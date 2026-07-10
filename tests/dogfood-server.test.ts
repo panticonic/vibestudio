@@ -53,9 +53,7 @@ describe("dogfood server supervisor", () => {
 
     expect(handled).toBe(true);
     expect(restart).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("unsupported under GAD VCS")
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unsupported under GAD VCS"));
     warnSpy.mockRestore();
   });
 
@@ -84,7 +82,7 @@ describe("dogfood server supervisor", () => {
     const workspaceConfig = YAML.parse(
       fs.readFileSync(path.join(wsDir, "source", "meta", "vibestudio.yml"), "utf8")
     );
-    expect(workspaceConfig.git.remotes.projects.vibestudio.origin).toBe(remoteUrl);
+    expect(workspaceConfig.git.remotes.projects.vibestudio.origin).toEqual({ url: remoteUrl });
     const dogfoodMeta = JSON.parse(
       fs.readFileSync(path.join(wsDir, "source", "meta", "dogfood.json"), "utf8")
     );

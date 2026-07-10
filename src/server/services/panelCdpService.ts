@@ -126,6 +126,13 @@ const screenshotOptionsSchema = z
   })
   .optional();
 
+const screenshotResultSchema = z.object({
+  data: z.string(),
+  mimeType: z.enum(["image/png", "image/jpeg"]),
+  width: z.number(),
+  height: z.number(),
+});
+
 export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinition {
   async function requireTarget(panelId: string): Promise<PanelAccessPermissionTarget> {
     const target = await deps.getTarget(panelId);
@@ -193,6 +200,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
           "(force-paints hidden/unslotted panels). Returns base64 image data + mime type; " +
           "no CDP WebSocket client needed.",
         args: z.tuple([z.string(), screenshotOptionsSchema]),
+        returns: screenshotResultSchema,
       },
       "hostProvider.open": {
         description: "Internal shell/server transport: open a streamed CDP host-provider channel.",

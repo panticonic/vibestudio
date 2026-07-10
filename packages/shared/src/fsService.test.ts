@@ -22,6 +22,7 @@ import {
   writeFileSync,
   mkdirSync,
   symlinkSync,
+  lstatSync,
   utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -290,6 +291,47 @@ describe("FsService", () => {
           "utf8",
         ])
       ).rejects.toThrow(/Symlink escapes sandbox/i);
+    });
+
+    it("rejects writes through dangling symlinks whose target cannot be contained", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-dangling-link");
+      const contextRoot = path.join(tmpRoot, "ctx-dangling-link");
+      mkdirSync(contextRoot, { recursive: true });
+      const outside = path.join(tmpRoot, "outside-created-by-link.txt");
+      symlinkSync(path.relative(contextRoot, outside), path.join(contextRoot, "escape.txt"));
+
+      await expect(
+        service.handleCall(ctx, "writeFile", ["escape.txt", "outside"])
+      ).rejects.toThrow(/Dangling symlink is not allowed/i);
+      expect(existsSync(outside)).toBe(false);
+    });
+
+    it("lets entry operations inspect, rename, and remove dangling leaf symlinks", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-dangling-entry");
+      const contextRoot = path.join(tmpRoot, "ctx-dangling-entry");
+      mkdirSync(contextRoot, { recursive: true });
+      symlinkSync("missing-target.txt", path.join(contextRoot, "dangling-link"));
+
+      await expect(service.handleCall(ctx, "readlink", ["dangling-link"])).resolves.toBe(
+        "missing-target.txt"
+      );
+      await expect(service.handleCall(ctx, "lstat", ["dangling-link"])).resolves.toMatchObject({
+        isSymbolicLink: true,
+      });
+      await expect(service.handleCall(ctx, "exists", ["dangling-link"])).resolves.toBe(false);
+
+      await service.handleCall(ctx, "rename", ["dangling-link", "renamed-link"]);
+      await expect(service.handleCall(ctx, "readlink", ["renamed-link"])).resolves.toBe(
+        "missing-target.txt"
+      );
+      await service.handleCall(ctx, "unlink", ["renamed-link"]);
+      expect(() => lstatSync(path.join(contextRoot, "renamed-link"))).toThrow();
+
+      symlinkSync("another-missing-target.txt", path.join(contextRoot, "rm-link"));
+      await service.handleCall(ctx, "rm", ["rm-link", { force: true }]);
+      expect(() => lstatSync(path.join(contextRoot, "rm-link"))).toThrow();
     });
   });
 
@@ -756,6 +798,85 @@ describe("FsService", () => {
       expect(applyCalls.at(-1)!.edits).toEqual([{ kind: "delete", path: "a.ts" }]);
     });
 
+    it("unlinks a scratch symlink entry without deleting its tracked target through GAD", async () => {
+      const { bridge, applyCalls, files } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-link-delete");
+
+      await svc.handleCall(ctx, "writeFile", ["/packages/lib/a.ts", "tracked"]);
+      const root = path.join(tmpRoot, "ctx-link-delete");
+      mkdirSync(path.join(root, ".tmp"), { recursive: true });
+      symlinkSync("../packages/lib/a.ts", path.join(root, ".tmp", "tracked-link"));
+
+      await svc.handleCall(ctx, "unlink", ["/.tmp/tracked-link"]);
+
+      expect(files.get("ctx-link-delete/packages/lib/a.ts")).toEqual({
+        kind: "text",
+        text: "tracked",
+      });
+      expect(applyCalls).toHaveLength(1);
+      expect(() => lstatSync(path.join(root, ".tmp", "tracked-link"))).toThrow();
+    });
+
+    it("keeps disk-only leaf symlinks under tracked paths out of GAD delete routing", async () => {
+      const { bridge, applyCalls } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-tracked-links");
+      const repoRoot = path.join(tmpRoot, "ctx-tracked-links", "packages", "lib");
+      mkdirSync(path.join(repoRoot, "target-dir"), { recursive: true });
+      writeFileSync(path.join(repoRoot, "target.txt"), "projection");
+      symlinkSync("target.txt", path.join(repoRoot, "unlink-link"));
+      symlinkSync("target.txt", path.join(repoRoot, "rm-link"));
+      symlinkSync("target-dir", path.join(repoRoot, "rmdir-link"), "dir");
+
+      await svc.handleCall(ctx, "unlink", ["/packages/lib/unlink-link"]);
+      await svc.handleCall(ctx, "rm", ["/packages/lib/rm-link", { recursive: true }]);
+      await expect(
+        svc.handleCall(ctx, "rmdir", ["/packages/lib/rmdir-link"])
+      ).rejects.toMatchObject({ code: "ENOTDIR" });
+
+      expect(existsSync(path.join(repoRoot, "target.txt"))).toBe(true);
+      expect(existsSync(path.join(repoRoot, "target-dir"))).toBe(true);
+      expect(lstatSync(path.join(repoRoot, "rmdir-link")).isSymbolicLink()).toBe(true);
+      expect(applyCalls).toHaveLength(0);
+    });
+
+    it("rejects renaming a symlink entry into a tracked destination", async () => {
+      const { bridge, applyCalls } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-link-rename");
+      const root = path.join(tmpRoot, "ctx-link-rename");
+      mkdirSync(path.join(root, ".tmp"), { recursive: true });
+      symlinkSync("missing-target", path.join(root, ".tmp", "source-link"));
+
+      await expect(
+        svc.handleCall(ctx, "rename", ["/.tmp/source-link", "/packages/lib/link"])
+      ).rejects.toThrow(/cannot move or replace a symbolic link.*GAD-tracked destination/s);
+
+      expect(lstatSync(path.join(root, ".tmp", "source-link")).isSymbolicLink()).toBe(true);
+      expect(applyCalls).toHaveLength(0);
+    });
+
+    it("directly renames a disk-only symlink from a malformed reserved path to scratch", async () => {
+      const { bridge, applyCalls } = makeMockBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-reserved-link-rename");
+      const root = path.join(tmpRoot, "ctx-reserved-link-rename");
+      mkdirSync(path.join(root, "agents", "legacy"), { recursive: true });
+      mkdirSync(path.join(root, ".tmp"), { recursive: true });
+      symlinkSync("missing-target", path.join(root, "agents", "legacy", "source-link"));
+
+      await svc.handleCall(ctx, "rename", ["/agents/legacy/source-link", "/.tmp/moved-link"]);
+
+      expect(() => lstatSync(path.join(root, "agents", "legacy", "source-link"))).toThrow();
+      expect(lstatSync(path.join(root, ".tmp", "moved-link")).isSymbolicLink()).toBe(true);
+      expect(applyCalls).toHaveLength(0);
+    });
+
     it("commits an atomic-write rename (.tmp → tracked) through GAD and drops the temp", async () => {
       const { bridge, files } = makeMockBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
@@ -830,18 +951,80 @@ describe("FsService", () => {
       expect(files.get("ctx-r/packages/lib/src/x.ts")).toEqual({ kind: "text", text: "x\n" });
     });
 
-    it("rejects an edit whose path is not inside any workspace repo", async () => {
-      // Every context is a full workspace branch (routed by the section taxonomy); the
-      // only structural rejection left is a path outside any workspace repo
-      // (a top-level file under no section).
+    it("keeps ordinary relative root write/rename/copy operations on context-local scratch disk", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
       const ctx = makeWorkerCtx("do:src:class:key");
-      registerContext(ctx.caller.runtime.id, "do", "ctx-w");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-root-scratch");
+
+      const source = ".fs-copy-rename-source.txt";
+      const renamed = ".fs-copy-rename-renamed.txt";
+      const copied = ".fs-copy-rename-copied.txt";
+      const expected = "root scratch content\n";
+
+      await svc.handleCall(ctx, "writeFile", [source, expected]);
+      await svc.handleCall(ctx, "rename", [source, renamed]);
+
+      await expect(svc.handleCall(ctx, "exists", [source])).resolves.toBe(false);
+      await expect(svc.handleCall(ctx, "exists", [renamed])).resolves.toBe(true);
+      await expect(svc.handleCall(ctx, "readFile", [renamed, "utf8"])).resolves.toBe(expected);
+
+      await svc.handleCall(ctx, "copyFile", [renamed, copied]);
+
+      await expect(svc.handleCall(ctx, "exists", [copied])).resolves.toBe(true);
+      await expect(svc.handleCall(ctx, "readFile", [copied, "utf8"])).resolves.toBe(expected);
+      expect(applyCalls).toHaveLength(0);
+    });
+
+    it("rejects malformed paths beneath reserved workspace source roots", async () => {
+      const { bridge, applyCalls } = makeRoutedBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-reserved-root");
+
+      for (const target of ["/packages", "/agents/legacy/file.ts"]) {
+        await expect(svc.handleCall(ctx, "writeFile", [target, "nope"])).rejects.toThrow(
+          /reserved workspace source root/
+        );
+      }
+      expect(applyCalls).toHaveLength(0);
+    });
+
+    it("routes in-sandbox symlink aliases to the canonical workspace repo", async () => {
+      const { bridge, applyCalls } = makeRoutedBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-repo-alias");
+
+      const root = path.join(tmpRoot, "ctx-repo-alias");
+      mkdirSync(path.join(root, "packages", "lib"), { recursive: true });
+      symlinkSync("packages", path.join(root, "source-alias"), "dir");
+
+      await svc.handleCall(ctx, "writeFile", ["source-alias/lib/src/x.ts", "x\n"]);
+      await svc.handleCall(ctx, "unlink", ["source-alias/lib/src/x.ts"]);
+
+      expect(applyCalls).toEqual([
+        {
+          repoPath: "packages/lib",
+          edits: [{ kind: "write", path: "src/x.ts", content: { kind: "text", text: "x\n" } }],
+        },
+        {
+          repoPath: "packages/lib",
+          edits: [{ kind: "delete", path: "src/x.ts" }],
+        },
+      ]);
+      expect(existsSync(path.join(root, "packages", "lib", "src", "x.ts"))).toBe(false);
+    });
+
+    it("rejects non-canonical workspace source-root casing", async () => {
+      const { bridge, applyCalls } = makeRoutedBridge();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-source-case");
 
       await expect(
-        svc.handleCall(ctx, "writeFile", ["/random-toplevel.ts", "nope"])
-      ).rejects.toThrow(/not inside a workspace repo/);
+        svc.handleCall(ctx, "writeFile", ["Packages/lib/src/x.ts", "nope"])
+      ).rejects.toThrow(/non-canonical casing.*packages/);
       expect(applyCalls).toHaveLength(0);
     });
 

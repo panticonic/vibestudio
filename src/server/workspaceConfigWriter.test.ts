@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { setDeclaredRemoteInConfig } from "@vibestudio/shared/workspace/remotes";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import { createRefService } from "./services/refService.js";
 import {
   collectTreeReachableDigests,
@@ -39,7 +41,7 @@ describe("workspaceConfigWriter", () => {
         remotes: {
           projects: {
             old: {
-              origin: "https://example.com/old.git",
+              origin: { url: "https://example.com/old.git" },
             },
           },
         },
@@ -87,25 +89,25 @@ describe("workspaceConfigWriter", () => {
       },
     });
 
-    const changed = await writer.persist({
+    const result = await writer.applyMutation({
       ctx: { caller: createVerifiedCaller("server", "server") },
-      nextConfig: {
+      mutate: () => ({
         id: "test",
         git: {
           remotes: {
             projects: {
               bgkit: {
-                origin: "https://github.com/werg/bgkit.git",
+                origin: { url: "https://github.com/werg/bgkit.git" },
               },
             },
           },
         },
-      },
+      }),
       summary: "record bgkit remote",
       operation: "push",
     });
 
-    expect(changed).toBe(true);
+    expect(result.changed).toBe(true);
     const updated = refs.readMain("meta");
     expect(updated?.stateHash).not.toBe(protectedState);
     expect(updated?.stateHash).not.toBe(staleState);
@@ -117,10 +119,94 @@ describe("workspaceConfigWriter", () => {
       remotes: {
         projects: {
           bgkit: {
-            origin: "https://github.com/werg/bgkit.git",
+            origin: { url: "https://github.com/werg/bgkit.git" },
           },
         },
       },
+    });
+  });
+
+  it("serializes concurrent narrow mutations against the latest protected config", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-config-writer-race-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const refs = createRefService({
+      statePath: path.join(root, "refs"),
+      gate: async () => undefined,
+      assertTreeComplete: async (stateHash) => {
+        if (!(await collectTreeReachableDigests(blobsDir, stateHash))) {
+          throw new Error(`incomplete tree: ${stateHash}`);
+        }
+      },
+    });
+    const initialDigest = (
+      await putBytes(blobsDir, Buffer.from(YAML.stringify({ id: "test" }), "utf8"))
+    ).digest;
+    const initialState = (
+      await mirrorWorktreeTree(blobsDir, [
+        { path: "vibestudio.yml", contentHash: initialDigest, mode: FILE_MODE },
+      ])
+    ).stateHash;
+    await refs.seedMain({ repoPath: "meta", value: initialState });
+
+    const writer = createWorkspaceConfigMainWriter({
+      workspacePath: path.join(root, "source"),
+      blobsDir,
+      refs,
+      vcs: {
+        async readFile(ref, filePath) {
+          const meta = await readFileAtTree(blobsDir, ref, filePath);
+          if (!meta) return null;
+          const bytes = await getBytes(blobsDir, meta.contentHash);
+          if (!bytes) throw new Error("missing test blob");
+          return { content: { kind: "text" as const, text: bytes.toString("utf8") } };
+        },
+        async listFiles(ref) {
+          const entries = await listTree(blobsDir, ref);
+          return (entries ?? [])
+            .filter((entry) => entry.kind === "file")
+            .map((entry) => ({
+              path: entry.path,
+              contentHash: entry.contentHash,
+              mode: entry.mode,
+            }));
+        },
+      },
+    });
+    const ctx = { caller: createVerifiedCaller("server", "server") };
+
+    await Promise.all([
+      writer.applyMutation({
+        ctx,
+        mutate: (current) =>
+          setDeclaredRemoteInConfig(current, "projects/alpha", {
+            name: "origin",
+            url: "https://example.com/alpha.git",
+          }),
+        summary: "record alpha remote",
+        operation: "push",
+      }),
+      writer.applyMutation({
+        ctx,
+        mutate: (current) =>
+          setDeclaredRemoteInConfig(current, "projects/beta", {
+            name: "origin",
+            url: "https://example.com/beta.git",
+          }),
+        summary: "record beta remote",
+        operation: "push",
+      }),
+    ]);
+
+    const updated = refs.readMain("meta");
+    const updatedFile = await readFileAtTree(blobsDir, updated!.stateHash, "vibestudio.yml");
+    const updatedBytes = await getBytes(blobsDir, updatedFile!.contentHash);
+    const parsed = YAML.parse(updatedBytes!.toString("utf8")) as WorkspaceConfig;
+    expect(parsed.git?.remotes?.["projects"]?.["alpha"]?.["origin"]).toEqual({
+      url: "https://example.com/alpha.git",
+    });
+    expect(parsed.git?.remotes?.["projects"]?.["beta"]?.["origin"]).toEqual({
+      url: "https://example.com/beta.git",
     });
   });
 });

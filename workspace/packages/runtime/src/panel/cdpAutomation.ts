@@ -4,6 +4,8 @@ import type {
   CdpEndpoint,
   PanelConsoleHistoryOptions,
   PanelConsoleHistoryResult,
+  PanelScreenshotOptions,
+  PanelScreenshotResult,
 } from "../core/index.js";
 
 export type { CdpAutomation, CdpEndpoint };
@@ -136,9 +138,8 @@ export function createCdpAutomation(
       const p = await connectPage();
       await p.click(selector);
     },
-    screenshot: async (options) => {
-      const p = await connectPage();
-      return p.screenshot(options);
+    screenshot: (options?: PanelScreenshotOptions) => {
+      return rpc.call<PanelScreenshotResult>("main", "panelCdp.screenshot", [id, options]);
     },
   };
 }

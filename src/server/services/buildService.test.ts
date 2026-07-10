@@ -45,7 +45,8 @@ function makeBuildSystem(): BuildSystemV2 {
               details: {
                 kind: "extension",
                 runtimeDepsKey: null,
-                runtimeAbi: "2",
+                runtimeAbi: "3",
+                providerContracts: {},
               },
               builtAt: "2026-01-01T00:00:00.000Z",
             },
@@ -136,7 +137,7 @@ describe("build service extension diagnostics", () => {
     ).resolves.toMatchObject({
       kind: "extension",
       name: "@workspace-extensions/example",
-      details: { kind: "extension", runtimeAbi: "2" },
+      details: { kind: "extension", runtimeAbi: "3", providerContracts: {} },
     });
   });
 

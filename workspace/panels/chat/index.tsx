@@ -421,14 +421,12 @@ export default function ChatPanel() {
   // prepare via the claude-code extension (resolves the channel's context,
   // ensures the vessel, mints the agent credential, writes the launch profile),
   // then open a context-scoped terminal running the returned argv. Both calls go
-  // through `extensions.invoke` (untyped) so the panel needs no extension types.
+  // through the manifest-selected claudeCode provider namespace.
   const handleOpenClaudeCode = useCallback(async (channelId: string) => {
     try {
-      const prepared = (await extensions.invoke(
-        "@workspace-extensions/claude-code",
-        "prepare",
-        [{ channelId }]
-      )) as {
+      const prepared = (await extensions.invokeProvider("claudeCode", "prepare", [
+        { channelId },
+      ])) as {
         contextId: string;
         contextFolder: string;
         env: Record<string, string>;

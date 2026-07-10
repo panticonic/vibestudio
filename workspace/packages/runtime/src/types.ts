@@ -106,8 +106,11 @@ export interface ReaddirOptions {
 }
 
 /**
- * Filesystem interface for panels and workers.
+ * Filesystem interface for panels, workers, and eval.
  * Compatible with Node's fs/promises and @vibestudio/git's FsPromisesLike.
+ * Every path is relative to the caller's context root, including paths with a
+ * leading `/`. Mutations inside workspace repos become GAD working edits;
+ * ordinary non-repo and platform-ignored paths are context-local scratch.
  */
 export interface RuntimeFs {
   /**

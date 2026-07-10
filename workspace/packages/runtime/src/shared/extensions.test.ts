@@ -66,13 +66,29 @@ describe("createExtensionsClient", () => {
     const rpc = createRpc();
     const extensions = createExtensionsClient(rpc);
 
-    await extensions.invoke("@workspace-extensions/typecheck-service", "checkPanel", ["panels/app"]);
+    await extensions.invoke("@workspace-extensions/typecheck-service", "checkPanel", [
+      "panels/app",
+    ]);
 
     expect(rpc.call).toHaveBeenCalledWith("main", "extensions.invoke", [
       "@workspace-extensions/typecheck-service",
       "checkPanel",
       ["panels/app"],
     ]);
+  });
+
+  it("routes provider namespaces only through invokeProvider", async () => {
+    const rpc = createRpc();
+    const extensions = createExtensionsClient(rpc);
+
+    await extensions.invokeProvider("browserData", "getHistory", [{ limit: 1 }]);
+
+    expect(rpc.call).toHaveBeenCalledWith("main", "extensions.invokeProvider", [
+      "browserData",
+      "getHistory",
+      [{ limit: 1 }],
+    ]);
+    expect(rpc.call).not.toHaveBeenCalledWith("main", "extensions.invoke", expect.anything());
   });
 
   it("keeps Promise assimilation and inspection keys inert on extension proxies", () => {

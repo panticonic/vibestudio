@@ -10,7 +10,19 @@
     "extension": {
       "activationEvents": [
         "*"
-      ]
+      ],
+      "providerContracts": {
+        "gitInterop": {
+          "methods": [
+            "upstreamStatus",
+            "pushUpstream",
+            "pullUpstream",
+            "publishRepo",
+            "cloneRepo",
+            "onMainAdvanced"
+          ]
+        }
+      }
     }
   },
   "dependencies": {

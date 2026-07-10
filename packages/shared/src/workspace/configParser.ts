@@ -8,11 +8,9 @@ import type {
   WorkspaceHostTargetName,
   WorkspaceTrustDecl,
 } from "./types.js";
-import {
-  WORKSPACE_APP_PACKAGE_SCOPE,
-  WORKSPACE_EXTENSION_PACKAGE_SCOPE,
-} from "./types.js";
+import { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE } from "./types.js";
 import { WORKSPACE_SOURCE_DIRS } from "./sourceDirs.js";
+import { validateWorkspaceGitConfig } from "./remotes.js";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
@@ -38,7 +36,7 @@ interface DeclaredUnitDescriptor<Decl extends { source: string }> {
 
 function normalizeDeclaredUnitSourceKey<Decl extends { source: string }>(
   source: string,
-  descriptor: DeclaredUnitDescriptor<Decl>,
+  descriptor: DeclaredUnitDescriptor<Decl>
 ): string {
   const normalized = normalizeDeclaredUnitSource(source);
   const sourceRootPrefix = `${descriptor.sourceRoot}/`;
@@ -60,34 +58,38 @@ function normalizeDeclaredUnitSource(source: string): string {
 
 function validateDeclaredUnitSource<Decl extends { source: string }>(
   source: string,
-  descriptor: DeclaredUnitDescriptor<Decl>,
+  descriptor: DeclaredUnitDescriptor<Decl>
 ): void {
   const normalized = normalizeDeclaredUnitSource(source);
   const [firstSegment] = normalized.split("/");
   const sourceRootPrefix = `${descriptor.sourceRoot}/`;
-  if (firstSegment && WORKSPACE_SOURCE_DIR_SET.has(firstSegment) && firstSegment !== descriptor.sourceRoot) {
+  if (
+    firstSegment &&
+    WORKSPACE_SOURCE_DIR_SET.has(firstSegment) &&
+    firstSegment !== descriptor.sourceRoot
+  ) {
     throw new Error(
-      `meta/vibestudio.yml: \`${descriptor.section}[].source\` must point under \`${descriptor.sourceRoot}/name\` or use a \`${descriptor.packageScope}name\` package name`,
+      `meta/vibestudio.yml: \`${descriptor.section}[].source\` must point under \`${descriptor.sourceRoot}/name\` or use a \`${descriptor.packageScope}name\` package name`
     );
   }
   if (normalized.startsWith(sourceRootPrefix)) {
     const sourceIdentity = normalized.slice(sourceRootPrefix.length);
     if (!/^[^/\s]+$/.test(sourceIdentity) || sourceIdentity.endsWith(".git")) {
       throw new Error(
-        `meta/vibestudio.yml: \`${descriptor.section}[].source\` must be \`${descriptor.sourceRoot}/name\` or \`${descriptor.packageScope}name\``,
+        `meta/vibestudio.yml: \`${descriptor.section}[].source\` must be \`${descriptor.sourceRoot}/name\` or \`${descriptor.packageScope}name\``
       );
     }
     return;
   }
   if (!UNIT_PACKAGE_NAME.test(normalized) || !normalized.startsWith(descriptor.packageScope)) {
     throw new Error(
-      `meta/vibestudio.yml: \`${descriptor.section}[].source\` must be \`${descriptor.sourceRoot}/name\` or \`${descriptor.packageScope}name\``,
+      `meta/vibestudio.yml: \`${descriptor.section}[].source\` must be \`${descriptor.sourceRoot}/name\` or \`${descriptor.packageScope}name\``
     );
   }
 }
 
 function validateDeclaredUnitList<Decl extends { source: string }>(
-  descriptor: DeclaredUnitDescriptor<Decl>,
+  descriptor: DeclaredUnitDescriptor<Decl>
 ): void {
   const declarations = descriptor.values;
   if (declarations === undefined) return;
@@ -97,17 +99,23 @@ function validateDeclaredUnitList<Decl extends { source: string }>(
   const seen = new Set<string>();
   for (const decl of declarations) {
     if (!decl || typeof decl.source !== "string" || decl.source.trim().length === 0) {
-      throw new Error(`meta/vibestudio.yml: every \`${descriptor.section}\` entry needs a non-empty \`source\``);
+      throw new Error(
+        `meta/vibestudio.yml: every \`${descriptor.section}\` entry needs a non-empty \`source\``
+      );
     }
     const ref = (decl as { ref?: unknown }).ref;
     if (ref !== undefined && (typeof ref !== "string" || ref.trim().length === 0)) {
-      throw new Error(`meta/vibestudio.yml: \`${descriptor.section}[].ref\` must be a non-empty string when provided`);
+      throw new Error(
+        `meta/vibestudio.yml: \`${descriptor.section}[].ref\` must be a non-empty string when provided`
+      );
     }
     validateDeclaredUnitSource(decl.source, descriptor);
     descriptor.validate?.(decl);
     const key = normalizeDeclaredUnitSourceKey(decl.source, descriptor);
     if (seen.has(key)) {
-      throw new Error(`meta/vibestudio.yml: duplicate ${descriptor.singular} declaration for "${decl.source}"`);
+      throw new Error(
+        `meta/vibestudio.yml: duplicate ${descriptor.singular} declaration for "${decl.source}"`
+      );
     }
     seen.add(key);
   }
@@ -132,6 +140,13 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
   validateTrust(config.trust);
   validateHostTargets(config.hostTargets);
   validateProviders(config);
+  try {
+    validateWorkspaceGitConfig(config.git);
+  } catch (error) {
+    throw new Error(
+      `meta/vibestudio.yml: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 const DECL_NAME_RE = /^[A-Za-z0-9._:-]+$/;
@@ -145,7 +160,15 @@ function parseDurationMs(value: string, field: string): number {
   const amount = Number(match[1]);
   const unit = match[2];
   const multiplier =
-    unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
+    unit === "ms"
+      ? 1
+      : unit === "s"
+        ? 1_000
+        : unit === "m"
+          ? 60_000
+          : unit === "h"
+            ? 3_600_000
+            : 86_400_000;
   return amount * multiplier;
 }
 
@@ -176,56 +199,87 @@ function validateHeartbeats(heartbeats: WorkspaceHeartbeatDecl[] | undefined): v
       typeof heartbeat.target.className !== "string" ||
       !heartbeat.target.className.trim()
     ) {
-      throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} target.source and target.className are required`);
+      throw new Error(
+        `meta/vibestudio.yml: heartbeat ${heartbeat.name} target.source and target.className are required`
+      );
     }
     if (
       heartbeat.target.objectKey !== undefined &&
       (typeof heartbeat.target.objectKey !== "string" || !heartbeat.target.objectKey.trim())
     ) {
-      throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} target.objectKey must be a non-empty string`);
+      throw new Error(
+        `meta/vibestudio.yml: heartbeat ${heartbeat.name} target.objectKey must be a non-empty string`
+      );
     }
     if (!heartbeat.schedule || typeof heartbeat.schedule.every !== "string") {
-      throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.every is required`);
+      throw new Error(
+        `meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.every is required`
+      );
     }
     const everyMs = parseDurationMs(heartbeat.schedule.every, `heartbeats[].schedule.every`);
     if (everyMs < 60_000 || everyMs > 30 * 86_400_000) {
-      throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.every must be between 1m and 30d`);
+      throw new Error(
+        `meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.every must be between 1m and 30d`
+      );
     }
     if (heartbeat.schedule.jitter !== undefined) {
       const jitterMs = parseDurationMs(heartbeat.schedule.jitter, `heartbeats[].schedule.jitter`);
       if (jitterMs < 0 || jitterMs > everyMs) {
-        throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.jitter must be no larger than schedule.every`);
+        throw new Error(
+          `meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.jitter must be no larger than schedule.every`
+        );
       }
     }
     if (heartbeat.schedule.at !== undefined) {
       validateClock(heartbeat.schedule.at, `heartbeats[].schedule.at`);
       if (everyMs % 86_400_000 !== 0) {
-        throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.at only applies to day-multiple intervals`);
+        throw new Error(
+          `meta/vibestudio.yml: heartbeat ${heartbeat.name} schedule.at only applies to day-multiple intervals`
+        );
       }
     }
     if (heartbeat.schedule.activeHours) {
-      validateClock(heartbeat.schedule.activeHours.start, `heartbeats[].schedule.activeHours.start`);
+      validateClock(
+        heartbeat.schedule.activeHours.start,
+        `heartbeats[].schedule.activeHours.start`
+      );
       validateClock(heartbeat.schedule.activeHours.end, `heartbeats[].schedule.activeHours.end`);
     }
     const tokenBudget = heartbeat.context?.tokenBudget;
-    if (tokenBudget !== undefined && (!Number.isInteger(tokenBudget) || tokenBudget < 1000 || tokenBudget > 200_000)) {
-      throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} context.tokenBudget is out of range`);
+    if (
+      tokenBudget !== undefined &&
+      (!Number.isInteger(tokenBudget) || tokenBudget < 1000 || tokenBudget > 200_000)
+    ) {
+      throw new Error(
+        `meta/vibestudio.yml: heartbeat ${heartbeat.name} context.tokenBudget is out of range`
+      );
     }
     const maxModelCalls = heartbeat.behavior?.maxModelCalls;
-    if (maxModelCalls !== undefined && (!Number.isInteger(maxModelCalls) || maxModelCalls < 1 || maxModelCalls > 10)) {
-      throw new Error(`meta/vibestudio.yml: heartbeat ${heartbeat.name} behavior.maxModelCalls is out of range`);
+    if (
+      maxModelCalls !== undefined &&
+      (!Number.isInteger(maxModelCalls) || maxModelCalls < 1 || maxModelCalls > 10)
+    ) {
+      throw new Error(
+        `meta/vibestudio.yml: heartbeat ${heartbeat.name} behavior.maxModelCalls is out of range`
+      );
     }
     if (heartbeat.behavior?.failureBackoff?.base !== undefined) {
-      parseDurationMs(heartbeat.behavior.failureBackoff.base, `heartbeats[].behavior.failureBackoff.base`);
+      parseDurationMs(
+        heartbeat.behavior.failureBackoff.base,
+        `heartbeats[].behavior.failureBackoff.base`
+      );
     }
     if (heartbeat.behavior?.failureBackoff?.max !== undefined) {
-      parseDurationMs(heartbeat.behavior.failureBackoff.max, `heartbeats[].behavior.failureBackoff.max`);
+      parseDurationMs(
+        heartbeat.behavior.failureBackoff.max,
+        `heartbeats[].behavior.failureBackoff.max`
+      );
     }
   }
 }
 
 export function resolveDeclaredExtensions(
-  config: WorkspaceConfig,
+  config: WorkspaceConfig
 ): Array<{ source: string; ref: string }> {
   return resolveDeclaredUnits(config.extensions ?? []).map((decl) => ({
     source: decl.source,
@@ -234,7 +288,7 @@ export function resolveDeclaredExtensions(
 }
 
 export function resolveDeclaredApps(
-  config: WorkspaceConfig,
+  config: WorkspaceConfig
 ): Array<{ source: string; ref: string }> {
   return (config.apps ?? []).map((decl) => ({
     source: decl.source.trim(),
@@ -243,7 +297,7 @@ export function resolveDeclaredApps(
 }
 
 function resolveDeclaredUnits<Decl extends { source: string; ref?: string }>(
-  declarations: Decl[],
+  declarations: Decl[]
 ): Array<Decl & { source: string; ref: string }> {
   return declarations.map((decl) => ({
     ...decl,
@@ -294,7 +348,7 @@ function canonicalUnitRepoPath(value: unknown, kind: CanonicalUnitKind, field: s
       : null;
   if (!identity || !/^[^/\s]+$/.test(identity) || identity.endsWith(".git")) {
     throw new Error(
-      `meta/vibestudio.yml: \`${field}\` must be \`${kind.sourceRoot}/name\` or \`${kind.packageScope}name\` (got ${JSON.stringify(value)})`,
+      `meta/vibestudio.yml: \`${field}\` must be \`${kind.sourceRoot}/name\` or \`${kind.packageScope}name\` (got ${JSON.stringify(value)})`
     );
   }
   return `${kind.sourceRoot}/${identity}`;
@@ -312,19 +366,16 @@ export function workspaceExtensionPackageName(source: string): string {
   return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${repoPath.slice("extensions/".length)}`;
 }
 
-export type WorkspaceExtensionProviderName = "browserData" | "gitInterop" | "claudeCode";
-
-const WORKSPACE_EXTENSION_PROVIDERS = new Set<string>([
+export const WORKSPACE_EXTENSION_PROVIDER_NAMES = [
   "browserData",
   "gitInterop",
   "claudeCode",
-]);
+] as const;
+export type WorkspaceExtensionProviderName = (typeof WORKSPACE_EXTENSION_PROVIDER_NAMES)[number];
 
-function validateUnitSourceList(
-  values: unknown,
-  kind: CanonicalUnitKind,
-  field: string,
-): string[] {
+const WORKSPACE_EXTENSION_PROVIDERS = new Set<string>(WORKSPACE_EXTENSION_PROVIDER_NAMES);
+
+function validateUnitSourceList(values: unknown, kind: CanonicalUnitKind, field: string): string[] {
   if (values === undefined) return [];
   if (!Array.isArray(values)) {
     throw new Error(`meta/vibestudio.yml: \`${field}\` must be a list`);
@@ -351,13 +402,11 @@ function validateTrust(trust: WorkspaceTrustDecl | undefined): void {
   validateUnitSourceList(
     trust.connectionManagementApps,
     APP_UNIT,
-    "trust.connectionManagementApps",
+    "trust.connectionManagementApps"
   );
 }
 
-function validateHostTargets(
-  hostTargets: WorkspaceConfig["hostTargets"] | undefined,
-): void {
+function validateHostTargets(hostTargets: WorkspaceConfig["hostTargets"] | undefined): void {
   if (hostTargets === undefined) return;
   if (hostTargets === null || typeof hostTargets !== "object" || Array.isArray(hostTargets)) {
     throw new Error("meta/vibestudio.yml: `hostTargets` must be a mapping");
@@ -365,18 +414,22 @@ function validateHostTargets(
   for (const [target, decl] of Object.entries(hostTargets)) {
     if (!(WORKSPACE_HOST_TARGETS as readonly string[]).includes(target)) {
       throw new Error(
-        `meta/vibestudio.yml: unknown \`hostTargets\` key "${target}" (expected one of ${WORKSPACE_HOST_TARGETS.join(", ")})`,
+        `meta/vibestudio.yml: unknown \`hostTargets\` key "${target}" (expected one of ${WORKSPACE_HOST_TARGETS.join(", ")})`
       );
     }
     if (decl === null || decl === undefined) continue;
     if (typeof decl !== "object" || Array.isArray(decl)) {
       throw new Error(`meta/vibestudio.yml: \`hostTargets.${target}\` must be a mapping`);
     }
-    canonicalUnitRepoPath((decl as WorkspaceHostTargetDecl).app, APP_UNIT, `hostTargets.${target}.app`);
+    canonicalUnitRepoPath(
+      (decl as WorkspaceHostTargetDecl).app,
+      APP_UNIT,
+      `hostTargets.${target}.app`
+    );
     validateUnitSourceList(
       (decl as WorkspaceHostTargetDecl).requiresExtensions,
       EXTENSION_UNIT,
-      `hostTargets.${target}.requiresExtensions`,
+      `hostTargets.${target}.requiresExtensions`
     );
   }
 }
@@ -394,20 +447,23 @@ function requireProviderSource(value: unknown, field: string): string {
 
 function providerExtensionRepoPath(
   config: WorkspaceConfig,
-  provider: WorkspaceExtensionProviderName,
+  provider: WorkspaceExtensionProviderName
 ): string | null {
-  const declared = (config.providers?.[provider] as { extension?: unknown } | undefined)
-    ?.extension;
+  const declared = (config.providers?.[provider] as { extension?: unknown } | undefined)?.extension;
   if (declared === undefined) return null;
-  const repoPath = canonicalUnitRepoPath(declared, EXTENSION_UNIT, `providers.${provider}.extension`);
+  const repoPath = canonicalUnitRepoPath(
+    declared,
+    EXTENSION_UNIT,
+    `providers.${provider}.extension`
+  );
   const isDeclared = (config.extensions ?? []).some(
     (extension) =>
       typeof extension?.source === "string" &&
-      canonicalUnitRepoPath(extension.source, EXTENSION_UNIT, "extensions[].source") === repoPath,
+      canonicalUnitRepoPath(extension.source, EXTENSION_UNIT, "extensions[].source") === repoPath
   );
   if (!isDeclared) {
     throw new Error(
-      `meta/vibestudio.yml: \`providers.${provider}.extension\` (${repoPath}) must also be declared under \`extensions\``,
+      `meta/vibestudio.yml: \`providers.${provider}.extension\` (${repoPath}) must also be declared under \`extensions\``
     );
   }
   return repoPath;
@@ -433,7 +489,7 @@ function validateProviders(config: WorkspaceConfig): void {
     if (decl === undefined) continue;
     if (decl === null || typeof decl !== "object" || Array.isArray(decl)) {
       throw new Error(
-        `meta/vibestudio.yml: \`providers.${provider}\` must be a mapping with an \`extension\``,
+        `meta/vibestudio.yml: \`providers.${provider}\` must be a mapping with an \`extension\``
       );
     }
     providerExtensionRepoPath(config, provider as WorkspaceExtensionProviderName);
@@ -454,7 +510,7 @@ export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): {
     connectionManagementApps: validateUnitSourceList(
       config.trust?.connectionManagementApps,
       APP_UNIT,
-      "trust.connectionManagementApps",
+      "trust.connectionManagementApps"
     ),
   };
 }
@@ -466,7 +522,7 @@ export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): {
  */
 export function resolveHostTargetDecl(
   config: WorkspaceConfig,
-  target: WorkspaceHostTargetName,
+  target: WorkspaceHostTargetName
 ): { appSource: string; requiresExtensions: string[] } | null {
   const decl = config.hostTargets?.[target];
   if (!decl || typeof decl !== "object") return null;
@@ -475,17 +531,9 @@ export function resolveHostTargetDecl(
     requiresExtensions: validateUnitSourceList(
       decl.requiresExtensions,
       EXTENSION_UNIT,
-      `hostTargets.${target}.requiresExtensions`,
+      `hostTargets.${target}.requiresExtensions`
     ),
   };
-}
-
-/**
- * The browser-data broker extension's package name
- * (`@workspace-extensions/name`), or null when no broker is declared.
- */
-export function browserDataBrokerPackageName(config: WorkspaceConfig): string | null {
-  return workspaceProviderExtensionPackageName(config, "browserData");
 }
 
 /**
@@ -495,12 +543,14 @@ export function browserDataBrokerPackageName(config: WorkspaceConfig): string | 
  */
 export function workspaceProviderExtensionPackageName(
   config: WorkspaceConfig,
-  provider: string,
+  provider: string
 ): string | null {
   if (!WORKSPACE_EXTENSION_PROVIDERS.has(provider)) return null;
-  const declared = (config.providers?.[provider as WorkspaceExtensionProviderName] as
-    | { extension?: unknown }
-    | undefined)?.extension;
+  const declared = (
+    config.providers?.[provider as WorkspaceExtensionProviderName] as
+      | { extension?: unknown }
+      | undefined
+  )?.extension;
   if (typeof declared !== "string" || declared.trim().length === 0) return null;
   return workspaceExtensionPackageName(declared);
 }

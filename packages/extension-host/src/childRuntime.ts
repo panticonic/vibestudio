@@ -20,6 +20,8 @@ import {
   type RegistryEntry,
 } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
+import { gitInteropMethods } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 import type { ExtensionInvocation } from "./types.js";
 import {
@@ -152,6 +154,12 @@ function serviceProxy(service: string): Record<string, (...args: unknown[]) => P
   });
 }
 
+function createGitInteropClient() {
+  return createTypedServiceClient("gitInterop", gitInteropMethods, (service, method, args) =>
+    rpcCall(`${service}.${method}`, args)
+  );
+}
+
 function createExtensionsClient(): ExtensionsClient {
   const proxyRpc = {
     call: (_target: string, method: string, args: unknown[]) => rpcCall(method, args),
@@ -162,8 +170,8 @@ function createExtensionsClient(): ExtensionsClient {
   const declaredStreaming = (name: string): Promise<Set<string>> => {
     let cached = streamingCache.get(name);
     if (!cached) {
-      cached = rpcCall<string[] | null>("extensions.streamingMethods", [name])
-        .then((methods) => new Set(methods ?? []))
+      cached = rpcCall<string[]>("extensions.streamingMethods", [name])
+        .then((methods) => new Set(methods))
         .catch(() => {
           // Don't pin a transient failure as "no streaming methods" for the
           // client's lifetime — drop the entry so the next call re-fetches.
@@ -213,6 +221,8 @@ function createExtensionsClient(): ExtensionsClient {
     list: () => rpcCall<RegistryEntry[]>("extensions.list", []),
     reload: (name) => rpcCall<void>("extensions.reload", [name]),
     invoke: (name, method, args) => rpcCall<unknown>("extensions.invoke", [name, method, args]),
+    invokeProvider: (provider, method, args) =>
+      rpcCall<unknown>("extensions.invokeProvider", [provider, method, args]),
   };
   return client;
 }
@@ -401,7 +411,7 @@ function createContext() {
       readdir: (p = ".") => nodeFs.readdir(storagePath(p)),
     },
     fs: createFsClient(),
-    git: serviceProxy("git"),
+    git: createGitInteropClient(),
     workspace: serviceProxy("workspace"),
     rpc: {
       call: <T>(targetId: string, method: string, ...args: unknown[]) =>
@@ -734,6 +744,22 @@ function settleWaitUntil(waitUntil: Promise<unknown>[]): void {
   });
 }
 
+function assertHostControlCaller(
+  request: { caller: { callerId: string; callerKind: string } },
+  method: string
+): void {
+  const { callerId, callerKind } = request.caller;
+  // Direct server envelopes use `main`; the server's connected-target RPC
+  // bridge uses its internal `server` endpoint. Both identities are minted by
+  // the host and cannot be claimed by authenticated userland callers.
+  if (callerKind === "server" && (callerId === "main" || callerId === "server")) return;
+  const error = new Error(
+    `Extension control method ${method} accepts only the trusted host principal`
+  ) as NodeJS.ErrnoException;
+  error.code = "EACCES";
+  throw error;
+}
+
 async function main(): Promise<void> {
   runtimeBridge = await connectRuntimeBridge();
   const bundlePath = requiredEnv("VIBESTUDIO_EXTENSION_BUNDLE_PATH");
@@ -754,11 +780,32 @@ async function main(): Promise<void> {
   }
   const apiObject = api && typeof api === "object" ? (api as Record<string, unknown>) : {};
   const methods = Object.keys(apiObject).filter((key) => typeof apiObject[key] === "function");
+  const providerApiValue = apiObject["providerContracts"];
+  if (
+    providerApiValue !== undefined &&
+    (!providerApiValue || typeof providerApiValue !== "object" || Array.isArray(providerApiValue))
+  ) {
+    throw new Error("activate().providerContracts must be an object keyed by provider slot");
+  }
+  const providerApis = (providerApiValue ?? {}) as Record<string, unknown>;
+  const providerMethods: Record<string, string[]> = {};
+  for (const [provider, providerApi] of Object.entries(providerApis)) {
+    if (!providerApi || typeof providerApi !== "object" || Array.isArray(providerApi)) {
+      throw new Error(`activate().providerContracts.${provider} must be a method object`);
+    }
+    const providerMethodObject = providerApi as Record<string, unknown>;
+    const names = Object.keys(providerMethodObject);
+    if (names.some((method) => typeof providerMethodObject[method] !== "function")) {
+      throw new Error(`activate().providerContracts.${provider} may contain only provider methods`);
+    }
+    providerMethods[provider] = names;
+  }
   const defaultExport = mod["default"] as { fetch?: unknown } | undefined;
   const fetchHandler =
     typeof defaultExport?.fetch === "function" ? defaultExport.fetch.bind(defaultExport) : null;
 
   runtimeBridge.expose("extension.invoke", async (req) => {
+    assertHostControlCaller(req, "extension.invoke");
     const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
     return invocationStore.run(invocation, async () => {
       const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
@@ -781,7 +828,43 @@ async function main(): Promise<void> {
     });
   });
 
+  runtimeBridge.expose("extension.invokeProvider", async (req) => {
+    assertHostControlCaller(req, "extension.invokeProvider");
+    const [provider, method, args, invocation] = req.args as [
+      string,
+      string,
+      unknown[],
+      ExtensionInvocation,
+    ];
+    return invocationStore.run(invocation, async () => {
+      const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
+        ? providerApis[provider]
+        : undefined;
+      const fn =
+        providerApi && typeof providerApi === "object"
+          ? (providerApi as Record<string, unknown>)[method]
+          : undefined;
+      if (typeof fn !== "function") {
+        const err = new Error(
+          `Extension provider method not found: providers.${provider}.${method}`
+        ) as NodeJS.ErrnoException;
+        err.code = "ENOMETHOD";
+        throw err;
+      }
+      try {
+        return await fn(...args);
+      } catch (err) {
+        throw extensionRuntimeError("invoke", err, {
+          extension: extensionName,
+          method: `providers.${provider}.${method}`,
+          caller: invocation.caller.callerId,
+        });
+      }
+    });
+  });
+
   runtimeBridge.exposeStreaming("extension.invokeStream", async (req, sink) => {
+    assertHostControlCaller(req, "extension.invokeStream");
     const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
     await invocationStore.run(invocation, async () => {
       const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
@@ -806,17 +889,20 @@ async function main(): Promise<void> {
   });
 
   runtimeBridge.expose("extension.fetchResponseBodyChunk", async (req) => {
+    assertHostControlCaller(req, "extension.fetchResponseBodyChunk");
     const [streamId] = req.args as [string];
     return readNextResponseBodyChunk(streamId);
   });
 
   runtimeBridge.expose("extension.fetchResponseBodyClose", async (req) => {
+    assertHostControlCaller(req, "extension.fetchResponseBodyClose");
     const [streamId] = req.args as [string];
     await closeResponseBodyStream(streamId);
     return null;
   });
 
   runtimeBridge.expose("extension.fetch", async (req) => {
+    assertHostControlCaller(req, "extension.fetch");
     const [requestEnvelope, invocation] = req.args as [
       { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
       ExtensionInvocation,
@@ -888,7 +974,7 @@ async function main(): Promise<void> {
   await rpcCall("extensions.health", ["healthy", { summary: "Activated" }]).catch((err) => {
     console.error("[ExtensionRuntime] Failed to report initial health:", err);
   });
-  await rpcCall("extensions.ready", [{ methods, hasFetch: !!fetchHandler }]);
+  await rpcCall("extensions.ready", [{ methods, providerMethods, hasFetch: !!fetchHandler }]);
 }
 
 function importExtensionModule(bundlePath: string): Promise<Record<string, any>> {

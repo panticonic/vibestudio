@@ -16,6 +16,7 @@ import * as fs from "fs";
 import { execFile } from "node:child_process";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/shared/serviceSchemas/gitInterop";
 import { createHash, randomBytes } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -24,6 +25,7 @@ import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
 import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
+import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -407,7 +409,7 @@ async function main() {
   const {
     resolveWorkspaceTrustGrants,
     resolveHostTargetDecl,
-    browserDataBrokerPackageName,
+    WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
   } = await import("@vibestudio/shared/workspace/configParser");
   const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
@@ -444,8 +446,8 @@ async function main() {
     );
     compare(
       "providers.browserData.extension",
-      browserDataBrokerPackageName(previousConfig),
-      browserDataBrokerPackageName(nextConfig)
+      workspaceProviderExtensionPackageName(previousConfig, "browserData"),
+      workspaceProviderExtensionPackageName(nextConfig, "browserData")
     );
 
     const previousVcs = resolveVcsStoreBinding(previousDecls);
@@ -514,7 +516,7 @@ async function main() {
       return env;
     }
     if (className === "BrowserDataDO") {
-      const broker = browserDataBrokerPackageName(workspaceConfig);
+      const broker = workspaceProviderExtensionPackageName(workspaceConfig, "browserData");
       return broker ? { BROWSER_DATA_BROKER_ID: broker } : {};
     }
     return {};
@@ -716,7 +718,7 @@ async function main() {
   if (process.env["VIBESTUDIO_DOGFOOD"] === "1") {
     console.warn(
       "[Dogfood] VIBESTUDIO_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
-        "use the git bridge (vcs export) once available."
+        "commit and push changes from the source workspace instead."
     );
   }
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
@@ -1215,37 +1217,18 @@ async function main() {
     refs: refService,
     vcs: workspaceVcs,
   });
-  const invokeGitInteropProvider = async <T>(
-    ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
-    method: string,
-    args: unknown[]
-  ): Promise<T> => {
-    const extensionName = workspaceProviderExtensionPackageName(workspaceConfig, "gitInterop");
-    if (!extensionName) {
-      throw new Error(
-        "Git upstream provider is unavailable: meta/vibestudio.yml declares no `providers.gitInterop.extension`"
-      );
-    }
-    const host = extensionHostForGateway;
-    if (!host) {
-      throw new Error("Git upstream provider is unavailable: extension host not started");
-    }
-    return (await host.invoke(ctx, extensionName, method, args)) as T;
-  };
+  const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
   const gitInteropDefinition = createGitInteropService({
     treeScanner,
     workspacePath,
     workspaceConfig,
-    cloneRepo: async (ctx, repoPath) => {
-      await invokeGitInteropProvider(ctx, "cloneRepo", [{ repoPath }]);
-    },
     invokeGitProvider: invokeGitInteropProvider,
     approvalQueue,
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    workspaceConfigWouldChange: (nextConfig) => workspaceConfigWriter.wouldChange(nextConfig),
-    persistWorkspaceConfig: (input) => workspaceConfigWriter.persist(input),
+    workspaceConfigMutationWouldChange: (mutate) => workspaceConfigWriter.wouldMutate(mutate),
+    persistWorkspaceConfigMutation: (input) => workspaceConfigWriter.applyMutation(input),
     onWorkspaceSourceChanged: async (_ctx, _summary) => {
       // The extension-owned clone path imports the checkout into GAD itself.
       // The host only refreshes source-tree bookkeeping so a freshly cloned
@@ -2031,10 +2014,10 @@ async function main() {
     });
   }
 
-  // browser-data is now an extension at
-  // workspace/extensions/browser-data — callers reach it
-  // through `extensions.invoke`. The extension proxies to the BrowserDataDO
-  // via unified RPC, so storage stays in workerd unchanged.
+  // browser-data is an extension at workspace/extensions/browser-data. Callers
+  // reach its declared namespace through `extensions.invokeProvider`; direct
+  // package invocation is not a provider route. The extension proxies to the
+  // BrowserDataDO via unified RPC, so storage stays in workerd unchanged.
 
   // ── Generic public webhook ingress ──
   {
@@ -2246,6 +2229,10 @@ async function main() {
         getGatewayUrl: () => getLocalGatewayUrl("extension startup"),
         resolveProviderExtensionName: (provider) =>
           workspaceProviderExtensionPackageName(workspaceConfig, provider),
+        providerSlots: WORKSPACE_EXTENSION_PROVIDER_NAMES,
+        hostProviderContracts: {
+          gitInterop: GIT_INTEROP_PROVIDER_METHOD_NAMES,
+        },
         onWorkspaceUnitsChanged: (reason) =>
           hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason),
         extensionTransport: {

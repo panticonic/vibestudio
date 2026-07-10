@@ -297,7 +297,7 @@ services:
         - server
         - worker
         - do
-        # git-bridge extension: vcsLog / ingestWorktreeState / listStateFiles
+        # git-bridge extension: vcsLog / ingestWorktreeState
         - extension
         # agent CLI (plan §3.1 grant set): vcsLog, listChannelLogs, mirror reads
         - agent

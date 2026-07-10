@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "../servicePolicy.js";
-import { defineServiceMethods } from "../typedServiceClient.js";
+import { defineServiceMethods, type TypedServiceClient } from "../typedServiceClient.js";
 
 // Access descriptors shared across the gitInterop method group. All four
 // methods mutate workspace config (`meta/vibestudio.yml`) and/or reach the
@@ -37,102 +37,113 @@ const UPSTREAM_STATUS_ACCESS: MethodAccessDescriptor = {
 const UPSTREAM_OPERATION_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
+const nonNegativeIntegerSchema = z.number().int().nonnegative();
 
-export const gitRemoteSchema = z.object({
-  name: z.string().describe('Git remote name, e.g. "origin".'),
-  url: z.string().describe("Remote fetch/push URL (https or git)."),
-  branch: z
-    .string()
-    .optional()
-    .describe("Default branch to track/clone; omit to use the remote's default."),
-});
+export const gitRemoteSchema = z
+  .object({
+    name: z.string().describe('Git remote name, e.g. "origin".'),
+    url: z.string().describe("Remote fetch/push URL (https or git)."),
+    branch: z
+      .string()
+      .optional()
+      .describe("Default branch to track/clone; omit to use the remote's default."),
+  })
+  .strict();
 export type GitRemote = z.infer<typeof gitRemoteSchema>;
 
-export const gitUpstreamConfigSchema = z.object({
-  remote: z.string().describe('Declared remote name, e.g. "origin".'),
-  branch: z
-    .string()
-    .optional()
-    .describe("Remote branch to track; defaults to the remote branch or main."),
-  autoPush: z.boolean().optional().describe("Whether protected-main advances auto-push upstream."),
-  credentialId: z.string().optional().describe("Credential id used for credentialed git HTTP."),
-  authorEmail: z.string().optional().describe("Exported git commit author email override."),
-  authorName: z.string().optional().describe("Exported git commit author name override."),
-});
+export const gitUpstreamConfigSchema = z
+  .object({
+    remote: z.string().describe('Declared remote name, e.g. "origin".'),
+    branch: z
+      .string()
+      .optional()
+      .describe("Remote branch to track; defaults to the remote branch or main."),
+    autoPush: z
+      .boolean()
+      .optional()
+      .describe("Whether protected-main advances auto-push upstream."),
+    credentialId: z.string().optional().describe("Credential id used for credentialed git HTTP."),
+    authorEmail: z.string().optional().describe("Exported git commit author email override."),
+    authorName: z.string().optional().describe("Exported git commit author name override."),
+  })
+  .strict();
 export type GitUpstreamConfig = z.infer<typeof gitUpstreamConfigSchema>;
 
-const gitRemoteDeclarationSchema = z.union([
-  z.string(),
-  z.object({
+const gitRemoteDeclarationSchema = z
+  .object({
     url: z.string(),
-    branch: z.string().nullable().optional(),
-  }),
-]);
+    branch: z.string().optional(),
+  })
+  .strict();
 
-export const gitSharedRemotesSchema = z.record(
-  z.record(z.record(gitRemoteDeclarationSchema.nullable().optional()).optional()).optional()
-);
+export const gitSharedRemotesSchema = z.record(z.record(z.record(gitRemoteDeclarationSchema)));
 export type GitSharedRemotes = z.infer<typeof gitSharedRemotesSchema>;
 
-export const gitUpstreamsSchema = z.record(
-  z.record(gitUpstreamConfigSchema.nullable().optional()).optional()
-);
+export const gitUpstreamsSchema = z.record(z.record(gitUpstreamConfigSchema));
 export type GitUpstreams = z.infer<typeof gitUpstreamsSchema>;
 
-export const gitImportProjectSchema = z.object({
-  path: z
-    .string()
-    .describe(
-      'Workspace-relative target path for the imported repo; must sit under a supported import dir (e.g. "projects/<name>").'
-    ),
-  remote: gitRemoteSchema.describe("Remote to clone from and record as a shared remote."),
-  branch: z
-    .string()
-    .optional()
-    .describe("Branch to clone; overrides remote.branch when both are given."),
-  credentialId: z
-    .string()
-    .optional()
-    .describe("Credential to authenticate the clone via the egress proxy."),
-});
+export const gitImportProjectSchema = z
+  .object({
+    path: z
+      .string()
+      .describe(
+        'Workspace-relative target path for the imported repo; must sit under a supported import dir (e.g. "projects/<name>").'
+      ),
+    remote: gitRemoteSchema.describe("Remote to clone from and record as a shared remote."),
+    credentialId: z
+      .string()
+      .optional()
+      .describe("Credential to authenticate the clone via the egress proxy."),
+  })
+  .strict();
 export type GitImportProjectRequest = z.infer<typeof gitImportProjectSchema>;
 
-export const gitCompleteWorkspaceDependenciesSchema = z.object({
-  credentialId: z
-    .string()
-    .optional()
-    .describe("Credential used to authenticate clones of the configured remotes."),
-});
+export const gitCompleteWorkspaceDependenciesSchema = z
+  .object({
+    credentialId: z
+      .string()
+      .optional()
+      .describe("Credential used to authenticate clones of the configured remotes."),
+  })
+  .strict();
 export type GitCompleteWorkspaceDependenciesOptions = z.infer<
   typeof gitCompleteWorkspaceDependenciesSchema
 >;
 
-export const gitImportedWorkspaceRepoSchema = z.object({
-  path: z.string(),
-  remote: gitRemoteSchema,
-});
+export const gitImportedWorkspaceRepoSchema = z
+  .object({
+    path: z.string(),
+    remote: gitRemoteSchema,
+  })
+  .strict();
 export type GitImportedWorkspaceRepo = z.infer<typeof gitImportedWorkspaceRepoSchema>;
 
-export const gitCompleteWorkspaceDependenciesResultSchema = z.object({
-  imported: z.array(gitImportedWorkspaceRepoSchema),
-  skipped: z.array(
-    z.object({
-      path: z.string(),
-      reason: z.enum(["already-present", "unsupported-path"]),
-    })
-  ),
-  failed: z.array(
-    z.object({
-      path: z.string(),
-      error: z.string(),
-    })
-  ),
-});
+export const gitCompleteWorkspaceDependenciesResultSchema = z
+  .object({
+    imported: z.array(gitImportedWorkspaceRepoSchema),
+    skipped: z.array(
+      z
+        .object({
+          path: z.string(),
+          reason: z.enum(["already-present", "unsupported-path"]),
+        })
+        .strict()
+    ),
+    failed: z.array(
+      z
+        .object({
+          path: z.string(),
+          error: z.string(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
 export type GitCompleteWorkspaceDependenciesResult = z.infer<
   typeof gitCompleteWorkspaceDependenciesResultSchema
 >;
 
-const gitUpstreamStatusStateSchema = z.enum([
+export const gitUpstreamStateSchema = z.enum([
   "in-sync",
   "ahead",
   "behind",
@@ -143,71 +154,118 @@ const gitUpstreamStatusStateSchema = z.enum([
   "pushing",
   "local-only",
 ]);
+export type GitUpstreamState = z.infer<typeof gitUpstreamStateSchema>;
 
-const gitUpstreamStatusOptionsSchema = z.object({
-  remote: z.string().optional(),
-  branch: z.string().optional(),
-  credentialId: z.string().optional(),
-  fetch: z.boolean().optional(),
-});
+export const gitUpstreamStatusOptionsSchema = z
+  .object({
+    remote: z.string().optional(),
+    branch: z.string().optional(),
+    credentialId: z.string().optional(),
+    fetch: z.boolean().optional(),
+  })
+  .strict();
+export type GitUpstreamStatusOptions = z.infer<typeof gitUpstreamStatusOptionsSchema>;
 
-const gitUpstreamStatusRowSchema = z.object({
-  repoPath: z.string(),
-  remote: z.string().optional(),
-  branch: z.string().optional(),
-  autoPush: z.boolean(),
-  state: gitUpstreamStatusStateSchema,
-  aheadBy: z.number(),
-  behindBy: z.number(),
-  lastPushedSha: z.string().optional(),
-  lastPushedAt: z.number().optional(),
-  lastError: z.string().optional(),
-});
+export const gitUpstreamStatusRowSchema = z
+  .object({
+    repoPath: z.string(),
+    remote: z.string().optional(),
+    branch: z.string().optional(),
+    autoPush: z.boolean(),
+    state: gitUpstreamStateSchema,
+    aheadBy: nonNegativeIntegerSchema,
+    behindBy: nonNegativeIntegerSchema,
+    lastPushedSha: z.string().optional(),
+    lastPushedAt: nonNegativeIntegerSchema.optional(),
+    lastError: z.string().optional(),
+  })
+  .strict();
+export type GitUpstreamStatusRow = z.infer<typeof gitUpstreamStatusRowSchema>;
 
-const gitOverwritePreviewSchema = z.object({
-  count: z.number(),
-  commits: z.array(z.object({ sha: z.string(), summary: z.string() })),
-});
+export const gitOverwritePreviewSchema = z
+  .object({
+    count: nonNegativeIntegerSchema,
+    commits: z.array(z.object({ sha: z.string(), summary: z.string() }).strict()),
+  })
+  .strict();
+export type GitOverwritePreview = z.infer<typeof gitOverwritePreviewSchema>;
 
-const gitPushUpstreamResultSchema = z.object({
-  exported: z.number(),
-  headCommit: z.string().nullable(),
-  pushed: z.boolean(),
-  status: gitUpstreamStatusStateSchema,
-  overwrites: gitOverwritePreviewSchema.optional(),
-});
+export const gitPushUpstreamOptionsSchema = z
+  .object({
+    force: z.boolean().optional(),
+  })
+  .strict();
+export type GitPushUpstreamOptions = z.infer<typeof gitPushUpstreamOptionsSchema>;
 
-const gitPullUpstreamResultSchema = z.object({
-  behindBy: z.number(),
-  aheadBy: z.number(),
-  incoming: z.array(z.object({ sha: z.string(), summary: z.string() })),
-  imported: z.object({ changed: z.boolean().optional(), stateHash: z.string().optional() }).optional(),
-});
+export const gitPushUpstreamResultSchema = z
+  .object({
+    exported: nonNegativeIntegerSchema,
+    headCommit: z.string().nullable(),
+    pushed: z.boolean(),
+    status: gitUpstreamStateSchema,
+    overwrites: gitOverwritePreviewSchema.optional(),
+  })
+  .strict();
+export type GitPushUpstreamResult = z.infer<typeof gitPushUpstreamResultSchema>;
 
-const gitPublishRepoSchema = z.object({
-  repoPath: z.string(),
-  provider: z.string().optional(),
-  name: z.string().optional(),
-  private: z.boolean().optional(),
-  description: z.string().optional(),
-  remote: z.string().optional(),
-  branch: z.string().optional(),
-  credentialId: z.string().optional(),
-  authorEmail: z.string().optional(),
-  authorName: z.string().optional(),
-  force: z.boolean().optional(),
-});
+export const gitPullUpstreamOptionsSchema = z
+  .object({
+    dryRun: z.boolean().optional(),
+  })
+  .strict();
+export type GitPullUpstreamOptions = z.infer<typeof gitPullUpstreamOptionsSchema>;
 
-const gitPublishResultSchema = z.object({
-  repoPath: z.string(),
-  provider: z.string(),
-  remoteUrl: z.string(),
-  webUrl: z.string(),
-  owner: z.string(),
-  exported: z.number(),
-  headCommit: z.string().nullable(),
-  pushed: z.boolean(),
-});
+export const gitImportResultSchema = z
+  .object({
+    stateHash: z.string(),
+    changed: z.boolean(),
+  })
+  .strict();
+export type GitImportResult = z.infer<typeof gitImportResultSchema>;
+
+export const gitPullUpstreamResultSchema = z
+  .object({
+    behindBy: nonNegativeIntegerSchema,
+    aheadBy: nonNegativeIntegerSchema,
+    incoming: z.array(z.object({ sha: z.string(), summary: z.string() }).strict()),
+    imported: gitImportResultSchema.optional(),
+  })
+  .strict();
+export type GitPullUpstreamResult = z.infer<typeof gitPullUpstreamResultSchema>;
+
+export const gitPublishRepoInputSchema = z
+  .object({
+    repoPath: z.string(),
+    provider: z.string().optional(),
+    name: z.string().optional(),
+    private: z.boolean().optional(),
+    description: z.string().optional(),
+    remote: z.string().optional(),
+    branch: z.string().optional(),
+    credentialId: z.string().optional(),
+    authorEmail: z.string().optional(),
+    authorName: z.string().optional(),
+    autoPush: z.boolean().optional(),
+    force: z.boolean().optional(),
+  })
+  .strict();
+export type GitPublishRepoInput = z.infer<typeof gitPublishRepoInputSchema>;
+
+export const gitPublishRepoResultSchema = z
+  .object({
+    repoPath: z.string(),
+    provider: z.string(),
+    remote: z.string(),
+    branch: z.string(),
+    remoteUrl: z.string(),
+    webUrl: z.string(),
+    owner: z.string(),
+    exported: nonNegativeIntegerSchema,
+    headCommit: z.string().nullable(),
+    pushed: z.boolean(),
+  })
+  .strict();
+export type GitPublishRepoResult = z.infer<typeof gitPublishRepoResultSchema>;
 
 export const gitInteropMethods = defineServiceMethods({
   setSharedRemote: {
@@ -217,7 +275,7 @@ export const gitInteropMethods = defineServiceMethods({
       z.string().describe("Workspace-relative repo/unit path the remote applies to."),
       gitRemoteSchema,
     ]),
-    returns: gitSharedRemotesSchema.optional(),
+    returns: gitSharedRemotesSchema,
     access: SHARED_REMOTE_WRITE_ACCESS,
     examples: [
       {
@@ -235,7 +293,7 @@ export const gitInteropMethods = defineServiceMethods({
       z.string().describe("Workspace-relative repo/unit path the remote belongs to."),
       z.string().describe('Name of the remote to remove, e.g. "origin".'),
     ]),
-    returns: gitSharedRemotesSchema.optional(),
+    returns: gitSharedRemotesSchema,
     access: SHARED_REMOTE_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit", "origin"] }],
   },
@@ -246,7 +304,7 @@ export const gitInteropMethods = defineServiceMethods({
       z.string().describe("Workspace-relative repo/unit path the upstream applies to."),
       gitUpstreamConfigSchema,
     ]),
-    returns: gitUpstreamsSchema.optional(),
+    returns: gitUpstreamsSchema,
     access: UPSTREAM_WRITE_ACCESS,
     examples: [
       {
@@ -263,7 +321,7 @@ export const gitInteropMethods = defineServiceMethods({
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the upstream belongs to."),
     ]),
-    returns: gitUpstreamsSchema.optional(),
+    returns: gitUpstreamsSchema,
     access: UPSTREAM_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit"] }],
   },
@@ -272,18 +330,27 @@ export const gitInteropMethods = defineServiceMethods({
       "Toggle auto-push on an already declared upstream, persisting the change to meta/vibestudio.yml; may prompt for capability approval.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the upstream belongs to."),
-      z.boolean().optional().describe("Whether auto-push should be enabled. Defaults to true."),
+      z.boolean().describe("Whether auto-push should be enabled."),
     ]),
-    returns: gitUpstreamsSchema.optional(),
+    returns: gitUpstreamsSchema,
     access: UPSTREAM_WRITE_ACCESS,
     examples: [{ args: ["projects/bgkit", true] }],
   },
   upstreamStatus: {
     description:
       "Return external Git upstream status for tracked repos. The configured gitInterop provider performs any Git/network work.",
-    args: z.tuple([
-      z.union([z.string(), z.array(z.string()), z.null()]).optional(),
-      gitUpstreamStatusOptionsSchema.optional(),
+    args: z.union([
+      z.tuple([
+        z
+          .array(z.string())
+          .describe("Workspace-relative repos to inspect; pass an empty array for every upstream."),
+      ]),
+      z.tuple([
+        z
+          .array(z.string())
+          .describe("Workspace-relative repos to inspect; pass an empty array for every upstream."),
+        gitUpstreamStatusOptionsSchema,
+      ]),
     ]),
     returns: z.array(gitUpstreamStatusRowSchema),
     access: UPSTREAM_STATUS_ACCESS,
@@ -292,9 +359,12 @@ export const gitInteropMethods = defineServiceMethods({
   pushUpstream: {
     description:
       "Export protected main and push it to the repo's declared upstream through the configured gitInterop provider.",
-    args: z.tuple([
-      z.string().describe("Workspace-relative repo/unit path to push."),
-      z.object({ force: z.boolean().optional() }).optional(),
+    args: z.union([
+      z.tuple([z.string().describe("Workspace-relative repo/unit path to push.")]),
+      z.tuple([
+        z.string().describe("Workspace-relative repo/unit path to push."),
+        gitPushUpstreamOptionsSchema,
+      ]),
     ]),
     returns: gitPushUpstreamResultSchema,
     access: UPSTREAM_OPERATION_ACCESS,
@@ -303,9 +373,12 @@ export const gitInteropMethods = defineServiceMethods({
   pullUpstream: {
     description:
       "Fetch/pull a declared upstream and import upstream changes into protected main through the configured gitInterop provider.",
-    args: z.tuple([
-      z.string().describe("Workspace-relative repo/unit path to pull."),
-      z.object({ dryRun: z.boolean().optional() }).optional(),
+    args: z.union([
+      z.tuple([z.string().describe("Workspace-relative repo/unit path to pull.")]),
+      z.tuple([
+        z.string().describe("Workspace-relative repo/unit path to pull."),
+        gitPullUpstreamOptionsSchema,
+      ]),
     ]),
     returns: gitPullUpstreamResultSchema,
     access: UPSTREAM_OPERATION_ACCESS,
@@ -314,14 +387,14 @@ export const gitInteropMethods = defineServiceMethods({
   publishRepo: {
     description:
       "Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
-    args: z.tuple([gitPublishRepoSchema]),
-    returns: gitPublishResultSchema,
+    args: z.tuple([gitPublishRepoInputSchema]),
+    returns: gitPublishRepoResultSchema,
     access: UPSTREAM_OPERATION_ACCESS,
     examples: [{ args: [{ repoPath: "projects/bgkit", private: true }] }],
   },
   importProject: {
     description:
-      "Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval.",
+      "Clone an external Git project into the workspace at the requested path and record its remote and upstream in meta/vibestudio.yml; clones over the network and may prompt for config-write approval.",
     args: z.tuple([gitImportProjectSchema]),
     returns: gitImportedWorkspaceRepoSchema,
     access: IMPORT_PROJECT_ACCESS,
@@ -330,8 +403,11 @@ export const gitInteropMethods = defineServiceMethods({
         args: [
           {
             path: "projects/bgkit",
-            remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
-            branch: "vibestudio-bridge",
+            remote: {
+              name: "origin",
+              url: "https://github.com/werg/bgkit.git",
+              branch: "vibestudio-bridge",
+            },
           },
         ],
       },
@@ -340,10 +416,54 @@ export const gitInteropMethods = defineServiceMethods({
   completeWorkspaceDependencies: {
     description:
       "Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results.",
-    args: z.union([z.tuple([]), z.tuple([gitCompleteWorkspaceDependenciesSchema.optional()])]),
+    args: z.union([z.tuple([]), z.tuple([gitCompleteWorkspaceDependenciesSchema])]),
     returns: gitCompleteWorkspaceDependenciesResultSchema,
     access: COMPLETE_DEPENDENCIES_ACCESS,
     examples: [{ args: [] }],
   },
 });
 export type GitInteropMethods = typeof gitInteropMethods;
+export type GitInteropClient = TypedServiceClient<GitInteropMethods>;
+
+/**
+ * Complete host-to-extension contract for the manifest-selected Git provider.
+ * These methods are host-only and cannot be reached through generic extension
+ * invocation.
+ */
+export const gitInteropProviderMethods = defineServiceMethods({
+  upstreamStatus: gitInteropMethods.upstreamStatus,
+  pushUpstream: gitInteropMethods.pushUpstream,
+  pullUpstream: gitInteropMethods.pullUpstream,
+  publishRepo: gitInteropMethods.publishRepo,
+  cloneRepo: {
+    description: "Clone one declared workspace dependency and import it into protected main.",
+    args: z.tuple([z.object({ repoPath: z.string() }).strict()]),
+    returns: gitImportResultSchema,
+  },
+  onMainAdvanced: {
+    description: "Queue upstream processing after protected main advances.",
+    args: z.tuple([z.array(z.string())]),
+    returns: z.object({ queued: nonNegativeIntegerSchema }).strict(),
+  },
+});
+export type GitInteropProviderMethods = typeof gitInteropProviderMethods;
+export type GitInteropProvider = TypedServiceClient<GitInteropProviderMethods>;
+export type GitInteropProviderMethod = keyof GitInteropProviderMethods;
+export type GitInteropProviderArgs<M extends GitInteropProviderMethod> = z.infer<
+  GitInteropProviderMethods[M]["args"]
+>;
+export type GitInteropProviderResult<M extends GitInteropProviderMethod> = z.infer<
+  GitInteropProviderMethods[M]["returns"]
+>;
+
+export const GIT_INTEROP_PROVIDER_METHOD_NAMES = Object.freeze(
+  Object.keys(gitInteropProviderMethods) as GitInteropProviderMethod[]
+);
+
+export const GIT_INTEROP_PROVIDER_OPERATIONS = [
+  "upstreamStatus",
+  "pushUpstream",
+  "pullUpstream",
+  "publishRepo",
+] as const satisfies readonly GitInteropProviderMethod[];
+export type GitInteropProviderOperation = (typeof GIT_INTEROP_PROVIDER_OPERATIONS)[number];

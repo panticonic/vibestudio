@@ -35,6 +35,19 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(out!.methods["readFile"]).toBe(fsService.readFile);
   });
 
+  it("documents the runtime-only blobstore.putBytes helper without inventing a wire method", () => {
+    const putBase64Schema = { description: "wire base64 method", argsSchema: {} };
+    const out = describeEvalBindingSurface("blobstore", ["putBase64", "putBytes"], {
+      putBase64: putBase64Schema,
+    });
+
+    expect(out!.methods["putBase64"]).toBe(putBase64Schema);
+    expect(out!.methods["putBytes"]).toBe(EVAL_RUNTIME_METHOD_NOTES["blobstore.putBytes"]);
+    const description = (out!.methods["putBytes"] as { description: string }).description;
+    expect(description).toContain("Uint8Array | ArrayBuffer");
+    expect(description).toContain("MIME metadata");
+  });
+
   it("describes mktemp as a temp FILE path (not a directory) so it isn't misused", () => {
     const out = describeEvalBindingSurface("fs", ["mktemp"], fsService);
     const desc = (out!.methods["mktemp"] as { description: string }).description;
@@ -48,10 +61,14 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     const createDesc = (out!.methods["createEntity"] as { description: string }).description;
     expect(createDesc).toContain('kind: "worker"');
     expect(createDesc).toContain("ctx:${ctx.contextId}");
+    expect(createDesc).toContain("workers.listSources()");
+    expect(createDesc).toContain("real manifest entry points");
+    expect(createDesc).toContain("not that worker code observed");
+    expect(createDesc).toContain("readNonSecretProbe");
     expect(createDesc).toContain('rpc.call("main", `workers.listSources`, [])');
-    expect((out!.methods["retireEntity"] as { description: string }).description).toContain(
-      "runtime.retireEntity"
-    );
+    const retireDesc = (out!.methods["retireEntity"] as { description: string }).description;
+    expect(retireDesc).toContain("runtime.retireEntity");
+    expect(retireDesc).toContain("runtime.listEntities");
   });
 
   it("falls back to a generic introspect note for a live method with no schema or override", () => {

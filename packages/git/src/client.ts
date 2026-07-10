@@ -874,10 +874,16 @@ export class GitClient {
    * Pull latest changes from remote
    */
   async pull(options: PullOptions): Promise<void> {
-    const author = options.author ?? this.author;
-    const onProgress = options.onProgress
+    const checked = assertOptionsObject<PullOptions>(
+      options,
+      "pull",
+      "pull({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string })"
+    );
+    assertDirString(checked.dir, "pull");
+    const author = checked.author ?? this.author;
+    const onProgress = checked.onProgress
       ? (progress: { phase?: string; loaded?: number; total?: number }) => {
-          options.onProgress?.({
+          checked.onProgress?.({
             phase: progress.phase ?? "unknown",
             loaded: progress.loaded ?? 0,
             total: progress.total ?? 0,
@@ -889,9 +895,11 @@ export class GitClient {
       await git.pull({
         fs: this.fs,
         http: this.http,
-        dir: options.dir,
-        remote: options.remote ?? "origin",
-        ref: options.ref,
+        dir: checked.dir,
+        url: checked.url,
+        remote: checked.remote ?? "origin",
+        ref: checked.ref,
+        remoteRef: checked.remoteRef,
         singleBranch: true,
         author,
         onProgress,
@@ -908,17 +916,24 @@ export class GitClient {
   /**
    * Fetch without merging
    */
-  async fetch(options: { dir: string; remote?: string; ref?: string }): Promise<FetchResult> {
-    const checked = assertOptionsObject<{ dir: string; remote?: string; ref?: string }>(
-      options,
-      "fetch",
-      "fetch({ dir: string, remote?: string, ref?: string })"
-    );
+  async fetch(options: {
+    dir: string;
+    url?: string;
+    remote?: string;
+    ref?: string;
+  }): Promise<FetchResult> {
+    const checked = assertOptionsObject<{
+      dir: string;
+      url?: string;
+      remote?: string;
+      ref?: string;
+    }>(options, "fetch", "fetch({ dir: string, url?: string, remote?: string, ref?: string })");
     try {
       const result = await git.fetch({
         fs: this.fs,
         http: this.http,
         dir: checked.dir,
+        url: checked.url,
         remote: checked.remote ?? "origin",
         ref: checked.ref,
         singleBranch: true,
@@ -938,25 +953,18 @@ export class GitClient {
 
   /**
    * Push changes to remote.
-   * Accepts either positional args (dir, options?) or a full options object.
    */
-  async push(
-    dirOrOptions: string | PushOptions,
-    extraOptions?: Omit<PushOptions, "dir">
-  ): Promise<void> {
-    const options: PushOptions =
-      typeof dirOrOptions === "string"
-        ? { dir: dirOrOptions, ...(extraOptions ?? {}) }
-        : assertOptionsObject<PushOptions>(
-            dirOrOptions,
-            "push",
-            "push({ dir: string, remote?: string, ref?: string, force?: boolean })"
-          );
-    assertDirString(options.dir, "push");
+  async push(options: PushOptions): Promise<void> {
+    const checked = assertOptionsObject<PushOptions>(
+      options,
+      "push",
+      "push({ dir: string, url?: string, remote?: string, ref?: string, remoteRef?: string, force?: boolean })"
+    );
+    assertDirString(checked.dir, "push");
 
-    const onProgress = options.onProgress
+    const onProgress = checked.onProgress
       ? (progress: { phase?: string; loaded?: number; total?: number }) => {
-          options.onProgress?.({
+          checked.onProgress?.({
             phase: progress.phase ?? "unknown",
             loaded: progress.loaded ?? 0,
             total: progress.total ?? 0,
@@ -968,11 +976,12 @@ export class GitClient {
       await git.push({
         fs: this.fs,
         http: this.http,
-        dir: options.dir,
-        remote: options.remote ?? "origin",
-        ref: options.ref,
-        remoteRef: options.remoteRef,
-        force: options.force ?? false,
+        dir: checked.dir,
+        url: checked.url,
+        remote: checked.remote ?? "origin",
+        ref: checked.ref,
+        remoteRef: checked.remoteRef,
+        force: checked.force ?? false,
         onProgress,
       });
     } catch (err) {
@@ -980,7 +989,7 @@ export class GitClient {
       if (authFailure) {
         throw new GitAuthError(authFailure.message, authFailure.statusCode);
       }
-      throw describeGitOperationError("push", options, err);
+      throw describeGitOperationError("push", checked, err);
     }
   }
 
@@ -1039,29 +1048,22 @@ export class GitClient {
 
   /**
    * Create a commit.
-   * Accepts either positional args (dir, message, author?) or an options object.
    */
-  async commit(
-    dirOrOptions: string | CommitOptions,
-    message?: string,
-    author?: CommitOptions["author"]
-  ): Promise<string> {
-    const options: CommitOptions =
-      typeof dirOrOptions === "string"
-        ? { dir: dirOrOptions, message: message!, author }
-        : dirOrOptions;
-    if (!options.dir) {
-      throw new Error("git.commit: 'dir' is required");
-    }
-    if (!options.message) {
-      throw new Error("git.commit: 'message' is required");
+  async commit(options: CommitOptions): Promise<string> {
+    const checked = assertOptionsObject<CommitOptions>(
+      options,
+      "commit",
+      "commit({ dir: string, message: string, author?: { name: string, email: string } })"
+    );
+    if (typeof checked.message !== "string" || checked.message.length === 0) {
+      throw new TypeError("git.commit: expected a non-empty message string");
     }
 
     const sha = await git.commit({
       fs: this.fs,
-      dir: options.dir,
-      message: options.message,
-      author: options.author ?? this.author,
+      dir: checked.dir,
+      message: checked.message,
+      author: checked.author ?? this.author,
     });
 
     return sha;
@@ -1214,19 +1216,33 @@ export class GitClient {
     });
   }
 
-  async fastForward(options: { dir: string; remote?: string; ref: string }): Promise<void> {
-    const checked = assertOptionsObject<{ dir: string; remote?: string; ref: string }>(
+  async fastForward(options: {
+    dir: string;
+    url?: string;
+    remote?: string;
+    ref: string;
+    remoteRef?: string;
+  }): Promise<void> {
+    const checked = assertOptionsObject<{
+      dir: string;
+      url?: string;
+      remote?: string;
+      ref: string;
+      remoteRef?: string;
+    }>(
       options,
       "fastForward",
-      "fastForward({ dir: string, remote?: string, ref: string })"
+      "fastForward({ dir: string, url?: string, remote?: string, ref: string, remoteRef?: string })"
     );
     try {
       await git.fastForward({
         fs: this.fs,
         http: this.http,
         dir: checked.dir,
+        url: checked.url,
         remote: checked.remote ?? "origin",
         ref: checked.ref,
+        remoteRef: checked.remoteRef,
       });
     } catch (err) {
       const authFailure = getAuthFailureInfo(err);
@@ -1370,17 +1386,22 @@ export class GitClient {
 
   /**
    * Create a branch.
-   * Accepts either positional args (dir, name) or an options object.
    */
-  async createBranch(dirOrOptions: string | CreateBranchOptions, name?: string): Promise<void> {
-    const options: CreateBranchOptions =
-      typeof dirOrOptions === "string" ? { dir: dirOrOptions, name: name! } : dirOrOptions;
+  async createBranch(options: CreateBranchOptions): Promise<void> {
+    const checked = assertOptionsObject<CreateBranchOptions>(
+      options,
+      "createBranch",
+      "createBranch({ dir: string, name: string, startPoint?: string, checkout?: boolean })"
+    );
+    if (typeof checked.name !== "string" || checked.name.length === 0) {
+      throw new TypeError("git.createBranch: expected a non-empty name string");
+    }
     await git.branch({
       fs: this.fs,
-      dir: options.dir,
-      ref: options.name,
-      object: options.startPoint ?? "HEAD",
-      checkout: options.checkout ?? false,
+      dir: checked.dir,
+      ref: checked.name,
+      object: checked.startPoint ?? "HEAD",
+      checkout: checked.checkout ?? false,
     });
   }
 

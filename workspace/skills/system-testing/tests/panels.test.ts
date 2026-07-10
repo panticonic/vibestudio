@@ -18,7 +18,7 @@ describe("create-panel validation", () => {
       [
         'const handle = await openPanel("panels/spectrolite");',
         "const page = await handle.cdp.lightweightPage();",
-        "await handle.cdp.captureScreenshot({ format: \"png\" });",
+        'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
       ].join("\n"),
       "error"
@@ -31,7 +31,7 @@ describe("create-panel validation", () => {
       [
         'const handle = await openPanel("panels/spectrolite");',
         "const page = await handle.cdp.lightweightPage();",
-        "await handle.cdp.captureScreenshot({ format: \"png\" });",
+        'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
       ].join("\n"),
       "complete"

@@ -33,10 +33,14 @@ export interface CloneOptions {
 export interface PullOptions {
   /** Local directory path */
   dir: string;
+  /** Immutable remote URL override. When set, config changes cannot redirect the operation. */
+  url?: string;
   /** Remote name (default: 'origin') */
   remote?: string;
   /** Branch to pull (default: current branch) */
   ref?: string;
+  /** Remote branch to merge into the local ref. Defaults to the configured merge ref. */
+  remoteRef?: string;
   /** Author info for merge commit if needed */
   author?: {
     name: string;
@@ -52,6 +56,8 @@ export interface PullOptions {
 export interface PushOptions {
   /** Local directory path */
   dir: string;
+  /** Immutable remote URL override. When set, config changes cannot redirect the operation. */
+  url?: string;
   /** Remote name (default: 'origin') */
   remote?: string;
   /** Branch to push (default: current branch) */

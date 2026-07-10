@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 vi.mock("@workspace/browser-data", async () => {
-  const actual = await vi.importActual<typeof import("@workspace/browser-data")>("@workspace/browser-data");
+  const actual =
+    await vi.importActual<typeof import("@workspace/browser-data")>("@workspace/browser-data");
   return {
     ...actual,
     detectBrowsers: vi.fn(() => []),
@@ -26,36 +28,41 @@ vi.mock("@workspace/browser-data", async () => {
       },
     ]),
     resolveProfilePath: vi.fn(() => "/tmp/profile"),
-    runImportPipeline: vi.fn(async (request: { dataTypes: string[] }, store: {
-      bookmarks: { addBatch(items: unknown[], meta?: unknown): Promise<number> };
-      history: { addBatch(items: unknown[], meta?: unknown): Promise<number> };
-    }) => {
-      const results = [];
-      if (request.dataTypes.includes("bookmarks")) {
-        await store.bookmarks.addBatch([{ title: "Example", url: "https://example.com" }]);
-        results.push({
-          dataType: "bookmarks",
-          success: true,
-          itemCount: 1,
-          skippedCount: 0,
-          warnings: [],
-        });
+    runImportPipeline: vi.fn(
+      async (
+        request: { dataTypes: string[] },
+        store: {
+          bookmarks: { addBatch(items: unknown[], meta?: unknown): Promise<number> };
+          history: { addBatch(items: unknown[], meta?: unknown): Promise<number> };
+        }
+      ) => {
+        const results = [];
+        if (request.dataTypes.includes("bookmarks")) {
+          await store.bookmarks.addBatch([{ title: "Example", url: "https://example.com" }]);
+          results.push({
+            dataType: "bookmarks",
+            success: true,
+            itemCount: 1,
+            skippedCount: 0,
+            warnings: [],
+          });
+        }
+        if (request.dataTypes.includes("history")) {
+          await store.history.addBatch(
+            [{ url: "https://example.com/docs", title: "Docs", visitCount: 1, lastVisitTime: 100 }],
+            { browser: "chrome", profilePath: "/tmp/profile" }
+          );
+          results.push({
+            dataType: "history",
+            success: true,
+            itemCount: 1,
+            skippedCount: 0,
+            warnings: [],
+          });
+        }
+        return results;
       }
-      if (request.dataTypes.includes("history")) {
-        await store.history.addBatch(
-          [{ url: "https://example.com/docs", title: "Docs", visitCount: 1, lastVisitTime: 100 }],
-          { browser: "chrome", profilePath: "/tmp/profile" },
-        );
-        results.push({
-          dataType: "history",
-          success: true,
-          itemCount: 1,
-          skippedCount: 0,
-          warnings: [],
-        });
-      }
-      return results;
-    }),
+    ),
   };
 });
 
@@ -69,7 +76,7 @@ type ApprovalChoice =
 function makeContext(
   callerKind: string | null = "shell",
   callerId = "shell",
-  approvalChoice: ApprovalChoice = { kind: "choice", choice: "allow" },
+  approvalChoice: ApprovalChoice = { kind: "choice", choice: "allow" }
 ) {
   const rpcCall = vi.fn(async (_targetId: string, method: string, ..._args: unknown[]) => {
     if (method === "addBookmarksBatch") return 1;
@@ -112,27 +119,54 @@ function makeContext(
 }
 
 describe("@workspace-extensions/browser-data", () => {
+  it("exposes exactly the manifest-declared browserData provider namespace", async () => {
+    const { ctx } = makeContext("shell");
+    const activated = await activate(ctx as never);
+    const manifest = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
+      vibestudio: {
+        extension: { providerContracts: { browserData: { methods: string[] } } };
+      };
+    };
+
+    expect(Object.keys(activated)).toEqual(["providerContracts"]);
+    expect(Object.keys(activated.providerContracts.browserData)).toEqual(
+      manifest.vibestudio.extension.providerContracts.browserData.methods
+    );
+  });
+
   it("gates sensitive methods behind approval and rejects when the user denies", async () => {
-    const { ctx, approvalsRequest } = makeContext("panel", "panel-1", { kind: "choice", choice: "deny" });
-    const api = await activate(ctx as never);
+    const { ctx, approvalsRequest } = makeContext("panel", "panel-1", {
+      kind: "choice",
+      choice: "deny",
+    });
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
     await expect(api.getPasswords()).rejects.toMatchObject({ code: "EACCES" });
     expect(approvalsRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ subject: { id: "browser-data:getPasswords", label: expect.any(String) } }),
+      expect.objectContaining({
+        subject: { id: "browser-data:getPasswords", label: expect.any(String) },
+      })
     );
   });
 
   it("allows sensitive methods for a userland caller once approved", async () => {
-    const { ctx, approvalsRequest } = makeContext("panel", "panel-1", { kind: "choice", choice: "allow" });
-    const api = await activate(ctx as never);
+    const { ctx, approvalsRequest } = makeContext("panel", "panel-1", {
+      kind: "choice",
+      choice: "allow",
+    });
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
-    await expect(api.getPasswords()).resolves.toEqual([{ id: 7, origin_url: "https://example.com" }]);
+    await expect(api.getPasswords()).resolves.toEqual([
+      { id: 7, origin_url: "https://example.com" },
+    ]);
     expect(approvalsRequest).toHaveBeenCalledTimes(1);
   });
 
   it("does not prompt for non-sensitive view methods", async () => {
     const { ctx, approvalsRequest } = makeContext("panel", "panel-1");
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
     await expect(api.getBookmarks()).resolves.toEqual([{ id: 1, title: "Example" }]);
     expect(approvalsRequest).not.toHaveBeenCalled();
@@ -140,51 +174,65 @@ describe("@workspace-extensions/browser-data", () => {
 
   it("does not prompt trusted shell callers for sensitive methods", async () => {
     const { ctx, approvalsRequest } = makeContext("shell");
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
-    await expect(api.getPasswords()).resolves.toEqual([{ id: 7, origin_url: "https://example.com" }]);
+    await expect(api.getPasswords()).resolves.toEqual([
+      { id: 7, origin_url: "https://example.com" },
+    ]);
     expect(approvalsRequest).not.toHaveBeenCalled();
   });
 
   it("rejects sensitive methods with ENOCALLER when there is no caller", async () => {
     const { ctx } = makeContext(null);
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
     await expect(api.getPasswords()).rejects.toMatchObject({ code: "ENOCALLER" });
   });
 
   it("routes shell calls to BrowserDataDO", async () => {
     const { ctx, rpcCall, resolveDurableObject } = makeContext();
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
     await expect(api.getBookmarks()).resolves.toEqual([{ id: 1, title: "Example" }]);
-    expect(resolveDurableObject).toHaveBeenCalledWith("vibestudio/internal", "BrowserDataDO", "global");
-    expect(rpcCall).toHaveBeenCalledWith("do:vibestudio/internal:BrowserDataDO:global", "getBookmarks", "/");
+    expect(resolveDurableObject).toHaveBeenCalledWith(
+      "vibestudio/internal",
+      "BrowserDataDO",
+      "global"
+    );
+    expect(rpcCall).toHaveBeenCalledWith(
+      "do:vibestudio/internal:BrowserDataDO:global",
+      "getBookmarks",
+      "/"
+    );
   });
 
   it("emits change events for mutations", async () => {
     const { ctx, emit } = makeContext();
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
-    await expect(api.addBookmark({ title: "Example", url: "https://example.com" })).resolves.toBe(42);
+    await expect(api.addBookmark({ title: "Example", url: "https://example.com" })).resolves.toBe(
+      42
+    );
     expect(emit).toHaveBeenCalledWith("data-changed", { dataType: "bookmarks" });
   });
 
   it("logs import results, emits import-complete, and reports healthy import status", async () => {
     const { ctx, rpcCall, emit, health } = makeContext();
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
-    await expect(api.startImport({
-      browser: "chrome",
-      profile: "/tmp/profile",
-      dataTypes: ["bookmarks"],
-    })).resolves.toMatchObject([{ dataType: "bookmarks", success: true }]);
+    await expect(
+      api.startImport({
+        browser: "chrome",
+        profile: "/tmp/profile",
+        dataTypes: ["bookmarks"],
+      })
+    ).resolves.toMatchObject([{ dataType: "bookmarks", success: true }]);
 
     expect(rpcCall).toHaveBeenCalledWith(
       "do:vibestudio/internal:BrowserDataDO:global",
       "addBookmarksBatch",
       [{ title: "Example", url: "https://example.com" }],
-      { browser: "chrome", profilePath: "/tmp/profile" },
+      { browser: "chrome", profilePath: "/tmp/profile" }
     );
     expect(rpcCall).toHaveBeenCalledWith(
       "do:vibestudio/internal:BrowserDataDO:global",
@@ -195,7 +243,7 @@ describe("@workspace-extensions/browser-data", () => {
         summaries: expect.arrayContaining([
           expect.objectContaining({ dataType: "bookmarks", scanned: 1 }),
         ]),
-      }),
+      })
     );
     expect(emit).toHaveBeenCalledWith("import-complete", expect.any(Array));
     expect(health.healthy).toHaveBeenLastCalledWith({ summary: "Browser data import completed" });
@@ -203,45 +251,44 @@ describe("@workspace-extensions/browser-data", () => {
 
   it("passes browser profile metadata when importing history", async () => {
     const { ctx, rpcCall } = makeContext();
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
-    await expect(api.startImport({
-      browser: "chrome",
-      profile: "/tmp/profile",
-      dataTypes: ["history"],
-    })).resolves.toMatchObject([{ dataType: "history", success: true }]);
+    await expect(
+      api.startImport({
+        browser: "chrome",
+        profile: "/tmp/profile",
+        dataTypes: ["history"],
+      })
+    ).resolves.toMatchObject([{ dataType: "history", success: true }]);
 
     expect(rpcCall).toHaveBeenCalledWith(
       "do:vibestudio/internal:BrowserDataDO:global",
       "addHistoryBatch",
       [{ url: "https://example.com/docs", title: "Docs", visitCount: 1, lastVisitTime: 100 }],
-      { browser: "chrome", profilePath: "/tmp/profile" },
+      { browser: "chrome", profilePath: "/tmp/profile" }
     );
   });
 
   it("opens imported HTTP tabs as child browser panels of the invoking caller", async () => {
     const { ctx, rpcCall } = makeContext("panel", "panel-parent");
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.browserData;
 
-    await expect(api.openTabsAsPanels({
-      browser: "chrome",
-      profile: "/tmp/profile",
-    })).resolves.toEqual({
+    await expect(
+      api.openTabsAsPanels({
+        browser: "chrome",
+        profile: "/tmp/profile",
+      })
+    ).resolves.toEqual({
       tabsFound: 2,
       panelsOpened: 1,
       panels: [{ id: "browser-panel-1", title: "Example", url: "https://example.com/" }],
       skipped: [{ url: "chrome://settings/", reason: "unsupported browser-panel URL scheme" }],
     });
 
-    expect(rpcCall).toHaveBeenCalledWith(
-      "main",
-      "panelTree.create",
-      "https://example.com/",
-      {
-        parentId: "panel-parent",
-        name: "Example (1.1)",
-        focus: false,
-      },
-    );
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", "https://example.com/", {
+      parentId: "panel-parent",
+      name: "Example (1.1)",
+      focus: false,
+    });
   });
 });

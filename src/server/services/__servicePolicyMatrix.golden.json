@@ -166,10 +166,15 @@
     "methods": {
       "completeWorkspaceDependencies": null,
       "importProject": null,
+      "publishRepo": null,
+      "pullUpstream": null,
+      "pushUpstream": null,
       "removeSharedRemote": null,
       "removeUpstream": null,
+      "setAutoPush": null,
       "setSharedRemote": null,
-      "setUpstream": null
+      "setUpstream": null,
+      "upstreamStatus": null
     }
   },
   "hostLifecycle": {

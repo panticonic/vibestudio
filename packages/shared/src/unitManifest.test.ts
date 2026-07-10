@@ -15,12 +15,62 @@ describe("validateUnitManifest", () => {
           extension: {
             activationEvents: ["*"],
             dependencyMode: "external",
+            providerContracts: {
+              gitInterop: { methods: ["upstreamStatus", "pushUpstream"] },
+            },
             contributes: { buildTargets: ["react-native"] },
           },
         },
-        { unitName: "@workspace-extensions/a" },
-      ),
+        { unitName: "@workspace-extensions/a" }
+      )
     ).not.toThrow();
+  });
+
+  it("rejects malformed provider contract namespaces", () => {
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              gitInterop: { methods: ["pushUpstream", "pushUpstream"] },
+            },
+          },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/non-empty array of unique method names/);
+
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              "git-interop": { methods: ["pushUpstream"] },
+            },
+          },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/valid provider slot/);
+
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              gitInterop: { methods: ["pushUpstream"], public: true },
+            },
+          },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/exactly one methods field/);
   });
 
   it("rejects unknown extension build-provider targets", () => {
@@ -28,8 +78,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         { extension: { activationEvents: ["*"], contributes: { buildTargets: ["electron"] } } },
-        { unitName: "@workspace-extensions/a" },
-      ),
+        { unitName: "@workspace-extensions/a" }
+      )
     ).toThrow(/contributes.buildTargets/);
   });
 
@@ -37,9 +87,12 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         extensionUnitManifestDescriptor,
-        { extension: { activationEvents: ["*"] }, app: { target: "electron", renderer: "index.tsx" } },
-        { unitName: "@workspace-extensions/a" },
-      ),
+        {
+          extension: { activationEvents: ["*"] },
+          app: { target: "electron", renderer: "index.tsx" },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
     ).toThrow(UnitManifestError);
   });
 
@@ -54,8 +107,8 @@ describe("validateUnitManifest", () => {
             capabilities: ["native-menus", "notifications", "fs-write"],
           },
         },
-        { unitName: "@workspace-apps/shell" },
-      ),
+        { unitName: "@workspace-apps/shell" }
+      )
     ).not.toThrow();
   });
 
@@ -64,8 +117,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "electron", renderer: "index.tsx", preload: "preload.ts" } },
-        { unitName: "@workspace-apps/shell" },
-      ),
+        { unitName: "@workspace-apps/shell" }
+      )
     ).toThrow(/pure-thin/);
   });
 
@@ -74,8 +127,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "dist", renderer: "index.tsx", distDir: "dist" } },
-        { unitName: "@workspace-apps/prebuilt" },
-      ),
+        { unitName: "@workspace-apps/prebuilt" }
+      )
     ).toThrow(/target must be "electron", "react-native", or "terminal"/);
   });
 
@@ -90,8 +143,8 @@ describe("validateUnitManifest", () => {
             capabilities: ["connection-management"],
           },
         },
-        { unitName: "@workspace-apps/remote-cli" },
-      ),
+        { unitName: "@workspace-apps/remote-cli" }
+      )
     ).not.toThrow();
   });
 
@@ -100,8 +153,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibestudio" } },
-        { unitName: "@workspace-apps/mobile" },
-      ),
+        { unitName: "@workspace-apps/mobile" }
+      )
     ).toThrow(/requires rnComponentName and rnHostAbi/);
   });
 
@@ -110,8 +163,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "react-native", renderer: "index.tsx", capabilities: ["native-menus"] } },
-        { unitName: "@workspace-apps/mobile" },
-      ),
+        { unitName: "@workspace-apps/mobile" }
+      )
     ).toThrow(/known react-native capabilities/);
   });
 });

@@ -58,7 +58,7 @@ function requireCreatePanelEvidence(result: Parameters<typeof finalMessageHasAll
       reason: `Successful eval did not exercise ${missing.join(", ")}`,
     };
   }
-  if (!/(?:captureScreenshot|\.screenshot\s*\()/.test(code)) {
+  if (!/\.screenshot\s*\(/.test(code)) {
     return { passed: false, reason: "Successful eval did not capture a screenshot" };
   }
   return { passed: true };
@@ -83,7 +83,17 @@ export const panelTests: TestCase[] = [
     prompt:
       "Exercise opening a browser panel for https://example.com/ using openPanel(), then navigate that same browser panel to https://example.org/ with the documented CDP automation API. Reuse the same handle and page; do not open replacement panels or inspect guessed internal source paths. Take a screenshot and run JavaScript in the browser panel. Finish with PANEL_BROWSER_OK, PANEL_NAVIGATE_OK, PANEL_SCREENSHOT_OK, PANEL_EVAL_OK, url=<current-url>, and final-marker.",
     validate: (result) =>
-      checkedWithField(result, ["PANEL_BROWSER_OK", "PANEL_NAVIGATE_OK", "PANEL_SCREENSHOT_OK", "PANEL_EVAL_OK", "final-marker"], "url"),
+      checkedWithField(
+        result,
+        [
+          "PANEL_BROWSER_OK",
+          "PANEL_NAVIGATE_OK",
+          "PANEL_SCREENSHOT_OK",
+          "PANEL_EVAL_OK",
+          "final-marker",
+        ],
+        "url"
+      ),
   },
   {
     name: "panel-list-sources",

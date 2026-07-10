@@ -115,6 +115,7 @@ interface BuildSystemLike {
         extension?: {
           activationEvents?: string[];
           streamingMethods?: string[];
+          providerContracts?: Record<string, { methods: string[] }>;
           contributes?: { buildTargets?: string[] };
         };
       };
@@ -140,6 +141,7 @@ interface ExtensionBuildMetadataLike {
         runtimeDepsKey?: string | null;
         runtimeAbi?: string | null;
         externalDeps?: Record<string, string>;
+        providerContracts?: Record<string, { methods: string[] }>;
       }
     | { kind: string };
 }
@@ -148,6 +150,14 @@ interface ExtensionBuildArtifactLike {
   path: string;
   role: string;
   platform?: string;
+}
+
+type ExtensionProviderContracts = Record<string, { methods: string[] }>;
+
+interface ExtensionReadyState {
+  methods: string[];
+  providerMethods: Record<string, string[]>;
+  hasFetch: boolean;
 }
 
 interface ExtensionTransportLike {
@@ -213,7 +223,16 @@ export interface ExtensionHostDeps {
   registerBuildProvider?: (provider: BuildProvider) => void;
   unregisterBuildProvider?: (target: BuildProviderTarget, name: string) => void;
   onWorkspaceUnitsChanged?: (reason: string) => void;
-  resolveProviderExtensionName?: (provider: string) => string | null;
+  /** Resolve a manifest provider slot to its selected extension package. */
+  resolveProviderExtensionName(provider: string): string | null;
+  /** Manifest provider slots whose selected extensions must declare a namespace. */
+  providerSlots: readonly string[];
+  /**
+   * Canonical host-owned provider contracts, keyed first by manifest provider
+   * slot and then by method. An implementing extension must declare the exact
+   * contract in its manifest; the approved build carries that declaration.
+   */
+  hostProviderContracts: Readonly<Record<string, readonly string[]>>;
 }
 
 export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
@@ -461,17 +480,44 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private validateExtensionManifestAtPath(nodePath: string, unitName: string): void {
     try {
-      readAndValidateUnitManifest(
+      const manifest = readAndValidateUnitManifest(
         extensionUnitManifestDescriptor,
         path.join(nodePath, "package.json"),
         { unitName },
         fs.readFileSync as (p: string, encoding: "utf-8") => string
       );
+      const extension = manifest["extension"] as
+        | { providerContracts?: ExtensionProviderContracts }
+        | undefined;
+      this.assertProviderContractManifest(unitName, extension?.providerContracts ?? {});
     } catch (err) {
       if (err instanceof UnitManifestError) throw err;
       throw new UnitManifestError(
         `Extension ${unitName} manifest validation failed: ${err instanceof Error ? err.message : String(err)}`,
         "MANIFEST_INTERNAL"
+      );
+    }
+  }
+
+  private assertProviderContractManifest(
+    unitName: string,
+    declarations: ExtensionProviderContracts
+  ): void {
+    for (const [provider, declaration] of Object.entries(declarations)) {
+      const expected = this.deps.hostProviderContracts[provider];
+      if (expected && !sameStringArray(declaration.methods, expected)) {
+        throw new UnitManifestError(
+          `Extension ${unitName} providerContracts.${provider}.methods must exactly match the host contract: ${expected.join(", ")}`,
+          "MANIFEST_PROVIDER_CONTRACT"
+        );
+      }
+    }
+    for (const provider of this.deps.providerSlots) {
+      if (this.deps.resolveProviderExtensionName(provider) !== unitName) continue;
+      if (declarations[provider]) continue;
+      throw new UnitManifestError(
+        `Extension ${unitName} is selected for providers.${provider} but does not declare providerContracts.${provider}`,
+        "MANIFEST_PROVIDER_CONTRACT"
       );
     }
   }
@@ -505,15 +551,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private async handle(ctx: ServiceContext, method: string, args: unknown[]): Promise<unknown> {
     switch (method) {
-      case "invoke":
+      case "invoke": {
         return this.invoke(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
-      case "invokeProvider":
-        return this.invokeProvider(
-          ctx,
-          args[0] as string,
-          args[1] as string,
-          args[2] as unknown[]
-        );
+      }
+      case "invokeProvider": {
+        this.assertPublicProviderInvocationAllowed(args[0] as string, args[1] as string);
+        return this.invokeProvider(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
+      }
       case "invokeStream":
         return this.invokeStream(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
       case "streamingMethods":
@@ -529,7 +573,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       case "on":
         return this.subscribe(ctx, args[0] as string, args[1] as string);
       case "ready":
-        return this.readyFromExtension(ctx, args[0] as { methods: string[]; hasFetch: boolean });
+        return this.readyFromExtension(ctx, args[0] as ExtensionReadyState);
       case "emit":
         return this.emitFromExtension(ctx, args[0] as string, args[1]);
       case "fetchRequestBodyChunk":
@@ -563,6 +607,25 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     method: string,
     args: unknown[]
   ): Promise<unknown> {
+    return this.invokeExtensionTarget(ctx, name, method, "invoke", (entry, invocation) => {
+      this.assertPublicExtensionInvocationAllowed(entry, method, "invoke");
+      return this.deps.extensionTransport.call(
+        entry.name,
+        "extension.invoke",
+        method,
+        args,
+        invocation
+      );
+    });
+  }
+
+  private async invokeExtensionTarget(
+    ctx: ServiceContext,
+    name: string,
+    invocationMethod: string,
+    operation: "invoke" | "invokeProvider",
+    call: (entry: RegistryEntry, invocation: ExtensionInvocation) => Promise<unknown>
+  ): Promise<unknown> {
     // Do not wait for the global background approval/build flow here. Invocation is target-local:
     // use the currently active bundle if one exists, or fail fast below. Waiting for `whenSettled()`
     // can park a low-value call to an already-running extension behind an unrelated pending
@@ -573,31 +636,27 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     if (!entry) {
       throw new ServiceError(
         "extensions",
-        "invoke",
+        operation,
         this.extensionNotInstalledMessage(name),
         "ENOEXT"
       );
     }
-    const invocation = this.createTrackedInvocation(ctx, entry.name, method);
+    const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
     if (!this.processes.isRunning(entry.name)) {
       throw new ServiceError(
         "extensions",
-        "invoke",
+        operation,
         `Extension is not running: ${entry.name}`,
         "ENOTREADY"
       );
     }
     try {
-      return await this.deps.extensionTransport.call(
-        entry.name,
-        "extension.invoke",
-        method,
-        args,
-        invocation
-      );
+      return await call(entry, invocation);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const wrapped = new Error(`Extension ${entry.name}.${method} invocation failed: ${message}`);
+      const wrapped = new Error(
+        `Extension ${entry.name}.${invocationMethod} invocation failed: ${message}`
+      );
       if (error instanceof Error) {
         (wrapped as Error & { cause?: unknown }).cause = error;
         if (error.stack) {
@@ -613,7 +672,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         "error",
         wrapped.message,
         {
-          method,
+          method: invocationMethod,
           callerId: ctx.caller.runtime.id,
           callerKind: ctx.caller.runtime.kind,
           code: typeof code === "string" ? code : undefined,
@@ -633,7 +692,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     method: string,
     args: unknown[]
   ): Promise<unknown> {
-    const name = this.deps.resolveProviderExtensionName?.(provider);
+    const name = this.deps.resolveProviderExtensionName(provider);
     if (!name) {
       throw new ServiceError(
         "extensions",
@@ -642,7 +701,114 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         "ENOENT"
       );
     }
-    return this.invoke(ctx, name, method, args);
+    const qualifiedMethod = `providers.${provider}.${method}`;
+    return this.invokeExtensionTarget(
+      ctx,
+      name,
+      qualifiedMethod,
+      "invokeProvider",
+      (entry, invocation) => {
+        this.assertActiveProviderImplementation(entry, provider, method, "invokeProvider");
+        return this.deps.extensionTransport.call(
+          entry.name,
+          "extension.invokeProvider",
+          provider,
+          method,
+          args,
+          invocation
+        );
+      }
+    );
+  }
+
+  private assertPublicProviderInvocationAllowed(provider: string, method: string): void {
+    if (!this.isHostProviderMethod(provider, method)) return;
+    throw new ServiceError(
+      "extensions",
+      "invokeProvider",
+      `Provider method providers.${provider}.${method} is host-owned; call the owning host service instead`,
+      "EACCES"
+    );
+  }
+
+  private assertPublicExtensionInvocationAllowed(
+    entry: RegistryEntry,
+    method: string,
+    operation: "invoke" | "invokeStream"
+  ): void {
+    const owner = this.activeProviderOwner(entry, method, operation);
+    if (!owner) return;
+    throw new ServiceError(
+      "extensions",
+      operation,
+      `Extension method ${entry.name}.${method} belongs to its providers.${owner} namespace; call extensions.invokeProvider instead`,
+      "EACCES"
+    );
+  }
+
+  private isHostProviderMethod(provider: string, method: string): boolean {
+    return this.deps.hostProviderContracts[provider]?.includes(method) ?? false;
+  }
+
+  private activeProviderOwner(
+    entry: RegistryEntry,
+    method: string,
+    operation: "invoke" | "invokeStream"
+  ): string | null {
+    const declarations = this.activeProviderContracts(entry, operation);
+    for (const [provider, declaration] of Object.entries(declarations)) {
+      if (declaration.methods.includes(method)) return provider;
+    }
+    return null;
+  }
+
+  private assertActiveProviderImplementation(
+    entry: RegistryEntry,
+    provider: string,
+    method: string,
+    operation: "invokeProvider"
+  ): void {
+    const declarations = this.activeProviderContracts(entry, operation);
+    if (declarations[provider]?.methods.includes(method)) return;
+    throw new ServiceError(
+      "extensions",
+      operation,
+      `Extension ${entry.name} does not implement provider-namespaced method providers.${provider}.${method}`,
+      "EPROTO"
+    );
+  }
+
+  private activeProviderContracts(
+    entry: RegistryEntry,
+    operation: "invoke" | "invokeProvider" | "invokeStream" | "ready"
+  ): ExtensionProviderContracts {
+    const build = entry.activeBundleKey
+      ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
+      : null;
+    const details = extensionMetadataDetails(build?.metadata);
+    if (
+      details?.runtimeAbi !== EXTENSION_RUNTIME_ABI_VERSION ||
+      !isExtensionProviderContracts(details.providerContracts)
+    ) {
+      throw new ServiceError(
+        "extensions",
+        operation,
+        `Extension ${entry.name} active build lacks ABI-v${EXTENSION_RUNTIME_ABI_VERSION} provider contract metadata`,
+        "ENOTREADY"
+      );
+    }
+    for (const [provider, declaration] of Object.entries(details.providerContracts)) {
+      const expected = this.deps.hostProviderContracts[provider];
+      if (expected && !sameStringArray(declaration.methods, expected)) {
+        throw new ServiceError(
+          "extensions",
+          operation,
+          `Extension ${entry.name} active providers.${provider} contract does not match the host`,
+          "EPROTO"
+        );
+      }
+    }
+    return details.providerContracts;
   }
 
   /**
@@ -676,6 +842,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         "ENOEXT"
       );
     }
+    this.assertPublicExtensionInvocationAllowed(entry, method, "invokeStream");
     if (!this.deps.extensionTransport.streamCallTarget) {
       throw new ServiceError(
         "extensions",
@@ -1033,10 +1200,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     return null;
   }
 
-  private readyFromExtension(
-    ctx: ServiceContext,
-    ready: { methods: string[]; hasFetch: boolean }
-  ): null {
+  private readyFromExtension(ctx: ServiceContext, ready: ExtensionReadyState): null {
     if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError(
         "extensions",
@@ -1045,7 +1209,48 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         "EACCES"
       );
     }
-    this.processes.markReady(ctx.caller.runtime.id, ready);
+    const entry = this.registry.get(ctx.caller.runtime.id);
+    if (!entry?.activeBundleKey) {
+      throw new ServiceError(
+        "extensions",
+        "ready",
+        `Extension ${ctx.caller.runtime.id} has no active approved build`,
+        "ENOTREADY"
+      );
+    }
+    const declared = this.activeProviderContracts(entry, "ready");
+    const reportedProviders = Object.keys(ready.providerMethods);
+    if (!sameStringArray(reportedProviders, Object.keys(declared))) {
+      throw new ServiceError(
+        "extensions",
+        "ready",
+        `Extension ${entry.name} reported provider namespaces that do not match its approved manifest`,
+        "EPROTO"
+      );
+    }
+    for (const [provider, declaration] of Object.entries(declared)) {
+      const reported = ready.providerMethods[provider];
+      if (!reported || !sameStringArray(reported, declaration.methods)) {
+        throw new ServiceError(
+          "extensions",
+          "ready",
+          `Extension ${entry.name} did not expose the approved providers.${provider} contract`,
+          "EPROTO"
+        );
+      }
+      if (declaration.methods.some((method) => ready.methods.includes(method))) {
+        throw new ServiceError(
+          "extensions",
+          "ready",
+          `Extension ${entry.name} exposed providers.${provider} methods on its flat public API`,
+          "EPROTO"
+        );
+      }
+    }
+    this.processes.markReady(ctx.caller.runtime.id, {
+      methods: ready.methods,
+      hasFetch: ready.hasFetch,
+    });
     return null;
   }
 
@@ -1538,7 +1743,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private hasCurrentExtensionRuntimeAbi(entry: RegistryEntry): boolean {
     if (!entry.activeBundleKey) return false;
     const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
-    return extensionMetadataDetails(build?.metadata)?.runtimeAbi === EXTENSION_RUNTIME_ABI_VERSION;
+    const details = extensionMetadataDetails(build?.metadata);
+    return (
+      details?.runtimeAbi === EXTENSION_RUNTIME_ABI_VERSION &&
+      isExtensionProviderContracts(details.providerContracts)
+    );
   }
 
   private hasUsableActiveRuntimeDeps(entry: RegistryEntry): boolean {
@@ -1806,6 +2015,7 @@ function extensionMetadataDetails(metadata: ExtensionBuildMetadataLike | undefin
   runtimeDepsKey?: string | null;
   runtimeAbi?: string | null;
   externalDeps?: Record<string, string>;
+  providerContracts?: ExtensionProviderContracts;
 } | null {
   const details = metadata?.details;
   if (details?.kind !== "extension") return null;
@@ -1814,7 +2024,27 @@ function extensionMetadataDetails(metadata: ExtensionBuildMetadataLike | undefin
     runtimeDepsKey?: string | null;
     runtimeAbi?: string | null;
     externalDeps?: Record<string, string>;
+    providerContracts?: ExtensionProviderContracts;
   };
+}
+
+function sameStringArray(actual: readonly string[], expected: readonly string[]): boolean {
+  return (
+    actual.length === expected.length && actual.every((value, index) => value === expected[index])
+  );
+}
+
+function isExtensionProviderContracts(value: unknown): value is ExtensionProviderContracts {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(
+    (declaration) =>
+      !!declaration &&
+      typeof declaration === "object" &&
+      !Array.isArray(declaration) &&
+      Object.keys(declaration).length === 1 &&
+      Array.isArray((declaration as { methods?: unknown }).methods) &&
+      (declaration as { methods: unknown[] }).methods.every((method) => typeof method === "string")
+  );
 }
 
 function requireBuildSourceStateHash(

@@ -148,9 +148,10 @@ interface ResolvedService {
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
+export type PublicApi = Pick<Api, "adaptLaunch">;
 declare module "@vibestudio/extension" {
   interface WorkspaceExtensions {
-    "@workspace-extensions/claude-code": Api;
+    "@workspace-extensions/claude-code": PublicApi;
   }
 }
 
@@ -636,5 +637,10 @@ export async function activate(ctx: ExtensionContext) {
 
   ctx.health.healthy({ summary: "Claude Code launch orchestrator activated" });
 
-  return { prepare, launchSubagent, release, resolvePrimaryChannel, adaptLaunch };
+  return {
+    providerContracts: {
+      claudeCode: { prepare, launchSubagent, release, resolvePrimaryChannel },
+    },
+    adaptLaunch,
+  };
 }

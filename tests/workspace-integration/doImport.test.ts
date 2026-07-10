@@ -111,12 +111,6 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
         vcsLog: async (repoPath, limit, head) => doi.vcsLog(repoPath, limit, head),
         ingestWorktreeState: (input) =>
           doi.ingestWorktreeState(input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]),
-        listStateFiles: async (stateHash) =>
-          doi.listStateFiles({ stateHash }) as unknown as Array<{
-            path: string;
-            content_hash: string;
-            mode: number;
-          }>,
         importPublish: (input) =>
           (
             doi as unknown as {

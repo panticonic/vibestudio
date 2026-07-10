@@ -128,7 +128,7 @@ export interface AgenticChatActions {
   onBecomeVisible?: () => void;
   /**
    * Launch a Claude Code session as a linked agent in this conversation. The
-   * host calls the `@workspace-extensions/claude-code` extension's `prepare`
+   * host calls `prepare` through the manifest-selected `claudeCode` provider
    * for the current channel and opens a context-scoped terminal running the
    * returned argv. Absent on hosts that don't wire agent-CLI launches.
    */
@@ -141,8 +141,15 @@ export interface AgenticChatActions {
 
 /** Chat API exposed to sandboxed code (eval, inline_ui, action bars, feedback_custom) */
 export interface ChatSandboxValue {
-  publish: (eventType: string, payload: unknown, options?: { idempotencyKey?: string }) => Promise<unknown>;
-  send: (content: string, options?: { idempotencyKey?: string; tier?: MessageTier }) => Promise<unknown>;
+  publish: (
+    eventType: string,
+    payload: unknown,
+    options?: { idempotencyKey?: string }
+  ) => Promise<unknown>;
+  send: (
+    content: string,
+    options?: { idempotencyKey?: string; tier?: MessageTier }
+  ) => Promise<unknown>;
   publishCustomMessage: (
     input: { typeId: string; initialState?: unknown; displayMode?: CustomMessageDisplayMode },
     options?: { idempotencyKey?: string }

@@ -51,6 +51,11 @@ function makeHost(
     recordUnitLog?: ReturnType<typeof vi.fn>;
     getContextIdForCaller?: (callerId: string) => string | null;
     resolveProviderExtensionName?: (provider: string) => string | null;
+    providerSlots?: readonly string[];
+    hostProviderContracts?: ExtensionHostDeps["hostProviderContracts"];
+    sourceProviderContracts?: Record<string, { methods: string[] }>;
+    activeProviderContracts?: Record<string, { methods: string[] }>;
+    candidateProviderContracts?: Record<string, { methods: string[] }>;
     readWorkspaceFileAtCommit?: ExtensionHostDeps["readWorkspaceFileAtCommit"];
     gitDefaultBranch?: "main" | "master";
     installed?: boolean;
@@ -70,6 +75,7 @@ function makeHost(
       displayName: "Git Tools",
       extension: {
         activationEvents: ["*"],
+        providerContracts: overrides.sourceProviderContracts ?? {},
         ...(overrides.buildTargets
           ? { contributes: { buildTargets: overrides.buildTargets } }
           : {}),
@@ -86,6 +92,7 @@ function makeHost(
         displayName: "Git Tools",
         extension: {
           activationEvents: ["*"],
+          providerContracts: overrides.sourceProviderContracts ?? {},
           ...(overrides.buildTargets
             ? { contributes: { buildTargets: overrides.buildTargets } }
             : {}),
@@ -136,7 +143,9 @@ function makeHost(
         details: {
           kind: "extension",
           runtimeDepsKey: "runtime-candidate",
-          runtimeAbi: "2",
+          runtimeAbi: "3",
+          providerContracts:
+            overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {},
           externalDeps: {},
         },
       },
@@ -152,7 +161,13 @@ function makeHost(
               details: {
                 kind: "extension",
                 runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
-                runtimeAbi: "2",
+                runtimeAbi: "3",
+                providerContracts:
+                  key === "candidate-key"
+                    ? (overrides.candidateProviderContracts ??
+                      overrides.sourceProviderContracts ??
+                      {})
+                    : (overrides.activeProviderContracts ?? {}),
                 externalDeps: overrides.activeExternalDeps ?? {},
               },
             },
@@ -181,7 +196,9 @@ function makeHost(
     approvalQueue,
     getGatewayUrl: () => "http://127.0.0.1:3000",
     getContextIdForCaller: overrides.getContextIdForCaller,
-    resolveProviderExtensionName: overrides.resolveProviderExtensionName,
+    resolveProviderExtensionName: overrides.resolveProviderExtensionName ?? (() => null),
+    providerSlots: overrides.providerSlots ?? [],
+    hostProviderContracts: overrides.hostProviderContracts ?? {},
     readWorkspaceFileAtCommit: overrides.readWorkspaceFileAtCommit ?? (async () => null),
     extensionTransport: overrides.extensionTransport ?? {
       call: vi.fn(async () => {
@@ -240,22 +257,161 @@ describe("ExtensionHost invocation attribution", () => {
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
+      hostProviderContracts: { gitInterop: ["upstreamStatus"] },
+      activeProviderContracts: {
+        gitInterop: { methods: ["upstreamStatus"] },
+      },
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invokeProvider(panelCtx("panel-1"), "gitInterop", "upstreamStatus", [])
+      host.invokeProvider(panelCtx("panel-1"), "gitInterop", "upstreamStatus", [[]])
     ).resolves.toBe("ok");
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
       extensionNode.name,
-      "extension.invoke",
+      "extension.invokeProvider",
+      "gitInterop",
       "upstreamStatus",
-      [],
+      [[]],
       expect.objectContaining({
         extensionName: extensionNode.name,
-        method: "upstreamStatus",
+        method: "providers.gitInterop.upstreamStatus",
       })
+    );
+  });
+
+  it("fails internal provider dispatch when the approved build does not declare that contract", async () => {
+    const extensionTransport = { call: vi.fn(async () => "unexpected") };
+    const { host } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: (provider) =>
+        provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
+      hostProviderContracts: { gitInterop: ["upstreamStatus"] },
+      activeProviderContracts: {},
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invokeProvider(panelCtx("panel-1"), "gitInterop", "upstreamStatus", [[]])
+    ).rejects.toMatchObject({ code: "EPROTO" });
+    expect(extensionTransport.call).not.toHaveBeenCalled();
+  });
+
+  it("rejects direct invocation from the approved provider contract even when its slot is unconfigured", async () => {
+    const extensionTransport = { call: vi.fn(async () => "unexpected") };
+    const { host } = makeHost({
+      extensionTransport,
+      hostProviderContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      activeProviderContracts: {
+        gitInterop: { methods: ["upstreamStatus", "publishRepo"] },
+      },
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host
+        .createServiceDefinition()
+        .handler(panelCtx("panel-1"), "invoke", [
+          "@workspace-extensions/git-tools",
+          "upstreamStatus",
+          [],
+        ])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      host.invoke(panelCtx("panel-1"), "extensions/git-tools", "upstreamStatus", [])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      host
+        .createServiceDefinition()
+        .handler(panelCtx("panel-1"), "invokeStream", [
+          "@workspace-extensions/git-tools",
+          "upstreamStatus",
+          [],
+        ])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    expect(extensionTransport.call).not.toHaveBeenCalled();
+  });
+
+  it("rejects public provider invocation by provider slot and method", async () => {
+    const extensionTransport = { call: vi.fn(async () => "unexpected") };
+    const { host } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: (provider) =>
+        provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
+      hostProviderContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host
+        .createServiceDefinition()
+        .handler(panelCtx("panel-1"), "invokeProvider", ["gitInterop", "publishRepo", []])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    expect(extensionTransport.call).not.toHaveBeenCalled();
+  });
+
+  it("does not reserve the same method name on a different provider slot", async () => {
+    const extensionTransport = { call: vi.fn(async () => "ok") };
+    const { host } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: (provider) =>
+        provider === "claudeCode" ? "@workspace-extensions/git-tools" : null,
+      hostProviderContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      activeProviderContracts: {
+        claudeCode: { methods: ["prepare", "publishRepo"] },
+      },
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host
+        .createServiceDefinition()
+        .handler(panelCtx("panel-1"), "invokeProvider", ["claudeCode", "prepare", []])
+    ).resolves.toBe("ok");
+    await expect(
+      host
+        .createServiceDefinition()
+        .handler(panelCtx("panel-1"), "invokeProvider", ["claudeCode", "publishRepo", []])
+    ).resolves.toBe("ok");
+    expect(extensionTransport.call).toHaveBeenNthCalledWith(
+      1,
+      "@workspace-extensions/git-tools",
+      "extension.invokeProvider",
+      "claudeCode",
+      "prepare",
+      [],
+      expect.objectContaining({ method: "providers.claudeCode.prepare" })
+    );
+    expect(extensionTransport.call).toHaveBeenNthCalledWith(
+      2,
+      "@workspace-extensions/git-tools",
+      "extension.invokeProvider",
+      "claudeCode",
+      "publishRepo",
+      [],
+      expect.objectContaining({ method: "providers.claudeCode.publishRepo" })
+    );
+  });
+
+  it("allows an unrelated extension to expose a public method with a provider-contract name", async () => {
+    const extensionTransport = { call: vi.fn(async () => "ok") };
+    const { host } = makeHost({
+      extensionTransport,
+      hostProviderContracts: { gitInterop: ["publishRepo"] },
+      activeProviderContracts: {},
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke(panelCtx("panel-1"), "extensions/git-tools", "publishRepo", [])
+    ).resolves.toBe("ok");
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      "@workspace-extensions/git-tools",
+      "extension.invoke",
+      "publishRepo",
+      [],
+      expect.objectContaining({ method: "publishRepo" })
     );
   });
 
@@ -1058,7 +1214,9 @@ describe("ExtensionHost activation", () => {
 
     const markReady = vi.spyOn(host.processes, "markReady");
 
-    await service.handler(extensionCtx as any, "ready", [{ methods: ["confirm"], hasFetch: true }]);
+    await service.handler(extensionCtx as any, "ready", [
+      { methods: ["confirm"], providerMethods: {}, hasFetch: true },
+    ]);
     await service.handler(extensionCtx as any, "emit", ["changed", { ok: true }]);
     await service.handler(extensionCtx as any, "health", ["degraded", { summary: "Waiting" }]);
     await service.handler(extensionCtx as any, "log", [
@@ -1097,6 +1255,23 @@ describe("ExtensionHost activation", () => {
         message: "Something happened",
       })
     );
+  });
+
+  it("rejects ready when runtime provider namespaces differ from the approved build", async () => {
+    const { host, extensionNode } = makeHost({
+      hostProviderContracts: { gitInterop: ["upstreamStatus"] },
+      activeProviderContracts: {
+        gitInterop: { methods: ["upstreamStatus"] },
+      },
+    });
+    const service = host.createServiceDefinition();
+    const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
+
+    await expect(
+      service.handler(extensionCtx as any, "ready", [
+        { methods: ["upstreamStatus"], providerMethods: {}, hasFetch: false },
+      ])
+    ).rejects.toMatchObject({ code: "EPROTO" });
   });
 
   it("allows server callers to invoke extension providers through the dispatcher", () => {

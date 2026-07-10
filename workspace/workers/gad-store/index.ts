@@ -5458,9 +5458,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { added, removed, changed };
   }
 
-  /** Full recursive file listing of a worktree state (vcs materialize; the
-   *  git-bridge extension's listing fallback for pre-mirroring states). */
-  @rpc({ callers: ["panel", "do", "worker", "server", "extension"] })
+  /** Full recursive file listing of a worktree state for VCS materialization. */
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listStateFiles(input: { stateHash: string }): JsonRecord[] {
     this.ensureReady();
     return this.filesForState(input.stateHash);

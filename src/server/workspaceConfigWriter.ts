@@ -3,7 +3,11 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import { parseWorkspaceConfigContent } from "@vibestudio/shared/workspace/loader";
 import { mirrorWorktreeTree, putBytes } from "./services/blobstoreService.js";
-import type { RefService, MainRefOperation } from "./services/refService.js";
+import {
+  isRefConflictError,
+  type RefService,
+  type MainRefOperation,
+} from "./services/refService.js";
 
 const META_REPO_PATH = "meta";
 const WORKSPACE_CONFIG_FILE = "vibestudio.yml";
@@ -20,13 +24,20 @@ type WorkspaceConfigVcs = {
 };
 
 export interface WorkspaceConfigMainWriter {
-  wouldChange(nextConfig: WorkspaceConfig): Promise<boolean>;
-  persist(input: {
+  wouldMutate(mutate: WorkspaceConfigMutation): Promise<boolean>;
+  applyMutation(input: {
     ctx: ServiceContext;
-    nextConfig: WorkspaceConfig;
+    mutate: WorkspaceConfigMutation;
     summary: string;
     operation: Extract<MainRefOperation, "push" | "import">;
-  }): Promise<boolean>;
+  }): Promise<WorkspaceConfigMutationResult>;
+}
+
+export type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
+
+export interface WorkspaceConfigMutationResult {
+  changed: boolean;
+  nextConfig: WorkspaceConfig;
 }
 
 export function createWorkspaceConfigMainWriter(deps: {
@@ -35,6 +46,8 @@ export function createWorkspaceConfigMainWriter(deps: {
   refs: Pick<RefService, "readMain" | "updateMains">;
   vcs: WorkspaceConfigVcs;
 }): WorkspaceConfigMainWriter {
+  let mutationQueue = Promise.resolve();
+
   const readCurrentMeta = async (): Promise<{ stateHash: string; content: string }> => {
     let metaMain = deps.refs.readMain(META_REPO_PATH);
     if (!metaMain && deps.vcs.ensureRepoLogsFromDisk) {
@@ -53,26 +66,35 @@ export function createWorkspaceConfigMainWriter(deps: {
     return { stateHash: metaMain.stateHash, content: file.content.text };
   };
 
-  const renderNext = async (
-    nextConfig: WorkspaceConfig
-  ): Promise<{ currentStateHash: string; currentContent: string; nextContent: string }> => {
+  const renderMutation = async (
+    mutate: WorkspaceConfigMutation
+  ): Promise<{
+    currentStateHash: string;
+    currentContent: string;
+    nextContent: string;
+    nextConfig: WorkspaceConfig;
+  }> => {
     const current = await readCurrentMeta();
+    const currentConfig = parseWorkspaceConfigContent(current.content, deps.workspacePath);
+    const nextConfig = mutate(currentConfig);
     return {
       currentStateHash: current.stateHash,
       currentContent: current.content,
       nextContent: renderWorkspaceConfigYaml(current.content, nextConfig, deps.workspacePath),
+      nextConfig,
     };
   };
 
-  return {
-    async wouldChange(nextConfig) {
-      const rendered = await renderNext(nextConfig);
-      return rendered.currentContent !== rendered.nextContent;
-    },
-
-    async persist(input) {
-      const rendered = await renderNext(input.nextConfig);
-      if (rendered.currentContent === rendered.nextContent) return false;
+  const applyMutation = async (
+    input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
+  ): Promise<WorkspaceConfigMutationResult> => {
+    // Conflicts can only come from another protected meta/main writer. Re-read
+    // and reapply the narrow mutation instead of replaying a stale snapshot.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const rendered = await renderMutation(input.mutate);
+      if (rendered.currentContent === rendered.nextContent) {
+        return { changed: false, nextConfig: rendered.nextConfig };
+      }
 
       const existingFiles = await deps.vcs.listFiles(rendered.currentStateHash);
       const { digest } = await putBytes(deps.blobsDir, Buffer.from(rendered.nextContent, "utf8"));
@@ -92,29 +114,55 @@ export function createWorkspaceConfigMainWriter(deps: {
       nextFiles.sort((a, b) => a.path.localeCompare(b.path));
 
       const nextState = await mirrorWorktreeTree(deps.blobsDir, nextFiles);
-      if (nextState.stateHash === rendered.currentStateHash) return false;
+      if (nextState.stateHash === rendered.currentStateHash) {
+        return { changed: false, nextConfig: rendered.nextConfig };
+      }
 
-      await deps.refs.updateMains({
-        entries: [
-          {
-            repoPath: META_REPO_PATH,
-            expectedOld: rendered.currentStateHash,
-            next: nextState.stateHash,
+      try {
+        await deps.refs.updateMains({
+          entries: [
+            {
+              repoPath: META_REPO_PATH,
+              expectedOld: rendered.currentStateHash,
+              next: nextState.stateHash,
+            },
+          ],
+          gateContext: {
+            kind: "system",
+            actor: {
+              id: input.ctx.caller.runtime.id,
+              kind: input.ctx.caller.runtime.kind,
+            },
           },
-        ],
-        gateContext: {
-          kind: "system",
-          actor: {
-            id: input.ctx.caller.runtime.id,
-            kind: input.ctx.caller.runtime.kind,
-          },
-        },
-        operation: input.operation,
-        reason: input.summary,
-        writer: "server:gitInterop",
-        onBehalfOf: input.ctx.caller,
-      });
-      return true;
+          operation: input.operation,
+          reason: input.summary,
+          writer: "server:gitInterop",
+          onBehalfOf: input.ctx.caller,
+        });
+        return { changed: true, nextConfig: rendered.nextConfig };
+      } catch (error) {
+        if (!isRefConflictError(error) || attempt === 4) throw error;
+      }
+    }
+    throw new Error("Workspace config mutation retry budget exhausted");
+  };
+
+  return {
+    async wouldMutate(mutate) {
+      const rendered = await renderMutation(mutate);
+      return rendered.currentContent !== rendered.nextContent;
+    },
+
+    applyMutation(input) {
+      const run = mutationQueue.then(
+        () => applyMutation(input),
+        () => applyMutation(input)
+      );
+      mutationQueue = run.then(
+        () => undefined,
+        () => undefined
+      );
+      return run;
     },
   };
 }

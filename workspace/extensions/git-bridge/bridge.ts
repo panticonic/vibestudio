@@ -13,10 +13,9 @@
  *
  *  - `store`   — the userland `vcs` service (gad-store DO, vibestudio.vcs.v1):
  *                `vcsLog` for the export walk, `ingestWorktreeState` for the
- *                import staging transition (non-main head), `importPublish` to
- *                advance the protected `main` through the gated single-writer
- *                path, `listStateFiles` as the listing fallback for
- *                pre-mirroring-invariant historical states.
+ *                import staging transition (non-main head), and
+ *                `importPublish` to advance the protected `main` through the
+ *                gated single-writer path.
  *  - `blobstore` — host content store RPC: blob bytes (`getBase64`/`putBase64`)
  *                and immutable trees (`putTree`/`getTree`/`listTree`). Import
  *                mirrors the scanned tree bottom-up (the eager half of the
@@ -46,6 +45,12 @@ import {
   buildWorktreeManifest,
   type ManifestHashEntry,
 } from "@vibestudio/shared/contentTree/worktreeHash";
+import {
+  STATE_HASH_RE,
+  TREE_EXEC_MODE,
+  TREE_FILE_MODE,
+  splitTreePath,
+} from "@vibestudio/shared/contentTree/treeObjects";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/workspace/remotes";
 import { withRepoLock } from "./repoLocks.js";
 
@@ -102,10 +107,6 @@ export interface BridgeVcsStore {
     summary?: string;
     metadata?: Record<string, unknown>;
   }): Promise<{ stateHash: string; eventId: string }>;
-  /** Listing fallback for states minted before the mirroring invariant. */
-  listStateFiles(
-    stateHash: string
-  ): Promise<Array<{ path: string; content_hash: string; mode: number }>>;
   /** Publish an ingested import staging head onto the repo's protected `main`
    *  through the DO's gated single-writer `refs.updateMains({operation:"import"})`
    *  path (write-ahead intent + provenance). No-ops when main already matches. */
@@ -167,6 +168,21 @@ interface ExportMarker {
 /** Tracked file map of a checkout: what the bridge last materialized. */
 type CheckoutMap = Record<string, { contentHash: string; mode: number }>;
 
+const BRIDGE_STATE_VERSION = 1 as const;
+const CONTENT_HASH_RE = /^[0-9a-f]{64}$/;
+const GIT_COMMIT_RE = /^[0-9a-f]{40}$/;
+
+interface StoredExportMarker extends ExportMarker {
+  version: typeof BRIDGE_STATE_VERSION;
+  kind: "export-marker";
+}
+
+interface StoredCheckoutMap {
+  version: typeof BRIDGE_STATE_VERSION;
+  kind: "checkout-map";
+  files: CheckoutMap;
+}
+
 interface MaterializeResult {
   tracked: CheckoutMap;
   stagePaths: string[];
@@ -197,6 +213,66 @@ const fsLike = {
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function parseStoredExportMarker(value: unknown): ExportMarker | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["version", "kind", "stateHash", "commitSha"]) ||
+    value["version"] !== BRIDGE_STATE_VERSION ||
+    value["kind"] !== "export-marker" ||
+    typeof value["stateHash"] !== "string" ||
+    !STATE_HASH_RE.test(value["stateHash"]) ||
+    typeof value["commitSha"] !== "string" ||
+    !GIT_COMMIT_RE.test(value["commitSha"])
+  ) {
+    return null;
+  }
+  return { stateHash: value["stateHash"], commitSha: value["commitSha"] };
+}
+
+function parseStoredCheckoutMap(value: unknown): CheckoutMap | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["version", "kind", "files"]) ||
+    value["version"] !== BRIDGE_STATE_VERSION ||
+    value["kind"] !== "checkout-map" ||
+    !isRecord(value["files"])
+  ) {
+    return null;
+  }
+
+  const entries: Array<[string, { contentHash: string; mode: number }]> = [];
+  for (const [filePath, candidate] of Object.entries(value["files"])) {
+    try {
+      if (splitTreePath(filePath).length === 0) return null;
+    } catch {
+      return null;
+    }
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, ["contentHash", "mode"]) ||
+      typeof candidate["contentHash"] !== "string" ||
+      !CONTENT_HASH_RE.test(candidate["contentHash"]) ||
+      (candidate["mode"] !== TREE_FILE_MODE && candidate["mode"] !== TREE_EXEC_MODE)
+    ) {
+      return null;
+    }
+    entries.push([filePath, { contentHash: candidate["contentHash"], mode: candidate["mode"] }]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return (
+    actual.length === keys.length &&
+    keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+  );
 }
 
 /** Join a state path onto the checkout dir and assert it stays inside it —
@@ -261,28 +337,38 @@ export class GitBridge {
     const raw = await this.host.state.get(`marker:${repoPath}`);
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as ExportMarker;
+      return parseStoredExportMarker(JSON.parse(raw));
     } catch {
       return null;
     }
   }
 
   private async setMarker(repoPath: string, marker: ExportMarker): Promise<void> {
-    await this.host.state.set(`marker:${repoPath}`, JSON.stringify(marker));
+    const stored: StoredExportMarker = {
+      version: BRIDGE_STATE_VERSION,
+      kind: "export-marker",
+      ...marker,
+    };
+    await this.host.state.set(`marker:${repoPath}`, JSON.stringify(stored));
   }
 
   private async getCheckoutMap(repoPath: string): Promise<CheckoutMap> {
     const raw = await this.host.state.get(`checkout:${repoPath}`);
     if (!raw) return {};
     try {
-      return JSON.parse(raw) as CheckoutMap;
+      return parseStoredCheckoutMap(JSON.parse(raw)) ?? {};
     } catch {
       return {};
     }
   }
 
   private async setCheckoutMap(repoPath: string, map: CheckoutMap): Promise<void> {
-    await this.host.state.set(`checkout:${repoPath}`, JSON.stringify(map));
+    const stored: StoredCheckoutMap = {
+      version: BRIDGE_STATE_VERSION,
+      kind: "checkout-map",
+      files: map,
+    };
+    await this.host.state.set(`checkout:${repoPath}`, JSON.stringify(stored));
   }
 
   /** `workspace/<repoPath>` — a repo's own checkout dir (its `.git/`). */
@@ -392,31 +478,25 @@ export class GitBridge {
     return { exported, headCommit: lastSha };
   }
 
-  /** Full file listing of a state: content store first (the tree authority),
-   *  gad-store DO listing as the fallback for pre-invariant historical states. */
+  /** Full file listing of a state from the canonical content-tree authority. */
   private async listStateFiles(
     stateHash: string
   ): Promise<Array<{ path: string; contentHash: string; mode: number }>> {
     const listing = await this.host.blobstore.listTree(stateHash, { limit: LIST_TREE_LIMIT });
-    if (listing !== null) {
-      if (listing.length >= LIST_TREE_LIMIT) {
-        // A silently truncated listing would export a WRONG tree — fail loudly.
-        throw new Error(`git export: state ${stateHash} exceeds ${LIST_TREE_LIMIT} tree entries`);
-      }
-      return listing
-        .filter((entry) => entry.kind === "file")
-        .map((entry) => ({
-          path: entry.path,
-          contentHash: entry.contentHash ?? "",
-          mode: entry.mode ?? 33188,
-        }));
+    if (listing === null) {
+      throw new Error(`git export: state ${stateHash} has no canonical content tree`);
     }
-    const rows = await this.host.store.listStateFiles(stateHash);
-    return rows.map((row) => ({
-      path: row.path,
-      contentHash: row.content_hash,
-      mode: row.mode,
-    }));
+    if (listing.length >= LIST_TREE_LIMIT) {
+      // A silently truncated listing would export a WRONG tree — fail loudly.
+      throw new Error(`git export: state ${stateHash} exceeds ${LIST_TREE_LIMIT} tree entries`);
+    }
+    return listing
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => ({
+        path: entry.path,
+        contentHash: entry.contentHash ?? "",
+        mode: entry.mode ?? 33188,
+      }));
   }
 
   /**

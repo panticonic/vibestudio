@@ -120,7 +120,8 @@ export interface GitConfig {
    *         origin:
    *           url: https://github.com/example/chat.git
    *           branch: main
-   *         ci: https://github.com/example/chat-ci.git
+   *         ci:
+   *           url: https://github.com/example/chat-ci.git
    */
   remotes?: WorkspaceGitRemotesConfig;
   /**
@@ -136,17 +137,14 @@ export interface WorkspaceGitRemoteConfig {
   branch?: string;
 }
 
-export type WorkspaceGitRemoteDeclaration =
-  | string
-  | {
-      url: string;
-      branch?: string | null;
-    };
+export interface WorkspaceGitRemoteDeclaration {
+  url: string;
+  branch?: string;
+}
 
 export type WorkspaceGitRemotesConfig = Record<
   string,
-  | Record<string, Record<string, WorkspaceGitRemoteDeclaration | null | undefined> | undefined>
-  | undefined
+  Record<string, Record<string, WorkspaceGitRemoteDeclaration>>
 >;
 
 export interface WorkspaceGitUpstreamConfig {
@@ -166,7 +164,7 @@ export interface WorkspaceGitUpstreamConfig {
 
 export type WorkspaceGitUpstreamsConfig = Record<
   string,
-  Record<string, WorkspaceGitUpstreamConfig | null | undefined> | undefined
+  Record<string, WorkspaceGitUpstreamConfig>
 >;
 
 /**

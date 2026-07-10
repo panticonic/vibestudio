@@ -207,7 +207,8 @@ export function PaneView(props: {
       setFindResult({ index: -1, count: 0 });
       return;
     }
-    const matched = terminalRef.current?.findNext(findQuery, searchOptions(caseSensitive, regex)) ?? false;
+    const matched =
+      terminalRef.current?.findNext(findQuery, searchOptions(caseSensitive, regex)) ?? false;
     setFindMatched(matched);
     if (!matched) setFindResult({ index: -1, count: 0 });
   }, [findOpen, findQuery, caseSensitive, regex]);
@@ -319,11 +320,9 @@ export function PaneView(props: {
   async function openLinkedConversation() {
     if (!linkedContextId) return;
     try {
-      const resolved = (await extensions.invoke(
-        "@workspace-extensions/claude-code",
-        "resolvePrimaryChannel",
-        [{ contextId: linkedContextId }]
-      )) as { channelId?: string } | null;
+      const resolved = (await extensions.invokeProvider("claudeCode", "resolvePrimaryChannel", [
+        { contextId: linkedContextId },
+      ])) as { channelId?: string } | null;
       if (!resolved?.channelId) {
         void notifications.show({
           type: "info",
@@ -789,14 +788,16 @@ function shellIntegrationMetaEqual(
   a: VscodeShellIntegrationMeta | undefined,
   b: VscodeShellIntegrationMeta | undefined
 ): boolean {
-  return a?.status === b?.status
-    && a?.cwd === b?.cwd
-    && a?.commandLine === b?.commandLine
-    && a?.commandRunning === b?.commandRunning
-    && a?.lastExitCode === b?.lastExitCode
-    && JSON.stringify(a?.shellEnv) === JSON.stringify(b?.shellEnv)
-    && a?.shellEnvUpdatedAt === b?.shellEnvUpdatedAt
-    && a?.updatedAt === b?.updatedAt;
+  return (
+    a?.status === b?.status &&
+    a?.cwd === b?.cwd &&
+    a?.commandLine === b?.commandLine &&
+    a?.commandRunning === b?.commandRunning &&
+    a?.lastExitCode === b?.lastExitCode &&
+    JSON.stringify(a?.shellEnv) === JSON.stringify(b?.shellEnv) &&
+    a?.shellEnvUpdatedAt === b?.shellEnvUpdatedAt &&
+    a?.updatedAt === b?.updatedAt
+  );
 }
 
 function isUnknownSessionError(err: unknown): boolean {

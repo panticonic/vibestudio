@@ -45,6 +45,12 @@ export interface PackageManifest {
      * the extension's internals — the client resolves them automatically.
      */
     streamingMethods?: string[];
+    /**
+     * Provider-namespaced contracts implemented by this extension, keyed by
+     * manifest provider slot. These methods are not part of the flat public
+     * extension API and are dispatched only through the matching namespace.
+     */
+    providerContracts?: Record<string, { methods: string[] }>;
   };
   /** Future shared manifest discriminator for worker units. */
   worker?: Record<string, unknown>;

@@ -60,6 +60,7 @@
       "@workspace-panels/hello-vanilla": ["workspace/panels/hello-vanilla/index.ts"],
       "@workspace-panels/hello-svelte": ["workspace/panels/hello-svelte/index.ts"],
       "@workspace-extensions/shell": ["workspace/extensions/shell/index.ts"],
+      "@workspace-extensions/claude-code": ["workspace/extensions/claude-code/index.ts"],
       "@workspace-extensions/file-tools": ["workspace/extensions/file-tools/index.ts"],
       "@workspace-extensions/image-service": ["workspace/extensions/image-service/index.ts"],
       "@workspace-extensions/local-models": ["workspace/extensions/local-models/index.ts"],

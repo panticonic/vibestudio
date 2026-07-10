@@ -82,6 +82,19 @@ export interface CdpEndpoint {
   token?: string;
 }
 
+export interface PanelScreenshotOptions {
+  format?: "png" | "jpeg";
+  quality?: number;
+}
+
+export interface PanelScreenshotResult {
+  /** Base64-encoded image bytes. */
+  data: string;
+  mimeType: "image/png" | "image/jpeg";
+  width: number;
+  height: number;
+}
+
 export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
 
 export interface PanelConsoleHistoryEntry {
@@ -141,7 +154,8 @@ export interface CdpAutomation {
   reload(): Promise<void>;
   stop(): Promise<void>;
   click(selector: string): Promise<void>;
-  screenshot(options?: unknown): Promise<unknown>;
+  /** One-RPC host capture, including hidden/unslotted panels. */
+  screenshot(options?: PanelScreenshotOptions): Promise<PanelScreenshotResult>;
 }
 
 export type PanelHandleContractRole = "parent" | "child";

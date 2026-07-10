@@ -2,6 +2,7 @@ import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
+import type { GitInteropClient } from "@vibestudio/shared/serviceSchemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export interface Disposable {
@@ -116,6 +117,8 @@ export interface ExtensionsClient {
    * while `ExtensionName` members still autocomplete.
    */
   invoke(name: ExtensionName | (string & {}), method: string, args: unknown[]): Promise<unknown>;
+  /** Invoke a method in the extension selected for a manifest provider slot. */
+  invokeProvider(provider: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
 /**
@@ -198,7 +201,7 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
     if (!cached) {
       cached = extensionsService
         .streamingMethods(name)
-        .then((methods) => new Set(methods ?? []))
+        .then((methods) => new Set(methods))
         .catch(() => {
           // Don't pin a transient failure as "no streaming methods" for the
           // client's lifetime — drop the entry so the next call re-fetches.
@@ -231,6 +234,8 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
     list: () => extensionsService.list(),
     reload: (name) => extensionsService.reload(name),
     invoke: (name, method, args) => extensionsService.invoke(name, method, args),
+    invokeProvider: (provider, method, args) =>
+      extensionsService.invokeProvider(provider, method, args),
   };
   return client;
 }
@@ -365,7 +370,8 @@ export interface ExtensionContext {
     readdir(path?: string): Promise<string[]>;
   };
   readonly fs: ExtensionFsClient;
-  readonly git: ExtensionRpcSurface;
+  /** Canonical typed external Git client (`gitInterop.*`). */
+  readonly git: GitInteropClient;
   readonly workspace: ExtensionWorkspaceLike;
   readonly rpc: ExtensionRpcLike;
   readonly workers: ExtensionWorkersLike;

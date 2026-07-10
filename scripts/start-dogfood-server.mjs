@@ -153,7 +153,7 @@ function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
   config.git.remotes ??= {};
   config.git.remotes[section] ??= {};
   config.git.remotes[section][repoKey] ??= {};
-  config.git.remotes[section][repoKey].origin = remoteUrl;
+  config.git.remotes[section][repoKey].origin = { url: remoteUrl };
   const tmpPath = `${configPath}.tmp`;
   fs.writeFileSync(tmpPath, YAML.stringify(config), "utf8");
   fs.renameSync(tmpPath, configPath);

@@ -8,7 +8,19 @@
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
-      "activationEvents": ["*"]
+      "activationEvents": [
+        "*"
+      ],
+      "providerContracts": {
+        "claudeCode": {
+          "methods": [
+            "prepare",
+            "launchSubagent",
+            "release",
+            "resolvePrimaryChannel"
+          ]
+        }
+      }
     }
   },
   "dependencies": {

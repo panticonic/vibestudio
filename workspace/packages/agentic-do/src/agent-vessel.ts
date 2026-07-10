@@ -123,7 +123,7 @@ const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 /** The subset of an external subagent launch result the spawn path consumes.
  *  Typed inline to avoid a vessel→extension source dependency; the call goes
- *  through the host `extensions.invoke` RPC. */
+ *  through a configured provider namespace when one exists. */
 interface ExternalSubagentLaunchResult {
   entityId: string;
   contextId: string;
@@ -147,6 +147,10 @@ function normalizeSubagentAgentKind(value: unknown): SubagentAgentKind | null {
 
 function externalSubagentExtensionId(agentKind: SubagentAgentKind): string {
   return `@workspace-extensions/${agentKind}`;
+}
+
+function externalSubagentProviderSlot(agentKind: SubagentAgentKind): string | null {
+  return agentKind === "claude-code" ? "claudeCode" : null;
 }
 
 export type ApprovalLevel = 0 | 1 | 2;
@@ -3868,11 +3872,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // 4) Launch the linked external subagent via its extension. The extension
     //    owns the Node-only work: prepare the linked vessel, write the profile,
     //    and spawn the headless process in the child context.
+    const providerSlot = externalSubagentProviderSlot(agentKind);
     const launched = await this.rpc.call<ExternalSubagentLaunchResult>(
       "main",
-      "extensions.invoke",
+      providerSlot ? "extensions.invokeProvider" : "extensions.invoke",
       [
-        externalSubagentExtensionId(agentKind),
+        providerSlot ?? externalSubagentExtensionId(agentKind),
         "launchSubagent",
         [
           {
@@ -4499,9 +4504,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (run.externalSessionEntityId) {
       const agentKind = normalizeSubagentAgentKind(run.agentKind);
       if (agentKind && agentKind !== "pi") {
+        const providerSlot = externalSubagentProviderSlot(agentKind);
         await this.rpc
-          .call("main", "extensions.invoke", [
-            externalSubagentExtensionId(agentKind),
+          .call("main", providerSlot ? "extensions.invokeProvider" : "extensions.invoke", [
+            providerSlot ?? externalSubagentExtensionId(agentKind),
             "release",
             [{ entityId: run.externalSessionEntityId }],
           ])

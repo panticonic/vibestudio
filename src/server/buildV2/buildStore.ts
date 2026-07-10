@@ -55,6 +55,7 @@ export type BuildMetadataDetails =
       kind: "extension";
       runtimeDepsKey: string | null;
       runtimeAbi: string | null;
+      providerContracts: Record<string, { methods: string[] }>;
       dependencyMode?: "auto" | "bundle" | "external";
       externalDeps?: Record<string, string>;
       dependencyOverrides?: Record<string, string>;

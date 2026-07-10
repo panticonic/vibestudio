@@ -8,7 +8,62 @@
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
-      "activationEvents": ["*"]
+      "activationEvents": [
+        "*"
+      ],
+      "providerContracts": {
+        "browserData": {
+          "methods": [
+            "detectBrowsers",
+            "getOpenTabs",
+            "openTabsAsPanels",
+            "startImport",
+            "getImportHistory",
+            "getProfileImportState",
+            "previewImport",
+            "getCookieDomains",
+            "getHistoryDomains",
+            "getPasswordOrigins",
+            "getAutofillFieldNames",
+            "getDomainReadiness",
+            "getAutocompleteDebug",
+            "getBookmarks",
+            "addBookmark",
+            "updateBookmark",
+            "deleteBookmark",
+            "moveBookmark",
+            "searchBookmarks",
+            "getHistory",
+            "deleteHistoryEntry",
+            "deleteHistoryRange",
+            "clearAllHistory",
+            "searchHistory",
+            "searchHistoryForAutocomplete",
+            "recordHistoryVisit",
+            "updateHistoryTitle",
+            "getPasswords",
+            "getPasswordForSite",
+            "addPassword",
+            "updatePassword",
+            "deletePassword",
+            "updatePasswordLastUsed",
+            "addNeverSavePassword",
+            "isNeverSavePassword",
+            "getAutofillSuggestions",
+            "getSearchEngines",
+            "setDefaultEngine",
+            "getPermissions",
+            "setPermission",
+            "exportBookmarks",
+            "exportPasswords",
+            "exportCookies",
+            "exportAll",
+            "getCookies",
+            "deleteCookie",
+            "clearCookies"
+          ]
+        }
+      }
     }
   },
   "dependencies": {

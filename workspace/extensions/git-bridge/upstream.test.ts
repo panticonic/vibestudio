@@ -24,10 +24,11 @@ const STATE_FILE = "state/upstream-state.json";
 const gitFns = vi.hoisted(() => ({
   push: vi.fn(),
   fetch: vi.fn(),
+  pull: vi.fn(),
+  fastForward: vi.fn(),
   resolveRef: vi.fn(),
   compareRefs: vi.fn(),
   getCurrentBranch: vi.fn(),
-  setRemote: vi.fn(),
   log: vi.fn(),
   getCurrentCommit: vi.fn(),
 }));
@@ -44,10 +45,11 @@ vi.mock("@vibestudio/git", () => {
   class GitClient {
     push = gitFns.push;
     fetch = gitFns.fetch;
+    pull = gitFns.pull;
+    fastForward = gitFns.fastForward;
     resolveRef = gitFns.resolveRef;
     compareRefs = gitFns.compareRefs;
     getCurrentBranch = gitFns.getCurrentBranch;
-    setRemote = gitFns.setRemote;
     log = gitFns.log;
     getCurrentCommit = gitFns.getCurrentCommit;
     constructor(..._args: unknown[]) {
@@ -66,6 +68,9 @@ interface ConfigEntry {
   remote?: string;
   branch?: string;
   autoPush?: boolean;
+  credentialId?: string;
+  authorEmail?: string;
+  authorName?: string;
   url?: string;
   remoteBranch?: string;
   /** When false the referenced remote is NOT declared (a broken upstream). */
@@ -90,6 +95,9 @@ function buildConfig(entries: ConfigEntry[]): unknown {
       remote,
       ...(entry.branch ? { branch: entry.branch } : {}),
       autoPush: entry.autoPush ?? false,
+      ...(entry.credentialId ? { credentialId: entry.credentialId } : {}),
+      ...(entry.authorEmail ? { authorEmail: entry.authorEmail } : {}),
+      ...(entry.authorName ? { authorName: entry.authorName } : {}),
     };
   }
   return { git: { remotes, upstreams } };
@@ -115,7 +123,13 @@ function createStorage(files: Map<string, string>) {
   };
 }
 
-function createCtx(config: unknown, opts: { files?: Map<string, string> } = {}) {
+function createCtx(
+  config: unknown,
+  opts: {
+    files?: Map<string, string>;
+    health?: { report: ReturnType<typeof vi.fn>; healthy: ReturnType<typeof vi.fn> };
+  } = {}
+) {
   const files = opts.files ?? new Map<string, string>();
   const notifications = { show: vi.fn(async () => "notif-id") };
   const rpc = {
@@ -126,12 +140,14 @@ function createCtx(config: unknown, opts: { files?: Map<string, string> } = {}) 
   };
   const credentials = { gitHttp: vi.fn(() => ({ request: vi.fn() })) };
   const ctx = {
+    name: "@workspace-extensions/custom-git-provider",
     workspace: { getInfo: async () => ({ path: "/tmp/ws" }) },
     credentials,
     notifications,
     rpc,
     storage: createStorage(files),
     log: { info: vi.fn(), warn: vi.fn() },
+    ...(opts.health ? { health: opts.health } : {}),
   };
   return { ctx, files, notifications, rpc, credentials };
 }
@@ -141,7 +157,9 @@ function createBridge(
     exportResult?: { exported: number; headCommit: string | null };
   } = {}
 ) {
-  const exportLockedInner = vi.fn(async () => opts.exportResult ?? { exported: 1, headCommit: "head-sha" });
+  const exportLockedInner = vi.fn(
+    async () => opts.exportResult ?? { exported: 1, headCommit: "head-sha" }
+  );
   const importLockedInner = vi.fn(async () => ({ stateHash: "state-hash", changed: true }));
   const repoGitDir = vi.fn(async (repo: string) => `/repos/${repo}`);
   return {
@@ -153,16 +171,40 @@ function createBridge(
 
 function readStored(files: Map<string, string>): {
   version: number;
-  repos: Record<string, { status?: string; lastPushedSha?: string; lastError?: string }>;
+  repos: Record<
+    string,
+    {
+      configFingerprint?: string;
+      status?: string;
+      lastPushedSha?: string;
+      lastPushedAt?: number;
+      lastError?: string;
+    }
+  >;
 } {
   const raw = files.get(STATE_FILE);
-  return raw ? JSON.parse(raw) : { version: 1, repos: {} };
+  return raw ? JSON.parse(raw) : { version: 2, repos: {} };
 }
 
-function makeEngine(config: unknown, bridge: unknown, opts: { files?: Map<string, string> } = {}) {
+function makeEngine(
+  config: unknown,
+  bridge: unknown,
+  opts: {
+    files?: Map<string, string>;
+    health?: { report: ReturnType<typeof vi.fn>; healthy: ReturnType<typeof vi.fn> };
+  } = {}
+) {
   const created = createCtx(config, opts);
   const engine = new UpstreamEngine(created.ctx as never, bridge as never);
   return { engine, ...created };
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 /** Fire and drain the debounce timer + all chained async work. */
@@ -174,8 +216,9 @@ describe("UpstreamEngine", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     for (const fn of Object.values(gitFns)) fn.mockReset();
-    gitFns.setRemote.mockResolvedValue(undefined);
     gitFns.fetch.mockResolvedValue(undefined);
+    gitFns.pull.mockResolvedValue(undefined);
+    gitFns.fastForward.mockResolvedValue(undefined);
     gitFns.push.mockResolvedValue(undefined);
     gitFns.resolveRef.mockResolvedValue(null);
     gitFns.compareRefs.mockResolvedValue(null);
@@ -219,7 +262,8 @@ describe("UpstreamEngine", () => {
     expect(gitFns.push).toHaveBeenCalledTimes(1);
     expect(gitFns.push).toHaveBeenCalledWith(
       expect.objectContaining({
-        remote: "origin",
+        url: "https://github.com/acme/b.git",
+        remote: expect.stringMatching(/^vibestudio-[a-f0-9]{24}$/),
         ref: "master",
         remoteRef: "refs/heads/main",
         force: false,
@@ -240,24 +284,78 @@ describe("UpstreamEngine", () => {
     expect(exportLockedInner).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cancel a queued main-advance job when a manual push succeeds", async () => {
+    const repo = "projects/queued-after-push";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const { bridge, exportLockedInner } = createBridge();
+    const enteredPush = deferred();
+    const releasePush = deferred();
+    gitFns.push.mockImplementationOnce(async () => {
+      enteredPush.resolve();
+      await releasePush.promise;
+    });
+    const { engine } = makeEngine(config, bridge);
+
+    const manualPush = engine.pushUpstream(repo);
+    await enteredPush.promise;
+    engine.onMainAdvanced([repo]);
+    releasePush.resolve();
+    await manualPush;
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(exportLockedInner).toHaveBeenCalledTimes(2);
+  });
+
   it("skips the wire push when the exported head is already the last-pushed sha", async () => {
     const repo = "projects/d";
     const config = buildConfig([{ repo, autoPush: true }]);
-    const files = new Map<string, string>([
-      [STATE_FILE, JSON.stringify({ version: 1, repos: { [repo]: { lastPushedSha: "same-sha" } } })],
-    ]);
+    const files = new Map<string, string>();
     const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "same-sha" } });
     const { engine } = makeEngine(config, bridge, { files });
 
+    // First push records a v2 state entry scoped to this declared upstream.
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+    gitFns.push.mockClear();
+
+    // A fresh engine using the same config and storage trusts that state.
+    const engine2 = makeEngine(config, bridge, { files }).engine;
+
     // Auto job: exports, but the head equals lastPushedSha so no wire push.
-    engine.onMainAdvanced([repo]);
+    engine2.onMainAdvanced([repo]);
     await tick();
     expect(gitFns.push).not.toHaveBeenCalled();
 
     // Manual push: same skip, reports pushed:false without touching the wire.
-    const result = await engine.pushUpstream(repo);
+    const result = await engine2.pushUpstream(repo);
     expect(result.pushed).toBe(false);
     expect(gitFns.push).not.toHaveBeenCalled();
+  });
+
+  it("ignores version 1 state instead of migrating its last-pushed sha", async () => {
+    const repo = "projects/v1-cut";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const files = new Map<string, string>([
+      [
+        STATE_FILE,
+        JSON.stringify({ version: 1, repos: { [repo]: { lastPushedSha: "same-sha" } } }),
+      ],
+    ]);
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "same-sha" } });
+    const { engine } = makeEngine(config, bridge, { files });
+
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+    expect(readStored(files)).toMatchObject({
+      version: 2,
+      repos: {
+        [repo]: {
+          configFingerprint: expect.any(String),
+          lastPushedSha: "same-sha",
+        },
+      },
+    });
   });
 
   it("marks auth-failed with a notification and no retry when push hits GitAuthError", async () => {
@@ -272,7 +370,28 @@ describe("UpstreamEngine", () => {
 
     expect(readStored(files).repos[repo]?.status).toBe("auth-failed");
     expect(notifications.show).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "warning", title: expect.stringContaining("failed") })
+      expect.objectContaining({
+        type: "warning",
+        title: expect.stringContaining("failed"),
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            invoke: {
+              kind: "extension",
+              extension: "@workspace-extensions/custom-git-provider",
+              method: "retryUpstreamPush",
+              args: [repo],
+            },
+          }),
+          expect.objectContaining({
+            invoke: {
+              kind: "extension",
+              extension: "@workspace-extensions/custom-git-provider",
+              method: "pauseAutoPush",
+              args: [repo],
+            },
+          }),
+        ]),
+      })
     );
 
     // No retry timer was scheduled: further time passes with no new attempts.
@@ -349,6 +468,131 @@ describe("UpstreamEngine", () => {
     expect(rows[0]?.lastPushedSha).toBe("persist-sha");
   });
 
+  it("forces the same head to each changed remote URL and upstream branch", async () => {
+    const repo = "projects/config-scope";
+    const files = new Map<string, string>();
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "stable-head" } });
+    const initialConfig = buildConfig([
+      { repo, autoPush: true, url: "https://github.com/acme/first.git", branch: "main" },
+    ]);
+    const first = makeEngine(initialConfig, bridge, { files }).engine;
+
+    await expect(first.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    const firstFingerprint = readStored(files).repos[repo]?.configFingerprint;
+    expect(firstFingerprint).toEqual(expect.any(String));
+
+    gitFns.push.mockClear();
+    const changedRemoteConfig = buildConfig([
+      { repo, autoPush: true, url: "https://github.com/acme/second.git", branch: "main" },
+    ]);
+    const second = makeEngine(changedRemoteConfig, bridge, { files }).engine;
+    await expect(second.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+    expect(gitFns.push).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url: "https://github.com/acme/second.git",
+        remote: expect.stringMatching(/^vibestudio-[a-f0-9]{24}$/),
+      })
+    );
+    const secondFingerprint = readStored(files).repos[repo]?.configFingerprint;
+    expect(secondFingerprint).not.toBe(firstFingerprint);
+
+    gitFns.push.mockClear();
+    const changedBranchConfig = buildConfig([
+      { repo, autoPush: true, url: "https://github.com/acme/second.git", branch: "release" },
+    ]);
+    const third = makeEngine(changedBranchConfig, bridge, { files }).engine;
+    await expect(third.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    expect(gitFns.push).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteRef: "refs/heads/release" })
+    );
+    expect(readStored(files).repos[repo]?.configFingerprint).not.toBe(secondFingerprint);
+  });
+
+  it("clears a persisted failure when declared upstream configuration changes", async () => {
+    const repo = "projects/failure-scope";
+    const files = new Map<string, string>();
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "retry-head" } });
+    const initialConfig = buildConfig([{ repo, autoPush: true, credentialId: "old-credential" }]);
+    const first = makeEngine(initialConfig, bridge, { files }).engine;
+    gitFns.push.mockRejectedValueOnce(new GitAuthError("401 Unauthorized", 401));
+
+    await expect(first.pushUpstream(repo)).rejects.toThrow("401 Unauthorized");
+    expect(readStored(files).repos[repo]?.status).toBe("auth-failed");
+
+    gitFns.push.mockReset();
+    gitFns.push.mockResolvedValue(undefined);
+    const changedConfig = buildConfig([{ repo, autoPush: true, credentialId: "new-credential" }]);
+    const second = makeEngine(changedConfig, bridge, { files }).engine;
+    const [status] = await second.upstreamStatus([repo]);
+
+    expect(status?.state).not.toBe("auth-failed");
+    expect(status?.state).not.toBe("diverged");
+    expect(status?.lastError).toBeUndefined();
+    expect(readStored(files).repos[repo]).not.toHaveProperty("status");
+    await expect(second.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears runtime retry backoff when the declared remote changes", async () => {
+    const repo = "projects/backoff-scope";
+    const config = buildConfig([
+      { repo, autoPush: true, url: "https://github.com/acme/before.git" },
+    ]) as { git: unknown };
+    const { bridge, exportLockedInner } = createBridge({
+      exportResult: { exported: 1, headCommit: "backoff-head" },
+    });
+    const { engine, files } = makeEngine(config, bridge);
+    gitFns.push.mockRejectedValue(new Error("ECONNRESET"));
+
+    engine.onMainAdvanced([repo]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(readStored(files).repos[repo]?.status).toBe("error");
+    expect(exportLockedInner).toHaveBeenCalledTimes(1);
+
+    gitFns.push.mockReset();
+    gitFns.push.mockResolvedValue(undefined);
+    config.git = (
+      buildConfig([{ repo, autoPush: true, url: "https://github.com/acme/after.git" }]) as {
+        git: unknown;
+      }
+    ).git;
+    engine.onMainAdvanced([repo]);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(exportLockedInner).toHaveBeenCalledTimes(2);
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+    expect(readStored(files).repos[repo]).toMatchObject({
+      status: "in-sync",
+      lastPushedSha: "backoff-head",
+    });
+  });
+
+  it("does not rescope or reuse persisted state for status-only overrides", async () => {
+    const repo = "projects/status-override";
+    const config = buildConfig([{ repo, autoPush: true, branch: "main" }]);
+    const files = new Map<string, string>();
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "same-head" } });
+    const { engine } = makeEngine(config, bridge, { files });
+
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    const fingerprint = readStored(files).repos[repo]?.configFingerprint;
+    gitFns.push.mockClear();
+
+    const [status] = await engine.upstreamStatus([repo], {
+      branch: "preview-only",
+      credentialId: "status-only-credential",
+    });
+    expect(status?.branch).toBe("preview-only");
+    expect(status?.lastPushedSha).toBeUndefined();
+    expect(status?.lastPushedAt).toBeUndefined();
+    expect(status?.lastError).toBeUndefined();
+    expect(readStored(files).repos[repo]?.configFingerprint).toBe(fingerprint);
+
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: false });
+    expect(gitFns.push).not.toHaveBeenCalled();
+  });
+
   it("tolerates a broken upstream declaration during activate and reports it as error", async () => {
     const healthy = "projects/ok";
     const broken = "projects/bad";
@@ -361,7 +605,7 @@ describe("UpstreamEngine", () => {
 
     await expect(engine.activate()).resolves.toBeUndefined();
 
-    const rows = await engine.upstreamStatus();
+    const rows = await engine.upstreamStatus([]);
     const brokenRow = rows.find((row) => row.repoPath === broken);
     const healthyRow = rows.find((row) => row.repoPath === healthy);
     expect(brokenRow?.state).toBe("error");
@@ -423,5 +667,193 @@ describe("UpstreamEngine", () => {
     const stored = readStored(files).repos;
     expect(stored[repoA]?.status).toBe("auth-failed");
     expect(stored[repoB]?.status).toBe("diverged");
+  });
+
+  it("binds each push to its captured URL and fingerprint-specific transport remote", async () => {
+    const repo = "projects/immutable-route";
+    const config = buildConfig([
+      { repo, autoPush: true, url: "https://example.com/before.git" },
+    ]) as { git: unknown };
+    const enteredExport = deferred();
+    const releaseExport = deferred();
+    let exportCount = 0;
+    const bridge = {
+      repoGitDir: vi.fn(async () => `/repos/${repo}`),
+      importLockedInner: vi.fn(),
+      exportLockedInner: vi.fn(async () => {
+        exportCount += 1;
+        if (exportCount === 1) {
+          enteredExport.resolve();
+          await releaseExport.promise;
+        }
+        return { exported: 1, headCommit: "stable-head" };
+      }),
+    };
+    const { engine } = makeEngine(config, bridge);
+
+    const firstPush = engine.pushUpstream(repo);
+    await enteredExport.promise;
+    config.git = (
+      buildConfig([{ repo, autoPush: true, url: "https://example.com/after.git" }]) as {
+        git: unknown;
+      }
+    ).git;
+    releaseExport.resolve();
+    await firstPush;
+    await engine.pushUpstream(repo);
+
+    const firstOptions = gitFns.push.mock.calls[0]?.[0] as {
+      url: string;
+      remote: string;
+    };
+    const secondOptions = gitFns.push.mock.calls[1]?.[0] as {
+      url: string;
+      remote: string;
+    };
+    expect(firstOptions.url).toBe("https://example.com/before.git");
+    expect(secondOptions.url).toBe("https://example.com/after.git");
+    expect(firstOptions.remote).toMatch(/^vibestudio-[a-f0-9]{24}$/);
+    expect(secondOptions.remote).toMatch(/^vibestudio-[a-f0-9]{24}$/);
+    expect(secondOptions.remote).not.toBe(firstOptions.remote);
+  });
+
+  it("re-reads auto-push only after acquiring the repo lock", async () => {
+    const repo = "projects/locked-auto-policy";
+    const config = buildConfig([{ repo, autoPush: true }]) as { git: unknown };
+    const enteredExport = deferred();
+    const releaseExport = deferred();
+    let exportCount = 0;
+    const bridge = {
+      repoGitDir: vi.fn(async () => `/repos/${repo}`),
+      importLockedInner: vi.fn(),
+      exportLockedInner: vi.fn(async () => {
+        exportCount += 1;
+        if (exportCount === 1) {
+          enteredExport.resolve();
+          await releaseExport.promise;
+        }
+        return { exported: 1, headCommit: `head-${exportCount}` };
+      }),
+    };
+    const { engine } = makeEngine(config, bridge);
+
+    const manualPush = engine.pushUpstream(repo);
+    await enteredExport.promise;
+    engine.onMainAdvanced([repo]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    config.git = (buildConfig([{ repo, autoPush: false }]) as { git: unknown }).git;
+    releaseExport.resolve();
+    await manualPush;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bridge.exportLockedInner).toHaveBeenCalledTimes(2);
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies pull fetch authentication failures in fingerprint-scoped state", async () => {
+    const repo = "projects/pull-auth";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const { bridge } = createBridge();
+    const { engine, files } = makeEngine(config, bridge);
+    gitFns.fetch.mockRejectedValueOnce(new GitAuthError("403 Forbidden", 403));
+
+    await expect(engine.pullUpstream(repo)).rejects.toThrow("403 Forbidden");
+
+    expect(readStored(files).repos[repo]).toMatchObject({
+      configFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      status: "auth-failed",
+      lastError: "403 Forbidden",
+    });
+  });
+
+  it("pulls the remote branch into the checkout's actual local branch", async () => {
+    const repo = "projects/pull-branch-parity";
+    const config = buildConfig([{ repo, autoPush: false, branch: "release" }]);
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge);
+    gitFns.resolveRef.mockResolvedValue("remote-head");
+    gitFns.compareRefs.mockResolvedValue({ ahead: 0, behind: 1, diverged: false });
+    gitFns.getCurrentBranch.mockResolvedValue("master");
+
+    await engine.pullUpstream(repo);
+
+    expect(gitFns.fastForward).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://github.com/acme/pull-branch-parity.git",
+        remote: expect.stringMatching(/^vibestudio-[a-f0-9]{24}$/),
+        ref: "master",
+        remoteRef: "release",
+      })
+    );
+  });
+
+  it("discards malformed version 2 state instead of accepting legacy-shaped fields", async () => {
+    const repo = "projects/strict-v2";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const files = new Map<string, string>([
+      [
+        STATE_FILE,
+        JSON.stringify({
+          version: 2,
+          repos: {
+            [repo]: {
+              configFingerprint: "0".repeat(64),
+              lastPushedSha: "same-head",
+              running: "pushing",
+            },
+          },
+        }),
+      ],
+    ]);
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "same-head" } });
+    const { engine } = makeEngine(config, bridge, { files });
+
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+    expect(readStored(files).repos[repo]).not.toHaveProperty("running");
+  });
+
+  it("reports recovered health when a configuration change clears a persisted failure", async () => {
+    const repo = "projects/health-scope";
+    const config = buildConfig([{ repo, autoPush: true, credentialId: "bad" }]) as {
+      git: unknown;
+    };
+    const health = { report: vi.fn(), healthy: vi.fn() };
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge, { health });
+    gitFns.push.mockRejectedValueOnce(new GitAuthError("401 Unauthorized", 401));
+
+    await expect(engine.pushUpstream(repo)).rejects.toThrow("401 Unauthorized");
+    expect(health.report).toHaveBeenLastCalledWith(
+      "degraded",
+      expect.objectContaining({ reasons: [`${repo}: auth-failed`] })
+    );
+
+    config.git = (
+      buildConfig([{ repo, autoPush: true, credentialId: "good" }]) as { git: unknown }
+    ).git;
+    await engine.upstreamStatus([repo]);
+
+    expect(health.healthy).toHaveBeenLastCalledWith({ summary: "git upstream healthy" });
+  });
+
+  it("clears an authentication pause after a successful declared-target status fetch", async () => {
+    const repo = "projects/health-fetch";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const health = { report: vi.fn(), healthy: vi.fn() };
+    const { bridge } = createBridge();
+    const { engine, files } = makeEngine(config, bridge, { health });
+    gitFns.push.mockRejectedValueOnce(new GitAuthError("401 Unauthorized", 401));
+    await expect(engine.pushUpstream(repo)).rejects.toThrow("401 Unauthorized");
+    expect(readStored(files).repos[repo]?.status).toBe("auth-failed");
+
+    gitFns.resolveRef.mockResolvedValue(null);
+    const [status] = await engine.upstreamStatus([repo], { fetch: true });
+
+    expect(status?.state).toBe("ahead");
+    expect(status?.lastError).toBeUndefined();
+    expect(readStored(files).repos[repo]?.status).toBe("ahead");
+    expect(health.healthy).toHaveBeenLastCalledWith({ summary: "git upstream healthy" });
   });
 });

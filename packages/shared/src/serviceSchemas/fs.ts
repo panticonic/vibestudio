@@ -1,7 +1,9 @@
 /**
- * fs service method schemas — per-context filesystem operations, sandboxed to
- * the caller's context folder. Pure-data wire contract shared by the server
- * registration and typed clients.
+ * fs service method schemas — filesystem operations sandboxed to the caller's
+ * context folder for context-bound callers. An unchained extension granted the
+ * explicit `host-fs-access` capability is the deliberate unrestricted-host
+ * exception. Pure-data wire contract shared by the server registration and
+ * typed clients.
  *
  * Caller-kind argument conventions (handled inside FsService):
  * - panel/app/worker/do callers: context resolved from the EntityCache.
@@ -138,18 +140,21 @@ export const fsMethods = defineServiceMethods({
   },
   writeFile: {
     description:
-      "Write data to a file, replacing existing contents; context-scoped writes create missing parent directories. Data may be a UTF-8 string or a base64 binary envelope. GAD-tracked context paths commit through the VCS rather than the worktree.",
+      "Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. For such callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
     ]),
     returns: voidSchema,
     access: WRITE_ACCESS,
-    examples: [{ args: ["/notes/todo.md", "buy milk\n"] }],
+    examples: [
+      { args: [".tmp/todo.md", "buy milk\n"] },
+      { args: ["projects/demo/notes/todo.md", "buy milk\n"] },
+    ],
   },
   appendFile: {
     description:
-      "Append data to the end of a file; context-scoped appends create the file and missing parent directories when absent. Data may be a UTF-8 string or a base64 binary envelope.",
+      "Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. For context-bound callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -172,7 +177,7 @@ export const fsMethods = defineServiceMethods({
   },
   mkdir: {
     description:
-      "Create a directory; with `recursive` it creates missing parents and returns the first-created path (relative to the context root), otherwise returns undefined.",
+      "Create a directory directly on the context filesystem projection (not as a GAD working edit); with `recursive` it creates missing parents and returns the first-created path relative to the context root, otherwise returns undefined.",
     args: z.union([
       z.tuple([z.string(), mkdirOptionsSchema.optional()]),
       z.tuple([z.string(), z.string(), mkdirOptionsSchema.optional()]),
@@ -182,14 +187,15 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/a/b/c", { recursive: true }] }],
   },
   rmdir: {
-    description: "Remove an empty directory; throws if the directory is not empty.",
+    description:
+      "Remove a directory. For context-bound callers, a valid workspace-repo path routes subtree removal through GAD; a scratch directory is removed directly and throws if it is not empty.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: voidSchema,
     access: DESTRUCTIVE_ACCESS,
   },
   rm: {
     description:
-      "Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths.",
+      "Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. For context-bound callers, a valid workspace-repo path routes the removal through GAD; scratch paths are removed directly.",
     args: z.union([
       z.tuple([z.string(), rmOptionsSchema.optional()]),
       z.tuple([z.string(), z.string(), rmOptionsSchema.optional()]),
@@ -231,32 +237,36 @@ export const fsMethods = defineServiceMethods({
   },
   // File manipulation
   unlink: {
-    description: "Delete a single file (not a directory).",
+    description:
+      "Delete a single file (not a directory). For context-bound callers, a valid workspace-repo path routes the deletion through GAD; a scratch path is deleted directly.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: voidSchema,
     access: DESTRUCTIVE_ACCESS,
   },
   copyFile: {
     description:
-      "Copy a file from a source path to a destination path, overwriting the destination.",
+      "Copy a file between context-root-relative paths, overwriting the destination. For context-bound callers, a valid workspace-repo destination becomes a GAD working edit; a platform-ignored destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape.",
     args: z.union([
       z.tuple([z.string(), z.string()]),
       z.tuple([z.string(), z.string(), z.string()]),
     ]),
     returns: voidSchema,
     access: WRITE_ACCESS,
-    examples: [{ args: ["/a.txt", "/b.txt"] }],
+    examples: [{ args: [".tmp/a.txt", ".tmp/b.txt"] }],
   },
   rename: {
     description:
-      "Move or rename a file or directory from a source path to a destination path (also the atomic-write commit step for temp files moved into tracked paths).",
+      "Move or rename a context-root-relative file or directory. For context-bound callers, scratch-to-scratch renames are direct; scratch-to-repo and repo-to-repo moves become GAD working edits. Moving a tracked repo path out to scratch is rejected so source state cannot bypass VCS. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape.",
     args: z.union([
       z.tuple([z.string(), z.string()]),
       z.tuple([z.string(), z.string(), z.string()]),
     ]),
     returns: voidSchema,
     access: WRITE_ACCESS,
-    examples: [{ args: ["/.tmp/tmp-ab12", "/notes/todo.md"] }],
+    examples: [
+      { args: ["/.tmp/tmp-ab12", "/.tmp/todo.md"] },
+      { args: ["/.tmp/tmp-ab12", "/projects/demo/notes/todo.md"] },
+    ],
   },
   realpath: {
     description:
@@ -273,7 +283,8 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   truncate: {
-    description: "Truncate (or zero-extend) a file to the given byte length (default 0).",
+    description:
+      "Truncate (or zero-extend) a file to the given byte length (default 0). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch file is changed directly.",
     args: z.union([
       z.tuple([z.string(), z.number().optional()]),
       z.tuple([z.string(), z.string(), z.number().optional()]),
@@ -290,7 +301,8 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   chmod: {
-    description: "Change a path's Unix permission bits (mode).",
+    description:
+      "Change a path's Unix permission bits (mode). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch path is changed directly.",
     args: z.union([
       z.tuple([z.string(), z.number()]),
       z.tuple([z.string(), z.string(), z.number()]),
@@ -300,7 +312,8 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/run.sh", 493] }],
   },
   utimes: {
-    description: "Set a path's access and modification timestamps (seconds since the epoch).",
+    description:
+      "Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; this does not create a GAD working edit.",
     args: z.union([
       z.tuple([z.string(), z.number(), z.number()]),
       z.tuple([z.string(), z.string(), z.number(), z.number()]),
@@ -334,7 +347,7 @@ export const fsMethods = defineServiceMethods({
   // File handles
   open: {
     description:
-      "Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle.",
+      "Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths.",
     args: z.union([
       z.tuple([z.string(), z.string().optional(), z.number().optional()]),
       z.tuple([z.string(), z.string(), z.string().optional(), z.number().optional()]),
@@ -363,7 +376,7 @@ export const fsMethods = defineServiceMethods({
   },
   handleWrite: {
     description:
-      "Write data (UTF-8 string or base64 binary envelope) to an open handle at the given position (null appends at the current offset), returning the byte count written.",
+      "Write data (UTF-8 string or base64 binary envelope) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only.",
     args: z.union([
       z.tuple([z.number(), fsDataSchema, z.number().nullable()]),
       z.tuple([z.string(), z.number(), fsDataSchema, z.number().nullable()]),
@@ -390,7 +403,7 @@ export const fsMethods = defineServiceMethods({
   // Tmp files
   mktemp: {
     description:
-      "Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (for direct fs write-to-temp-then-rename patterns); the file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination.",
+      "Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (preferred for write-to-temp-then-rename patterns). The file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination.",
     args: z.union([z.tuple([z.string().optional()]), z.tuple([z.string(), z.string().optional()])]),
     returns: z.string(),
     access: {

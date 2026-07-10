@@ -68,7 +68,11 @@ interface ExtensionContextLike {
     call<T>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
   };
   workers: {
-    resolveDurableObject(source: string, className: string, objectKey: string): Promise<{ targetId: string }>;
+    resolveDurableObject(
+      source: string,
+      className: string,
+      objectKey: string
+    ): Promise<{ targetId: string }>;
   };
   invocation: InvocationLike;
   approvals: {
@@ -196,11 +200,6 @@ const METHOD_LABELS: Record<string, string> = {
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@vibestudio/extension" {
-  interface WorkspaceExtensions {
-    "@workspace-extensions/browser-data": Api;
-  }
-}
 
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("browser-data extension activating");
@@ -223,7 +222,7 @@ export async function activate(ctx: ExtensionContextLike) {
     if (callerKind && TRUSTED_CALLER_KINDS.has(callerKind)) return;
     if (!caller || callerKind === "http") {
       const err = new Error(
-        `browser-data.${method} requires a panel, worker, or DO caller`,
+        `browser-data.${method} requires a panel, worker, or DO caller`
       ) as NodeJS.ErrnoException;
       err.code = "ENOCALLER";
       throw err;
@@ -247,7 +246,7 @@ export async function activate(ctx: ExtensionContextLike) {
     });
     if (choice.kind === "uncallable") {
       const err = new Error(
-        `browser-data.${method} requires an interactive caller`,
+        `browser-data.${method} requires an interactive caller`
       ) as NodeJS.ErrnoException;
       err.code = "ENOCALLER";
       throw err;
@@ -259,7 +258,8 @@ export async function activate(ctx: ExtensionContextLike) {
     }
   };
 
-  const guarded = <Args extends unknown[], R>(method: string, fn: (...args: Args) => Promise<R>) =>
+  const guarded =
+    <Args extends unknown[], R>(method: string, fn: (...args: Args) => Promise<R>) =>
     async (...args: Args): Promise<R> => {
       if (GATED_METHODS.has(method)) await requireApproval(method);
       return fn(...args);
@@ -279,130 +279,167 @@ export async function activate(ctx: ExtensionContextLike) {
     return result;
   };
 
-  return {
+  const browserData = {
     detectBrowsers: guarded("detectBrowsers", async () => detectBrowsers()),
     getOpenTabs: guarded("getOpenTabs", async (request: BrowserOpenTabsRequest) =>
-      readOpenTabs(request)),
+      readOpenTabs(request)
+    ),
     openTabsAsPanels: guarded("openTabsAsPanels", async (request: BrowserOpenTabsRequest) =>
-      openTabsAsPanels(request, ctx)),
+      openTabsAsPanels(request, ctx)
+    ),
 
     startImport: guarded("startImport", async (request: ImportRequest) =>
-      importBrowserData(request, callStore, emitChanged, ctx)),
+      importBrowserData(request, callStore, emitChanged, ctx)
+    ),
 
     getImportHistory: guarded("getImportHistory", async () => callStore("getImportHistory")),
-    getProfileImportState: guarded("getProfileImportState", async (query: { browser: string; profilePath?: string; profile?: unknown }) =>
-      callStore("getProfileImportState", {
-        browser: query.browser,
-        profilePath: query.profilePath ?? resolveProfilePath(query as ImportRequest),
-      })),
+    getProfileImportState: guarded(
+      "getProfileImportState",
+      async (query: { browser: string; profilePath?: string; profile?: unknown }) =>
+        callStore("getProfileImportState", {
+          browser: query.browser,
+          profilePath: query.profilePath ?? resolveProfilePath(query as ImportRequest),
+        })
+    ),
     previewImport: guarded("previewImport", async (request: ImportRequest) =>
-      previewBrowserData(request, callStore)),
+      previewBrowserData(request, callStore)
+    ),
 
     getCookieDomains: guarded("getCookieDomains", async () => callStore("getCookieDomains")),
     getHistoryDomains: guarded("getHistoryDomains", async (limit?: number) =>
-      callStore("getHistoryDomains", limit)),
+      callStore("getHistoryDomains", limit)
+    ),
     getPasswordOrigins: guarded("getPasswordOrigins", async () => callStore("getPasswordOrigins")),
     getAutofillFieldNames: guarded("getAutofillFieldNames", async () =>
-      callStore("getAutofillFieldNames")),
+      callStore("getAutofillFieldNames")
+    ),
     getDomainReadiness: guarded("getDomainReadiness", async (domain: string) =>
-      callStore("getDomainReadiness", domain)),
+      callStore("getDomainReadiness", domain)
+    ),
     getAutocompleteDebug: guarded("getAutocompleteDebug", async (query: string) =>
-      getAutocompleteDebug(query, callStore)),
+      getAutocompleteDebug(query, callStore)
+    ),
 
     getBookmarks: guarded("getBookmarks", async (folderPath?: string) =>
-      callStore("getBookmarks", folderPath ?? "/")),
+      callStore("getBookmarks", folderPath ?? "/")
+    ),
     addBookmark: guarded("addBookmark", async (bookmark: unknown) =>
-      mutate("bookmarks", "addBookmark", bookmark)),
+      mutate("bookmarks", "addBookmark", bookmark)
+    ),
     updateBookmark: guarded("updateBookmark", async (id: number, partial: unknown) =>
-      mutate("bookmarks", "updateBookmark", id, partial)),
+      mutate("bookmarks", "updateBookmark", id, partial)
+    ),
     deleteBookmark: guarded("deleteBookmark", async (id: number) =>
-      mutate("bookmarks", "deleteBookmark", id)),
+      mutate("bookmarks", "deleteBookmark", id)
+    ),
     moveBookmark: guarded("moveBookmark", async (id: number, folder: string, position: number) =>
-      mutate("bookmarks", "moveBookmark", id, folder, position)),
+      mutate("bookmarks", "moveBookmark", id, folder, position)
+    ),
     searchBookmarks: guarded("searchBookmarks", async (query: string) =>
-      callStore("searchBookmarks", query)),
+      callStore("searchBookmarks", query)
+    ),
 
     getHistory: guarded("getHistory", async (query: unknown) => callStore("getHistory", query)),
     deleteHistoryEntry: guarded("deleteHistoryEntry", async (id: number) =>
-      mutate("history", "deleteHistoryEntry", id)),
+      mutate("history", "deleteHistoryEntry", id)
+    ),
     deleteHistoryRange: guarded("deleteHistoryRange", async (start: number, end: number) =>
-      mutate("history", "deleteHistoryRange", start, end)),
+      mutate("history", "deleteHistoryRange", start, end)
+    ),
     clearAllHistory: guarded("clearAllHistory", async () => mutate("history", "clearAllHistory")),
     searchHistory: guarded("searchHistory", async (query: string, limit?: number) =>
-      callStore("searchHistory", query, limit)),
+      callStore("searchHistory", query, limit)
+    ),
     searchHistoryForAutocomplete: guarded("searchHistoryForAutocomplete", async (query: unknown) =>
-      callStore("searchHistoryForAutocomplete", query)),
+      callStore("searchHistoryForAutocomplete", query)
+    ),
     recordHistoryVisit: guarded("recordHistoryVisit", async (request: RecordHistoryVisitRequest) =>
-      mutate("history", "recordHistoryVisit", validateHistoryVisit(request))),
+      mutate("history", "recordHistoryVisit", validateHistoryVisit(request))
+    ),
     updateHistoryTitle: guarded("updateHistoryTitle", async (request: UpdateHistoryTitleRequest) =>
-      mutate("history", "updateHistoryTitle", validateHistoryTitle(request))),
+      mutate("history", "updateHistoryTitle", validateHistoryTitle(request))
+    ),
 
     getPasswords: guarded("getPasswords", async () => callStore("getPasswords")),
     getPasswordForSite: guarded("getPasswordForSite", async (origin: string) =>
-      callStore("getPasswordForSite", origin)),
+      callStore("getPasswordForSite", origin)
+    ),
     addPassword: guarded("addPassword", async (password: unknown) =>
-      mutate("passwords", "addPassword", password)),
+      mutate("passwords", "addPassword", password)
+    ),
     updatePassword: guarded("updatePassword", async (id: number, partial: unknown) =>
-      mutate("passwords", "updatePassword", id, partial)),
+      mutate("passwords", "updatePassword", id, partial)
+    ),
     deletePassword: guarded("deletePassword", async (id: number) =>
-      mutate("passwords", "deletePassword", id)),
+      mutate("passwords", "deletePassword", id)
+    ),
     updatePasswordLastUsed: guarded("updatePasswordLastUsed", async (id: number) =>
-      mutate("passwords", "updateLastUsed", id)),
+      mutate("passwords", "updateLastUsed", id)
+    ),
     addNeverSavePassword: guarded("addNeverSavePassword", async (origin: string) =>
-      mutate("passwords", "addNeverSave", origin)),
+      mutate("passwords", "addNeverSave", origin)
+    ),
     isNeverSavePassword: guarded("isNeverSavePassword", async (origin: string) =>
-      callStore("isNeverSave", origin)),
-    getAutofillSuggestions: guarded("getAutofillSuggestions", async (origin: string, fieldName?: string) =>
-      callStore("getAutofillSuggestions", origin, fieldName)),
+      callStore("isNeverSave", origin)
+    ),
+    getAutofillSuggestions: guarded(
+      "getAutofillSuggestions",
+      async (origin: string, fieldName?: string) =>
+        callStore("getAutofillSuggestions", origin, fieldName)
+    ),
 
     getSearchEngines: guarded("getSearchEngines", async () => callStore("getSearchEngines")),
     setDefaultEngine: guarded("setDefaultEngine", async (id: number) =>
-      mutate("searchEngines", "setDefaultEngine", id)),
+      mutate("searchEngines", "setDefaultEngine", id)
+    ),
     getPermissions: guarded("getPermissions", async (origin?: string) =>
-      callStore("getPermissions", origin)),
+      callStore("getPermissions", origin)
+    ),
     setPermission: guarded("setPermission", async (origin: string, perm: string, value: string) =>
-      mutate("permissions", "setPermission", origin, perm, value)),
+      mutate("permissions", "setPermission", origin, perm, value)
+    ),
 
-    exportBookmarks: guarded(
-      "exportBookmarks",
-      async (format: "html" | "json" | "chrome-json") =>
-        exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks")),
+    exportBookmarks: guarded("exportBookmarks", async (format: "html" | "json" | "chrome-json") =>
+      exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks"))
     ),
     exportPasswords: guarded(
       "exportPasswords",
       async (format: "csv-chrome" | "csv-firefox" | "json") =>
-        exportPasswords(format, await callStore<Array<Record<string, unknown>>>("getPasswords")),
+        exportPasswords(format, await callStore<Array<Record<string, unknown>>>("getPasswords"))
     ),
-    exportCookies: guarded(
-      "exportCookies",
-      async (format: "json" | "netscape-txt") =>
-        exportCookies(format, await callStore<Array<Record<string, unknown>>>("getCookies")),
+    exportCookies: guarded("exportCookies", async (format: "json" | "netscape-txt") =>
+      exportCookies(format, await callStore<Array<Record<string, unknown>>>("getCookies"))
     ),
     exportAll: guarded("exportAll", async () =>
       exportAll(
         await callStore<Array<Record<string, unknown>>>("getAllBookmarks"),
         await callStore<Array<Record<string, unknown>>>("getHistory", { limit: 2147483647 }),
         await callStore<Array<Record<string, unknown>>>("getCookies"),
-        await callStore<Array<Record<string, unknown>>>("getPasswords"),
-      )),
+        await callStore<Array<Record<string, unknown>>>("getPasswords")
+      )
+    ),
 
     getCookies: guarded("getCookies", async (domain?: string) => callStore("getCookies", domain)),
     deleteCookie: guarded("deleteCookie", async (id: number) =>
-      mutate("cookies", "deleteCookie", id)),
+      mutate("cookies", "deleteCookie", id)
+    ),
     clearCookies: guarded("clearCookies", async (domain?: string) =>
-      mutate("cookies", "clearCookies", domain)),
+      mutate("cookies", "clearCookies", domain)
+    ),
   };
+  return { providerContracts: { browserData } };
 }
 
 async function openTabsAsPanels(
   request: BrowserOpenTabsRequest,
-  ctx: ExtensionContextLike,
+  ctx: ExtensionContextLike
 ): Promise<OpenTabsAsPanelsResult> {
   const allTabs = readOpenTabs(request);
   const selection = request.selection;
   const tabs = selection
     ? allTabs.filter((tab) =>
-        selection.some((s) => s.windowIndex === tab.windowIndex && s.tabIndex === tab.tabIndex))
+        selection.some((s) => s.windowIndex === tab.windowIndex && s.tabIndex === tab.tabIndex)
+      )
     : allTabs;
   const parentId = parentPanelIdFromInvocation(ctx.invocation.current());
   const panels: OpenTabsAsPanelsResult["panels"] = [];
@@ -422,7 +459,7 @@ async function openTabsAsPanels(
           ...(parentId ? { parentId } : {}),
           name: panelNameForOpenTab(tab),
           focus: false,
-        },
+        }
       );
       panels.push({ id: created.id, title: created.title, url: tab.url });
     } catch (err) {
@@ -442,7 +479,7 @@ async function openTabsAsPanels(
 }
 
 function parentPanelIdFromInvocation(
-  invocation: ReturnType<InvocationLike["current"]>,
+  invocation: ReturnType<InvocationLike["current"]>
 ): string | undefined {
   const caller = invocation?.chainCaller ?? invocation?.caller;
   if (!caller?.callerId) return undefined;
@@ -475,23 +512,40 @@ async function importBrowserData(
   request: ImportRequest,
   callStore: <T>(method: string, ...args: unknown[]) => Promise<T>,
   emitChanged: (dataType: ImportDataType | "passwords" | "searchEngines") => void,
-  ctx: ExtensionContextLike,
+  ctx: ExtensionContextLike
 ): Promise<ImportResult[]> {
   const profilePath = resolveProfilePath(request);
   const meta: ImportBatchMeta = { browser: request.browser, profilePath };
   const store = {
-    bookmarks: { addBatch: (items: ImportedBookmark[], m?: ImportBatchMeta) =>
-      callStore<number>("addBookmarksBatch", items, m ?? meta) },
-    history: { addBatch: (items: ImportedHistoryEntry[], m?: ImportHistoryBatchMeta) =>
-      callStore<number>("addHistoryBatch", items, m ?? meta) },
-    cookies: { addBatch: (items: ImportedCookie[]) => callStore<number>("addCookiesBatch", items, meta) },
-    passwords: { addBatch: (items: ImportedPassword[]) => callStore<number>("addPasswordsBatch", items, meta) },
-    autofill: { addBatch: (items: ImportedAutofillEntry[], m?: ImportBatchMeta) =>
-      callStore<number>("addAutofillBatch", items, m ?? meta) },
-    searchEngines: { addBatch: (items: ImportedSearchEngine[], m?: ImportBatchMeta) =>
-      callStore<number>("addSearchEnginesBatch", items, m ?? meta) },
-    permissions: { addBatch: (items: ImportedPermission[]) => callStore<number>("addPermissionsBatch", items, meta) },
-    favicons: { addBatch: (items: ImportedFavicon[]) => callStore<number>("addFaviconsBatch", items, meta) },
+    bookmarks: {
+      addBatch: (items: ImportedBookmark[], m?: ImportBatchMeta) =>
+        callStore<number>("addBookmarksBatch", items, m ?? meta),
+    },
+    history: {
+      addBatch: (items: ImportedHistoryEntry[], m?: ImportHistoryBatchMeta) =>
+        callStore<number>("addHistoryBatch", items, m ?? meta),
+    },
+    cookies: {
+      addBatch: (items: ImportedCookie[]) => callStore<number>("addCookiesBatch", items, meta),
+    },
+    passwords: {
+      addBatch: (items: ImportedPassword[]) => callStore<number>("addPasswordsBatch", items, meta),
+    },
+    autofill: {
+      addBatch: (items: ImportedAutofillEntry[], m?: ImportBatchMeta) =>
+        callStore<number>("addAutofillBatch", items, m ?? meta),
+    },
+    searchEngines: {
+      addBatch: (items: ImportedSearchEngine[], m?: ImportBatchMeta) =>
+        callStore<number>("addSearchEnginesBatch", items, m ?? meta),
+    },
+    permissions: {
+      addBatch: (items: ImportedPermission[]) =>
+        callStore<number>("addPermissionsBatch", items, meta),
+    },
+    favicons: {
+      addBatch: (items: ImportedFavicon[]) => callStore<number>("addFaviconsBatch", items, meta),
+    },
   };
   const startedAt = Date.now();
   const results = await runImportPipeline(request, store);
@@ -501,7 +555,8 @@ async function importBrowserData(
     browser: request.browser,
     profilePath,
     mode: "import",
-    status: failures.length === 0 ? "success" : failures.length === results.length ? "error" : "partial",
+    status:
+      failures.length === 0 ? "success" : failures.length === results.length ? "error" : "partial",
     startedAt,
     finishedAt,
     dataTypes: results.map((result) => result.dataType),
@@ -525,10 +580,11 @@ async function importBrowserData(
 
 async function previewBrowserData(
   request: ImportRequest,
-  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>,
+  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>
 ): Promise<PreviewResult[]> {
   return previewImportPipeline(request, (dataType, items, meta) =>
-    callStore("classifyAgainstStore", dataType, items, meta));
+    callStore("classifyAgainstStore", dataType, items, meta)
+  );
 }
 
 interface AutocompleteDebugSuggestion {
@@ -548,7 +604,7 @@ interface AutocompleteDebugSuggestion {
  */
 async function getAutocompleteDebug(
   query: string,
-  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>,
+  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>
 ): Promise<{ query: string; suggestions: AutocompleteDebugSuggestion[] }> {
   const normalized = query.trim().toLowerCase();
   const [history, bookmarks, engines] = await Promise.all([
@@ -563,7 +619,7 @@ async function getAutocompleteDebug(
     title: string,
     typedCount: number,
     visitCount: number,
-    lastVisit: number,
+    lastVisit: number
   ): AutocompleteDebugSuggestion => {
     const haystacks = [url.toLowerCase(), title.toLowerCase()];
     const reasons: string[] = [];
@@ -602,19 +658,29 @@ async function getAutocompleteDebug(
         String(h["title"] ?? ""),
         Number(h["typed_count"] ?? 0),
         Number(h["visit_count"] ?? 0),
-        Number(h["last_visit"] ?? 0),
-      ),
+        Number(h["last_visit"] ?? 0)
+      )
     );
   }
   for (const b of bookmarks) {
     suggestions.push(
-      scoreEntry("bookmark", String(b["url"] ?? ""), String(b["title"] ?? ""), 0, 0, Number(b["date_added"] ?? 0)),
+      scoreEntry(
+        "bookmark",
+        String(b["url"] ?? ""),
+        String(b["title"] ?? ""),
+        0,
+        0,
+        Number(b["date_added"] ?? 0)
+      )
     );
   }
   for (const e of engines) {
     const keyword = String(e["keyword"] ?? "");
     if (!keyword) continue;
-    if (normalized && (keyword.toLowerCase() === normalized || keyword.toLowerCase().startsWith(normalized))) {
+    if (
+      normalized &&
+      (keyword.toLowerCase() === normalized || keyword.toLowerCase().startsWith(normalized))
+    ) {
       suggestions.push({
         source: "search-engine",
         keyword,
@@ -635,8 +701,7 @@ function reportImportHealth(ctx: ExtensionContextLike, results: ImportResult[]):
   if (failures.length > 0) {
     ctx.health?.degraded({
       summary: "Some browser data imports failed",
-      reasons: failures.map((result) =>
-        `${result.dataType}: ${result.error ?? "import failed"}`),
+      reasons: failures.map((result) => `${result.dataType}: ${result.error ?? "import failed"}`),
     });
     return;
   }
@@ -650,13 +715,18 @@ function reportImportHealth(ctx: ExtensionContextLike, results: ImportResult[]):
   ctx.health?.healthy({ summary: "Browser data import completed" });
 }
 
-function exportBookmarks(format: "html" | "json" | "chrome-json", allBookmarks: Array<Record<string, unknown>>): string {
+function exportBookmarks(
+  format: "html" | "json" | "chrome-json",
+  allBookmarks: Array<Record<string, unknown>>
+): string {
   const imported: ImportedBookmark[] = allBookmarks.map((b) => ({
     title: String(b["title"] ?? ""),
     url: String(b["url"] ?? ""),
     dateAdded: Number(b["date_added"] ?? Date.now()),
-    folder: String(b["folder_path"] ?? "/").split("/").filter(Boolean),
-    tags: b["tags"] ? JSON.parse(String(b["tags"])) as string[] : undefined,
+    folder: String(b["folder_path"] ?? "/")
+      .split("/")
+      .filter(Boolean),
+    tags: b["tags"] ? (JSON.parse(String(b["tags"])) as string[]) : undefined,
     keyword: b["keyword"] ? String(b["keyword"]) : undefined,
   }));
   if (format === "html") return exportNetscapeBookmarks(imported);
@@ -697,7 +767,10 @@ function validateHttpUrl(url: string): void {
   }
 }
 
-function exportPasswords(format: "csv-chrome" | "csv-firefox" | "json", allPasswords: Array<Record<string, unknown>>): string {
+function exportPasswords(
+  format: "csv-chrome" | "csv-firefox" | "json",
+  allPasswords: Array<Record<string, unknown>>
+): string {
   const imported: ImportedPassword[] = allPasswords.map((p) => ({
     url: String(p["origin_url"] ?? ""),
     username: String(p["username"] ?? ""),
@@ -710,7 +783,10 @@ function exportPasswords(format: "csv-chrome" | "csv-firefox" | "json", allPassw
   return JSON.stringify(imported, null, 2);
 }
 
-function exportCookies(format: "json" | "netscape-txt", allCookies: Array<Record<string, unknown>>): string {
+function exportCookies(
+  format: "json" | "netscape-txt",
+  allCookies: Array<Record<string, unknown>>
+): string {
   const mapped = allCookies.map(storedCookieToImported);
   if (format === "netscape-txt") return exportNetscapeCookies(mapped);
   return JSON.stringify(mapped, null, 2);
@@ -720,7 +796,7 @@ function exportAll(
   bookmarks: Array<Record<string, unknown>>,
   history: Array<Record<string, unknown>>,
   cookies: Array<Record<string, unknown>>,
-  passwords: Array<Record<string, unknown>>,
+  passwords: Array<Record<string, unknown>>
 ): string {
   return exportJson({
     exportedAt: new Date().toISOString(),
@@ -742,8 +818,8 @@ function storedCookieToImported(c: Record<string, unknown>): ImportedCookie {
     expirationDate: c["expiration_date"] == null ? undefined : Number(c["expiration_date"]),
     secure: Number(c["secure"] ?? 0) === 1,
     httpOnly: Number(c["http_only"] ?? 0) === 1,
-    sameSite: (String(c["same_site"] ?? "unspecified") as ImportedCookie["sameSite"]),
-    sourceScheme: (String(c["source_scheme"] ?? "unset") as ImportedCookie["sourceScheme"]),
+    sameSite: String(c["same_site"] ?? "unspecified") as ImportedCookie["sameSite"],
+    sourceScheme: String(c["source_scheme"] ?? "unset") as ImportedCookie["sourceScheme"],
     sourcePort: Number(c["source_port"] ?? -1),
   };
 }
