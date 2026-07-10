@@ -129,7 +129,9 @@ export function summarizeFailures(
 ): FailureReport {
   const limits = { ...DEFAULT_LIMITS, ...opts };
   const failed = suite.results.filter(
-    (entry) => !entry.result.passed || (entry.execution.toolFailures?.length ?? 0) > 0
+    (entry) =>
+      !entry.result.passed ||
+      (entry.execution.toolFailures ?? []).some((failure) => failure.expected !== true)
   );
   return {
     failureCount: failed.length,
@@ -178,6 +180,9 @@ function summarizeFailure(
     handle: participant.handle,
     connected: participant.connected,
   }));
+  const unexpectedToolFailures = (entryExecution["toolFailures"] ?? []).filter(
+    (failure) => failure.expected !== true
+  );
 
   return {
     name: entry.test.name,
@@ -195,8 +200,8 @@ function summarizeFailure(
     cleanupErrors,
     participants,
     likelyIssue: entry.result.passed
-      ? (entryExecution["toolFailures"]?.length ?? 0) > 0
-        ? `tool-failure-observed:${entryExecution["toolFailures"]!.map((failure) => failure.name).join(",")}`
+      ? unexpectedToolFailures.length > 0
+        ? `tool-failure-observed:${unexpectedToolFailures.map((failure) => failure.name).join(",")}`
         : "passed"
       : classifyFailure(entry, finalAgentMessage, invocations, cleanupErrors),
   };
@@ -231,7 +236,9 @@ function classifyFailure(
   const incomplete = invocations.filter((invocation) => invocation.status !== "complete");
   if (incomplete.length > 0)
     return `incomplete-invocation:${incomplete.map((i) => i.name).join(",")}`;
-  const toolFailures = entry.execution.toolFailures ?? [];
+  const toolFailures = (entry.execution.toolFailures ?? []).filter(
+    (failure) => failure.expected !== true
+  );
   if (toolFailures.length > 0) return `tool-error:${toolFailures.map((i) => i.name).join(",")}`;
   const errored = invocations.filter((invocation) => invocation.error || invocation.isError);
   if (errored.length > 0) return `tool-error:${errored.map((i) => i.name).join(",")}`;

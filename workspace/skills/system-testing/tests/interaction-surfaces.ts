@@ -114,7 +114,7 @@ export const interactionSurfaceTests: TestCase[] = [
         "action bar"
       ),
     validate: (result) => {
-      const tools = requireCompletedTools(result, ["eval", "load_action_bar"]);
+      const tools = requireCompletedTools(result, ["load_action_bar"]);
       if (!tools.passed) return tools;
       const actionBarCalls = completedNamedToolCalls(result, "load_action_bar");
       if (

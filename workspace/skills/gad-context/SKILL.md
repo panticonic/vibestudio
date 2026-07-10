@@ -51,6 +51,12 @@ Useful APIs:
 - `gad.getGadStateProducer({ stateHash })`
 - `gad.inspectStorageDiagnostics({ rowByteLimit, limit })`
 
+Branch/state lookups are sentinel-based: an unknown branch returns an empty
+file list, while missing state files/producers return `null`. During the
+inspecting agent's own active turn, `inspectAgentHealth().summary.ok` may be
+false solely because that turn/invocation is still open; zero durable issue
+counters distinguish this expected in-flight state from corruption.
+
 Current implemented hardening:
 
 - Duplicate `turn.opened` events are rejected at append time and should fail

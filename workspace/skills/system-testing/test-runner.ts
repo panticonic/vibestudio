@@ -115,7 +115,7 @@ export class TestRunner {
       if (entry.execution.error) errored++;
       else if (entry.result.passed) passed++;
       else failed++;
-      const entryToolFailures = entry.execution.toolFailures?.length ?? 0;
+      const entryToolFailures = unexpectedToolFailures(entry.execution.toolFailures).length;
       toolFailureCount += entryToolFailures;
       if (entryToolFailures > 0) testsWithToolFailures++;
     }
@@ -175,7 +175,10 @@ export class TestRunner {
             return { messages, duration, snapshot };
           })();
       execution.duration ||= Date.now() - startTime;
-      execution.toolFailures = collectToolFailures(execution);
+      execution.toolFailures = classifyExpectedToolFailures(
+        collectToolFailures(execution),
+        test.expectedToolFailures
+      );
       const result = test.validate(execution);
       outcome = { result, execution };
     } catch (err) {
@@ -194,7 +197,10 @@ export class TestRunner {
         error: errorMessage,
         snapshot,
       };
-      execution.toolFailures = collectToolFailures(execution);
+      execution.toolFailures = classifyExpectedToolFailures(
+        collectToolFailures(execution),
+        test.expectedToolFailures
+      );
       try {
         execution.diagnostics = await this.runner.collectDiagnostics({
           channelId: session?.channelId,
@@ -422,6 +428,28 @@ function collectToolFailures(execution: TestExecutionResult): ToolFailureSummary
   }
 
   return failures;
+}
+
+function classifyExpectedToolFailures(
+  failures: ToolFailureSummary[],
+  expected: TestCase["expectedToolFailures"]
+): ToolFailureSummary[] {
+  if (!expected?.length) return failures;
+  return failures.map((failure) => {
+    const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
+    const matched = expected.some(
+      (candidate) =>
+        candidate.name === failure.name &&
+        (!candidate.errorIncludes || text.includes(candidate.errorIncludes.toLowerCase()))
+    );
+    return matched ? { ...failure, expected: true } : failure;
+  });
+}
+
+function unexpectedToolFailures(
+  failures: ToolFailureSummary[] | undefined
+): ToolFailureSummary[] {
+  return (failures ?? []).filter((failure) => failure.expected !== true);
 }
 
 function summarizeToolFailure(

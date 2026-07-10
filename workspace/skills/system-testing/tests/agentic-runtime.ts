@@ -1,5 +1,10 @@
 import type { TestCase } from "../types.js";
-import { completedToolNames, finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  completedToolNames,
+  finalMessageHasAll,
+  findLastAgentMessage,
+  noIncompleteInvocations,
+} from "./_helpers.js";
 
 function withNoPending(
   result: ReturnType<typeof finalMessageHasAll>,
@@ -8,6 +13,19 @@ function withNoPending(
   if (!result.passed) return result;
   const pending = noIncompleteInvocations(execution);
   return pending.passed ? result : pending;
+}
+
+function channelInspectionIsBounded(result: Parameters<typeof findLastAgentMessage>[0]) {
+  const marker = finalMessageHasAll(result, ["CHANNEL_INSPECT_OK"]);
+  if (!marker.passed) return marker;
+  const message = findLastAgentMessage(result);
+  if (!/\bbounded\b|\blimit\s*[:=]?\s*\d+\b/i.test(message)) {
+    return {
+      passed: false,
+      reason: `Expected bounded inspection evidence ("bounded" or an explicit limit): ${message.slice(0, 400)}`,
+    };
+  }
+  return { passed: true };
 }
 
 export const agenticRuntimeTests: TestCase[] = [
@@ -41,8 +59,7 @@ export const agenticRuntimeTests: TestCase[] = [
     category: "agentic-runtime",
     prompt:
       "Inspect channel history for a harmless fake channel id. Finish with CHANNEL_INSPECT_OK and bounded.",
-    validate: (result) =>
-      withNoPending(finalMessageHasAll(result, ["CHANNEL_INSPECT_OK", "bounded"]), result),
+    validate: (result) => withNoPending(channelInspectionIsBounded(result), result),
   },
   {
     name: "large-eval-result-terminal",

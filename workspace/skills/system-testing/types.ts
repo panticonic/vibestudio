@@ -10,7 +10,15 @@ export interface ToolFailureSummary {
   terminalReasonCode?: string;
   error?: string;
   resultSummary?: string;
+  /** True when the test explicitly exercises this failure mode. */
+  expected?: boolean;
   source: "message" | "snapshot";
+}
+
+export interface ExpectedToolFailure {
+  name: string;
+  /** Optional case-insensitive discriminator in the error/result text. */
+  errorIncludes?: string;
 }
 
 export interface TestCase {
@@ -19,6 +27,8 @@ export interface TestCase {
   category: string;
   /** Natural language task prompt sent to the test agent */
   prompt: string;
+  /** Tool errors deliberately induced by this test, not infrastructure defects. */
+  expectedToolFailures?: ExpectedToolFailure[];
   /**
    * Optional custom orchestration for tests that need multiple independent
    * headless agents, ordered phases, or other harness-level setup that a single
@@ -69,9 +79,9 @@ export interface TestSuiteResult {
   passed: number;
   failed: number;
   errored: number;
-  /** Total failed tool calls observed, independent from pass/fail status. */
+  /** Total unexpected failed tool calls observed, independent from pass/fail status. */
   toolFailureCount?: number;
-  /** Number of tests that observed at least one failed tool call. */
+  /** Number of tests that observed at least one unexpected failed tool call. */
   testsWithToolFailures?: number;
   skipped: number;
   duration: number;

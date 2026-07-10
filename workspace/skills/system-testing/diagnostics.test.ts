@@ -202,4 +202,31 @@ describe("system-testing diagnostics", () => {
       likelyIssue: "tool-failure-observed:eval",
     });
   });
+
+  it("does not diagnose a deliberately exercised tool failure as a system defect", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "prompt-1",
+        senderId: "headless",
+        kind: "message",
+        complete: true,
+        content: "prompt",
+      },
+    ];
+    const entry = passingEntryWithToolFailure(messages);
+    entry.execution.toolFailures![0]!.expected = true;
+
+    expect(summarizeEntry(entry).likelyIssue).toBe("passed");
+    expect(
+      summarizeFailures({
+        total: 1,
+        passed: 1,
+        failed: 0,
+        errored: 0,
+        skipped: 0,
+        duration: 1,
+        results: [entry],
+      }).failureCount
+    ).toBe(0);
+  });
 });

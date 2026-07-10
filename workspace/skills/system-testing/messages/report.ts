@@ -154,8 +154,9 @@ export async function reportStage(
     passed: entry.result.passed,
     durationMs: entry.execution.duration ?? 0,
     reason: reasonFor(entry),
-    toolFailures: entry.execution.toolFailures,
-    toolFailureCount: entry.execution.toolFailures?.length ?? 0,
+    toolFailures: entry.execution.toolFailures?.filter((failure) => failure.expected !== true),
+    toolFailureCount:
+      entry.execution.toolFailures?.filter((failure) => failure.expected !== true).length ?? 0,
     detail: summarizeEntry(entry, PER_TEST_LIMITS),
   }));
 

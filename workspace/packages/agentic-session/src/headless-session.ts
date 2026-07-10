@@ -124,6 +124,34 @@ export interface HeadlessSessionCloseOptions {
   waitForRemoteCleanup?: boolean;
 }
 
+function invocationErrorMessage(value: unknown, fallback: string): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record["error"] === "string") return record["error"];
+    if (typeof record["message"] === "string") return record["message"];
+    const details = record["details"];
+    if (details && typeof details === "object") {
+      const detailError = (details as Record<string, unknown>)["error"];
+      if (typeof detailError === "string") return detailError;
+    }
+    const protocolContent = record["protocolContent"];
+    if (Array.isArray(protocolContent)) {
+      const text = protocolContent.find(
+        (item) => item && typeof item === "object" && typeof item["text"] === "string"
+      )?.["text"];
+      if (typeof text === "string") return text;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return fallback;
+    }
+  }
+  return value == null ? fallback : String(value);
+}
+
 // ===========================================================================
 // HeadlessSession
 // ===========================================================================
@@ -769,7 +797,10 @@ export class HeadlessSession {
         consoleOutput: message.invocation!.execution.consoleOutput,
         progress: message.invocation!.execution.progress,
         error: message.invocation!.execution.isError
-          ? String(message.invocation!.execution.result ?? message.invocation!.execution.description ?? "Invocation failed")
+          ? invocationErrorMessage(
+              message.invocation!.execution.result,
+              message.invocation!.execution.description || "Invocation failed"
+            )
           : undefined,
       }));
     return {
