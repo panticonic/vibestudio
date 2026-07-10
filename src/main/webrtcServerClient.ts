@@ -7,10 +7,11 @@
  *
  * Structure mirrors `createServerClient` exactly so the two are interchangeable
  * behind `ServerClient`:
- *   - the main `shell` principal is one `openSession({ callerKind: "shell" })`;
+ *   - the main `shell` principal is one `openSession(...)` over the pipe;
  *   - each Electron-hosted `app` principal gets a one-time connection grant
- *     (`auth.grantConnection`) redeemed by its own `openSession({ callerKind:
- *     "app" })` over the same pipe — so one app dropping never tears down others.
+ *     (`auth.grantConnection`) redeemed by its own `openSession(...)` over the
+ *     same pipe — so one app dropping never tears down others. The server derives
+ *     the authoritative caller-kind from the redeemed grant, not the session.
  *
  * The shell token is supplied by the caller (`getShellToken`), exactly as the
  * local path receives `ports.shellToken` from its child server and the CLI client
@@ -107,7 +108,6 @@ export async function createWebRtcServerClient(
     ...(args.transport ? { transport: args.transport } : {}),
     getShellToken: args.getShellToken,
     connectionId: args.connectionId ?? randomUUID(),
-    callerKind: "shell",
     clientPlatform: "desktop",
     platform: "desktop",
     ...(args.onPaired ? { onPaired: args.onPaired } : {}),
@@ -172,7 +172,6 @@ export async function createWebRtcServerClient(
     }
     const session = transport.openSession({
       connectionId: randomUUID(),
-      callerKind: "app",
       clientPlatform: "desktop",
       // Re-grant on EVERY (re)open: connection grants are one-shot, so pinning the
       // first grant's token would fail the redeem on reconnect — the auto-reopened
@@ -237,7 +236,6 @@ export async function createWebRtcServerClient(
     // per open — grants are one-shot and the pipe auto-reopens sessions.
     const session = transport.openSession({
       connectionId,
-      callerKind: "panel",
       clientPlatform: "desktop",
       getToken: async () => (await authClient.grantConnection(runtimeEntityId)).token,
     });

@@ -47,7 +47,6 @@
 
 import type {
   AuthenticatedCaller,
-  CallerKind,
   EnvelopeRpcTransport,
   RpcConnectionStatus,
   RpcEnvelope,
@@ -213,8 +212,6 @@ function unrefTimer(timer: AnyTimer): void {
 export interface WebRtcSessionOptions {
   /** Logical session id (defaults to the connectionId, or a random id). */
   sid?: string;
-  /** This principal's caller kind ('panel' | 'shell' | …). */
-  callerKind?: CallerKind | "unknown";
   /** Host-chosen connection id — the lease key the server's gate matches. */
   connectionId?: string;
   clientLabel?: string;

@@ -7,8 +7,11 @@
  * Two surfaces, one job each (no redundancy):
  *   - **WebSocket** (`WebSocketImpl`) — blind-relays our SDP/ICE to the peer and
  *     delivers the peer's back, plus room lifecycle
- *     (`peer-joined`/`peer-left`). The room PERSISTS, so the same socket carries
- *     ICE-restart. A join declares its slot via a required `role=offerer|answerer`
+ *     (`peer-joined`/`peer-left`). The room PERSISTS, so a reconnect re-joins the
+ *     same room to re-signal a fresh pipe (a full re-establish, no re-pair — an
+ *     in-place ICE-restart isn't supported by the answerer stack; see
+ *     docs/webrtc-ice-restart-findings.md). A join declares its slot via a
+ *     required `role=offerer|answerer`
  *     query param; a same-role reconnect evicts our own ghost (§4). Keepalive is
  *     out-of-band: we ping every 20s (the DO auto-responds with a pong without
  *     waking) and reap a socket that goes 40s without a pong. ping/pong never

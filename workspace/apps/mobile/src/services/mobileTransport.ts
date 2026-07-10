@@ -192,7 +192,6 @@ export class MobileRpcClient
       // which equals the panel bundle's RPC `from` (cfg.entityId) so routed
       // responses match their recorded origin.
       connectionId,
-      callerKind: "panel",
       clientPlatform: "mobile",
       getToken: async () => {
         const grant = await authClient.grantConnection(runtimeEntityId);

@@ -20,7 +20,19 @@ type RpcHandler = (target: string, method: string, args: unknown[]) => unknown;
  * scoped app session are independent — exactly the production topology.
  */
 function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolean } = {}) {
-  const opened: Array<{ opts: { callerKind?: string }; session: WebRtcSession }> = [];
+  // The caller-kind is no longer a client-supplied session option — the server
+  // derives it from the redeemed grant. The fake therefore distinguishes the main
+  // shell session from each scoped app/panel session by the REAL token each one
+  // redeems: the shell authenticates with `getShellToken`, while every app/panel
+  // principal redeems its own one-shot connection grant, so its token differs.
+  const opened: Array<{
+    opts: { connectionId?: string; getToken?: () => string | Promise<string> };
+    session: WebRtcSession;
+    token?: string;
+  }> = [];
+  // Token of the first session opened — the main shell principal (createPairedConnection
+  // opens it during construction). Any session whose token differs is a scoped grant.
+  let shellToken: string | undefined;
   let status: "connected" | "disconnected" = "disconnected";
   const candidateTypeListeners = new Set<(type: string | null) => void>();
   const emitCandidateType = (type: string | null): void => {
@@ -44,20 +56,30 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
     openSession: (opts: {
       sid?: string;
       connectionId?: string;
-      callerKind?: string;
       getToken?: () => string | Promise<string>;
     }): WebRtcSession => {
       const listeners = new Set<(e: RpcEnvelope) => void>();
+      const entry: {
+        opts: typeof opts;
+        session: WebRtcSession;
+        token?: string;
+      } = { opts, session: undefined as unknown as WebRtcSession };
       // Mirror the real openSession: it invokes getToken to redeem the (one-shot)
-      // connection grant during the handshake that ready() awaits.
-      const authReady = Promise.resolve(opts.getToken?.());
+      // connection grant during the handshake that ready() awaits. Record the
+      // resolved token so the suite can tell shell from scoped sessions.
+      const authReady = Promise.resolve(opts.getToken?.()).then((token) => {
+        entry.token = token as string | undefined;
+        if (shellToken === undefined) shellToken = entry.token; // first open = shell
+        return token;
+      });
       let closed = false;
       const session = {
         sid: opts.sid ?? opts.connectionId ?? "sid",
         callerId: () => "main",
         ready: async () => {
           await authReady;
-          if (options.hangAppReady && opts.callerKind === "app") {
+          // Only a scoped app/panel session (grant token ≠ shell token) hangs here.
+          if (options.hangAppReady && entry.token !== shellToken) {
             await new Promise(() => undefined);
           }
         },
@@ -90,7 +112,8 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
           return () => listeners.delete(cb);
         },
       } as unknown as WebRtcSession;
-      opened.push({ opts, session });
+      entry.session = session;
+      opened.push(entry);
       return session;
     },
   } as unknown as WebRtcTransport;
@@ -109,7 +132,10 @@ describe("createWebRtcServerClient", () => {
       transport,
     });
     expect(transport.connect).toHaveBeenCalledOnce();
-    expect(opened[0]!.opts.callerKind).toBe("shell");
+    // The one session opened is the main shell principal — it authenticated with
+    // the shell token (getShellToken), not a redeemed connection grant.
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.token).toBe("shell-token");
     expect(client.isConnected()).toBe(true);
     expect(client.getConnectionStatus()).toBe("connected");
     await expect(client.call("demo", "echo", ["hi"])).resolves.toEqual({ echoed: "hi" });
@@ -135,18 +161,21 @@ describe("createWebRtcServerClient", () => {
       client.callAs({ callerId: "app:1", callerKind: "app" }, "svc", "ping", [])
     ).resolves.toEqual({ pong: true });
     expect(grants).toBe(1);
-    // main shell session + one scoped app session over the same pipe
-    expect(opened.map((o) => o.opts.callerKind)).toEqual(["shell", "app"]);
+    // main shell session (shell token) + one scoped app session that redeemed its
+    // own connection grant ("grant-tok"), over the same pipe — one per principal.
+    expect(opened.map((o) => o.token)).toEqual(["t", "grant-tok"]);
 
     // Grants are one-shot: if the scoped session dies (lease revoke / pipe drop),
     // the next callAs must RE-GRANT a fresh token, not reuse the consumed one
     // (the bug that left a listen-only app principal dead after any reconnect).
-    opened.find((o) => o.opts.callerKind === "app")!.session.close();
+    opened.find((o) => o.token === "grant-tok")!.session.close();
     await expect(
       client.callAs({ callerId: "app:1", callerKind: "app" }, "svc", "ping", [])
     ).resolves.toEqual({ pong: true });
     expect(grants).toBe(2);
-    expect(opened.map((o) => o.opts.callerKind)).toEqual(["shell", "app", "app"]);
+    // A fresh grant-backed session opened for the re-grant; the shell session and
+    // the dropped app entry are untouched — sessions are isolated per principal.
+    expect(opened.map((o) => o.token)).toEqual(["t", "grant-tok", "grant-tok"]);
   });
 
   it("closes the transport when the main session fails to authenticate (no leaked pipe)", async () => {

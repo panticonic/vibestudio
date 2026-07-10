@@ -173,7 +173,6 @@ describe("MobileRpcClient WebRTC transport", () => {
     expect(transport.openSession).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionId: "panel-conn-1",
-        callerKind: "panel",
         clientPlatform: "mobile",
       })
     );

@@ -4,7 +4,15 @@
  * signaling box is deliberately dumb: a UUID-addressed rendezvous that
  * blind-relays SDP/ICE between two peers (security lives in the QR pin, not the
  * relay). The room PERSISTS for the connection's lifetime (WebSocket
- * Hibernation API) so it can carry ICE-restart, not just first connect.
+ * Hibernation API) so a reconnect re-joins the SAME room to re-signal a fresh
+ * pipe — the pairing/QR is never needed again — not just first connect.
+ *
+ * NB: reconnect is a full re-establish (fresh DTLS), NOT an in-place ICE-restart.
+ * A true ICE-restart (refresh ICE creds while keeping DTLS/SCTP + the open data
+ * channel) is empirically infeasible on the node-datachannel answerer — a
+ * re-offer neither rotates the ICE ufrag nor survives the channel; see
+ * docs/webrtc-ice-restart-findings.md. The persistent room + persistent server
+ * cert make re-establish seamless (no re-pair; sessions auto-reopen).
  */
 
 import type { RtcIceCandidate, RtcIceServer, RtcSessionDescription } from "./webrtcPeer.js";

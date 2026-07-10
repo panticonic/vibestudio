@@ -965,7 +965,6 @@ describe("WebRTC transport — session lifecycle", () => {
     let tokenCalls = 0;
     const session = transport.openSession({
       connectionId: "c1",
-      callerKind: "panel",
       getToken: () => {
         tokenCalls++;
         return "grant-1";
@@ -999,7 +998,6 @@ describe("WebRTC transport — session lifecycle", () => {
     const paired: Array<{ deviceId: string; refreshToken: string }> = [];
     const session = transport.openSession({
       connectionId: "c1",
-      callerKind: "shell",
       getToken: () => "pairing-code",
       onPaired: (cred) => {
         paired.push(cred);

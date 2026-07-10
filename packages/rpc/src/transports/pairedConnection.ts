@@ -106,7 +106,6 @@ export interface CreatePairedConnectionOptions {
   /** Main session identity/telemetry. */
   connectionId?: string;
   sid?: string;
-  callerKind?: WebRtcSessionOptions["callerKind"];
   clientLabel?: string;
   clientSessionId?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
@@ -252,7 +251,6 @@ export async function createPairedConnection(
   const mainSession = transport.openSession({
     connectionId: options.connectionId ?? randomId(),
     ...(options.sid ? { sid: options.sid } : {}),
-    callerKind: options.callerKind ?? "shell",
     ...(options.clientLabel ? { clientLabel: options.clientLabel } : {}),
     ...(options.clientSessionId ? { clientSessionId: options.clientSessionId } : {}),
     ...(options.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),
