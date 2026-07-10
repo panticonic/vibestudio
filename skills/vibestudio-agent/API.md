@@ -520,7 +520,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 | Method | Description |
 |--------|-------------|
-| `workers.listSources` | List available worker sources with durable object classes |
+| `workers.listSources` | List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers) |
 | `workers.listServices` | List manifest-declared userland services |
 | `workers.resolveService` | Resolve a userland service by name or protocol |
 | `workers.resolveDurableObject` | Resolve a Durable Object RPC target by source/class/key |

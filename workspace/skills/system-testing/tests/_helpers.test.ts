@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TestExecutionResult } from "../types.js";
 import {
+  completedToolNames,
   failedToolCalls,
   finalMessageHasField,
   finalMessageHasMarkerCount,
@@ -9,6 +10,33 @@ import {
   incompleteToolCalls,
   noFailedInvocations,
 } from "./_helpers.js";
+
+function executionWithProjectedInvocation(
+  status: string,
+  terminalOutcome?: string,
+  isError?: boolean
+): TestExecutionResult {
+  return {
+    duration: 0,
+    messages: [
+      { kind: "message", senderId: "user", complete: true, content: "prompt" },
+      {
+        kind: "message",
+        senderId: "agent",
+        complete: true,
+        contentType: "invocation",
+        invocation: {
+          id: "call-projected",
+          name: "eval",
+          status,
+          terminalOutcome,
+          isError,
+          arguments: { code: "return true" },
+        },
+      },
+    ],
+  } as TestExecutionResult;
+}
 
 function executionWithInvocation(status: string, terminalOutcome?: string): TestExecutionResult {
   return {
@@ -98,6 +126,18 @@ describe("system-testing validation helpers", () => {
 
   it("does not classify completed invocations as incomplete", () => {
     expect(incompleteToolCalls(executionWithInvocation("complete", "success"))).toEqual([]);
+  });
+
+  it("normalizes flattened completed invocation cards", () => {
+    const result = executionWithProjectedInvocation("complete", "success", false);
+    expect(incompleteToolCalls(result)).toEqual([]);
+    expect(completedToolNames(result)).toEqual(new Set(["eval"]));
+  });
+
+  it("normalizes flattened failed invocation cards", () => {
+    const result = executionWithProjectedInvocation("error", "tool_error", true);
+    expect(incompleteToolCalls(result)).toEqual([]);
+    expect(failedToolCalls(result).map((call) => call.name)).toEqual(["eval"]);
   });
 
   it("classifies pending invocations as incomplete", () => {

@@ -35,8 +35,19 @@ describe("createWorkerdClient", () => {
     // cloneDO/destroyDO are closed off — reachable only via runtime.cloneContext/
     // destroyContext (server-internal), never on this userland client.
     expect(Object.keys(client).sort()).toEqual(
-      ["durableObjectService", "listServices", "resolveDurableObject", "resolveService"].sort()
+      [
+        "durableObjectService",
+        "listServices",
+        "listSources",
+        "resolveDurableObject",
+        "resolveService",
+      ].sort()
     );
+  });
+
+  it("listSources calls workers.listSources", async () => {
+    await client.listSources();
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.listSources", []);
   });
 
   it("listServices calls workers.listServices", async () => {

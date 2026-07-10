@@ -22,7 +22,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `openExternal` | value |  |  |
-| `workers` | namespace | `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` |  |
+| `workers` | namespace | `listSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery and manifest-declared service resolution. listSources() returns every launchable worker with its source, real manifest entry point, and Durable Object classes; lifecycle uses runtime.createEntity/retireEntity. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
 | `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
@@ -51,6 +51,87 @@ For panel navigation options, `contextId` changes the target panel's
 filesystem/storage context and `ref` selects the code build. Never rely on
 `contextId` to imply `ctx:<contextId>`; pass `ref` explicitly when replacing a
 panel with context-branch code.
+
+## Worker Lifecycle and Environment Bindings
+
+Discover launchable sources with `await workers.listSources()`. The result
+includes every regular and Durable Object worker, its workspace `source`, the
+manifest's actual `entry`, and `classes` (empty for a regular worker). Use the
+returned `entry` or read `<source>/package.json`; do not assume `index.ts`.
+
+Launch and retire a regular worker through the runtime entity service:
+
+```ts
+const handle = await rpc.call("main", "runtime.createEntity", [{
+  kind: "worker",
+  source: "workers/my-worker",
+  key: `probe-${crypto.randomUUID()}`,
+  contextId: ctx.contextId,
+  ref: `ctx:${ctx.contextId}`, // omit only when intentionally using main
+  env: { NON_SECRET_PROBE: "configured" },
+}]);
+
+try {
+  // Exercise the worker here.
+} finally {
+  await rpc.call("main", "runtime.retireEntity", [{ id: handle.id }]);
+}
+```
+
+Extra `env` values are string bindings delivered through the second argument of
+the worker's `fetch(request, env, ctx)` handler. Read them from `env` (typed as
+`WorkerEnv`), not from Node's `process.env`.
+
+A resolved `runtime.createEntity` call proves that the host accepted the env
+configuration and started the worker. It does not prove that the running worker
+observed a value. For an end-to-end check, expose one intentionally non-secret
+probe from worker code and call it through the returned `targetId`:
+
+The shipped `workers/hello` sample already implements the fixed
+`readNonSecretProbe` RPC method for no-edit diagnostics. Launch it with
+`env: { NON_SECRET_PROBE: "configured" }`, then call
+`rpc.call(handle.targetId, "readNonSecretProbe", [])`. It never returns another
+binding. Use the pattern below when authoring your own worker.
+
+```ts
+import {
+  createWorkerRuntime,
+  handleWorkerRpc,
+  type ExecutionContext,
+  type WorkerEnv,
+} from "@workspace/runtime/worker";
+
+let exposedForWorker: string | null = null;
+
+export default {
+  async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext) {
+    const runtime = createWorkerRuntime(env);
+    if (exposedForWorker !== env.WORKER_ID) {
+      runtime.rpc.expose("readNonSecretProbe", () => ({
+        value:
+          typeof env["NON_SECRET_PROBE"] === "string" ? env["NON_SECRET_PROBE"] : null,
+      }));
+      exposedForWorker = env.WORKER_ID;
+    }
+    const rpcResponse = handleWorkerRpc(runtime, request);
+    if (rpcResponse) return rpcResponse;
+    return new Response("ready");
+  },
+};
+```
+
+```ts
+const observed = await rpc.call<{ value: string | null }>(
+  handle.targetId,
+  "readNonSecretProbe",
+  []
+);
+if (observed.value !== "configured") throw new Error("Worker env mismatch");
+```
+
+Keep a probe narrow and remove it from production code. Never expose the full
+`env` object or accept an arbitrary key: env may contain bearer tokens and other
+secrets. Do not add env fields to `runtime.listEntities` or entity handles.
 
 ## Userland Services
 

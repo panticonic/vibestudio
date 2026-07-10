@@ -20,6 +20,7 @@ import { namespaceEntry, valueEntry, type RuntimeSurfaceEntry } from "./runtimeS
 
 // --- shared namespace member arrays (single source of truth) ---
 export const WORKERS_MEMBERS = [
+  "listSources",
   "listServices",
   "resolveService",
   "resolveDurableObject",
@@ -205,7 +206,10 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   openPanel: valueEntry("Open a workspace or browser panel and return a PanelHandle."),
   listPanels: valueEntry("List open panels."),
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
-  workers: namespaceEntry(WORKERS_MEMBERS),
+  workers: namespaceEntry(
+    WORKERS_MEMBERS,
+    "Worker discovery and manifest-declared service resolution. listSources() returns every launchable worker with its source, real manifest entry point, and Durable Object classes; lifecycle uses runtime.createEntity/retireEntity."
+  ),
   workspace: namespaceEntry(WORKSPACE_MEMBERS),
   credentials: namespaceEntry(CREDENTIALS_MEMBERS, undefined, "credentials"),
   git: namespaceEntry(GIT_MEMBERS),

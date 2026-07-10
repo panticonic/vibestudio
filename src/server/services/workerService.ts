@@ -2,7 +2,7 @@
  * Worker RPC Service -- high-level worker DO operations.
  *
  * Provides:
- * - listSources: available worker sources (durable.classes from manifests)
+ * - listSources: launchable worker sources (including manifest entry + durable classes)
  * - listServices / resolveService: manifest-declared userland services
  */
 
@@ -13,7 +13,6 @@ import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
 import type { WorkspaceDeclarations } from "@vibestudio/shared/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { resolveUserlandService, type ResolvedUserlandService } from "../userlandServices.js";
-import { assertPresent } from "../../lintHelpers";
 import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
 type ServiceListRow =
@@ -44,6 +43,22 @@ type ScopedDeclarations = {
   buildRef?: string;
 };
 
+const WorkerSourceSchema = z
+  .object({
+    name: z.string().describe("Workspace package name."),
+    source: z.string().describe('Workspace-relative worker source, e.g. "workers/hello".'),
+    title: z.string().optional().describe("Human-readable worker title, when declared."),
+    entry: z
+      .string()
+      .optional()
+      .describe('Manifest entry point relative to the source directory, e.g. "worker.tsx".'),
+    classes: z
+      .array(z.object({ className: z.string() }).passthrough())
+      .describe("Declared Durable Object classes; empty for a regular worker."),
+    agent: z.unknown().optional().describe("Chat-agent manifest metadata, when declared."),
+  })
+  .strict();
+
 export function createWorkerService(deps: {
   buildSystem: BuildSystemV2;
   workspaceDecls: WorkspaceDeclarations;
@@ -65,8 +80,10 @@ export function createWorkerService(deps: {
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
     methods: {
       listSources: {
-        description: "List available worker sources with durable object classes",
+        description:
+          "List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers)",
         args: z.tuple([]),
+        returns: z.array(WorkerSourceSchema),
       },
       listServices: {
         description: "List manifest-declared userland services",
@@ -87,15 +104,13 @@ export function createWorkerService(deps: {
           const graph = buildSystem.getGraph();
           return graph
             .allNodes()
-            .filter(
-              (n) =>
-                n.kind === "worker" && n.manifest.durable && n.manifest.durable.classes.length > 0
-            )
+            .filter((n) => n.kind === "worker")
             .map((n) => ({
               name: n.name,
               source: n.relativePath,
               title: n.manifest.title,
-              classes: assertPresent(n.manifest.durable).classes,
+              entry: n.manifest.entry,
+              classes: n.manifest.durable?.classes ?? [],
               agent: n.manifest.agent,
             }));
         }

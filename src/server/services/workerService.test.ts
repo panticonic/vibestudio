@@ -65,7 +65,7 @@ function createDeps() {
             kind: "worker",
             name: "stateless-api",
             relativePath: "workers/stateless-api",
-            manifest: {},
+            manifest: { entry: "worker.ts" },
           },
         ],
       }),
@@ -75,6 +75,27 @@ function createDeps() {
 }
 
 describe("workerService userland service resolution", () => {
+  it("lists every launchable worker with its real manifest entry point", async () => {
+    const deps = createDeps();
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(createWorkerService(deps as never));
+    dispatcher.markInitialized();
+
+    await expect(dispatcher.dispatch(panelCtx, "workers", "listSources", [])).resolves.toEqual([
+      expect.objectContaining({
+        name: "example-store",
+        source: "workers/example-store",
+        classes: [{ className: "ExampleStoreDO" }],
+      }),
+      expect.objectContaining({
+        name: "stateless-api",
+        source: "workers/stateless-api",
+        entry: "worker.ts",
+        classes: [],
+      }),
+    ]);
+  });
+
   it("lists and resolves manifest-declared services", async () => {
     const deps = createDeps();
     const dispatcher = new ServiceDispatcher();

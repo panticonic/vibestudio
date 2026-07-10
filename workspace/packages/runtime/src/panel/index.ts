@@ -21,6 +21,7 @@ export type {
   DurableObjectServiceClient,
   ResolvedUserlandService,
   UserlandServiceInfo,
+  WorkerSourceInfo,
 } from "../shared/workerd.js";
 export type * from "../shared/gad.js";
 export type {
