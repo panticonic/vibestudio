@@ -18,7 +18,12 @@ import { panel, vcs } from "@workspace/runtime";
 import type { Store } from "./store";
 import type { SpectroliteState } from "./state";
 import { createQueuedRefresh } from "./queuedRefresh";
-import { vaultContextId, vaultPathMapping, normalizeVaultPath, type VaultPathMapping } from "./vaultContext";
+import {
+  vaultContextId,
+  vaultPathMapping,
+  normalizeVaultPath,
+  type VaultPathMapping,
+} from "./vaultContext";
 
 export interface VaultControllerHooks {
   /** Notify the session layer (agent scope update / default-agent bootstrap). */
@@ -37,7 +42,7 @@ export class VaultController {
 
   constructor(
     private readonly store: Store<SpectroliteState>,
-    private readonly hooks: VaultControllerHooks,
+    private readonly hooks: VaultControllerHooks
   ) {}
 
   /** The mapping for the active vault (vault-relative ↔ workspace-relative vcs paths). */
@@ -52,14 +57,20 @@ export class VaultController {
    */
   selectVault(contextPath: string, options?: { starterDoc?: VaultStarterDoc }): void {
     const repoRoot = normalizeVaultPath(contextPath);
+    this.store.setState({ vaultError: null, vaultPendingPath: repoRoot });
     const stateArgs: Record<string, unknown> = { repoRoot };
     if (options?.starterDoc) stateArgs["pendingStarterDoc"] = options.starterDoc;
-    void panel.reopen({
-      contextId: vaultContextId(repoRoot),
-      stateArgs,
-    }).catch((err) => {
-      console.warn("[Spectrolite] reopen for vault select failed:", err);
-    });
+    void panel
+      .reopen({
+        contextId: vaultContextId(repoRoot),
+        stateArgs,
+      })
+      .catch((err) => {
+        this.store.setState({
+          vaultError: `Couldn't open this vault: ${err instanceof Error ? err.message : String(err)}`,
+          vaultPendingPath: null,
+        });
+      });
   }
 
   /** Forget the selection so the picker shows (reopen without a repoRoot). */
@@ -73,6 +84,9 @@ export class VaultController {
       pathContentHashes: {},
       pathsLoaded: false,
       pathsLoading: false,
+      pathsError: null,
+      vaultError: null,
+      vaultPendingPath: null,
       pendingSuggestions: [],
       removedHandles: [],
       repoRoot: null,
@@ -87,12 +101,17 @@ export class VaultController {
     return this.pathsRefresh.run(async () => {
       const root = this.store.getState().repoRoot;
       if (root === null) {
-        this.store.setState({ paths: [], pathContentHashes: {}, pathsLoading: false });
+        this.store.setState({
+          paths: [],
+          pathContentHashes: {},
+          pathsLoading: false,
+          pathsError: null,
+        });
         return;
       }
       const mapping = vaultPathMapping(root);
       const epoch = this.pathsEpoch;
-      this.store.setState({ pathsLoading: true });
+      this.store.setState({ pathsLoading: true, pathsError: null });
       try {
         const entries = await vcs.listFiles();
         if (epoch !== this.pathsEpoch) return;
@@ -105,11 +124,20 @@ export class VaultController {
             return [relPath];
           })
           .sort((a, b) => a.localeCompare(b));
-        this.store.setState({ paths, pathContentHashes, pathsLoading: false, pathsLoaded: true });
+        this.store.setState({
+          paths,
+          pathContentHashes,
+          pathsLoading: false,
+          pathsLoaded: true,
+          pathsError: null,
+        });
       } catch (err) {
-        console.warn("[Spectrolite] listFiles failed:", err);
         if (epoch !== this.pathsEpoch) return;
-        this.store.setState({ paths: [], pathContentHashes: {}, pathsLoading: false, pathsLoaded: true });
+        this.store.setState({
+          pathsLoading: false,
+          pathsLoaded: true,
+          pathsError: `Couldn't load the notes in this vault: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     });
   }

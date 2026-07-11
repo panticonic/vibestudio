@@ -13,9 +13,11 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Box, Button, Flex, Heading, IconButton, Text } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, Heading, IconButton, Text } from "@radix-ui/themes";
 import {
   DotsHorizontalIcon,
+  Cross2Icon,
+  ExclamationTriangleIcon,
   HamburgerMenuIcon,
   Link2Icon,
   ListBulletIcon,
@@ -66,27 +68,34 @@ export function Shell({ theme }: { theme: "light" | "dark" }) {
   const repoRoot = useAppState((s) => s.repoRoot);
   const isMobile = useIsMobile();
   const [quickOpen, setQuickOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Wikilink bridge for the rendered doc: [[Page]] resolves against the
   // live path index at click time (no stale closures), and unresolved
   // targets are created Obsidian-style.
-  const wikilinkContext = useMemo(() => ({
-    resolve: (target: string) => resolveWikilinkTarget(target, app.store.getState().paths),
-    open: (path: string) => app.openFile(path),
-    openOrCreate: async (target: string) => {
-      const resolved = resolveWikilinkTarget(target, app.store.getState().paths);
-      if (resolved) {
-        app.openFile(resolved);
-        return;
-      }
-      try {
-        const created = await app.vault.createFile(target, `# ${target}\n\n`);
-        app.openFile(created);
-      } catch (err) {
-        console.warn(`[Spectrolite] create failed for "${target}":`, err);
-      }
-    },
-  }), [app]);
+  const wikilinkContext = useMemo(
+    () => ({
+      resolve: (target: string) => resolveWikilinkTarget(target, app.store.getState().paths),
+      open: (path: string) => app.openFile(path),
+      openOrCreate: async (target: string) => {
+        const resolved = resolveWikilinkTarget(target, app.store.getState().paths);
+        if (resolved) {
+          app.openFile(resolved);
+          return;
+        }
+        try {
+          setActionError(null);
+          const created = await app.vault.createFile(target, `# ${target}\n\n`);
+          app.openFile(created);
+        } catch (err) {
+          setActionError(
+            `Couldn't create “${target}”: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      },
+    }),
+    [app]
+  );
 
   useEffect(() => {
     if (repoRoot === null) return;
@@ -114,10 +123,13 @@ export function Shell({ theme }: { theme: "light" | "dark" }) {
       else if (id === "newNote") {
         void (async () => {
           try {
+            setActionError(null);
             const created = await app.vault.createFile("Untitled", "# Untitled\n\n");
             app.openFile(created);
           } catch (err) {
-            console.warn("[Spectrolite] new note failed:", err);
+            setActionError(
+              `Couldn't create a new note: ${err instanceof Error ? err.message : String(err)}`
+            );
           }
         })();
       }
@@ -130,9 +142,39 @@ export function Shell({ theme }: { theme: "light" | "dark" }) {
 
   return (
     <WikilinkContext.Provider value={wikilinkContext}>
-      {isMobile
-        ? <MobileWorkspace theme={theme} onQuickOpen={() => setQuickOpen(true)} />
-        : <DesktopWorkspace theme={theme} onQuickOpen={() => setQuickOpen(true)} />}
+      {actionError ? (
+        <Callout.Root
+          color="red"
+          role="alert"
+          style={{
+            position: "absolute",
+            zIndex: 20,
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            maxWidth: "min(560px, calc(100% - 24px))",
+          }}
+        >
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>{actionError}</Callout.Text>
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="red"
+            aria-label="Dismiss error"
+            onClick={() => setActionError(null)}
+          >
+            <Cross2Icon />
+          </IconButton>
+        </Callout.Root>
+      ) : null}
+      {isMobile ? (
+        <MobileWorkspace theme={theme} onQuickOpen={() => setQuickOpen(true)} />
+      ) : (
+        <DesktopWorkspace theme={theme} onQuickOpen={() => setQuickOpen(true)} />
+      )}
       <QuickOpenDialog open={quickOpen} onOpenChange={setQuickOpen} />
     </WikilinkContext.Provider>
   );
@@ -141,12 +183,26 @@ export function Shell({ theme }: { theme: "light" | "dark" }) {
 function PickerScreen() {
   const app = useApp();
   const agentHandle = useAppState((s) => s.roster[0]?.handle ?? s.installedAgents[0]?.handle);
+  const vaultError = useAppState((s) => s.vaultError);
+  const vaultPendingPath = useAppState((s) => s.vaultPendingPath);
   return (
     <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
       <Flex align="center" justify="between" gap="3" px="3" py="2" className="spectrolite-header">
         <Brand />
         <AgentBadges />
       </Flex>
+      {vaultError ? (
+        <Callout.Root color="red" role="alert" mx="3" mt="3">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>{vaultError}</Callout.Text>
+        </Callout.Root>
+      ) : vaultPendingPath ? (
+        <Text size="2" color="gray" mx="3" mt="3" role="status">
+          Opening {vaultPendingPath}…
+        </Text>
+      ) : null}
       <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <VaultPicker
           agentHandle={agentHandle}
@@ -162,13 +218,21 @@ function PickerScreen() {
 function Brand() {
   return (
     <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
-      <span className="spectrolite-gem spectrolite-gem--small" aria-hidden>◆</span>
+      <span className="spectrolite-gem spectrolite-gem--small" aria-hidden>
+        ◆
+      </span>
       <Heading size="3">Spectrolite</Heading>
     </Flex>
   );
 }
 
-function DesktopWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQuickOpen: () => void }) {
+function DesktopWorkspace({
+  theme,
+  onQuickOpen,
+}: {
+  theme: "light" | "dark";
+  onQuickOpen: () => void;
+}) {
   const app = useApp();
   const repoRoot = useAppState((s) => s.repoRoot)!;
   const activePath = useAppState((s) => s.activePath);
@@ -281,7 +345,13 @@ function DesktopWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQ
   );
 }
 
-function MobileWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQuickOpen: () => void }) {
+function MobileWorkspace({
+  theme,
+  onQuickOpen,
+}: {
+  theme: "light" | "dark";
+  onQuickOpen: () => void;
+}) {
   const repoRoot = useAppState((s) => s.repoRoot)!;
   const activeTitle = useActiveTitle();
   const activePath = useAppState((s) => s.activePath);
@@ -290,7 +360,14 @@ function MobileWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQu
 
   return (
     <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
-      <Flex align="center" gap="2" px="2" py="2" className="spectrolite-header" style={{ minHeight: 48 }}>
+      <Flex
+        align="center"
+        gap="2"
+        px="2"
+        py="2"
+        className="spectrolite-header"
+        style={{ minHeight: 48 }}
+      >
         <IconButton
           size="3"
           variant="ghost"
@@ -304,7 +381,9 @@ function MobileWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQu
           <Text size="2" weight="medium" truncate as="div" title={activePath ?? undefined}>
             {activeTitle ?? "Spectrolite"}
           </Text>
-          <Text size="1" color="gray" truncate as="div">{vaultName(repoRoot)}</Text>
+          <Text size="1" color="gray" truncate as="div">
+            {vaultName(repoRoot)}
+          </Text>
         </Box>
         <IconButton
           size="3"
@@ -351,16 +430,30 @@ function MobileWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQu
 
       <MobileSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)}>
         <Flex direction="column" style={{ height: "100%" }}>
-          <Flex align="center" justify="between" px="2" py="2" style={{ borderBottom: "1px solid var(--gray-4)" }}>
+          <Flex
+            align="center"
+            justify="between"
+            px="2"
+            py="2"
+            style={{ borderBottom: "1px solid var(--gray-4)" }}
+          >
             <Heading size="2">Files</Heading>
-            <Button size="2" variant="ghost" color="gray" onClick={() => setSidebarOpen(false)} aria-label="Close files">
+            <Button
+              size="2"
+              variant="ghost"
+              color="gray"
+              onClick={() => setSidebarOpen(false)}
+              aria-label="Close files"
+            >
               Done
             </Button>
           </Flex>
           <Box style={{ flex: 1, minHeight: 0 }}>
             <FileTree onOpened={() => setSidebarOpen(false)} />
           </Box>
-          <Box style={{ maxHeight: "32vh", borderTop: "1px solid var(--gray-4)", overflow: "hidden" }}>
+          <Box
+            style={{ maxHeight: "32vh", borderTop: "1px solid var(--gray-4)", overflow: "hidden" }}
+          >
             <BacklinksPanel onOpened={() => setSidebarOpen(false)} />
           </Box>
         </Flex>

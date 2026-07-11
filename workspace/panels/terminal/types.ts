@@ -74,7 +74,7 @@ export interface TerminalState {
   scrollbackBytes: number;
   themeOverride: "auto" | "light" | "dark";
   notificationCenterOpen: boolean;
-  notificationFilter?: "all" | "approval" | "failure" | "done";
+  notificationFilter?: "all" | "approval" | "failure" | "waiting" | "done";
   perSession: Record<string, PerSessionState>;
   pasteMode: "path" | "dataUri" | "both";
   imagePasteRelative: boolean;

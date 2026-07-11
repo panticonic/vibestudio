@@ -28,7 +28,18 @@ function collectPanels(nodes: WorkspaceNode[]): WorkspaceNode[] {
       result.push(node);
     result.push(...collectPanels(node.children));
   }
-  return result;
+  return result.sort((a, b) =>
+    (a.launchable?.title ?? a.name).localeCompare(b.launchable?.title ?? b.name)
+  );
+}
+
+function collectWorkspaceFeatures(nodes: WorkspaceNode[], prefix: "skills/" | "extensions/") {
+  const result: WorkspaceNode[] = [];
+  for (const node of nodes) {
+    if (node.path.startsWith(prefix) && node.isUnit) result.push(node);
+    result.push(...collectWorkspaceFeatures(node.children, prefix));
+  }
+  return result.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function PanelCard({ node }: { node: WorkspaceNode }) {
@@ -46,8 +57,8 @@ function PanelCard({ node }: { node: WorkspaceNode }) {
             <Text weight="medium" size="2">
               {node.launchable?.title ?? node.name}
             </Text>
-            <Text size="1" color="gray" style={{ wordBreak: "break-all" }}>
-              {node.path}
+            <Text size="1" color="gray">
+              {node.launchable?.description ?? `Open ${node.launchable?.title ?? node.name}`}
             </Text>
           </Flex>
           <ChevronRightIcon style={{ flexShrink: 0, color: "var(--gray-8)" }} />
@@ -91,6 +102,14 @@ function NewPanelPage() {
   }, [promptInput]);
 
   const panels = useMemo(() => (tree ? collectPanels(tree.children) : []), [tree]);
+  const skills = useMemo(
+    () => (tree ? collectWorkspaceFeatures(tree.children, "skills/") : []),
+    [tree]
+  );
+  const extensions = useMemo(
+    () => (tree ? collectWorkspaceFeatures(tree.children, "extensions/") : []),
+    [tree]
+  );
 
   const filteredPanels = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -153,6 +172,13 @@ function NewPanelPage() {
               placeholder="Filter..."
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && filteredPanels[0]) {
+                  e.preventDefault();
+                  window.location.href = buildPanelLink(filteredPanels[0].path);
+                }
+              }}
+              aria-label="Filter panels; press Enter to open the first result"
             >
               <TextField.Slot>
                 <MagnifyingGlassIcon />
@@ -173,6 +199,64 @@ function NewPanelPage() {
           )}
         </Box>
       )}
+      {!loading && !error ? (
+        <Flex direction="column" gap="4" mt="5">
+          <Section>
+            <Heading size="3" mb="2">
+              Installed skills
+            </Heading>
+            <Text size="2" color="gray" mb="3">
+              Skills teach agents specialized workflows and tools. Mention a skill by name in chat
+              to use it.
+            </Text>
+            <Flex direction="column" gap="2">
+              {skills.length ? (
+                skills.map((node) => (
+                  <Card key={node.path}>
+                    <Text weight="medium" size="2">
+                      {node.skillInfo?.name ?? node.name}
+                    </Text>
+                    <Text as="p" size="1" color="gray">
+                      {node.skillInfo?.description ?? node.path}
+                    </Text>
+                  </Card>
+                ))
+              ) : (
+                <Text size="2" color="gray">
+                  No workspace skills are installed.
+                </Text>
+              )}
+            </Flex>
+          </Section>
+          <Section>
+            <Heading size="3" mb="2">
+              Extensions
+            </Heading>
+            <Text size="2" color="gray" mb="3">
+              Extensions add background integrations and agent capabilities. Listed entries are
+              installed in this workspace.
+            </Text>
+            <Flex direction="column" gap="2">
+              {extensions.length ? (
+                extensions.map((node) => (
+                  <Card key={node.path}>
+                    <Text weight="medium" size="2">
+                      {node.packageInfo?.name ?? node.name}
+                    </Text>
+                    <Text as="p" size="1" color="gray">
+                      Installed · {node.path}
+                    </Text>
+                  </Card>
+                ))
+              ) : (
+                <Text size="2" color="gray">
+                  No workspace extensions are installed.
+                </Text>
+              )}
+            </Flex>
+          </Section>
+        </Flex>
+      ) : null}
     </AboutPage>
   );
 }

@@ -33,6 +33,7 @@ import { shouldAutoSendInitialPrompt } from "./core/useChatCore";
  */
 
 const FLUSH_RETRY_DELAY_MS = 1_500;
+export const AGENT_LAUNCH_WATCHDOG_MS = 45_000;
 
 /** Build the spawn config from the inline draft, dropping the handle: the
  *  first-agent setup never exposes a handle field, so a draft handle is only a
@@ -129,6 +130,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const spawnInFlightRef = useRef(false); // the onAddAgent promise is pending
   const flushingRef = useRef(false);
   const flushTimerRef = useRef(0);
+  const launchWatchdogRef = useRef(0);
   const everHadAgentRef = useRef(false);
   const initialPromptEnqueuedRef = useRef(false);
 
@@ -223,6 +225,27 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     issuedRef.current = false;
     setLaunchFailed(false); // re-arms the spawn-driver effect
   }, []);
+
+  // A host can acknowledge the spawn RPC before the worker later reports a
+  // build/start error. Fold that signal into the same retriable queue state,
+  // and bound the otherwise indefinite "launching" wait.
+  useEffect(() => {
+    if (!armed || agentPresent || launchFailed) {
+      window.clearTimeout(launchWatchdogRef.current);
+      return;
+    }
+    if (Array.from(pendingAgents.values()).some((agent) => agent.status === "error")) {
+      setLaunchFailed(true);
+      return;
+    }
+    window.clearTimeout(launchWatchdogRef.current);
+    launchWatchdogRef.current = window.setTimeout(() => {
+      issuedRef.current = false;
+      spawnInFlightRef.current = false;
+      setLaunchFailed(true);
+    }, AGENT_LAUNCH_WATCHDOG_MS);
+    return () => window.clearTimeout(launchWatchdogRef.current);
+  }, [armed, agentPresent, launchFailed, pendingAgents]);
 
   // Stable refs so the wrapped send callback doesn't churn every keystroke.
   const stateRef = useRef({ agentPresent, active, armed, input, agentId, draft });
@@ -399,7 +422,10 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     })();
   }, [agentPresent, queued, publishText, maybeSetDefaultTitle, flushTick]);
 
-  useEffect(() => () => window.clearTimeout(flushTimerRef.current), []);
+  useEffect(() => () => {
+    window.clearTimeout(flushTimerRef.current);
+    window.clearTimeout(launchWatchdogRef.current);
+  }, []);
 
   // Route an injected initialPrompt through the SAME queue only when this host
   // can spawn an agent. Otherwise useAgenticChat leaves the prompt on

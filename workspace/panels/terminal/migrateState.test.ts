@@ -118,10 +118,17 @@ describe("terminal state migration", () => {
 
   it("sanitizes unsafe keybinding overrides", () => {
     const migrated = migrateState({
-      keybindings: { palette: "Ctrl+K", newPane: "Mod+T" },
+      keybindings: {
+        palette: "Ctrl+K",
+        newPane: "Mod+T",
+        find: 42,
+        unknownAction: "Mod+Q",
+      },
     });
 
-    expect(migrated.keybindings).toEqual({});
+    // Plain Ctrl letters, malformed values, and unknown actions are dropped;
+    // a valid user override remains intact.
+    expect(migrated.keybindings).toEqual({ newPane: "Mod+T" });
   });
 
   it("supplies empty scratch state when missing from v1 persisted state", () => {

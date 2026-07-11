@@ -61,6 +61,18 @@ function ClaudeCodeLauncher() {
   );
 }
 
+function friendlyConnectionStatus(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "error": return "Connection failed";
+    case "disconnected": return "Offline";
+    case "connecting":
+    case "connecting...": return "Connecting…";
+    case "reconnecting":
+    case "reconnecting...": return "Reconnecting…";
+    default: return status || "Offline";
+  }
+}
+
 /** Shallow-compare two Maps by entry value (used for small maps like activeStatus). */
 function mapsShallowEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
   if (a === b) return true;
@@ -225,7 +237,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           </Badge>
         </Flex>
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
-          <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : status}</Badge>
+          <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : friendlyConnectionStatus(status)}</Badge>
           {/* Fork switcher — current branch + siblings/children, next to roster.
               Self-subscribes to ChatContext.forkState (renders null when absent). */}
           <ForkSwitcher />
@@ -280,8 +292,8 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           <span
             className="chat-connection-dot"
             style={{ background: connected ? "var(--green-9)" : "var(--gray-8)" }}
-            title={connected ? "Connected" : status}
-            aria-label={connected ? "Connected" : status}
+            title={connected ? "Connected" : friendlyConnectionStatus(status)}
+            aria-label={connected ? "Connected" : friendlyConnectionStatus(status)}
           />
           <ForkSwitcher />
         </Flex>

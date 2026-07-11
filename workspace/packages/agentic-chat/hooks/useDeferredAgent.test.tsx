@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Participant } from "@workspace/pubsub";
 import type { AvailableAgent, ModelCatalog } from "@workspace/agentic-core";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
-import { useDeferredAgent } from "./useDeferredAgent";
+import { AGENT_LAUNCH_WATCHDOG_MS, useDeferredAgent } from "./useDeferredAgent";
 import type { ChatParticipantMetadata } from "../types";
 
 const WORKSPACE_MODEL = "openai-codex:gpt-5.6-sol";
@@ -118,6 +118,18 @@ describe("useDeferredAgent", () => {
     });
     expect(m.onAddAgent).toHaveBeenCalledTimes(1);
     expect(result.current.deferredAgent?.queued.length).toBe(2);
+  });
+
+  it("turns an acknowledged-but-stuck launch into a retriable failure", async () => {
+    vi.useFakeTimers();
+    const m = freshMocks();
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello" }),
+    });
+    await act(async () => result.current.sendMessage());
+    await act(async () => vi.advanceTimersByTimeAsync(AGENT_LAUNCH_WATCHDOG_MS));
+    expect(result.current.deferredAgent?.launchFailed).toBe(true);
+    vi.useRealTimers();
   });
 
   it("flushes the queue live when an agent joins, then stands down", async () => {

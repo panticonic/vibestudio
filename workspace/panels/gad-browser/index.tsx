@@ -120,7 +120,6 @@ function formatGitState(row: GitStatusRow): string {
   return row.state;
 }
 
-
 function GitTab({
   rows,
   loading,
@@ -287,8 +286,11 @@ function GitTab({
                           </IconButton>
                         </DropdownMenu.Trigger>
                         <DropdownMenu.Content>
-                          <DropdownMenu.Item onClick={() => onViewDiff(row.repoPath)}>
-                            View diff
+                          <DropdownMenu.Item
+                            disabled={!row.behindBy || busy}
+                            onClick={() => onViewDiff(row.repoPath)}
+                          >
+                            Preview incoming changes
                           </DropdownMenu.Item>
                           <DropdownMenu.Item
                             color="red"
@@ -538,6 +540,7 @@ function App() {
     preview: GitPullPreview;
   } | null>(null);
   const [operationStatus, setOperationStatus] = useState<string>("");
+  const [operationFailed, setOperationFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const selectedBranch = useMemo(
     () => branches.find((branch) => asText(branch["branch_id"]) === selectedBranchId) ?? null,
@@ -546,6 +549,8 @@ function App() {
 
   async function refresh() {
     setLoading(true);
+    setOperationFailed(false);
+    setOperationStatus("");
     try {
       const [nextStatus, nextBranches] = await Promise.all([
         gad.status(),
@@ -575,6 +580,11 @@ function App() {
         setInvocations([]);
         setEnvelopes([]);
       }
+    } catch (err) {
+      setOperationFailed(true);
+      setOperationStatus(
+        `Couldn't load repository data: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setLoading(false);
     }
@@ -590,6 +600,7 @@ function App() {
       });
       setGitRows(rows);
     } catch (err) {
+      setOperationFailed(true);
       setOperationStatus(`Git status failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       if (showLoading) setGitLoading(false);
@@ -601,9 +612,15 @@ function App() {
     setGitLoading(true);
     try {
       await action();
+      setOperationFailed(false);
       setOperationStatus(success);
+      window.setTimeout(
+        () => setOperationStatus((current) => (current === success ? "" : current)),
+        5_000
+      );
       await refreshGitStatus(false);
     } catch (err) {
+      setOperationFailed(true);
       setOperationStatus(`Git action failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGitPendingRepo(null);
@@ -628,9 +645,11 @@ function App() {
       .pullUpstream(repoPath, { dryRun: true })
       .then((preview) => {
         setGitPullPreview({ repoPath, preview });
+        setOperationFailed(false);
         setOperationStatus("");
       })
       .catch((err) => {
+        setOperationFailed(true);
         setOperationStatus(
           `Pull preview failed: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -670,7 +689,8 @@ function App() {
       previewPullGit(repoPath);
       return;
     }
-    setOperationStatus(`No incoming upstream diff preview is available for ${repoPath}`);
+    setOperationFailed(true);
+    setOperationStatus(`No incoming changes are available to preview for ${repoPath}`);
   }
 
   async function checkIntegrity() {
@@ -678,7 +698,13 @@ function App() {
     try {
       const result = await gad.checkGadIntegrity({});
       setIntegrity(result.errors);
+      setOperationFailed(!result.ok);
       setOperationStatus(result.ok ? "Integrity OK" : `${result.errors.length} integrity issue(s)`);
+    } catch (err) {
+      setOperationFailed(true);
+      setOperationStatus(
+        `Integrity check failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setLoading(false);
     }
@@ -689,7 +715,13 @@ function App() {
     try {
       const result = await gad.validateGadHashes({});
       setIntegrity(result.errors.map((message) => ({ message })));
+      setOperationFailed(!result.ok);
       setOperationStatus(result.ok ? "Hashes OK" : `${result.errors.length} hash issue(s)`);
+    } catch (err) {
+      setOperationFailed(true);
+      setOperationStatus(
+        `Hash validation failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setLoading(false);
     }
@@ -699,9 +731,13 @@ function App() {
     setLoading(true);
     try {
       const result = await gad.rebuildTrajectoryProjections({});
+      setOperationFailed(false);
       setOperationStatus(`Replayed ${result.replayed} event(s)`);
       await refresh();
       await checkIntegrity();
+    } catch (err) {
+      setOperationFailed(true);
+      setOperationStatus(`Replay failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -743,6 +779,7 @@ function App() {
         if (!cancelled) setGitRows(rows);
       } catch (err) {
         if (!cancelled) {
+          setOperationFailed(true);
           setOperationStatus(
             `Git status failed: ${err instanceof Error ? err.message : String(err)}`
           );
@@ -770,7 +807,13 @@ function App() {
     void gad
       .query("SELECT log_id, head, state_hash, commit_event_id FROM gad_worktree_heads")
       .then((result) => setWorktreeHeads(result.rows))
-      .catch(() => setWorktreeHeads([]));
+      .catch((err) => {
+        setWorktreeHeads([]);
+        setOperationFailed(true);
+        setOperationStatus(
+          `Couldn't load comparison states: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
   }, [diffTarget]);
 
   useEffect(() => {
@@ -801,7 +844,12 @@ function App() {
       gad
         .query("SELECT * FROM channel_envelopes ORDER BY channel_id, seq LIMIT 200")
         .then((result) => setEnvelopes(result.rows)),
-    ]);
+    ]).catch((err) => {
+      setOperationFailed(true);
+      setOperationStatus(
+        `Couldn't load the selected branch: ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
   }, [selectedBranchId]);
 
   // When a diff-review target is active, the Files tab is filtered to the
@@ -817,7 +865,11 @@ function App() {
   const actionButtons = (
     <>
       {operationStatus ? (
-        <Text color="gray" size="2">
+        <Text
+          color={operationFailed ? "red" : "gray"}
+          size="2"
+          role={operationFailed ? "alert" : "status"}
+        >
           {operationStatus}
         </Text>
       ) : null}

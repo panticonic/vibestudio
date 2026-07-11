@@ -65,6 +65,12 @@ export interface SpectroliteState {
   pathsLoading: boolean;
   /** False until the first path scan for the current vault settles. */
   pathsLoaded: boolean;
+  /** User-facing failure from the most recent vault file listing. */
+  pathsError: string | null;
+  /** User-facing failure while reopening a selected vault. */
+  vaultError: string | null;
+  /** Vault currently being opened, used to make picker clicks visibly pending. */
+  vaultPendingPath: string | null;
   /** Vault-relative paths with uncommitted local edits (for the file index dot). */
   dirtyPaths: ReadonlyArray<string>;
 
@@ -105,6 +111,9 @@ export function initialState(args: {
     pathContentHashes: {},
     pathsLoading: false,
     pathsLoaded: false,
+    pathsError: null,
+    vaultError: null,
+    vaultPendingPath: null,
     dirtyPaths: [],
 
     activePath: args.openPath,

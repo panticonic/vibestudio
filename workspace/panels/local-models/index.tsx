@@ -150,13 +150,29 @@ function formatUptime(ms: number): string {
 function fitBadge(fit: string) {
   switch (fit) {
     case "full-gpu":
-      return <Badge color="green" variant="soft">● full GPU</Badge>;
+      return (
+        <Badge color="green" variant="soft">
+          ● full GPU
+        </Badge>
+      );
     case "partial-offload":
-      return <Badge color="amber" variant="soft">◐ partial offload</Badge>;
+      return (
+        <Badge color="amber" variant="soft">
+          ◐ partial offload
+        </Badge>
+      );
     case "cpu-only":
-      return <Badge color="gray" variant="soft">CPU</Badge>;
+      return (
+        <Badge color="gray" variant="soft">
+          CPU
+        </Badge>
+      );
     default:
-      return <Badge color="red" variant="soft">too big</Badge>;
+      return (
+        <Badge color="red" variant="soft">
+          too big
+        </Badge>
+      );
   }
 }
 
@@ -189,7 +205,11 @@ function serverBadge(state: ServerState) {
         </Tooltip>
       );
     default:
-      return <Badge color="gray" variant="soft">stopped</Badge>;
+      return (
+        <Badge color="gray" variant="soft">
+          stopped
+        </Badge>
+      );
   }
 }
 
@@ -201,12 +221,15 @@ export default function LocalModelsPanel() {
   const [status, setStatus] = useState<LocalModelsStatus | null>(null);
   const [models, setModels] = useState<LocalModelEntry[]>([]);
   const [catalog, setCatalog] = useState<CuratedModel[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<LocalModelEntry | null>(null);
   const [importPath, setImportPath] = useState("");
   const [logLines, setLogLines] = useState<string[] | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
   const [logKind, setLogKind] = useState<"utility" | "main">("utility");
   const pollRef = useRef<number>(0);
 
@@ -220,9 +243,11 @@ export default function LocalModelsPanel() {
     if (!kind || openLogHandledRef.current) return;
     openLogHandledRef.current = true;
     setLogKind(kind);
+    setLogError(null);
+    setLogLines([]);
     void invoke<string[]>("tailServerLogLines", [kind, 200])
       .then((lines) => setLogLines(lines))
-      .catch(() => setLogLines([]));
+      .catch((err) => setLogError(err instanceof Error ? err.message : String(err)));
   }, [stateArgs.openLog]);
 
   const refresh = useCallback(async () => {
@@ -239,12 +264,24 @@ export default function LocalModelsPanel() {
     }
   }, []);
 
+  const loadCatalog = useCallback(async () => {
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      setCatalog(await invoke<CuratedModel[]>("searchCatalog"));
+    } catch (err) {
+      setCatalogError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
-    void invoke<CuratedModel[]>("searchCatalog").then(setCatalog).catch(() => {});
+    void loadCatalog();
     pollRef.current = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(pollRef.current);
-  }, [refresh]);
+  }, [refresh, loadCatalog]);
 
   const act = useCallback(
     async (label: string, run: () => Promise<unknown>) => {
@@ -297,6 +334,18 @@ export default function LocalModelsPanel() {
                     {Math.round(hardware.ramMB / 1024)} GB RAM
                     {engine ? ` · llama.cpp ${engine.pin.buildTag}` : ""}
                   </Text>
+                ) : error ? (
+                  <Flex direction="column" align="start" gap="2" mt="1">
+                    <Text size="2" color="red">
+                      Can't reach the local-models extension.
+                    </Text>
+                    <Text size="1" color="gray">
+                      Check that the extension is installed and enabled, then retry.
+                    </Text>
+                    <Button size="1" variant="soft" color="red" onClick={() => void refresh()}>
+                      <ReloadIcon /> Retry
+                    </Button>
+                  </Flex>
                 ) : (
                   <Flex align="center" gap="2" mt="1">
                     <Spinner size="1" />
@@ -310,9 +359,7 @@ export default function LocalModelsPanel() {
                     <Callout.Icon>
                       <ExclamationTriangleIcon />
                     </Callout.Icon>
-                    <Callout.Text>
-                      GPU backend degraded: {engine.degradedReason}
-                    </Callout.Text>
+                    <Callout.Text>GPU backend degraded: {engine.degradedReason}</Callout.Text>
                   </Callout.Root>
                 )}
               </Box>
@@ -390,9 +437,7 @@ export default function LocalModelsPanel() {
               </Heading>
               <Flex direction="column" gap="2">
                 {status.downloads.map((job) => {
-                  const progress = job.totalBytes
-                    ? (job.receivedBytes / job.totalBytes) * 100
-                    : 0;
+                  const progress = job.totalBytes ? (job.receivedBytes / job.totalBytes) * 100 : 0;
                   return (
                     <Flex key={job.id} align="center" gap="3">
                       <Box style={{ flex: 1, minWidth: 0 }}>
@@ -589,33 +634,66 @@ export default function LocalModelsPanel() {
                         {entry.blurb}
                       </Text>
                     </Box>
-                    <Button
-                      size="1"
-                      variant="soft"
-                      disabled={busy !== null || !quant}
-                      onClick={() =>
-                        act("download", async () => {
-                          // File naming follows the HF convention the curated
-                          // catalog pins: <repo-basename>-<QUANT>.gguf.
-                          const repoBase = entry.hfRepo.split("/")[1] ?? entry.slug;
-                          const file = `${repoBase.replace(/-GGUF$/iu, "")}-${quant}.gguf`;
-                          await invoke("startDownloadJob", [
-                            {
-                              hfRepo: entry.hfRepo,
-                              file,
-                              displayName: entry.displayName,
-                              slug: entry.slug,
-                            },
-                          ]);
-                        })
+                    <Tooltip
+                      content={
+                        quant
+                          ? "Download this model"
+                          : "No compatible build is available for your detected hardware tier"
                       }
                     >
-                      <DownloadIcon /> Get
-                    </Button>
+                      <Button
+                        size="1"
+                        variant="soft"
+                        disabled={busy !== null || !quant}
+                        onClick={() =>
+                          act("download", async () => {
+                            // File naming follows the HF convention the curated
+                            // catalog pins: <repo-basename>-<QUANT>.gguf.
+                            const repoBase = entry.hfRepo.split("/")[1] ?? entry.slug;
+                            const file = `${repoBase.replace(/-GGUF$/iu, "")}-${quant}.gguf`;
+                            await invoke("startDownloadJob", [
+                              {
+                                hfRepo: entry.hfRepo,
+                                file,
+                                displayName: entry.displayName,
+                                slug: entry.slug,
+                              },
+                            ]);
+                          })
+                        }
+                      >
+                        <DownloadIcon /> Get
+                      </Button>
+                    </Tooltip>
                   </Flex>
                 );
               })}
-              {filteredCatalog.length === 0 && (
+              {catalogLoading ? (
+                <Flex align="center" gap="2">
+                  <Spinner size="1" />
+                  <Text size="1" color="gray">
+                    Loading catalog…
+                  </Text>
+                </Flex>
+              ) : null}
+              {catalogError ? (
+                <Callout.Root color="red" size="1">
+                  <Callout.Text>
+                    <Flex align="center" gap="2">
+                      Couldn't load the model catalog: {catalogError}
+                      <Button
+                        size="1"
+                        variant="soft"
+                        color="red"
+                        onClick={() => void loadCatalog()}
+                      >
+                        Retry
+                      </Button>
+                    </Flex>
+                  </Callout.Text>
+                </Callout.Root>
+              ) : null}
+              {!catalogLoading && !catalogError && filteredCatalog.length === 0 && (
                 <Text size="1" color="gray">
                   Nothing matching — every curated model for this hardware tier is installed.
                 </Text>
@@ -623,6 +701,24 @@ export default function LocalModelsPanel() {
             </Flex>
             <Separator size="4" my="3" />
             <Flex gap="2" align="center">
+              <input
+                type="file"
+                // Chromium/Electron directory picker; the runtime import API needs the folder path.
+                {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+                aria-label="Choose a folder of GGUF files"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0] as
+                    | (File & { path?: string })
+                    | undefined;
+                  const path = file?.path;
+                  if (path) setImportPath(path.replace(/[\\/][^\\/]+$/, ""));
+                  else
+                    setError(
+                      "The selected folder path was unavailable. Enter its absolute path instead."
+                    );
+                }}
+                style={{ maxWidth: 190 }}
+              />
               <TextField.Root
                 placeholder="Import a folder of GGUF files (absolute path)…"
                 value={importPath}
@@ -657,7 +753,9 @@ export default function LocalModelsPanel() {
                     <Text size="2" weight="medium">
                       {kind === "utility" ? "Utility (fallback, CPU)" : "Main (library)"}
                     </Text>
-                    <Box mt="1">{status ? serverBadge(status.servers[kind]) : <Spinner size="1" />}</Box>
+                    <Box mt="1">
+                      {status ? serverBadge(status.servers[kind]) : <Spinner size="1" />}
+                    </Box>
                   </Box>
                   <Flex gap="2">
                     <Button
@@ -675,6 +773,8 @@ export default function LocalModelsPanel() {
                       onClick={() =>
                         act("logs", async () => {
                           setLogKind(kind);
+                          setLogError(null);
+                          setLogLines([]);
                           setLogLines(await invoke<string[]>("tailServerLogLines", [kind, 200]));
                         })
                       }
@@ -690,12 +790,15 @@ export default function LocalModelsPanel() {
       </ScrollArea>
 
       {/* ── delete confirm ────────────────────────────────────────────── */}
-      <Dialog.Root open={removeTarget !== null} onOpenChange={(open) => !open && setRemoveTarget(null)}>
+      <Dialog.Root
+        open={removeTarget !== null}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+      >
         <Dialog.Content maxWidth="380px">
           <Dialog.Title>Delete {removeTarget?.displayName}?</Dialog.Title>
           <Dialog.Description size="2" color="gray">
-            Frees the model's disk space. Agents configured to use it will fall back the next
-            time they run.
+            Frees the model's disk space. Agents configured to use it will fall back the next time
+            they run.
           </Dialog.Description>
           <Flex gap="2" justify="end" mt="3">
             <Dialog.Close>
@@ -720,12 +823,12 @@ export default function LocalModelsPanel() {
       {/* ── log viewer ────────────────────────────────────────────────── */}
       <Dialog.Root open={logLines !== null} onOpenChange={(open) => !open && setLogLines(null)}>
         <Dialog.Content maxWidth="720px">
-          <Dialog.Title>
-            {logKind === "utility" ? "Utility" : "Main"} server log
-          </Dialog.Title>
+          <Dialog.Title>{logKind === "utility" ? "Utility" : "Main"} server log</Dialog.Title>
           <ScrollArea type="auto" scrollbars="both" style={{ maxHeight: 420 }}>
             <Code size="1" style={{ whiteSpace: "pre", display: "block", padding: 8 }}>
-              {(logLines ?? []).join("\n") || "(log empty)"}
+              {logError
+                ? `Couldn't read the log: ${logError}`
+                : (logLines ?? []).join("\n") || "(log empty)"}
             </Code>
           </ScrollArea>
         </Dialog.Content>

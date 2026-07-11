@@ -3,6 +3,8 @@ import { Badge, Box, Button, Flex, IconButton, Text, TextArea, Tooltip } from "@
 import {
   Cross2Icon,
   DragHandleDots2Icon,
+  ArrowUpIcon,
+  ArrowDownIcon,
   ExclamationTriangleIcon,
   LightningBoltIcon,
   LockOpen1Icon,
@@ -29,6 +31,9 @@ export interface OutboxItemProps {
   onEdit: (messageId: string, newText: string) => void | Promise<void>;
   onCancel: (messageId: string) => void | Promise<void>;
   onRetry?: (messageId: string) => void;
+  onMove?: (messageId: string, direction: -1 | 1) => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
   // --- Drag-to-reorder wiring (handled by Outbox) ---
   onDragStart?: (messageId: string) => void;
   onDragOver?: (messageId: string) => void;
@@ -53,6 +58,9 @@ export const OutboxItem = React.memo(function OutboxItem({
   onEdit,
   onCancel,
   onRetry,
+  onMove,
+  canMoveUp = false,
+  canMoveDown = false,
   onDragStart,
   onDragOver,
   onDrop,
@@ -175,6 +183,28 @@ export const OutboxItem = React.memo(function OutboxItem({
               )}
               {!editing && (
                 <Flex align="center" gap="1" className="outbox-item-actions">
+                  <IconButton
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    aria-label="Move message up"
+                    title="Move up"
+                    disabled={!canMoveUp}
+                    onClick={() => onMove?.(msg.id, -1)}
+                  >
+                    <ArrowUpIcon />
+                  </IconButton>
+                  <IconButton
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    aria-label="Move message down"
+                    title="Move down"
+                    disabled={!canMoveDown}
+                    onClick={() => onMove?.(msg.id, 1)}
+                  >
+                    <ArrowDownIcon />
+                  </IconButton>
                   {failed ? (
                     <Button
                       size="1"

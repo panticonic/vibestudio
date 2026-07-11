@@ -181,6 +181,14 @@ export const Outbox = React.memo(function Outbox() {
     current.splice(toIdx, 0, from);
     setOrderOverride(current);
   }, [items]);
+  const handleMove = useCallback((id: string, direction: -1 | 1) => {
+    const current = items.map((message) => message.id);
+    const from = current.indexOf(id);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= current.length) return;
+    [current[from], current[to]] = [current[to]!, current[from]!];
+    setOrderOverride(current);
+  }, [items]);
 
   // Suppress the queue until the channel is connected (replay complete — the
   // ConnectionManager only reports "connected" after `client.ready()`). During
@@ -203,7 +211,7 @@ export const Outbox = React.memo(function Outbox() {
       aria-label="Outbox — your unsent messages"
       className="outbox-list"
     >
-      {items.map((m) => (
+      {items.map((m, index) => (
         <OutboxItem
           key={m.id}
           msg={m}
@@ -214,6 +222,9 @@ export const Outbox = React.memo(function Outbox() {
           onEdit={editPendingMessage}
           onCancel={cancelPendingMessage}
           onRetry={retrySend}
+          onMove={handleMove}
+          canMoveUp={index > 0}
+          canMoveDown={index < items.length - 1}
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
           onDrop={handleDrop}

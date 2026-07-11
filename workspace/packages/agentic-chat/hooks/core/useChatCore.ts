@@ -744,10 +744,14 @@ export function useChatCore({
         }
       } catch (err) {
         settleGhost();
-        setInput(text);
-        inputRef.current = text;
-        setReplyTo(previousReplyTo);
-        console.error("[Chat] Send failed, draft restored:", err);
+        // Never clobber a newer draft typed while this request was in flight.
+        // Keep both texts in the composer so neither user's work is lost.
+        const currentDraft = inputRef.current;
+        const restoredDraft = currentDraft.trim() ? `${currentDraft}\n\n${text}` : text;
+        setInput(restoredDraft);
+        inputRef.current = restoredDraft;
+        if (!currentDraft.trim()) setReplyTo(previousReplyTo);
+        console.error("[Chat] Send failed:", err);
         throw err;
       }
     },
@@ -872,6 +876,10 @@ export function useChatCore({
         await c.callMethod(targetId, "pause", { reason: "User interrupted execution" });
       } catch (err) {
         console.warn("[Chat] Interrupt failed:", err);
+        setConnectionError({
+          message: err instanceof Error ? `Couldn't stop the agent: ${err.message}` : "Couldn't stop the agent. Try again.",
+          at: Date.now(),
+        });
       }
     },
     []
@@ -1006,9 +1014,9 @@ export function useChatCore({
       paused === 0 && outboxCount === 0
         ? "Nothing to flush"
         : remaining > 0
-          ? `Sent 1 of ${outboxCount} queued · ${remaining} waiting`
+            ? `Delivering the next message · ${remaining} still queued`
           : outboxCount > 0
-            ? "Steers delivered — press again to send your next queued message."
+            ? "Delivering your queued message…"
             : "Interrupted";
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     setFlushNarration({ text, remaining });
@@ -1057,6 +1065,10 @@ export function useChatCore({
           await (handle as { result?: Promise<unknown> }).result;
         } catch (err) {
           console.warn("[Chat] Cancel eval failed:", err);
+          setConnectionError({
+            message: err instanceof Error ? `Couldn't cancel the tool call: ${err.message}` : "Couldn't cancel the tool call. Try again.",
+            at: Date.now(),
+          });
         }
         return;
       }
@@ -1076,7 +1088,13 @@ export function useChatCore({
         // effort — when we already aborted locally this is just cleanup.
         await c.cancelMethodCall(transportCallId);
       } catch (err) {
-        if (!abortedLocally) console.warn("[Chat] Cancel invocation failed:", err);
+        if (!abortedLocally) {
+          console.warn("[Chat] Cancel invocation failed:", err);
+          setConnectionError({
+            message: err instanceof Error ? `Couldn't cancel the tool call: ${err.message}` : "Couldn't cancel the tool call. Try again.",
+            at: Date.now(),
+          });
+        }
       }
     },
     []

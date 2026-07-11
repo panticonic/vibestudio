@@ -5,7 +5,6 @@ import { useTouchDevice } from "@workspace/react/responsive";
 import { CommandPalette, type CommandItem } from "@workspace/ui";
 import {
   commandTargetForEnter,
-  hasCommandTargetModifier,
   type CommandRunTarget,
 } from "./commandLauncherModel.js";
 import { loadCommandSuggestions, type CommandSuggestion } from "./commandSources.js";
@@ -95,7 +94,7 @@ export function CommandLauncher(props: {
         const suggestion = item.value;
         if (!suggestion) return;
         const key = asKeyEvent(modifiers);
-        const target = hasCommandTargetModifier(key)
+        const target = canChooseRunTarget(suggestion)
           ? commandTargetForEnter(key)
           : suggestionDefaultTarget(suggestion);
         void accept(suggestion, target);
@@ -103,16 +102,13 @@ export function CommandLauncher(props: {
       footer={
         <Flex align="center" gap="3" wrap="wrap">
           <Text size="1" color="gray">
-            <Kbd>Enter</Kbd> split right
+            <Kbd>Enter</Kbd> run here
           </Text>
           <Text size="1" color="gray">
             <Kbd>Shift Enter</Kbd> split down
           </Text>
           <Text size="1" color="gray">
             <Kbd>Ctrl/Cmd Enter</Kbd> split right
-          </Text>
-          <Text size="1" color="gray">
-            <Kbd>Ctrl/Cmd Shift Enter</Kbd> split down
           </Text>
         </Flex>
       }

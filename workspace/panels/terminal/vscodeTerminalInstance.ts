@@ -31,6 +31,7 @@ export type VscodeTerminalInstanceOptions = {
   theme: XtermTheme;
   focused: boolean;
   onError(error: string): void;
+  onRecovered?(): void;
   onNotification(notification: ParsedNotification): void;
   onFindResult?(result: TerminalFindResult): void;
   onScrollStateChange?(scrolledUp: boolean): void;
@@ -107,6 +108,7 @@ export class VscodeTerminalInstance {
         shell: this.options.shell,
         onData: (event) => this.handleProcessData(event),
         onError: this.onError,
+        onRecovered: this.options.onRecovered,
       });
       this.writeScheduler = new VscodeTerminalWriteScheduler({
         target: () => this.frontend,

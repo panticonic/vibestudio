@@ -217,12 +217,14 @@ export async function createProject(params: {
                 "@radix-ui/themes",
                 "@workspace/runtime",
                 "@workspace/react",
+                "@workspace/ui/panel",
               ],
               ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
             },
             dependencies: {
               "@workspace/runtime": "workspace:*",
               "@workspace/react": "workspace:*",
+              "@workspace/ui": "workspace:*",
               "@radix-ui/themes": "^3.2.1",
             },
           },
@@ -232,6 +234,7 @@ export async function createProject(params: {
         files["index.tsx"] =
           `import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { usePanelTheme } from "@workspace/react";
+import { useAppTheme } from "@workspace/ui/panel";
 import { Flex, Text, Theme } from "@radix-ui/themes";
 
 type DataMode = "fixture" | "live";
@@ -258,10 +261,11 @@ function DataModeProvider({ children }: { children: ReactNode }) {
 
 export default function ${toPascalCase(name)}() {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
   const content = <${toPascalCase(name)}Content />;
 
   return (
-    <Theme appearance={theme}>
+    <Theme appearance={theme} {...appTheme}>
       <DataModeProvider>
         {content}
       </DataModeProvider>

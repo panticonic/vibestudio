@@ -13,6 +13,8 @@ import { useIsMobile } from "@workspace/react/responsive";
 import {
   actionLabel,
   defaultKeybindings,
+  displayChord,
+  eventToChord,
   validateKeybindingOverrides,
   type KeybindingAction,
   type KeybindingOverrides,
@@ -191,19 +193,28 @@ export function Settings(props: {
                         </Text>
                         <TextField.Root
                           size="1"
-                          value={props.keybindings[action] ?? defaultKeybindings[action]}
-                          placeholder={defaultKeybindings[action]}
+                          value={displayChord(props.keybindings[action] ?? defaultKeybindings[action]).join("+")}
+                          placeholder={displayChord(defaultKeybindings[action]).join("+")}
                           color={issue ? "red" : undefined}
-                          onChange={(event) => {
-                            const value = event.target.value.trim();
+                          readOnly
+                          onKeyDown={(event) => {
+                            if (event.key === "Tab") return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (event.key === "Backspace" || event.key === "Delete") {
+                              props.onChange({ keybindings: updateKeybindingOverride(props.keybindings, action, "") });
+                              return;
+                            }
+                            if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
                             props.onChange({
                               keybindings: updateKeybindingOverride(
                                 props.keybindings,
                                 action,
-                                value
+                                eventToChord(event.nativeEvent)
                               ),
                             });
                           }}
+                          aria-label={`${actionLabel(action)} shortcut. Press a key combination to change it.`}
                           style={{ flex: 1 }}
                         />
                       </Flex>

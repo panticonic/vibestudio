@@ -22,6 +22,7 @@ import type { MdxActionHandlers } from "./markdownComponents";
 type GroupedItem =
   | { type: "inline-group"; items: Array<{ msg: ChatMessage; index: number }>; inlineItems: InlineItem[]; key: string }
   | { type: "chat-message"; msg: ChatMessage; index: number };
+const INITIAL_RENDERED_ITEMS = 200;
 
 // --- Grouping helper functions (module-level for reuse by fast paths) ---
 
@@ -491,12 +492,17 @@ export const MessageList = React.memo(function MessageList({
     prevGroupCacheRef.current = { messages, result };
     return result;
   }, [messages]);
+  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDERED_ITEMS);
+  const visibleGroupedItems = useMemo(
+    () => groupedItems.slice(Math.max(0, groupedItems.length - renderLimit)),
+    [groupedItems, renderLimit]
+  );
   const scrollAnchorItems = useMemo<ScrollAnchorItem[]>(
-    () => groupedItems.map((item) => ({
+    () => visibleGroupedItems.map((item) => ({
       id: groupedItemAnchorId(item),
       signature: groupedItemSignature(item),
     })),
-    [groupedItems],
+    [visibleGroupedItems],
   );
 
   useScrollAnchor({
@@ -522,8 +528,8 @@ export const MessageList = React.memo(function MessageList({
   // Refs for stable renderItem callback — avoids recreating the closure on every
   // groupedItems / copiedMessageId change, which would force every visible
   // virtual item to re-render.
-  const groupedItemsRef = useRef(groupedItems);
-  groupedItemsRef.current = groupedItems;
+  const groupedItemsRef = useRef(visibleGroupedItems);
+  groupedItemsRef.current = visibleGroupedItems;
   const copiedMessageIdRef = useRef(copiedMessageId);
   copiedMessageIdRef.current = copiedMessageId;
 
@@ -625,6 +631,13 @@ export const MessageList = React.memo(function MessageList({
           style={{ padding: "var(--message-list-padding)" }}
         >
           {/* Load earlier messages button */}
+          {visibleGroupedItems.length < groupedItems.length ? (
+            <Flex justify="center" py="1">
+              <Button size="1" variant="soft" onClick={() => setRenderLimit((limit) => limit + INITIAL_RENDERED_ITEMS)}>
+                Show {Math.min(INITIAL_RENDERED_ITEMS, groupedItems.length - visibleGroupedItems.length)} earlier messages
+              </Button>
+            </Flex>
+          ) : null}
           {hasMoreHistory && onLoadEarlierMessages && (
             <Flex justify="center" py="1">
               <Button
@@ -645,7 +658,7 @@ export const MessageList = React.memo(function MessageList({
             )
           ) : (
             <Flex className="message-list-stack" direction="column" gap="1">
-              {groupedItems.map((item, index) => (
+              {visibleGroupedItems.map((item, index) => (
                 <div
                   className="message-item"
                   data-scroll-anchor-id={groupedItemAnchorId(item)}

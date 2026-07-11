@@ -3,7 +3,7 @@ export const defaultKeybindings = {
   find: "Mod+F",
   findNext: "Mod+G",
   findPrev: "Shift+Mod+G",
-  newPane: "Mod+T",
+  newPane: "Mod+Shift+T",
   splitRight: "Mod+D",
   splitDown: "Mod+Shift+D",
   closePane: "Mod+Shift+W",
@@ -11,9 +11,9 @@ export const defaultKeybindings = {
   focusDown: "Mod+Alt+ArrowDown",
   focusLeft: "Mod+Alt+H",
   focusRight: "Mod+Alt+L",
-  fontUp: "Mod+=",
-  fontDown: "Mod+-",
-  fontReset: "Mod+0",
+  fontUp: "Mod+Alt+=",
+  fontDown: "Mod+Alt+-",
+  fontReset: "Mod+Alt+0",
   toggleNotifications: "Mod+Shift+N",
   jumpToLatestUnread: "Mod+Shift+U",
   nextUnread: "F8",
@@ -23,7 +23,7 @@ export const defaultKeybindings = {
   clear: "Mod+Shift+L",
   settings: "Mod+,",
   openScratch: "Mod+E",
-  shortcuts: "Mod+/",
+  shortcuts: "Mod+Shift+/",
 } as const;
 
 export type KeybindingAction = keyof typeof defaultKeybindings;
@@ -37,13 +37,53 @@ export interface KeybindingValidationIssue {
 }
 
 export const neverBindPlainCtrl = new Set([
-  "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-  "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+  "f",
+  "g",
+  "h",
+  "i",
+  "j",
+  "k",
+  "l",
+  "m",
+  "n",
+  "o",
+  "p",
+  "q",
+  "r",
+  "s",
+  "t",
+  "u",
+  "v",
+  "w",
+  "x",
+  "y",
+  "z",
 ]);
 
 export function resolveChord(chord: string, platform = defaultPlatform()): string {
   const isMac = /mac/i.test(platform);
-  return normalizeChord(chord.replace(/\bMod\b/g, isMac ? "Meta" : "Ctrl+Shift"));
+  if (isMac) return normalizeChord(chord.replace(/\bMod\b/g, "Meta"));
+  const hasMod = /(^|\+)Mod(?=\+|$)/i.test(chord);
+  const hasExplicitShift = /(^|\+)Shift(?=\+|$)/i.test(chord);
+  if (hasMod && hasExplicitShift) {
+    return normalizeChord(
+      chord.replace(/(^|\+)Mod(?=\+|$)/i, "$1Ctrl").replace(/(^|\+)Shift(?=\+|$)/i, "$1Alt")
+    );
+  }
+  return normalizeChord(chord.replace(/\bMod\b/g, "Ctrl+Shift"));
+}
+
+/** Platform-resolved tokens for shortcut hints and editable placeholders. */
+export function displayChord(chord: string, platform = defaultPlatform()): string[] {
+  const resolved = resolveChord(chord, platform).split("+");
+  return /mac/i.test(platform)
+    ? resolved.map((token) => (token === "Meta" ? "⌘" : token === "Alt" ? "⌥" : token))
+    : resolved;
 }
 
 function defaultPlatform(): string {
@@ -61,15 +101,22 @@ export function eventToChord(event: KeyboardEvent): string {
 }
 
 export function isPlainEscapeEvent(event: KeyboardEvent): boolean {
-  return event.key === "Escape" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+  return (
+    event.key === "Escape" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+  );
 }
 
 export function isForbiddenPlainCtrlChord(chord: string): boolean {
   const parts = chord.split("+");
-  return parts.length === 2 && parts[0] === "Ctrl" && neverBindPlainCtrl.has(parts[1]!.toLowerCase());
+  return (
+    parts.length === 2 && parts[0] === "Ctrl" && neverBindPlainCtrl.has(parts[1]!.toLowerCase())
+  );
 }
 
-export function buildResolvedKeymap(keymap: KeybindingOverrides = {}, platform?: string): Partial<Record<string, KeybindingAction>> {
+export function buildResolvedKeymap(
+  keymap: KeybindingOverrides = {},
+  platform?: string
+): Partial<Record<string, KeybindingAction>> {
   const merged = { ...defaultKeybindings, ...keymap };
   const resolved: Partial<Record<string, KeybindingAction>> = {};
   for (const [action, chord] of Object.entries(merged) as Array<[KeybindingAction, string]>) {
@@ -80,15 +127,23 @@ export function buildResolvedKeymap(keymap: KeybindingOverrides = {}, platform?:
   return resolved;
 }
 
-export function sanitizeKeybindingOverrides(overrides: KeybindingOverrides = {}, platform?: string): KeybindingOverrides {
+export function sanitizeKeybindingOverrides(
+  overrides: KeybindingOverrides = {},
+  platform?: string
+): KeybindingOverrides {
   const issues = validateKeybindingOverrides(overrides, platform);
   const invalid = new Set(issues.map((issue) => issue.action));
   return Object.fromEntries(
-    Object.entries(overrides).filter(([action, chord]) => chord.trim() && !invalid.has(action as KeybindingAction)),
+    Object.entries(overrides).filter(
+      ([action, chord]) => chord.trim() && !invalid.has(action as KeybindingAction)
+    )
   ) as KeybindingOverrides;
 }
 
-export function validateKeybindingOverrides(overrides: KeybindingOverrides = {}, platform?: string): KeybindingValidationIssue[] {
+export function validateKeybindingOverrides(
+  overrides: KeybindingOverrides = {},
+  platform?: string
+): KeybindingValidationIssue[] {
   const issues: KeybindingValidationIssue[] = [];
   const seen = new Map<string, KeybindingAction>();
   const merged = { ...defaultKeybindings, ...overrides };
@@ -99,13 +154,21 @@ export function validateKeybindingOverrides(overrides: KeybindingOverrides = {},
     }
     const normalized = resolveChord(chord, platform);
     if (isForbiddenPlainCtrlChord(normalized)) {
-      issues.push({ action, chord, message: "Plain Ctrl+letter belongs to the shell. Use Mod or Ctrl+Shift." });
+      issues.push({
+        action,
+        chord,
+        message: "Plain Ctrl+letter belongs to the shell. Use Mod or Ctrl+Shift.",
+      });
       continue;
     }
     const existing = seen.get(normalized);
     if (existing) {
       issues.push({ action, chord, message: `Conflicts with ${actionLabel(existing)}.` });
-      issues.push({ action: existing, chord: merged[existing], message: `Conflicts with ${actionLabel(action)}.` });
+      issues.push({
+        action: existing,
+        chord: merged[existing],
+        message: `Conflicts with ${actionLabel(action)}.`,
+      });
       continue;
     }
     seen.set(normalized, action);
@@ -118,7 +181,10 @@ export function actionLabel(action: KeybindingAction): string {
 }
 
 function normalizeChord(chord: string): string {
-  const rawParts = chord.split("+").map((part) => part.trim()).filter(Boolean);
+  const rawParts = chord
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean);
   const key = normalizeKey(rawParts.pop() ?? "");
   const modifiers = new Set(rawParts.map(normalizeModifier));
   const parts = ["Ctrl", "Meta", "Alt", "Shift"].filter((modifier) => modifiers.has(modifier));

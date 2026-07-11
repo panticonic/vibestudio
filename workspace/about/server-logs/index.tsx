@@ -27,6 +27,7 @@ import {
   ArrowDownIcon,
   ChevronRightIcon,
   ChevronDownIcon,
+  ReloadIcon,
 } from "@radix-ui/react-icons";
 import { rpc } from "@workspace/runtime";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
@@ -118,11 +119,7 @@ function shortBoot(id: string): string {
 
 function prettyFields(fields: unknown[]): string {
   try {
-    return fields
-      .map((f) =>
-        typeof f === "string" ? f : JSON.stringify(f, null, 2)
-      )
-      .join("\n");
+    return fields.map((f) => (typeof f === "string" ? f : JSON.stringify(f, null, 2))).join("\n");
   } catch {
     return String(fields);
   }
@@ -189,14 +186,14 @@ function LogRow({
     record.level === "error"
       ? "var(--red-a2)"
       : record.level === "warn"
-      ? "var(--amber-a2)"
-      : "transparent";
+        ? "var(--amber-a2)"
+        : "transparent";
   const accent =
     record.level === "error"
       ? "var(--red-9)"
       : record.level === "warn"
-      ? "var(--amber-9)"
-      : "transparent";
+        ? "var(--amber-9)"
+        : "transparent";
 
   return (
     <Box
@@ -312,6 +309,7 @@ function ServerLogsPage() {
   const [meta, setMeta] = useState<LogEnvelope | null>(null);
   const [stats, setStats] = useState<LogStats | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bootNonce, setBootNonce] = useState(0);
 
   // Controls
   const [search, setSearch] = useState("");
@@ -333,47 +331,44 @@ function ServerLogsPage() {
 
   // -- Ingestion ------------------------------------------------------------
 
-  const ingest = useCallback(
-    (records: LogRecord[], bootId?: string, restartFirst?: boolean) => {
-      if (bootId && bootIdRef.current && bootId !== bootIdRef.current) {
-        // Server restarted: insert a divider and reset the running head.
-        lastSeqRef.current = 0;
-        bootIdRef.current = bootId;
-        setItems((prev) => {
-          const divider: StreamItem = {
-            kind: "restart",
-            id: `restart-${bootId}-${Date.now()}`,
-            bootId,
-          };
-          const next = [...prev, divider];
-          const freshRecords = records.filter((r) => r.seq > lastSeqRef.current);
-          if (freshRecords.length > 0) {
-            lastSeqRef.current = freshRecords[freshRecords.length - 1]!.seq;
-          }
-          const fresh = freshRecords.map<StreamItem>((record) => ({ kind: "log", record }));
-          return trimItems([...next, ...fresh]);
-        });
-        return;
-      }
-      if (bootId && !bootIdRef.current) bootIdRef.current = bootId;
-
-      const fresh = records.filter((r) => r.seq > lastSeqRef.current);
-      if (fresh.length === 0) return;
-      lastSeqRef.current = fresh[fresh.length - 1]!.seq;
-
+  const ingest = useCallback((records: LogRecord[], bootId?: string, restartFirst?: boolean) => {
+    if (bootId && bootIdRef.current && bootId !== bootIdRef.current) {
+      // Server restarted: insert a divider and reset the running head.
+      lastSeqRef.current = 0;
+      bootIdRef.current = bootId;
       setItems((prev) => {
-        const additions = fresh.map<StreamItem>((record) => ({ kind: "log", record }));
-        const combined = restartFirst ? additions : [...prev, ...additions];
-        return trimItems(combined);
+        const divider: StreamItem = {
+          kind: "restart",
+          id: `restart-${bootId}-${Date.now()}`,
+          bootId,
+        };
+        const next = [...prev, divider];
+        const freshRecords = records.filter((r) => r.seq > lastSeqRef.current);
+        if (freshRecords.length > 0) {
+          lastSeqRef.current = freshRecords[freshRecords.length - 1]!.seq;
+        }
+        const fresh = freshRecords.map<StreamItem>((record) => ({ kind: "log", record }));
+        return trimItems([...next, ...fresh]);
       });
+      return;
+    }
+    if (bootId && !bootIdRef.current) bootIdRef.current = bootId;
 
-      // If not pinned to bottom, surface a "new logs" pill.
-      if (!(followRef.current && atBottomRef.current)) {
-        setPendingCount((c) => c + fresh.length);
-      }
-    },
-    []
-  );
+    const fresh = records.filter((r) => r.seq > lastSeqRef.current);
+    if (fresh.length === 0) return;
+    lastSeqRef.current = fresh[fresh.length - 1]!.seq;
+
+    setItems((prev) => {
+      const additions = fresh.map<StreamItem>((record) => ({ kind: "log", record }));
+      const combined = restartFirst ? additions : [...prev, ...additions];
+      return trimItems(combined);
+    });
+
+    // If not pinned to bottom, surface a "new logs" pill.
+    if (!(followRef.current && atBottomRef.current)) {
+      setPendingCount((c) => c + fresh.length);
+    }
+  }, []);
 
   // -- Mount: subscribe, seed, close race gap ------------------------------
 
@@ -388,6 +383,7 @@ function ServerLogsPage() {
 
     async function boot() {
       try {
+        setError(null);
         // 1. Subscribe first so nothing is missed between seed and stream.
         off = rpc.on("event:server-log:append", handleAppend as (ev: unknown) => void);
         await rpc.call("main", "events.subscribe", ["server-log:append"]);
@@ -423,7 +419,7 @@ function ServerLogsPage() {
       if (off) off();
       void rpc.call("main", "events.unsubscribe", ["server-log:append"]).catch(() => {});
     };
-  }, [ingest]);
+  }, [ingest, bootNonce]);
 
   // -- Stats polling --------------------------------------------------------
 
@@ -510,18 +506,12 @@ function ServerLogsPage() {
         bootIdRef.current = res.serverBootId;
       }
       // Merge results (dedupe handled by ingest via seq), then jump to bottom.
-      const existing = new Set(
-        items.flatMap((i) => (i.kind === "log" ? [i.record.seq] : []))
-      );
+      const existing = new Set(items.flatMap((i) => (i.kind === "log" ? [i.record.seq] : [])));
       const additions = res.records
         .filter((r) => !existing.has(r.seq))
         .map<StreamItem>((record) => ({ kind: "log", record }));
       if (additions.length > 0) {
-        setItems((prev) =>
-          trimItems(
-            [...prev, ...additions].sort((a, b) => seqOf(a) - seqOf(b))
-          )
-        );
+        setItems((prev) => trimItems(mergeCurrentBootLogs(prev, additions)));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -582,11 +572,7 @@ function ServerLogsPage() {
       }}
     >
       {/* Header */}
-      <Box
-        px={isMobile ? "3" : "4"}
-        py="3"
-        style={{ borderBottom: "1px solid var(--gray-a5)" }}
-      >
+      <Box px={isMobile ? "3" : "4"} py="3" style={{ borderBottom: "1px solid var(--gray-a5)" }}>
         <Flex align="center" justify="between" gap="3" wrap="wrap">
           <Flex align="center" gap="3" style={{ minWidth: 0 }}>
             <Flex align="center" gap="2">
@@ -603,12 +589,7 @@ function ServerLogsPage() {
               <Text size="4" weight="bold" style={{ letterSpacing: -0.2 }}>
                 Server Logs
               </Text>
-              <Badge
-                color={following ? "grass" : "gray"}
-                variant="soft"
-                radius="full"
-                size="1"
-              >
+              <Badge color={following ? "grass" : "gray"} variant="soft" radius="full" size="1">
                 {following ? "LIVE" : follow ? "follow" : "paused"}
               </Badge>
             </Flex>
@@ -742,11 +723,19 @@ function ServerLogsPage() {
           }}
         >
           {error && (
-            <Box p="4">
+            <Flex p="4" direction="column" align="start" gap="3" role="alert">
               <Text color="red" size="2">
-                {error}
+                Couldn't connect to the server log stream: {error}
               </Text>
-            </Box>
+              <Button
+                size="2"
+                variant="soft"
+                color="red"
+                onClick={() => setBootNonce((value) => value + 1)}
+              >
+                <ReloadIcon /> Retry
+              </Button>
+            </Flex>
           )}
           {!error && logCount === 0 && (
             <Flex
@@ -825,11 +814,7 @@ function ServerLogsPage() {
         justify="between"
         style={{ borderTop: "1px solid var(--gray-a5)" }}
       >
-        <Text
-          size="1"
-          color="gray"
-          style={{ fontFamily: "var(--code-font-family, monospace)" }}
-        >
+        <Text size="1" color="gray" style={{ fontFamily: "var(--code-font-family, monospace)" }}>
           {logCount.toLocaleString()} shown / {items.length.toLocaleString()} loaded
           {items.length >= MAX_ROWS ? ` (capped ${MAX_ROWS})` : ""}
         </Text>
@@ -871,6 +856,20 @@ function LevelCountBadge({ level, count }: { level: Level; count: number }) {
 
 function seqOf(it: StreamItem): number {
   return it.kind === "log" ? it.record.seq : -1;
+}
+
+/** Merge search results into the current boot without moving restart boundaries. */
+function mergeCurrentBootLogs(current: StreamItem[], additions: StreamItem[]): StreamItem[] {
+  let boundary = -1;
+  for (let index = current.length - 1; index >= 0; index -= 1) {
+    if (current[index]?.kind === "restart") {
+      boundary = index;
+      break;
+    }
+  }
+  const prefix = boundary >= 0 ? current.slice(0, boundary + 1) : [];
+  const currentBoot = boundary >= 0 ? current.slice(boundary + 1) : current;
+  return [...prefix, ...[...currentBoot, ...additions].sort((a, b) => seqOf(a) - seqOf(b))];
 }
 
 /** Keep the in-memory list bounded, dropping the oldest entries. */

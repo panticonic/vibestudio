@@ -57,11 +57,13 @@ import {
 ```tsx
 import { Theme } from "@radix-ui/themes";
 import { usePanelTheme } from "@workspace/react";
+import { useAppTheme } from "@workspace/ui/panel";
 
 export default function App() {
   const appearance = usePanelTheme();
+  const appTheme = useAppTheme();
   return (
-    <Theme appearance={appearance}>
+    <Theme appearance={appearance} {...appTheme}>
       {/* Your UI */}
     </Theme>
   );

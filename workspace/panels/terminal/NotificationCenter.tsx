@@ -41,13 +41,20 @@ export function NotificationCenter(props: {
           <Button size="1" variant="soft" onClick={props.onMarkAllRead}>
             Mark read
           </Button>
-          <Button size="1" variant="ghost" onClick={props.onClearAll}>
+          <Button
+            size="1"
+            variant="ghost"
+            onClick={() => {
+              const unread = props.notifications.some((item) => !item.read);
+              if (!unread || window.confirm("Clear all terminal notifications, including unread ones?")) props.onClearAll();
+            }}
+          >
             Clear
           </Button>
         </Flex>
       </Flex>
       <Flex gap="1" wrap="wrap">
-        {(["all", "approval", "failure", "done"] as const).map((item) => (
+        {(["all", "approval", "failure", "waiting", "done"] as const).map((item) => (
           <button
             key={item}
             onClick={() => props.onFilterChange(item)}
@@ -61,6 +68,8 @@ export function NotificationCenter(props: {
                   ? "red"
                   : item === "approval"
                     ? "amber"
+                    : item === "waiting"
+                      ? "blue"
                     : item === "done"
                       ? "green"
                       : "gray"

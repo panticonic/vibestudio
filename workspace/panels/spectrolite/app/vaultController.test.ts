@@ -25,13 +25,15 @@ vi.mock("@workspace/runtime", () => ({
 }));
 
 function makeStore() {
-  return createStore(initialState({
-    contextId: "ctx",
-    channelName: "chan",
-    repoRoot: "projects/default",
-    openPath: null,
-    installedAgents: [],
-  }));
+  return createStore(
+    initialState({
+      contextId: "ctx",
+      channelName: "chan",
+      repoRoot: "projects/default",
+      openPath: null,
+      installedAgents: [],
+    })
+  );
 }
 
 describe("VaultController", () => {
@@ -44,10 +46,15 @@ describe("VaultController", () => {
     const controller = new VaultController(store, {
       onVaultSelected: () => {},
     });
-    const releases: Array<(entries: Array<{ path: string; contentHash: string; mode: number }>) => void> = [];
-    runtimeMocks.listFiles.mockImplementation(() => new Promise((resolve) => {
-      releases.push(resolve);
-    }));
+    const releases: Array<
+      (entries: Array<{ path: string; contentHash: string; mode: number }>) => void
+    > = [];
+    runtimeMocks.listFiles.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(resolve);
+        })
+    );
 
     const running = controller.refreshPaths();
     controller.refreshPaths();
@@ -77,6 +84,22 @@ describe("VaultController", () => {
     expect(store.getState().paths).toEqual(["A.mdx", "nested/B.mdx"]);
   });
 
+  it("keeps known paths and exposes a retryable error when listing fails", async () => {
+    const store = makeStore();
+    store.setState({ paths: ["Existing.mdx"], pathsLoaded: true });
+    const controller = new VaultController(store, { onVaultSelected: () => {} });
+    runtimeMocks.listFiles.mockRejectedValue(new Error("pipe unavailable"));
+
+    await controller.refreshPaths();
+
+    expect(store.getState()).toMatchObject({
+      paths: ["Existing.mdx"],
+      pathsLoaded: true,
+      pathsLoading: false,
+      pathsError: "Couldn't load the notes in this vault: pipe unavailable",
+    });
+  });
+
   it("passes starter docs through reopen so creation happens in the vault context", () => {
     const store = makeStore();
     const controller = new VaultController(store, { onVaultSelected: () => {} });
@@ -94,33 +117,48 @@ describe("VaultController", () => {
     expect(runtimeMocks.edit).not.toHaveBeenCalled();
   });
 
+  it("surfaces a failed vault selection and clears its pending state", async () => {
+    const store = makeStore();
+    const controller = new VaultController(store, { onVaultSelected: () => {} });
+    runtimeMocks.reopen.mockRejectedValueOnce(new Error("reopen failed"));
+
+    controller.selectVault("projects/broken");
+    expect(store.getState().vaultPendingPath).toBe("projects/broken");
+    await vi.waitFor(() => expect(store.getState().vaultPendingPath).toBeNull());
+    expect(store.getState().vaultError).toBe("Couldn't open this vault: reopen failed");
+  });
+
   it("enters picker state and clears persisted repoRoot when switching vaults", async () => {
     const store = makeStore();
     store.setState({
       activeDeps: { chart: "1.0.0" },
       activePath: "E2E.mdx",
       dirtyPaths: ["E2E.mdx"],
-      installedAgents: [{
-        agentId: "SilentAgentWorker",
-        className: "SilentAgentWorker",
-        handle: "scribe",
-        key: "scribe",
-        source: "workers/silent-agent-worker",
-      }],
+      installedAgents: [
+        {
+          agentId: "SilentAgentWorker",
+          className: "SilentAgentWorker",
+          handle: "scribe",
+          key: "scribe",
+          source: "workers/silent-agent-worker",
+        },
+      ],
       paths: ["E2E.mdx"],
       pathsLoaded: true,
-      pendingSuggestions: [{
-        id: "s",
-        vcsPath: "projects/default/E2E.mdx",
-        collision: {
-          fromIndex: 0,
-          toIndex: 1,
-          oldIds: ["a"],
-          oldTexts: ["old"],
-          newTexts: ["new"],
-          liveIds: ["a"],
+      pendingSuggestions: [
+        {
+          id: "s",
+          vcsPath: "projects/default/E2E.mdx",
+          collision: {
+            fromIndex: 0,
+            toIndex: 1,
+            oldIds: ["a"],
+            oldTexts: ["old"],
+            newTexts: ["new"],
+            liveIds: ["a"],
+          },
         },
-      }],
+      ],
       roster: [{ handle: "scribe", status: "live" }],
     });
     const controller = new VaultController(store, { onVaultSelected: () => {} });

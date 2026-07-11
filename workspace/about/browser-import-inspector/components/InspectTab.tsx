@@ -41,7 +41,7 @@ function DomainReadinessPanel() {
   const [query, setQuery] = useState("");
   const { state } = useAsync<DomainReadiness | null>(
     () => (query ? browserData.getDomainReadiness(query) : Promise.resolve(null)),
-    [query],
+    [query]
   );
   const r = state.data;
   const ready = r && r.cookies > 0 && r.password;
@@ -74,6 +74,7 @@ function DomainReadinessPanel() {
         </Flex>
       </form>
       {state.status === "loading" && <Spinner size="1" />}
+      <AsyncFailure status={state.status} error={state.error} subject="domain readiness" />
       {r && (
         <Box mt="3">
           <Callout.Root color={ready ? "green" : "gray"} size="1" mb="2">
@@ -86,7 +87,11 @@ function DomainReadinessPanel() {
           <Flex gap="3" wrap="wrap">
             <ReadinessChip label="cookies" ok={r.cookies > 0} detail={`${r.cookies}`} />
             <ReadinessChip label="password" ok={r.password} />
-            <ReadinessChip label="permissions" ok={r.permissions.length > 0} detail={`${r.permissions.length}`} />
+            <ReadinessChip
+              label="permissions"
+              ok={r.permissions.length > 0}
+              detail={`${r.permissions.length}`}
+            />
             <ReadinessChip
               label="recent history"
               ok={r.recentHistoryCount > 0}
@@ -121,6 +126,7 @@ function CookieInspector() {
         Domains and counts are shown without values. Revealing values requires approval.
       </Text>
       {state.status === "loading" && <Spinner size="1" />}
+      <AsyncFailure status={state.status} error={state.error} subject="cookie domains" />
       {state.status === "ready" && (state.data?.length ?? 0) === 0 && (
         <Text size="1" color="gray">
           No cookies imported yet.
@@ -163,8 +169,9 @@ function CookieInspector() {
 
 function CookieReveal(props: { domain: string; onClose: () => void }) {
   const { state } = useAsync<Array<Record<string, unknown>>>(
-    () => browserData.getCookies(props.domain) as unknown as Promise<Array<Record<string, unknown>>>,
-    [props.domain],
+    () =>
+      browserData.getCookies(props.domain) as unknown as Promise<Array<Record<string, unknown>>>,
+    [props.domain]
   );
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
 
@@ -263,7 +270,7 @@ function PasswordVaultPreview() {
 function PasswordReveal() {
   const { state } = useAsync<Array<Record<string, unknown>>>(
     () => browserData.getPasswords() as unknown as Promise<Array<Record<string, unknown>>>,
-    [],
+    []
   );
   if (state.status === "loading") return <Spinner size="1" />;
   if (state.status === "denied")
@@ -280,6 +287,12 @@ function PasswordReveal() {
     );
   return (
     <Box mt="2" p="2" style={{ background: "var(--gray-a3)", borderRadius: "var(--radius-2)" }}>
+      {(state.data?.length ?? 0) > 100 ? (
+        <Text size="1" color="amber" mb="2" as="div">
+          Showing the first 100 of {state.data!.length} passwords. Filter by origin before treating
+          this as a complete audit.
+        </Text>
+      ) : null}
       <Flex direction="column" gap="1">
         {state.data?.slice(0, 100).map((p, i) => (
           <Flex key={i} gap="2" align="center">
@@ -305,6 +318,12 @@ function HistoryInspector(props: { now: number }) {
         History by domain
       </Heading>
       {state.status === "loading" && <Spinner size="1" />}
+      <AsyncFailure status={state.status} error={state.error} subject="browser history" />
+      {state.status === "ready" && (state.data?.length ?? 0) === 0 ? (
+        <Text size="1" color="gray">
+          No history imported yet.
+        </Text>
+      ) : null}
       <Box style={{ maxHeight: 320, overflowY: "auto" }}>
         <Table.Root size="1" variant="surface">
           <Table.Header>
@@ -337,4 +356,27 @@ function HistoryInspector(props: { now: number }) {
       </Box>
     </Card>
   );
+}
+
+function AsyncFailure(props: { status: string; error?: string; subject: string }) {
+  if (props.status === "denied") {
+    return (
+      <Callout.Root size="1" color="amber" mt="2">
+        <Callout.Text>
+          Access to {props.subject} was denied. Approve the request and try again.
+        </Callout.Text>
+      </Callout.Root>
+    );
+  }
+  if (props.status === "error") {
+    return (
+      <Callout.Root size="1" color="red" mt="2">
+        <Callout.Text>
+          Couldn't load {props.subject}
+          {props.error ? `: ${props.error}` : "."}
+        </Callout.Text>
+      </Callout.Root>
+    );
+  }
+  return null;
 }

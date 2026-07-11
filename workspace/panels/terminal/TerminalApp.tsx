@@ -5,6 +5,7 @@ import { useIsMobile, usePaletteCommands, usePanelTheme } from "@workspace/react
 import {
   rpc,
   panel,
+  notifications,
   workspace,
   callMain,
   type WorkspaceUnitStatus,
@@ -32,10 +33,10 @@ import {
   isPlainEscapeEvent,
   actionLabel,
   defaultKeybindings,
+  displayChord,
   type KeybindingAction,
 } from "./keybindings.js";
 import { migrateState } from "./migrateState.js";
-import { disposePanelSessions } from "./panelLifecycle.js";
 import { findDirectionalPane, type PaneFocusDirection } from "./paneFocus.js";
 import { openPort, openUrl } from "./portClick.js";
 import { restoreTerminalState } from "./restore.js";
@@ -124,9 +125,9 @@ export function TerminalApp() {
   const interactiveOpenInFlightRef = useRef(false);
   const approvedOpenUrlIdsRef = useRef(new Set<string>());
   const latestStateRef = useRef(state);
-  const latestShellRef = useRef(shell);
   const prevScratchOpenRef = useRef(state.scratchOpen);
-  const { toast, showToast } = useToast();
+  const { toast, showToast, dismissToast } = useToast();
+  const lastZoomEscapeRef = useRef(0);
 
   const appearance = state.themeOverride === "auto" ? panelAppearance : state.themeOverride;
   const appTheme = useAppTheme();
@@ -280,7 +281,11 @@ export function TerminalApp() {
       commitScratchText(bufferId, text);
       const payload = run ? (text.endsWith("\n") ? text : `${text}\n`) : text;
       void actions.sendText(targetSessionId, payload).catch((err) => {
-        showToast(err instanceof Error ? `Paste failed: ${err.message}` : "Paste failed");
+        void notifications.show({
+          type: "error",
+          title: "Paste failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
       });
       setState((prev) => ({ ...prev, scratchOpen: false }));
     },
@@ -293,15 +298,7 @@ export function TerminalApp() {
 
   useEffect(() => {
     latestStateRef.current = state;
-    latestShellRef.current = shell;
   }, [shell, state]);
-
-  useEffect(
-    () => () => {
-      disposePanelSessions(latestShellRef.current, latestStateRef.current);
-    },
-    []
-  );
 
   useEffect(
     () => sessionStore.connect(shell, sessionIdsKey ? sessionIdsKey.split("\0") : []),
@@ -369,11 +366,11 @@ export function TerminalApp() {
       try {
         return await operation();
       } catch (err) {
-        showToast(
-          err instanceof Error
-            ? `Terminal failed to start: ${err.message}`
-            : "Terminal failed to start"
-        );
+        void notifications.show({
+          type: "error",
+          title: "Terminal failed to start",
+          message: err instanceof Error ? err.message : String(err),
+        });
         return undefined;
       } finally {
         interactiveOpenInFlightRef.current = false;
@@ -622,6 +619,12 @@ export function TerminalApp() {
     if (!state.zoomedSessionId) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isPlainEscapeEvent(event)) return;
+      const now = Date.now();
+      if (now - lastZoomEscapeRef.current > 600) {
+        lastZoomEscapeRef.current = now;
+        return;
+      }
+      lastZoomEscapeRef.current = 0;
       event.preventDefault();
       event.stopPropagation();
       setState((prev) => ({ ...prev, zoomedSessionId: undefined }));
@@ -812,7 +815,7 @@ export function TerminalApp() {
   // Build the shortcuts cheat-sheet from the live keymap (defaults + overrides).
   const mergedKeymap = { ...defaultKeybindings, ...state.keybindings };
   const chordFor = (action: KeybindingAction) =>
-    (mergedKeymap[action] ?? defaultKeybindings[action]).split("+");
+    displayChord(mergedKeymap[action] ?? defaultKeybindings[action]);
   const SHORTCUT_SECTIONS: { title: string; actions: KeybindingAction[] }[] = [
     { title: "Panes", actions: ["newPane", "splitRight", "splitDown", "closePane", "zoom"] },
     { title: "Navigation", actions: ["focusUp", "focusDown", "focusLeft", "focusRight", "jumpToLatestUnread", "nextUnread"] },
@@ -850,7 +853,6 @@ export function TerminalApp() {
               sessions={sessions}
               notifications={state.notifications}
               focusedSessionId={focusedSessionId}
-              settingsControl={settingsControl}
               shell={shell}
               fontSize={state.fontSize}
               fontFamily={state.fontFamily}
@@ -932,7 +934,21 @@ export function TerminalApp() {
             />
           )}
         </Box>
-        <Toast toast={toast} />
+        <Box style={{ position: "absolute", top: "0.25rem", right: "2.5rem", zIndex: 8 }}>
+          {settingsControl}
+        </Box>
+        {sessionOpenPendingLabel && visibleTree ? (
+          <Box
+            role="status"
+            aria-live="polite"
+            px="2"
+            py="1"
+            style={{ position: "absolute", left: "50%", bottom: "0.5rem", transform: "translateX(-50%)", zIndex: 7, borderRadius: "var(--radius-2)", background: "var(--gray-3)", boxShadow: "var(--shadow-2)" }}
+          >
+            <Text size="1" color="gray">{sessionOpenPendingLabel}</Text>
+          </Box>
+        ) : null}
+        <Toast toast={toast} onDismiss={dismissToast} />
         {state.notificationCenterOpen ? (
           isMobile ? (
             <Box

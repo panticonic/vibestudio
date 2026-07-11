@@ -109,7 +109,7 @@ function isThemeOverride(value: unknown): value is TerminalState["themeOverride"
 }
 
 function isNotificationFilter(value: unknown): value is TerminalState["notificationFilter"] {
-  return value === "all" || value === "approval" || value === "failure" || value === "done";
+  return value === "all" || value === "approval" || value === "failure" || value === "waiting" || value === "done";
 }
 
 function isNotificationSeverity(value: unknown): value is TerminalNotification["severity"] {
@@ -179,7 +179,15 @@ function containsSession(node: SplitNode | undefined, sessionId: string): boolea
 
 function migrateKeybindings(value: unknown): KeybindingOverrides {
   if (!isRecord(value)) return {};
-  const sanitized = sanitizeKeybindingOverrides(value as KeybindingOverrides);
+  // Persisted panel state is untrusted runtime data. Only pass known actions
+  // with string chords into the validator; its public API is intentionally
+  // typed and assumes callers already satisfy KeybindingOverrides.
+  const candidates: KeybindingOverrides = {};
+  for (const action of Object.keys(defaultKeybindings) as KeybindingAction[]) {
+    const chord = value[action];
+    if (typeof chord === "string") candidates[action] = chord;
+  }
+  const sanitized = sanitizeKeybindingOverrides(candidates);
   return Object.fromEntries(
     Object.entries(sanitized).filter(([action, chord]) => chord !== defaultKeybindings[action as KeybindingAction]),
   ) as KeybindingOverrides;

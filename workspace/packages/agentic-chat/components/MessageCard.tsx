@@ -236,7 +236,7 @@ export const MessageCard = React.memo(function MessageCard({
   const [resumeScheduleState, setResumeScheduleState] = useState<
     "idle" | "scheduling" | "scheduled" | "failed"
   >("idle");
-  const [retryLocalState, setRetryLocalState] = useState<"idle" | "switching" | "ready" | "failed">(
+  const [retryLocalState, setRetryLocalState] = useState<"idle" | "switching" | "ready" | "sent" | "failed">(
     "idle"
   );
   const [cleanStartState, setCleanStartState] = useState<
@@ -245,6 +245,7 @@ export const MessageCard = React.memo(function MessageCard({
   const [currentAgentModelRef, setCurrentAgentModelRef] = useState<string | null | undefined>(
     undefined
   );
+  const [longContentExpanded, setLongContentExpanded] = useState(false);
   const inputContext = useContext(ChatInputContext);
   const chatContext = useOptionalChatContext();
   const callMethod = chatCallMethod(chat);
@@ -310,12 +311,13 @@ export const MessageCard = React.memo(function MessageCard({
           });
         }
       }
-      if (inputContext) {
-        inputContext.onInputChange("retry");
-      } else if (sendFromChat) {
+      if (sendFromChat) {
         await sendFromChat("retry", { tier: "primary" });
+        setRetryLocalState("sent");
+      } else if (inputContext) {
+        inputContext.onInputChange("retry");
+        setRetryLocalState("ready");
       }
-      setRetryLocalState("ready");
     } catch (err) {
       console.warn("[MessageCard] Retry with local model failed:", err);
       setRetryLocalState("failed");
@@ -572,7 +574,7 @@ export const MessageCard = React.memo(function MessageCard({
                     size="1"
                     variant="soft"
                     color={retryLocalState === "failed" ? "red" : "blue"}
-                    disabled={retryLocalState === "switching" || retryLocalState === "ready"}
+                    disabled={retryLocalState === "switching" || retryLocalState === "ready" || retryLocalState === "sent"}
                     onClick={handleRetryWithLocalModel}
                     title="Switch this agent to the local fallback model and prepare a retry"
                   >
@@ -580,7 +582,9 @@ export const MessageCard = React.memo(function MessageCard({
                     {retryLocalState === "switching"
                       ? "Switching"
                       : retryLocalState === "ready"
-                        ? "Retry ready"
+                        ? "Ready — press Send"
+                        : retryLocalState === "sent"
+                          ? "Retry sent"
                         : retryLocalState === "failed"
                           ? "Retry local failed"
                           : "Retry with local model"}
@@ -869,13 +873,21 @@ export const MessageCard = React.memo(function MessageCard({
             </Flex>
           )}
           {hasContent && (
-            <Box className="message-content">
-              <MessageContent
-                content={msg.content}
-                isStreaming={isStreaming}
-                mdxActions={mdxActions}
-              />
-            </Box>
+            <>
+              <Box
+                className="message-content"
+                style={!isStreaming && msg.content.length > 6_000 && !longContentExpanded
+                  ? { maxHeight: "28rem", overflow: "hidden", maskImage: "linear-gradient(to bottom, black 85%, transparent)" }
+                  : undefined}
+              >
+                <MessageContent content={msg.content} isStreaming={isStreaming} mdxActions={mdxActions} />
+              </Box>
+              {!isStreaming && msg.content.length > 6_000 ? (
+                <Button size="1" variant="ghost" color="gray" onClick={() => setLongContentExpanded((expanded) => !expanded)}>
+                  {longContentExpanded ? "Show less" : "Show full message"}
+                </Button>
+              ) : null}
+            </>
           )}
           {hasAttachments && <ImageGallery attachments={msg.attachments!} />}
           {hasError && (
