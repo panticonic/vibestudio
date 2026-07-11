@@ -56,6 +56,8 @@ export const ABOUT_PAGES = {
   KEYBOARD_SHORTCUTS: "keyboard-shortcuts",
   HELP: "help",
   ABOUT: "about",
+  CREDENTIALS: "credentials",
+  PERMISSIONS: "permissions",
 } as const;
 
 export type AboutPageId = (typeof ABOUT_PAGES)[keyof typeof ABOUT_PAGES];

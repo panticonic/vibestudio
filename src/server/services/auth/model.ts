@@ -135,14 +135,15 @@ export function mintPairingInvite(deps: {
   const room = randomUUID();
   const code = deps.deviceAuthStore.createPairingCode(expiresInMs, { room });
   ingress.armRoom(room, { inviteCode: code });
-  const payload = { ...pairing, room, code };
+  const expiresAt = Date.now() + expiresInMs;
+  const payload = { ...pairing, room, code, exp: expiresAt };
   return {
     code,
     room,
     deepLink: createConnectDeepLink(payload),
     pairUrl: createConnectPairUrl(payload),
     expiresInMs,
-    expiresAt: Date.now() + expiresInMs,
+    expiresAt,
     fp: pairing.fp,
     sig: pairing.sig,
     ice: pairing.ice,

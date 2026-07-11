@@ -44,7 +44,7 @@ export function setMenuPanelRegistry(reg: PanelRegistry): void {
   _menuPanelRegistry = reg;
 }
 
-/** Archive the currently focused panel (Cmd+W / Ctrl+W). Falls back to window close if no panel is focused. */
+/** Close the currently focused panel. Falls back to window close if no panel is focused. */
 async function archiveFocusedPanel(mainWindow: Electron.BaseWindow): Promise<void> {
   const focusedId = _menuPanelRegistry?.getFocusedPanelId();
   if (focusedId && _menuPanelLifecycle) {
@@ -143,12 +143,16 @@ export function buildCommonMenuItems(
   dev: MenuItemConstructorOptions[];
 } {
   const isMac = process.platform === "darwin";
+  const newPanelAccelerator = isMac ? "Cmd+T" : "Ctrl+Shift+T";
+  const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
+  const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
+  const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   const backAccelerator = isMac ? "Cmd+[" : "Alt+Left";
   const forwardAccelerator = isMac ? "Cmd+]" : "Alt+Right";
   const file: MenuItemConstructorOptions[] = [
     {
       label: "New Panel",
-      accelerator: "CmdOrCtrl+T",
+      accelerator: newPanelAccelerator,
       click: () => {
         emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
       },
@@ -162,11 +166,25 @@ export function buildCommonMenuItems(
       },
     },
     {
+      label: "Focus Pending Approval",
+      accelerator: "CmdOrCtrl+Shift+A",
+      click: () => emitMenuEvent("focus-approval-card"),
+    },
+    {
       label: "Switch Workspace...",
       accelerator: "CmdOrCtrl+Shift+O",
       click: () => {
         emitMenuEvent("open-workspace-switcher");
       },
+    },
+    { type: "separator" },
+    {
+      label: "Credentials...",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.CREDENTIALS }),
+    },
+    {
+      label: "Permissions...",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS }),
     },
   ];
 
@@ -200,18 +218,18 @@ export function buildCommonMenuItems(
   view.push(
     {
       label: "Reload Panel",
-      accelerator: "CmdOrCtrl+R",
+      accelerator: reloadPanelAccelerator,
       click: () => dispatchChromeCommand("reload-panel"),
     },
     {
       label: "Force Reload View",
-      accelerator: "CmdOrCtrl+Shift+R",
+      accelerator: forceReloadAccelerator,
       click: () => dispatchChromeCommand("force-reload-view"),
     },
-    { label: "Stop Loading", accelerator: "Esc", click: () => dispatchChromeCommand("stop") },
+    { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
     {
       label: "Toggle Address Bar",
-      accelerator: "CmdOrCtrl+L",
+      accelerator: addressBarAccelerator,
       click: () => {
         emitMenuEvent("toggle-address-bar");
         emitMenuEvent("focus-address-bar");
@@ -307,6 +325,11 @@ export function setupMenu(
   interceptPanelDevToolsShortcut(shellContents);
 
   const isMac = process.platform === "darwin";
+  const newPanelAccelerator = isMac ? "Cmd+T" : "Ctrl+Shift+T";
+  const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
+  const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
+  const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
+  const closePanelAccelerator = isMac ? "Cmd+W" : "Ctrl+Shift+W";
   const backAccelerator = isMac ? "Cmd+[" : "Alt+Left";
   const forwardAccelerator = isMac ? "Cmd+]" : "Alt+Right";
   const viewSubmenu: MenuItemConstructorOptions[] = [];
@@ -355,10 +378,21 @@ export function setupMenu(
       submenu: [
         {
           label: "New Panel",
-          accelerator: "CmdOrCtrl+T",
+          accelerator: newPanelAccelerator,
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
           },
+        },
+        { type: "separator" },
+        {
+          label: "Command Palette...",
+          accelerator: "CmdOrCtrl+K",
+          click: () => emitMenuEvent("open-command-palette"),
+        },
+        {
+          label: "Focus Pending Approval",
+          accelerator: "CmdOrCtrl+Shift+A",
+          click: () => emitMenuEvent("focus-approval-card"),
         },
         { type: "separator" },
         {
@@ -371,8 +405,8 @@ export function setupMenu(
         { type: "separator" },
         isMac
           ? {
-              label: "Archive Panel",
-              accelerator: "CmdOrCtrl+W",
+              label: "Close Panel",
+              accelerator: closePanelAccelerator,
               click: () => archiveFocusedPanel(mainWindow),
             }
           : { role: "quit" },
@@ -409,19 +443,19 @@ export function setupMenu(
         ...viewSubmenu,
         {
           label: "Reload Panel",
-          accelerator: "CmdOrCtrl+R",
+          accelerator: reloadPanelAccelerator,
           click: () => dispatchChromeCommand("reload-panel"),
         },
         {
           label: "Force Reload View",
-          accelerator: "CmdOrCtrl+Shift+R",
+          accelerator: forceReloadAccelerator,
           click: () => dispatchChromeCommand("force-reload-view"),
         },
-        { label: "Stop Loading", accelerator: "Esc", click: () => dispatchChromeCommand("stop") },
+        { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
         { type: "separator" },
         {
           label: "Toggle Address Bar",
-          accelerator: "CmdOrCtrl+L",
+          accelerator: addressBarAccelerator,
           click: () => {
             emitMenuEvent("toggle-address-bar");
             emitMenuEvent("focus-address-bar");
@@ -475,8 +509,8 @@ export function setupMenu(
           ? [{ type: "separator" }, { role: "front" }, { type: "separator" }, { role: "window" }]
           : [
               {
-                label: "Archive Panel",
-                accelerator: "Ctrl+W",
+                label: "Close Panel",
+                accelerator: closePanelAccelerator,
                 click: () => archiveFocusedPanel(mainWindow),
               },
             ]),
@@ -497,6 +531,18 @@ export function setupMenu(
           label: "Documentation",
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HELP });
+          },
+        },
+        {
+          label: "Credentials",
+          click: () => {
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.CREDENTIALS });
+          },
+        },
+        {
+          label: "Permissions",
+          click: () => {
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS });
           },
         },
         {

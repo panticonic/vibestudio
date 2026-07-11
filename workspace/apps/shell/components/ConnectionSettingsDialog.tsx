@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, Dialog, Flex, Text, TextField, Callout, Box } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { AppDialog } from "@workspace/ui";
-import { createConnectDeepLink, parseConnectLink, type ConnectPairing } from "@vibestudio/shared/connect";
+import {
+  createConnectDeepLink,
+  parseConnectLink,
+  type ConnectPairing,
+} from "@vibestudio/shared/connect";
 import {
   app,
   incomingPairLink,
@@ -18,6 +22,7 @@ import { AppUpdatesSection } from "./AppUpdatesSection";
 type LiveConnection = {
   status: "connected" | "connecting" | "disconnected";
   isRemote: boolean;
+  reconnect?: { phase: string; attempt: number; reason: string };
 };
 
 interface Props {
@@ -50,9 +55,20 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
 
   useShellEvent(
     "server-connection-changed",
-    useCallback((payload: { status: LiveConnection["status"]; isRemote: boolean }) => {
-      setLive({ status: payload.status, isRemote: payload.isRemote });
-    }, [])
+    useCallback(
+      (payload: {
+        status: LiveConnection["status"];
+        isRemote: boolean;
+        reconnect?: LiveConnection["reconnect"];
+      }) => {
+        setLive({
+          status: payload.status,
+          isRemote: payload.isRemote,
+          reconnect: payload.reconnect,
+        });
+      },
+      []
+    )
   );
 
   useEffect(() => {
@@ -174,7 +190,10 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
         ) : current?.configured && live?.isRemote && live.status === "connecting" ? (
           // A transient blip — calm, reassuring, NOT the scary re-pair banner.
           <Callout.Root size="1" color="blue" mb="3">
-            <Callout.Text>Reconnecting to your server…</Callout.Text>
+            <Callout.Text>
+              Reconnecting to your server
+              {live.reconnect?.attempt ? ` — attempt ${live.reconnect.attempt}` : ""}…
+            </Callout.Text>
           </Callout.Root>
         ) : current?.configured && live?.isRemote && live.status === "disconnected" ? (
           <Callout.Root size="1" color="amber" mb="3">
@@ -236,13 +255,27 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
           </Callout.Root>
         ) : null}
 
-        {current?.isActive && current.bootstrap !== "none" ? (
-          <PairedDevicesSection currentDeviceId={current.deviceId} />
-        ) : null}
+        {/* Local server sessions can mint companion-device invites too. Keeping
+            this visible is the desktop entry point the mobile pairing flow promises. */}
+        {current ? <PairedDevicesSection currentDeviceId={current.deviceId} /> : null}
         <AppUpdatesSection />
 
         <Flex justify="between" mt="4" gap="3">
           <Flex gap="2">
+            {live?.isRemote && live.status !== "connected" ? (
+              <Button
+                variant="soft"
+                disabled={busy}
+                onClick={() => {
+                  setError(null);
+                  void remoteCred
+                    .reconnectNow()
+                    .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+                }}
+              >
+                Reconnect now
+              </Button>
+            ) : null}
             {confirmingDisconnect ? (
               <>
                 <Button color="red" disabled={busy} onClick={clearAndRelaunch}>

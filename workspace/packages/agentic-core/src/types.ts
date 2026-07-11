@@ -126,6 +126,8 @@ export interface AgenticChatActions {
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => Promise<void>;
   onBecomeVisible?: () => void;
+  /** Raise host-level attention for a blocking in-chat question. */
+  onAttentionRequired?: (title: string, message?: string) => void;
   /**
    * Launch a Claude Code session as a linked agent in this conversation. The
    * host calls `prepare` through the manifest-selected `claudeCode` provider

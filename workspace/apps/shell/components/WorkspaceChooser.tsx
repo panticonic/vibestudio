@@ -12,7 +12,7 @@ import {
   Spinner,
   Text,
 } from "@radix-ui/themes";
-import { Cross2Icon, ExclamationTriangleIcon, PlusIcon } from "@radix-ui/react-icons";
+import { ExclamationTriangleIcon, PlusIcon, TrashIcon } from "@radix-ui/react-icons";
 import { Surface, VibestudioLogo } from "@workspace/ui";
 
 import {
@@ -72,6 +72,7 @@ export function WorkspaceChooser() {
       await chooseWorkspace(ws.name);
     } catch (error) {
       console.error("Failed to choose workspace:", error);
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -255,18 +256,20 @@ interface WorkspaceItemProps {
 
 function WorkspaceItem({ workspace, isActive, onSelect, onRemove }: WorkspaceItemProps) {
   return (
-    <Card asChild style={{ cursor: "pointer" }} className="workspace-item">
-      <button
-        onClick={onSelect}
-        style={{
-          width: "100%",
-          textAlign: "left",
-          background: "transparent",
-          border: "none",
-          padding: 0,
-        }}
-      >
-        <Flex justify="between" align="center" p="3">
+    <Card style={{ position: "relative" }} className="workspace-item">
+      <Flex justify="between" align="center" p="3" gap="2">
+        <button
+          onClick={onSelect}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            textAlign: "left",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+          }}
+        >
           <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
             <Text size="2" weight="medium" truncate>
               {workspace.name}
@@ -280,19 +283,21 @@ function WorkspaceItem({ workspace, isActive, onSelect, onRemove }: WorkspaceIte
               {formatRelativeTime(workspace.lastOpened)}
             </Text>
           </Flex>
-          {!isActive && (
-            <IconButton
-              variant="ghost"
-              size="1"
-              color="gray"
-              onClick={onRemove}
-              style={{ flexShrink: 0 }}
-            >
-              <Cross2Icon />
-            </IconButton>
-          )}
-        </Flex>
-      </button>
+        </button>
+        {!isActive && (
+          <IconButton
+            variant="ghost"
+            size="1"
+            color="gray"
+            onClick={onRemove}
+            aria-label={`Delete workspace ${workspace.name}`}
+            title={`Delete workspace ${workspace.name}`}
+            style={{ flexShrink: 0 }}
+          >
+            <TrashIcon />
+          </IconButton>
+        )}
+      </Flex>
     </Card>
   );
 }

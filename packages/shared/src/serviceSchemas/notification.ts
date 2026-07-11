@@ -35,6 +35,8 @@ export const NotificationActionSchema = z.object({
         type: z.literal("workspace.restartUnit"),
         name: z.string(),
       }),
+      z.object({ type: z.literal("desktop.downloadUpdate") }),
+      z.object({ type: z.literal("desktop.installUpdate") }),
     ])
     .optional()
     .describe("Optional built-in command the shell runs when the action is taken."),

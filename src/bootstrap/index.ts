@@ -38,15 +38,22 @@ type BootstrapBridge = {
   launchLocalWorkspace: (workspaceName: string) => Promise<unknown>;
   launchEphemeralWorkspace: () => Promise<unknown>;
   pairRemote: (payload: { link: string; label?: string }) => Promise<unknown>;
+  retryStartup: () => Promise<unknown>;
+  chooseConnection: () => Promise<unknown>;
+  openLog: (path: string) => Promise<unknown>;
 };
 
 type BootstrapConnectionState = {
-  mode: "choose-connection" | "starting" | "connected";
+  mode: "choose-connection" | "starting" | "connected" | "failed";
   localWorkspaces: Array<{ name: string; lastOpened: number }>;
   lastLocalWorkspaceName: string | null;
   isDev?: boolean;
   /** The vibestudio://connect deep link the app was opened with (auto-pair). */
   pendingPairLink?: string | null;
+  pendingPairConfirmed?: boolean;
+  startupError?: { message: string; detail?: string; logPath?: string } | null;
+  serverLogPath?: string | null;
+  startupDetail?: string | null;
 };
 
 const globals = globalThis as unknown as {
@@ -110,6 +117,8 @@ let emptyLaunchText = "No workspace approval is pending. Starting the workspace.
 const decidingApprovalIds = new Set<string>();
 const openReviewApprovalIds = new Set<string>();
 let decisionError: string | null = null;
+let startupWaitBeganAt = 0;
+const STARTUP_POLL_TIMEOUT_MS = 135_000;
 
 function scheduleRefresh(): void {
   if (refreshScheduled || refreshInFlight) return;
@@ -327,6 +336,7 @@ function render(): void {
       message.textContent = emptyLaunchText;
       approvalsContainer.append(message);
       if (launchSession) appendLaunchTimeline(approvalsContainer, launchSession);
+      if (launchSession?.status === "denied") appendDeniedRecovery(approvalsContainer);
       if (launchCopy) {
         launchCopy.textContent = emptyLaunchText;
       }
@@ -359,6 +369,27 @@ function render(): void {
   } finally {
     rendering = false;
   }
+}
+
+function appendDeniedRecovery(parent: HTMLElement): void {
+  const explanation = document.createElement("div");
+  explanation.className = "status";
+  explanation.textContent =
+    "No workspace app or extension code was started. You can review the request again without restarting Vibestudio.";
+  const actions = document.createElement("div");
+  actions.className = "toolbar";
+  const review = document.createElement("button");
+  review.className = "primary";
+  review.textContent = "Review again";
+  review.onclick = () => {
+    launchSession = null;
+    void refresh();
+  };
+  const choose = document.createElement("button");
+  choose.textContent = "Choose another workspace";
+  choose.onclick = () => void bootstrapApi?.chooseConnection();
+  actions.append(review, choose);
+  parent.append(explanation, actions);
 }
 
 async function refresh(): Promise<void> {
@@ -415,7 +446,8 @@ function isBootstrapConnectionState(value: unknown): value is BootstrapConnectio
   if (
     value["mode"] !== "choose-connection" &&
     value["mode"] !== "starting" &&
-    value["mode"] !== "connected"
+    value["mode"] !== "connected" &&
+    value["mode"] !== "failed"
   ) {
     return false;
   }
@@ -497,8 +529,24 @@ function renderConnectionHandoff(): void {
   const detail = document.createElement("div");
   detail.className = "status";
   detail.textContent =
-    connectionHandoff?.detail ?? "Preparing the selected workspace and startup approval gate...";
+    connectionState?.startupDetail ??
+    connectionHandoff?.detail ??
+    "Preparing the selected workspace and startup approval gate...";
   approvalsContainer.append(message, detail);
+  const elapsedMs = startupWaitBeganAt ? Date.now() - startupWaitBeganAt : 0;
+  if (elapsedMs >= 1_000) {
+    const elapsed = document.createElement("div");
+    elapsed.className = "status";
+    elapsed.textContent = `Elapsed: ${formatElapsed(elapsedMs)}`;
+    approvalsContainer.append(elapsed);
+  }
+  const startupLogPath = connectionState?.serverLogPath ?? connectionState?.startupError?.logPath;
+  if (elapsedMs >= 15_000 && startupLogPath) {
+    const logButton = document.createElement("button");
+    logButton.textContent = "View server log";
+    logButton.onclick = () => void bootstrapApi?.openLog(startupLogPath);
+    approvalsContainer.append(logButton);
+  }
   if (launchCopy) {
     launchCopy.textContent = detail.textContent;
   }
@@ -507,6 +555,7 @@ function renderConnectionHandoff(): void {
 async function runConnectionAction(actionId: string, action: () => Promise<void>): Promise<void> {
   if (connectionBusyAction) return;
   connectionBusyAction = actionId;
+  startupWaitBeganAt = Date.now();
   connectionHandoff = connectionHandoffFor(actionId);
   connectionError = null;
   if (connectionHandoff) {
@@ -688,6 +737,20 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
   approvalsContainer.className = "connection-grid";
   approvalsContainer.replaceChildren();
   appendConnectionStatus(approvalsContainer);
+  if (state.pendingPairLink && state.pendingPairConfirmed && !autoPairTriggered) {
+    autoPairTriggered = true;
+    const link = state.pendingPairLink;
+    void runConnectionAction("pair", async () => {
+      if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
+      const result = await bootstrapApi.pairRemote({ link });
+      if (isRecord(result) && result["ok"] === false) {
+        throw new Error(
+          typeof result["message"] === "string" ? result["message"] : "Pairing failed"
+        );
+      }
+    });
+    return;
+  }
   // Opened via a vibestudio://connect deep link ⇒ show a confirmation card (server
   // label + fingerprint + Trust/Cancel) rather than silently pairing. Opening a
   // link is not consent to trust the server it points at.
@@ -806,6 +869,7 @@ function dismissPairButton(label: string): HTMLButtonElement {
 }
 
 function renderStartingWorkspace(): void {
+  if (!startupWaitBeganAt) startupWaitBeganAt = Date.now();
   connectionHandoff = {
     title: "Starting workspace",
     detail: "Preparing the selected workspace and startup approval gate...",
@@ -813,11 +877,74 @@ function renderStartingWorkspace(): void {
   renderConnectionHandoff();
 }
 
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+function renderStartupFailure(state: BootstrapConnectionState): void {
+  connectionState = state;
+  setBootstrapHeader("connection");
+  if (bootstrapTitle) bootstrapTitle.textContent = "Vibestudio could not start";
+  const failure = state.startupError;
+  approvalsContainer.className = "launch-card";
+  approvalsContainer.replaceChildren();
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = failure?.message ?? "Workspace startup did not complete.";
+  const detail = document.createElement("div");
+  detail.className = "meta";
+  detail.textContent = failure?.detail ?? "Retry, or choose a different server or workspace.";
+  const actions = document.createElement("div");
+  actions.className = "toolbar";
+  const retry = document.createElement("button");
+  retry.className = "primary";
+  retry.textContent = "Retry startup";
+  retry.onclick = () => void bootstrapApi?.retryStartup();
+  const choose = document.createElement("button");
+  choose.textContent = "Choose another workspace";
+  choose.onclick = () => void bootstrapApi?.chooseConnection();
+  actions.append(retry, choose);
+  if (failure?.logPath) {
+    const log = document.createElement("button");
+    log.textContent = "View server log";
+    log.onclick = () => void bootstrapApi?.openLog(failure.logPath ?? "");
+    actions.append(log);
+    const path = document.createElement("code");
+    path.className = "log-path";
+    path.textContent = failure.logPath;
+    approvalsContainer.append(title, detail, path, actions);
+  } else {
+    approvalsContainer.append(title, detail, actions);
+  }
+  if (launchCopy) launchCopy.textContent = detail.textContent;
+}
+
 function waitForConnectedBootstrapState(): void {
   window.setTimeout(async () => {
-    const state = bootstrapApi ? await bootstrapApi.getState().catch(() => null) : null;
+    const state = await getBootstrapStateWithTimeout();
     if (!isBootstrapConnectionState(state)) {
+      if (Date.now() - startupWaitBeganAt >= STARTUP_POLL_TIMEOUT_MS) {
+        renderStartupFailure({
+          mode: "failed",
+          localWorkspaces: [],
+          lastLocalWorkspaceName: null,
+          startupError: {
+            message: "Workspace startup stopped responding.",
+            detail: "The host did not report progress. Retry startup or choose another workspace.",
+          },
+          serverLogPath: connectionState?.serverLogPath,
+        });
+        return;
+      }
       waitForConnectedBootstrapState();
+      return;
+    }
+    connectionState = state;
+    if (state.mode === "failed") {
+      renderStartupFailure(state);
       return;
     }
     if (state.mode === "connected") {
@@ -829,8 +956,29 @@ function waitForConnectedBootstrapState(): void {
       return;
     }
     renderStartingWorkspace();
+    if (Date.now() - startupWaitBeganAt >= STARTUP_POLL_TIMEOUT_MS) {
+      renderStartupFailure({
+        ...state,
+        mode: "failed",
+        startupError: {
+          message: "Workspace startup is taking longer than expected.",
+          detail: "Retry startup, inspect the server log, or choose another workspace.",
+          ...(state.startupError?.logPath ? { logPath: state.startupError.logPath } : {}),
+          ...(state.serverLogPath ? { logPath: state.serverLogPath } : {}),
+        },
+      });
+      return;
+    }
     waitForConnectedBootstrapState();
   }, 500);
+}
+
+async function getBootstrapStateWithTimeout(): Promise<unknown> {
+  if (!bootstrapApi) return null;
+  return await Promise.race([
+    bootstrapApi.getState().catch(() => null),
+    new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 5_000)),
+  ]);
 }
 
 async function startLaunchGate(): Promise<void> {
@@ -845,14 +993,20 @@ async function startLaunchGate(): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  const state = bootstrapApi ? await bootstrapApi.getState().catch(() => null) : null;
+  const state = await getBootstrapStateWithTimeout();
   if (isBootstrapConnectionState(state) && state.mode === "choose-connection") {
     renderConnectionChooser(state);
     return;
   }
   if (isBootstrapConnectionState(state) && state.mode === "starting") {
+    connectionState = state;
+    startupWaitBeganAt = Date.now();
     renderStartingWorkspace();
     waitForConnectedBootstrapState();
+    return;
+  }
+  if (isBootstrapConnectionState(state) && state.mode === "failed") {
+    renderStartupFailure(state);
     return;
   }
   await startLaunchGate();

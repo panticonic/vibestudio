@@ -518,6 +518,7 @@ export const remoteCred = {
   createPairingInvite: (args?: { ttlMs?: number }) => remoteCredClient.createPairingInvite(args),
   listDevices: () => remoteCredClient.listDevices(),
   revokeDevice: (deviceId: string) => remoteCredClient.revokeDevice(deviceId),
+  reconnectNow: () => remoteCredClient.reconnectNow(),
   clear: () => remoteCredClient.clear(),
   relaunch: () => remoteCredClient.relaunch(),
 };
@@ -605,6 +606,7 @@ import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>
     shellApprovalClient.resolve(approvalId, decision),
+  blockCapability: (approvalId: string) => shellApprovalClient.blockCapability(approvalId),
   resolveBootstrap: (approvalId: string, decision: Extract<ApprovalDecision, "once" | "deny">) =>
     shellApprovalClient.resolveBootstrap(approvalId, decision),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>

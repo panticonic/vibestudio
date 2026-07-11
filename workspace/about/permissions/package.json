@@ -1,0 +1,16 @@
+{
+  "name": "@workspace-about/permissions",
+  "version": "0.1.0",
+  "private": true,
+  "vibestudio": {
+    "title": "Permissions",
+    "description": "Review and revoke saved app and agent permissions",
+    "hiddenInLauncher": false,
+    "autoArchiveWhenEmpty": true
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*",
+    "@workspace/about-shared": "workspace:*"
+  },
+  "type": "module"
+}

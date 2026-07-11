@@ -87,6 +87,9 @@ export async function requestCapabilityPermission(
   if (deps.grantStore.hasGrant(request.capability, resourceKey, identity, resourceScope)) {
     return { allowed: true };
   }
+  if (deps.grantStore.hasDenial(request.capability, resourceKey, identity, resourceScope)) {
+    return { allowed: false, reason: `${request.deniedReason} (blocked in Permissions)` };
+  }
 
   const decision = await deps.approvalQueue.request({
     kind: "capability",

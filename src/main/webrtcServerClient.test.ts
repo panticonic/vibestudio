@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import type { RpcEnvelope } from "@vibestudio/rpc";
-import type { WebRtcSession, WebRtcTransport } from "@vibestudio/rpc/transports/webrtcClient";
+import type {
+  ReconnectProgress,
+  WebRtcSession,
+  WebRtcTransport,
+} from "@vibestudio/rpc/transports/webrtcClient";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
 
@@ -139,6 +143,35 @@ describe("createWebRtcServerClient", () => {
     expect(client.isConnected()).toBe(true);
     expect(client.getConnectionStatus()).toBe("connected");
     await expect(client.call("demo", "echo", ["hi"])).resolves.toEqual({ echoed: "hi" });
+  });
+
+  it("forwards reconnect progress when the injected transport supports it", async () => {
+    const { transport } = makeFakeTransport(() => null);
+    let emitProgress: ((progress: ReconnectProgress) => void) | undefined;
+    (
+      transport as unknown as {
+        onReconnectProgress: (listener: (progress: ReconnectProgress) => void) => () => void;
+      }
+    ).onReconnectProgress = (listener) => {
+      emitProgress = listener;
+      return () => {};
+    };
+    const onReconnectProgress = vi.fn();
+    await createWebRtcServerClient({
+      pairing: PAIRING,
+      callerId: "shell:dev",
+      getShellToken: () => "shell-token",
+      transport,
+      onReconnectProgress,
+    });
+
+    emitProgress?.({ attempt: 2, phase: "connecting", reason: "retry", layer: "signaling" });
+    expect(onReconnectProgress).toHaveBeenCalledWith({
+      attempt: 2,
+      phase: "connecting",
+      reason: "retry",
+      layer: "signaling",
+    });
   });
 
   it("opens a scoped app session via a one-time connection grant for callAs()", async () => {

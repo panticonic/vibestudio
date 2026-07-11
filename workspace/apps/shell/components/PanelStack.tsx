@@ -35,7 +35,11 @@ import {
   useDescendantSiblingGroups,
 } from "../shell/hooks/PanelTreeContext";
 import { app, panel as panelService, view } from "../shell/client";
-import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../state/appModeAtoms";
+import {
+  pinMutationSeqAtom,
+  pinnedPanelIdsAtom,
+  workspaceChooserDialogOpenAtom,
+} from "../state/appModeAtoms";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { useNavigation } from "./NavigationContext";
 import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
@@ -128,6 +132,7 @@ export function PanelStack({
 
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const bumpPinMutationSeq = useSetAtom(pinMutationSeqAtom);
+  const openWorkspaceChooser = useSetAtom(workspaceChooserDialogOpenAtom);
 
   // ID-based visible panel state
   const [visiblePanelId, setVisiblePanelId] = useState<string | null>(null);
@@ -144,6 +149,10 @@ export function PanelStack({
   }, [visiblePanelId, setAddressBarVisible]);
   const [hostThemeCss, setHostThemeCss] = useState<string | null>(null);
   const [visibleRuntimeLease, setVisibleRuntimeLease] = useState<PanelRuntimeLease | null>(null);
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
+  const [takeoverError, setTakeoverError] = useState<string | null>(null);
+  const [buildSlow, setBuildSlow] = useState(false);
+  const [unresponsivePanels, setUnresponsivePanels] = useState<Set<string>>(() => new Set());
   const [sidebarWidth, setSidebarWidth] = useState<number>(260);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isResizeHover, setIsResizeHover] = useState(false);
@@ -161,6 +170,27 @@ export function PanelStack({
   const { ancestors } = useAncestors(visiblePanelId);
   const { siblings } = useSiblings(visiblePanelId);
   const { groups: descendantGroups } = useDescendantSiblingGroups(visiblePanelId);
+
+  useShellEvent(
+    "panel-responsiveness-changed",
+    useCallback(({ panelId, responsive }) => {
+      setUnresponsivePanels((current) => {
+        const next = new Set(current);
+        if (responsive) next.delete(panelId);
+        else next.add(panelId);
+        return next;
+      });
+    }, [])
+  );
+
+  useEffect(() => {
+    setTakeoverError(null);
+    setTakeoverBusy(false);
+    setBuildSlow(false);
+    if (!visiblePanel || visiblePanel.artifacts?.htmlPath || visiblePanel.artifacts?.error) return;
+    const timer = window.setTimeout(() => setBuildSlow(true), 60_000);
+    return () => window.clearTimeout(timer);
+  }, [visiblePanel?.id, visiblePanel?.artifacts?.htmlPath, visiblePanel?.artifacts?.error]);
 
   // Ancestor IDs for tree auto-expansion
   const ancestorIds = useMemo(() => ancestors.map((a) => a.id), [ancestors]);
@@ -423,7 +453,7 @@ export function PanelStack({
           await panelService.unload(panelId);
           break;
         case "archive":
-          // Archive panel (remove from tree)
+          // Close panel (remove from tree)
           await panelService.archive(panelId);
           break;
       }
@@ -436,7 +466,7 @@ export function PanelStack({
     onRegisterPanelAction?.(handlePanelAction);
   }, [onRegisterPanelAction, handlePanelAction]);
 
-  // Handle direct archive button clicks (X button in tree sidebar)
+  // Handle direct close button clicks (X button in tree sidebar)
   const handleArchive = useCallback(async (panelId: string) => {
     await panelService.archive(panelId);
   }, []);
@@ -896,6 +926,20 @@ export function PanelStack({
         <Text size="2" color="gray">
           Create a panel or choose another workspace to continue.
         </Text>
+        <Flex gap="2" wrap="wrap" justify="center">
+          <Button
+            onClick={() => {
+              void panelService
+                .createAboutPanel("new")
+                .then((result) => navigateToPanelId(result.id));
+            }}
+          >
+            New panel
+          </Button>
+          <Button variant="soft" onClick={() => openWorkspaceChooser(true)}>
+            Switch workspace
+          </Button>
+        </Flex>
       </Flex>
     );
   }
@@ -913,6 +957,45 @@ export function PanelStack({
     }
 
     const artifacts = visiblePanel.artifacts;
+    if (unresponsivePanels.has(visiblePanel.id)) {
+      return (
+        <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
+          <Text size="4" weight="bold">
+            This panel is not responding
+          </Text>
+          <Text size="2" color="gray" align="center">
+            Its renderer may be busy or stuck. You can wait, or force a clean reload.
+          </Text>
+          <Flex gap="2">
+            <Button
+              variant="soft"
+              onClick={() =>
+                setUnresponsivePanels((current) => {
+                  const next = new Set(current);
+                  next.delete(visiblePanel.id);
+                  return next;
+                })
+              }
+            >
+              Wait
+            </Button>
+            <Button
+              color="red"
+              onClick={() => {
+                setUnresponsivePanels((current) => {
+                  const next = new Set(current);
+                  next.delete(visiblePanel.id);
+                  return next;
+                });
+                void panelService.forceReloadView(visiblePanel.id);
+              }}
+            >
+              Force reload
+            </Button>
+          </Flex>
+        </Flex>
+      );
+    }
     // "Leased elsewhere" means the runtime slot is held by a NON-desktop client
     // (the headless host or a mobile device) that renders it remotely — the only
     // case where "Take Over" is meaningful. A desktop-held lease whose build
@@ -934,14 +1017,26 @@ export function PanelStack({
             Running on {leasedElsewhere.holderLabel}
           </Text>
           <Button
+            disabled={takeoverBusy}
             onClick={() => {
-              void panelService.takeOver(leasedElsewhere.slotId).catch((error) => {
-                console.error("Failed to take over panel", error);
-              });
+              setTakeoverBusy(true);
+              setTakeoverError(null);
+              void panelService
+                .takeOver(leasedElsewhere.slotId)
+                .catch((error) => {
+                  console.error("Failed to take over panel", error);
+                  setTakeoverError(error instanceof Error ? error.message : String(error));
+                })
+                .finally(() => setTakeoverBusy(false));
             }}
           >
-            Take Over
+            {takeoverBusy ? "Taking over…" : "Take Over"}
           </Button>
+          {takeoverError ? (
+            <Text color="red" size="2" role="alert">
+              Couldn&apos;t take over: {takeoverError}
+            </Text>
+          ) : null}
         </Flex>
       );
     }
@@ -956,6 +1051,14 @@ export function PanelStack({
           <Text color="red" size="2" style={{ fontFamily: "monospace" }}>
             {artifacts.error}
           </Text>
+          <Flex gap="2" mt="3">
+            <Button variant="soft" onClick={() => void panelService.reload(visiblePanel.id)}>
+              Reload
+            </Button>
+            <Button onClick={() => void panelService.rebuildAndReload(visiblePanel.id)}>
+              Rebuild
+            </Button>
+          </Flex>
         </Flex>
       );
     }
@@ -966,6 +1069,30 @@ export function PanelStack({
         <Flex direction="column" align="center" justify="center" height="100%">
           <Spinner size="3" />
           <Text mt="3">{"Preparing panel..."}</Text>
+          {artifacts?.buildProgress ? (
+            <Text size="2" color="gray" mt="1">
+              {artifacts.buildProgress}
+            </Text>
+          ) : null}
+          {buildSlow ? (
+            <Flex direction="column" align="center" gap="2" mt="3">
+              <Text size="2" color="amber">
+                This build is taking longer than expected.
+              </Text>
+              <Flex gap="2">
+                <Button
+                  size="1"
+                  variant="soft"
+                  onClick={() => void panelService.createAboutPanel("server-logs")}
+                >
+                  View server logs
+                </Button>
+                <Button size="1" onClick={() => void panelService.rebuildPanel(visiblePanel.id)}>
+                  Rebuild
+                </Button>
+              </Flex>
+            </Flex>
+          ) : null}
         </Flex>
       );
     }

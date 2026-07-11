@@ -40,6 +40,13 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", "once"] }],
   },
+  blockCapability: {
+    description:
+      "Deny a pending capability request and remember that denial for this exact code version until revoked.",
+    args: z.tuple([z.string()]),
+    returns: z.void(),
+    access: RESOLVE_ACCESS,
+  },
   resolveBootstrap: {
     description:
       "Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval.",

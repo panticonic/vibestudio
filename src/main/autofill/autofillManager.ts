@@ -98,6 +98,8 @@ interface PulledState {
   pending: PendingSnapshot | null;
   fieldsRemoved: boolean;
   usernameSnapshot: string | null;
+  overlayKey: "ArrowDown" | "ArrowUp" | "Enter" | "Escape" | null;
+  forceRefill: boolean;
 }
 
 interface AutofillPanelState {
@@ -434,6 +436,10 @@ export class AutofillManager {
 
     if (!pulled) return;
 
+    if (pulled.overlayKey && this.activeOverlayWcId === wcId) {
+      this.overlay.handleKey(pulled.overlayKey);
+    }
+
     await this.processPulledState(wcId, wc, state, pulled);
   }
 
@@ -503,7 +509,7 @@ export class AutofillManager {
       pulled.focus &&
       state.credentials.length === 1 &&
       state.fields &&
-      !state.hasAutoFilled
+      (!state.hasAutoFilled || pulled.forceRefill)
     ) {
       // Single credential + first focus (before auto-fill) -> fill now
       await this.fillCredential(wcId, wc, assertPresent(state.credentials[0]), state.fields);
@@ -653,9 +659,19 @@ export class AutofillManager {
 
     this.activeOverlayWcId = wcId;
     this.overlay.show(credentialItems, bounds);
+    void this.executeInActiveFrame(wc, state, "window.__vibestudio_af_overlay_visible = true");
   }
 
   private hideOverlay(): void {
+    const wcId = this.activeOverlayWcId;
+    if (wcId !== null) {
+      const state = this.panelState.get(wcId);
+      const viewId = this.getViewManager().findViewIdByWebContentsId(wcId);
+      const wc = viewId ? this.getViewManager().getWebContents(viewId) : null;
+      if (state && wc && !wc.isDestroyed()) {
+        void this.executeInActiveFrame(wc, state, "window.__vibestudio_af_overlay_visible = false");
+      }
+    }
     this.overlay.hide();
     this.activeOverlayWcId = null;
   }

@@ -85,6 +85,15 @@ function PanelAppContent() {
         );
       }
       if (event.key === "Escape") {
+        const target = event.target instanceof Element ? event.target : null;
+        if (
+          event.defaultPrevented ||
+          target?.closest(
+            'input, textarea, select, [contenteditable="true"], [role="dialog"], [data-shell-overlay]'
+          )
+        ) {
+          return;
+        }
         handleChromeCommand({ type: "stop" });
       }
     };

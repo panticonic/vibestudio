@@ -34,7 +34,9 @@ const SERVICE_NAME = "userlandApproval";
  * this long with no user answer. Agent runtimes use the same horizon so
  * whichever side fires first wins, and the other settle path is a no-op.
  */
-const EXTERNAL_APPROVAL_TIMEOUT_MS = 120_000;
+// A pushed approval must survive a realistic step-away from the desk. Ten
+// minutes matches interactive sign-in horizons while still bounding callers.
+export const EXTERNAL_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 const BINARY_OPTIONS: UserlandApprovalOption[] = [
   { value: "allow", label: "Allow", tone: "primary" },
   { value: "deny", label: "Deny", tone: "danger" },
@@ -92,6 +94,11 @@ export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   grantStore: Pick<UserlandApprovalGrantStore, "lookup" | "record" | "revoke" | "list">;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
+  onExternalApprovalExpired?: (details: {
+    channelId: string;
+    operation: string;
+    requestId: string;
+  }) => void;
 }): ServiceDefinition {
   function extensionIssuer(ctx: ServiceContext): UserlandApprovalIssuer | undefined {
     return ctx.caller.runtime.kind === "extension"
@@ -389,7 +396,7 @@ export function createUserlandApprovalService(deps: {
    * File a relayed external-agent tool-use permission (plan §7.3) as a
    * first-class workspace approval and long-poll for the verdict. Resolves
    * `{ behavior: "allow" | "deny" }` when the user answers, or `deny` on the
-   * ~120s expiry / no-user-context. Per-request; no durable grant.
+   * ten-minute expiry / no-user-context. Per-request; no durable grant.
    */
   async function requestExternal(
     ctx: ServiceContext,
@@ -402,9 +409,13 @@ export function createUserlandApprovalService(deps: {
     if (!principal) return { behavior: "deny" };
     const binding = await resolveExternalAgentBinding(ctx, "requestExternal", req.channelId);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), EXTERNAL_APPROVAL_TIMEOUT_MS);
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      controller.abort();
+    }, EXTERNAL_APPROVAL_TIMEOUT_MS);
     try {
-      return await deps.approvalQueue.requestExternalAgent({
+      const result = await deps.approvalQueue.requestExternalAgent({
         kind: "external-agent",
         callerId: principal.callerId,
         callerKind: principal.callerKind,
@@ -421,6 +432,14 @@ export function createUserlandApprovalService(deps: {
         resolveToken: req.resolveToken,
         signal: controller.signal,
       });
+      if (expired) {
+        deps.onExternalApprovalExpired?.({
+          channelId: binding.channelId,
+          operation: req.operation,
+          requestId: req.requestId,
+        });
+      }
+      return result;
     } finally {
       clearTimeout(timer);
     }

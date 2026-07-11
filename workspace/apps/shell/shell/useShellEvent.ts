@@ -19,14 +19,40 @@ export type { EventPayloads } from "./client.js";
 
 /** Refcount per event name. Shared across all hook instances. */
 const subscriptionRefcounts = new Map<EventName, number>();
+const retryAttempts = new Map<EventName, number>();
+const retryTimers = new Map<EventName, number>();
+
+function ensureSubscribed(event: EventName): void {
+  void events
+    .subscribe(event)
+    .then(() => {
+      retryAttempts.delete(event);
+      window.dispatchEvent(new CustomEvent("shell-event-subscription-restored", { detail: event }));
+    })
+    .catch((err: unknown) => {
+      console.warn(`[useShellEvent] subscribe ${event} failed:`, err);
+      if ((subscriptionRefcounts.get(event) ?? 0) <= 0 || retryTimers.has(event)) return;
+      const attempt = (retryAttempts.get(event) ?? 0) + 1;
+      retryAttempts.set(event, attempt);
+      window.dispatchEvent(
+        new CustomEvent("shell-event-subscription-degraded", { detail: { event, attempt } })
+      );
+      const delay = Math.min(15_000, 500 * 2 ** Math.min(attempt - 1, 5));
+      retryTimers.set(
+        event,
+        window.setTimeout(() => {
+          retryTimers.delete(event);
+          if ((subscriptionRefcounts.get(event) ?? 0) > 0) ensureSubscribed(event);
+        }, delay)
+      );
+    });
+}
 
 function addSubscription(event: EventName): void {
   const prev = subscriptionRefcounts.get(event) ?? 0;
   subscriptionRefcounts.set(event, prev + 1);
   if (prev === 0) {
-    void events
-      .subscribe(event)
-      .catch((err: unknown) => console.warn(`[useShellEvent] subscribe ${event} failed:`, err));
+    ensureSubscribed(event);
   }
 }
 
@@ -35,6 +61,10 @@ function removeSubscription(event: EventName): void {
   if (prev <= 0) return;
   if (prev === 1) {
     subscriptionRefcounts.delete(event);
+    const timer = retryTimers.get(event);
+    if (timer !== undefined) window.clearTimeout(timer);
+    retryTimers.delete(event);
+    retryAttempts.delete(event);
     void events
       .unsubscribe(event)
       .catch((err: unknown) => console.warn(`[useShellEvent] unsubscribe ${event} failed:`, err));

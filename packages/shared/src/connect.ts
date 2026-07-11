@@ -42,11 +42,11 @@ export interface ConnectPairing {
   ice?: TurnPolicy;
   /** Optional server/workspace label to disambiguate servers. */
   srv?: string;
+  /** Invite expiry in epoch milliseconds; clients reject stale QR links immediately. */
+  exp?: number;
 }
 
-export type ConnectLink =
-  | ({ kind: "ok" } & ConnectPairing)
-  | { kind: "error"; reason: string };
+export type ConnectLink = ({ kind: "ok" } & ConnectPairing) | { kind: "error"; reason: string };
 export type SignalingResolution = { url: string; source: SignalingResolutionSource };
 type QueryParseResult =
   | { kind: "ok"; values: Map<string, string> }
@@ -68,6 +68,7 @@ function encodeConnectParams(pairing: ConnectPairing): string {
     `ice=${encodeURIComponent(pairing.ice ?? "all")}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
+  if (pairing.exp) params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
   return params.join("&");
 }
 
@@ -175,7 +176,10 @@ export function parseConnectLink(raw: string): ConnectLink {
   const afterScheme = raw.slice(prefix.length);
   const isSchemeLink =
     raw.startsWith(prefix) &&
-    (afterScheme === "" || afterScheme[0] === "?" || afterScheme[0] === "/" || afterScheme[0] === "#");
+    (afterScheme === "" ||
+      afterScheme[0] === "?" ||
+      afterScheme[0] === "/" ||
+      afterScheme[0] === "#");
   let rawParams: string;
   if (isSchemeLink) {
     const queryStart = raw.indexOf("?");
@@ -186,7 +190,8 @@ export function parseConnectLink(raw: string): ConnectLink {
     // URL-parseable on RN/Hermes (asserted by connect.test.ts). Strip any
     // `#fragment` so it can't fold into the last query value.
     const fragmentStart = raw.indexOf("#", queryStart);
-    rawParams = fragmentStart >= 0 ? raw.slice(queryStart + 1, fragmentStart) : raw.slice(queryStart + 1);
+    rawParams =
+      fragmentStart >= 0 ? raw.slice(queryStart + 1, fragmentStart) : raw.slice(queryStart + 1);
   } else if (raw.startsWith(httpsPrefix)) {
     let url: URL;
     try {
@@ -243,6 +248,17 @@ export function parseConnectLink(raw: string): ConnectLink {
   if (ice && ice !== "all" && ice !== "relay") {
     return { kind: "error", reason: "TURN policy `ice` must be `all` or `relay`" };
   }
+  const expRaw = params.values.get("exp");
+  const exp = expRaw ? Number(expRaw) : undefined;
+  if (expRaw && (!Number.isFinite(exp) || (exp ?? 0) <= 0)) {
+    return { kind: "error", reason: "Pairing link expiry has an unexpected format" };
+  }
+  if (exp !== undefined && exp <= Date.now()) {
+    return {
+      kind: "error",
+      reason: "This pairing link has expired — generate a new invite on the server",
+    };
+  }
 
   return {
     kind: "ok",
@@ -253,6 +269,7 @@ export function parseConnectLink(raw: string): ConnectLink {
     v: PAIRING_PROTOCOL_VERSION,
     ice: (ice as TurnPolicy | undefined) ?? "all",
     srv: params.values.get("srv") || undefined,
+    ...(exp !== undefined ? { exp } : {}),
   };
 }
 
@@ -265,26 +282,33 @@ export function resolveSignalingUrl(options: {
 }): SignalingResolution {
   const envKeys = options.envKeys ?? ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
   const env = options.env ?? {};
-  const candidates: Array<{ value: string | null | undefined; source: SignalingResolutionSource }> = [
-    { value: options.flag, source: "flag" },
-    {
-      value: envKeys.map((key) => env[key]).find((value) => value !== undefined && value !== ""),
-      source: "env",
-    },
-    { value: options.configUrl, source: "config" },
-    { value: options.defaultUrl ?? DEFAULT_SIGNAL_URL, source: "default" },
-  ];
-  const selected = candidates.find((candidate) => candidate.value !== undefined && candidate.value !== "");
+  const candidates: Array<{ value: string | null | undefined; source: SignalingResolutionSource }> =
+    [
+      { value: options.flag, source: "flag" },
+      {
+        value: envKeys.map((key) => env[key]).find((value) => value !== undefined && value !== ""),
+        source: "env",
+      },
+      { value: options.configUrl, source: "config" },
+      { value: options.defaultUrl ?? DEFAULT_SIGNAL_URL, source: "default" },
+    ];
+  const selected = candidates.find(
+    (candidate) => candidate.value !== undefined && candidate.value !== ""
+  );
   const raw = selected?.value ?? DEFAULT_SIGNAL_URL;
   const parsed = parseSignalingEndpoint(raw);
   if (parsed.kind === "error") {
-    throw new Error(`Invalid WebRTC signaling endpoint from ${selected?.source ?? "default"}: ${parsed.reason}`);
+    throw new Error(
+      `Invalid WebRTC signaling endpoint from ${selected?.source ?? "default"}: ${parsed.reason}`
+    );
   }
   return { url: parsed.url, source: selected?.source ?? "default" };
 }
 
 /** The signaling endpoint is a public wss/https URL (ws/http allowed for loopback dev). */
-export function parseSignalingEndpoint(raw: string): { kind: "ok"; url: string } | { kind: "error"; reason: string } {
+export function parseSignalingEndpoint(
+  raw: string
+): { kind: "ok"; url: string } | { kind: "error"; reason: string } {
   let endpoint: URL;
   try {
     endpoint = new URL(raw);
@@ -293,10 +317,16 @@ export function parseSignalingEndpoint(raw: string): { kind: "ok"; url: string }
   }
   const proto = endpoint.protocol;
   if (proto !== "wss:" && proto !== "https:" && proto !== "ws:" && proto !== "http:") {
-    return { kind: "error", reason: `Signaling endpoint must be ws(s)/http(s) (got ${proto || "no scheme"})` };
+    return {
+      kind: "error",
+      reason: `Signaling endpoint must be ws(s)/http(s) (got ${proto || "no scheme"})`,
+    };
   }
   if ((proto === "ws:" || proto === "http:") && !isLoopbackHost(endpoint.hostname)) {
-    return { kind: "error", reason: `Cleartext signaling is only allowed for loopback. Use wss:// for ${endpoint.hostname}.` };
+    return {
+      kind: "error",
+      reason: `Cleartext signaling is only allowed for loopback. Use wss:// for ${endpoint.hostname}.`,
+    };
   }
   return { kind: "ok", url: endpoint.toString() };
 }

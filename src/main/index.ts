@@ -40,6 +40,15 @@ const APP_NAME = "Vibestudio";
 const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
 const IS_HEADLESS_HOST =
   process.env["VIBESTUDIO_HEADLESS_HOST"] === "1" || process.argv.includes("--headless-host");
+const recoveredCrashArgIndex = process.argv.findIndex((arg) =>
+  arg.startsWith("--recovered-local-server-crash=")
+);
+const recoveredLocalServerCrash =
+  recoveredCrashArgIndex >= 0
+    ? (process.argv[recoveredCrashArgIndex]?.split("=")[1] ?? "unknown")
+    : null;
+// Consume the marker so later intentional relaunches do not repeat the notice.
+if (recoveredCrashArgIndex >= 0) process.argv.splice(recoveredCrashArgIndex, 1);
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -95,6 +104,7 @@ import {
   resolveStartupMode,
   shouldRequestSingleInstanceLock,
   getPendingUserDataDir,
+  chooseConnectionRelaunchArgs,
   workspaceRelaunchArgs,
   type StartupMode,
   type ConnectedStartupMode,
@@ -220,6 +230,12 @@ let electronHostLaunchTimer: ReturnType<typeof setTimeout> | null = null;
 let electronHostLaunchBlockedByApproval = false;
 let electronHostLaunchInFlight = false;
 let bootstrapWorkspaceRpcReady = false;
+let bootstrapStartupError: { message: string; detail?: string; logPath?: string } | null = null;
+let bootstrapStartupDetail: string | null = null;
+let desktopAutoUpdater: {
+  downloadUpdate(): Promise<unknown>;
+  quitAndInstall(): void;
+} | null = null;
 // True when this launch found a persisted WebRTC remote pairing — the chooser is
 // skipped and `establishServerSession` connects to the remote over the pipe.
 let remotePairedAtLaunch = false;
@@ -236,20 +252,6 @@ function isTerminalRemoteCredentialFailure(error: unknown): boolean {
   return /credential (expired|revoked|invalid)|re-pair|fingerprint mismatch|invalid token|session (is )?closed|session auth failed|SESSION_AUTH_FAILED/i.test(
     message
   );
-}
-
-/**
- * Relaunch into the server chooser instead of exiting, so a failed remote connect
- * can NEVER permanently brick startup (the prior code `app.exit(1)`-ed and the
- * next launch re-dialed the same dead pairing forever). The one-shot
- * `--skip-remote-pairing` flag suppresses auto-dialing the stored pairing for the
- * relaunched process only; the pairing itself is kept unless the caller cleared it.
- */
-function relaunchToServerChooser(): never {
-  const args = process.argv.slice(1).filter((a) => a !== "--skip-remote-pairing");
-  args.push("--skip-remote-pairing");
-  relaunchApp({ args });
-  throw new Error("relaunching to server chooser"); // unreachable; relaunchApp exits
 }
 
 // The bootstrap chooser resolves IN-PROCESS (no relaunch): when the user picks a
@@ -1243,7 +1245,7 @@ function retryElectronHostTargetLaunchAfterAppEvent(change: ServerHostTargetChan
 type BootstrapWorkspaceEntry = { name: string; lastOpened: number };
 
 type BootstrapConnectionState = {
-  mode: "choose-connection" | "starting" | "connected";
+  mode: "choose-connection" | "starting" | "connected" | "failed";
   localWorkspaces: BootstrapWorkspaceEntry[];
   lastLocalWorkspaceName: string | null;
   isDev: boolean;
@@ -1252,6 +1254,10 @@ type BootstrapConnectionState = {
    * any — so the chooser can auto-pair instead of waiting for a paste+click.
    */
   pendingPairLink: string | null;
+  pendingPairConfirmed: boolean;
+  startupError: { message: string; detail?: string; logPath?: string } | null;
+  serverLogPath: string | null;
+  startupDetail: string | null;
 };
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -1270,8 +1276,9 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
   // paired WebRTC remote (remotePairedAtLaunch) or a resolved chooser choice
   // (chooserChoiceMade) flips the launch gate forward to connect rather than
   // offering a choice.
-  const mode =
-    startupMode.kind === "pending" && !remotePairedAtLaunch && !chooserChoiceMade
+  const mode = bootstrapStartupError
+    ? "failed"
+    : startupMode.kind === "pending" && !remotePairedAtLaunch && !chooserChoiceMade
       ? "choose-connection"
       : bootstrapWorkspaceRpcReady
         ? "connected"
@@ -1283,13 +1290,20 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
   // Only the chooser reads localWorkspaces. The renderer polls getState every 500ms
   // while "starting", so computing the workspace scan on every tick is pure waste —
   // the poll only watches for the mode flip. Compute the heavy fields only when shown.
-  if (mode !== "choose-connection") {
+  if (mode !== "choose-connection" && mode !== "failed") {
     return {
       mode,
       localWorkspaces: [],
       lastLocalWorkspaceName: null,
       isDev: isDev(),
       pendingPairLink,
+      pendingPairConfirmed: process.argv.includes("--pair-confirmed"),
+      startupError: bootstrapStartupError,
+      serverLogPath:
+        startupMode.kind === "local"
+          ? path.join(startupMode.wsDir, "state", "logs", "server.log")
+          : null,
+      startupDetail: bootstrapStartupDetail,
     };
   }
   const localWorkspaces = centralData.listWorkspaces().map((entry) => ({
@@ -1302,6 +1316,13 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
     lastLocalWorkspaceName: centralData.getLastOpenedWorkspace()?.name ?? null,
     isDev: isDev(),
     pendingPairLink,
+    pendingPairConfirmed: process.argv.includes("--pair-confirmed"),
+    startupError: bootstrapStartupError,
+    serverLogPath:
+      startupMode.kind === "local"
+        ? path.join(startupMode.wsDir, "state", "logs", "server.log")
+        : null,
+    startupDetail: bootstrapStartupDetail,
   };
 }
 
@@ -1320,6 +1341,33 @@ function installBootstrapConnectionHandlers(): void {
   ipcMain.handle("vibestudio:bootstrap:get-state", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:get-state");
     return getBootstrapConnectionState();
+  });
+
+  ipcMain.handle("vibestudio:bootstrap:retry-startup", (event) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:retry-startup");
+    relaunchApp({ args: process.argv.slice(1) });
+  });
+
+  ipcMain.handle("vibestudio:bootstrap:choose-connection", (event) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:choose-connection");
+    relaunchApp({
+      args: [
+        ...chooseConnectionRelaunchArgs().filter((arg) => arg !== "--skip-remote-pairing"),
+        "--skip-remote-pairing",
+      ],
+    });
+  });
+
+  ipcMain.handle("vibestudio:bootstrap:open-log", async (event, rawPath: unknown) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:open-log");
+    const expectedPath =
+      bootstrapStartupError?.logPath ??
+      (startupMode.kind === "local"
+        ? path.join(startupMode.wsDir, "state", "logs", "server.log")
+        : null);
+    if (typeof rawPath !== "string" || !expectedPath) return;
+    if (path.resolve(rawPath) !== path.resolve(expectedPath)) return;
+    await shell.openPath(rawPath);
   });
 
   // The chooser handlers resolve the in-process choice instead of relaunching.
@@ -1381,6 +1429,9 @@ function attachWorkspaceWindowServices(): void {
       if (wc && !wc.isDestroyed()) {
         wc.send("vibestudio:event", event, payload);
       }
+    },
+    onPanelResponsivenessChanged: (panelId, responsive) => {
+      eventService.emit("panel-responsiveness-changed", { panelId, responsive });
     },
     autofillManager: autofillManager ?? undefined,
     autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
@@ -1596,6 +1647,9 @@ app.on("ready", async () => {
   // event so a network flap (e.g. Wi-Fi reassociate) probes the pipe promptly
   // instead of lingering on a stale "connected". NUDGE ONLY, never a teardown.
   ipcMain.on("vibestudio:shell.network-online", () => nudgeServerLiveness("network online"));
+  ipcMain.on("vibestudio:shell.chrome-interactive-focus", (event, active: unknown) => {
+    viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
+  });
   installBootstrapConnectionHandlers();
   // npm-channel update notice — no-ops unless launched from a global npm install
   // (the launcher sets VIBESTUDIO_NPM_CHANNEL); notification-first, never self-updates.
@@ -1725,6 +1779,8 @@ app.on("ready", async () => {
             callback: (info: { version?: string; message?: string }) => void
           ) => void;
           checkForUpdates: () => Promise<unknown>;
+          downloadUpdate: () => Promise<unknown>;
+          quitAndInstall: () => void;
         };
       };
 
@@ -1736,17 +1792,55 @@ app.on("ready", async () => {
       };
       autoUpdater.autoDownload = false; // Don't auto-download, let user decide
       autoUpdater.autoInstallOnAppQuit = true;
+      desktopAutoUpdater = autoUpdater;
 
       autoUpdater.on("update-available", (info: { version?: string }) => {
         console.log(`[AutoUpdater] Update available: ${info.version}`);
+        eventService.emit("notification:show", {
+          id: "desktop-update-available",
+          type: "info",
+          title: `Vibestudio ${info.version ?? "update"} is available`,
+          message: "Download it now and keep working while it prepares in the background.",
+          ttl: 0,
+          actions: [
+            {
+              id: "desktop-update-download",
+              label: "Download update",
+              variant: "solid",
+              command: { type: "desktop.downloadUpdate" },
+            },
+          ],
+        });
       });
 
       autoUpdater.on("update-downloaded", (info: { version?: string }) => {
         console.log(`[AutoUpdater] Update downloaded: ${info.version}`);
+        eventService.emit("notification:show", {
+          id: "desktop-update-ready",
+          type: "success",
+          title: "Update ready to install",
+          message: `Restart Vibestudio to install ${info.version ?? "the update"}.`,
+          ttl: 0,
+          actions: [
+            {
+              id: "desktop-update-install",
+              label: "Restart and install",
+              variant: "solid",
+              command: { type: "desktop.installUpdate" },
+            },
+          ],
+        });
       });
 
       autoUpdater.on("error", (error: { message?: string }) => {
         console.warn(`[AutoUpdater] Error: ${error.message}`);
+        eventService.emit("notification:show", {
+          id: "desktop-update-error",
+          type: "error",
+          title: "App update failed",
+          message: error.message ?? "The update could not be prepared.",
+          ttl: 0,
+        });
       });
 
       // Check for updates (non-blocking)
@@ -1761,7 +1855,7 @@ app.on("ready", async () => {
 
   // A persisted WebRTC remote pairing skips the chooser: establishServerSession
   // dials it over the pipe regardless of the (pending/local) startup mode.
-  // `--skip-remote-pairing` (set by relaunchToServerChooser) suppresses auto-dial
+  // `--skip-remote-pairing` (set by the recovery chooser) suppresses auto-dial
   // for one launch so a failed remote connect lands on the chooser, not a re-dial loop.
   const skipRemotePairingLaunch = process.argv.includes("--skip-remote-pairing");
   const storedRemoteAtLaunch = loadStoredRemotePairing();
@@ -1810,7 +1904,7 @@ app.on("ready", async () => {
       const isEphemeral = choice.ephemeral;
       const autoApproveStartupUnits =
         process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
-        (startup.resolved.name === "default" && startup.resolved.created && !isEphemeral);
+        (startup.resolved.created && !isEphemeral);
       startupMode = {
         kind: "local",
         wsDir: startup.resolved.wsDir,
@@ -1849,6 +1943,15 @@ app.on("ready", async () => {
   });
   const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
     await serverEventSubscriptions.replay({ force: true });
+    if (recoveredLocalServerCrash) {
+      eventService.emit("notification:show", {
+        id: "local-server-crash-recovered",
+        type: "warning",
+        title: "Workspace server recovered",
+        message: `The local server stopped unexpectedly (code ${recoveredLocalServerCrash}) and was restarted. Your workspace is available again.`,
+        ttl: 0,
+      });
+    }
     // Catch up on approvals that arrived while the event stream was down.
     void approvalAttention?.refresh();
     if (!panelOrchestrator) return;
@@ -1879,6 +1982,15 @@ app.on("ready", async () => {
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
+    notifyError: (title, message) => {
+      eventService.emit("notification:show", {
+        id: `oauth-handoff-error-${Date.now()}`,
+        type: "error",
+        title,
+        message,
+        ttl: 0,
+      });
+    },
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
     resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
@@ -1905,6 +2017,11 @@ app.on("ready", async () => {
       pendingRemotePairing?.srv ??
       (!skipRemotePairingLaunch ? storedRemoteAtLaunch?.pairing.srv : undefined);
     const isRemoteSession = pendingRemotePairing !== null || remotePairedAtLaunch;
+    bootstrapStartupDetail = isRemoteSession
+      ? `Connecting to ${remoteHost || "the paired server"}…`
+      : startupMode.kind === "local"
+        ? `Starting local workspace “${startupMode.workspaceName}”…`
+        : null;
 
     eventService.emit("server-connection-changed", {
       status: "connecting",
@@ -1952,6 +2069,14 @@ app.on("ready", async () => {
           }
           previousStatus = status;
         },
+        onReconnectProgress: (progress) => {
+          eventService.emit("server-connection-changed", {
+            status: "connecting",
+            isRemote: true,
+            remoteHost,
+            reconnect: progress,
+          });
+        },
         onRecovery: (kind) => {
           void recoverShellStateFromServer(kind).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1967,11 +2092,10 @@ app.on("ready", async () => {
       if (remotePairedAtLaunch) {
         const message = error instanceof Error ? error.message : String(error);
         log.warn(`[remote] establish failed during a paired launch: ${message}`);
-        // Drop the stored pairing only if it was terminally rejected (so a
-        // transient outage keeps it for a later retry); either way return to the
-        // chooser instead of exiting — startup must never be permanently bricked.
+        // Drop the stored pairing only if it was terminally rejected. The outer
+        // startup recovery handler keeps the bootstrap window open with the
+        // reason and explicit Retry / choose-another-workspace actions.
         if (isTerminalRemoteCredentialFailure(error)) clearStoredRemotePairing();
-        relaunchToServerChooser();
       }
       throw error;
     }
@@ -2310,7 +2434,26 @@ app.on("ready", async () => {
         serverClient: sc,
       })
     );
-    electronContainer.registerRpc(createNotificationService({ eventService, getViewManager }));
+    electronContainer.registerRpc(
+      createNotificationService({
+        eventService,
+        getViewManager,
+        onAction: async (_id, actionId) => {
+          if (actionId === "desktop-update-download") {
+            if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
+            await desktopAutoUpdater.downloadUpdate();
+          } else if (actionId === "desktop-update-install") {
+            if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
+            desktopAutoUpdater.quitAndInstall();
+          } else if (actionId.startsWith("oauth-cancel:")) {
+            const transactionId = actionId.slice("oauth-cancel:".length);
+            const client = serverClientRef;
+            if (!client) throw new Error("The server connection is unavailable");
+            await client.call("credentials", "cancelOAuth", [{ transactionId }]);
+          }
+        },
+      })
+    );
     // Workspace operations live entirely on the server now (single source of
     // truth, accessible to panels/workers/shell). The shell renderer's
     // `workspace.*` calls reach the server by default because only true
@@ -2664,7 +2807,26 @@ app.on("ready", async () => {
     }
     await Promise.all(cleanupPromises);
 
-    console.error("[App] Startup failed; exiting:", formatUnknownError(error));
+    console.error("[App] Startup failed:", formatUnknownError(error));
+    if (!IS_HEADLESS_HOST && mainWindow) {
+      const message = error instanceof Error ? error.message : String(error);
+      const remoteStartupFailed = remotePairedAtLaunch || pendingRemotePairing !== null;
+      bootstrapWorkspaceRpcReady = false;
+      bootstrapStartupError = {
+        message: remoteStartupFailed
+          ? `Could not connect to the paired server: ${message}`
+          : `Could not start the workspace: ${message}`,
+        detail: remoteStartupFailed
+          ? "The saved pairing was kept unless the server rejected it. Check the server or choose another workspace."
+          : "Retry the startup, or choose another server or workspace.",
+        ...(startupMode.kind === "local"
+          ? { logPath: path.join(startupMode.wsDir, "state", "logs", "server.log") }
+          : {}),
+      };
+      remotePairedAtLaunch = false;
+      log.error(`[bootstrap] Startup failed; keeping recovery window open: ${message}`);
+      return;
+    }
     app.exit(1);
   }
 });
@@ -2674,15 +2836,13 @@ app.on("window-all-closed", () => {
 });
 
 // ── Quit policy for the desktop-owned local server ──
-// The local server is a detached process that can outlive the app. On quit we
-// simply ASK whether to keep it running (so background work — e.g. an agent
-// mid-turn — finishes and the next launch reattaches instantly) or stop it.
-// No activity guessing: the user decides, and can persist that choice with
-// "Remember my choice" (cleared by re-toggling in Settings / deleting the
-// `keepServerOnQuit` field). Decided here, consumed by the will-quit cleanup.
+// The local server is detached and idle-exits on its own. Defaulting to keep is
+// both safe for active work and avoids confronting every first-run user with a
+// persistent infrastructure decision. An explicit remembered "stop" setting is
+// still honored.
 let serverQuitDecision: "stop" | "keep" | null = null;
 
-app.on("before-quit", (event) => {
+app.on("before-quit", (_event) => {
   if (serverQuitDecision !== null || isCleaningUp) return;
   const conn = serverSession;
   if (!conn || conn.serverOwnership !== "desktop-local" || !conn.localServerManager) {
@@ -2690,34 +2850,10 @@ app.on("before-quit", (event) => {
     serverQuitDecision = "keep";
     return;
   }
-  // Remembered choice: honor it without prompting.
+  // Remembered choice: honor it. With no preference, keep the detached server;
+  // its idle monitor reaps it automatically when no clients or work remain.
   const remembered = centralData.getKeepServerOnQuit();
-  if (remembered !== null) {
-    serverQuitDecision = remembered ? "keep" : "stop";
-    return;
-  }
-  event.preventDefault();
-  void (async () => {
-    const { response, checkboxChecked } = await dialog.showMessageBox({
-      type: "question",
-      buttons: ["Keep running", "Stop server"],
-      defaultId: 0,
-      // Escape / closing the dialog keeps the server — never kill work on a
-      // stray keypress.
-      cancelId: 0,
-      title: "Quit Vibestudio",
-      message: "Keep the workspace server running in the background?",
-      detail:
-        "The workspace server can keep running after you close the app so background " +
-        "tasks (like agent runs) finish and the next launch reattaches instantly — " +
-        "or stop it now. You can change this any time.",
-      checkboxLabel: "Remember my choice",
-    });
-    const keep = response === 0;
-    if (checkboxChecked) centralData.setKeepServerOnQuit(keep);
-    serverQuitDecision = keep ? "keep" : "stop";
-    app.quit();
-  })();
+  serverQuitDecision = remembered === false ? "stop" : "keep";
 });
 
 // Use will-quit with preventDefault to properly await async shutdown

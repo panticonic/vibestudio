@@ -295,7 +295,12 @@ export const WorkspaceTreeNodeSchema: z.ZodType<WorkspaceTreeNode> = z.lazy(() =
     path: z.string(),
     isUnit: z.boolean(),
     launchable: z
-      .object({ type: z.literal("app"), title: z.string(), hidden: z.boolean().optional() })
+      .object({
+        type: z.literal("app"),
+        title: z.string(),
+        description: z.string().optional(),
+        hidden: z.boolean().optional(),
+      })
       .optional(),
     packageInfo: z.object({ name: z.string(), version: z.string().optional() }).optional(),
     skillInfo: z.object({ name: z.string(), description: z.string() }).optional(),
@@ -336,7 +341,9 @@ export const workspaceMethods = defineServiceMethods({
       path: z.string().describe("Absolute path to the workspace source tree."),
       statePath: z.string().describe("Absolute path to the workspace's persisted state directory."),
       contextsPath: z.string().describe("Absolute path to the workspace's `.contexts` directory."),
-      config: WorkspaceConfigSchema.describe("The resolved workspace config (meta/vibestudio.yml)."),
+      config: WorkspaceConfigSchema.describe(
+        "The resolved workspace config (meta/vibestudio.yml)."
+      ),
     }),
     access: READ_ACCESS,
   },
@@ -469,7 +476,9 @@ export const workspaceMethods = defineServiceMethods({
     description:
       "Return raw SKILL.md contents by legacy bare skill name (`code-review` -> skills/code-review/SKILL.md) or workspace repo path (`packages/foo`, `workers/bar`, `meta`). Path traversal is rejected.",
     args: z.tuple([
-      z.string().describe("Legacy skill name under skills/ or workspace repo path containing SKILL.md."),
+      z
+        .string()
+        .describe("Legacy skill name under skills/ or workspace repo path containing SKILL.md."),
     ]),
     returns: z.string(),
     access: READ_ACCESS,
@@ -488,9 +497,7 @@ export const workspaceMethods = defineServiceMethods({
   ensureContextFolder: {
     description:
       "Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree.",
-    args: z.tuple([
-      z.string().describe("Context id whose working folder to materialize."),
-    ]),
+    args: z.tuple([z.string().describe("Context id whose working folder to materialize.")]),
     returns: z.object({
       dir: z.string().describe("Absolute path to the materialized context folder."),
     }),

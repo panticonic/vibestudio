@@ -27,7 +27,11 @@ import {
   type RpcCallOptions,
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
-import { type WebRtcSession, type WebRtcTransport } from "@vibestudio/rpc/transports/webrtcClient";
+import {
+  type ReconnectProgress,
+  type WebRtcSession,
+  type WebRtcTransport,
+} from "@vibestudio/rpc/transports/webrtcClient";
 import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
 import type {
   PeerConnectionProvider,
@@ -65,6 +69,7 @@ export interface WebRtcServerClientArgs {
   onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
   onServerEvent?: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   /**
    * Test seam: a pre-built transport (the real path lazy-loads node-datachannel
@@ -120,6 +125,13 @@ export async function createWebRtcServerClient(
   const transport = paired.transport;
   const mainSession = paired.mainSession;
   transport.onStatusChange((status) => args.onConnectionStatusChanged?.(status));
+  // Older/custom transports used by embedders and tests may not yet expose
+  // reconnect progress. Treat it as additive observability: real transports
+  // forward it, while a legacy seam must not make an otherwise healthy
+  // connection fail during setup.
+  if (typeof transport.onReconnectProgress === "function") {
+    transport.onReconnectProgress((progress) => args.onReconnectProgress?.(progress));
+  }
   // Relay alarm (§9.8): remember the selected path for the shell and warn loud
   // when TURN engages — a relayed pipe works but P2P failed (or was forced).
   let lastCandidateType: RtcCandidateType | null = transport.candidateType();

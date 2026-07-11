@@ -1134,6 +1134,12 @@ export const credentialsMethods = defineServiceMethods({
     returns: z.void(),
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
+  cancelOAuth: {
+    description: "Cancel a pending interactive OAuth connection transaction.",
+    args: z.tuple([z.object({ transactionId: z.string().min(1) }).strict()]),
+    returns: z.void(),
+    access: FORWARD_OAUTH_CALLBACK_ACCESS,
+  },
   listStoredCredentials: {
     description:
       "List summaries of stored URL-bound credentials visible to the caller; secret material is never included.",

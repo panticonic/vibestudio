@@ -25,6 +25,7 @@ export type FieldValue = PrimitiveFieldValue | string[];
 export type FieldType =
   // Standard form types
   | "string" // Text input
+  | "textarea" // Multi-line text input
   | "number" // Numeric input
   | "boolean" // Switch/toggle
   | "select" // Dropdown

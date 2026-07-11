@@ -31,6 +31,9 @@ const REMOTE_CRED_CLEAR_ACCESS: MethodAccessDescriptor = {
 const REMOTE_CRED_RELAUNCH_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",
 };
+const REMOTE_CRED_RECONNECT_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "write",
+};
 
 export const RemoteCredSaveArgsSchema = z.object({
   url: z.string().describe("Selected-workspace server URL (http/https) to connect to."),
@@ -41,7 +44,9 @@ export type RemoteCredSaveArgs = z.infer<typeof RemoteCredSaveArgsSchema>;
 export const RemoteCredPairingCodeArgsSchema = z.object({
   link: z
     .string()
-    .describe("A `vibestudio://connect?...` or `https://vibestudio.app/pair#...` link carrying the WebRTC pairing material."),
+    .describe(
+      "A `vibestudio://connect?...` or `https://vibestudio.app/pair#...` link carrying the WebRTC pairing material."
+    ),
   label: z.string().optional().describe("Human-readable label for the new device credential."),
 });
 export type RemoteCredPairingCodeArgs = z.infer<typeof RemoteCredPairingCodeArgsSchema>;
@@ -153,6 +158,12 @@ export const remoteCredMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.object({ revoked: z.boolean() }),
     access: REMOTE_CRED_REVOKE_ACCESS,
+  },
+  reconnectNow: {
+    description: "Probe the current remote pipe immediately so a dead connection reconnects now.",
+    args: z.tuple([]),
+    returns: z.void(),
+    access: REMOTE_CRED_RECONNECT_ACCESS,
   },
   clear: {
     description: "Delete the locally stored remote-server credential.",

@@ -42,6 +42,29 @@ export default function MainMode() {
     };
   }, []);
 
+  useEffect(() => {
+    const bridge = (
+      globalThis as {
+        __vibestudioApp?: { setChromeInteractiveFocus?: (active: boolean) => void };
+      }
+    ).__vibestudioApp;
+    const isInteractive = (target: EventTarget | null) =>
+      target instanceof Element &&
+      target.closest(
+        'input, textarea, select, button, a[href], [contenteditable="true"], [role="button"], [role="treeitem"], [role="dialog"], [tabindex]:not([tabindex="-1"])'
+      ) !== null;
+    const sync = (event: FocusEvent) =>
+      bridge?.setChromeInteractiveFocus?.(isInteractive(event.target));
+    const clear = () => bridge?.setChromeInteractiveFocus?.(false);
+    document.addEventListener("focusin", sync, true);
+    window.addEventListener("blur", clear);
+    return () => {
+      document.removeEventListener("focusin", sync, true);
+      window.removeEventListener("blur", clear);
+      clear();
+    };
+  }, []);
+
   return (
     <>
       <PanelApp />

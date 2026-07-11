@@ -97,7 +97,12 @@ export class WorkspaceTreeScanner {
         const pkg = JSON.parse(await fs.readFile(path.join(abs, "package.json"), "utf8")) as {
           name?: string;
           version?: string;
-          vibestudio?: { title?: string; hiddenInLauncher?: boolean; shell?: unknown };
+          vibestudio?: {
+            title?: string;
+            description?: string;
+            hiddenInLauncher?: boolean;
+            shell?: unknown;
+          };
         };
         if (pkg.name) {
           node.packageInfo = { name: pkg.name, ...(pkg.version ? { version: pkg.version } : {}) };
@@ -129,12 +134,13 @@ export class WorkspaceTreeScanner {
     node: WorkspaceNode,
     unitRel: string,
     name: string,
-    manifest: { title?: string; hiddenInLauncher?: boolean } | undefined
+    manifest: { title?: string; description?: string; hiddenInLauncher?: boolean } | undefined
   ): void {
     if (!manifest || (!unitRel.startsWith("panels/") && !isAboutSource(unitRel))) return;
     node.launchable = {
       type: "app",
       title: manifest.title ?? name,
+      ...(manifest.description ? { description: manifest.description } : {}),
       ...(manifest.hiddenInLauncher ? { hidden: true } : {}),
     };
   }

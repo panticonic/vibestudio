@@ -7,7 +7,7 @@
  * approval as props and runs the matching `shellApproval.*` call when the card
  * emits an intent. The presentational card lives in `./ApprovalCard`.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { Badge, Flex, Text } from "@radix-ui/themes";
 import { ChevronRightIcon } from "@radix-ui/react-icons";
@@ -19,8 +19,16 @@ import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibestudio/shared/shell/approvalState";
-import { blobstore, events, onRpcEvent, panel, shellApproval, shellPresence } from "../shell/client";
+import {
+  blobstore,
+  events,
+  onRpcEvent,
+  panel,
+  shellApproval,
+  shellPresence,
+} from "../shell/client";
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
+import { useShellEvent } from "../shell/useShellEvent";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
 import { useNavigation } from "./NavigationContext";
 import { ApprovalKindIcon } from "./ApprovalCard";
@@ -71,9 +79,11 @@ export function ConsentApprovalBar() {
     approvalId: string;
     message: string;
   } | null>(null);
+  const [submittingApprovalId, setSubmittingApprovalId] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [attentionSeq, setAttentionSeq] = useState(0);
+  const [keyboardFocusRequested, setKeyboardFocusRequested] = useState(false);
   // Diff-review (P3.5): host-served blob cache, keyed by content hash, fetched
   // lazily on the overlay surface's behalf (the surface has no RPC).
   const [blobResults, setBlobResults] = useState<Record<string, BlobResult>>({});
@@ -95,6 +105,14 @@ export function ConsentApprovalBar() {
     const intervalId = window.setInterval(heartbeat, 5_000);
     return () => window.clearInterval(intervalId);
   }, []);
+
+  useShellEvent(
+    "focus-approval-card",
+    useCallback(() => {
+      setMinimized(false);
+      setKeyboardFocusRequested(true);
+    }, [])
+  );
 
   useEffect(() => {
     const controller = createApprovalStateController({
@@ -233,41 +251,41 @@ export function ConsentApprovalBar() {
   };
   const submitClientConfig = (values: Record<string, string>) => {
     if (current?.kind !== "client-config") return;
-    void shellApproval
-      .submitClientConfig(current.approvalId, values)
-      .catch((err: unknown) =>
-        console.error("[ConsentApprovalBar] submitClientConfig failed:", err)
-      );
+    runApprovalAction(current, () => shellApproval.submitClientConfig(current.approvalId, values));
   };
   const submitCredentialInput = (values: Record<string, string>) => {
     if (current?.kind !== "credential-input") return;
-    void shellApproval
-      .submitCredentialInput(current.approvalId, values)
-      .catch((err: unknown) =>
-        console.error("[ConsentApprovalBar] submitCredentialInput failed:", err)
-      );
+    runApprovalAction(current, () =>
+      shellApproval.submitCredentialInput(current.approvalId, values)
+    );
   };
   const submitSecretInput = (values: Record<string, string>) => {
     if (current?.kind !== "secret-input") return;
-    void shellApproval
-      .submitSecretInput(current.approvalId, values)
-      .catch((err: unknown) =>
-        console.error("[ConsentApprovalBar] submitSecretInput failed:", err)
-      );
+    runApprovalAction(current, () => shellApproval.submitSecretInput(current.approvalId, values));
   };
   const resolveUserland = (choice: string) => {
     if (current?.kind !== "userland") return;
-    void shellApproval
-      .resolveUserland(current.approvalId, choice)
-      .catch((err: unknown) => console.error("[ConsentApprovalBar] resolveUserland failed:", err));
+    runApprovalAction(current, () => shellApproval.resolveUserland(current.approvalId, choice));
   };
   const resolveExternalAgent = (behavior: "allow" | "deny") => {
     if (current?.kind !== "external-agent") return;
-    void shellApproval
-      .resolveExternalAgent(current.approvalId, behavior)
-      .catch((err: unknown) =>
-        console.error("[ConsentApprovalBar] resolveExternalAgent failed:", err)
-      );
+    runApprovalAction(current, () =>
+      shellApproval.resolveExternalAgent(current.approvalId, behavior)
+    );
+  };
+  const runApprovalAction = (approval: PendingApproval, action: () => Promise<unknown>) => {
+    if (submittingApprovalId) return;
+    setDecisionError(null);
+    setSubmittingApprovalId(approval.approvalId);
+    void action()
+      .catch((err: unknown) => {
+        console.error("[ConsentApprovalBar] approval action failed:", err);
+        setDecisionError({
+          approvalId: approval.approvalId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => setSubmittingApprovalId(null));
   };
   // Diff-review escape hatch: reuse the open gad-browser panel if one exists
   // (navigate it to the new target + focus), otherwise create one. The target
@@ -312,6 +330,11 @@ export function ConsentApprovalBar() {
         return;
       case "decide":
         decide(intent.decision);
+        return;
+      case "block-capability":
+        if (current.kind === "capability") {
+          runApprovalAction(current, () => shellApproval.blockCapability(current.approvalId));
+        }
         return;
       case "device-cancel":
         decide("dismiss");
@@ -363,7 +386,7 @@ export function ConsentApprovalBar() {
           surface: "approval-card",
           open: true,
           bounds: anchorBounds,
-          focus: needsFocus,
+          focus: needsFocus || keyboardFocusRequested,
           theme,
           props: {
             approval: current,
@@ -373,6 +396,7 @@ export function ConsentApprovalBar() {
               decisionError && decisionError.approvalId === current.approvalId
                 ? decisionError.message
                 : null,
+            actionPending: submittingApprovalId === current.approvalId,
             diffReview,
             blobResults,
             appearance: effectiveTheme,

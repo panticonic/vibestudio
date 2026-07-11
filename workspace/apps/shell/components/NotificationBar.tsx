@@ -252,10 +252,19 @@ export function NotificationBar() {
   const isVisible = notifications.size > 0;
   if (!isVisible) return null;
 
-  // Show the most recent notification (last added)
+  // Keep persistent failures visible ahead of routine transient confirmations.
   const entries = Array.from(notifications.values());
-  const current = assertPresent(entries[entries.length - 1]);
-  const queuedNotifications = entries.slice(0, -1).reverse();
+  const priority: Record<NotificationPayload["type"], number> = {
+    error: 5,
+    warning: 4,
+    consent: 3,
+    info: 2,
+    success: 1,
+  };
+  const current = assertPresent(
+    entries.reduce((best, entry) => (priority[entry.type] >= priority[best.type] ? entry : best))
+  );
+  const queuedNotifications = entries.filter((entry) => entry.id !== current.id).reverse();
   const expanded = expandedIds.has(current.id);
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {

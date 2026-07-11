@@ -7,7 +7,10 @@ import {
   ServiceError,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { createUserlandApprovalService } from "./userlandApprovalService.js";
+import {
+  createUserlandApprovalService,
+  EXTERNAL_APPROVAL_TIMEOUT_MS,
+} from "./userlandApprovalService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrant } from "@vibestudio/shared/approvals";
 
@@ -565,7 +568,7 @@ describe("userlandApprovalService", () => {
       });
       const promise = service.handler(doCtx, "requestExternal", [externalRequest]);
       // Flush the async principal resolution so the timeout is armed, then fire it.
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(EXTERNAL_APPROVAL_TIMEOUT_MS);
       await expect(promise).resolves.toEqual({ behavior: "deny" });
       expect(capturedSignal?.aborted).toBe(true);
     } finally {

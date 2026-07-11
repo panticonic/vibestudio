@@ -341,6 +341,8 @@ export interface ChatContextValue {
   connectionError: { message: string; at: number } | null;
   /** Clear the current connectionError (e.g., after a retry). */
   dismissConnectionError?: () => void;
+  /** Re-run the initial channel connection after a terminal failure. */
+  retryConnection?: () => void;
 
   /** Chat API for sandboxed code */
   chat: ChatSandboxValue;

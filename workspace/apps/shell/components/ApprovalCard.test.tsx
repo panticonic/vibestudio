@@ -142,7 +142,10 @@ describe("ApprovalCard", () => {
     expect(card.getAttribute("data-approval-tone")).toBe("red");
 
     const trustButton = screen.getByText("Trust version").closest("button");
-    expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
+    expect(trustButton?.getAttribute("data-accent-color")).toBe("");
+    expect(
+      screen.getByText("Allow once").closest("button")?.getAttribute("data-accent-color")
+    ).toBe("amber");
     fireEvent.click(trustButton as HTMLButtonElement);
     expect(emit).toHaveBeenCalledWith({
       type: "decide",

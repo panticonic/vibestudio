@@ -15,11 +15,13 @@ import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApp
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 export function createShellApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   metrics?: PushMetrics;
+  capabilityGrantStore?: CapabilityGrantStore;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
@@ -41,6 +43,48 @@ export function createShellApprovalService(deps: {
           if (existed) {
             metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
           }
+          return;
+        }
+        case "blockCapability": {
+          const [approvalId] = args as [string];
+          const pending = approvalQueue
+            .listPending()
+            .find((approval) => approval.approvalId === approvalId);
+          if (!pending || pending.kind !== "capability") {
+            throw new ServiceError(
+              serviceName,
+              method,
+              "No pending capability approval found",
+              "ENOENT"
+            );
+          }
+          if (!deps.capabilityGrantStore) {
+            throw new ServiceError(
+              serviceName,
+              method,
+              "Capability grant store unavailable",
+              "ENOSYS"
+            );
+          }
+          const resourceKey = pending.grantResourceKey ?? pending.resource?.value;
+          if (!resourceKey) {
+            throw new ServiceError(serviceName, method, "Capability resource is missing", "EINVAL");
+          }
+          deps.capabilityGrantStore.grant(
+            pending.capability,
+            resourceKey,
+            {
+              callerId: pending.callerId,
+              repoPath: pending.repoPath,
+              effectiveVersion: pending.effectiveVersion,
+            },
+            "version",
+            pending.resourceScope,
+            Date.now(),
+            "deny"
+          );
+          approvalQueue.resolve(approvalId, "deny");
+          metrics.recordApprovalResolved({ decision: "deny", source: ctx.caller.runtime.kind });
           return;
         }
         case "resolveBootstrap": {

@@ -24,24 +24,9 @@ interface ConnectionSnapshot {
   candidateType?: CandidateType;
 }
 
-interface HealthSample {
-  version?: string;
-  uptimeMs?: number;
-  workerd?: string;
-  error?: string;
-  sampledAt: number;
-}
-
-function formatUptime(ms: number): string {
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
-  return `${Math.floor(ms / 86_400_000)}d`;
-}
-
 export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [snap, setSnap] = useState<ConnectionSnapshot | null>(null);
-  const [health, setHealth] = useState<HealthSample | null>(null);
+  const [hasConnected, setHasConnected] = useState(false);
 
   useEffect(() => {
     app
@@ -53,6 +38,7 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
           remoteHost: info.remoteHost,
           candidateType: info.connectionCandidateType ?? null,
         });
+        if ((info.connectionStatus ?? "connected") === "connected") setHasConnected(true);
       })
       .catch(() => {});
   }, []);
@@ -72,28 +58,21 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
           remoteHost: payload.remoteHost,
           candidateType: payload.candidateType ?? null,
         });
+        if (payload.status === "connected") setHasConnected(true);
       },
       []
     )
   );
 
-  useShellEvent(
-    "server-health",
-    useCallback((payload: HealthSample) => {
-      setHealth(payload);
-    }, [])
-  );
-
   if (!snap) return null;
-
-  // Happy path: hide entirely in local-connected mode.
-  if (snap.mode === "local" && snap.status === "connected") return null;
 
   let tooltip =
     snap.status === "disconnected"
       ? `Disconnected from ${snap.mode === "remote" ? `remote server ${snap.remoteHost ?? ""}` : "local server"}`
       : snap.status === "connecting"
-        ? "Reconnecting to server…"
+        ? hasConnected
+          ? "Reconnecting to server…"
+          : "Connecting to server…"
         : snap.mode === "remote"
           ? `Connected to ${snap.remoteHost ?? "remote server"}`
           : "Connected (local)";
@@ -101,30 +80,22 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
   // Surface the selected network path on a live remote pipe: a TURN relay works
   // but is slower, so telling the user why is a kindness (not an alarm). Direct
   // (P2P) is noted quietly in the tooltip only — no visible chrome for the happy path.
-  const isRelayed = snap.status === "connected" && snap.mode === "remote" && snap.candidateType === "relay";
+  const isRelayed =
+    snap.status === "connected" && snap.mode === "remote" && snap.candidateType === "relay";
   if (snap.status === "connected" && snap.mode === "remote" && snap.candidateType) {
     tooltip += isRelayed
       ? "\nRelayed via TURN — direct peer-to-peer wasn't available, so traffic is slower."
       : "\nDirect peer-to-peer connection.";
   }
 
-  // Append health poll details when we have a sample AND the connection is
-  // live. `health.error` means the most recent poll failed — surface it so a
-  // silent network partition doesn't look healthy.
-  if (snap.status === "connected" && snap.mode === "remote" && health) {
-    if (health.error) {
-      tooltip += `\nHealth poll: ${health.error}`;
-    } else {
-      const parts: string[] = [];
-      if (health.version) parts.push(`v${health.version}`);
-      if (health.uptimeMs != null) parts.push(`up ${formatUptime(health.uptimeMs)}`);
-      if (health.workerd) parts.push(`workerd: ${health.workerd}`);
-      if (parts.length > 0) tooltip += `\n${parts.join(" · ")}`;
-    }
-  }
-
   const badgeColor =
-    snap.status === "disconnected" ? "red" : snap.status === "connecting" ? "amber" : "green";
+    snap.status === "disconnected"
+      ? "red"
+      : snap.status === "connecting"
+        ? "amber"
+        : snap.mode === "remote"
+          ? "green"
+          : "gray";
 
   const icon =
     snap.status === "disconnected" ? (

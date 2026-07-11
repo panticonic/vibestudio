@@ -1201,6 +1201,25 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     });
   }
 
+  async function cancelOAuth(
+    ctx: ServiceContext,
+    request: { transactionId: string }
+  ): Promise<void> {
+    const tx = oauthTransactions.get(request.transactionId);
+    if (!tx) return;
+    const privileged = ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
+    if (
+      !privileged &&
+      (tx.callerId !== ctx.caller.runtime.id || tx.callerKind !== ctx.caller.runtime.kind)
+    ) {
+      throw new OAuthConnectionError("client_not_authorized");
+    }
+    oauthTransactions.delete(tx.id);
+    clearTimeout(tx.timer);
+    await transitionOAuthTransaction(tx, "cancelled", "approval_denied");
+    tx.reject(new OAuthConnectionError("approval_denied", "Sign-in cancelled"));
+  }
+
   async function requestCredentialInput(
     ctx: ServiceContext,
     params: RequestCredentialInputParams
@@ -4416,6 +4435,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           return deleteClientConfig(ctx, (args as [DeleteClientConfigParams])[0]);
         case "forwardOAuthCallback":
           return forwardOAuthCallback(ctx, (args as [ForwardOAuthCallbackParams])[0]);
+        case "cancelOAuth":
+          return cancelOAuth(ctx, (args as [{ transactionId: string }])[0]);
         case "listStoredCredentials":
           return listStoredCredentials();
         case "inspectStoredCredentials":

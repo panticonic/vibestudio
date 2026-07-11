@@ -1609,7 +1609,14 @@ async function main() {
 
   // ── Shell approval service (consent bar queue) ──
   const { createShellApprovalService } = await import("./services/shellApprovalService.js");
-  container.registerRpc(createShellApprovalService({ approvalQueue }));
+  container.registerRpc(createShellApprovalService({ approvalQueue, capabilityGrantStore }));
+  const { createPermissionsService } = await import("./services/permissionsService.js");
+  container.registerRpc(
+    createPermissionsService({
+      capabilityGrants: capabilityGrantStore,
+      userlandGrants: userlandApprovalGrantStore,
+    })
+  );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
   container.registerRpc(
     createCorsApprovalService({
@@ -1623,6 +1630,15 @@ async function main() {
       approvalQueue,
       grantStore: userlandApprovalGrantStore,
       resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
+      onExternalApprovalExpired: ({ operation }) => {
+        eventService.emit("notification:show", {
+          id: `external-approval-expired-${Date.now()}`,
+          type: "warning",
+          title: "Claude Code request expired",
+          message: `${operation} was denied because no answer was received within 10 minutes.`,
+          ttl: 0,
+        });
+      },
     })
   );
 

@@ -9,13 +9,14 @@
  * WebRTC pipe.
  */
 
-import { app } from "electron";
+import { app, Notification } from "electron";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot } from "./paths.js";
 import { LocalServerManager } from "./localServerManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
+import type { ReconnectProgress } from "@vibestudio/rpc/transports/webrtcClient";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
@@ -108,6 +109,7 @@ export function connectRemoteViaWebRtc(
     onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
     onServerEvent?: (event: string, payload: unknown) => void;
     onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+    onReconnectProgress?: (progress: ReconnectProgress) => void;
     onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   }
 ): Promise<ServerClient> {
@@ -136,6 +138,7 @@ export async function establishServerSession(args: {
   centralData: CentralDataManager;
   onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
 }): Promise<SessionConnection> {
   const { mode, pendingPairing, skipStoredRemote, onServerEvent } = args;
@@ -170,7 +173,15 @@ export async function establishServerSession(args: {
     centralData: args.centralData,
     onCrash: (code) => {
       console.error(`[App] Local server died and could not be recovered (code ${code ?? "?"})`);
-      relaunchApp({ exitCode: 1 });
+      const message = "The local workspace server stopped. Vibestudio is restarting it now.";
+      if (Notification.isSupported()) {
+        new Notification({ title: "Workspace server stopped", body: message }).show();
+      }
+      const relaunchArgs = process.argv
+        .slice(1)
+        .filter((arg) => !arg.startsWith("--recovered-local-server-crash="));
+      relaunchArgs.push(`--recovered-local-server-crash=${code ?? "unknown"}`);
+      relaunchApp({ args: relaunchArgs, exitCode: 1 });
     },
   });
 
@@ -292,6 +303,7 @@ export async function establishServerSession(args: {
 type RemoteConnectArgs = {
   onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
 };
 
@@ -321,6 +333,7 @@ async function establishRemoteSession(
         }),
       onServerEvent: args.onServerEvent,
       onConnectionStatusChanged: args.onConnectionStatusChanged,
+      onReconnectProgress: args.onReconnectProgress,
       onRecovery: args.onRecovery,
     }
   );
@@ -356,6 +369,7 @@ async function establishFreshPairSession(
     },
     onServerEvent: args.onServerEvent,
     onConnectionStatusChanged: args.onConnectionStatusChanged,
+    onReconnectProgress: args.onReconnectProgress,
     onRecovery: args.onRecovery,
   });
   if (!issuedCredential.current) {

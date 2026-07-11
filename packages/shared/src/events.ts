@@ -38,11 +38,13 @@ export type EventName =
   | "panel-tree-updated"
   | "open-workspace-switcher"
   | "open-command-palette"
+  | "focus-approval-card"
   | "toggle-address-bar"
   | "focus-address-bar"
   | "panel-chrome-command"
   | "toggle-panel-devtools"
   | "panel-initialization-error"
+  | "panel-responsiveness-changed"
   | "navigate-about"
   | "navigate-to-panel"
   | "external-open:open"
@@ -69,7 +71,9 @@ export interface NotificationAction {
   command?:
     | { type: "app.applyUpdate"; appId: string }
     | { type: "app.rollback"; appId: string; buildKey?: string }
-    | { type: "workspace.restartUnit"; name: string };
+    | { type: "workspace.restartUnit"; name: string }
+    | { type: "desktop.downloadUpdate" }
+    | { type: "desktop.installUpdate" };
   invoke?: {
     kind: "extension";
     extension: string;
@@ -151,11 +155,13 @@ export interface EventPayloads {
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
   "open-command-palette": undefined;
+  "focus-approval-card": undefined;
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
   "panel-chrome-command": { command: PanelCommandId };
   "toggle-panel-devtools": undefined;
   "panel-initialization-error": { path: string; error: string };
+  "panel-responsiveness-changed": { panelId: string; responsive: boolean };
   "navigate-about": { page: string };
   "navigate-to-panel": { panelId: string };
   "external-open:open": {
@@ -217,6 +223,12 @@ export interface EventPayloads {
      * path has not settled yet).
      */
     candidateType?: "host" | "srflx" | "prflx" | "relay" | null;
+    reconnect?: {
+      phase: "scheduled" | "connecting" | "failed";
+      attempt: number;
+      nextRetryInMs?: number;
+      reason: string;
+    };
   };
   "server-health": {
     /** Server version string from /healthz response body. */
@@ -296,11 +308,13 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel:snapshot",
   "open-workspace-switcher",
   "open-command-palette",
+  "focus-approval-card",
   "toggle-address-bar",
   "focus-address-bar",
   "panel-chrome-command",
   "toggle-panel-devtools",
   "panel-initialization-error",
+  "panel-responsiveness-changed",
   "navigate-about",
   "navigate-to-panel",
   "external-open:open",

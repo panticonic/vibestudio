@@ -17,6 +17,7 @@ export interface ServerEventBridgeDeps {
   getServerClient(): ServerClient | null;
   openExternal(url: string): Promise<void>;
   warn(message: string): void;
+  notifyError?(title: string, message: string): void;
   /** OS-level attention (badge/flash/notification) for pending approvals. */
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
   /** Host-target apps changed state; desktop bootstrap can retry launch. */
@@ -78,7 +79,22 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
 
     const bareEvent = event.slice("event:".length);
     if (bareEvent === "external-open:open") {
-      void handleExternalOpenPayload(payload as ExternalOpenPayload, {
+      const external = payload as ExternalOpenPayload;
+      const transactionId = external.oauthLoopback?.transactionId;
+      const pendingNotificationId = transactionId ? `oauth-pending-${transactionId}` : null;
+      if (pendingNotificationId && transactionId) {
+        emitNormalized("notification:show", {
+          id: pendingNotificationId,
+          type: "info",
+          title: "Finish signing in in your browser",
+          message: "Vibestudio is waiting for the provider to return you to the app.",
+          ttl: 0,
+          actions: [
+            { id: `oauth-cancel:${transactionId}`, label: "Cancel sign-in", variant: "soft" },
+          ],
+        });
+      }
+      void handleExternalOpenPayload(external, {
         openExternal: deps.openExternal,
         forwardOAuthCallback: (request) => {
           const client = deps.getServerClient();
@@ -86,13 +102,17 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
             ? credentialsClientFor(client).forwardOAuthCallback(request)
             : Promise.resolve();
         },
-      }).catch((err: unknown) => {
-        deps.warn(
-          `[externalOpen] OAuth browser handoff failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
-      });
+      })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[externalOpen] OAuth browser handoff failed: ${message}`);
+          deps.notifyError?.("Sign-in could not continue", message);
+        })
+        .finally(() => {
+          if (pendingNotificationId) {
+            emitNormalized("notification:dismiss", { id: pendingNotificationId });
+          }
+        });
       return;
     }
 

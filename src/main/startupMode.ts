@@ -19,6 +19,7 @@ const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
 export const WORKSPACE_CREATE_IF_MISSING_ARG = "--workspace-create-if-missing";
 export const DEV_WEBRTC_REMOTE_ARG = "--dev-webrtc-remote";
+export const PAIR_CONFIRMED_ARG = "--pair-confirmed";
 /**
  * Marks a local launch as a disposable dev workspace: the workspace dir is deleted on exit
  * (see the will-quit cleanup). Paired with `--workspace <name>` so the same workspace is kept
@@ -193,7 +194,7 @@ export function resolveLocalStartupMode(
   const isEphemeral = startup.isEphemeral || process.argv.includes(EPHEMERAL_WORKSPACE_ARG);
   const autoApproveStartupUnits =
     process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
-    (startup.resolved.name === "default" && startup.resolved.created && !isEphemeral);
+    (startup.resolved.created && !isEphemeral);
   return {
     kind: "local",
     wsDir: startup.resolved.wsDir,

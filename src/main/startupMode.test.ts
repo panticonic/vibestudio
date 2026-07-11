@@ -255,6 +255,25 @@ describe("resolveStartupMode interactive desktop policy", () => {
     });
   });
 
+  it("auto-approves shipped startup units for every newly created named workspace", () => {
+    setArgv(["--workspace", "my-first-workspace", "--workspace-create-if-missing"]);
+    mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
+      resolved: {
+        wsDir: "/tmp/vibestudio-my-first-workspace",
+        workspace: { config: { id: "my-first-workspace-id" } },
+        name: "my-first-workspace",
+        created: true,
+      },
+      isEphemeral: false,
+    });
+
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
+      kind: "local",
+      workspaceName: "my-first-workspace",
+      autoApproveStartupUnits: true,
+    });
+  });
+
   it("honors the startup-unit auto-approval env for explicit workspaces", () => {
     process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
     setArgv(["--workspace", "e2e-explicit"]);

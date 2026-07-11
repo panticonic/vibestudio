@@ -7,6 +7,7 @@ import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred"
 import type { StartupMode } from "../startupMode.js";
 import { createServerClient, type ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
+import { PAIR_CONFIRMED_ARG } from "../startupMode.js";
 import {
   isLoopbackHost,
   selectedWorkspaceNameFromUrl,
@@ -296,8 +297,16 @@ export function createRemoteCredService(deps: {
           // so the paired desktop shows a name instead of unlabeled — bug 11).
           const relaunchArgs = process.argv
             .slice(1)
-            .filter((a) => !a.startsWith("vibestudio://") && !a.startsWith(PAIR_LABEL_ARG_PREFIX));
+            .filter(
+              (a) =>
+                !a.startsWith("vibestudio://") &&
+                !a.startsWith(PAIR_LABEL_ARG_PREFIX) &&
+                a !== PAIR_CONFIRMED_ARG
+            );
           relaunchArgs.push(deepLink);
+          // This link came from an explicit in-app Save/Switch action, so the
+          // trust confirmation already happened. External deep links omit it.
+          relaunchArgs.push(PAIR_CONFIRMED_ARG);
           if (typeof label === "string" && label.trim()) {
             relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
           }
@@ -324,6 +333,12 @@ export function createRemoteCredService(deps: {
           const client = liveServerClient();
           if (!client) throw new Error("Not connected to a server");
           return await authClientFor(client).revokeDevice(deviceId);
+        }
+        case "reconnectNow": {
+          const client = liveServerClient();
+          if (!client?.nudge) throw new Error("The current connection cannot be nudged");
+          client.nudge();
+          return;
         }
         case "clear":
           // Forget the persisted WebRTC pairing; the next launch starts unpaired

@@ -235,6 +235,8 @@ export class ViewManager {
   private pendingSlotRestores = new Map<string, NativePanelSlotState>();
   /** Whether a shell overlay (dialog) is active — panel views are hidden while true */
   private shellOverlayActive = false;
+  /** Synchronously maintained by the hosted shell preload for key forwarding. */
+  private shellChromeInteractiveFocus = false;
 
   // View protection state
   private protectedViewIds = new Set<string>();
@@ -352,7 +354,20 @@ export class ViewManager {
         return;
       }
       const panelId = this.getFocusedPanelId();
-      if (!panelId || this.nativeShellOverlay.isVisible()) return;
+      if (!panelId || this.nativeShellOverlay.isVisible() || this.shellChromeInteractiveFocus)
+        return;
+      // These keys operate focused shell controls and navigation widgets. Never
+      // teleport them into a panel even if focus state is momentarily racing.
+      if (
+        input.key === "Tab" ||
+        input.key === "Enter" ||
+        input.key === " " ||
+        input.key === "Space" ||
+        input.key === "Escape" ||
+        input.key.startsWith("Arrow")
+      ) {
+        return;
+      }
       const focused = electronWebContents.getFocusedWebContents();
       if (focused && focused.id !== this.shellView.webContents.id) return;
       const managed = this.views.get(panelId);
@@ -1095,6 +1110,12 @@ export class ViewManager {
     }
     this.applyBoundsToVisiblePanel();
     this.reconcileNativeLayerOrder();
+  }
+
+  setShellChromeInteractiveFocus(senderWebContentsId: number, active: boolean): void {
+    const shellChrome = this.getShellChromeWebContents();
+    if (!shellChrome || shellChrome.id !== senderWebContentsId) return;
+    this.shellChromeInteractiveFocus = active;
   }
 
   private focusVisibleView(managed: ManagedView): void {

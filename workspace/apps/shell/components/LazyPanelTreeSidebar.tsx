@@ -395,16 +395,52 @@ const SortableTreeItem = memo(
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {
-        if (e.key === "Tab") {
+        if ((e.ctrlKey || e.metaKey) && e.key === "ArrowLeft") {
           e.preventDefault();
-          if (e.shiftKey) {
-            onUnindent(panel.id);
-          } else {
-            onIndent(panel.id);
+          onUnindent(panel.id);
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "ArrowRight") {
+          e.preventDefault();
+          onIndent(panel.id);
+          return;
+        }
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleSelect();
+          return;
+        }
+        if (e.key === "ArrowRight" && hasChildren && collapsed) {
+          e.preventDefault();
+          onToggleCollapse(panel.id);
+          return;
+        }
+        if (e.key === "ArrowLeft" && hasChildren && !collapsed) {
+          e.preventDefault();
+          onToggleCollapse(panel.id);
+          return;
+        }
+        if (["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+          const rows = Array.from(
+            document.querySelectorAll<HTMLElement>('[data-panel-tree-row="true"]')
+          );
+          const current = rows.indexOf(e.currentTarget as HTMLElement);
+          const nextIndex =
+            e.key === "Home"
+              ? 0
+              : e.key === "End"
+                ? rows.length - 1
+                : e.key === "ArrowUp"
+                  ? Math.max(0, current - 1)
+                  : Math.min(rows.length - 1, current + 1);
+          const next = rows[nextIndex];
+          if (next) {
+            e.preventDefault();
+            next.focus();
           }
         }
       },
-      [panel.id, onIndent, onUnindent]
+      [collapsed, handleSelect, hasChildren, onIndent, onToggleCollapse, onUnindent, panel.id]
     );
 
     const handleArchive = useCallback(
@@ -449,7 +485,9 @@ const SortableTreeItem = memo(
           align="center"
           gap="1"
           pr="2"
-          role="button"
+          role="treeitem"
+          aria-expanded={hasChildren ? !collapsed : undefined}
+          data-panel-tree-row="true"
           aria-label={`Select panel ${panel.title}`}
           style={rowStyle}
           data-active={isSelected ? "true" : "false"}
@@ -565,7 +603,7 @@ const SortableTreeItem = memo(
                 size="1"
                 variant="ghost"
                 color="gray"
-                aria-label="Archive panel"
+                aria-label="Close panel"
                 onClick={handleArchive}
                 className="app-tree-action app-tree-action-danger"
                 style={{

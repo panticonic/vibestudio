@@ -25,6 +25,7 @@ export interface ApprovalCardSurfaceProps {
   approval: PendingApproval;
   queue: ApprovalQueueInfo | null;
   decisionError: string | null;
+  actionPending?: boolean;
   /** P3.5 diff-review payload (null when the approval carries no diff). */
   diffReview?: DiffReviewEntry[] | null;
   /** Chrome-pushed blob cache, keyed by content hash. */
@@ -53,6 +54,7 @@ function ApprovalCardSurfaceInner({
   approval,
   queue,
   decisionError,
+  actionPending,
   diffReview,
   blobResults,
   appearance,
@@ -103,6 +105,7 @@ function ApprovalCardSurfaceInner({
       caller={caller}
       queue={queue}
       decisionError={decisionError}
+      actionPending={actionPending ?? false}
       diffReview={diffReview ?? null}
       fetchContent={fetchContent}
       appearance={appearance ?? "light"}

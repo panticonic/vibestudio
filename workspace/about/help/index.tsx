@@ -2,7 +2,7 @@
  * Help Page - Shell panel showing documentation and help resources.
  */
 import type { ReactNode } from "react";
-import { Card, Flex, Heading, Text, Kbd } from "@radix-ui/themes";
+import { Card, Flex, Heading, Text, Kbd, Link } from "@radix-ui/themes";
 import {
   RocketIcon,
   CubeIcon,
@@ -10,7 +10,10 @@ import {
   MagicWandIcon,
   CodeIcon,
   QuestionMarkCircledIcon,
+  LockClosedIcon,
+  MobileIcon,
 } from "@radix-ui/react-icons";
+import { buildPanelLink } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import { AboutThemeRoot, AboutPage, BRAND_GRADIENT } from "@workspace/about-shared/ui";
 
@@ -18,6 +21,7 @@ interface HelpSection {
   title: string;
   icon: ReactNode;
   content: string;
+  link?: { label: string; panel: string };
 }
 
 const helpSections: HelpSection[] = [
@@ -25,38 +29,51 @@ const helpSections: HelpSection[] = [
     title: "Getting Started",
     icon: <RocketIcon />,
     content:
-      "Vibestudio is a composable desktop application framework that lets you build and run panels. " +
-      "Panels are self-contained web applications that can communicate with each other and access system services.",
+      "Vibestudio is your personal vibe computer: a workspace for building, browsing, and working with AI agents. " +
+      "Everything opens in panels, while sensitive actions remain sandboxed until you approve them.",
   },
   {
     title: "Workspaces",
     icon: <CubeIcon />,
     content:
-      "A workspace is a directory containing your panels and configuration. " +
-      "Each workspace has a meta/vibestudio.yml file that defines settings like initial panels and shared git remotes. " +
-      "Use Cmd/Ctrl+Shift+O to switch between workspaces.",
+      "A workspace keeps your panels, conversations, projects, and settings together. " +
+      "Use Cmd/Ctrl+Shift+O to switch workspaces; each workspace has its own durable state and permissions.",
   },
   {
     title: "Panels",
     icon: <DashboardIcon />,
     content:
-      "Panels are React applications that run in isolated webviews. They can be app panels (your code) " +
-      "or browser panels (external websites). " +
-      "Panels can create child panels and communicate via RPC.",
+      "Panels can be chats, terminals, personal apps, tools, or websites. Use Cmd+T on macOS or Ctrl+Shift+T elsewhere to open one, " +
+      "and Cmd/Ctrl+K to find actions contributed by the panel you are using.",
   },
   {
-    title: "AI Integration",
+    title: "Agents and providers",
     icon: <MagicWandIcon />,
     content:
-      "Vibestudio supports multiple AI providers including Anthropic, OpenAI, Google, and more. " +
-      "Open a chat panel (Cmd/Ctrl+T, then start a chat) to work with an AI agent inside your workspace.",
+      "Agents work inside your workspace, but cannot silently cross protected boundaries. " +
+      "Open a chat from the panel launcher and connect a cloud provider when prompted, or opt into a local model.",
   },
   {
-    title: "Development",
+    title: "Approvals and sandboxing",
+    icon: <LockClosedIcon />,
+    content:
+      "When an agent or panel needs network, filesystem, credential, or other sensitive access, Vibestudio pauses it and asks you. " +
+      "Allow once for a narrow exception; only create a lasting trust grant when you recognize the requester and scope.",
+    link: { label: "Review saved permissions", panel: "about/permissions" },
+  },
+  {
+    title: "Credentials",
     icon: <CodeIcon />,
     content:
-      "Use the DevTools (Cmd/Ctrl+Shift+I for panels, Cmd/Ctrl+Alt+I for the shell) to debug your applications. " +
-      "Panels are hot-reloaded when you make changes to the source code.",
+      "Passwords and service tokens are stored outside panel code. A panel receives only the credential binding you approve, " +
+      "and you can revoke stored credentials from the credential manager.",
+    link: { label: "Manage credentials", panel: "about/credentials" },
+  },
+  {
+    title: "Phone and remote access",
+    icon: <MobileIcon />,
+    content:
+      "Pair a phone or another Vibestudio device from Devices & Connection. Pairing links expire quickly; each paired device gets its own revocable identity.",
   },
 ];
 
@@ -96,6 +113,16 @@ function HelpPage() {
           <Text as="p" size="2" color="gray" style={{ lineHeight: 1.65 }}>
             {section.content}
           </Text>
+          {section.link ? (
+            <Link
+              href={buildPanelLink(section.link.panel)}
+              size="2"
+              mt="2"
+              style={{ display: "inline-block" }}
+            >
+              {section.link.label} →
+            </Link>
+          ) : null}
         </Card>
       ))}
 
@@ -108,7 +135,11 @@ function HelpPage() {
             Press <Kbd>Cmd/Ctrl + /</Kbd> for the full list of keyboard shortcuts.
           </Text>
           <Text size="2" color="gray">
-            Press <Kbd>Cmd/Ctrl + T</Kbd> to open the panel launcher or start a new chat.
+            Press <Kbd>Cmd + T</Kbd> on macOS or <Kbd>Ctrl + Shift + T</Kbd> elsewhere to open the
+            panel launcher.
+          </Text>
+          <Text size="2" color="gray">
+            Press <Kbd>Cmd/Ctrl + K</Kbd> to search actions for the app and current panel.
           </Text>
         </Flex>
       </Card>
