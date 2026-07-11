@@ -11,7 +11,7 @@
  * - Uses safe area insets for status bar spacing
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import {
   View,
   Text,
@@ -33,6 +33,36 @@ import {
   type TextMatchRange,
 } from "@vibestudio/shared/panelChrome";
 import { VibestudioLogo } from "./VibestudioLogo";
+
+declare const require: (id: string) => unknown;
+type IconProps = { size?: number; color?: string; strokeWidth?: number };
+type IconComponent = ComponentType<IconProps>;
+type IconModule = Record<string, IconComponent | undefined>;
+let lucideIcons: IconModule = {};
+try {
+  lucideIcons = require("lucide-react-native") as IconModule;
+} catch {
+  lucideIcons = {};
+}
+const fallbackIcon =
+  (glyph: string): IconComponent =>
+  ({ size = 18, color }) => (
+    <Text style={{ color, fontSize: size, lineHeight: size }}>{glyph}</Text>
+  );
+const icon = (name: string, glyph: string) => lucideIcons[name] ?? fallbackIcon(glyph);
+const ArrowLeft = icon("ArrowLeft", "‹");
+const ArrowRight = icon("ArrowRight", "›");
+const Bookmark = icon("Bookmark", "★");
+const Clock3 = icon("Clock3", "◷");
+const Globe2 = icon("Globe2", "◎");
+const Link2 = icon("Link2", "↗");
+const Menu = icon("Menu", "≡");
+const PanelTop = icon("PanelTop", "□");
+const Plus = icon("Plus", "+");
+const RefreshCw = icon("RefreshCw", "↻");
+const Search = icon("Search", "?");
+const Square = icon("Square", "■");
+const Workflow = icon("Workflow", "◇");
 
 interface AppBarProps {
   /** Title to display in the center */
@@ -157,11 +187,7 @@ export function AppBar({
           accessibilityLabel="Open panel drawer"
           accessibilityRole="button"
         >
-          <View style={styles.hamburger}>
-            <View style={[styles.hamburgerLine, { backgroundColor: colors.text }]} />
-            <View style={[styles.hamburgerLine, { backgroundColor: colors.text }]} />
-            <View style={[styles.hamburgerLine, { backgroundColor: colors.text }]} />
-          </View>
+          <Menu size={23} color={colors.text} />
         </Pressable>
 
         <VibestudioLogo size={30} variant="mark" style={styles.brandLogo} />
@@ -185,7 +211,7 @@ export function AppBar({
           accessibilityLabel={addressBarVisible ? "Hide address bar" : "Show address bar"}
           accessibilityRole="button"
         >
-          <Text style={[styles.urlButtonText, { color: colors.textSecondary }]}>URL</Text>
+          <Link2 size={18} color={colors.textSecondary} />
         </Pressable>
 
         {/* Create new panel button */}
@@ -196,7 +222,7 @@ export function AppBar({
           accessibilityLabel="Create new panel"
           accessibilityRole="button"
         >
-          <Text style={[styles.plusIcon, { color: colors.text }]}>+</Text>
+          <Plus size={25} color={colors.text} />
         </Pressable>
       </View>
       {addressBarVisible && (
@@ -207,8 +233,9 @@ export function AppBar({
             style={[styles.navButton, !canGoBack && styles.disabledButton]}
             accessibilityLabel="Back"
             accessibilityRole="button"
+            hitSlop={8}
           >
-            <Text style={[styles.navButtonText, { color: colors.text }]}>{"<"}</Text>
+            <ArrowLeft size={20} color={colors.text} />
           </Pressable>
           <Pressable
             onPress={onForward}
@@ -216,8 +243,9 @@ export function AppBar({
             style={[styles.navButton, !canGoForward && styles.disabledButton]}
             accessibilityLabel="Forward"
             accessibilityRole="button"
+            hitSlop={8}
           >
-            <Text style={[styles.navButtonText, { color: colors.text }]}>{">"}</Text>
+            <ArrowRight size={20} color={colors.text} />
           </Pressable>
           <TextInput
             testID="address-input"
@@ -269,10 +297,13 @@ export function AppBar({
             style={styles.navButton}
             accessibilityLabel={isLoading ? "Stop loading" : "Reload"}
             accessibilityRole="button"
+            hitSlop={8}
           >
-            <Text style={[styles.navButtonText, { color: colors.text }]}>
-              {isLoading ? "x" : "R"}
-            </Text>
+            {isLoading ? (
+              <Square size={16} color={colors.text} />
+            ) : (
+              <RefreshCw size={19} color={colors.text} />
+            )}
           </Pressable>
         </View>
       )}
@@ -301,9 +332,10 @@ export function AppBar({
               accessibilityLabel={item.label}
             >
               <View style={styles.suggestionContent}>
-                <Text style={[styles.suggestionIcon, { color: colors.textSecondary }]}>
-                  {iconText(item.iconKind)}
-                </Text>
+                {React.createElement(iconForSuggestion(item.iconKind), {
+                  size: 18,
+                  color: colors.textSecondary,
+                })}
                 <View style={styles.suggestionText}>
                   <HighlightedText
                     text={item.label}
@@ -327,14 +359,18 @@ export function AppBar({
   );
 }
 
-function iconText(kind: AddressAutocompleteItem["iconKind"]): string {
+function iconForSuggestion(kind: AddressAutocompleteItem["iconKind"]): IconComponent {
   return (
     (
-      { globe: "go", history: "h", bookmark: "*", search: "?", session: "s", panel: "p" } as Record<
-        string,
-        string
-      >
-    )[kind] ?? "-"
+      {
+        globe: Globe2,
+        history: Clock3,
+        bookmark: Bookmark,
+        search: Search,
+        session: Workflow,
+        panel: PanelTop,
+      } as Record<string, IconComponent>
+    )[kind] ?? Globe2
   );
 }
 
@@ -432,8 +468,8 @@ const styles = StyleSheet.create({
     fontSize: 10,
   },
   navButton: {
-    width: 34,
-    height: 34,
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -10,6 +10,9 @@ import { atom } from "jotai";
 /** Stored server URL (populated from keychain on app launch) */
 export const serverUrlAtom = atom<string>("");
 
+/** Human-readable remote pairing identity (never the on-device loopback façade). */
+export const pairingIdentityAtom = atom<{ server: string; deviceId: string } | null>(null);
+
 /** Whether valid credentials are loaded (not whether WS is connected) */
 export const isAuthenticatedAtom = atom<boolean>(false);
 

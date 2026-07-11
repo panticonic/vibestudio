@@ -104,8 +104,11 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       await shellClient.panels.refresh();
       // Update the atom so the UI re-renders with the new tree
       setPanelTree(shellClient.panels.getTree());
-    } catch {
-      // Offline -- ignore
+    } catch (error) {
+      Alert.alert(
+        "Couldn't refresh panels",
+        error instanceof Error ? error.message : "Check your connection and try again."
+      );
     }
     setRefreshing(false);
   }, [shellClient, setPanelTree]);
@@ -274,8 +277,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           <VibestudioLogo size={72} variant="mark" style={styles.emptyLogo} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No panels open yet</Text>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Tap the address bar at the top of the screen and enter a URL or panel source to open
-            your first panel.
+            Tap + to choose a panel, or tap URL in the top bar and enter a website or panel source.
           </Text>
         </View>
       ) : (

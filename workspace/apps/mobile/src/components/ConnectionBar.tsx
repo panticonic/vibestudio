@@ -9,7 +9,7 @@
  * - Disconnected: red, stays visible (server unreachable)
  */
 
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Animated, Pressable, Alert } from "react-native";
 import { useAtomValue } from "jotai";
 import { connectionStatusAtom, networkReachableAtom } from "../state/connectionAtoms";
@@ -47,7 +47,11 @@ const STATUS_CONFIG: Record<ConnectionStatus, StatusConfig> = {
  * - Connecting after a disconnect: "Reconnecting..." if transport was previously connected
  * - Otherwise: standard status label
  */
-function getDisplayConfig(status: ConnectionStatus, networkReachable: boolean, wasConnected: boolean): StatusConfig {
+function getDisplayConfig(
+  status: ConnectionStatus,
+  networkReachable: boolean,
+  wasConnected: boolean
+): StatusConfig {
   if (status === "connected") {
     return STATUS_CONFIG.connected;
   }
@@ -68,6 +72,7 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
   const networkReachable = useAtomValue(networkReachableAtom);
   const colors = useAtomValue(themeColorsAtom);
   const shellClient = useAtomValue(shellClientAtom);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
 
   // Track whether we've been connected before to distinguish
   // "Connecting..." (initial) from "Reconnecting..." (after disconnect)
@@ -81,6 +86,13 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
       wasConnectedRef.current = true;
     }
   }, [status]);
+
+  useEffect(() => {
+    if (!shellClient) return;
+    return shellClient.transport.onReconnectProgress?.((progress) => {
+      setReconnectAttempt(progress.attempt);
+    });
+  }, [shellClient]);
 
   useEffect(() => {
     // Clear any pending hide timer
@@ -133,13 +145,11 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
   // (disconnected, or offline) so the user is never stuck without a way to
   // retry or re-pair. A live pipe is never a problem, even if NetInfo reports
   // "no internet" (LAN-only), so a connected status is excluded.
-  const isProblem = status !== "connected" && (status === "disconnected" || !networkReachable);
+  const isProblem = status !== "connected";
 
   const handlePress = useCallback(() => {
     const reconnect = () => shellClient?.transport.reconnect();
-    const buttons: Parameters<typeof Alert.alert>[2] = [
-      { text: "Reconnect", onPress: reconnect },
-    ];
+    const buttons: Parameters<typeof Alert.alert>[2] = [{ text: "Reconnect", onPress: reconnect }];
     if (onRepair) {
       buttons.push({ text: "Re-pair device", onPress: onRepair });
     }
@@ -150,19 +160,28 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
         ? "Vibestudio isn't connected to your server."
         : "Your device appears to be offline. Reconnect once your network is back.",
       buttons,
-      { cancelable: true },
+      { cancelable: true }
     );
   }, [networkReachable, onRepair, shellClient]);
 
   const config = getDisplayConfig(status, networkReachable, wasConnectedRef.current);
   const backgroundColor = colors[config.colorKey];
-  const label = isProblem ? `${config.label} — tap to fix` : config.label;
+  const reconnectLabel =
+    wasConnectedRef.current && reconnectAttempt > 0
+      ? `Reconnecting (attempt ${reconnectAttempt})…`
+      : config.label;
+  const label = isProblem ? `${reconnectLabel} — tap for options` : config.label;
   const accessibilityHint = onRepair
     ? "Opens actions to reconnect or re-pair the device."
     : "Opens actions to reconnect.";
 
   const content = (
-    <Animated.View style={[styles.container, { backgroundColor, opacity, height: animatedHeight, overflow: "hidden" }]}>
+    <Animated.View
+      style={[
+        styles.container,
+        { backgroundColor, opacity, height: animatedHeight, overflow: "hidden" },
+      ]}
+    >
       <View style={styles.dot} />
       <Text style={styles.text}>{label}</Text>
     </Animated.View>

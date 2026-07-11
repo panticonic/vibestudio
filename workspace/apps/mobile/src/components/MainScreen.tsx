@@ -46,6 +46,7 @@ import {
 } from "../services/appUpdatePrompt";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 import { resetToNativeBootstrap } from "../services/auth";
+import { clearShellCredential } from "@vibestudio/mobile-webrtc";
 import {
   buildPanelChromeState,
   buildAddressAutocompleteItems,
@@ -313,12 +314,6 @@ export function MainScreen() {
     };
   }, [activeChromeState?.ref, activePanel, activePanelSnapshot, shellClient]);
   useEffect(() => {
-    if (!approvalDeepLinkId) return;
-    if (pendingApprovals.some((approval) => approval.approvalId === approvalDeepLinkId)) {
-      setApprovalDeepLinkId(null);
-    }
-  }, [approvalDeepLinkId, pendingApprovals, setApprovalDeepLinkId]);
-  useEffect(() => {
     if (!shellClient) {
       setPendingApprovals([]);
     }
@@ -404,11 +399,15 @@ export function MainScreen() {
     }
     return pending;
   }, [applyPendingApprovals, shellClient]);
-  const removeResolvedApproval = useCallback((approvalId: string) => {
-    setPendingApprovals((current) =>
-      current.filter((approval) => approval.approvalId !== approvalId)
-    );
-  }, []);
+  const removeResolvedApproval = useCallback(
+    (approvalId: string) => {
+      setPendingApprovals((current) =>
+        current.filter((approval) => approval.approvalId !== approvalId)
+      );
+      if (approvalId === approvalDeepLinkId) setApprovalDeepLinkId(null);
+    },
+    [approvalDeepLinkId, setApprovalDeepLinkId]
+  );
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision) => {
       if (!shellClient) throw new Error("Shell client not available");
@@ -1059,13 +1058,14 @@ export function MainScreen() {
   );
   const executeAddressAction = useCallback(
     (action: AddressAction, mode: AddressNavigationMode = "current") => {
-      if (!shellClient || !activePanelId) return;
+      if (!shellClient) return;
+      const targetMode: AddressNavigationMode = activePanelId ? mode : "root";
       if (action.type === "navigate-url") {
         const intent = getBrowserNavigationIntentForAddressAction(action);
         if (intent) pendingHistoryIntentByUrl.current.set(canonicalHistoryKey(action.url), intent);
-        if (mode === "external") {
+        if (targetMode === "external") {
           void openExternalUrl(action.url);
-        } else if (mode === "child") {
+        } else if (targetMode === "child" && activePanelId) {
           void shellClient.panels
             .createBrowserUrlPanel(activePanelId, action.url, { focus: true })
             .catch((error: unknown) =>
@@ -1075,7 +1075,7 @@ export function MainScreen() {
                 tone: "danger",
               })
             );
-        } else if (mode === "root") {
+        } else if (targetMode === "root") {
           void shellClient.panels
             .createBrowserUrlPanel(null, action.url, { focus: true })
             .then((result) => activatePanel(result.id))
@@ -1087,6 +1087,7 @@ export function MainScreen() {
               })
             );
         } else {
+          if (!activePanelId) return;
           const active = shellClient.panels.registry.getPanel(activePanelId);
           if (active && isBrowserPanelSource(getCurrentSnapshot(active).source)) {
             setWebViewStack((prev) =>
@@ -1119,11 +1120,11 @@ export function MainScreen() {
         const url = applySearchTemplate(action.query, action.template);
         const intent = getBrowserNavigationIntentForAddressAction(action);
         if (intent) pendingHistoryIntentByUrl.current.set(canonicalHistoryKey(url), intent);
-        if (mode === "external") {
+        if (targetMode === "external") {
           void openExternalUrl(url);
           return;
         }
-        if (mode === "current") {
+        if (targetMode === "current" && activePanelId) {
           const active = shellClient.panels.registry.getPanel(activePanelId);
           if (active && isBrowserPanelSource(getCurrentSnapshot(active).source)) {
             setWebViewStack((prev) =>
@@ -1140,7 +1141,9 @@ export function MainScreen() {
           }
         }
         void shellClient.panels
-          .createBrowserUrlPanel(mode === "child" ? activePanelId : null, url, { focus: true })
+          .createBrowserUrlPanel(targetMode === "child" ? activePanelId : null, url, {
+            focus: true,
+          })
           .then((result) => activatePanel(result.id))
           .catch((error: unknown) =>
             pushToast({
@@ -1154,9 +1157,9 @@ export function MainScreen() {
       if (action.type === "panel-source") {
         const ref = action.ref ?? undefined;
         const created =
-          mode === "current"
+          targetMode === "current" && activePanelId
             ? shellClient.panels.navigatePanel(activePanelId, action.source, { ref })
-            : mode === "child"
+            : targetMode === "child" && activePanelId
               ? shellClient.panels.createChildPanel(activePanelId, action.source, {
                   focus: true,
                   ref,
@@ -1177,7 +1180,7 @@ export function MainScreen() {
   );
   const handleNavigateAddress = useCallback(
     (value: string, mode: AddressNavigationMode = "current") => {
-      if (!shellClient || !activePanelId) return;
+      if (!shellClient) return;
       const parsed = parseAddressInput(value);
       if (!parsed) return;
       if (parsed.type === "browser-url") {
@@ -1300,12 +1303,26 @@ export function MainScreen() {
     return () => subscription.remove();
   }, [activePanelId, activePanelParentId, activatePanel, webViewNavigation]);
   const handleRepair = useCallback(() => {
-    void resetToNativeBootstrap().catch((error) => {
-      Alert.alert(
-        "Re-pair failed",
-        error instanceof Error ? error.message : "Could not return to the pairing screen."
-      );
-    });
+    Alert.alert(
+      "Re-pair this device?",
+      "This removes the saved connection. Try Reconnect first if the server is temporarily unavailable.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Re-pair",
+          style: "destructive",
+          onPress: () =>
+            void clearShellCredential()
+              .then(() => resetToNativeBootstrap())
+              .catch((error) =>
+                Alert.alert(
+                  "Re-pair failed",
+                  error instanceof Error ? error.message : "Could not return to the pairing screen."
+                )
+              ),
+        },
+      ]
+    );
   }, []);
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>

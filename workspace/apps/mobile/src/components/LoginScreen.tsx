@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   SafeAreaView,
@@ -15,12 +16,17 @@ import { resetToNativeBootstrap } from "../services/auth";
 import { readClipboardText } from "../services/nativeCapabilities";
 import { loadShellCredential, clearShellCredential } from "@vibestudio/mobile-webrtc";
 import { parseConnectLink } from "@vibestudio/shared/connect";
-import { ShellClient, type Credentials } from "../services/shellClient";
+import {
+  MobileHostTargetApprovalRequiredError,
+  ShellClient,
+  type Credentials,
+} from "../services/shellClient";
 import {
   serverUrlAtom,
   isAuthenticatedAtom,
   authLoadingAtom,
   authErrorAtom,
+  pairingIdentityAtom,
 } from "../state/authAtoms";
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
@@ -47,26 +53,41 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const setAuthLoading = useSetAtom(authLoadingAtom);
   const setAuthError = useSetAtom(authErrorAtom);
   const setConnectionStatus = useSetAtom(connectionStatusAtom);
+  const setPairingIdentity = useSetAtom(pairingIdentityAtom);
   const setShellClient = useSetAtom(shellClientAtom);
   const setPanelTree = useSetAtom(panelTreeAtom);
   const authLoading = useAtomValue(authLoadingAtom);
   const authError = useAtomValue(authErrorAtom);
+  const [connectionPhase, setConnectionPhase] = React.useState("Reading saved pairing…");
+  const [connectionAttempt, setConnectionAttempt] = React.useState(0);
+  const [needsHostApproval, setNeedsHostApproval] = React.useState(false);
+  const cancelConnectionRef = React.useRef<(() => void) | null>(null);
 
-  const handleResetToBootstrap = React.useCallback(async () => {
-    setAuthLoading(true);
-    setAuthError(null);
-    try {
-      // Clear the WebRTC reconnect credential BEFORE the native reset relaunches:
-      // the native reset only forgets the native-side credential, so without this
-      // the reloaded bootstrap reads the stale credential and silently reconnects
-      // to the old pairing instead of showing the pairing screen.
-      await clearShellCredential();
-      await resetToNativeBootstrap();
-    } catch (error) {
-      setAuthLoading(false);
-      setAuthError(error instanceof Error ? error.message : "Could not return to pairing.");
-    }
-  }, [setAuthError, setAuthLoading]);
+  const resetToBootstrap = React.useCallback(
+    async (clearPairing: boolean) => {
+      setAuthLoading(true);
+      setAuthError(null);
+      try {
+        if (clearPairing) await clearShellCredential();
+        await resetToNativeBootstrap();
+      } catch (error) {
+        setAuthLoading(false);
+        setAuthError(error instanceof Error ? error.message : "Could not return to pairing.");
+      }
+    },
+    [setAuthError, setAuthLoading]
+  );
+
+  const handleResetToBootstrap = React.useCallback(() => {
+    Alert.alert(
+      "Replace this pairing?",
+      "Retry first if the server may only be temporarily unavailable. Re-pairing removes this device's saved connection.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Re-pair", style: "destructive", onPress: () => void resetToBootstrap(true) },
+      ]
+    );
+  }, [resetToBootstrap]);
 
   const handlePastePairingLink = React.useCallback(async () => {
     setAuthLoading(true);
@@ -84,12 +105,12 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
       // intact so the device can still reconnect.
       const parsed = parseConnectLink(rawUrl);
       if (parsed.kind === "error") {
-        throw new Error(
-          `That doesn't look like a valid Vibestudio pairing link. ${parsed.reason}`
-        );
+        throw new Error(`That doesn't look like a valid Vibestudio pairing link. ${parsed.reason}`);
       }
-      await clearShellCredential();
       await Linking.openURL(rawUrl);
+      // Only replace the saved pairing after the OS accepted the new link.
+      // A rejected deep-link handoff must leave the working credential intact.
+      await clearShellCredential();
     } catch (error) {
       setAuthLoading(false);
       setAuthError(error instanceof Error ? error.message : "Could not open pairing link.");
@@ -116,6 +137,9 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     const connect = async () => {
       setAuthLoading(true);
       setAuthError(null);
+      setNeedsHostApproval(false);
+      setConnectionAttempt(0);
+      setConnectionPhase("Reading saved pairing…");
       try {
         smokePhase("workspace-login-connect-start");
         // WebRTC model: the device identity is the stored shell credential
@@ -133,6 +157,11 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           deviceId: stored.deviceId,
           serverId: stored.pairing.srv ?? "",
         };
+        setPairingIdentity({
+          server: stored.pairing.srv || "Paired workspace server",
+          deviceId: stored.deviceId,
+        });
+        setConnectionPhase("Contacting your workspace server…");
 
         const client = new ShellClient({
           credentials,
@@ -144,6 +173,24 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           },
         });
         pendingClient = client;
+        const offProgress = client.transport.onReconnectProgress?.((progress) => {
+          if (cancelled) return;
+          setConnectionAttempt(progress.attempt);
+          setConnectionPhase(
+            progress.phase === "scheduled"
+              ? "Waiting to retry the server…"
+              : progress.layer === "signaling"
+                ? "Contacting the pairing service…"
+                : "Connecting securely to your workspace…"
+          );
+        });
+        cancelConnectionRef.current = () => {
+          cancelled = true;
+          offProgress?.();
+          client.dispose();
+          setAuthLoading(false);
+          setAuthError("Connection cancelled. Your saved pairing is unchanged.");
+        };
 
         await client.init();
         if (cancelled) {
@@ -151,6 +198,8 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           return;
         }
         finishConnectedClient(client, credentials);
+        offProgress?.();
+        cancelConnectionRef.current = null;
         pendingClient = null;
       } catch (error) {
         pendingClient?.dispose();
@@ -159,6 +208,11 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         setAuthLoading(false);
         const message =
           error instanceof Error ? error.message : "Could not open the selected workspace.";
+        if (error instanceof MobileHostTargetApprovalRequiredError) {
+          setNeedsHostApproval(true);
+          setAuthError("The workspace's mobile app needs your approval before it can run.");
+          return;
+        }
         smokePhase("workspace-login-error", {
           message,
           name: error instanceof Error ? error.name : typeof error,
@@ -176,6 +230,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     return () => {
       cancelled = true;
       pendingClient?.dispose();
+      cancelConnectionRef.current = null;
     };
   }, [
     navigation,
@@ -187,6 +242,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     setPanelTree,
     setServerUrlAtom,
     setShellClient,
+    setPairingIdentity,
   ]);
 
   return (
@@ -202,8 +258,16 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           <View style={styles.loadingBlock}>
             <ActivityIndicator color={colors.primary} size="large" />
             <Text style={[styles.message, { color: colors.textSecondary }]}>
-              Connecting to your Vibestudio workspace...
+              {connectionPhase}
+              {connectionAttempt > 0 ? ` Attempt ${connectionAttempt}.` : ""}
             </Text>
+            <Pressable
+              style={[styles.secondaryButton, { borderColor: colors.border }]}
+              onPress={() => cancelConnectionRef.current?.()}
+              accessibilityRole="button"
+            >
+              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Cancel</Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -213,13 +277,21 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
               {authError}
             </Text>
             <Text style={[styles.message, { color: colors.textSecondary }]}>
-              Return to the native host bootstrap to pair or choose a workspace.
+              {needsHostApproval
+                ? "Review the workspace app in the pairing screen. Your saved pairing will stay intact."
+                : "Retry keeps your saved pairing. Only re-pair if you want to replace this connection."}
             </Text>
             <Pressable
               style={[styles.button, { backgroundColor: colors.primary }]}
-              onPress={() => void handleResetToBootstrap()}
+              onPress={() =>
+                needsHostApproval
+                  ? void resetToBootstrap(false)
+                  : setRetryNonce((value) => value + 1)
+              }
             >
-              <Text style={[styles.buttonText, { color: colors.text }]}>Open pairing</Text>
+              <Text style={[styles.buttonText, { color: colors.text }]}>
+                {needsHostApproval ? "Review and approve" : "Retry"}
+              </Text>
             </Pressable>
             <Pressable
               style={[styles.secondaryButton, { borderColor: colors.border }]}
@@ -231,9 +303,11 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
             </Pressable>
             <Pressable
               style={[styles.secondaryButton, { borderColor: colors.border }]}
-              onPress={() => setRetryNonce((value) => value + 1)}
+              onPress={handleResetToBootstrap}
             >
-              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Retry</Text>
+              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>
+                Re-pair device…
+              </Text>
             </Pressable>
           </View>
         ) : null}

@@ -6,7 +6,7 @@ import { clearShellCredential } from "@vibestudio/mobile-webrtc";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import { clearCredentials, resetToNativeBootstrap } from "../services/auth";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
-import { serverUrlAtom, isAuthenticatedAtom } from "../state/authAtoms";
+import { isAuthenticatedAtom, pairingIdentityAtom } from "../state/authAtoms";
 import { activePanelIdAtom } from "../state/navigationAtoms";
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { themeColorsAtom } from "../state/themeAtoms";
@@ -21,7 +21,7 @@ interface SettingsScreenProps {
 export function SettingsScreen({ navigation }: SettingsScreenProps) {
   const shellClient = useAtomValue(shellClientAtom);
   const setShellClient = useSetAtom(shellClientAtom);
-  const serverUrl = useAtomValue(serverUrlAtom);
+  const pairingIdentity = useAtomValue(pairingIdentityAtom);
   const connectionStatus = useAtomValue(connectionStatusAtom);
   const setAuthenticated = useSetAtom(isAuthenticatedAtom);
   const setPanelTree = useSetAtom(panelTreeAtom);
@@ -61,7 +61,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
         { text: "Cancel", style: "cancel" },
         { text: "Disconnect", style: "destructive", onPress: () => void performDisconnect() },
       ],
-      { cancelable: true },
+      { cancelable: true }
     );
   };
 
@@ -92,11 +92,14 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Connection</Text>
           <Text style={[styles.label, { color: colors.textSecondary }]}>
-            Server: {serverUrl || "not configured"}
+            Server: {pairingIdentity?.server || "not configured"}
           </Text>
-          <Text style={[styles.label, { color: colors.textSecondary }]}>
-            Status: {statusLabel}
-          </Text>
+          {pairingIdentity?.deviceId ? (
+            <Text style={[styles.label, { color: colors.textSecondary }]}>
+              Device: {pairingIdentity.deviceId}
+            </Text>
+          ) : null}
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Status: {statusLabel}</Text>
         </View>
 
         <Pressable

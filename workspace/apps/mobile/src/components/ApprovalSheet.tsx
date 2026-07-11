@@ -197,15 +197,9 @@ export interface ApprovalSheetProps {
     approvalId: string,
     values: Record<string, string>
   ) => Promise<void> | void;
-  onSubmitSecretInput: (
-    approvalId: string,
-    values: Record<string, string>
-  ) => Promise<void> | void;
+  onSubmitSecretInput: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
   onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
-  onResolveExternalAgent: (
-    approvalId: string,
-    behavior: "allow" | "deny"
-  ) => Promise<void> | void;
+  onResolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") => Promise<void> | void;
   /**
    * Optional. When supplied and the current approval comes from a panel,
    * the caller chip becomes touchable and invokes this with the panel id.
@@ -256,6 +250,7 @@ export function ApprovalSheet({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState(false);
   const translateY = useRef(new Animated.Value(Dimensions.get("window").height)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const dragOffset = useRef(0);
@@ -279,6 +274,7 @@ export function ApprovalSheet({
     setValues({});
     setError(null);
     setPendingAction(null);
+    setMinimized(false);
     setDetailsOpen(
       shouldOpenApprovalDetails(current) ||
         (current.kind === "credential" && !!current.oauthAudienceDomainMismatch)
@@ -331,14 +327,10 @@ export function ApprovalSheet({
 
   const dismiss = useCallback(() => {
     if (!current || isBusy) return;
-    const action: PendingAction = current.kind === "userland" ? "userland:dismiss" : "dismiss";
-    void runAction(action, () => {
-      if (current.kind === "userland") {
-        return onResolveUserland(current.approvalId, "dismiss");
-      }
-      return onResolve(current.approvalId, "dismiss");
-    });
-  }, [current, isBusy, onResolve, onResolveUserland, runAction]);
+    // Backdrop taps and swipe-down mean “not now”, not denial. Keep the queue
+    // entry pending and leave a visible pill to reopen it.
+    setMinimized(true);
+  }, [current, isBusy]);
 
   const panResponder = useMemo(
     () =>
@@ -375,6 +367,29 @@ export function ApprovalSheet({
   }, [callerInfo, onNavigateToPanel]);
 
   if (!current || !copy || !callerInfo) return null;
+
+  if (minimized) {
+    return (
+      <Modal visible transparent animationType="fade" presentationStyle="overFullScreen">
+        <View pointerEvents="box-none" style={styles.minimizedRoot}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Review pending approval: ${copy.title}`}
+            onPress={() => setMinimized(false)}
+            style={({ pressed }) => [
+              styles.minimizedApproval,
+              { backgroundColor: colors.surface, borderColor: colors.warning },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.minimizedApprovalText, { color: colors.text }]}>
+              Approval waiting · Review
+            </Text>
+          </Pressable>
+        </View>
+      </Modal>
+    );
+  }
 
   return (
     <Modal visible transparent animationType="none" presentationStyle="overFullScreen">
@@ -451,7 +466,9 @@ export function ApprovalSheet({
                   <ExternalAgentPanel approval={current} />
                 ) : null}
                 {error ? <InlineError message={error} /> : null}
-                {current.kind === "client-config" || current.kind === "credential-input" || current.kind === "secret-input" ? (
+                {current.kind === "client-config" ||
+                current.kind === "credential-input" ||
+                current.kind === "secret-input" ? (
                   <SecretConfigFields
                     approval={current}
                     values={values}
@@ -731,7 +748,12 @@ function CallerRow({
 
 function getCategoryIcon(approval: PendingApproval): IconComponent {
   if (approval.kind === "capability") return ExternalLink;
-  if (approval.kind === "client-config" || approval.kind === "credential-input" || approval.kind === "secret-input") return Settings2;
+  if (
+    approval.kind === "client-config" ||
+    approval.kind === "credential-input" ||
+    approval.kind === "secret-input"
+  )
+    return Settings2;
   if (approval.kind === "userland")
     return approval.callerKind === "worker"
       ? Workflow
@@ -773,11 +795,7 @@ function ApprovalMarkdown({
   const blocks = parseApprovalMarkdown(source);
   if (blocks.length === 0) return null;
   const color =
-    tone === "danger"
-      ? colors.danger
-      : tone === "muted"
-        ? colors.textSecondary
-        : colors.text;
+    tone === "danger" ? colors.danger : tone === "muted" ? colors.textSecondary : colors.text;
   return (
     <View style={[styles.markdownBlock, compact ? styles.markdownBlockCompact : null]}>
       {blocks.map((block, index) => {
@@ -889,7 +907,10 @@ function SecretConfigFields({
   values,
   onChange,
 }: {
-  approval: PendingClientConfigApproval | PendingCredentialInputApproval | PendingSecretInputApproval;
+  approval:
+    | PendingClientConfigApproval
+    | PendingCredentialInputApproval
+    | PendingSecretInputApproval;
   values: Record<string, string>;
   onChange: (name: string, value: string) => void;
 }) {
@@ -1662,7 +1683,10 @@ function InputApprovalActions({
   submitDescription = "Save this connected service.",
   denyDescription = "Do not save this connected service.",
 }: {
-  approval: PendingClientConfigApproval | PendingCredentialInputApproval | PendingSecretInputApproval;
+  approval:
+    | PendingClientConfigApproval
+    | PendingCredentialInputApproval
+    | PendingSecretInputApproval;
   values: Record<string, string>;
   busy: boolean;
   pendingAction: PendingAction | null;
@@ -1886,6 +1910,23 @@ function truncateId(id: string, head = 8, tail = 4): string {
 }
 
 const styles = StyleSheet.create({
+  minimizedRoot: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "flex-end",
+    justifyContent: "flex-end",
+    padding: 16,
+  },
+  minimizedApproval: {
+    borderRadius: 999,
+    borderWidth: 1,
+    minHeight: 44,
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  minimizedApprovalText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
   modalRoot: {
     flex: 1,
     justifyContent: "flex-end",

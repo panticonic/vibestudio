@@ -272,9 +272,7 @@ describe("ApprovalSheet", () => {
     expect(getByText("npm install")).toBeTruthy();
 
     fireEvent.press(getByTestId("approval-action-allow"));
-    await waitFor(() =>
-      expect(onResolveExternalAgent).toHaveBeenCalledWith("approval-1", "allow")
-    );
+    await waitFor(() => expect(onResolveExternalAgent).toHaveBeenCalledWith("approval-1", "allow"));
   });
 
   it("resolves userland options and renders verified issuer chrome", async () => {
@@ -425,13 +423,14 @@ describe("ApprovalSheet", () => {
     );
   });
 
-  it("dismisses from backdrop and uses userland dismiss RPC", async () => {
+  it("minimizes from backdrop without denying the pending userland request", async () => {
     const onResolveUserland = jest.fn(async () => undefined);
-    const { getByTestId } = renderSheet(userland, { onResolveUserland });
+    const { getByTestId, getByText } = renderSheet(userland, { onResolveUserland });
 
     fireEvent.press(getByTestId("approval-backdrop"));
 
-    await waitFor(() => expect(onResolveUserland).toHaveBeenCalledWith("approval-1", "dismiss"));
+    expect(onResolveUserland).not.toHaveBeenCalled();
+    expect(getByText("Approval waiting · Review")).toBeTruthy();
   });
 
   it("replaces sheet content when approval id changes", () => {

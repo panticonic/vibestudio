@@ -1,6 +1,6 @@
 import React from "react";
 import { Alert } from "react-native";
-import { fireEvent, render } from "@testing-library/react-native";
+import { act, fireEvent, render } from "@testing-library/react-native";
 import { Provider, createStore } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
 import { connectionStatusAtom, networkReachableAtom } from "../state/connectionAtoms";
@@ -21,18 +21,14 @@ describe("ConnectionBar", () => {
     const { getByRole } = render(
       <Provider store={store}>
         <ConnectionBar onRepair={onRepair} />
-      </Provider>,
+      </Provider>
     );
 
     fireEvent.press(getByRole("button"));
 
     expect(alertSpy).toHaveBeenCalledTimes(1);
     const buttons = (alertSpy.mock.calls[0]?.[2] ?? []) as AlertButton[];
-    expect(buttons.map((button) => button.text)).toEqual([
-      "Reconnect",
-      "Re-pair device",
-      "Cancel",
-    ]);
+    expect(buttons.map((button) => button.text)).toEqual(["Reconnect", "Re-pair device", "Cancel"]);
 
     buttons.find((button) => button.text === "Reconnect")?.onPress?.();
     expect(reconnect).toHaveBeenCalledTimes(1);
@@ -53,7 +49,7 @@ describe("ConnectionBar", () => {
     const { getByRole } = render(
       <Provider store={store}>
         <ConnectionBar />
-      </Provider>,
+      </Provider>
     );
 
     fireEvent.press(getByRole("button"));
@@ -61,6 +57,34 @@ describe("ConnectionBar", () => {
     expect(buttons.map((button) => button.text)).toEqual(["Reconnect", "Cancel"]);
 
     alertSpy.mockRestore();
+  });
+
+  it("stays actionable and shows reconnect attempt progress while connecting", () => {
+    const store = createStore();
+    let progress: ((value: { attempt: number }) => void) | undefined;
+    store.set(connectionStatusAtom, "connected");
+    store.set(shellClientAtom, {
+      transport: {
+        reconnect: jest.fn(),
+        onReconnectProgress: (listener: (value: { attempt: number }) => void) => {
+          progress = listener;
+          return jest.fn();
+        },
+      },
+    } as never);
+
+    const view = render(
+      <Provider store={store}>
+        <ConnectionBar onRepair={jest.fn()} />
+      </Provider>
+    );
+    act(() => {
+      store.set(connectionStatusAtom, "connecting");
+      progress?.({ attempt: 3 });
+    });
+
+    expect(view.getByRole("button")).toBeTruthy();
+    expect(view.getByText(/attempt 3/i)).toBeTruthy();
   });
 
   it("treats a live pipe as connected even when NetInfo reports no internet (LAN-only)", () => {
@@ -73,7 +97,7 @@ describe("ConnectionBar", () => {
     const { queryByRole } = render(
       <Provider store={store}>
         <ConnectionBar />
-      </Provider>,
+      </Provider>
     );
 
     // Connected ⇒ not a problem ⇒ not actionable, regardless of NetInfo.
@@ -88,7 +112,7 @@ describe("ConnectionBar", () => {
     const { queryByRole } = render(
       <Provider store={store}>
         <ConnectionBar />
-      </Provider>,
+      </Provider>
     );
 
     expect(queryByRole("button")).toBeNull();

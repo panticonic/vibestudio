@@ -1,6 +1,6 @@
 import type { RpcClient, RpcConnectionStatus, RpcEventContext } from "@vibestudio/rpc";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
-import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
+import type { ReconnectProgress, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import {
   loadShellCredential,
   reconnectViaWebRtc,
@@ -122,6 +122,31 @@ describe("MobileRpcClient WebRTC transport", () => {
     expect(client.status).toBe("connected");
   });
 
+  it("forwards transport reconnect progress when that optional hook is available", async () => {
+    let emitProgress: ((progress: ReconnectProgress) => void) | undefined;
+    const transport = {
+      openSession: jest.fn(),
+      onReconnectProgress: jest.fn((listener) => {
+        emitProgress = listener;
+        return jest.fn();
+      }),
+    } as unknown as WebRtcConnection["transport"];
+    mockReconnectViaWebRtc.mockResolvedValue(makeConnection({ transport }));
+    const client = new MobileRpcClient({});
+    const listener = jest.fn();
+    client.onReconnectProgress(listener);
+
+    await client.connectAndWait();
+    emitProgress?.({ attempt: 3, phase: "scheduled", reason: "network unavailable", layer: null });
+
+    expect(listener).toHaveBeenCalledWith({
+      attempt: 3,
+      phase: "scheduled",
+      reason: "network unavailable",
+      layer: null,
+    });
+  });
+
   it("dispatches server events to subscribed local listeners and unsubscribes cleanly", async () => {
     const eventCallbacks = new Map<string, (event: RpcEventContext) => void>();
     const activeUnsub = jest.fn();
@@ -137,9 +162,9 @@ describe("MobileRpcClient WebRTC transport", () => {
 
     const unsubscribe = client.on("event:shell-approval:pending-changed", listener);
     await client.connectAndWait();
-    eventCallbacks
-      .get("event:shell-approval:pending-changed")!
-      ({ payload: { pending: ["approval-1"] } } as RpcEventContext);
+    eventCallbacks.get("event:shell-approval:pending-changed")!({
+      payload: { pending: ["approval-1"] },
+    } as RpcEventContext);
 
     expect(listener).toHaveBeenCalledWith({ payload: { pending: ["approval-1"] } });
     unsubscribe();
@@ -176,11 +201,7 @@ describe("MobileRpcClient WebRTC transport", () => {
         clientPlatform: "mobile",
       })
     );
-    expect(rpc.call).toHaveBeenCalledWith(
-      "main",
-      "auth.grantConnection",
-      ["panel:runtime-1"]
-    );
+    expect(rpc.call).toHaveBeenCalledWith("main", "auth.grantConnection", ["panel:runtime-1"]);
     expect(tokenSeenByReady).toBe("panel-grant-123");
   });
 
