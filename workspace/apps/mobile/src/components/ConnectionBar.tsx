@@ -84,6 +84,7 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
   useEffect(() => {
     if (status === "connected") {
       wasConnectedRef.current = true;
+      setReconnectAttempt(0);
     }
   }, [status]);
 

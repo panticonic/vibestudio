@@ -4,11 +4,11 @@
 
 Vibestudio uses platform-specific directories for storing application state, following OS conventions:
 
-| Platform | Location |
-|----------|----------|
-| **Linux** | `~/.config/vibestudio/` |
-| **macOS** | `~/Library/Application Support/vibestudio/` |
-| **Windows** | `%APPDATA%\vibestudio\` |
+| Platform    | Location                                    |
+| ----------- | ------------------------------------------- |
+| **Linux**   | `~/.config/vibestudio/`                     |
+| **macOS**   | `~/Library/Application Support/vibestudio/` |
+| **Windows** | `%APPDATA%\vibestudio\`                     |
 
 These paths are determined by `getUserDataPath()` from `@vibestudio/env-paths`.
 
@@ -28,9 +28,10 @@ Content-addressed build store. Each build is stored immutably at `{userData}/bui
   └── metadata.json   (sentinel — kind, name, ev, sourcemap, builtAt)
 ```
 
-The build key is a hash of `BUILD_CACHE_VERSION + unitName + effectiveVersion + sourcemap`. No LRU or TTL — garbage collection prunes entries not referenced by any active unit.
+The build key is a hash of `BUILD_CACHE_VERSION + unitName + effectiveVersion + rootDepsFingerprint + sourcemap`. No LRU or TTL — garbage collection prunes entries not referenced by any active unit.
 
 **When to clear**:
+
 - If you suspect stale/corrupt builds
 - To force rebuild all panels
 - To reclaim disk space
@@ -58,7 +59,7 @@ git-replacement system) is responsible for tracking reachability and calling
 `blobstore.delete(digest)`. See
 [`docs/architecture/storage.md`](docs/architecture/storage.md#blobstore-content-addressable-objects).
 
-### `build-artifacts/`
+### `external-deps/`
 
 Stores external dependency installs (npm `node_modules`) for panels and workers, keyed by a hash of the merged dependency set. Extension runtime dependencies that may run lifecycle scripts are stored separately under `extension-runtime-deps/`.
 
@@ -101,13 +102,10 @@ The internal stores are:
 Legacy host-owned SQLite files are removed on server startup. There are no
 other Vibestudio-managed SQLite files outside `workerd-do/`.
 
-### `ev-map.json`
+### `ev-state.json`
 
-Persisted effective version map — derived state, safe to delete (triggers full recompute on next startup).
-
-### `ref-state.json`
-
-Per-unit commit SHAs used for cold-start diffing. Compared against current refs to determine which units need EV recomputation.
+Persisted effective-version state — derived data that is safe to delete to
+trigger a full recompute on the next startup.
 
 ### `data.json`
 

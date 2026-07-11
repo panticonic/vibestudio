@@ -22,6 +22,7 @@ vi.mock("electron", () => ({ app: mocks.app, safeStorage: mocks.safeStorage }));
 
 vi.mock("./deviceCredentialStore.js", () => ({
   loadStoredRemotePairing: () => mocks.store.value,
+  loadDeviceCredentialByWorkspaceId: () => null,
   saveDeviceCredential: (value: DeviceCredentialEntry) => {
     mocks.store.value = value.transport === "webrtc" ? (value as StoredRemote) : mocks.store.value;
   },

@@ -9,6 +9,10 @@ import {
   userlandApprovalGrantId,
   type UserlandApprovalGrantStore,
 } from "./userlandApprovalGrantStore.js";
+import {
+  credentialUseGrantId,
+  type CredentialUseGrantStoreLike,
+} from "./credentialUseGrantStore.js";
 
 const SERVICE = "permissions";
 const TRUSTED_PAGE = "about/permissions";
@@ -16,6 +20,7 @@ const TRUSTED_PAGE = "about/permissions";
 export function createPermissionsService(deps: {
   capabilityGrants: CapabilityGrantStore;
   userlandGrants: UserlandApprovalGrantStore;
+  credentialUseGrants: CredentialUseGrantStoreLike;
 }): ServiceDefinition {
   return {
     name: SERVICE,
@@ -47,9 +52,30 @@ export function createPermissionsService(deps: {
                   ? "Trusted for this repository"
                   : "Trusted for this code version",
             capability: grant.capability,
-            resource: grant.resourceKey,
+            resource:
+              grant.capability === "network" && grant.resourceKey === "network:*"
+                ? "All network destinations"
+                : grant.resourceKey,
             repoPath: grant.repoPath,
             ...(grant.effectiveVersion ? { effectiveVersion: grant.effectiveVersion } : {}),
+            grantedAt: grant.grantedAt,
+          }));
+        const sessionCapability: SavedPermissionGrant[] = deps.capabilityGrants
+          .listSession()
+          .map((grant) => ({
+            id: capabilityGrantId(grant),
+            kind: "capability",
+            callerLabel: grant.repoPath || grant.callerId || "App",
+            scopeLabel:
+              grant.effect === "deny"
+                ? "Blocked for this session"
+                : "Allowed until Vibestudio restarts",
+            capability: grant.capability,
+            resource:
+              grant.capability === "network" && grant.resourceKey === "network:*"
+                ? "All network destinations"
+                : grant.resourceKey,
+            repoPath: grant.repoPath,
             grantedAt: grant.grantedAt,
           }));
         const userland: SavedPermissionGrant[] = deps.userlandGrants
@@ -70,14 +96,36 @@ export function createPermissionsService(deps: {
               : {}),
             grantedAt: grant.grantedAt,
           }));
-        return [...capability, ...userland].sort((a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0));
+        const credentialUse: SavedPermissionGrant[] = deps.credentialUseGrants
+          .listAll()
+          .map((grant) => ({
+            id: credentialUseGrantId(grant),
+            kind: "credential-use",
+            callerLabel: grant.repoPath || grant.callerId || grant.bindingId,
+            scopeLabel:
+              grant.scope === "repo"
+                ? "Trusted for this repository"
+                : "Trusted for this code version",
+            capability: `Credential ${grant.use}: ${grant.action}`,
+            resource: grant.resource,
+            ...(grant.repoPath ? { repoPath: grant.repoPath } : {}),
+            ...(grant.effectiveVersion ? { effectiveVersion: grant.effectiveVersion } : {}),
+            grantedAt: grant.grantedAt,
+          }));
+        return [...sessionCapability, ...capability, ...userland, ...credentialUse].sort(
+          (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
+        );
       }
       if (method === "revoke") {
-        const [{ kind, id }] = args as [{ kind: "capability" | "userland"; id: string }];
+        const [{ kind, id }] = args as [
+          { kind: "capability" | "userland" | "credential-use"; id: string },
+        ];
         const removed =
           kind === "capability"
-            ? deps.capabilityGrants.revokePersistent(id)
-            : deps.userlandGrants.revokePersistent(id);
+            ? deps.capabilityGrants.revokePersistent(id) || deps.capabilityGrants.revokeSession(id)
+            : kind === "userland"
+              ? deps.userlandGrants.revokePersistent(id)
+              : await deps.credentialUseGrants.revoke(id);
         if (!removed)
           throw new ServiceError(SERVICE, method, "Permission grant not found", "ENOENT");
         return;

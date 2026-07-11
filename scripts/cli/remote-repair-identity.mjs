@@ -12,7 +12,11 @@ function defaultIdentityPath() {
 }
 
 function parseArgs(argv) {
-  const options = { identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? defaultIdentityPath(), yes: false, help: false };
+  const options = {
+    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? defaultIdentityPath(),
+    yes: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--identity") options.identity = path.resolve(argv[++i] ?? "");
@@ -48,7 +52,9 @@ function main() {
     return 0;
   }
   if (!options.yes) {
-    throw new Error("refusing to replace identity material without --yes; every paired device must re-pair afterwards");
+    throw new Error(
+      "refusing to replace identity material without --yes; every paired device must re-pair afterwards"
+    );
   }
   const identity = path.resolve(options.identity);
   fs.mkdirSync(path.dirname(identity), { recursive: true });
@@ -58,24 +64,35 @@ function main() {
   }
   const cert = `${identity}.cert.tmp`;
   const key = `${identity}.key.tmp`;
-  const result = spawnSync("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-sha256",
-    "-days",
-    "3650",
-    "-subj",
-    "/CN=Vibestudio WebRTC",
-    "-keyout",
-    key,
-    "-out",
-    cert,
-  ], { stdio: "pipe" });
+  const result = spawnSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-sha256",
+      "-days",
+      "3650",
+      "-subj",
+      "/CN=Vibestudio WebRTC",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+    ],
+    { stdio: "pipe" }
+  );
+  if (result.error) {
+    throw new Error(
+      `openssl is required on PATH to regenerate the identity: ${result.error.message}`
+    );
+  }
   if (result.status !== 0) {
-    throw new Error(`openssl failed: ${result.stderr.toString() || result.stdout.toString()}`);
+    throw new Error(
+      `openssl failed: ${result.stderr?.toString() || result.stdout?.toString() || "unknown error"}`
+    );
   }
   const combined = `${fs.readFileSync(cert, "utf8")}\n${fs.readFileSync(key, "utf8")}`;
   fs.writeFileSync(identity, combined, { mode: 0o600 });
@@ -92,6 +109,8 @@ function main() {
 try {
   process.exit(main());
 } catch (error) {
-  console.error(`[remote-repair-identity] ${error instanceof Error ? error.message : String(error)}`);
+  console.error(
+    `[remote-repair-identity] ${error instanceof Error ? error.message : String(error)}`
+  );
   process.exit(1);
 }

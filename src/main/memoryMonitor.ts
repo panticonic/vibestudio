@@ -10,14 +10,25 @@ const DEFAULT_LOG_INTERVAL_MS = 60_000;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
 let monitorStarted = false;
 let _viewManager: ViewManager | null = null;
+let pressureHandler: ((summary: string) => void) | null = null;
+let lastPressureNoticeAt = 0;
+const DEFAULT_PRESSURE_MB = 1_024;
+const PRESSURE_NOTICE_COOLDOWN_MS = 10 * 60_000;
 
 export function setMemoryMonitorViewManager(vm: ViewManager | null): void {
   _viewManager = vm;
 }
 
+export function setMemoryPressureHandler(handler: ((summary: string) => void) | null): void {
+  pressureHandler = handler;
+}
+
 type MemorySnapshotOptions = {
   reason?: string;
   thresholdMb?: number;
+  pressureThresholdMb?: number;
+  /** Sample for pressure without writing periodic diagnostics to the log. */
+  silent?: boolean;
 };
 
 function parsePositiveInt(value: string | undefined): number | null {
@@ -57,8 +68,6 @@ export async function logMemorySnapshot(options: MemorySnapshotOptions = {}): Pr
       const memKb = metric.memory.workingSetSize;
       const memMb = memKb / 1024;
 
-      if (options.thresholdMb && memMb < options.thresholdMb) return null;
-
       return {
         id: truncate(id, 40),
         mb: Math.round(memMb * 10) / 10,
@@ -72,11 +81,33 @@ export async function logMemorySnapshot(options: MemorySnapshotOptions = {}): Pr
 
   const sortedByMem = nonNull.sort((a, b) => (b?.mb ?? 0) - (a?.mb ?? 0));
 
+  const pressureThreshold = options.pressureThresholdMb ?? DEFAULT_PRESSURE_MB;
+  const largest = sortedByMem[0];
+  if (
+    largest &&
+    largest.mb >= pressureThreshold &&
+    Date.now() - lastPressureNoticeAt >= PRESSURE_NOTICE_COOLDOWN_MS
+  ) {
+    lastPressureNoticeAt = Date.now();
+    pressureHandler?.(
+      `${largest.id} is using about ${Math.round(largest.mb)} MB. Close or unload unused panels if the app feels slow.`
+    );
+  }
+
+  if (options.silent) return;
+
+  const logThresholdMb = options.thresholdMb ?? 0;
+  const logEntries =
+    logThresholdMb > 0
+      ? sortedByMem.filter((entry) => assertPresent(entry).mb >= logThresholdMb)
+      : sortedByMem;
+  if (logEntries.length === 0) return;
+
   const mainMetric = metrics.find((m) => m.type === "Browser");
   const mainMb = mainMetric ? Math.round((mainMetric.memory.workingSetSize / 1024) * 10) / 10 : "?";
 
   const reason = options.reason ? `[${options.reason}]` : "";
-  const lines = sortedByMem.map(
+  const lines = logEntries.map(
     (e) =>
       `  ${assertPresent(e).mb.toString().padStart(7)}MB  ${assertPresent(e).id.padEnd(42)} ${assertPresent(e).url}`
   );
@@ -90,20 +121,31 @@ export function startMemoryMonitor(): void {
   const intervalMs = parsePositiveInt(process.env["VIBESTUDIO_MEMORY_LOG_MS"]) ?? 0;
   const logOnce = process.env["VIBESTUDIO_MEMORY_LOG_ONCE"] === "1";
   const thresholdMb = parsePositiveInt(process.env["VIBESTUDIO_MEMORY_LOG_THRESHOLD_MB"]) ?? 0;
-
-  if (intervalMs <= 0 && !logOnce) return;
+  const pressureThresholdMb =
+    parsePositiveInt(process.env["VIBESTUDIO_MEMORY_PRESSURE_MB"]) ?? DEFAULT_PRESSURE_MB;
 
   if (logOnce) {
-    void logMemorySnapshot({ reason: "startup", thresholdMb });
-    return;
+    void logMemorySnapshot({ reason: "startup", thresholdMb, pressureThresholdMb });
   }
 
   const effectiveInterval = intervalMs > 0 ? intervalMs : DEFAULT_LOG_INTERVAL_MS;
   monitorTimer = setInterval(() => {
-    void logMemorySnapshot({ reason: "interval", thresholdMb });
+    void logMemorySnapshot({
+      reason: "interval",
+      thresholdMb,
+      pressureThresholdMb,
+      silent: logOnce || intervalMs <= 0,
+    });
   }, effectiveInterval);
 
-  void logMemorySnapshot({ reason: "startup", thresholdMb });
+  if (!logOnce) {
+    void logMemorySnapshot({
+      reason: "startup",
+      thresholdMb,
+      pressureThresholdMb,
+      silent: intervalMs <= 0,
+    });
+  }
 }
 
 export function stopMemoryMonitor(): void {

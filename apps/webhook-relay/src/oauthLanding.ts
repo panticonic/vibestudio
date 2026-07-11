@@ -286,7 +286,7 @@ code{overflow-wrap:anywhere}
   <h1>Pair Vibestudio</h1>
   <p id="status">Preparing pairing link.</p>
   <p><button id="open" type="button">Open in Vibestudio</button></p>
-  <p class="muted" id="install">If Vibestudio is not installed, build or install the mobile shell, then return to this page and open the link.</p>
+  <p class="muted" id="install">If Vibestudio is not installed, install the app from your organization’s distribution source, then return to this page.</p>
   <p><code id="link"></code></p>
 </main>
 <script>
@@ -315,9 +315,9 @@ code{overflow-wrap:anywhere}
     status.textContent = "Opening Vibestudio. If it does not open, install the Android shell and retry.";
     setTimeout(openLink, 50);
   } else if (isIos) {
-    status.textContent = "Tap Open in Vibestudio. If it is not installed, build the iOS shell on your Mac first.";
+    status.textContent = "Tap Open in Vibestudio. If the app is not installed, install it first and then return to this page.";
   } else {
-    status.textContent = "Open this link on a phone with Vibestudio installed.";
+    status.textContent = "Click Open in Vibestudio if it is installed on this computer, or open this page on a paired phone.";
   }
   open.addEventListener("click", openLink);
 })();

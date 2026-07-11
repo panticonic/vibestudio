@@ -193,13 +193,16 @@ export function TerminalApp() {
     });
   }, []);
 
-  const setScratchOpen = useCallback((open: boolean) => {
-    if (open) {
-      openScratch();
-      return;
-    }
-    setState((prev) => ({ ...prev, scratchOpen: false }));
-  }, [openScratch]);
+  const setScratchOpen = useCallback(
+    (open: boolean) => {
+      if (open) {
+        openScratch();
+        return;
+      }
+      setState((prev) => ({ ...prev, scratchOpen: false }));
+    },
+    [openScratch]
+  );
 
   const newScratchBuffer = useCallback(() => {
     setState((prev) => {
@@ -672,10 +675,8 @@ export function TerminalApp() {
     expose("terminal.getMeta", async (args: { sessionId: string; key?: string }) =>
       actions.getMeta(args.sessionId, args.key)
     );
-    expose(
-      "terminal.setMeta",
-      async (args: { sessionId: string; key: string; value: unknown }) =>
-        actions.setMeta(args.sessionId, args.key, args.value)
+    expose("terminal.setMeta", async (args: { sessionId: string; key: string; value: unknown }) =>
+      actions.setMeta(args.sessionId, args.key, args.value)
     );
     expose("terminal.deleteMeta", async (args: { sessionId: string; key: string }) =>
       actions.deleteMeta(args.sessionId, args.key)
@@ -716,8 +717,7 @@ export function TerminalApp() {
     if (action === "newPane") void openDefaultPane();
     else if (action === "splitRight") void runInteractiveOpen(() => actions.splitFocused("row"));
     else if (action === "splitDown") void runInteractiveOpen(() => actions.splitFocused("column"));
-    else if (action === "clear" && focusedSessionId)
-      void actions.clearScrollback(focusedSessionId);
+    else if (action === "clear" && focusedSessionId) void actions.clearScrollback(focusedSessionId);
     else if (action === "toggleFind") window.dispatchEvent(new CustomEvent("terminal:find"));
     else if (action === "toggleNotifications")
       setState((prev) => ({ ...prev, notificationCenterOpen: !prev.notificationCenterOpen }));
@@ -750,7 +750,9 @@ export function TerminalApp() {
           ] ?? unread[0])
         : unread[0];
     if (!target) return;
-    setState((prev) => markSessionRead({ ...prev, focusedSessionId: target.sessionId }, target.sessionId));
+    setState((prev) =>
+      markSessionRead({ ...prev, focusedSessionId: target.sessionId }, target.sessionId)
+    );
   }
 
   const notificationCenter = (
@@ -818,14 +820,27 @@ export function TerminalApp() {
     displayChord(mergedKeymap[action] ?? defaultKeybindings[action]);
   const SHORTCUT_SECTIONS: { title: string; actions: KeybindingAction[] }[] = [
     { title: "Panes", actions: ["newPane", "splitRight", "splitDown", "closePane", "zoom"] },
-    { title: "Navigation", actions: ["focusUp", "focusDown", "focusLeft", "focusRight", "jumpToLatestUnread", "nextUnread"] },
+    {
+      title: "Navigation",
+      actions: [
+        "focusUp",
+        "focusDown",
+        "focusLeft",
+        "focusRight",
+        "jumpToLatestUnread",
+        "nextUnread",
+      ],
+    },
     { title: "Search", actions: ["find", "findNext", "findPrev"] },
     { title: "View", actions: ["fontUp", "fontDown", "fontReset", "clear", "toggleNotifications"] },
     { title: "App", actions: ["palette", "openScratch", "settings", "shortcuts"] },
   ];
   const shortcutGroups: ShortcutGroup[] = SHORTCUT_SECTIONS.map((section) => ({
     title: section.title,
-    entries: section.actions.map((action) => ({ label: actionLabel(action), keys: chordFor(action) })),
+    entries: section.actions.map((action) => ({
+      label: actionLabel(action),
+      keys: chordFor(action),
+    })),
   }));
 
   return (
@@ -834,8 +849,28 @@ export function TerminalApp() {
         height="100vh"
         width="100vw"
         direction="column"
-        style={{ overflow: "hidden", background: "var(--color-page-background)", position: "relative" }}
+        style={{
+          overflow: "hidden",
+          background: "var(--color-page-background)",
+          position: "relative",
+        }}
       >
+        {state.zoomedSessionId ? (
+          <Box
+            position="absolute"
+            top="2"
+            left="50%"
+            style={{ transform: "translateX(-50%)", zIndex: 20 }}
+          >
+            <Button
+              size="1"
+              variant="solid"
+              onClick={() => setState((prev) => ({ ...prev, zoomedSessionId: undefined }))}
+            >
+              Zoomed — Esc Esc to restore
+            </Button>
+          </Box>
+        ) : null}
         <Box
           p="1"
           style={{
@@ -860,7 +895,9 @@ export function TerminalApp() {
               pasteMode={state.pasteMode}
               imagePasteRelative={state.imagePasteRelative}
               resizeKey={resizeKey}
-              onFocus={(sessionId) => setState((prev) => ({ ...prev, focusedSessionId: sessionId }))}
+              onFocus={(sessionId) =>
+                setState((prev) => ({ ...prev, focusedSessionId: sessionId }))
+              }
               onClose={(sessionId) => {
                 const session = sessions[sessionId];
                 if (session?.alive && !window.confirm("Close this running terminal?")) return;
@@ -943,9 +980,20 @@ export function TerminalApp() {
             aria-live="polite"
             px="2"
             py="1"
-            style={{ position: "absolute", left: "50%", bottom: "0.5rem", transform: "translateX(-50%)", zIndex: 7, borderRadius: "var(--radius-2)", background: "var(--gray-3)", boxShadow: "var(--shadow-2)" }}
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: "0.5rem",
+              transform: "translateX(-50%)",
+              zIndex: 7,
+              borderRadius: "var(--radius-2)",
+              background: "var(--gray-3)",
+              boxShadow: "var(--shadow-2)",
+            }}
           >
-            <Text size="1" color="gray">{sessionOpenPendingLabel}</Text>
+            <Text size="1" color="gray">
+              {sessionOpenPendingLabel}
+            </Text>
           </Box>
         ) : null}
         <Toast toast={toast} onDismiss={dismissToast} />

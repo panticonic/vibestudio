@@ -14,14 +14,32 @@ import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibestud
 import YAML from "yaml";
 import dotenv from "dotenv";
 import { createDevLogger } from "@vibestudio/dev-log";
-import {
-  parseWorkspaceConfigContentWithId,
-  resolveWorkspaceTrustGrants,
-} from "./configParser.js";
+import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "../chromeTrust.js";
 export { resolveDeclaredApps, resolveDeclaredExtensions } from "./configParser.js";
 
 const log = createDevLogger("Workspace");
+const DESKTOP_AUTO_APPROVE_ONCE_FILE = "desktop-auto-approve-once";
+
+/** Carry a trusted in-app create action across the desktop relaunch. */
+export function markDesktopAutoApproveOnce(wsDir: string): void {
+  const stateDir = path.join(wsDir, "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, DESKTOP_AUTO_APPROVE_ONCE_FILE), "created-in-app\n", "utf8");
+}
+
+/** Consume the one-shot create marker. A missing marker is the normal path. */
+export function consumeDesktopAutoApproveOnce(wsDir: string): boolean {
+  const marker = path.join(wsDir, "state", DESKTOP_AUTO_APPROVE_ONCE_FILE);
+  try {
+    fs.unlinkSync(marker);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    console.warn(`[Workspace] Could not consume ${marker}:`, error);
+    return false;
+  }
+}
 import type {
   Workspace,
   WorkspaceConfig,
@@ -34,10 +52,7 @@ import {
   getExistingWorkspaceTemplateDir,
   getWorkspaceTemplateCandidates,
 } from "../runtimePaths.js";
-import {
-  WORKSPACE_SOURCE_DIRS,
-  WORKSPACE_STATE_DIRS,
-} from "./sourceDirs.js";
+import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "./sourceDirs.js";
 
 const WORKSPACE_CONFIG_FILE = "meta/vibestudio.yml";
 const CENTRAL_CONFIG_FILE = "config.yml";
@@ -436,7 +451,6 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
-
 export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
 
 /**
@@ -594,9 +608,21 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
     if (!opts.init) {
       throw new Error(`Workspace not found at ${wsDir}`);
     }
-    // Clean up partial directory from a previously interrupted create
+    // Never infer that an existing directory is disposable just because its
+    // manifest is missing. It may contain panels, source, or state that the
+    // user can recover by restoring source/meta/vibestudio.yml.
     if (fs.existsSync(wsDir)) {
-      fs.rmSync(wsDir, { recursive: true, force: true });
+      const entries = fs.readdirSync(wsDir);
+      if (entries.length > 0) {
+        throw new Error(
+          `Workspace exists at ${wsDir} but ${WORKSPACE_CONFIG_FILE} is missing. ` +
+            "Restore the manifest or choose a different workspace name; existing files were not changed."
+        );
+      }
+      // An empty directory contains no user data and is a common remnant of an
+      // interrupted create. initWorkspace intentionally requires the target not
+      // to exist, so remove only this proven-empty shell before scaffolding it.
+      fs.rmdirSync(wsDir);
     }
     const templateDir = opts.appRoot ? resolveWorkspaceTemplateDir(opts.appRoot) : null;
     initWorkspace(name, templateDir ? { templateDir } : undefined);

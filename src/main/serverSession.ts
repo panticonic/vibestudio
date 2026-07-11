@@ -111,6 +111,7 @@ export function connectRemoteViaWebRtc(
     onConnectionStatusChanged?: (status: ConnectionStatus) => void;
     onReconnectProgress?: (progress: ReconnectProgress) => void;
     onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+    onMainSessionTerminalClose?: (error: Error) => void;
   }
 ): Promise<ServerClient> {
   return createWebRtcServerClient({ pairing, ...options });
@@ -140,6 +141,7 @@ export async function establishServerSession(args: {
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+  onMainSessionTerminalClose?: (error: Error) => void;
 }): Promise<SessionConnection> {
   const { mode, pendingPairing, skipStoredRemote, onServerEvent } = args;
 
@@ -173,6 +175,47 @@ export async function establishServerSession(args: {
     centralData: args.centralData,
     onCrash: (code) => {
       console.error(`[App] Local server died and could not be recovered (code ${code ?? "?"})`);
+      const now = Date.now();
+      let previous = { count: 0, firstAt: now };
+      try {
+        const parsed = JSON.parse(process.env["VIBESTUDIO_LOCAL_CRASH_RELAUNCH_STATE"] ?? "{}") as {
+          count?: number;
+          firstAt?: number;
+          workspaceName?: string;
+        };
+        if (
+          typeof parsed.count === "number" &&
+          typeof parsed.firstAt === "number" &&
+          parsed.workspaceName === mode.workspaceName &&
+          now - parsed.firstAt < 5 * 60_000
+        ) {
+          previous = { count: parsed.count, firstAt: parsed.firstAt };
+        }
+      } catch {
+        // A malformed inherited marker simply starts a fresh recovery window.
+      }
+      const recovery = {
+        count: previous.count + 1,
+        firstAt: previous.firstAt,
+        workspaceName: mode.workspaceName,
+      };
+      process.env["VIBESTUDIO_LOCAL_CRASH_RELAUNCH_STATE"] = JSON.stringify(recovery);
+      if (recovery.count >= 3) {
+        const message =
+          "The local workspace server stopped repeatedly. Automatic restart was stopped to avoid a relaunch loop.";
+        if (Notification.isSupported()) {
+          new Notification({ title: "Workspace server keeps stopping", body: message }).show();
+        }
+        relaunchApp({
+          args: [
+            "--choose-connection",
+            `--local-server-crash-loop=${code ?? "unknown"}`,
+            `--local-server-crash-workspace=${mode.workspaceName}`,
+          ],
+          exitCode: 1,
+        });
+        return;
+      }
       const message = "The local workspace server stopped. Vibestudio is restarting it now.";
       if (Notification.isSupported()) {
         new Notification({ title: "Workspace server stopped", body: message }).show();
@@ -305,6 +348,7 @@ type RemoteConnectArgs = {
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+  onMainSessionTerminalClose?: (error: Error) => void;
 };
 
 /**
@@ -335,6 +379,7 @@ async function establishRemoteSession(
       onConnectionStatusChanged: args.onConnectionStatusChanged,
       onReconnectProgress: args.onReconnectProgress,
       onRecovery: args.onRecovery,
+      onMainSessionTerminalClose: args.onMainSessionTerminalClose,
     }
   );
   log.info("[Server] Shell client connected over WebRTC remote pipe (returning device)");
@@ -361,7 +406,12 @@ async function establishFreshPairSession(
     // one-time code; we don't know that id yet, so dial with a stable selfId. (If
     // the resolved id is ever threaded back, swap it in here.)
     callerId: "shell:pairing",
-    getShellToken: () => pairing.code,
+    getShellToken: () => {
+      const credential = issuedCredential.current;
+      return credential
+        ? `refresh:${credential.deviceId}:${credential.refreshToken}`
+        : pairing.code;
+    },
     // Persist the issued device credential against the pairing material (minus the
     // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
     onPaired: (credential) => {
@@ -371,6 +421,7 @@ async function establishFreshPairSession(
     onConnectionStatusChanged: args.onConnectionStatusChanged,
     onReconnectProgress: args.onReconnectProgress,
     onRecovery: args.onRecovery,
+    onMainSessionTerminalClose: args.onMainSessionTerminalClose,
   });
   if (!issuedCredential.current) {
     // The one-time code did not yield a credential — nothing to persist, but the

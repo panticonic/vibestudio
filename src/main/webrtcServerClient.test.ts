@@ -30,7 +30,11 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
   // redeems: the shell authenticates with `getShellToken`, while every app/panel
   // principal redeems its own one-shot connection grant, so its token differs.
   const opened: Array<{
-    opts: { connectionId?: string; getToken?: () => string | Promise<string> };
+    opts: {
+      connectionId?: string;
+      getToken?: () => string | Promise<string>;
+      onTerminalClose?: (error: Error) => void;
+    };
     session: WebRtcSession;
     token?: string;
   }> = [];
@@ -38,6 +42,11 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
   // opens it during construction). Any session whose token differs is a scoped grant.
   let shellToken: string | undefined;
   let status: "connected" | "disconnected" = "disconnected";
+  const statusListeners = new Set<(status: "connected" | "disconnected") => void>();
+  const emitStatus = (next: "connected" | "disconnected"): void => {
+    status = next;
+    for (const listener of statusListeners) listener(next);
+  };
   const candidateTypeListeners = new Set<(type: string | null) => void>();
   const emitCandidateType = (type: string | null): void => {
     for (const listener of candidateTypeListeners) listener(type);
@@ -48,7 +57,10 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
     }),
     ready: async () => {},
     status: () => status,
-    onStatusChange: () => () => {},
+    onStatusChange: (listener: (next: "connected" | "disconnected") => void) => {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    },
     candidateType: () => null,
     onCandidateType: (listener: (type: string | null) => void) => {
       candidateTypeListeners.add(listener);
@@ -61,6 +73,7 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
       sid?: string;
       connectionId?: string;
       getToken?: () => string | Promise<string>;
+      onTerminalClose?: (error: Error) => void;
     }): WebRtcSession => {
       const listeners = new Set<(e: RpcEnvelope) => void>();
       const entry: {
@@ -121,7 +134,7 @@ function makeFakeTransport(handler: RpcHandler, options: { hangAppReady?: boolea
       return session;
     },
   } as unknown as WebRtcTransport;
-  return { transport, opened, emitCandidateType };
+  return { transport, opened, emitCandidateType, emitStatus };
 }
 
 describe("createWebRtcServerClient", () => {
@@ -172,6 +185,31 @@ describe("createWebRtcServerClient", () => {
       reason: "retry",
       layer: "signaling",
     });
+  });
+
+  it("stays disconnected after the main session terminally closes even if the pipe reports healthy", async () => {
+    const { transport, opened, emitCandidateType, emitStatus } = makeFakeTransport(() => null);
+    const onConnectionStatusChanged = vi.fn();
+    const onMainSessionTerminalClose = vi.fn();
+    const client = await createWebRtcServerClient({
+      pairing: PAIRING,
+      callerId: "shell:dev",
+      getShellToken: () => "shell-token",
+      transport,
+      onConnectionStatusChanged,
+      onMainSessionTerminalClose,
+    });
+
+    const terminalError = new Error("device revoked");
+    opened[0]!.opts.onTerminalClose?.(terminalError);
+    opened[0]!.session.close();
+    emitStatus("connected");
+    emitCandidateType("relay");
+
+    expect(onMainSessionTerminalClose).toHaveBeenCalledWith(terminalError);
+    expect(onConnectionStatusChanged).toHaveBeenLastCalledWith("disconnected");
+    expect(client.isConnected()).toBe(false);
+    expect(client.getConnectionStatus()).toBe("disconnected");
   });
 
   it("opens a scoped app session via a one-time connection grant for callAs()", async () => {

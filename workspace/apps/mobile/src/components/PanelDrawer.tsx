@@ -37,6 +37,7 @@ import { buildPanelChromeState, isBrowserPanelSource } from "@vibestudio/shared/
 import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
+import { pushToastAtom } from "../state/toastAtoms";
 
 interface PanelDrawerProps {
   /** Called when a panel is selected; parent should close the drawer */
@@ -76,6 +77,7 @@ function findPanelById(panels: Panel[], panelId: string): Panel | null {
 }
 
 export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
+  const pushToast = useSetAtom(pushToastAtom);
   const shellClient = useAtomValue(shellClientAtom);
   const panelTree = useAtomValue(panelTreeAtom);
   const setPanelTree = useSetAtom(panelTreeAtom);
@@ -129,11 +131,37 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   );
 
   const handleArchive = useCallback(
-    (panelId: string) => {
-      if (!shellClient) return;
-      void shellClient.panels.archive(panelId);
+    async (panelId: string) => {
+      if (!shellClient) throw new Error("Not connected");
+      const target = findPanelById(panelTree, panelId);
+      const confirmed = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          target?.children.length ? "Archive this panel tree?" : "Archive this panel?",
+          target?.children.length
+            ? `“${target.title}” and all child panels will be archived.`
+            : `Archive “${target?.title ?? "this panel"}”?`,
+          [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            { text: "Archive", style: "destructive", onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) }
+        );
+      });
+      if (!confirmed) throw new Error("Archive cancelled");
+      try {
+        await shellClient.panels.archive(panelId);
+        setPanelTree(shellClient.panels.getTree());
+        pushToast({ title: "Panel archived", message: target?.title ?? panelId, tone: "success" });
+      } catch (error) {
+        pushToast({
+          title: "Could not archive panel",
+          message: error instanceof Error ? error.message : String(error),
+          tone: "danger",
+        });
+        throw error;
+      }
     },
-    [shellClient]
+    [panelTree, pushToast, setPanelTree, shellClient]
   );
 
   const togglePanelPin = useCallback(

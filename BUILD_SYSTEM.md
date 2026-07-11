@@ -30,7 +30,7 @@ The build key is the full cache identity:
 build_key = hash(BUILD_CACHE_VERSION, rootDepsFingerprint, unitName, ev, sourcemap)
 ```
 
-`BUILD_CACHE_VERSION` (currently `"17"`) is incremented when build logic changes (plugins, esbuild options, shims) or when the build-key derivation itself changes, to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
+`BUILD_CACHE_VERSION` is incremented when build logic changes (plugins, esbuild options, shims) or when the build-key derivation itself changes, to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
 
 `rootDepsFingerprint` folds in the **contents** of the host-root `package.json`, `pnpm-lock.yaml`, and `pnpm-workspace.yaml`, so a change to the host's dependency set (which can change what external npm deps resolve to) invalidates cached workspace builds. Missing files are handled deterministically (absent is distinct from present-but-empty). The host app root is injected explicitly at build-system construction (`setBuildRootConfig`), with the `VIBESTUDIO_APP_ROOT` env var as an override and `process.cwd()` as a last-resort fallback. The fingerprint, its resolved root, how the root was resolved, and its per-file inputs are exposed via `getRootDependencyFingerprintInfo()` for build metadata/diagnostics. (These host-root files are read off live disk, not content-addressed workspace state; folding them into GAD state is a future step.)
 
@@ -269,16 +269,16 @@ Unit metadata lives in `package.json` under the `vibestudio` key:
 }
 ```
 
-| Field              | Default       | Description                                                         |
-| ------------------ | ------------- | ------------------------------------------------------------------- |
-| `title`            | package name  | Display title (used in HTML `<title>` and launcher)                 |
-| `shell`            | `false`       | Grants shell service access (about pages)                           |
-| `hiddenInLauncher` | `false`       | Hide from launcher UI                                               |
-| `sourcemap`        | `true`        | Include inline source maps                                          |
-| `entry`            | auto-detected | Explicit entry point path                                           |
-| `externals`        | `{}`          | Import map entries (externalized from bundle)                       |
-| `exposeModules`    | `[]`          | Modules registered on `__vibestudioModuleMap__`                       |
-| `dedupeModules`    | `[]`          | Additional packages to deduplicate (react/react-dom always deduped) |
+| Field              | Default       | Description                                                                                                                                                            |
+| ------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`            | package name  | Display title (used in HTML `<title>` and launcher)                                                                                                                    |
+| `shell`            | `false`       | Grants shell service access (about pages)                                                                                                                              |
+| `hiddenInLauncher` | `false`       | Hide from launcher UI                                                                                                                                                  |
+| `sourcemap`        | `true`        | Include inline source maps                                                                                                                                             |
+| `entry`            | auto-detected | Explicit entry point path                                                                                                                                              |
+| `externals`        | `{}`          | Import map entries (externalized from bundle)                                                                                                                          |
+| `exposeModules`    | `[]`          | Modules registered on `__vibestudioModuleMap__`                                                                                                                        |
+| `dedupeModules`    | `[]`          | Additional packages to deduplicate (react/react-dom always deduped)                                                                                                    |
 | `frameworkModule`  | per framework | Override the workspace module the generated panel entry imports the framework auto-mount contract from (defaults per `buildV2/platformModules.ts` `FRAMEWORK_MODULES`) |
 
 ---

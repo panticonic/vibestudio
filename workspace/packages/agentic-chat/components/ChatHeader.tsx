@@ -63,13 +63,18 @@ function ClaudeCodeLauncher() {
 
 function friendlyConnectionStatus(status: string): string {
   switch (status.trim().toLowerCase()) {
-    case "error": return "Connection failed";
-    case "disconnected": return "Offline";
+    case "error":
+      return "Connection failed";
+    case "disconnected":
+      return "Offline";
     case "connecting":
-    case "connecting...": return "Connecting…";
+    case "connecting...":
+      return "Connecting…";
     case "reconnecting":
-    case "reconnecting...": return "Reconnecting…";
-    default: return status || "Offline";
+    case "reconnecting...":
+      return "Reconnecting…";
+    default:
+      return status || "Offline";
   }
 }
 
@@ -95,6 +100,7 @@ function mapsShallowEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
 export function ChatHeader() {
   const {
     channelId,
+    channelTitle,
     connected,
     status,
     sessionEnabled,
@@ -133,6 +139,7 @@ export function ChatHeader() {
   return (
     <ChatHeaderInner
       channelId={channelId}
+      title={channelTitle ?? "Agentic Chat"}
       connected={connected}
       status={status}
       sessionEnabled={sessionEnabled}
@@ -151,6 +158,7 @@ export function ChatHeader() {
 
 interface ChatHeaderInnerProps {
   channelId: string | null;
+  title: string;
   connected: boolean;
   status: string;
   sessionEnabled?: boolean;
@@ -169,6 +177,7 @@ function chatHeaderInnerPropsEqual(
 ): boolean {
   return (
     prev.channelId === next.channelId &&
+    prev.title === next.title &&
     prev.connected === next.connected &&
     prev.status === next.status &&
     prev.sessionEnabled === next.sessionEnabled &&
@@ -184,6 +193,7 @@ function chatHeaderInnerPropsEqual(
 
 const ChatHeaderInner = React.memo(function ChatHeaderInner({
   channelId,
+  title,
   connected,
   status,
   sessionEnabled,
@@ -222,7 +232,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
       >
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
           <Text size="5" weight="bold" style={{ minWidth: 0 }}>
-            Agentic Chat
+            {title}
           </Text>
           <Badge
             color={sessionEnabled ? "blue" : "orange"}
@@ -237,7 +247,9 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           </Badge>
         </Flex>
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
-          <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : friendlyConnectionStatus(status)}</Badge>
+          <Badge color={connected ? "green" : "gray"}>
+            {connected ? "Connected" : friendlyConnectionStatus(status)}
+          </Badge>
           {/* Fork switcher — current branch + siblings/children, next to roster.
               Self-subscribes to ChatContext.forkState (renders null when absent). */}
           <ForkSwitcher />
@@ -287,7 +299,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
       >
         <Flex gap="2" align="center" style={{ minWidth: 0 }}>
           <Text size="4" weight="bold" truncate style={{ minWidth: 0 }}>
-            Agentic Chat
+            {title}
           </Text>
           <span
             className="chat-connection-dot"
@@ -392,7 +404,14 @@ function ChatHeaderOverflowMenu({
                   {onRemoveAgent && (
                     <>
                       <DropdownMenu.Separator />
-                      <DropdownMenu.Item color="red" onSelect={() => onRemoveAgent(handle)}>
+                      <DropdownMenu.Item
+                        color="red"
+                        onSelect={() => {
+                          if (window.confirm(`Remove @${handle} and its saved agent settings?`)) {
+                            onRemoveAgent(handle);
+                          }
+                        }}
+                      >
                         Remove Agent
                       </DropdownMenu.Item>
                     </>
@@ -412,15 +431,21 @@ function ChatHeaderOverflowMenu({
             <DropdownMenu.Sub>
               <DropdownMenu.SubTrigger>
                 Approvals:{" "}
-                {APPROVAL_LEVELS[toolApproval.settings.globalFloor as keyof typeof APPROVAL_LEVELS]
-                  ?.label}
+                {
+                  APPROVAL_LEVELS[toolApproval.settings.globalFloor as keyof typeof APPROVAL_LEVELS]
+                    ?.label
+                }
               </DropdownMenu.SubTrigger>
               <DropdownMenu.SubContent>
                 {([0, 1, 2] as const).map((level) => (
                   <DropdownMenu.CheckboxItem
                     key={level}
                     checked={toolApproval.settings.globalFloor === level}
-                    onCheckedChange={() => toolApproval.onSetFloor(level)}
+                    onCheckedChange={() => {
+                      void toolApproval.onSetFloor(level).catch((error: unknown) => {
+                        console.error("[ChatHeader] Failed to update permission level:", error);
+                      });
+                    }}
                   >
                     {APPROVAL_LEVELS[level].label}
                   </DropdownMenu.CheckboxItem>

@@ -31,7 +31,13 @@ export type {
 // ===========================================================================
 // UI-only types
 // ===========================================================================
-import type { AgentDebugPayload, Participant, AttachmentInput, SandboxSource, PubSubClient } from "@workspace/pubsub";
+import type {
+  AgentDebugPayload,
+  Participant,
+  AttachmentInput,
+  SandboxSource,
+  PubSubClient,
+} from "@workspace/pubsub";
 import type { ActiveFeedback, ToolApprovalProps } from "@workspace/tool-ui";
 import type { PendingImage } from "./utils/imageUtils";
 import type { ComponentType, RefObject } from "react";
@@ -168,6 +174,8 @@ export interface UndoableAction {
   /** Messages covered by this undo. Consecutive cancels within the window
    *  accumulate here so a single Undo restores them all (e.g. "cancel queued"). */
   messageIds: string[];
+  /** The resend can restore text only; the original carried richer delivery data. */
+  textOnlyRestore?: boolean;
   /** Epoch ms when the undo window closes. */
   expiresAt: number;
 }
@@ -329,6 +337,8 @@ export interface ChatContextValue {
   replaySettled: boolean;
   status: string;
   channelId: string | null;
+  /** Current user-visible channel title, updated with channel config changes. */
+  channelTitle: string | null;
   /** Connected runtime caller that can receive OAuth browser handoff events. */
   browserHandoffCaller: BrowserHandoffCaller;
   sessionEnabled?: boolean;
@@ -415,10 +425,6 @@ export interface ChatContextValue {
   pendingSendCount: number;
   /** Message ids sent with after-turn intent — drives the outbox lane cue. */
   afterTurnMessageIds: Set<string>;
-  /** Message ids whose send failed — shown as "Failed — tap to retry". */
-  failedSendMessageIds: Set<string>;
-  /** Re-attempt a failed send by message id. */
-  retrySend: (messageId: string) => void;
 
   // Handlers
   onLoadEarlierMessages: () => void;
@@ -477,10 +483,7 @@ export interface ChatContextValue {
 }
 
 /** Which await a loading message type is currently parked on. */
-export type MessageTypeLoadingStage =
-  | "fetching-definition"
-  | "loading-source"
-  | "compiling";
+export type MessageTypeLoadingStage = "fetching-definition" | "loading-source" | "compiling";
 
 export type MessageTypeRegistryEntry =
   | {

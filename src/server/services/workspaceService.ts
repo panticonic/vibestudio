@@ -89,6 +89,8 @@ export interface CentralDataLike {
   removeWorkspace(name: string): void;
   touchWorkspace(name: string): void;
   getWorkspaceEntry(name: string): unknown | null;
+  getWorkspaceLocalServer?(name: string): { pid: number } | null | undefined;
+  clearWorkspaceLocalServer?(name: string): void;
 }
 
 export interface WorkspaceServiceDeps {
@@ -107,7 +109,10 @@ export interface WorkspaceServiceDeps {
    * subscribes and relaunches itself into the selected workspace. With no
    * shell attached the event is a no-op (the caller reconnects manually).
    */
-  eventService?: { emit(event: "workspace:relaunch-requested", payload: { name: string }): void };
+  eventService?: {
+    emit(event: "workspace:relaunch-requested", payload: { name: string }): void;
+    getSubscriberCount?(event: "workspace:relaunch-requested"): number;
+  };
   /** Workspace-unit operational status rows, including extension health. */
   listUnits?: () => Promise<WorkspaceUnitStatus[]> | WorkspaceUnitStatus[];
   /** Restart a workspace unit through the owning manager. */
@@ -571,6 +576,25 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           if (name === deps.getConfig().id) {
             throw new Error("Cannot delete the currently running workspace");
           }
+          const attachedServer = deps.centralData.getWorkspaceLocalServer?.(name);
+          if (attachedServer?.pid) {
+            try {
+              process.kill(attachedServer.pid, 0);
+              throw new Error(
+                `Cannot delete workspace “${name}” while its server (PID ${attachedServer.pid}) is running. Stop that workspace server first.`
+              );
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+                deps.centralData.clearWorkspaceLocalServer?.(name);
+              } else if (!(error instanceof Error) || !error.message.startsWith("Cannot delete")) {
+                throw new Error(
+                  `Cannot verify whether workspace “${name}” server PID ${attachedServer.pid} is still running. Stop it before deleting the workspace.`
+                );
+              } else {
+                throw error;
+              }
+            }
+          }
           await requireWorkspaceApproval(deps, ctx, "delete", {
             target: name,
             title: "Delete workspace?",
@@ -584,6 +608,30 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
 
         case "select": {
           const [name] = args as [string];
+          if (!deps.centralData) {
+            throw new Error("Workspace switching requires an attached desktop workspace catalog.");
+          }
+          if (!deps.centralData.hasWorkspace(name)) {
+            const names = deps.centralData
+              .listWorkspaces()
+              .filter(isWorkspaceEntry)
+              .map((entry) => entry.name);
+            const suggestion = closestWorkspaceName(name, names);
+            throw new Error(
+              `Workspace "${name}" does not exist; create it first.${
+                suggestion ? ` Did you mean "${suggestion}"?` : ""
+              }`
+            );
+          }
+          if (
+            !deps.eventService ||
+            !deps.eventService.getSubscriberCount ||
+            deps.eventService.getSubscriberCount("workspace:relaunch-requested") === 0
+          ) {
+            throw new Error(
+              "No desktop shell is attached to switch workspaces. Reconnect from the desktop app and try again."
+            );
+          }
           await requireWorkspaceApproval(deps, ctx, "select", {
             target: name,
             title: "Switch workspace?",
@@ -591,7 +639,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             warning: "Switching workspaces relaunches the app.",
           });
           // Touch the catalog so the workspace is marked as recently opened.
-          deps.centralData?.touchWorkspace(name);
+          deps.centralData.touchWorkspace(name);
           // Signal any attached desktop shell to relaunch into the new
           // workspace. With no shell attached the event goes nowhere and the
           // caller must reconnect manually.
@@ -936,4 +984,33 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       }
     },
   };
+}
+
+function closestWorkspaceName(target: string, names: string[]): string | null {
+  const normalized = target.toLowerCase();
+  let best: { name: string; distance: number } | null = null;
+  for (const name of names) {
+    const distance = levenshtein(normalized, name.toLowerCase());
+    if (!best || distance < best.distance) best = { name, distance };
+  }
+  if (!best || best.distance > Math.max(2, Math.floor(normalized.length / 3))) return null;
+  return best.name;
+}
+
+function levenshtein(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = row[0] ?? 0;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const above = row[j] ?? 0;
+      row[j] = Math.min(
+        above + 1,
+        (row[j - 1] ?? 0) + 1,
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      diagonal = above;
+    }
+  }
+  return row[b.length] ?? 0;
 }

@@ -210,10 +210,7 @@ export interface ChatCoreState {
     messageId?: string,
     agentHandle?: string
   ) => Promise<void>;
-  handleCancelInvocation: (
-    invocation: InvocationCardPayload,
-    senderId: string
-  ) => Promise<void>;
+  handleCancelInvocation: (invocation: InvocationCardPayload, senderId: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   handleCallMethodResult: (
     providerId: string,
@@ -236,6 +233,7 @@ export interface ChatCoreState {
 
   sessionEnabled: boolean | undefined;
   channelName: string;
+  channelTitle: string | null;
   theme: "light" | "dark";
   config: ConnectionConfig;
 
@@ -245,14 +243,12 @@ export interface ChatCoreState {
   primaryActionIntent: PrimaryActionIntent;
   pendingSendCount: number;
   afterTurnMessageIds: Set<string>;
-  failedSendMessageIds: Set<string>;
   flushNarration: FlushNarration | undefined;
   undoableAction: UndoableAction | undefined;
   editPendingMessage: (messageId: string, newText: string) => Promise<void>;
   cancelPendingMessage: (messageId: string) => Promise<void>;
   flushOutboxAndInterrupt: () => Promise<void>;
   undoLastAction: () => void;
-  retrySend: (messageId: string) => void;
 
   inputContextValue: ChatInputContextValue;
 }
@@ -287,6 +283,7 @@ export function useChatCore({
   const allParticipantsRef = useRef<Record<string, Participant<ChatParticipantMetadata>>>({});
   const inputRef = useRef("");
   const defaultTitleSetRef = useRef(Boolean(_channelConfig?.title));
+  const [channelTitle, setChannelTitle] = useState<string | null>(_channelConfig?.title ?? null);
   const hasTranscriptMessagesRef = useRef(false);
 
   // Suppress disconnect detection until we see ourselves in the roster
@@ -410,16 +407,12 @@ export function useChatCore({
   const [pendingSendCount, setPendingSendCount] = useState(0);
   /** Message ids sent with after-turn intent (drives the outbox lane cue). */
   const [afterTurnMessageIds, setAfterTurnMessageIds] = useState<Set<string>>(new Set());
-  /** Message ids whose send failed (shown as "Failed — tap to retry"). */
-  const [failedSendMessageIds, setFailedSendMessageIds] = useState<Set<string>>(new Set());
   /** Transient flush narration for the inline pill + aria-live. */
   const [flushNarration, setFlushNarration] = useState<
     { text: string; remaining: number } | undefined
   >(undefined);
   /** Short reversible undo window after a retract/cancel. */
-  const [undoableAction, setUndoableAction] = useState<
-    { kind: "retract" | "cancel"; messageIds: string[]; expiresAt: number } | undefined
-  >(undefined);
+  const [undoableAction, setUndoableAction] = useState<UndoableAction | undefined>(undefined);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Retained text of retracted messages so undo can re-send them. */
@@ -512,11 +505,13 @@ export function useChatCore({
       if (initialTitle) {
         defaultTitleSetRef.current = true;
         document.title = initialTitle;
+        setChannelTitle(initialTitle);
       }
       newClient.onConfigChange((cfg: ChannelConfig) => {
         if (cfg.title) {
           defaultTitleSetRef.current = true;
           document.title = cfg.title;
+          setChannelTitle(cfg.title);
         }
       });
 
@@ -710,8 +705,7 @@ export function useChatCore({
           replyTo: options?.replyTo,
           metadata: options?.metadata,
         });
-        // Tag after-turn sends so the outbox can render the "after this turn"
-        // lane, and clear any prior failed flag for a retried id.
+        // Tag after-turn sends so the outbox can render the "after this turn" lane.
         if (messageId) {
           if (isAfterTurn) {
             setAfterTurnMessageIds((prev) => {
@@ -720,12 +714,6 @@ export function useChatCore({
               return next;
             });
           }
-          setFailedSendMessageIds((prev) => {
-            if (!prev.has(messageId)) return prev;
-            const next = new Set(prev);
-            next.delete(messageId);
-            return next;
-          });
         }
         settleGhost();
         await backfillAfterLocalPublish(pubsubId);
@@ -736,6 +724,7 @@ export function useChatCore({
         if (defaultTitle) {
           defaultTitleSetRef.current = true;
           document.title = defaultTitle;
+          setChannelTitle(defaultTitle);
           void clientRef.current
             .updateChannelConfig({ title: defaultTitle, titleExplicit: false })
             .catch((err) => {
@@ -801,11 +790,10 @@ export function useChatCore({
     if (!title) return;
     defaultTitleSetRef.current = true;
     document.title = title;
-    void clientRef.current
-      ?.updateChannelConfig({ title, titleExplicit: false })
-      .catch((err) => {
-        console.warn("[useChatCore] Failed to persist default channel title:", err);
-      });
+    setChannelTitle(title);
+    void clientRef.current?.updateChannelConfig({ title, titleExplicit: false }).catch((err) => {
+      console.warn("[useChatCore] Failed to persist default channel title:", err);
+    });
   }, []);
 
   // --- Auto-send initial prompt once connected ---
@@ -832,6 +820,7 @@ export function useChatCore({
     if (defaultTitle) {
       defaultTitleSetRef.current = true;
       document.title = defaultTitle;
+      setChannelTitle(defaultTitle);
       void client
         .updateChannelConfig({ title: defaultTitle, titleExplicit: false })
         .catch((err) => {
@@ -848,7 +837,14 @@ export function useChatCore({
       })
       .then(({ pubsubId }) => backfillAfterLocalPublish(pubsubId))
       .catch((err) => console.warn("[Chat] Failed to send initial prompt:", err));
-  }, [backfillAfterLocalPublish, connected, client, channelName, initialPrompt, forceInitialPrompt]);
+  }, [
+    backfillAfterLocalPublish,
+    connected,
+    client,
+    channelName,
+    initialPrompt,
+    forceInitialPrompt,
+  ]);
 
   // --- Load earlier messages (delegates to useChannelMessages pagination) ---
   const loadEarlierMessages = channelLoadEarlier;
@@ -877,7 +873,10 @@ export function useChatCore({
       } catch (err) {
         console.warn("[Chat] Interrupt failed:", err);
         setConnectionError({
-          message: err instanceof Error ? `Couldn't stop the agent: ${err.message}` : "Couldn't stop the agent. Try again.",
+          message:
+            err instanceof Error
+              ? `Couldn't stop the agent: ${err.message}`
+              : "Couldn't stop the agent. Try again.",
           at: Date.now(),
         });
       }
@@ -949,6 +948,10 @@ export function useChatCore({
       if (!c) return;
       const msg = messagesRef.current.find((m) => m.id === messageId);
       if (msg) retractedTextRef.current.set(messageId, msg.content);
+      const textOnlyRestore =
+        (msg?.attachments?.length ?? 0) > 0 ||
+        (msg?.mentions?.length ?? 0) > 0 ||
+        afterTurnMessageIds.has(messageId);
       try {
         const { pubsubId } = await c.retractMessage(messageId, {
           reason: "Canceled by author",
@@ -964,8 +967,18 @@ export function useChatCore({
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
       setUndoableAction((current) =>
         current && current.kind === "cancel"
-          ? { kind: "cancel", messageIds: [...current.messageIds, messageId], expiresAt: Date.now() + 5000 }
-          : { kind: "cancel", messageIds: [messageId], expiresAt: Date.now() + 5000 }
+          ? {
+              kind: "cancel",
+              messageIds: [...current.messageIds, messageId],
+              expiresAt: Date.now() + 5000,
+              textOnlyRestore: current.textOnlyRestore || textOnlyRestore,
+            }
+          : {
+              kind: "cancel",
+              messageIds: [messageId],
+              expiresAt: Date.now() + 5000,
+              textOnlyRestore,
+            }
       );
       undoTimerRef.current = setTimeout(() => {
         setUndoableAction((current) => {
@@ -974,7 +987,7 @@ export function useChatCore({
         });
       }, 5000);
     },
-    [backfillAfterLocalPublish]
+    [afterTurnMessageIds, backfillAfterLocalPublish]
   );
 
   // --- Undo the last retract/cancel by re-sending every retained text ---
@@ -1014,7 +1027,7 @@ export function useChatCore({
       paused === 0 && outboxCount === 0
         ? "Nothing to flush"
         : remaining > 0
-            ? `Delivering the next message · ${remaining} still queued`
+          ? `Delivering the next message · ${remaining} still queued`
           : outboxCount > 0
             ? "Delivering your queued message…"
             : "Interrupted";
@@ -1022,20 +1035,6 @@ export function useChatCore({
     setFlushNarration({ text, remaining });
     flushTimerRef.current = setTimeout(() => setFlushNarration(undefined), 4000);
   }, [pauseBusyAgents]);
-
-  // --- Retry a failed send by re-sending the retained draft ---
-  const retrySend = useCallback(
-    (messageId: string) => {
-      const text = retractedTextRef.current.get(messageId);
-      const c = clientRef.current;
-      if (!text || !c) return;
-      void c
-        .send(text, {})
-        .then(({ pubsubId }) => backfillAfterLocalPublish(pubsubId))
-        .catch((err) => console.warn("[Chat] Retry send failed:", err));
-    },
-    [backfillAfterLocalPublish]
-  );
 
   // --- primaryActionIntent: what pressing Enter does right now ---
   const primaryActionIntent: "send" | "steer" | "queue" = agentBusy ? "steer" : "send";
@@ -1066,7 +1065,10 @@ export function useChatCore({
         } catch (err) {
           console.warn("[Chat] Cancel eval failed:", err);
           setConnectionError({
-            message: err instanceof Error ? `Couldn't cancel the tool call: ${err.message}` : "Couldn't cancel the tool call. Try again.",
+            message:
+              err instanceof Error
+                ? `Couldn't cancel the tool call: ${err.message}`
+                : "Couldn't cancel the tool call. Try again.",
             at: Date.now(),
           });
         }
@@ -1091,7 +1093,10 @@ export function useChatCore({
         if (!abortedLocally) {
           console.warn("[Chat] Cancel invocation failed:", err);
           setConnectionError({
-            message: err instanceof Error ? `Couldn't cancel the tool call: ${err.message}` : "Couldn't cancel the tool call. Try again.",
+            message:
+              err instanceof Error
+                ? `Couldn't cancel the tool call: ${err.message}`
+                : "Couldn't cancel the tool call. Try again.",
             at: Date.now(),
           });
         }
@@ -1219,6 +1224,7 @@ export function useChatCore({
     selfIdRef,
     sessionEnabled: true,
     channelName,
+    channelTitle,
     theme,
     config,
     agentBusy,
@@ -1226,14 +1232,12 @@ export function useChatCore({
     primaryActionIntent,
     pendingSendCount,
     afterTurnMessageIds,
-    failedSendMessageIds,
     flushNarration,
     undoableAction,
     editPendingMessage,
     cancelPendingMessage,
     flushOutboxAndInterrupt,
     undoLastAction,
-    retrySend,
     inputContextValue,
   };
 }

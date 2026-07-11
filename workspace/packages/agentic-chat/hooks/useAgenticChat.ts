@@ -285,7 +285,9 @@ export function useAgenticChat({
           size: number;
         }>,
       getText: (digest: string) =>
-        sandboxRef.current.rpc.call("main", "blobstore.getText", [digest]) as Promise<string | null>,
+        sandboxRef.current.rpc.call("main", "blobstore.getText", [digest]) as Promise<
+          string | null
+        >,
     }),
     []
   );
@@ -537,15 +539,12 @@ export function useAgenticChat({
     },
     []
   );
-  const loadSourceFile = useCallback(
-    async (path: string) => {
-      const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
-        sandboxRef.current.rpc.call("main", `${svc}.${method}`, args)
-      );
-      return (await fsClient.readFile(path, "utf8")) as string;
-    },
-    []
-  );
+  const loadSourceFile = useCallback(async (path: string) => {
+    const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
+      sandboxRef.current.rpc.call("main", `${svc}.${method}`, args)
+    );
+    return (await fsClient.readFile(path, "utf8")) as string;
+  }, []);
   const loadImport = useCallback<NonNullable<SandboxOptions["loadImport"]>>(
     (specifier, ref, externals) => sandboxRef.current.loadImport(specifier, ref, externals),
     []
@@ -849,6 +848,7 @@ export function useAgenticChat({
                   ],
                   values: {},
                   hideSubmit: true,
+                  dismissible: false,
                   createdAt: Date.now(),
                   complete: (result: FeedbackResult) => {
                     if (result.type === "submit") {
@@ -1386,6 +1386,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       replaySettled: core.replaySettled,
       status: core.status,
       channelId: channelName,
+      channelTitle: core.channelTitle,
       browserHandoffCaller: {
         id: runtimeCallerId(config.rpc.selfId),
         kind: browserHandoffCallerKindFromMetadata(metadata.type),
@@ -1429,8 +1430,6 @@ Use package imports available to inline_ui plus relative imports for local helpe
       undoLastAction: core.undoLastAction,
       pendingSendCount: core.pendingSendCount,
       afterTurnMessageIds: core.afterTurnMessageIds,
-      failedSendMessageIds: core.failedSendMessageIds,
-      retrySend: core.retrySend,
       onLoadEarlierMessages: core.loadEarlierMessages,
       onInterrupt: core.handleInterruptAgent,
       onCancelInvocation: core.handleCancelInvocation,
@@ -1462,6 +1461,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       core.connected,
       core.replaySettled,
       core.status,
+      core.channelTitle,
       core.selfId,
       config.rpc.selfId,
       metadata.type,
@@ -1504,8 +1504,6 @@ Use package imports available to inline_ui plus relative imports for local helpe
       core.undoLastAction,
       core.pendingSendCount,
       core.afterTurnMessageIds,
-      core.failedSendMessageIds,
-      core.retrySend,
       core.loadEarlierMessages,
       core.handleInterruptAgent,
       core.handleCallMethod,

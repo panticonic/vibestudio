@@ -95,17 +95,23 @@ export function createAppService(deps: {
 
         case "clearBuildCache": {
           requireAppCapability(ctx, deps.getViewManager(), "panel-hosting", "app.clearBuildCache");
+          const failures: string[] = [];
           if (buildClient) {
             try {
               await buildClient.recompute();
             } catch (e) {
               console.warn("[App] Build recompute failed:", e);
+              failures.push(e instanceof Error ? e.message : String(e));
             }
           }
           try {
             deps.panelOrchestrator.invalidateReadyPanels();
           } catch (error) {
             console.warn("[App] Failed to invalidate panel states:", error);
+            failures.push(error instanceof Error ? error.message : String(error));
+          }
+          if (failures.length > 0) {
+            throw new Error(`Build cache refresh failed: ${failures.join("; ")}`);
           }
           return;
         }
@@ -117,6 +123,9 @@ export function createAppService(deps: {
               return await buildClient.getAboutPages();
             } catch (e) {
               console.warn("[App] Failed to fetch shell pages:", e);
+              throw new Error(
+                `Couldn't load shell pages: ${e instanceof Error ? e.message : String(e)}`
+              );
             }
           }
           return [];

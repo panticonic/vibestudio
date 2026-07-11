@@ -134,7 +134,7 @@ export function approvalGatePolicy(): StepPolicy {
           payloadKind: "approval.requested",
           payload: {
             protocol: AGENTIC_PROTOCOL_VERSION,
-            question: "Allow tool call?",
+            question: approvalQuestion(name, payload["request"]),
             requestedBy: ctx.selfRef,
             details: { toolName: name, input: payload["request"] },
           },
@@ -162,6 +162,17 @@ export function approvalGatePolicy(): StepPolicy {
       return { append, effects };
     },
   };
+}
+
+function approvalQuestion(toolName: string, request: unknown): string {
+  const input = request && typeof request === "object" ? (request as Record<string, unknown>) : {};
+  const target = ["path", "filePath", "command", "url", "query"]
+    .map((key) => input[key])
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const friendlyName = toolName || "this tool";
+  return target
+    ? `Allow ${friendlyName} to act on “${target.length > 120 ? `${target.slice(0, 117)}…` : target}”?`
+    : `Allow the ${friendlyName} tool?`;
 }
 
 /** ask-user: rewrite ask_user invocations to a channel call to the prompter. */

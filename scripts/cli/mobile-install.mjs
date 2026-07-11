@@ -20,14 +20,20 @@ const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf
 const releaseArtifactName = "app-release.apk";
 const releasePackage = "app.vibestudio.mobile";
 const internalPackage = "app.vibestudio.mobile.internal";
-const internalApkPath = path.join(androidDir, "app", "build", "outputs", "apk", "internal", "app-internal.apk");
+const internalApkPath = path.join(
+  androidDir,
+  "app",
+  "build",
+  "outputs",
+  "apk",
+  "internal",
+  "app-internal.apk"
+);
 const defaultReleaseBaseUrl = `https://github.com/vibestudio/vibestudio/releases/download/v${pkg.version}`;
 const defaultArtifactUrl =
-  process.env.VIBESTUDIO_MOBILE_APK_URL ??
-  `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
+  process.env.VIBESTUDIO_MOBILE_APK_URL ?? `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
 const defaultChecksumUrl =
-  process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ??
-  `${defaultReleaseBaseUrl}/SHA256SUMS`;
+  process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ?? `${defaultReleaseBaseUrl}/SHA256SUMS`;
 const platformToolsVersion = "36.0.0";
 const platformToolsPins = {
   linux: {
@@ -129,7 +135,8 @@ function parseArgs(argv) {
     throw new Error("--platform must be android or ios");
   }
   options.packageName =
-    options.packageName ?? (options.fromSource || options.noBuild ? internalPackage : releasePackage);
+    options.packageName ??
+    (options.fromSource || options.noBuild ? internalPackage : releasePackage);
   return options;
 }
 
@@ -199,7 +206,10 @@ function runCapture(command, args, options = {}) {
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`));
+      else
+        reject(
+          new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`)
+        );
     });
   });
 }
@@ -220,7 +230,14 @@ function iosSdk(options) {
 
 function iosAppPath(options) {
   const sdk = iosSdk(options);
-  return path.join(iosDir, "build", "Build", "Products", `${options.configuration}-${sdk}`, "Vibestudio.app");
+  return path.join(
+    iosDir,
+    "build",
+    "Build",
+    "Products",
+    `${options.configuration}-${sdk}`,
+    "Vibestudio.app"
+  );
 }
 
 async function ensureIosEntitlements(options) {
@@ -240,7 +257,9 @@ async function ensurePods() {
 
 async function installIos(options) {
   if (process.platform !== "darwin") {
-    throw new Error("iOS install requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac for provisioning details.");
+    throw new Error(
+      "iOS install requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac for provisioning details."
+    );
   }
   await ensureIosEntitlements(options);
   await ensurePods();
@@ -252,18 +271,22 @@ async function installIos(options) {
     "CODE_SIGN_ENTITLEMENTS=Generated/Vibestudio.entitlements",
   ];
   if (options.teamId) signingArgs.push(`DEVELOPMENT_TEAM=${options.teamId}`);
-  await run("xcodebuild", [
-    ...buildTarget,
-    "-scheme",
-    "Vibestudio",
-    "-configuration",
-    options.configuration,
-    "-derivedDataPath",
-    path.join(iosDir, "build"),
-    ...iosDestination(options),
-    ...signingArgs,
-    "build",
-  ], { cwd: iosDir });
+  await run(
+    "xcodebuild",
+    [
+      ...buildTarget,
+      "-scheme",
+      "Vibestudio",
+      "-configuration",
+      options.configuration,
+      "-derivedDataPath",
+      path.join(iosDir, "build"),
+      ...iosDestination(options),
+      ...signingArgs,
+      "build",
+    ],
+    { cwd: iosDir }
+  );
   const appPath = iosAppPath(options);
   if (!fs.existsSync(appPath)) throw new Error(`iOS build did not produce ${appPath}`);
   if (options.simulator) {
@@ -271,9 +294,25 @@ async function installIos(options) {
     await run("xcrun", ["simctl", "install", "booted", appPath]);
     if (options.launch) await run("xcrun", ["simctl", "launch", "booted", options.bundleId]);
   } else if (options.device) {
-    await run("xcrun", ["devicectl", "device", "install", "app", "--device", options.device, appPath]);
+    await run("xcrun", [
+      "devicectl",
+      "device",
+      "install",
+      "app",
+      "--device",
+      options.device,
+      appPath,
+    ]);
     if (options.launch) {
-      await run("xcrun", ["devicectl", "device", "process", "launch", "--device", options.device, options.bundleId]);
+      await run("xcrun", [
+        "devicectl",
+        "device",
+        "process",
+        "launch",
+        "--device",
+        options.device,
+        options.bundleId,
+      ]);
     }
   } else {
     console.log(`[mobile-install] iOS app built: ${appPath}`);
@@ -285,22 +324,27 @@ async function downloadFile(url, destination) {
   await fsp.mkdir(path.dirname(destination), { recursive: true });
   await new Promise((resolve, reject) => {
     const request = (currentUrl) => {
-      https.get(currentUrl, (response) => {
-        if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0) && response.headers.location) {
-          response.resume();
-          request(new URL(response.headers.location, currentUrl).toString());
-          return;
-        }
-        if ((response.statusCode ?? 0) < 200 || (response.statusCode ?? 0) >= 300) {
-          response.resume();
-          reject(new Error(`download failed (${response.statusCode}) from ${currentUrl}`));
-          return;
-        }
-        const file = fs.createWriteStream(destination);
-        response.pipe(file);
-        file.on("finish", () => file.close(resolve));
-        file.on("error", reject);
-      }).on("error", reject);
+      https
+        .get(currentUrl, (response) => {
+          if (
+            [301, 302, 303, 307, 308].includes(response.statusCode ?? 0) &&
+            response.headers.location
+          ) {
+            response.resume();
+            request(new URL(response.headers.location, currentUrl).toString());
+            return;
+          }
+          if ((response.statusCode ?? 0) < 200 || (response.statusCode ?? 0) >= 300) {
+            response.resume();
+            reject(new Error(`download failed (${response.statusCode}) from ${currentUrl}`));
+            return;
+          }
+          const file = fs.createWriteStream(destination);
+          response.pipe(file);
+          file.on("finish", () => file.close(resolve));
+          file.on("error", reject);
+        })
+        .on("error", reject);
     };
     request(url);
   });
@@ -322,24 +366,29 @@ function artifactCachePath(url) {
 async function downloadText(url) {
   return new Promise((resolve, reject) => {
     const request = (currentUrl) => {
-      https.get(currentUrl, (response) => {
-        if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0) && response.headers.location) {
-          response.resume();
-          request(new URL(response.headers.location, currentUrl).toString());
-          return;
-        }
-        if ((response.statusCode ?? 0) < 200 || (response.statusCode ?? 0) >= 300) {
-          response.resume();
-          reject(new Error(`download failed (${response.statusCode}) from ${currentUrl}`));
-          return;
-        }
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk) => {
-          body += chunk;
-        });
-        response.on("end", () => resolve(body));
-      }).on("error", reject);
+      https
+        .get(currentUrl, (response) => {
+          if (
+            [301, 302, 303, 307, 308].includes(response.statusCode ?? 0) &&
+            response.headers.location
+          ) {
+            response.resume();
+            request(new URL(response.headers.location, currentUrl).toString());
+            return;
+          }
+          if ((response.statusCode ?? 0) < 200 || (response.statusCode ?? 0) >= 300) {
+            response.resume();
+            reject(new Error(`download failed (${response.statusCode}) from ${currentUrl}`));
+            return;
+          }
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk) => {
+            body += chunk;
+          });
+          response.on("end", () => resolve(body));
+        })
+        .on("error", reject);
     };
     request(url);
   });
@@ -363,7 +412,9 @@ async function verifyAndroidArtifact(artifactPath, options) {
   let expected = options.artifactSha256 ? String(options.artifactSha256).trim().toLowerCase() : "";
   if (!expected) {
     if (!options.checksumUrl) {
-      throw new Error("Android release APK verification requires --checksum-url or --artifact-sha256");
+      throw new Error(
+        "Android release APK verification requires --checksum-url or --artifact-sha256"
+      );
     }
     const checksums = await downloadText(options.checksumUrl);
     expected = checksumFromList(checksums, artifactPath) ?? "";
@@ -434,7 +485,9 @@ async function ensureAdb() {
   const url = `https://dl.google.com/android/repository/${pin.archive}`;
   await fsp.mkdir(downloads, { recursive: true });
   if (!fs.existsSync(archivePath)) {
-    console.log(`[mobile-install] Downloading Android platform-tools ${platformToolsVersion}: ${url}`);
+    console.log(
+      `[mobile-install] Downloading Android platform-tools ${platformToolsVersion}: ${url}`
+    );
     await downloadFile(url, archivePath);
   }
   const actual = await sha256File(archivePath);
@@ -476,7 +529,7 @@ async function assertInstallTarget(adbPath, device) {
   } catch (error) {
     throw new Error(
       "adb failed to list devices. Make sure a phone or emulator is connected and authorized.\n" +
-      String(error instanceof Error ? error.message : error),
+        String(error instanceof Error ? error.message : error)
     );
   }
 
@@ -484,10 +537,14 @@ async function assertInstallTarget(adbPath, device) {
   if (device) {
     const match = devices.find((entry) => entry.serial === device);
     if (!match) {
-      throw new Error(`adb does not see device "${device}".\n\n${result.stdout.trim() || "No adb output"}`);
+      throw new Error(
+        `adb does not see device "${device}".\n\n${result.stdout.trim() || "No adb output"}`
+      );
     }
     if (match.state !== "device") {
-      throw new Error(`adb sees "${device}" but it is "${match.state}". Unlock the phone and accept the USB debugging prompt.`);
+      throw new Error(
+        `adb sees "${device}" but it is "${match.state}". Unlock the phone and accept the USB debugging prompt.`
+      );
     }
     return;
   }
@@ -497,23 +554,22 @@ async function assertInstallTarget(adbPath, device) {
 
   if (ready.length > 1) {
     throw new Error(
-      "adb sees multiple install targets. Re-run with --device <serial>.\n\n" +
-      result.stdout.trim(),
+      "adb sees multiple install targets. Re-run with --device <serial>.\n\n" + result.stdout.trim()
     );
   }
 
   if (devices.length > 0) {
     throw new Error(
       "adb sees a device, but it is not ready. Unlock the phone and accept the USB debugging prompt.\n\n" +
-      result.stdout.trim(),
+        result.stdout.trim()
     );
   }
 
   throw new Error(
     "adb does not see any Android device or emulator.\n\n" +
-    "Check that the phone is plugged in, Developer options are enabled, USB debugging is on, " +
-    "the phone is unlocked, and the USB debugging authorization prompt has been accepted.\n" +
-    `Then confirm with: ${adbPath} devices -l`,
+      "Check that the phone is plugged in, Developer options are enabled, USB debugging is on, " +
+      "the phone is unlocked, and the USB debugging authorization prompt has been accepted.\n" +
+      `Then confirm with: ${adbPath} devices -l`
   );
 }
 
@@ -522,6 +578,11 @@ async function main() {
   if (options.help) {
     printHelp();
     return;
+  }
+  if (options.fromSource && !fs.existsSync(options.platform === "ios" ? iosDir : androidDir)) {
+    throw new Error(
+      "mobile install --from-source requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap`."
+    );
   }
 
   if (options.platform === "ios") {
@@ -567,15 +628,18 @@ async function main() {
   await run(adbPath, adbArgs(options.device, ["install", "-r", "-d", apkPath]));
 
   if (options.launch) {
-    await run(adbPath, adbArgs(options.device, [
-      "shell",
-      "monkey",
-      "-p",
-      options.packageName,
-      "-c",
-      "android.intent.category.LAUNCHER",
-      "1",
-    ]));
+    await run(
+      adbPath,
+      adbArgs(options.device, [
+        "shell",
+        "monkey",
+        "-p",
+        options.packageName,
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "1",
+      ])
+    );
   }
 }
 

@@ -99,12 +99,16 @@ function getPanelState(manager: AutofillManager, wcId: number): TestPanelState {
 
 function createMockPasswordStore() {
   return {
+    getAll: vi.fn().mockReturnValue([]),
     getForOrigin: vi.fn().mockReturnValue([]),
     updateLastUsed: vi.fn(),
     update: vi.fn(),
     add: vi.fn().mockReturnValue(1),
     addNeverSave: vi.fn(),
     isNeverSave: vi.fn().mockReturnValue(false),
+    delete: vi.fn(),
+    listNeverSaveOrigins: vi.fn().mockReturnValue([]),
+    removeNeverSave: vi.fn(),
   };
 }
 

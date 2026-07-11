@@ -31,6 +31,7 @@ const log = createDevLogger("Autofill");
 
 /** Narrow interface for the password store — avoids deep import */
 interface PasswordStoreLike {
+  getAll(): Promise<StoredPassword[]> | StoredPassword[];
   getForOrigin(origin: string): Promise<StoredPassword[]> | StoredPassword[];
   updateLastUsed(id: number): Promise<void> | void;
   update(
@@ -46,6 +47,9 @@ interface PasswordStoreLike {
   }): Promise<number> | number;
   addNeverSave(origin: string): Promise<void> | void;
   isNeverSave(origin: string): Promise<boolean> | boolean;
+  delete(id: number): Promise<void> | void;
+  listNeverSaveOrigins(): Promise<string[]> | string[];
+  removeNeverSave(origin: string): Promise<void> | void;
 }
 
 interface FieldInfo {
@@ -355,6 +359,24 @@ export class AutofillManager {
           case "confirmSave": {
             const [panelId, action] = args as [string, "save" | "never" | "dismiss"];
             await this.handleConfirmSave(panelId, action);
+            return;
+          }
+          case "listSavedPasswords": {
+            const rows = await this.passwordStore.getAll();
+            return rows.map((row) => ({
+              id: row.id,
+              origin: row.origin_url,
+              username: row.username,
+            }));
+          }
+          case "deleteSavedPassword": {
+            await this.passwordStore.delete(args[0] as number);
+            return;
+          }
+          case "listNeverSaveOrigins":
+            return await this.passwordStore.listNeverSaveOrigins();
+          case "removeNeverSaveOrigin": {
+            await this.passwordStore.removeNeverSave(args[0] as string);
             return;
           }
           default:

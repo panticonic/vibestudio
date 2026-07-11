@@ -108,9 +108,8 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         throw new Error(`That doesn't look like a valid Vibestudio pairing link. ${parsed.reason}`);
       }
       await Linking.openURL(rawUrl);
-      // Only replace the saved pairing after the OS accepted the new link.
-      // A rejected deep-link handoff must leave the working credential intact.
-      await clearShellCredential();
+      // Opening a URL is not proof that iOS delivered it back to this app. Keep
+      // the working credential until a successful pairing overwrites it.
     } catch (error) {
       setAuthLoading(false);
       setAuthError(error instanceof Error ? error.message : "Could not open pairing link.");
@@ -167,6 +166,10 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           credentials,
           onStatusChange: (status) => {
             setConnectionStatus(status);
+            if (status === "connected") {
+              setConnectionAttempt(0);
+              setConnectionPhase("Preparing the mobile workspace…");
+            }
           },
           onTreeUpdated: (tree) => {
             setPanelTree(tree);

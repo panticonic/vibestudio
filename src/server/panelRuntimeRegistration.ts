@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
@@ -1115,8 +1116,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");
-    const { createWorkspaceConfigManager, createAndRegisterWorkspace, deleteWorkspaceDir } =
-      await import("@vibestudio/shared/workspace/loader");
+    const {
+      createWorkspaceConfigManager,
+      createAndRegisterWorkspace,
+      deleteWorkspaceDir,
+      markDesktopAutoApproveOnce,
+    } = await import("@vibestudio/shared/workspace/loader");
     const wsConfigPath = path.join(workspacePath, "meta/vibestudio.yml");
     const wsConfigManager = createWorkspaceConfigManager(wsConfigPath, workspaceConfig);
 
@@ -1129,7 +1134,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         centralData: centralData ?? null,
         createWorkspace: (name, opts) => {
           if (!centralData) throw new Error("Workspace creation not available");
-          return createAndRegisterWorkspace(name, centralData, opts);
+          const created = createAndRegisterWorkspace(name, centralData, opts);
+          markDesktopAutoApproveOnce(getWorkspaceDir(created.name));
+          return created;
         },
         deleteWorkspaceDir,
         eventService: deps.eventService,

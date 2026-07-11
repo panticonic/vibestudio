@@ -69,7 +69,11 @@ import {
   type StreamFrameType,
 } from "../protocol/bulkMux.js";
 import { createControlCodec } from "./controlFraming.js";
-import { createFrameScheduler, type EnqueueOutcome, type FrameScheduler } from "./frameScheduler.js";
+import {
+  createFrameScheduler,
+  type EnqueueOutcome,
+  type FrameScheduler,
+} from "./frameScheduler.js";
 import {
   SESSION_CLOSE,
   SESSION_HELLO,
@@ -233,6 +237,8 @@ export interface WebRtcSessionOptions {
    * (pairing) open delivers it.
    */
   onPaired?: (credential: { deviceId: string; refreshToken: string }) => void | Promise<void>;
+  /** Fired when the server terminally closes this logical session. */
+  onTerminalClose?: (error: Error) => void;
 }
 
 /** A logical session over the pipe — a full `EnvelopeRpcTransport`. */
@@ -492,7 +498,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     onStreamOverflow: (streamId, bufferedBytes) => {
       const error = errorWithCode(
         `stream ${streamId} exceeded the ${STREAM_RECEIVE_CAP_BYTES}-byte receive buffer (${bufferedBytes} buffered)`,
-        STREAM_RECEIVE_OVERFLOW_CODE,
+        STREAM_RECEIVE_OVERFLOW_CODE
       );
       logWarn(`${log} ${error.message}`);
       const active = activeStreams.get(streamId);
@@ -594,7 +600,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   function encodeBulkFrameParts(
     streamId: number,
     type: StreamFrameType,
-    payload: Uint8Array,
+    payload: Uint8Array
   ): Uint8Array[] {
     const budget = Math.max(1, effectiveChunk - BULK_MUX_HEADER_BYTES);
     if (payload.byteLength <= budget) {
@@ -609,8 +615,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           encodeBulkMessage(
             streamId,
             type,
-            payload.subarray(offset, Math.min(offset + budget, payload.byteLength)),
-          ),
+            payload.subarray(offset, Math.min(offset + budget, payload.byteLength))
+          )
         );
       }
       return parts;
@@ -619,26 +625,34 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // END carries a tiny JSON payload and cannot continue (MORE is invalid
       // on END) — an oversized one is a programming error, not a wire state.
       throw new Error(
-        `END payload (${payload.byteLength}B) exceeds the negotiated chunk (${budget}B)`,
+        `END payload (${payload.byteLength}B) exceeds the negotiated chunk (${budget}B)`
       );
     }
     // Oversized HEAD/ERROR JSON continues via MORE messages (§1.2).
     const parts: Uint8Array[] = [];
     for (let offset = 0; offset < payload.byteLength; offset += budget) {
       const end = Math.min(offset + budget, payload.byteLength);
-      parts.push(encodeBulkMessage(streamId, type, payload.subarray(offset, end), end < payload.byteLength));
+      parts.push(
+        encodeBulkMessage(streamId, type, payload.subarray(offset, end), end < payload.byteLength)
+      );
     }
     return parts;
   }
 
-  function sendBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void> {
+  function sendBulkFrame(
+    streamId: number,
+    type: StreamFrameType,
+    payload: Uint8Array
+  ): Promise<void> {
     const scheduler = bulkScheduler;
     if (!bulk || bulk.readyState !== "open" || !scheduler) {
       throw errorWithCode("WebRTC bulk channel not open", PIPE_CLOSED_CODE);
     }
     // Outcome discarded: bulk-stream failure is signalled by pipe-down/stream
     // teardown, not per-write results (settle-never-rejects).
-    return scheduler.enqueue(streamId, encodeBulkFrameParts(streamId, type, payload)).then(() => undefined);
+    return scheduler
+      .enqueue(streamId, encodeBulkFrameParts(streamId, type, payload))
+      .then(() => undefined);
   }
 
   // -- inbound control demux ----------------------------------------------------
@@ -661,7 +675,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // no RPC ever flows over an unpinned pipe (plan §6.1, proven §11).
       const error = errorWithCode(
         `DTLS fingerprint mismatch: observed ${observed} != pinned ${pairing.fingerprint}`,
-        FINGERPRINT_MISMATCH_CODE,
+        FINGERPRINT_MISMATCH_CODE
       );
       logError(`${log} ${error.message}`);
       rejectConnect?.(error);
@@ -680,7 +694,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     } catch (error) {
       // ControlProtocolViolation (defrag budget breach) — fail loud (§2.5).
       onPipeDown(
-        `control protocol violation: ${error instanceof Error ? error.message : String(error)}`,
+        `control protocol violation: ${error instanceof Error ? error.message : String(error)}`
       );
       return;
     }
@@ -692,7 +706,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // Control frames are whole JSON documents from a conforming peer; a
       // malformed one is a protocol violation, not something to tolerate.
       onPipeDown(
-        `malformed control frame: ${error instanceof Error ? error.message : String(error)}`,
+        `malformed control frame: ${error instanceof Error ? error.message : String(error)}`
       );
       return;
     }
@@ -761,7 +775,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         // bounce after a re-drive race): either way the tracked entry is
         // done and must never re-drive.
         unflushedRouted.delete((frame as SessionRoutedResponseErrorFrame).requestId);
-        sessions.get(frame.sid)?.deliverRoutedResponseError(frame as SessionRoutedResponseErrorFrame);
+        sessions
+          .get(frame.sid)
+          ?.deliverRoutedResponseError(frame as SessionRoutedResponseErrorFrame);
         return;
       case "routed-event-error":
         // Best-effort events: warn only (parity with wsClient.ts:204-212).
@@ -789,7 +805,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // BulkProtocolViolation — a peer speaking a different dialect fails loud
       // instead of corrupting streams silently (§1.2).
       onPipeDown(
-        `bulk protocol violation: ${error instanceof Error ? error.message : String(error)}`,
+        `bulk protocol violation: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -799,7 +815,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   function handleRemoteHello(frame: SessionHelloFrame, forGeneration: number): void {
     if (frame.proto !== SESSION_PROTOCOL_VERSION) {
       onPipeDown(
-        `protocol violation: hello proto ${frame.proto} (want ${SESSION_PROTOCOL_VERSION})`,
+        `protocol violation: hello proto ${frame.proto} (want ${SESSION_PROTOCOL_VERSION})`
       );
       return;
     }
@@ -877,11 +893,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     effectiveChunk = Math.min(advertisedMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
     keepaliveIntervalMs = Math.min(
       LOCAL_KEEPALIVE.intervalMs,
-      remoteHello.keepalive?.intervalMs || Number.POSITIVE_INFINITY,
+      remoteHello.keepalive?.intervalMs || Number.POSITIVE_INFINITY
     );
     keepaliveTimeoutMs = Math.min(
       LOCAL_KEEPALIVE.timeoutMs,
-      remoteHello.keepalive?.timeoutMs || Number.POSITIVE_INFINITY,
+      remoteHello.keepalive?.timeoutMs || Number.POSITIVE_INFINITY
     );
     lastPongAt = Date.now();
     reconnectAttempt = 0;
@@ -967,7 +983,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     if (closed || establishing || reconnectTimer !== null) return;
     const delay = Math.min(
       RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt + Math.random() * RECONNECT_JITTER_MS,
-      RECONNECT_MAX_DELAY_MS,
+      RECONNECT_MAX_DELAY_MS
     );
     reconnectAttempt++;
     emitReconnectProgress("scheduled", reason);
@@ -1001,9 +1017,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     try {
       await establishPeer();
     } catch (error) {
-      logWarn(
-        `${log} establish failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      logWarn(`${log} establish failed: ${error instanceof Error ? error.message : String(error)}`);
       dirty = true;
     } finally {
       establishing = false;
@@ -1030,7 +1044,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       establishDeadlineTimer = null;
       if (closed || status === "connected") return;
       logWarn(
-        `${log} reconnect establish stalled (no pipe within ${RECONNECT_ESTABLISH_DEADLINE_MS}ms) — retrying`,
+        `${log} reconnect establish stalled (no pipe within ${RECONNECT_ESTABLISH_DEADLINE_MS}ms) — retrying`
       );
       emitReconnectProgress("failed", `establish stalled: ${reason}`);
       onPipeDown("reconnect establish deadline exceeded");
@@ -1124,12 +1138,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           // Descriptions exchanged — let ICE/DTLS finish; the establish
           // deadline backstops a window that never completes.
           logWarn(
-            `${log} signaling closed after description exchange (${reason ?? ""}) — letting ICE/DTLS finish`,
+            `${log} signaling closed after description exchange (${reason ?? ""}) — letting ICE/DTLS finish`
           );
           return;
         }
         onPipeDown(`signaling closed: ${reason ?? ""}`);
-      }),
+      })
     );
     if (role === "offerer" && sig.onPeerJoined) {
       unsubs.push(
@@ -1139,12 +1153,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           void sig
             .sendDescription(lastLocalOffer)
             .catch((error) => logWarn(`${log} re-send offer on peer-joined`, error));
-        }),
+        })
       );
     }
     const iceServers = sig.fetchIceServers
       ? await sig.fetchIceServers()
-      : pairing.iceServers ?? [];
+      : (pairing.iceServers ?? []);
     if (thisGeneration !== generation || closed || dirty) return; // aborted under us
 
     const pc = await provider.create({
@@ -1203,7 +1217,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       bulkChannel.onError((error) => {
         if (thisGeneration !== generation) return;
         onPipeDown(`bulk channel error: ${error.message}`);
-      }),
+      })
     );
 
     // Candidate buffering (§3.2): queue inbound remote candidates until a remote
@@ -1211,7 +1225,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // setRemoteDescription is genuinely async — candidates racing it were dropped.
     let remoteDescApplied = false;
     const pendingCandidates: RtcIceCandidate[] = [];
-    const applyRemoteDescription = async (desc: { type: "offer" | "answer"; sdp: string }): Promise<void> => {
+    const applyRemoteDescription = async (desc: {
+      type: "offer" | "answer";
+      sdp: string;
+    }): Promise<void> => {
       await pc.setRemoteDescription(desc);
       if (thisGeneration !== generation || closed) return;
       if (desc.type === "offer" && role === "answerer") {
@@ -1244,8 +1261,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           if (thisGeneration === generation) onPipeDown("signaling sendDescription failed");
         });
       }),
-      pc.onLocalCandidate((cand) =>
-        void sig.sendCandidate(cand).catch((error) => logWarn(`${log} sendCandidate`, error)),
+      pc.onLocalCandidate(
+        (cand) =>
+          void sig.sendCandidate(cand).catch((error) => logWarn(`${log} sendCandidate`, error))
       ),
       sig.onDescription((desc) => {
         if (thisGeneration !== generation || closed) return;
@@ -1260,9 +1278,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           pendingCandidates.push(cand);
           return;
         }
-        void pc.addRemoteCandidate(cand).catch((error) => logWarn(`${log} addRemoteCandidate`, error));
+        void pc
+          .addRemoteCandidate(cand)
+          .catch((error) => logWarn(`${log} addRemoteCandidate`, error));
       }),
-      pc.onConnectionStateChange((state) => onConnectionState(state, thisGeneration)),
+      pc.onConnectionStateChange((state) => onConnectionState(state, thisGeneration))
     );
     // Re-emit the candidate type on every selected-pair change (bug #4): the
     // one-shot read at hello-complete misses a still-null nomination and a
@@ -1273,7 +1293,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         pc.onSelectedCandidateChange((type) => {
           if (thisGeneration !== generation || closed || status !== "connected") return;
           emitCandidateType(type);
-        }),
+        })
       );
     }
 
@@ -1424,7 +1444,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     sid: string,
     streamId: number,
     bodyStreamId: number,
-    body: ReadableStream<Uint8Array>,
+    body: ReadableStream<Uint8Array>
   ): { abort: (error: Error) => void } {
     const reader = body.getReader();
     let abortError: Error | null = null;
@@ -1451,7 +1471,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
             if (abortError) throw abortError;
           }
         }
-        await sendBulkFrame(bodyStreamId, FRAME_END, encoder.encode(JSON.stringify({ bytesIn: bytesOut })));
+        await sendBulkFrame(
+          bodyStreamId,
+          FRAME_END,
+          encoder.encode(JSON.stringify({ bytesIn: bytesOut }))
+        );
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         // Settle the server's inbound body loudly (it must never hang half-fed).
@@ -1459,7 +1483,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           await sendBulkFrame(
             bodyStreamId,
             FRAME_ERROR,
-            encoder.encode(JSON.stringify({ message: err.message, code: "UPLOAD_ABORTED" })),
+            encoder.encode(JSON.stringify({ message: err.message, code: "UPLOAD_ABORTED" }))
           );
         } catch {
           /* pipe gone — the server reaps the body via session/pipe teardown */
@@ -1506,7 +1530,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         // await rejects now, and tell the server to stop producing. settleStream
         // also aborts an in-flight upload pump (§1.6), whose ERROR frame settles
         // the server's inbound body.
-        inboundMux.fail(streamId, errorWithCode("Streaming RPC aborted by caller", PIPE_CLOSED_CODE));
+        inboundMux.fail(
+          streamId,
+          errorWithCode("Streaming RPC aborted by caller", PIPE_CLOSED_CODE)
+        );
         try {
           writeControlFrame({ t: SESSION_STREAM_CANCEL, sid, streamId });
         } catch {
@@ -1689,7 +1716,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       this.deadlineTimer = setTimeout(() => {
         this.deadlineTimer = null;
         if (gen !== this.openGen || this.sessionClosed || closed || this.openSettled) return;
-        logWarn(`${log} session ${this.sid} open attempt timed out after ${SESSION_OPEN_DEADLINE_MS}ms`);
+        logWarn(
+          `${log} session ${this.sid} open attempt timed out after ${SESSION_OPEN_DEADLINE_MS}ms`
+        );
         this.scheduleRetry("open deadline");
       }, SESSION_OPEN_DEADLINE_MS);
       unrefTimer(this.deadlineTimer);
@@ -1707,15 +1736,18 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     private scheduleRetry(reason: string): void {
       if (this.sessionClosed || closed || this.retryTimer !== null || !this.isCurrent()) return;
       const delay = Math.min(
-        SESSION_RETRY_BASE_DELAY_MS * 2 ** this.retryAttempt + Math.random() * SESSION_RETRY_JITTER_MS,
-        SESSION_RETRY_MAX_DELAY_MS,
+        SESSION_RETRY_BASE_DELAY_MS * 2 ** this.retryAttempt +
+          Math.random() * SESSION_RETRY_JITTER_MS,
+        SESSION_RETRY_MAX_DELAY_MS
       );
       this.retryAttempt++;
       this.retryTimer = setTimeout(() => {
         this.retryTimer = null;
         if (this.sessionClosed || closed || !this.isCurrent()) return;
         if (status !== "connected") return; // pipe recovery reopens on completion
-        logWarn(`${log} session ${this.sid} reopening (attempt ${this.retryAttempt}, after: ${reason})`);
+        logWarn(
+          `${log} session ${this.sid} reopening (attempt ${this.retryAttempt}, after: ${reason})`
+        );
         void this.reopen().catch(() => undefined);
       }, delay);
       unrefTimer(this.retryTimer);
@@ -1809,7 +1841,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // Non-terminal (e.g. 4008 session-not-open after a server-side desync):
       // sends must wait for the reopen, so re-arm the open promise and schedule
       // a backoff reopen — the desync self-heals within one round-trip (§1.5).
-      logWarn(`${log} session ${this.sid} closed non-terminally (${code ?? "?"}: ${reason ?? ""}) — reopening`);
+      logWarn(
+        `${log} session ${this.sid} closed non-terminally (${code ?? "?"}: ${reason ?? ""}) — reopening`
+      );
       this.clearDeadline();
       this.ensureOpenPromise();
       this.scheduleRetry(`server closed (${code ?? "?"})`);
@@ -1827,6 +1861,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         sessions.delete(this.sid);
         // A dead session can never re-drive: drop its tracked requests (§3.4).
         dropUnflushedRouted(this.sid);
+      }
+      try {
+        this.opts.onTerminalClose?.(error);
+      } catch (callbackError) {
+        logWarn(`${log} session ${this.sid} onTerminalClose threw`, callbackError);
       }
     }
 

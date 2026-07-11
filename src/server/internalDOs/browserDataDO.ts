@@ -1001,6 +1001,20 @@ export class BrowserDataDO extends DurableObjectBase {
   }
 
   @rpc
+  getNeverSaveOrigins(): string[] {
+    return (
+      this.sql.exec(`SELECT origin FROM password_never_save ORDER BY origin`).toArray() as Array<{
+        origin: string;
+      }>
+    ).map((row) => row.origin);
+  }
+
+  @rpc
+  removeNeverSave(origin: string): void {
+    this.sql.exec(`DELETE FROM password_never_save WHERE origin = ?`, origin);
+  }
+
+  @rpc
   updateLastUsed(id: number): void {
     this.sql.exec(
       `UPDATE passwords SET date_last_used = ?, times_used = times_used + 1 WHERE id = ?`,

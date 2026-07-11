@@ -376,7 +376,9 @@ export class MobileRpcClient implements Pick<
 
     throw lastError instanceof Error
       ? lastError
-      : new Error(`WebRTC connection timeout (${maxMs}ms) — re-pair this device`);
+      : new Error(
+          `Could not reach your workspace server after ${Math.round(maxMs / 1000)} seconds. It may be asleep or offline — retry, or re-pair only if the server was replaced.`
+        );
   }
 
   private async teardown(): Promise<void> {

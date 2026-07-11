@@ -19,14 +19,33 @@ const CHILD_IDENTITY_TIMEOUT_S = 30;
 export function parseArgs(argv) {
   const args = [...argv];
   if (args.includes("--help")) {
-    return { verb: "deploy", target: null, artifact: null, signalUrl: null, port: "3030", workspace: null, purge: false, help: true };
+    return {
+      verb: "deploy",
+      target: null,
+      artifact: null,
+      signalUrl: null,
+      port: "3030",
+      workspace: null,
+      purge: false,
+      help: true,
+    };
   }
   const verb = ["status", "logs", "update", "remove"].includes(args[0]) ? args.shift() : "deploy";
-  const options = { verb, target: args.shift() ?? null, artifact: null, signalUrl: null, port: "3030", workspace: null, purge: false, help: false };
+  const options = {
+    verb,
+    target: args.shift() ?? null,
+    artifact: null,
+    signalUrl: null,
+    port: "3030",
+    workspace: null,
+    purge: false,
+    help: false,
+  };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--artifact") options.artifact = path.resolve(args[++i] ?? "");
-    else if (arg === "--signal-url" || arg === "--signaling-url") options.signalUrl = args[++i] ?? "";
+    else if (arg === "--signal-url" || arg === "--signaling-url")
+      options.signalUrl = args[++i] ?? "";
     else if (arg === "--port") options.port = args[++i] ?? "3030";
     else if (arg === "--workspace") options.workspace = args[++i] ?? "";
     else if (arg === "--purge") options.purge = true;
@@ -62,7 +81,18 @@ export function run(command, args, options = {}) {
     const stdio = hasInput ? ["pipe", "inherit", "inherit"] : (options.stdio ?? "inherit");
     const child = spawn(command, args, { cwd: options.cwd ?? repoRoot, env: process.env, stdio });
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`))));
+    child.on("exit", (code, signal) => {
+      const interrupted =
+        options.allowInterrupt === true &&
+        (code === 130 || code === 143 || signal === "SIGINT" || signal === "SIGTERM");
+      if (code === 0 || interrupted) resolve();
+      else
+        reject(
+          new Error(
+            `${command} ${args.join(" ")} failed with ${signal ? `signal ${signal}` : `code ${code}`}`
+          )
+        );
+    });
     if (hasInput) {
       child.stdin.on("error", () => {});
       child.stdin.write(options.input);
@@ -118,9 +148,12 @@ export function workspaceNameForDeploy(options) {
 // there is no ssh-side re-parse: `set -e` at the top aborts the whole script and
 // a non-bash login shell can't mangle it. `-l` sources the user's login profile
 // so nvm / user-prefix npm bin dirs land on PATH before we resolve `vibestudio`.
-export async function ssh(target, script, hooks = {}) {
+export async function ssh(target, script, hooks = {}, runOptions = {}) {
   assertSafeTarget(target);
-  await (hooks.run ?? run)("ssh", [target, "bash", "-l", "-s"], { input: script });
+  await (hooks.run ?? run)("ssh", [target, "bash", "-l", "-s"], {
+    input: script,
+    ...runOptions,
+  });
 }
 
 function nodeHealthzProbe(port) {
@@ -137,7 +170,8 @@ function nodeHealthzProbe(port) {
 
 export async function deploy(options, hooks = {}) {
   assertSafeTarget(options.target);
-  if (options.artifact && !fs.existsSync(options.artifact)) throw new Error(`artifact not found: ${options.artifact}`);
+  if (options.artifact && !fs.existsSync(options.artifact))
+    throw new Error(`artifact not found: ${options.artifact}`);
   const port = validatePort(options.port);
   const signalUrl = validateSignalUrl(options.signalUrl);
   const workspaceName = workspaceNameForDeploy(options);
@@ -288,8 +322,12 @@ export async function main(argv = process.argv.slice(2), hooks = {}) {
     return options.help ? 0 : 1;
   }
   if (options.verb === "deploy" || options.verb === "update") return deploy(options, hooks);
-  if (options.verb === "status") return ssh(options.target, `systemctl --user --no-pager status ${UNIT_NAME}`, hooks);
-  if (options.verb === "logs") return ssh(options.target, `journalctl --user -u ${UNIT_NAME} -f`, hooks);
+  if (options.verb === "status")
+    return ssh(options.target, `systemctl --user --no-pager status ${UNIT_NAME}`, hooks);
+  if (options.verb === "logs")
+    return ssh(options.target, `journalctl --user -u ${UNIT_NAME} -f`, hooks, {
+      allowInterrupt: true,
+    });
   if (options.verb === "remove") return ssh(options.target, removeScript(options.purge), hooks);
   throw new Error(`unknown verb: ${options.verb}`);
 }

@@ -105,6 +105,7 @@ function makeService(
   opts: {
     eventService?: {
       emit: (event: "workspace:relaunch-requested", payload: { name: string }) => void;
+      getSubscriberCount?: (event: "workspace:relaunch-requested") => number;
     };
   } = {}
 ) {
@@ -538,7 +539,7 @@ describe("workspace.select", () => {
       centralData: central,
       createWorkspace: vi.fn(),
       deleteWorkspaceDir: vi.fn(),
-      eventService: { emit },
+      eventService: { emit, getSubscriberCount: vi.fn(() => 1) },
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
@@ -548,7 +549,7 @@ describe("workspace.select", () => {
     expect(emit).toHaveBeenCalledWith("workspace:relaunch-requested", { name: "other" });
   });
 
-  it("is a no-op (no error) when eventService is undefined", async () => {
+  it("fails clearly when no desktop shell is attached", async () => {
     const central = makeCentralData();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
@@ -561,8 +562,10 @@ describe("workspace.select", () => {
       // No eventService — no shell attached to relaunch.
     });
 
-    await expect(service.handler(panelCtx, "select", ["other"])).resolves.toBeUndefined();
-    expect(central.touchWorkspace).toHaveBeenCalledWith("other");
+    await expect(service.handler(panelCtx, "select", ["other"])).rejects.toThrow(
+      /No desktop shell is attached/
+    );
+    expect(central.touchWorkspace).not.toHaveBeenCalled();
   });
 
   it("the runtime client's switchTo() maps to the wire method workspace.select", () => {

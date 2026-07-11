@@ -39,7 +39,7 @@ import {
   type FlattenedPanel,
 } from "../shell/hooks/index.js";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
-import { menu, panel } from "../shell/client.js";
+import { menu, notification, panel } from "../shell/client.js";
 import {
   activeWorkspaceNameAtom,
   pinnedPanelIdsAtom,
@@ -446,9 +446,17 @@ const SortableTreeItem = memo(
     const handleArchive = useCallback(
       (e: React.MouseEvent) => {
         e.stopPropagation();
+        if (
+          panel.childCount > 0 &&
+          !window.confirm(
+            `Close “${panel.title}” and its ${panel.childCount} child panel${panel.childCount === 1 ? "" : "s"}?`
+          )
+        ) {
+          return;
+        }
         onArchive?.(panel.id);
       },
-      [panel.id, onArchive]
+      [panel.childCount, panel.id, panel.title, onArchive]
     );
 
     const handleAddChild = useCallback(
@@ -791,12 +799,20 @@ export function LazyPanelTreeSidebar({
   }, [ancestorIds, collapsedIds, expandIds]);
 
   const handleNewPanel = useCallback(async () => {
-    const result = await panel.createAboutPanel("new");
-    window.dispatchEvent(
-      new CustomEvent("shell-panel-created", {
-        detail: { panelId: result.id },
-      })
-    );
+    try {
+      const result = await panel.createAboutPanel("new");
+      window.dispatchEvent(
+        new CustomEvent("shell-panel-created", {
+          detail: { panelId: result.id },
+        })
+      );
+    } catch (error) {
+      void notification.show({
+        type: "error",
+        title: "Couldn't create panel",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }, []);
 
   const handleSwitchWorkspace = useCallback(() => {
@@ -808,12 +824,20 @@ export function LazyPanelTreeSidebar({
       if (collapsedIds.has(parentId)) {
         expandIds([parentId]);
       }
-      const result = await panel.createChild(parentId, "about/new", { focus: true });
-      window.dispatchEvent(
-        new CustomEvent("shell-panel-created", {
-          detail: { panelId: result.id },
-        })
-      );
+      try {
+        const result = await panel.createChild(parentId, "about/new", { focus: true });
+        window.dispatchEvent(
+          new CustomEvent("shell-panel-created", {
+            detail: { panelId: result.id },
+          })
+        );
+      } catch (error) {
+        void notification.show({
+          type: "error",
+          title: "Couldn't add child panel",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
     [collapsedIds, expandIds]
   );

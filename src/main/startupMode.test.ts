@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // resetModules + re-import in each test.
 
 const mockResolveWorkspaceName = vi.fn(() => null as string | null);
+const mockConsumeDesktopAutoApproveOnce = vi.fn(() => false);
 const mockIsDev = vi.fn(() => false);
 const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
   resolved: {
@@ -25,6 +26,7 @@ const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
 
 vi.mock("@vibestudio/shared/workspace/loader", () => ({
   resolveWorkspaceName: () => mockResolveWorkspaceName(),
+  consumeDesktopAutoApproveOnce: () => mockConsumeDesktopAutoApproveOnce(),
   resolveOrCreateWorkspace: () => {
     throw new Error("not used in these tests");
   },
@@ -66,6 +68,8 @@ describe("resolveStartupMode interactive desktop policy", () => {
     delete process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
     mockResolveWorkspaceName.mockReset();
     mockResolveWorkspaceName.mockReturnValue(null);
+    mockConsumeDesktopAutoApproveOnce.mockReset();
+    mockConsumeDesktopAutoApproveOnce.mockReturnValue(false);
     mockResolveLocalWorkspaceStartup.mockClear();
     mockIsDev.mockReset();
     mockIsDev.mockReturnValue(false);
@@ -147,12 +151,11 @@ describe("resolveStartupMode interactive desktop policy", () => {
     );
   });
 
-  it("marks chooser-launched local workspaces as create-if-missing", () => {
+  it("builds workspace switches without implicitly creating a missing workspace", () => {
     expect(mod.workspaceRelaunchArgs("default", ["--foo", "--workspace", "old"])).toEqual([
       "--foo",
       "--workspace",
       "default",
-      mod.WORKSPACE_CREATE_IF_MISSING_ARG,
     ]);
   });
 
@@ -176,7 +179,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
         mod.DEV_WEBRTC_REMOTE_ARG,
         "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
       ])
-    ).toEqual(["--foo", "--workspace", "default", mod.WORKSPACE_CREATE_IF_MISSING_ARG]);
+    ).toEqual(["--foo", "--workspace", "default"]);
   });
 
   it("builds ephemeral-workspace relaunch args that pin the name and tag it disposable", () => {

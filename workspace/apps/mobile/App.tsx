@@ -12,6 +12,7 @@ import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
+import { Toast } from "./src/components/Toast";
 import { setApprovedAppCapabilities } from "./src/services/appCapabilities";
 import { registerBackgroundHandlers } from "./src/services/backgroundHandlers";
 import { setupOAuthHandler } from "./src/services/oauthHandler";
@@ -64,24 +65,29 @@ function AppContent() {
     let cleanup: (() => void) | null = null;
     let disposed = false;
 
-    void setupNotificationCategories().then(() => registerForPushNotifications(shellClient, {
-      onApprovalDeepLink: (approvalId) => setApprovalDeepLink(approvalId),
-      onToast: (toast) => pushToast(toast),
-    })).then((nextCleanup) => {
-      if (disposed) {
-        nextCleanup();
-        return;
-      }
-      cleanup = nextCleanup;
-    }).catch((error) => {
-      console.warn("[App] Failed to initialize push notifications:", error);
-      pushToast({
-        durationMs: 7000,
-        message: error instanceof Error ? error.message : String(error),
-        title: "Push notifications unavailable",
-        tone: "warning",
+    void setupNotificationCategories()
+      .then(() =>
+        registerForPushNotifications(shellClient, {
+          onApprovalDeepLink: (approvalId) => setApprovalDeepLink(approvalId),
+          onToast: (toast) => pushToast(toast),
+        })
+      )
+      .then((nextCleanup) => {
+        if (disposed) {
+          nextCleanup();
+          return;
+        }
+        cleanup = nextCleanup;
+      })
+      .catch((error) => {
+        console.warn("[App] Failed to initialize push notifications:", error);
+        pushToast({
+          durationMs: 7000,
+          message: error instanceof Error ? error.message : String(error),
+          title: "Push notifications unavailable",
+          tone: "warning",
+        });
       });
-    });
 
     return () => {
       disposed = true;
@@ -100,6 +106,7 @@ function AppContent() {
         <NavigationContainer>
           <RootNavigator />
         </NavigationContainer>
+        <Toast />
       </ErrorBoundary>
     </>
   );

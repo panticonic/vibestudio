@@ -8,7 +8,12 @@ import { parseSignalingEndpoint } from "./lib/connect-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
-const wrangler = path.join(repoRoot, "node_modules", ".bin", process.platform === "win32" ? "wrangler.cmd" : "wrangler");
+const wrangler = path.join(
+  repoRoot,
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "wrangler.cmd" : "wrangler"
+);
 
 function parseArgs(argv) {
   const options = { url: null, dryRun: false, help: false };
@@ -37,7 +42,11 @@ function run(command, args, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env: process.env, stdio: "inherit" });
     child.on("error", reject);
-    child.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`)));
+    child.on("exit", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`))
+    );
   });
 }
 
@@ -79,15 +88,25 @@ async function main() {
   // Validate the endpoint BEFORE the (slow) wrangler deploy so a typo fails fast
   // instead of after a successful deploy.
   const validatedUrl = validateUrl(options.url);
+  if (!fs.existsSync(signalingDir) || !fs.existsSync(wrangler)) {
+    throw new Error(
+      "remote setup-signaling requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap` before deploying the signaling worker."
+    );
+  }
   if (options.dryRun) {
     console.log(`[remote-setup-signaling] ${wrangler} deploy`);
+    if (validatedUrl !== null) {
+      console.log(`[remote-setup-signaling] would save signalingUrl=${validatedUrl}`);
+    }
   } else {
     await run(wrangler, ["deploy"], signalingDir);
+    writeConfig(validatedUrl);
   }
-  writeConfig(validatedUrl);
 }
 
 main().catch((error) => {
-  console.error(`[remote-setup-signaling] ${error instanceof Error ? error.message : String(error)}`);
+  console.error(
+    `[remote-setup-signaling] ${error instanceof Error ? error.message : String(error)}`
+  );
   process.exit(1);
 });

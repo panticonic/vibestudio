@@ -693,7 +693,7 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
   input.oninput = () => {
     localWorkspaceValue = input.value;
   };
-  const launchLabel = state.localWorkspaces.length > 0 ? "Launch by name" : "Create and launch";
+  const launchLabel = state.localWorkspaces.length > 0 ? "Launch existing" : "Create and launch";
   const launchButton = connectionButton(launchLabel, "local:new", async () => {
     if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
     const name = localWorkspaceValue.trim() || state.lastLocalWorkspaceName || "default";

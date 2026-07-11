@@ -348,10 +348,15 @@ function ProfilesTab() {
             </Text>
           )}
           {ref.kind !== "cpuprofile" ? (
-            <Text size="1" color="gray" as="div">
-              Open this artifact in DevTools or speedscope; inline viewing is available for CPU
-              profiles.
-            </Text>
+            <Flex direction="column" gap="1">
+              <Text size="1" color="gray" as="div">
+                Open this artifact in DevTools or speedscope; inline viewing is available for CPU
+                profiles.
+              </Text>
+              <Text size="1" color="gray" as="div">
+                Artifact: <Code>{ref.path}</Code>
+              </Text>
+            </Flex>
           ) : null}
         </Card>
       ))}

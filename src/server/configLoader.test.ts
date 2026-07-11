@@ -31,4 +31,10 @@ describe("CONFIG_LOADER_JS", () => {
     expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.getItem("__vibestudioPanelInit")');
     expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.setItem("__vibestudioPanelInit"');
   });
+
+  it("renders a recovery surface when the generated panel bundle cannot load", () => {
+    expect(CONFIG_LOADER_JS).toContain("bundle.onerror");
+    expect(CONFIG_LOADER_JS).toContain("The panel bundle could not be loaded.");
+    expect(CONFIG_LOADER_JS).toContain("Reload panel");
+  });
 });

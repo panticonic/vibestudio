@@ -46,8 +46,10 @@ export class CapabilityGrantStore {
   ): boolean {
     const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
     return (
-      Array.from(this.sessionGrants.values()).some((grant) =>
-        grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      Array.from(this.sessionGrants.values()).some(
+        (grant) =>
+          grant.effect !== "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
       ) ||
       this.persistent.grants.some(
         (grant) =>
@@ -117,16 +119,37 @@ export class CapabilityGrantStore {
     resourceScope?: ApprovalResourceScope
   ): boolean {
     const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
-    return this.persistent.grants.some(
-      (grant) =>
-        grant.effect === "deny" &&
-        grantMatches(grant, capability, resourceKey, requestedScope, identity)
+    return (
+      Array.from(this.sessionGrants.values()).some(
+        (grant) =>
+          grant.effect === "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      ) ||
+      this.persistent.grants.some(
+        (grant) =>
+          grant.effect === "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      )
     );
   }
 
   /** Durable grants only; session decisions intentionally disappear at restart. */
   listPersistent(): CapabilityGrant[] {
     return this.persistent.grants.map((grant) => ({ ...grant }));
+  }
+
+  /** Active in-memory decisions, exposed so the trusted Permissions page can revoke them. */
+  listSession(): CapabilityGrant[] {
+    return Array.from(this.sessionGrants.values(), (grant) => ({ ...grant }));
+  }
+
+  revokeSession(id: string): boolean {
+    for (const [key, grant] of this.sessionGrants) {
+      if (capabilityGrantId(grant) !== id) continue;
+      this.sessionGrants.delete(key);
+      return true;
+    }
+    return false;
   }
 
   revokePersistent(id: string): boolean {
@@ -147,7 +170,12 @@ export class CapabilityGrantStore {
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
+        console.warn(
+          `[CapabilityGrantStore] Ignoring unreadable grants file ${this.filePath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        this.persistent = { grants: [] };
       }
     }
   }

@@ -17,6 +17,7 @@ export function parseArgs(argv) {
   const options = {
     signalUrl: null,
     identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? null,
+    identityExplicit: Boolean(process.env.VIBESTUDIO_WEBRTC_IDENTITY),
     json: false,
     help: false,
   };
@@ -26,6 +27,7 @@ export function parseArgs(argv) {
       options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--identity") {
       options.identity = path.resolve(argv[++i] ?? "");
+      options.identityExplicit = true;
     } else if (arg === "--json") {
       options.json = true;
     } else if (arg === "--help") {
@@ -76,16 +78,24 @@ export function inspectIdentity(identityPath) {
   const dir = path.dirname(identityPath);
   const legacy = ["server.pem", "server.key"].filter((name) => fs.existsSync(path.join(dir, name)));
   if (legacy.length > 0) {
-    return check(false, "identity", "", `legacy WebRTC identity remnants found (run: vibestudio remote repair-identity --yes): ${legacy.join(", ")}`, {
-      path: identityPath,
-      legacy,
-    });
+    return check(
+      false,
+      "identity",
+      "",
+      `legacy WebRTC identity remnants found (run: vibestudio remote repair-identity --yes): ${legacy.join(", ")}`,
+      {
+        path: identityPath,
+        legacy,
+      }
+    );
   }
   let stat;
   try {
     stat = fs.statSync(identityPath);
   } catch {
-    return check(false, "identity", "", `identity file is missing: ${identityPath}`, { path: identityPath });
+    return check(false, "identity", "", `identity file is missing: ${identityPath}`, {
+      path: identityPath,
+    });
   }
   // Private key material must not be group/world accessible.
   const mode = stat.mode & 0o777;
@@ -127,7 +137,10 @@ export function signalingRoomWsUrl(resolvedUrl, room = randomUUID()) {
 }
 
 export async function checkSignaling(signalUrl, wsFactory = (u) => new WebSocket(u)) {
-  const resolved = resolveSignalingUrl({ flag: signalUrl ?? undefined, defaultUrl: DEFAULT_SIGNAL_URL });
+  const resolved = resolveSignalingUrl({
+    flag: signalUrl ?? undefined,
+    defaultUrl: DEFAULT_SIGNAL_URL,
+  });
   const url = signalingRoomWsUrl(resolved.url);
   return new Promise((resolve) => {
     let settled = false;
@@ -144,13 +157,28 @@ export async function checkSignaling(signalUrl, wsFactory = (u) => new WebSocket
       resolve(result);
     };
     const timer = setTimeout(() => {
-      finish(check(false, "signaling", "", `timed out connecting to ${url}`, { url, source: resolved.source }));
+      finish(
+        check(false, "signaling", "", `timed out connecting to ${url}`, {
+          url,
+          source: resolved.source,
+        })
+      );
     }, 8000);
     socket.once("open", () => {
-      finish(check(true, "signaling", `reachable: ${resolved.url} (${resolved.source})`, "", { url, source: resolved.source }));
+      finish(
+        check(true, "signaling", `reachable: ${resolved.url} (${resolved.source})`, "", {
+          url,
+          source: resolved.source,
+        })
+      );
     });
     socket.once("error", (error) => {
-      finish(check(false, "signaling", "", `cannot connect to ${url}: ${error.message}`, { url, source: resolved.source }));
+      finish(
+        check(false, "signaling", "", `cannot connect to ${url}: ${error.message}`, {
+          url,
+          source: resolved.source,
+        })
+      );
     });
   });
 }
@@ -169,12 +197,21 @@ async function checkGatewayPort(port) {
   return new Promise((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port }, () => {
       socket.destroy();
-      resolve(check(true, "gateway-port", `loopback gateway is listening on 127.0.0.1:${port}`, ""));
+      resolve(
+        check(true, "gateway-port", `loopback gateway is listening on 127.0.0.1:${port}`, "")
+      );
     });
     socket.setTimeout(3000);
     socket.once("timeout", () => {
       socket.destroy();
-      resolve(check(false, "gateway-port", "", `nothing is listening on 127.0.0.1:${port} (check: vibestudio remote deploy logs <host>)`));
+      resolve(
+        check(
+          false,
+          "gateway-port",
+          "",
+          `nothing is listening on 127.0.0.1:${port} (check: vibestudio remote deploy logs <host>)`
+        )
+      );
     });
     socket.once("error", (error) => {
       resolve(check(false, "gateway-port", "", `cannot reach 127.0.0.1:${port}: ${error.message}`));
@@ -184,7 +221,10 @@ async function checkGatewayPort(port) {
 
 export async function checkDeployedUnit(spawnImpl, unitPath = unitFilePath()) {
   if (!fs.existsSync(unitPath)) {
-    return { unit: skip("systemd-unit", "no deployed unit on this host (client preflight)"), port: null };
+    return {
+      unit: skip("systemd-unit", "no deployed unit on this host (client preflight)"),
+      port: null,
+    };
   }
   const { spawnSync } = spawnImpl ?? (await import("node:child_process"));
   const active = spawnSync("systemctl", ["--user", "is-active", UNIT_NAME], { encoding: "utf8" });
@@ -210,7 +250,9 @@ export async function runDoctor(options, deps = {}) {
     (deps.require ?? require)("node-datachannel");
     checks.push(check(true, "node-datachannel", "native addon loads", ""));
   } catch (error) {
-    checks.push(check(false, "node-datachannel", "", `native addon failed to load: ${error.message}`));
+    checks.push(
+      check(false, "node-datachannel", "", `native addon failed to load: ${error.message}`)
+    );
   }
   checks.push(
     check(
@@ -225,7 +267,12 @@ export async function runDoctor(options, deps = {}) {
   if (port !== null) {
     checks.push(await checkGatewayPort(port));
   }
-  checks.push(inspectIdentity(options.identity));
+  const identityExplicit = options.identityExplicit ?? Boolean(options.identity);
+  checks.push(
+    unit.skipped && !identityExplicit
+      ? skip("identity", "no server identity expected on a client host")
+      : inspectIdentity(options.identity)
+  );
   checks.push(await checkSignaling(options.signalUrl, deps.wsFactory));
   return { ok: checks.filter((entry) => !entry.skipped).every((entry) => entry.ok), checks };
 }

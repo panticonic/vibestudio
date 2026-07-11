@@ -49,6 +49,8 @@
             "updatePasswordLastUsed",
             "addNeverSavePassword",
             "isNeverSavePassword",
+            "getNeverSavePasswordOrigins",
+            "removeNeverSavePassword",
             "getAutofillSuggestions",
             "getSearchEngines",
             "setDefaultEngine",

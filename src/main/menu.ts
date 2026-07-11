@@ -1,4 +1,4 @@
-import { app, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
+import { app, dialog, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
 import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
@@ -23,7 +23,8 @@ export function setMenuEventService(es: EventService): void {
 
 function emitMenuEvent<E extends EventName>(event: E, payload?: EventPayloads[E]): boolean {
   if (!_menuEventService) {
-    throw new Error(`Menu eventService not initialized for "${event}"`);
+    console.warn(`[Menu] event service is not ready for "${event}"`);
+    return false;
   }
   _menuEventService.emit(event, payload);
   return true;
@@ -48,10 +49,32 @@ export function setMenuPanelRegistry(reg: PanelRegistry): void {
 async function archiveFocusedPanel(mainWindow: Electron.BaseWindow): Promise<void> {
   const focusedId = _menuPanelRegistry?.getFocusedPanelId();
   if (focusedId && _menuPanelLifecycle) {
+    const panel = _menuPanelRegistry?.getPanel(focusedId);
+    const descendantCount = panel ? countPanelDescendants(panel) : 0;
+    if (descendantCount > 0) {
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Close panel tree?",
+        message: `Close “${panel?.title ?? "this panel"}” and ${descendantCount} child panel${descendantCount === 1 ? "" : "s"}?`,
+        detail: "All panels below it will also be archived.",
+        buttons: ["Cancel", "Close panels"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (result.response !== 1) return;
+    }
     await _menuPanelLifecycle.closePanel(focusedId);
   } else {
     mainWindow.close();
   }
+}
+
+function countPanelDescendants(panel: { children: Array<{ children: unknown[] }> }): number {
+  return panel.children.reduce(
+    (count, child) => count + 1 + countPanelDescendants(child as never),
+    0
+  );
 }
 
 function reloadFocusedPanel(force = false): void {
@@ -147,8 +170,8 @@ export function buildCommonMenuItems(
   const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
-  const backAccelerator = isMac ? "Cmd+[" : "Alt+Left";
-  const forwardAccelerator = isMac ? "Cmd+]" : "Alt+Right";
+  const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
+  const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const file: MenuItemConstructorOptions[] = [
     {
       label: "New Panel",
@@ -160,7 +183,7 @@ export function buildCommonMenuItems(
     { type: "separator" },
     {
       label: "Command Palette...",
-      accelerator: "CmdOrCtrl+K",
+      accelerator: commandPaletteAccelerator,
       click: () => {
         emitMenuEvent("open-command-palette");
       },
@@ -190,7 +213,7 @@ export function buildCommonMenuItems(
 
   const edit: MenuItemConstructorOptions[] = [
     { label: "Undo", accelerator: "CmdOrCtrl+Z", role: "undo" },
-    { label: "Redo", accelerator: "CmdOrCtrl+Y", role: "redo" },
+    { label: "Redo", accelerator: redoAccelerator, role: "redo" },
     { type: "separator" },
     { label: "Cut", accelerator: "CmdOrCtrl+X", role: "cut" },
     { label: "Copy", accelerator: "CmdOrCtrl+C", role: "copy" },
@@ -201,14 +224,12 @@ export function buildCommonMenuItems(
   if (options?.onHistoryBack) {
     view.push({
       label: "Back",
-      accelerator: backAccelerator,
       click: () => options.onHistoryBack?.(),
     });
   }
   if (options?.onHistoryForward) {
     view.push({
       label: "Forward",
-      accelerator: forwardAccelerator,
       click: () => options.onHistoryForward?.(),
     });
   }
@@ -232,7 +253,6 @@ export function buildCommonMenuItems(
       accelerator: addressBarAccelerator,
       click: () => {
         emitMenuEvent("toggle-address-bar");
-        emitMenuEvent("focus-address-bar");
       },
     },
     { type: "separator" },
@@ -254,6 +274,15 @@ export function buildCommonMenuItems(
         }
       },
     }
+  );
+  view.push(
+    { type: "separator" },
+    { label: "Reset Zoom", role: "resetZoom" },
+    { label: "Zoom In", role: "zoomIn" },
+    { label: "Zoom Out", role: "zoomOut" },
+    { type: "separator" },
+    { label: "Toggle Full Screen", role: "togglefullscreen" },
+    { label: "Minimize", role: "minimize" }
   );
 
   const dev: MenuItemConstructorOptions[] = [
@@ -330,21 +359,19 @@ export function setupMenu(
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   const closePanelAccelerator = isMac ? "Cmd+W" : "Ctrl+Shift+W";
-  const backAccelerator = isMac ? "Cmd+[" : "Alt+Left";
-  const forwardAccelerator = isMac ? "Cmd+]" : "Alt+Right";
+  const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
+  const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const viewSubmenu: MenuItemConstructorOptions[] = [];
 
   if (options?.onHistoryBack) {
     viewSubmenu.push({
       label: "Back",
-      accelerator: backAccelerator,
       click: () => options.onHistoryBack?.(),
     });
   }
   if (options?.onHistoryForward) {
     viewSubmenu.push({
       label: "Forward",
-      accelerator: forwardAccelerator,
       click: () => options.onHistoryForward?.(),
     });
   }
@@ -386,7 +413,7 @@ export function setupMenu(
         { type: "separator" },
         {
           label: "Command Palette...",
-          accelerator: "CmdOrCtrl+K",
+          accelerator: commandPaletteAccelerator,
           click: () => emitMenuEvent("open-command-palette"),
         },
         {
@@ -417,7 +444,7 @@ export function setupMenu(
       label: "Edit",
       submenu: [
         { role: "undo" },
-        { role: "redo" },
+        { label: "Redo", accelerator: redoAccelerator, role: "redo" },
         { type: "separator" },
         { role: "cut" },
         { role: "copy" },
@@ -458,7 +485,6 @@ export function setupMenu(
           accelerator: addressBarAccelerator,
           click: () => {
             emitMenuEvent("toggle-address-bar");
-            emitMenuEvent("focus-address-bar");
           },
         },
         { type: "separator" },

@@ -2,14 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Box, Button, Flex, IconButton, Text, TextArea, Tooltip } from "@radix-ui/themes";
 import {
   Cross2Icon,
-  DragHandleDots2Icon,
-  ArrowUpIcon,
-  ArrowDownIcon,
-  ExclamationTriangleIcon,
   LightningBoltIcon,
   LockOpen1Icon,
   Pencil1Icon,
-  ReloadIcon,
   TimerIcon,
 } from "@radix-ui/react-icons";
 import type { Participant } from "@workspace/pubsub";
@@ -25,20 +20,9 @@ export interface OutboxItemProps {
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   /** UI lane treatment derived from send-time intent (local UI state). */
   lane: OutboxLane;
-  /** A failed send that must never silently disappear. */
-  failed?: boolean;
   touch?: boolean;
   onEdit: (messageId: string, newText: string) => void | Promise<void>;
   onCancel: (messageId: string) => void | Promise<void>;
-  onRetry?: (messageId: string) => void;
-  onMove?: (messageId: string, direction: -1 | 1) => void;
-  canMoveUp?: boolean;
-  canMoveDown?: boolean;
-  // --- Drag-to-reorder wiring (handled by Outbox) ---
-  onDragStart?: (messageId: string) => void;
-  onDragOver?: (messageId: string) => void;
-  onDrop?: () => void;
-  dragging?: boolean;
 }
 
 const CLAMP_LINES = 2;
@@ -46,25 +30,16 @@ const CLAMP_LINES = 2;
 /**
  * A single outbox card: compact message-card language with the iris "you"
  * accent left rail + tint, an editable-until-read glyph, inline detailed ack
- * row, edit / cancel ghost buttons, a failed-retry state, a drag handle, and
+ * row, edit / cancel ghost buttons, a failed-retry state, and
  * lane treatment for "lands this turn" (steer) vs "after this turn" (deferred).
  */
 export const OutboxItem = React.memo(function OutboxItem({
   msg,
   participants,
   lane,
-  failed = false,
   touch = false,
   onEdit,
   onCancel,
-  onRetry,
-  onMove,
-  canMoveUp = false,
-  canMoveDown = false,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  dragging = false,
 }: OutboxItemProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.content);
@@ -109,37 +84,12 @@ export const OutboxItem = React.memo(function OutboxItem({
   return (
     <Box
       role="listitem"
-      className={[
-        "outbox-item",
-        laneIsAfterTurn ? "outbox-item-after-turn" : "outbox-item-steer",
-        failed && "outbox-item-failed",
-        dragging && "outbox-item-dragging",
-      ]
+      className={["outbox-item", laneIsAfterTurn ? "outbox-item-after-turn" : "outbox-item-steer"]
         .filter(Boolean)
         .join(" ")}
       data-lane={lane}
-      draggable={!editing && !touch}
-      onDragStart={() => onDragStart?.(msg.id)}
-      onDragOver={(e) => {
-        e.preventDefault();
-        onDragOver?.(msg.id);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        onDrop?.();
-      }}
     >
       <Flex gap="2" align="start">
-        {!touch && (
-          <Box
-            className="outbox-drag-handle app-touch-target"
-            aria-label="Drag to reorder"
-            title="Drag to reorder"
-            data-testid="outbox-drag-handle"
-          >
-            <DragHandleDots2Icon />
-          </Box>
-        )}
         <Flex direction="column" gap="2" style={{ flex: 1, minWidth: 0 }}>
           {/* Lane + editable-until-read header */}
           <Flex align="center" justify="between" gap="2">
@@ -187,48 +137,13 @@ export const OutboxItem = React.memo(function OutboxItem({
                     size="1"
                     variant="ghost"
                     color="gray"
-                    aria-label="Move message up"
-                    title="Move up"
-                    disabled={!canMoveUp}
-                    onClick={() => onMove?.(msg.id, -1)}
+                    className="app-touch-target"
+                    aria-label="Edit message"
+                    title="Edit"
+                    onClick={beginEdit}
                   >
-                    <ArrowUpIcon />
+                    <Pencil1Icon />
                   </IconButton>
-                  <IconButton
-                    size="1"
-                    variant="ghost"
-                    color="gray"
-                    aria-label="Move message down"
-                    title="Move down"
-                    disabled={!canMoveDown}
-                    onClick={() => onMove?.(msg.id, 1)}
-                  >
-                    <ArrowDownIcon />
-                  </IconButton>
-                  {failed ? (
-                    <Button
-                      size="1"
-                      variant="soft"
-                      color="red"
-                      className="app-touch-target"
-                      onClick={() => onRetry?.(msg.id)}
-                    >
-                      <ReloadIcon />
-                      Retry
-                    </Button>
-                  ) : (
-                    <IconButton
-                      size="1"
-                      variant="ghost"
-                      color="gray"
-                      className="app-touch-target"
-                      aria-label="Edit message"
-                      title="Edit"
-                      onClick={beginEdit}
-                    >
-                      <Pencil1Icon />
-                    </IconButton>
-                  )}
                   <IconButton
                     size="1"
                     variant="ghost"
@@ -299,16 +214,6 @@ export const OutboxItem = React.memo(function OutboxItem({
           )}
 
           {hasAttachments && !editing && <ImageGallery attachments={msg.attachments!} />}
-
-          {/* Failed banner — never silently disappears */}
-          {failed && !editing && (
-            <Flex align="center" gap="1" className="outbox-item-failed-banner">
-              <ExclamationTriangleIcon />
-              <Text size="1" color="red">
-                Failed — tap to retry
-              </Text>
-            </Flex>
-          )}
         </Flex>
       </Flex>
     </Box>

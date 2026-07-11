@@ -61,6 +61,9 @@ const qrcode = require("qrcode-terminal") as {
   generate(value: string, options?: { small?: boolean }): void;
 };
 const DEFAULT_REMOTE_INVITE_URL = "http://127.0.0.1:3030";
+const NOT_PAIRED_GUIDANCE =
+  'not paired — run `vibestudio remote pair "vibestudio://connect?..."` ' +
+  "(get an invite from the desktop app or `vibestudio remote invite` on the host)";
 
 // ───────────────────────────────────────────────────────────────────────────
 // remote commands
@@ -101,10 +104,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
   try {
     const creds = loadCliCredentials();
     if (!creds) {
-      throw new AuthError(
-        'not paired — run `vibestudio remote pair "vibestudio://connect?..."` ' +
-          "(get an invite from the desktop app or `vibestudio remote invite` on the host)"
-      );
+      throw new AuthError(NOT_PAIRED_GUIDANCE);
     }
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
       throw new AuthError(
@@ -236,7 +236,7 @@ async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const creds = loadCliCredentials();
-    if (!creds) throw new AuthError("not paired");
+    if (!creds) throw new AuthError(NOT_PAIRED_GUIDANCE);
     const workspaces = await listRemoteWorkspaces(creds);
     printResult(
       { workspaces },
@@ -263,7 +263,7 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
       (typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"] : "");
     if (!name) throw new UsageError("workspace name is required");
     const creds = loadCliCredentials();
-    if (!creds) throw new AuthError("not paired");
+    if (!creds) throw new AuthError(NOT_PAIRED_GUIDANCE);
     const selected = await selectRemoteWorkspace(creds, name);
     saveCliCredentials(selected);
     printResult(
@@ -837,11 +837,16 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
 async function remoteHostImpl(inv: ParsedInvocation): Promise<number> {
   const flagStr = (name: string): string | undefined =>
     typeof inv.flags[name] === "string" ? (inv.flags[name] as string) : undefined;
-  const flagMin = (name: string): number | undefined => {
+  const flagMin = (name: string, allowZero = false): number | undefined => {
     const raw = flagStr(name);
     if (!raw) return undefined;
-    const minutes = Number.parseInt(raw, 10);
-    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : undefined;
+    const minutes = Number(raw);
+    if (!Number.isFinite(minutes) || (!allowZero && minutes <= 0) || (allowZero && minutes < 0)) {
+      throw new UsageError(
+        `--${name} must be ${allowZero ? "zero or a positive number" : "a positive number"}`
+      );
+    }
+    return minutes * 60_000;
   };
 
   const explicitUrl = flagStr("url");
@@ -906,14 +911,17 @@ async function remoteHostImpl(inv: ParsedInvocation): Promise<number> {
     resolveConfig: (overrides: Record<string, unknown>) => unknown;
   };
 
+  const maxPanelsRaw = flagStr("max-panels");
+  const maxPanels = maxPanelsRaw === undefined ? undefined : Number(maxPanelsRaw);
+  if (maxPanels !== undefined && (!Number.isInteger(maxPanels) || maxPanels <= 0)) {
+    throw new UsageError("--max-panels must be a positive integer");
+  }
   const config = resolveConfig({
     ...configOverrides,
     label: flagStr("label"),
-    maxPanels: flagStr("max-panels")
-      ? Number.parseInt(flagStr("max-panels") as string, 10)
-      : undefined,
+    maxPanels,
     idleUnloadMs: flagMin("idle-unload-min"),
-    idleExitMs: flagMin("idle-exit-min"),
+    idleExitMs: flagMin("idle-exit-min", true),
     chromiumPath: flagStr("chromium-path"),
     leanBrowser: inv.flags["lean-browser"] === true,
   });
@@ -1040,7 +1048,7 @@ export async function main(argv: string[]): Promise<number> {
   // `emit`/`channel-host` subcommands) and calls the configured Claude Code
   // provider over RPC — it deliberately owns no `CliCommand` entries.
   if (group === "claude") {
-    const json = rest.includes("--json") && !rest.includes("--plain");
+    const json = jsonMode(rest.includes("--json"));
     const claudeArgs = rest.filter((arg) => arg !== "--json" && arg !== "--plain");
     try {
       return await runClaudeGroup(claudeArgs, { json });
@@ -1116,7 +1124,7 @@ function runScript(scriptName: string, argv: string[]): Promise<number> {
     return Promise.resolve(1);
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...argv], {
+    const child = spawn(process.execPath, [scriptPath, ...normalizePassthroughArgs(argv)], {
       cwd: repoRoot,
       env: process.env,
       stdio: "inherit",
@@ -1132,6 +1140,24 @@ function runScript(scriptName: string, argv: string[]): Promise<number> {
       resolve(code ?? 0);
     });
   });
+}
+
+function normalizePassthroughArgs(argv: string[]): string[] {
+  const normalized: string[] = [];
+  let passthrough = false;
+  for (const arg of argv) {
+    if (passthrough || arg === "--") {
+      normalized.push(arg);
+      passthrough = true;
+      continue;
+    }
+    const inline = /^(--[^=]+)=(.*)$/.exec(arg);
+    const flag = inline?.[1];
+    const value = inline?.[2];
+    if (flag !== undefined && value !== undefined) normalized.push(flag, value);
+    else normalized.push(arg);
+  }
+  return normalized;
 }
 
 function printHelp(): void {
@@ -1194,10 +1220,14 @@ function packageVersion(): string {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main(process.argv.slice(2))
-    .then((code) => process.exit(code))
+    .then((code) => {
+      // Let stdout/stderr drain before Node exits. Calling process.exit here
+      // truncates large piped JSON and binary `fs read` output at the pipe buffer.
+      process.exitCode = code;
+    })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      process.exitCode = 1;
     });
 }
 

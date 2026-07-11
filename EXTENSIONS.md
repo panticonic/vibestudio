@@ -131,7 +131,7 @@ The stale `agent` build kind described in `BUILD_SYSTEM.md` was never actually i
 ## Activation contract
 
 ```ts
-// workspace/extensions/@acme/git-tools/index.ts
+// workspace/extensions/git-tools/index.ts
 import type { ExtensionContext } from "@vibestudio/extension";
 
 export interface GitToolsApi {
@@ -512,10 +512,13 @@ Consumers reach the auto-prefix HTTP surface the same way they reach any interna
 
 Vibestudio already requests approval for git pushes. Extensions add one special case to that existing path: a push to an installed extension's active branch (`main` / `master` in v1) uses extension-specific copy and decision handling, because accepting that push changes trusted native code. No separate build-hash approval key is introduced.
 
-Two extension-specific approval sub-kinds cover the non-git management cases:
+Two extension-specific approval sub-kinds cover declarative reconciliation:
 
-1. **`extension.install`** — user-initiated. The user just typed `extensions.install(...)` or clicked Install in a manager UI; they're at the keyboard, focused on the action, and asked for code to be installed. The prompt is forward-looking and informational: "Here's what you asked to install. Confirm."
-2. **`extension.update`** — user-initiated dependency refresh. Dependency-only changes never trigger this prompt automatically; the manager offers an explicit update action instead.
+1. **`extension.install`** — adding an extension declaration to
+   `meta/vibestudio.yml` requires confirmation when the changed workspace
+   configuration is pushed or reconciled.
+2. **`extension.update`** — an explicit dependency refresh of a declared
+   extension. Dependency-only changes never trigger this prompt automatically.
 
 Source updates are handled by the git push approval flow, not by `extensions.update`. The push is the user's intent signal and the approval decision is scoped to that git write. If approved, the push lands; the extension manager then rebuilds and activates from the new branch state. If denied, the push fails and no extension state changes.
 
@@ -721,12 +724,12 @@ A new package `packages/extension-host/`:
 packages/extension-host/
 ├── src/
 │   ├── index.ts                  # boot, walk registry, spawn enabled extensions
-│   ├── registry.ts               # in-memory map + registry.json atomic writes
 │   ├── processManager.ts         # ExtensionProcessManager (sibling to WorkerdManager)
 │   ├── childRuntime.ts           # entry shipped into the child process — sets up WS,
 │   │                             # imports the bundle, calls activate, handles invokes
-│   ├── service.ts                # dispatcher service ("extensions") handler — invoke / on / management
-│   └── installer.ts              # install / uninstall / update / reload pipeline + git-push gate integration
+│   ├── service.ts                # registry, reconciliation, dispatcher service, and management
+│   ├── types.ts                  # public host types
+│   └── wireEnvelopes.ts          # child/host wire validation
 ```
 
 `childRuntime.ts` is the entry actually executed by the forked process. It reads the bundle path and gateway URL from `process.env`, opens the WebSocket, loads the ESM bundle with `await import(pathToFileURL(bundlePath).href)`, calls `module.activate(ctx)`, and serves invoke requests by looking up the returned API object. The user's bundle is loaded as a normal Node module — no `vm.createContext`, no sandbox — `vm.createContext` adds nothing once the process boundary is in place.

@@ -133,6 +133,7 @@ const GATED_METHODS = new Set<string>([
   "updatePassword",
   "updatePasswordLastUsed",
   "addNeverSavePassword",
+  "removeNeverSavePassword",
   "recordHistoryVisit",
   "updateHistoryTitle",
   "setPermission",
@@ -186,6 +187,7 @@ const METHOD_LABELS: Record<string, string> = {
   updatePassword: "Modify a saved password",
   updatePasswordLastUsed: "Update saved-password usage",
   addNeverSavePassword: "Add a never-save origin",
+  removeNeverSavePassword: "Allow password saves for a site again",
   recordHistoryVisit: "Record a history visit",
   updateHistoryTitle: "Update a history title",
   setPermission: "Change a site permission",
@@ -381,6 +383,12 @@ export async function activate(ctx: ExtensionContextLike) {
     ),
     isNeverSavePassword: guarded("isNeverSavePassword", async (origin: string) =>
       callStore("isNeverSave", origin)
+    ),
+    getNeverSavePasswordOrigins: guarded("getNeverSavePasswordOrigins", async () =>
+      callStore("getNeverSaveOrigins")
+    ),
+    removeNeverSavePassword: guarded("removeNeverSavePassword", async (origin: string) =>
+      mutate("passwords", "removeNeverSave", origin)
     ),
     getAutofillSuggestions: guarded(
       "getAutofillSuggestions",

@@ -61,11 +61,12 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
         isRemote: boolean;
         reconnect?: LiveConnection["reconnect"];
       }) => {
-        setLive({
+        setLive((current) => ({
           status: payload.status,
           isRemote: payload.isRemote,
-          reconnect: payload.reconnect,
-        });
+          reconnect:
+            payload.reconnect ?? (payload.status === "connecting" ? current?.reconnect : undefined),
+        }));
       },
       []
     )
@@ -176,8 +177,8 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       open={open}
       onOpenChange={onOpenChange}
       maxWidth="680px"
-      title="Remote server"
-      description="Pair this app with a Vibestudio server running elsewhere."
+      title="Connections & paired devices"
+      description="Connect this desktop to a server, or pair phones and other devices with the current workspace."
     >
       <Box mt="3">
         {current?.isActive ? (

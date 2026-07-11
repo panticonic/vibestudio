@@ -1,9 +1,8 @@
 /**
  * ConnectionStatusBadge — chrome indicator for server connection state.
  *
- * Hidden when running a local server in the happy path (avoids visual noise).
- * Shows a colored dot + tooltip for remote mode and any degraded state.
- * Clicking opens the ConnectionSettingsDialog.
+ * Intentionally visible in both local and remote modes: besides status, this is
+ * the stable entry point for connection settings and companion-device pairing.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -75,7 +74,7 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
           : "Connecting to server…"
         : snap.mode === "remote"
           ? `Connected to ${snap.remoteHost ?? "remote server"}`
-          : "Connected (local)";
+          : "Connected locally — open connection settings and pair devices";
 
   // Surface the selected network path on a live remote pipe: a TURN relay works
   // but is slower, so telling the user why is a kindness (not an alarm). Direct

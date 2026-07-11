@@ -147,8 +147,7 @@ export function invocationEffect(
       ...base,
       kind: "channel_call",
       idempotencyKey: transport.transportCallId ?? ids.transportCallId(invocation.invocationId),
-      transportCallId:
-        transport.transportCallId ?? ids.transportCallId(invocation.invocationId),
+      transportCallId: transport.transportCallId ?? ids.transportCallId(invocation.invocationId),
       target: transport.target,
       method: invocation.name,
       args: invocation.request,
@@ -169,11 +168,14 @@ export function invocationEffect(
 export function approvalFormEffect(
   state: AgentState,
   approval: PendingApproval
-): ChannelCallEffect {
-  const target =
-    state.config.roster?.participants?.find(
-      (participant) => participant.type === "panel" || participant.ref.kind === "user"
-    )?.ref ?? ({ kind: "user", id: "user" } as ParticipantRef);
+): ChannelCallEffect | null {
+  const target = state.config.roster?.participants?.find(
+    (participant) => participant.type === "panel" || participant.ref.kind === "user"
+  )?.ref;
+  // Park the durable approval until a real prompting participant joins. A
+  // phantom user target makes delivery fail and incorrectly turns "nobody is
+  // viewing this chat" into a denial.
+  if (!target) return null;
   return {
     effectId: ids.approvalFormEffect(approval.approvalId),
     kind: "channel_call",
@@ -221,7 +223,8 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
     out.push(invocationEffect(state, invocation));
   }
   for (const approval of Object.values(state.pendingApprovals)) {
-    out.push(approvalFormEffect(state, approval));
+    const effect = approvalFormEffect(state, approval);
+    if (effect) out.push(effect);
   }
   for (const wait of Object.values(state.pendingCredentialWaits)) {
     out.push(credentialWaitEffect(state, wait));
@@ -459,10 +462,7 @@ export function outcomeEvents(
   return []; // publish_envelope: fire-and-forget, no outcome events
 }
 
-function shouldPublishModelOutcome(
-  request: ModelRequestDescriptor,
-  blocks: unknown[]
-): boolean {
+function shouldPublishModelOutcome(request: ModelRequestDescriptor, blocks: unknown[]): boolean {
   const metadata = request.turnMetadata;
   if (!metadata) return true;
   if (metadata.delivery === "none") return false;
@@ -474,7 +474,9 @@ function shouldPublishModelOutcome(
 function blocksLookSuccessful(blocks: unknown[]): boolean {
   const text = blocks
     .map((block) =>
-      block && typeof block === "object" && typeof (block as { content?: unknown }).content === "string"
+      block &&
+      typeof block === "object" &&
+      typeof (block as { content?: unknown }).content === "string"
         ? (block as { content: string }).content.toLowerCase()
         : ""
     )

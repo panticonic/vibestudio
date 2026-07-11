@@ -73,7 +73,7 @@ const helpSections: HelpSection[] = [
     title: "Phone and remote access",
     icon: <MobileIcon />,
     content:
-      "Pair a phone or another Vibestudio device from Devices & Connection. Pairing links expire quickly; each paired device gets its own revocable identity.",
+      "Click the connection status badge in the title bar, then use Paired devices → Connect a device. Pairing links expire quickly; each paired device gets its own revocable identity.",
   },
 ];
 

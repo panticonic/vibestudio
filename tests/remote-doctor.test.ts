@@ -111,7 +111,10 @@ describe("remote-doctor", () => {
   });
 
   it("skips (does not fail) the systemd-unit check when no unit is deployed", async () => {
-    const { unit, port } = await checkDeployedUnit(undefined, "/nonexistent/vibestudio-server.service");
+    const { unit, port } = await checkDeployedUnit(
+      undefined,
+      "/nonexistent/vibestudio-server.service"
+    );
     expect(unit.skipped).toBe(true);
     expect(unit.ok).toBe(true);
     expect(port).toBeNull();
@@ -144,8 +147,21 @@ describe("remote-doctor", () => {
       }
     );
     expect(result.ok).toBe(true);
-    expect(result.checks.some((c: { name: string; skipped?: boolean }) => c.name === "systemd-unit" && c.skipped)).toBe(true);
-    expect(result.checks.some((c: { name: string; ok: boolean }) => c.name === "identity" && c.ok)).toBe(true);
-    expect(result.checks.some((c: { name: string; ok: boolean }) => c.name === "signaling" && c.ok)).toBe(true);
+    expect(
+      result.checks.some(
+        (c: { name: string; skipped?: boolean }) => c.name === "systemd-unit" && c.skipped
+      )
+    ).toBe(true);
+    expect(
+      result.checks.some((c: { name: string; ok: boolean }) => c.name === "identity" && c.ok)
+    ).toBe(true);
+    expect(
+      result.checks.some(
+        (c: { name: string; skipped?: boolean }) => c.name === "identity" && !c.skipped
+      )
+    ).toBe(true);
+    expect(
+      result.checks.some((c: { name: string; ok: boolean }) => c.name === "signaling" && c.ok)
+    ).toBe(true);
   });
 });

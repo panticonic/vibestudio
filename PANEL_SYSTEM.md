@@ -34,17 +34,17 @@ my-panel/
 
 ### Manifest Fields
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `title` | string | package name | Display name |
-| `entry` | string | `index.tsx` | Entry point file |
-| `template` | string | `"default"` | Workspace template name (see below) |
-| `sourcemap` | boolean | `true` | Include inline source maps |
-| `externals` | Record | `{}` | Import map entries (externalized from bundle) |
-| `exposeModules` | string[] | `[]` | Modules registered on `__vibestudioModuleMap__` |
-| `dedupeModules` | string[] | `[]` | Additional packages to deduplicate (react/react-dom always deduped) |
-| `shell` | boolean | `false` | Grants shell service access (about pages) |
-| `hiddenInLauncher` | boolean | `false` | Hide from launcher UI |
+| Field              | Type     | Default      | Description                                                         |
+| ------------------ | -------- | ------------ | ------------------------------------------------------------------- |
+| `title`            | string   | package name | Display name                                                        |
+| `entry`            | string   | `index.tsx`  | Entry point file                                                    |
+| `template`         | string   | `"default"`  | Workspace template name (see below)                                 |
+| `sourcemap`        | boolean  | `true`       | Include inline source maps                                          |
+| `externals`        | Record   | `{}`         | Import map entries (externalized from bundle)                       |
+| `exposeModules`    | string[] | `[]`         | Modules registered on `__vibestudioModuleMap__`                     |
+| `dedupeModules`    | string[] | `[]`         | Additional packages to deduplicate (react/react-dom always deduped) |
+| `shell`            | boolean  | `false`      | Grants shell service access (about pages)                           |
+| `hiddenInLauncher` | boolean  | `false`      | Hide from launcher UI                                               |
 
 ## Workspace Templates
 
@@ -52,11 +52,11 @@ The `template` field in the vibestudio config selects a workspace template from 
 
 Three frameworks are supported, one per template:
 
-| Template | Framework | UI layer | Binding package |
-|----------|-----------|----------|-----------------|
-| `default` (`workspace/templates/default/`) | `react` | React + Radix UI | `@workspace/react` |
-| `svelte` (`workspace/templates/svelte/`) | `svelte` | Svelte 5 | `@workspace/svelte` |
-| `vanilla` (`workspace/templates/vanilla/`) | `vanilla` | none — pure DOM | none (`@workspace/runtime` only) |
+| Template                                   | Framework | UI layer         | Binding package                  |
+| ------------------------------------------ | --------- | ---------------- | -------------------------------- |
+| `default` (`workspace/templates/default/`) | `react`   | React + Radix UI | `@workspace/react`               |
+| `svelte` (`workspace/templates/svelte/`)   | `svelte`  | Svelte 5         | `@workspace/svelte`              |
+| `vanilla` (`workspace/templates/vanilla/`) | `vanilla` | none — pure DOM  | none (`@workspace/runtime` only) |
 
 Most panels should use the `default` (React) template. To use another framework, set the `template` field and depend on its binding package (or none for vanilla). Canonical examples: `panels/hello-svelte` (Svelte) and `panels/hello-vanilla` (vanilla); see [PANEL_DEVELOPMENT.md](PANEL_DEVELOPMENT.md) for how to write each.
 
@@ -75,49 +75,66 @@ The framework id is read from the chosen template's `template.json` (`{"framewor
 ```typescript
 import {
   // Identity & storage context (top-level)
-  id,                    // Current runtime entity ID (changes on navigate/reopen)
-  contextId,             // Storage context ID
+  id, // Current runtime entity ID (changes on navigate/reopen)
+  contextId, // Storage context ID
 
   // The `panel` namespace — identity, theme, lifecycle, state args
-  panel,                 // panel.slotId / entityId / parentId / env;
-                         // panel.getTheme() / onThemeChange() / getInfo();
-                         // panel.focusPanel() / onFocus() / onConnectionError() / reopen();
-                         // panel.registerPaletteCommands() / onPaletteRun();
-                         // panel.stateArgs.{ get, set, setForPanel }
+  panel, // panel.slotId / entityId / parentId / env;
+  // panel.getTheme() / onThemeChange() / getInfo();
+  // panel.focusPanel() / onFocus() / onConnectionError() / reopen();
+  // panel.registerPaletteCommands() / onPaletteRun();
+  // panel.stateArgs.{ get, set, setForPanel }
 
   // RPC
-  rpc,                   // RPC client: rpc.expose(), rpc.call(), events
-  callMain,              // Call a server ("main") service method
+  rpc, // RPC client: rpc.expose(), rpc.call(), events
+  callMain, // Call a server ("main") service method
 
   // Panels & navigation
-  openPanel,             // Open a workspace/browser panel → PanelHandle
-  buildPanelLink,        // Build a navigation URL (low-level; prefer openPanel)
-  panelTree,             // Get/list/walk the panel tree (top-level, NOT workspace.panelTree)
-  getPanelHandle,        // Handle by id
-  listPanels,            // List open panels
-  parent,                // This panel's parent handle (no-op handle when root)
-  getParent,             // Parent handle, or null
+  openPanel, // Open a workspace/browser panel → PanelHandle
+  buildPanelLink, // Build a navigation URL (low-level; prefer openPanel)
+  panelTree, // Get/list/walk the panel tree (top-level, NOT workspace.panelTree)
+  getPanelHandle, // Handle by id
+  listPanels, // List open panels
+  parent, // This panel's parent handle (no-op handle when root)
+  getParent, // Parent handle, or null
   getParentWithContract, // Contract-typed parent handle, or null
-  onChildCreated,        // window.open child notifications
-  openExternal,          // Open a URL in the system browser
+  onChildCreated, // window.open child notifications
+  openExternal, // Open a URL in the system browser
 
   // Filesystem & service namespaces
-  fs,                    // RPC-backed filesystem
-  workspace,             // Workspace catalog, source tree, units
-  vcs,                   // GAD VCS: edit → commit → push
-  gad,                   // GAD store queries
-  git, blobstore, credentials, workers,
-  extensions, approvals, notifications, webhooks,
+  fs, // RPC-backed filesystem
+  workspace, // Workspace catalog, source tree, units
+  vcs, // GAD VCS: edit → commit → push
+  gad, // GAD store queries
+  git,
+  blobstore,
+  credentials,
+  workers,
+  extensions,
+  approvals,
+  notifications,
+  webhooks,
 
   // Durable Objects, gateway, agent APIs
-  doTargetId, createDurableObjectServiceClient,
-  gatewayConfig, gatewayFetch,
-  agentApi, adblock, journal,
+  doTargetId,
+  createDurableObjectServiceClient,
+  gatewayConfig,
+  gatewayFetch,
+  agentApi,
+  adblock,
+  journal,
 
   // Authoring helpers (portable: identical on panel · worker · eval)
-  z, defineContract, Rpc,
-  parseContextId, isValidContextId, getInstanceId,
-  normalizePath, getFileName, resolvePath, createGatewayFetch,
+  z,
+  defineContract,
+  Rpc,
+  parseContextId,
+  isValidContextId,
+  getInstanceId,
+  normalizePath,
+  getFileName,
+  resolvePath,
+  createGatewayFetch,
 } from "@workspace/runtime";
 export type { PanelHandle } from "@workspace/runtime";
 ```
@@ -137,7 +154,7 @@ import { panel } from "@workspace/runtime";
 import { useStateArgs } from "@workspace/react";
 
 const snapshot = panel.stateArgs.get<{ channel: string }>(); // imperative
-const reactive = useStateArgs<{ channel: string }>();         // re-renders
+const reactive = useStateArgs<{ channel: string }>(); // re-renders
 ```
 
 Use `panel.slotId` for panel-tree operations and PubSub/channel client identity. Use
@@ -156,9 +173,9 @@ Use `openPanel` to open panels. It handles both URLs (browser panels) and worksp
 ```typescript
 import { openPanel } from "@workspace/runtime";
 
-await openPanel("panels/editor");                          // Open a workspace panel
-await openPanel("panels/chat", { stateArgs: { ch: "x" }}); // With state args
-await openPanel("https://github.com");                     // Open URL as browser panel
+await openPanel("panels/editor"); // Open a workspace panel
+await openPanel("panels/chat", { stateArgs: { ch: "x" } }); // With state args
+await openPanel("https://github.com"); // Open URL as browser panel
 ```
 
 For in-page navigation (replacing the current panel), use `buildPanelLink` + `window.location.href`:
@@ -175,20 +192,19 @@ window.location.href = buildPanelLink("panels/chat", { contextId: "abc-123" });
 
 `buildPanelLink` returns a relative path for same-context navigation and an absolute URL with `contextId` in the query string when `contextId` is provided.
 
-
 ## PanelHandle Methods
 
 ```typescript
 const handle = panelTree.get("panel-id");
 
-handle.id                         // Stable panel slot ID
-await handle.refresh()            // Hydrate metadata for an existing slot
-handle.call.method(args)          // Call exposed RPC method
-handle.emit("event", payload)     // Emit event to the panel
-handle.on("event", handler)       // Listen for events from the panel
-handle.cdp.lightweightPage()      // Approval-gated CDP page access
-handle.ensureLoaded()             // Explicit load for RPC/introspection
-handle.close()                    // Approval-gated structural operation
+handle.id; // Stable panel slot ID
+await handle.refresh(); // Hydrate metadata for an existing slot
+handle.call.method(args); // Call exposed RPC method
+handle.emit("event", payload); // Emit event to the panel
+handle.on("event", handler); // Listen for events from the panel
+handle.cdp.lightweightPage(); // Approval-gated CDP page access
+handle.ensureLoaded(); // Explicit load for RPC/introspection
+handle.close(); // Approval-gated structural operation
 ```
 
 Use `panelTree.get/list/roots/children` for existing panels;
@@ -214,7 +230,7 @@ export const editorContract = defineContract({
   child: {
     methods: {} as EditorApi,
     emits: {
-      "saved": z.object({ path: z.string() }),
+      saved: z.object({ path: z.string() }),
     },
   },
 });
@@ -228,9 +244,13 @@ import { editorContract } from "./contract.js";
 
 const parent = getParentWithContract(editorContract);
 
-rpc.expose({
-  async getContent() { return content; },
-  async setContent(text) { setContent(text); },
+rpc.exposeAll({
+  async getContent() {
+    return content;
+  },
+  async setContent(text) {
+    setContent(text);
+  },
 });
 
 await parent?.emit("saved", { path: "/file.txt" }); // Typed when a parent is present.
@@ -261,9 +281,9 @@ const history = await vcs.log("panels/editor", { limit: 50 });
 Monitor RPC connection health:
 
 ```typescript
-import { onConnectionError } from "@workspace/runtime";
+import { panel } from "@workspace/runtime";
 
-const unsubscribe = onConnectionError((error) => {
+const unsubscribe = panel.onConnectionError((error) => {
   console.error(`Connection error [${error.code}]: ${error.reason}`);
   // error.source is "electron" or "server" when using dual transports
 });
@@ -284,14 +304,17 @@ Panels have isolated storage based on their context ID:
 
 Panels can share code via workspace packages:
 
-| Scope | Location | Purpose |
-|-------|----------|---------|
-| `@workspace/*` | `workspace/packages/` | Shared utilities |
-| `@workspace-panels/*` | `workspace/panels/` | Panel packages |
-| `@workspace-about/*` | `workspace/about/` | About/shell panels |
-| `@workspace-agents/*` | `workspace/agents/` | Agent packages |
+| Scope                  | Location              | Purpose            |
+| ---------------------- | --------------------- | ------------------ |
+| `@workspace/*`         | `workspace/packages/` | Shared utilities   |
+| `@workspace-panels/*`  | `workspace/panels/`   | Panel packages     |
+| `@workspace-about/*`   | `workspace/about/`    | About/shell panels |
+| `@workspace-workers/*` | `workspace/workers/`  | Worker packages    |
+| `@workspace-apps/*`    | `workspace/apps/`     | App packages       |
+| `@workspace-skills/*`  | `workspace/skills/`   | Skill packages     |
 
 Export contracts for cross-panel imports:
+
 ```json
 {
   "exports": {

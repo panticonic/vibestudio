@@ -97,6 +97,7 @@ export class PanelView implements PanelViewLike {
   private readonly panelOrchestrator: PanelOrchestratorLike;
   private readonly managedHosts: readonly string[];
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
+  private onPanelLinkError?: (panelId: string, url: string, message: string) => void;
   private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
   private autofillManager?: AutofillManagerLike;
   private autofillPreloadPath?: string;
@@ -132,6 +133,7 @@ export class PanelView implements PanelViewLike {
     cdpHost: CdpHostLike;
     panelOrchestrator: PanelOrchestratorLike;
     sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
+    onPanelLinkError?: (panelId: string, url: string, message: string) => void;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
     autofillManager?: AutofillManagerLike;
     autofillPreloadPath?: string;
@@ -147,6 +149,7 @@ export class PanelView implements PanelViewLike {
     this.panelOrchestrator = deps.panelOrchestrator;
     this.managedHosts = this.buildManagedHosts(deps.serverInfo);
     this.sendPanelEvent = deps.sendPanelEvent;
+    this.onPanelLinkError = deps.onPanelLinkError;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
     this.autofillManager = deps.autofillManager;
     this.autofillPreloadPath = deps.autofillPreloadPath;
@@ -605,6 +608,11 @@ export class PanelView implements PanelViewLike {
         );
         return { action: "deny" as const };
       }
+      this.handlePanelLinkError(
+        panelId,
+        new Error("This link type is not supported. Use an http(s) or Vibestudio panel link."),
+        url
+      );
       return { action: "deny" as const };
     });
 
@@ -756,6 +764,7 @@ export class PanelView implements PanelViewLike {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`[PanelView] Failed to handle panel link for ${viewId}: ${url}: ${message}`);
     this.sendPanelEvent?.(viewId, "runtime:child-creation-error", { url, error: message });
+    this.onPanelLinkError?.(viewId, url, message);
   }
 
   // ==== Crash recovery ======================================================
@@ -802,7 +811,7 @@ export class PanelView implements PanelViewLike {
   <h1>${escapeHtml(title)}</h1>
   <p>The panel stopped unexpectedly. Reload it to try again.</p>
   <details><summary>Technical details</summary><p>${escapeHtml(detail)}</p></details>
-  ${targetUrl ? `<p><a href="${escapeHtml(targetUrl)}">Reload panel</a></p>` : "<p>Open the panel menu and choose Rebuild.</p>"}
+  ${targetUrl ? `<p><a href="${escapeHtml(targetUrl)}">Reload panel</a></p>` : panel ? "<p>Open the panel menu and choose Rebuild.</p>" : "<p>Restart Vibestudio from the launcher to recover the app shell.</p>"}
 </div></body></html>`;
     void contents
       .loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)

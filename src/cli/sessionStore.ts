@@ -39,7 +39,12 @@ export function loadAgentSession(name: string): AgentSession | null {
   let parsed: Partial<AgentSession>;
   try {
     parsed = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<AgentSession>;
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[vibestudio] Could not read agent session ${p}: ${
+        error instanceof Error ? error.message : String(error)
+      }. Restore or remove this file before re-attaching the session.`
+    );
     return null;
   }
   if (
@@ -51,6 +56,9 @@ export function loadAgentSession(name: string): AgentSession | null {
     typeof parsed.scopeKey !== "string" ||
     typeof parsed.createdAt !== "number"
   ) {
+    console.warn(
+      `[vibestudio] Agent session file ${p} has an invalid schema. Restore or remove it before re-attaching the session.`
+    );
     return null;
   }
   return parsed as AgentSession;

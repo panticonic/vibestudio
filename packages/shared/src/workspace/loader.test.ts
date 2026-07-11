@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   initWorkspace,
   loadWorkspaceConfig,
+  resolveOrCreateWorkspace,
   resolveDeclaredApps,
   resolveDeclaredExtensions,
 } from "./loader.js";
@@ -158,7 +159,6 @@ describe("loadWorkspaceConfig", () => {
       /apps\[\]\.source.*@workspace-apps\/name/
     );
   });
-
 });
 
 describe("resolveDeclaredExtensions", () => {
@@ -170,10 +170,7 @@ describe("resolveDeclaredExtensions", () => {
     expect(
       resolveDeclaredExtensions({
         id: "ws",
-        extensions: [
-          { source: "extensions/a" },
-          { source: "@workspace-extensions/b", ref: "dev" },
-        ],
+        extensions: [{ source: "extensions/a" }, { source: "@workspace-extensions/b", ref: "dev" }],
       })
     ).toEqual([
       { source: "extensions/a", ref: "main" },
@@ -312,7 +309,9 @@ describe("initWorkspace", () => {
       ]);
       expect(fs.existsSync(path.join(sourceRoot, "apps", "shell", ".git"))).toBe(false);
       expect(fs.existsSync(path.join(sourceRoot, "apps", "mobile", ".git"))).toBe(false);
-      expect(fs.existsSync(path.join(sourceRoot, "extensions", "react-native", ".git"))).toBe(false);
+      expect(fs.existsSync(path.join(sourceRoot, "extensions", "react-native", ".git"))).toBe(
+        false
+      );
       expect(
         JSON.parse(fs.readFileSync(path.join(sourceRoot, "apps", "shell", "package.json"), "utf-8"))
       ).toMatchObject({
@@ -391,4 +390,53 @@ describe("initWorkspace", () => {
 
   // The `.vibestudio-template-source.json` provenance marker was write-only (no
   // reader) and is removed by the per-repo reshape's cleanup; its test is gone.
+});
+
+describe("resolveOrCreateWorkspace", () => {
+  (process.platform === "linux" ? it : it.skip)(
+    "reuses an empty interrupted-create directory without deleting non-empty workspaces",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+      tempRoots.push(root);
+      process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+
+      const templateRoot = path.join(root, "workspace-template");
+      writeConfig(templateRoot, "initPanels: []\n");
+
+      const emptyWorkspace = path.join(
+        process.env["XDG_CONFIG_HOME"],
+        "vibestudio",
+        "workspaces",
+        "interrupted"
+      );
+      fs.mkdirSync(emptyWorkspace, { recursive: true });
+
+      const resolved = resolveOrCreateWorkspace({
+        name: "interrupted",
+        appRoot: root,
+        init: true,
+      });
+
+      expect(resolved.created).toBe(true);
+      expect(resolved.workspace.config.id).toBe("interrupted");
+      expect(fs.existsSync(path.join(emptyWorkspace, "source", "meta", "vibestudio.yml"))).toBe(
+        true
+      );
+
+      const occupiedWorkspace = path.join(
+        process.env["XDG_CONFIG_HOME"],
+        "vibestudio",
+        "workspaces",
+        "occupied"
+      );
+      fs.mkdirSync(occupiedWorkspace, { recursive: true });
+      const recoveryFile = path.join(occupiedWorkspace, "recover-me.txt");
+      fs.writeFileSync(recoveryFile, "important\n");
+
+      expect(() =>
+        resolveOrCreateWorkspace({ name: "occupied", appRoot: root, init: true })
+      ).toThrow(/existing files were not changed/);
+      expect(fs.readFileSync(recoveryFile, "utf8")).toBe("important\n");
+    }
+  );
 });

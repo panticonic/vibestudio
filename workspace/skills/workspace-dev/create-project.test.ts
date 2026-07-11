@@ -183,6 +183,18 @@ describe("createProject", () => {
     });
   });
 
+  it("rejects names and titles that would produce invalid generated source", async () => {
+    const { createProject } = await import("./create-project.js");
+
+    await expect(createProject({ projectType: "panel", name: "Bad Name" })).rejects.toThrow(
+      /Project name/
+    );
+    await expect(
+      createProject({ projectType: "panel", name: "valid-name", title: 'Broken " title' })
+    ).rejects.toThrow(/Project title/);
+    expect(mocks.edit).not.toHaveBeenCalled();
+  });
+
   it("does not report a scaffold as published when the build gate rejects it", async () => {
     mocks.push.mockResolvedValueOnce({
       status: "build-failed",
@@ -243,9 +255,9 @@ describe("forkProject", () => {
     });
     const { forkProject } = await import("./create-project.js");
 
-    await expect(
-      forkProject({ from: "packages/source", to: "packages/new" })
-    ).rejects.toThrow(/not published because main diverged.*packages\/new/s);
+    await expect(forkProject({ from: "packages/source", to: "packages/new" })).rejects.toThrow(
+      /not published because main diverged.*packages\/new/s
+    );
   });
 
   it("rewrites a single-class worker fork and preserves binary files", async () => {

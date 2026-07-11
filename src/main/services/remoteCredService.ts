@@ -16,6 +16,7 @@ import {
 } from "@vibestudio/shared/connect";
 import {
   clearStoredRemotePairing as clearStoredRemotePairingInStore,
+  loadDeviceCredentialByWorkspaceId,
   loadStoredRemotePairing as loadStoredRemotePairingFromStore,
   saveDeviceCredential,
   type StoredRemote,
@@ -218,11 +219,15 @@ export function createRemoteCredService(deps: {
           const stored = loadStoredRemotePairing();
           const client = liveServerClient();
           const onRemotePipe = deps.getConnectionMode?.() === "remote";
+          const localCredential =
+            !onRemotePipe && deps.startupMode.kind === "local"
+              ? loadDeviceCredentialByWorkspaceId(deps.startupMode.workspaceId)
+              : null;
           return {
             configured: !!stored,
             isActive: !!stored && onRemotePipe && (client?.isConnected() ?? false),
             bootstrap: stored ? "device" : "none",
-            deviceId: stored?.deviceId,
+            deviceId: stored?.deviceId ?? localCredential?.deviceId,
             workspaceName: stored?.workspaceName,
           } satisfies RemoteCredCurrent;
         }
@@ -336,7 +341,11 @@ export function createRemoteCredService(deps: {
         }
         case "reconnectNow": {
           const client = liveServerClient();
-          if (!client?.nudge) throw new Error("The current connection cannot be nudged");
+          if (!client?.nudge) {
+            throw new Error(
+              "Reconnect isn't available for this connection — try relaunching Vibestudio."
+            );
+          }
           client.nudge();
           return;
         }

@@ -12,7 +12,9 @@ import {
   type WebContents,
 } from "electron";
 import * as path from "path";
+import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
+import { EventService } from "@vibestudio/shared/eventsService";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
@@ -49,6 +51,23 @@ const recoveredLocalServerCrash =
     : null;
 // Consume the marker so later intentional relaunches do not repeat the notice.
 if (recoveredCrashArgIndex >= 0) process.argv.splice(recoveredCrashArgIndex, 1);
+const crashLoopArgIndex = process.argv.findIndex((arg) =>
+  arg.startsWith("--local-server-crash-loop=")
+);
+const localServerCrashLoopCode =
+  crashLoopArgIndex >= 0 ? (process.argv[crashLoopArgIndex]?.split("=")[1] ?? "unknown") : null;
+if (crashLoopArgIndex >= 0) process.argv.splice(crashLoopArgIndex, 1);
+const crashLoopWorkspaceArgIndex = process.argv.findIndex((arg) =>
+  arg.startsWith("--local-server-crash-workspace=")
+);
+const crashLoopWorkspaceName =
+  crashLoopWorkspaceArgIndex >= 0
+    ? (process.argv[crashLoopWorkspaceArgIndex]?.split("=")[1] ?? null)
+    : null;
+if (crashLoopWorkspaceArgIndex >= 0) process.argv.splice(crashLoopWorkspaceArgIndex, 1);
+if (!recoveredLocalServerCrash && !localServerCrashLoopCode) {
+  delete process.env["VIBESTUDIO_LOCAL_CRASH_RELAUNCH_STATE"];
+}
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -57,8 +76,57 @@ function formatUnknownError(error: unknown): string {
   return String(error);
 }
 
+function writeHeadlessStartupError(error: unknown, wsDir?: string): void {
+  try {
+    const directory = wsDir ? path.join(wsDir, "state") : app.getPath("userData");
+    fs.mkdirSync(directory, { recursive: true });
+    const logPath = wsDir ? path.join(directory, "logs", "server.log") : undefined;
+    fs.writeFileSync(
+      path.join(directory, "startup-error.json"),
+      JSON.stringify(
+        {
+          failedAt: new Date().toISOString(),
+          message: error instanceof Error ? error.message : String(error),
+          detail: formatUnknownError(error),
+          ...(logPath ? { logPath } : {}),
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+  } catch (writeError) {
+    console.error("[headless] Failed to write startup-error.json:", writeError);
+  }
+}
+
 function logSuppressedErrorDialog(title: string, content: string): void {
   console.error(`[App] Suppressed error dialog: ${title}\n${content}`);
+}
+
+// Initialize the emergency notification bus before installing process-level
+// exception handlers. Those handlers can run during later module setup and must
+// never touch a not-yet-initialized binding.
+const eventService = new EventService();
+
+function surfaceMainProcessFatal(title: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!app.isReady()) return;
+  try {
+    eventService.emit("notification:show", {
+      id: `main-process-error:${Date.now()}`,
+      type: "error",
+      title,
+      message,
+      ttl: 0,
+    });
+    if (Notification.isSupported()) {
+      new Notification({ title, body: message, urgency: "critical" }).show();
+    }
+  } catch (surfaceError) {
+    // An exception reporter must not recursively trigger itself.
+    console.error("[App] Failed to surface main-process error:", surfaceError);
+  }
 }
 
 // Electron's default main-process exception handling can show a blocking
@@ -66,9 +134,11 @@ function logSuppressedErrorDialog(title: string, content: string): void {
 // these errors instead of interrupting the user with generic native dialogs.
 process.on("uncaughtException", (error) => {
   console.error("[App] Uncaught exception in main process:", formatUnknownError(error));
+  surfaceMainProcessFatal("Vibestudio encountered an internal error", error);
 });
 process.on("unhandledRejection", (reason) => {
   console.error("[App] Unhandled rejection in main process:", formatUnknownError(reason));
+  surfaceMainProcessFatal("A Vibestudio operation failed", reason);
 });
 dialog.showErrorBox = logSuppressedErrorDialog;
 
@@ -119,7 +189,6 @@ import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
-import { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
 import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibestudio/shared/hostTargetLaunchGate";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
@@ -131,7 +200,6 @@ import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapA
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 
-const eventService = new EventService();
 import { ViewManager } from "./viewManager.js";
 import {
   createVerifiedCaller,
@@ -144,7 +212,11 @@ import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { createEventsServiceDefinition } from "@vibestudio/shared/eventsService";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
-import { startMemoryMonitor, setMemoryMonitorViewManager } from "./memoryMonitor.js";
+import {
+  startMemoryMonitor,
+  setMemoryMonitorViewManager,
+  setMemoryPressureHandler,
+} from "./memoryMonitor.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
 import { assertPresent } from "../lintHelpers";
 
@@ -187,13 +259,31 @@ loadCentralEnv();
 const centralData = new CentralDataManager();
 let startupMode: StartupMode;
 let workspaceId: string = "unknown";
+let bootstrapStartupError: { message: string; detail?: string; logPath?: string } | null = null;
+let retryWorkspaceName: string | null = crashLoopWorkspaceName;
+
+if (localServerCrashLoopCode) {
+  bootstrapStartupError = {
+    message: `The local workspace server stopped repeatedly (last exit code ${localServerCrashLoopCode}).`,
+    detail:
+      "Automatic restart was stopped to avoid a relaunch loop. Inspect the server log, then retry or choose another workspace.",
+  };
+}
 
 try {
   startupMode = resolveStartupMode(centralData, { interactiveDesktop: !IS_HEADLESS_HOST });
 } catch (error) {
   console.error("[Workspace] Failed to initialize workspace:", error);
-  app.quit();
-  process.exit(1);
+  if (IS_HEADLESS_HOST) {
+    writeHeadlessStartupError(error);
+    app.quit();
+    process.exit(1);
+  }
+  startupMode = { kind: "pending" };
+  bootstrapStartupError = {
+    message: error instanceof Error ? error.message : String(error),
+    detail: formatUnknownError(error),
+  };
 }
 
 if (
@@ -230,7 +320,6 @@ let electronHostLaunchTimer: ReturnType<typeof setTimeout> | null = null;
 let electronHostLaunchBlockedByApproval = false;
 let electronHostLaunchInFlight = false;
 let bootstrapWorkspaceRpcReady = false;
-let bootstrapStartupError: { message: string; detail?: string; logPath?: string } | null = null;
 let bootstrapStartupDetail: string | null = null;
 let desktopAutoUpdater: {
   downloadUpdate(): Promise<unknown>;
@@ -286,6 +375,12 @@ let mainWindow: BaseWindow | null = null;
 let viewManager: ViewManager | null = null;
 let approvalAttention: ApprovalAttention | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
+
+app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.show();
+  mainWindow.focus();
+});
 let autofillManager: import("./autofill/autofillManager.js").AutofillManager | null = null;
 const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
@@ -1345,7 +1440,9 @@ function installBootstrapConnectionHandlers(): void {
 
   ipcMain.handle("vibestudio:bootstrap:retry-startup", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:retry-startup");
-    relaunchApp({ args: process.argv.slice(1) });
+    relaunchApp({
+      args: retryWorkspaceName ? workspaceRelaunchArgs(retryWorkspaceName) : process.argv.slice(1),
+    });
   });
 
   ipcMain.handle("vibestudio:bootstrap:choose-connection", (event) => {
@@ -1377,6 +1474,12 @@ function installBootstrapConnectionHandlers(): void {
   ipcMain.handle("vibestudio:bootstrap:launch-local-workspace", (event, workspaceName?: string) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:launch-local-workspace");
     const name = normalizeBootstrapWorkspaceName(workspaceName);
+    const knownWorkspaces = centralData.listWorkspaces();
+    if (knownWorkspaces.length > 0 && !centralData.hasWorkspace(name)) {
+      throw new Error(
+        `No workspace named “${name}”. Choose an existing workspace; create new workspaces from the workspace manager.`
+      );
+    }
     log.info(`[bootstrap] Launching local workspace "${name}" by user request`);
     resolveChooserChoice({ kind: "local", name, ephemeral: false });
     return { ok: true };
@@ -1429,6 +1532,15 @@ function attachWorkspaceWindowServices(): void {
       if (wc && !wc.isDestroyed()) {
         wc.send("vibestudio:event", event, payload);
       }
+    },
+    onPanelLinkError: (_panelId, url, message) => {
+      eventService.emit("notification:show", {
+        id: `panel-link-error:${Date.now()}`,
+        type: "error",
+        title: "Couldn't open link",
+        message: `${message} (${url})`,
+        ttl: 10_000,
+      });
     },
     onPanelResponsivenessChanged: (panelId, responsive) => {
       eventService.emit("panel-responsiveness-changed", { panelId, responsive });
@@ -1545,11 +1657,16 @@ function createWindow(): void {
         : `Vibestudio — ${workspaceId}`
   );
 
-  mainWindow.on("focus", () => approvalAttention?.handleWindowFocus());
+  mainWindow.on("focus", () => {
+    app.setBadgeCount(0);
+    approvalAttention?.handleWindowFocus();
+    void approvalAttention?.refresh({ quiet: true });
+  });
 
   mainWindow.on("closed", () => {
     stopElectronHostTargetLaunchLoop();
     mainWindow = null;
+    setMemoryMonitorViewManager(null);
     viewManager = null;
     panelView = null; // Clear so getPanelView() returns null until recreated
     appOrchestrator = null;
@@ -1560,8 +1677,17 @@ function createWindow(): void {
 
   attachWorkspaceWindowServices();
 
-  // Optional memory diagnostics (env-driven).
+  // Periodic memory diagnostics plus a throttled user-visible pressure warning.
   if (viewManager) setMemoryMonitorViewManager(viewManager);
+  setMemoryPressureHandler((message) => {
+    eventService.emit("notification:show", {
+      id: "memory-pressure",
+      type: "warning",
+      title: "High panel memory use",
+      message,
+      ttl: 12_000,
+    });
+  });
   startMemoryMonitor();
 
   // Setup application menu (uses shell webContents for menu events)
@@ -1729,14 +1855,39 @@ app.on("ready", async () => {
     return viewInfo?.type === "app" && viewInfo.capabilities.includes(capability);
   };
 
+  const webContentsMayUseSensitivePermission = (
+    contents: WebContents | null | undefined,
+    permission: string
+  ): boolean => {
+    if (!contents || !viewManager) return false;
+    const viewId = viewManager.findViewIdByWebContentsId(contents.id);
+    const viewInfo = viewId ? viewManager.getViewInfo(viewId) : null;
+    // Keep the request and check handlers consistent: Chromium may consult the
+    // check handler before it reaches the request handler.
+    if (permission === "fullscreen" && viewInfo?.type === "browser") return true;
+    return appWebContentsHasPermissionCapability(contents, permission);
+  };
+
   const installPermissionHandlers = (targetSession: Session): void => {
     targetSession.setPermissionRequestHandler((contents, permission, callback) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
-        if (appWebContentsHasPermissionCapability(contents, permission)) {
+        const viewId = contents ? viewManager?.findViewIdByWebContentsId(contents.id) : null;
+        const viewInfo = viewId ? viewManager?.getViewInfo(viewId) : null;
+        // Native fullscreen is a reversible presentation action and is expected
+        // to work for videos in ordinary browser panels.
+        if (webContentsMayUseSensitivePermission(contents, permission)) {
           callback(true);
           return;
         }
         console.warn(`[permissions] denied request for '${permission}'`);
+        const label = permission === "media" ? "Camera or microphone" : permission;
+        eventService.emit("notification:show", {
+          id: `permission-blocked:${viewId ?? "unknown"}:${permission}`,
+          type: "warning",
+          title: `${label} access blocked`,
+          message: `This ${viewInfo?.type ?? "panel"} is not allowed to use ${label.toLowerCase()}.`,
+          ttl: 8_000,
+        });
         callback(false);
         return;
       }
@@ -1745,7 +1896,7 @@ app.on("ready", async () => {
     });
     targetSession.setPermissionCheckHandler((contents, permission) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
-        return appWebContentsHasPermissionCapability(contents, permission);
+        return webContentsMayUseSensitivePermission(contents, permission);
       }
       return true;
     });
@@ -1894,13 +2045,26 @@ app.on("ready", async () => {
     if (choice.kind === "local") {
       // Resolve (creating if missing) the chosen local workspace in-process and
       // promote `startupMode` to local so the connected setup spawns its server.
-      const startup = resolveLocalWorkspaceStartup({
-        appRoot: getAppRoot(),
-        centralData,
-        name: choice.name,
-        init: true,
-        isDev: isDev(),
-      });
+      let startup: ReturnType<typeof resolveLocalWorkspaceStartup>;
+      retryWorkspaceName = choice.name;
+      try {
+        startup = resolveLocalWorkspaceStartup({
+          appRoot: getAppRoot(),
+          centralData,
+          name: choice.name,
+          init: true,
+          isDev: isDev(),
+        });
+      } catch (error) {
+        bootstrapWorkspaceRpcReady = false;
+        bootstrapStartupError = {
+          message: `Could not open workspace “${choice.name}”: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          detail: formatUnknownError(error),
+        };
+        return;
+      }
       const isEphemeral = choice.ephemeral;
       const autoApproveStartupUnits =
         process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
@@ -1991,6 +2155,25 @@ app.on("ready", async () => {
         ttl: 0,
       });
     },
+    onAttentionRequired: (title, message) => {
+      const focusWindow = () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      };
+      mainWindow?.flashFrame(true);
+      app.setBadgeCount(1);
+      if (Notification.isSupported()) {
+        const nativeNotification = new Notification({
+          title,
+          body: message,
+          urgency: "critical",
+        });
+        nativeNotification.on("click", focusWindow);
+        nativeNotification.show();
+      }
+    },
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
     resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
@@ -2042,6 +2225,21 @@ app.on("ready", async () => {
         skipStoredRemote: skipRemotePairingLaunch,
         centralData,
         onServerEvent: handleServerEvent,
+        onMainSessionTerminalClose: (error) => {
+          const message = error.message || "The paired server ended this session.";
+          eventService.emit("server-connection-changed", {
+            status: "disconnected",
+            isRemote: true,
+            remoteHost,
+          });
+          eventService.emit("notification:show", {
+            id: "remote-main-session-ended",
+            type: "error",
+            title: "Paired server session ended",
+            message: `${message} Re-pair this device or relaunch Vibestudio.`,
+            ttl: 0,
+          });
+        },
         onConnectionStatusChanged: (status) => {
           // The selected ICE path (host/srflx/prflx = direct, relay = TURN) is
           // additive observability the WebRTC ServerClient exposes; the loopback
@@ -2060,6 +2258,19 @@ app.on("ready", async () => {
             remoteHost,
             ...(candidateType ? { candidateType } : {}),
           });
+          if (status === "disconnected") {
+            for (const entry of panelRegistry?.listPanels() ?? []) {
+              const wc = viewManager?.getWebContents(entry.panelId);
+              if (wc && !wc.isDestroyed()) {
+                wc.send("vibestudio:event", "runtime:connection-error", {
+                  code: 1006,
+                  reason:
+                    "The workspace server connection closed. Reconnect, then retry this panel.",
+                  source: "server",
+                });
+              }
+            }
+          }
           // On every transition into "connected" (including the very first one
           // and any subsequent reconnect), replay shell subscriptions. The
           // first callback may fire before `serverClientRef` is assigned; the
@@ -2213,12 +2424,18 @@ app.on("ready", async () => {
       return pathname === "/" ? "" : pathname;
     })();
 
-    // Client-local pin store (desktop only). `userData` is already
-    // workspace-scoped, which is exactly the pin scope we want. Headless is out
-    // of scope for the UI GC and gets no pin store.
+    // A workspace selected in-process cannot safely repoint Electron's userData
+    // directory, so derive the pin path from the resolved workspace itself.
     const panelPinStore = IS_HEADLESS_HOST
       ? undefined
-      : new PanelPinStore(path.join(app.getPath("userData"), "panel-pins.json"));
+      : new PanelPinStore(
+          path.join(
+            startupMode.kind === "local"
+              ? path.join(startupMode.wsDir, "state")
+              : app.getPath("userData"),
+            "panel-pins.json"
+          )
+        );
 
     // Create PanelOrchestrator
     panelOrchestrator = new PanelOrchestrator({
@@ -2509,9 +2726,15 @@ app.on("ready", async () => {
     electronContainer.registerRpc({
       name: "autofill",
       description: "Password autofill management",
-      policy: { allowed: ["shell"] },
+      policy: { allowed: ["shell", "panel"] },
       methods: autofillMethods,
       handler: async (_ctx, method, args) => {
+        if (
+          _ctx.caller.runtime.kind === "panel" &&
+          _ctx.caller.code?.repoPath !== "about/credentials"
+        ) {
+          throw new Error("Only the trusted Credentials page may manage browser passwords");
+        }
         if (!autofillManager) throw new Error("Autofill not initialized");
         const def = autofillManager.getServiceDefinition();
         return def.handler(_ctx, method, args);
@@ -2827,6 +3050,12 @@ app.on("ready", async () => {
       log.error(`[bootstrap] Startup failed; keeping recovery window open: ${message}`);
       return;
     }
+    if (IS_HEADLESS_HOST) {
+      writeHeadlessStartupError(
+        error,
+        startupMode.kind === "local" ? startupMode.wsDir : undefined
+      );
+    }
     app.exit(1);
   }
 });
@@ -2934,7 +3163,10 @@ app.on("will-quit", (event) => {
 });
 
 app.on("activate", () => {
-  if (mainWindow === null && (serverSession || startupMode.kind === "pending")) {
+  if (
+    mainWindow === null &&
+    (serverSession || startupMode.kind === "pending" || bootstrapStartupError)
+  ) {
     void createWindow();
   }
   const focusedPanelId = panelRegistry?.getFocusedPanelId();

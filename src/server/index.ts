@@ -593,11 +593,13 @@ async function main() {
   const { createEgressProxy } = await import("./services/egressProxy.js");
   const { CredentialLifecycle } = await import("./services/credentialLifecycle.js");
   const { CredentialSessionGrantStore } = await import("./services/credentialSessionGrants.js");
+  const { CredentialUseGrantStore } = await import("./services/credentialUseGrantStore.js");
 
   const credentialStore = new CredentialStore();
   const clientConfigStore = new ClientConfigStore();
   const auditLog = new AuditLog({ logDir: path.join(statePath, "credentials-audit") });
   const credentialSessionGrantStore = new CredentialSessionGrantStore();
+  const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
   const { UserlandApprovalGrantStore } = await import("./services/userlandApprovalGrantStore.js");
@@ -655,6 +657,7 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     sessionGrantStore: credentialSessionGrantStore,
+    credentialUseGrantStore,
     credentialLifecycle,
   });
   let panelRuntimeCoordinatorForCleanup:
@@ -1615,6 +1618,7 @@ async function main() {
     createPermissionsService({
       capabilityGrants: capabilityGrantStore,
       userlandGrants: userlandApprovalGrantStore,
+      credentialUseGrants: credentialUseGrantStore,
     })
   );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
@@ -1720,6 +1724,7 @@ async function main() {
       egressProxy,
       approvalQueue,
       sessionGrantStore: credentialSessionGrantStore,
+      credentialUseGrantStore,
       credentialLifecycle,
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,

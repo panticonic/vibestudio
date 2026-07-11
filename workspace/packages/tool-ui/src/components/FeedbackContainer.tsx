@@ -13,7 +13,7 @@ export interface FeedbackContainerProps {
   /** The feedback component to render */
   children: ReactNode;
   /** Called when user clicks the X button */
-  onDismiss: () => void;
+  onDismiss?: () => void;
   /** Called when the component throws during render */
   onError: (error: Error) => void;
   /** Title displayed in the container header (default: "Agent requires input") */

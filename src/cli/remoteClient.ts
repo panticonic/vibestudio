@@ -166,7 +166,8 @@ async function postHubWorkspaceJson(
   if (!creds.hubUrl) {
     throw new AuthError("stored credential is missing a hub URL; pair again");
   }
-  const response = await fetch(serverWorkspaceRouteUrl(creds.hubUrl, route), {
+  const url = serverWorkspaceRouteUrl(creds.hubUrl, route);
+  const response = await fetchWithActionableAuthError(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -272,7 +273,8 @@ export async function createPairingInviteWithAdmin(
       "not paired and no local admin token found; run on the remote host or pass --admin-token"
     );
   }
-  const response = await fetch(serverAuthRouteUrl(endpoint, "create-pairing-code"), {
+  const url = serverAuthRouteUrl(endpoint, "create-pairing-code");
+  const response = await fetchWithActionableAuthError(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -290,6 +292,14 @@ export async function createPairingInviteWithAdmin(
     throw new Error("invite failed: server returned an unexpected response");
   }
   return body as unknown as PairingInvite;
+}
+
+async function fetchWithActionableAuthError(url: URL, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    throw new AuthError(`cannot reach ${url.origin}: ${networkErrorMessage(error)}`);
+  }
 }
 
 function remoteErrorMessage(body: { error?: unknown; code?: unknown }, fallback: string): string {

@@ -3,8 +3,9 @@
 `vibestudio` is the unified terminal entrypoint for remote server and mobile setup.
 Run `vibestudio --help` for a grouped overview, `vibestudio <group> --help` for
 commands in one area, and `vibestudio <group> <command> --help` for full flags.
-Output switches to JSON when stdout is piped; pass `--plain` to keep the readable
-format (or `--json` to request structured output explicitly).
+Structured commands switch to JSON when stdout is piped; pass `--plain` to keep
+their readable format (or `--json` explicitly). Long-running passthrough commands
+such as `remote serve`, deployment, and mobile tooling document their own output flags.
 
 ## Development
 
@@ -140,7 +141,8 @@ not failed, when run as a client-side preflight.
 `remote serve`, `mobile pair`, and server startup resolve signaling as:
 flag > environment > config > hosted default (`wss://signal.vibestudio.app`).
 Use `remote setup-signaling` only when you want to self-host the Cloudflare
-signaling worker.
+signaling worker. It requires a Vibestudio source checkout with dependencies
+installed (`pnpm bootstrap`); it is not included in the npm package.
 
 Production Cloudflare deploys are rooted in the repo scripts:
 
@@ -185,7 +187,7 @@ Start the phone pairing server (pairing is over WebRTC — no Tailscale/HTTPS se
 vibestudio mobile pair --port 3030
 ```
 
-Run the local mobile dev loop:
+From a Vibestudio source checkout, run the local mobile dev loop:
 
 ```sh
 vibestudio mobile dev --platform android

@@ -19,7 +19,7 @@ import {
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Callout, Flex, Text, Theme } from "@radix-ui/themes";
+import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { AgenticChat, ErrorBoundary, ReviewAndPickSurface } from "@workspace/agentic-chat";
 import type {
   ConnectionConfig,
@@ -282,13 +282,19 @@ export default function ChatPanel() {
     })();
   }, [resolvedContextId, stateArgs.channelName]);
 
+  // Resolve this before constructing action callbacks that include the
+  // channel in durable notification ids.
+  const channelName = stateArgs.channelName ?? bootstrapChannel;
+
   // Agent subscription recovery: when a panel has a channel but no DO
   // participants, re-create+subscribe each persisted agent using its stable
   // `key` so we hit the same entity row idempotently. This also covers fresh
   // bootstrap, where server-side startup approvals/builds can briefly race
   // the first create+subscribe attempt.
   const rehydrationCheckedRef = useRef(false);
-  const [rehydrationStatus, setRehydrationStatus] = useState<"idle" | "recovering" | "failed">("idle");
+  const [rehydrationStatus, setRehydrationStatus] = useState<"idle" | "recovering" | "failed">(
+    "idle"
+  );
   const [rehydrationError, setRehydrationError] = useState<string | null>(null);
   const [rehydrationAttempt, setRehydrationAttempt] = useState(0);
   useEffect(() => {
@@ -375,7 +381,11 @@ export default function ChatPanel() {
             const message = err instanceof Error ? err.message : String(err);
             setRehydrationError(message);
             setRehydrationStatus("failed");
-            void notifications.show({ type: "error", title: "Couldn't reconnect the chat agent", message });
+            void notifications.show({
+              type: "error",
+              title: "Couldn't reconnect the chat agent",
+              message,
+            });
             return;
           }
           await delay(AGENT_SUBSCRIPTION_RETRY_DELAY_MS);
@@ -446,7 +456,8 @@ export default function ChatPanel() {
   }, []);
 
   const handleReloadPanel = useCallback(async (panelId: string) => {
-    void panel.focusPanel(panelId);
+    await panel.focusPanel(panelId);
+    window.location.reload();
   }, []);
 
   // Deep-link from a local model's red error dot in the picker (item 6) to the
@@ -820,7 +831,9 @@ export default function ChatPanel() {
   const handleRemoveAgent = useCallback(async (channelName: string, handle: string) => {
     try {
       const currentArgs = panel.stateArgs.get<ChatStateArgs>();
-      const persisted = (currentArgs.installedAgents ?? []).find((agent) => agent.handle === handle);
+      const persisted = (currentArgs.installedAgents ?? []).find(
+        (agent) => agent.handle === handle
+      );
       if (!persisted) throw new Error(`No installed agent record matches @${handle}`);
       await unsubscribeDOFromChannel(
         persisted.source,
@@ -829,7 +842,9 @@ export default function ChatPanel() {
         channelName
       );
       await panel.stateArgs.set({
-        installedAgents: (currentArgs.installedAgents ?? []).filter((agent) => agent.key !== persisted.key),
+        installedAgents: (currentArgs.installedAgents ?? []).filter(
+          (agent) => agent.key !== persisted.key
+        ),
       });
     } catch (err) {
       void notifications.show({
@@ -859,7 +874,12 @@ export default function ChatPanel() {
       onOpenClaudeCode: handleOpenClaudeCode,
       onOpenLocalModelsLog: handleOpenLocalModelsLog,
       onAttentionRequired: (title, message) => {
-        void notifications.show({ type: "warning", title, message });
+        void notifications.show({
+          id: `chat-attention:${channelName ?? "pending"}`,
+          type: "warning",
+          title,
+          message,
+        });
       },
     }),
     [
@@ -878,6 +898,7 @@ export default function ChatPanel() {
       handleReloadPanel,
       handleOpenClaudeCode,
       handleOpenLocalModelsLog,
+      channelName,
     ]
   );
 
@@ -964,8 +985,7 @@ export default function ChatPanel() {
   // all other operations use runtime APIs.
   const toolProvider: ToolProvider = useCallback(() => ({}), []);
 
-  // Resolve channel name: from stateArgs (existing chat) or bootstrap (new chat)
-  const channelName = stateArgs.channelName ?? bootstrapChannel;
+  // Resolve installed agents from persisted panel state.
   const installedAgents = stateArgs.installedAgents ?? undefined;
 
   // Still bootstrapping — show a brief loading indicator
@@ -985,23 +1005,32 @@ export default function ChatPanel() {
               overflow: "hidden",
             }}
           >
-            <Text size="2" color="gray">
-              Starting chat...
-            </Text>
+            <Flex align="center" gap="2">
+              <Spinner size="1" />
+              <Text size="2" color="gray">
+                Starting chat…
+              </Text>
+            </Flex>
           </Flex>
         </Theme>
       </ErrorBoundary>
     );
   }
   const fallbackModelName = fallbackNotice
-    ? modelCatalog?.models.find((model) => model.ref === fallbackNotice)?.name ?? fallbackNotice.replace(/^local:/, "")
+    ? (modelCatalog?.models.find((model) => model.ref === fallbackNotice)?.name ??
+      fallbackNotice.replace(/^local:/, ""))
     : null;
+  const fallbackConsentRequired = Boolean(fallbackNotice && !fallbackNoticeDismissed);
 
   return (
     <>
       {rehydrationStatus !== "idle" ? (
         <Theme appearance={theme} {...appTheme}>
-          <Callout.Root color={rehydrationStatus === "failed" ? "red" : "blue"} size="1" style={{ borderRadius: 0 }}>
+          <Callout.Root
+            color={rehydrationStatus === "failed" ? "red" : "blue"}
+            size="1"
+            style={{ borderRadius: 0 }}
+          >
             <Flex align="center" justify="between" gap="3" width="100%">
               <Callout.Text>
                 {rehydrationStatus === "failed"
@@ -1009,10 +1038,15 @@ export default function ChatPanel() {
                   : "Reconnecting your agent…"}
               </Callout.Text>
               {rehydrationStatus === "failed" ? (
-                <Button size="1" variant="soft" color="red" onClick={() => {
-                  rehydrationCheckedRef.current = false;
-                  setRehydrationAttempt((attempt) => attempt + 1);
-                }}>
+                <Button
+                  size="1"
+                  variant="soft"
+                  color="red"
+                  onClick={() => {
+                    rehydrationCheckedRef.current = false;
+                    setRehydrationAttempt((attempt) => attempt + 1);
+                  }}
+                >
                   Retry
                 </Button>
               ) : null}
@@ -1029,37 +1063,50 @@ export default function ChatPanel() {
           >
             <Flex align="center" justify="between" gap="3" style={{ width: "100%" }}>
               <Callout.Text>
-                No cloud provider connected — using <Text weight="medium">{fallbackModelName}</Text> on
-                this device. Answers will be simpler than a frontier model's.
+                No cloud provider is connected. Before sending a first message, choose whether to
+                use <Text weight="medium">{fallbackModelName}</Text> on this device. This downloads
+                roughly 700 MB; progress is available in Local Models, and answers will be simpler
+                than a frontier model's.
               </Callout.Text>
               <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-                <Button size="1" variant="soft" onClick={() => setFallbackNoticeDismissed(true)}>
-                  OK
+                <Button size="1" variant="solid" onClick={() => setFallbackNoticeDismissed(true)}>
+                  Use local model (~700 MB)
                 </Button>
               </Flex>
             </Flex>
           </Callout.Root>
         </Theme>
       )}
-      <AgenticChat
-        config={config}
-        channelName={channelName}
-        channelConfig={stateArgs.channelConfig}
-        contextId={resolvedContextId}
-        metadata={PANEL_METADATA}
-        tools={toolProvider}
-        actions={chatActions}
-        theme={theme}
-        installedAgents={installedAgents}
-        initialPrompt={initialPromptCaptured.current}
-        forceInitialPrompt={stateArgs.forceInitialPrompt}
-        forkNav={forkNav}
-        sandbox={sandboxConfig}
-        initialActionBarFile={stateArgs.actionBarFile ?? undefined}
-        initialActionBarProps={stateArgs.actionBarProps ?? undefined}
-        initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
-        onActionBarFileChange={handleActionBarFileChange}
-      />
+      <div
+        inert={fallbackConsentRequired}
+        aria-disabled={fallbackConsentRequired}
+        style={{
+          minHeight: 0,
+          flex: 1,
+          display: "flex",
+          opacity: fallbackConsentRequired ? 0.6 : 1,
+        }}
+      >
+        <AgenticChat
+          config={config}
+          channelName={channelName}
+          channelConfig={stateArgs.channelConfig}
+          contextId={resolvedContextId}
+          metadata={PANEL_METADATA}
+          tools={toolProvider}
+          actions={chatActions}
+          theme={theme}
+          installedAgents={installedAgents}
+          initialPrompt={initialPromptCaptured.current}
+          forceInitialPrompt={stateArgs.forceInitialPrompt}
+          forkNav={forkNav}
+          sandbox={sandboxConfig}
+          initialActionBarFile={stateArgs.actionBarFile ?? undefined}
+          initialActionBarProps={stateArgs.actionBarProps ?? undefined}
+          initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
+          onActionBarFileChange={handleActionBarFileChange}
+        />
+      </div>
       {reviewTarget && (
         <Theme appearance={theme} {...appTheme}>
           <ReviewAndPickSurface

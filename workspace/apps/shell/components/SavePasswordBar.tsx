@@ -118,6 +118,13 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
     });
   };
 
+  let hostname: string;
+  try {
+    hostname = new URL(prompt.origin).hostname;
+  } catch {
+    hostname = prompt.origin;
+  }
+
   const handleSave = async () => {
     setSaving(true);
     setSaveError(null);
@@ -133,11 +140,24 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
     }
   };
 
-  const handleNever = () => {
-    void autofill
-      .confirmSave(prompt.panelId, "never")
-      .catch((err: unknown) => console.warn("[SavePasswordBar] Never-save failed:", err));
-    removePrompt(prompt.panelId);
+  const handleNever = async () => {
+    if (
+      !window.confirm(
+        `Never offer to save passwords for ${hostname}? This preference remains until you remove it from Credentials.`
+      )
+    )
+      return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await autofill.confirmSave(prompt.panelId, "never");
+      removePrompt(prompt.panelId);
+    } catch (err) {
+      console.warn("[SavePasswordBar] Never-save failed:", err);
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDismiss = () => {
@@ -146,13 +166,6 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
       .catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
     removePrompt(prompt.panelId);
   };
-
-  let hostname: string;
-  try {
-    hostname = new URL(prompt.origin).hostname;
-  } catch {
-    hostname = prompt.origin;
-  }
 
   const message = prompt.isUpdate
     ? `Update password for ${prompt.username} on ${hostname}?`
@@ -197,9 +210,9 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
           variant="soft"
           className="app-touch-target"
           disabled={saving}
-          onClick={handleNever}
+          onClick={() => void handleNever()}
         >
-          Never
+          Never for this site
         </Button>
         <Button
           size="1"

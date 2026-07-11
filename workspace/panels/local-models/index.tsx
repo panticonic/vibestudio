@@ -633,6 +633,11 @@ export default function LocalModelsPanel() {
                       <Text size="1" color="gray" as="p" truncate>
                         {entry.blurb}
                       </Text>
+                      {!quant ? (
+                        <Text size="1" color="gray" as="p">
+                          No compatible build is available for your detected hardware tier.
+                        </Text>
+                      ) : null}
                     </Box>
                     <Tooltip
                       content={
@@ -775,7 +780,11 @@ export default function LocalModelsPanel() {
                           setLogKind(kind);
                           setLogError(null);
                           setLogLines([]);
-                          setLogLines(await invoke<string[]>("tailServerLogLines", [kind, 200]));
+                          try {
+                            setLogLines(await invoke<string[]>("tailServerLogLines", [kind, 200]));
+                          } catch (error) {
+                            setLogError(error instanceof Error ? error.message : String(error));
+                          }
                         })
                       }
                     >

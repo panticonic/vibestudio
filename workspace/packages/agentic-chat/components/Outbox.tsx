@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Box, Button, Flex, IconButton, ScrollArea, Text } from "@radix-ui/themes";
 import { ChevronDownIcon, ChevronUpIcon, LightningBoltIcon } from "@radix-ui/react-icons";
 import { useIsMobile, useTouchDevice } from "@workspace/react/responsive";
@@ -12,10 +12,7 @@ import type { ChatMessage } from "../types";
  * - self-authored, kind === "message", not error, not retracted, zero reads.
  * Sorted by existing message order (the array is already chronological).
  */
-function deriveOutboxMessages(
-  messages: ChatMessage[],
-  selfId: string | null
-): ChatMessage[] {
+function deriveOutboxMessages(messages: ChatMessage[], selfId: string | null): ChatMessage[] {
   if (!selfId) return [];
   return messages.filter((m) => {
     if (m.senderId !== selfId) return false;
@@ -93,7 +90,8 @@ export function deriveActiveOutbox(
 ): ChatMessage[] {
   if (!selfId) return [];
   return deriveOutboxMessages(messages, selfId).filter(
-    (m) => !hasOfflinePendingRecipient(m, liveRoster) && hasDeliverableRecipient(m, selfId, liveRoster)
+    (m) =>
+      !hasOfflinePendingRecipient(m, liveRoster) && hasDeliverableRecipient(m, selfId, liveRoster)
   );
 }
 
@@ -116,18 +114,12 @@ export const Outbox = React.memo(function Outbox() {
     cancelPendingMessage,
     flushOutboxAndInterrupt,
     afterTurnMessageIds,
-    failedSendMessageIds,
-    retrySend,
   } = useChatContext();
   const isMobile = useIsMobile();
   const isTouch = useTouchDevice();
   const touch = isMobile || isTouch;
 
   const [collapsed, setCollapsed] = useState(true);
-  // Local drag-reorder ordering overlaid on the derived order.
-  const [orderOverride, setOrderOverride] = useState<string[] | null>(null);
-  const dragIdRef = useRef<string | null>(null);
-  const dragOverIdRef = useRef<string | null>(null);
 
   // Offline-recipient messages move to the transcript (with a marker), not the
   // outbox, so the outbox stays the actively-deliverable queue.
@@ -136,22 +128,7 @@ export const Outbox = React.memo(function Outbox() {
     [messages, selfId, participants]
   );
 
-  // Apply local reorder override, keeping any ids not present in the override
-  // (newly arrived) appended in their derived order.
-  const items = useMemo(() => {
-    if (!orderOverride) return derived;
-    const byId = new Map(derived.map((m) => [m.id, m]));
-    const ordered: ChatMessage[] = [];
-    for (const id of orderOverride) {
-      const m = byId.get(id);
-      if (m) {
-        ordered.push(m);
-        byId.delete(id);
-      }
-    }
-    for (const m of derived) if (byId.has(m.id)) ordered.push(m);
-    return ordered;
-  }, [derived, orderOverride]);
+  const items = derived;
 
   const laneFor = useCallback(
     (id: string): OutboxLane => {
@@ -160,35 +137,6 @@ export const Outbox = React.memo(function Outbox() {
     },
     [afterTurnMessageIds, agentBusy]
   );
-
-  const handleDragStart = useCallback((id: string) => {
-    dragIdRef.current = id;
-  }, []);
-  const handleDragOver = useCallback((id: string) => {
-    dragOverIdRef.current = id;
-  }, []);
-  const handleDrop = useCallback(() => {
-    const from = dragIdRef.current;
-    const to = dragOverIdRef.current;
-    dragIdRef.current = null;
-    dragOverIdRef.current = null;
-    if (!from || !to || from === to) return;
-    const current = items.map((m) => m.id);
-    const fromIdx = current.indexOf(from);
-    const toIdx = current.indexOf(to);
-    if (fromIdx < 0 || toIdx < 0) return;
-    current.splice(fromIdx, 1);
-    current.splice(toIdx, 0, from);
-    setOrderOverride(current);
-  }, [items]);
-  const handleMove = useCallback((id: string, direction: -1 | 1) => {
-    const current = items.map((message) => message.id);
-    const from = current.indexOf(id);
-    const to = from + direction;
-    if (from < 0 || to < 0 || to >= current.length) return;
-    [current[from], current[to]] = [current[to]!, current[from]!];
-    setOrderOverride(current);
-  }, [items]);
 
   // Suppress the queue until the channel is connected (replay complete — the
   // ConnectionManager only reports "connected" after `client.ready()`). During
@@ -211,24 +159,15 @@ export const Outbox = React.memo(function Outbox() {
       aria-label="Outbox — your unsent messages"
       className="outbox-list"
     >
-      {items.map((m, index) => (
+      {items.map((m) => (
         <OutboxItem
           key={m.id}
           msg={m}
           participants={allParticipants}
           lane={laneFor(m.id)}
-          failed={failedSendMessageIds?.has(m.id)}
           touch={touch}
           onEdit={editPendingMessage}
           onCancel={cancelPendingMessage}
-          onRetry={retrySend}
-          onMove={handleMove}
-          canMoveUp={index > 0}
-          canMoveDown={index < items.length - 1}
-          onDragStart={handleDragStart}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          dragging={dragIdRef.current === m.id}
         />
       ))}
     </Flex>

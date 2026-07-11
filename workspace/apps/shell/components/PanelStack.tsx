@@ -34,7 +34,7 @@ import {
   useSiblings,
   useDescendantSiblingGroups,
 } from "../shell/hooks/PanelTreeContext";
-import { app, panel as panelService, view } from "../shell/client";
+import { app, notification, panel as panelService, view } from "../shell/client";
 import {
   pinMutationSeqAtom,
   pinnedPanelIdsAtom,
@@ -59,6 +59,11 @@ interface PanelStackProps {
     handler: (panelId: string, action: PanelContextMenuAction) => void
   ) => void;
   onRegisterChromeCommand?: (handler: (command: ChromeCommand) => void) => void;
+}
+
+function reportPanelCommandError(action: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  void notification.show({ type: "error", title: `${action} failed`, message, ttl: 8_000 });
 }
 
 export type ChromeCommand =
@@ -468,7 +473,11 @@ export function PanelStack({
 
   // Handle direct close button clicks (X button in tree sidebar)
   const handleArchive = useCallback(async (panelId: string) => {
-    await panelService.archive(panelId);
+    try {
+      await panelService.archive(panelId);
+    } catch (error) {
+      reportPanelCommandError("Close panel", error);
+    }
   }, []);
 
   useEffect(() => {
@@ -597,24 +606,32 @@ export function PanelStack({
             panelId,
             assertPresent(getBrowserNavigationIntentForCommand(command.type))
           );
-          void panelService.reload(panelId);
+          void panelService
+            .reload(panelId)
+            .catch((error) => reportPanelCommandError("Reload", error));
           return;
         case "reload-view":
           void panelService.markBrowserNavigationIntent(
             panelId,
             assertPresent(getBrowserNavigationIntentForCommand(command.type))
           );
-          void panelService.reloadView(panelId);
+          void panelService
+            .reloadView(panelId)
+            .catch((error) => reportPanelCommandError("Reload", error));
           return;
         case "force-reload-view":
           void panelService.markBrowserNavigationIntent(
             panelId,
             assertPresent(getBrowserNavigationIntentForCommand(command.type))
           );
-          void panelService.forceReloadView(panelId);
+          void panelService
+            .forceReloadView(panelId)
+            .catch((error) => reportPanelCommandError("Force reload", error));
           return;
         case "rebuild-panel":
-          void panelService.rebuildPanel(panelId);
+          void panelService
+            .rebuildPanel(panelId)
+            .catch((error) => reportPanelCommandError("Rebuild", error));
           return;
         case "stop":
           void view.browserStop(panelId);
@@ -639,14 +656,16 @@ export function PanelStack({
             if (url)
               void panelService
                 .createBrowser(url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .then((result) => navigateToPanelId(result.id))
+                .catch((error) => reportPanelCommandError("Duplicate panel", error));
           } else {
             void panelService
               .createPanel(snapshot.source, {
                 isRoot: true,
                 ref: snapshot.options.ref,
               })
-              .then((result) => navigateToPanelId(result.id));
+              .then((result) => navigateToPanelId(result.id))
+              .catch((error) => reportPanelCommandError("Duplicate panel", error));
           }
           return;
         }
@@ -662,10 +681,22 @@ export function PanelStack({
           });
           return;
         case "unload":
-          void panelService.unload(panelId);
+          void panelService
+            .unload(panelId)
+            .catch((error) => reportPanelCommandError("Unload", error));
           return;
         case "archive":
-          void panelService.archive(panelId);
+          if (
+            visiblePanel &&
+            (panelMap.get(panelId)?.children.length ?? 0) > 0 &&
+            !window.confirm(
+              `Close “${visiblePanel.title}” and its child panels? All descendants will be archived.`
+            )
+          )
+            return;
+          void panelService
+            .archive(panelId)
+            .catch((error) => reportPanelCommandError("Close panel", error));
           return;
         case "focus-address":
           window.dispatchEvent(new Event("shell-focus-address"));
@@ -830,7 +861,14 @@ export function PanelStack({
         }
       }
     },
-    [navigatePanelHistory, navigateToPanelId, setPinnedPanelIds, bumpPinMutationSeq, visiblePanel]
+    [
+      navigatePanelHistory,
+      navigateToPanelId,
+      setPinnedPanelIds,
+      bumpPinMutationSeq,
+      visiblePanel,
+      panelMap,
+    ]
   );
 
   useEffect(() => {
@@ -931,7 +969,8 @@ export function PanelStack({
             onClick={() => {
               void panelService
                 .createAboutPanel("new")
-                .then((result) => navigateToPanelId(result.id));
+                .then((result) => navigateToPanelId(result.id))
+                .catch((error) => reportPanelCommandError("Create panel", error));
             }}
           >
             New panel

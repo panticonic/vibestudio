@@ -843,6 +843,12 @@ function UserlandApprovalActions({
   approval: PendingUserlandApproval;
   onChoose: (choice: string) => void;
 }) {
+  const oneTimeOption =
+    approval.promptOptions === "scoped"
+      ? null
+      : (approval.options.find((option) => option.tone === "primary") ??
+        approval.options.find((option) => option.tone !== "danger") ??
+        null);
   return (
     <Flex direction="column" align="end" gap="1">
       <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
@@ -857,6 +863,15 @@ function UserlandApprovalActions({
             onClick={() => onChoose(option.value)}
           />
         ))}
+        {oneTimeOption ? (
+          <DecisionButton
+            label="Only this time"
+            description={`${oneTimeOption.label}, without remembering the choice.`}
+            variant="surface"
+            icon={<CheckCircledIcon />}
+            onClick={() => onChoose(`once:${oneTimeOption.value}`)}
+          />
+        ) : null}
         <Tooltip content="Dismiss">
           <IconButton size="1" variant="ghost" color="gray" onClick={() => onChoose("dismiss")}>
             <Cross2Icon />
@@ -866,7 +881,7 @@ function UserlandApprovalActions({
       <Text size="1" color="gray">
         {approval.promptOptions === "scoped"
           ? "Use the trust option to remember this approval."
-          : "Remembered until revoked."}
+          : "Choices are remembered unless you select Only this time."}
       </Text>
     </Flex>
   );

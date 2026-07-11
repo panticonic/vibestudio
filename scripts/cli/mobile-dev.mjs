@@ -124,7 +124,11 @@ function spawnManaged(command, args, options = {}) {
   });
   pipeChildOutput(child, options.label ?? command);
   child.once("error", (error) => {
-    prefixAndWrite(options.label ?? command, `Failed to start ${command}: ${error.message}`, process.stderr);
+    prefixAndWrite(
+      options.label ?? command,
+      `Failed to start ${command}: ${error.message}`,
+      process.stderr
+    );
   });
   return child;
 }
@@ -147,7 +151,8 @@ function waitForSpawn(child, command, args, timeoutMs = 1_000) {
     child.once("spawn", onSpawn);
     child.once("error", onError);
     if (child.pid) finish();
-    if (child.exitCode != null) finish(new Error(`${command} ${args.join(" ")} exited before startup`));
+    if (child.exitCode != null)
+      finish(new Error(`${command} ${args.join(" ")} exited before startup`));
   });
 }
 
@@ -188,7 +193,9 @@ function runCommand(command, args, options = {}) {
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`));
+        reject(
+          new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`)
+        );
       }
     });
   });
@@ -352,9 +359,21 @@ async function main() {
     printHelp();
     return;
   }
+  if (
+    !(await fsp
+      .stat(mobileDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false))
+  ) {
+    throw new Error(
+      "mobile dev requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap`."
+    );
+  }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
-      throw new Error("iOS dev requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac.");
+      throw new Error(
+        "iOS dev requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac."
+      );
     }
     const startedChildren = [];
     try {
@@ -373,15 +392,19 @@ async function main() {
         await sleep(3000);
       }
       if (!options.noInstall) {
-        await runCommand(process.execPath, [
-          path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
-          "--platform",
-          "ios",
-          "--simulator",
-          "--configuration",
-          "Debug",
-          ...(options.noLaunch ? [] : ["--launch"]),
-        ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
+        await runCommand(
+          process.execPath,
+          [
+            path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
+            "--platform",
+            "ios",
+            "--simulator",
+            "--configuration",
+            "Debug",
+            ...(options.noLaunch ? [] : ["--launch"]),
+          ],
+          { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
+        );
       }
       console.log("[mobile-dev] iOS shell is running. Start pairing with: vibestudio mobile pair");
       await new Promise((resolve) => {
@@ -425,7 +448,9 @@ async function main() {
     if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
       try {
         await fsp.access(readyInfo.workspaceDir);
-        console.warn(`[mobile-dev] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`);
+        console.warn(
+          `[mobile-dev] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
+        );
       } catch {
         // Server cleanup completed.
       }
@@ -439,13 +464,19 @@ async function main() {
   const readyFilePath = path.join(os.tmpdir(), `vibestudio-mobile-ready-${process.pid}.json`);
 
   try {
-    if (!await hasAdbDevice(options.device)) {
+    if (!(await hasAdbDevice(options.device))) {
       if (!options.avd) {
-        throw new Error("No Android device/emulator detected. Start one first or pass --avd <name>.");
+        throw new Error(
+          "No Android device/emulator detected. Start one first or pass --avd <name>."
+        );
       }
-      emulatorChild = spawnManaged(process.env.ANDROID_EMULATOR ?? "emulator", ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"], {
-        label: "emulator",
-      });
+      emulatorChild = spawnManaged(
+        process.env.ANDROID_EMULATOR ?? "emulator",
+        ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"],
+        {
+          label: "emulator",
+        }
+      );
     }
 
     if (emulatorChild) {
@@ -551,7 +582,9 @@ async function main() {
     }
 
     console.log(`[mobile-dev] Ready`);
-    console.log(`[mobile-dev] Workspace: ${ready.workspaceName}${ready.isEphemeral ? " (ephemeral)" : ""}`);
+    console.log(
+      `[mobile-dev] Workspace: ${ready.workspaceName}${ready.isEphemeral ? " (ephemeral)" : ""}`
+    );
     console.log(`[mobile-dev] Gateway:   ${ready.gatewayUrl}`);
     console.log(`[mobile-dev] Device:    ${options.device ?? "default adb device"}`);
 

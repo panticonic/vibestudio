@@ -18,7 +18,6 @@ import { AppBar } from "./AppBar";
 import { PanelWebView } from "./PanelWebView";
 import { WebViewErrorBoundary } from "./WebViewErrorBoundary";
 import { ApprovalSheet } from "./ApprovalSheet";
-import { Toast } from "./Toast";
 import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
@@ -785,11 +784,18 @@ export function MainScreen() {
     const workspaceId = shellClient?.workspaceId;
     if (!workspaceId) return;
     let cancelled = false;
-    void loadPinnedPanelIds(workspaceId).then((ids) => {
-      if (cancelled) return;
-      setPinnedPanelIds(new Set(ids));
-      setPinsHydrated(true);
-    });
+    void loadPinnedPanelIds(workspaceId)
+      .then((ids) => {
+        if (cancelled) return;
+        setPinnedPanelIds(new Set(ids));
+        setPinsHydrated(true);
+      })
+      .catch((error: unknown) => {
+        console.warn("[MainScreen] Failed to restore pinned panels:", error);
+        if (cancelled) return;
+        setPinnedPanelIds(new Set());
+        setPinsHydrated(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -1497,7 +1503,6 @@ export function MainScreen() {
         onResolveExternalAgent={resolveExternalAgent}
         onNavigateToPanel={activatePanel}
       />
-      <Toast />
     </View>
   );
 }

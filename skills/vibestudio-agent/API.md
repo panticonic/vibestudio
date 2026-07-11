@@ -350,7 +350,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`
 
 | Method | Description |
 |--------|-------------|
-| `permissions.list` | List durable capability and userland grants for the trusted permissions page. |
+| `permissions.list` | List active session and durable capability, userland, and credential-use grants. |
 | `permissions.revoke` | Revoke one durable permission grant by its opaque id. |
 
 ## `presence`

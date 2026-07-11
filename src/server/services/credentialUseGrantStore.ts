@@ -3,13 +3,15 @@ import path from "node:path";
 import type { CredentialUseGrant } from "../../../packages/shared/src/credentials/types.js";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
-interface StoredCredentialUseGrant extends CredentialUseGrant {
+export interface StoredCredentialUseGrant extends CredentialUseGrant {
   credentialId: string;
 }
 
 export interface CredentialUseGrantStoreLike {
   list(credentialId: string): CredentialUseGrant[];
+  listAll(): StoredCredentialUseGrant[];
   upsert(credentialId: string, grant: CredentialUseGrant): void | Promise<void>;
+  revoke(id: string): boolean | Promise<boolean>;
 }
 
 export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
@@ -26,6 +28,20 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
     return this.grants
       .filter((grant) => grant.credentialId === credentialId)
       .map(({ credentialId: _credentialId, ...grant }) => ({ ...grant }));
+  }
+
+  listAll(): StoredCredentialUseGrant[] {
+    this.load();
+    return this.grants.map((grant) => ({ ...grant }));
+  }
+
+  revoke(id: string): boolean {
+    this.load();
+    const before = this.grants.length;
+    this.grants = this.grants.filter((grant) => credentialUseGrantId(grant) !== id);
+    if (this.grants.length === before) return false;
+    this.save();
+    return true;
   }
 
   upsert(credentialId: string, grant: CredentialUseGrant): void {
@@ -99,4 +115,8 @@ function storedCredentialUseGrantKey(grant: StoredCredentialUseGrant): string {
     grant.repoPath ?? "",
     grant.effectiveVersion ?? "",
   ].join("\x00");
+}
+
+export function credentialUseGrantId(grant: StoredCredentialUseGrant): string {
+  return Buffer.from(storedCredentialUseGrantKey(grant), "utf8").toString("base64url");
 }

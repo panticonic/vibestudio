@@ -11,7 +11,7 @@ import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/
 
 export interface SavedPermissionGrant {
   id: string;
-  kind: "capability" | "userland";
+  kind: "capability" | "userland" | "credential-use";
   callerLabel: string;
   scopeLabel: string;
   capability?: string;
@@ -43,7 +43,11 @@ function GrantCard({
           <Flex align="center" gap="2" wrap="wrap">
             <Heading size="3">{grant.callerLabel}</Heading>
             <Badge color={grant.kind === "capability" ? "blue" : "purple"} variant="soft">
-              {grant.kind === "capability" ? "System capability" : "Agent choice"}
+              {grant.kind === "capability"
+                ? "System capability"
+                : grant.kind === "credential-use"
+                  ? "Credential use"
+                  : "Agent choice"}
             </Badge>
           </Flex>
           <Text size="2">{grant.scopeLabel}</Text>

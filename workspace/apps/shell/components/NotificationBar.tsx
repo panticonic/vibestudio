@@ -142,10 +142,21 @@ export function NotificationBar() {
   );
 
   const handleAction = useCallback(
-    (notificationId: string, action: NonNullable<NotificationPayload["actions"]>[number]) => {
+    async (notificationId: string, action: NonNullable<NotificationPayload["actions"]>[number]) => {
       const actionId = action.id;
-      // Report action to main process via RPC service
-      void notification.reportAction(notificationId, actionId);
+      // Main-side actions can fail (updater unavailable, OAuth cancel while
+      // disconnected). Keep the original notification visible in that case.
+      try {
+        await notification.reportAction(notificationId, actionId);
+      } catch (err) {
+        void notification.show({
+          type: "error",
+          title: "Action failed",
+          message: err instanceof Error ? err.message : String(err),
+          ttl: 0,
+        });
+        return;
+      }
       if (action.command?.type === "app.applyUpdate") {
         const appId = action.command.appId;
         void app

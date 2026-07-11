@@ -100,7 +100,9 @@ async function launchGui(args) {
 if (wantsGui && hasElectron()) {
   await launchGui(argv.filter((arg) => !GUI_TRIGGERS.has(arg)));
 } else if (wantsGui) {
-  // Server package (no Electron): bare invocation shows CLI help.
+  console.error(
+    "The desktop GUI is not included in @panticonic/vibestudio-server; install @panticonic/vibestudio to use the app."
+  );
   launchCli(["--help"]);
 } else {
   launchCli(argv);

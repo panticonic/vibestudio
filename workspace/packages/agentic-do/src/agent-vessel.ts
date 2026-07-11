@@ -1219,6 +1219,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private loopConfig(channelId: string): AgentLoopConfig {
     const settings = this.getAgentSettings();
+    // Tool approval is a channel-wide consent control. The chat header writes
+    // this value to channel config, so it must override the legacy per-agent
+    // setting used as the fallback for channels that have not selected a level.
+    const channelConfig =
+      (this.subscriptions.getConfig(channelId) as Record<string, unknown> | null) ??
+      this.channelConfigCache.get(channelId)?.value;
+    const channelApprovalLevel = channelConfig?.["approvalLevel"];
+    const approvalLevel =
+      channelApprovalLevel === 0 || channelApprovalLevel === 1 || channelApprovalLevel === 2
+        ? channelApprovalLevel
+        : settings.approvalLevel;
     const publishPolicy = this.getPublishPolicy(channelId);
     const immediatePrompt = this.immediatePrompt(channelId);
     const materialized = this.materializedModel(channelId, settings.model);
@@ -1239,7 +1250,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           }
         : {}),
       thinkingLevel: settings.thinkingLevel,
-      approvalLevel: settings.approvalLevel,
+      approvalLevel,
       respondPolicy: settings.respondPolicy,
       systemPromptHash: this.getStateValue(`agent:promptHash:${channelId}`) ?? "",
       ...(immediatePrompt ? { immediatePrompt } : {}),

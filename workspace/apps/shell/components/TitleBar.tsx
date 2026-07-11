@@ -54,6 +54,7 @@ import {
 import { getAddressNavigationModeFromModifiers } from "@vibestudio/shared/panelCommands";
 import {
   menu,
+  notification,
   panel,
   type NativeShellOverlayEvent,
   type NativeShellOverlayOptions,
@@ -224,12 +225,20 @@ export function TitleBar({
                 size="2"
                 className="app-touch-target"
                 onClick={async () => {
-                  const result = await panel.createAboutPanel("new");
-                  window.dispatchEvent(
-                    new CustomEvent("shell-panel-created", {
-                      detail: { panelId: result.id },
-                    })
-                  );
+                  try {
+                    const result = await panel.createAboutPanel("new");
+                    window.dispatchEvent(
+                      new CustomEvent("shell-panel-created", {
+                        detail: { panelId: result.id },
+                      })
+                    );
+                  } catch (error) {
+                    void notification.show({
+                      type: "error",
+                      title: "Couldn't create panel",
+                      message: error instanceof Error ? error.message : String(error),
+                    });
+                  }
                 }}
                 aria-label="New panel"
               >
@@ -338,12 +347,20 @@ export function TitleBar({
               variant="ghost"
               size="1"
               onClick={async () => {
-                const result = await panel.createAboutPanel("new");
-                window.dispatchEvent(
-                  new CustomEvent("shell-panel-created", {
-                    detail: { panelId: result.id },
-                  })
-                );
+                try {
+                  const result = await panel.createAboutPanel("new");
+                  window.dispatchEvent(
+                    new CustomEvent("shell-panel-created", {
+                      detail: { panelId: result.id },
+                    })
+                  );
+                } catch (error) {
+                  void notification.show({
+                    type: "error",
+                    title: "Couldn't create panel",
+                    message: error instanceof Error ? error.message : String(error),
+                  });
+                }
               }}
               aria-label="New panel"
             >
@@ -1035,6 +1052,7 @@ function HoverableBreadcrumbItem({
   };
 
   const archivePanel = () => {
+    if (!window.confirm(`Close “${title}”? Child panels, if any, will also be archived.`)) return;
     void panel.archive(panelId).catch((error) => {
       console.error("Failed to close panel from title bar", error);
     });

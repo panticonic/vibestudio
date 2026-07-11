@@ -479,6 +479,7 @@ export default function NewsPanel() {
   const [pastOpen, setPastOpen] = useState(false);
   const [savedArticles, setSavedArticles] = useState<ArticleRow[]>([]);
   const [pendingArticles, setPendingArticles] = useState<ArticleRow[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
@@ -912,8 +913,10 @@ export default function NewsPanel() {
     if (!pendingOpen || !agentTarget || !channelName) return;
     if ((overview?.untriagedCount ?? 0) === 0) {
       setPendingArticles([]);
+      setPendingError(null);
       return;
     }
+    setPendingError(null);
     let cancelled = false;
     void rpc
       .call<{ articles: ArticleRow[] }>(agentTarget, "listArticles", [
@@ -921,9 +924,16 @@ export default function NewsPanel() {
         { untriagedOnly: true, limit: 50 },
       ])
       .then((res) => {
-        if (!cancelled) setPendingArticles(res.articles);
+        if (!cancelled) {
+          setPendingArticles(res.articles);
+          setPendingError(null);
+        }
       })
-      .catch((err) => console.warn("[NewsPanel] pending fetch failed:", err));
+      .catch((err) => {
+        if (!cancelled) {
+          setPendingError(err instanceof Error ? err.message : String(err));
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -941,7 +951,12 @@ export default function NewsPanel() {
       .then((res) => {
         if (!cancelled) setSavedArticles(res.articles);
       })
-      .catch((err) => console.warn("[NewsPanel] saved fetch failed:", err));
+      .catch((err) => {
+        if (!cancelled)
+          setError(
+            `Couldn't load saved stories: ${err instanceof Error ? err.message : String(err)}`
+          );
+      });
     return () => {
       cancelled = true;
     };
@@ -961,7 +976,10 @@ export default function NewsPanel() {
         .then((res) => {
           if (!cancelled) setSearchResults(res);
         })
-        .catch((err) => console.warn("[NewsPanel] search failed:", err));
+        .catch((err) => {
+          if (!cancelled)
+            setError(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
     }, 300);
     return () => {
       cancelled = true;
@@ -1260,7 +1278,12 @@ export default function NewsPanel() {
                         </Flex>
                         {pendingOpen ? (
                           <Flex direction="column" gap="2" pt="2" pl="3">
-                            {pendingArticles.length === 0 ? (
+                            {pendingError ? (
+                              <Text size="1" color="red" role="alert">
+                                Couldn't load uncategorized stories: {pendingError}. Close and
+                                reopen this section to retry.
+                              </Text>
+                            ) : pendingArticles.length === 0 ? (
                               <Text size="1" color="gray">
                                 Loading…
                               </Text>

@@ -350,7 +350,7 @@ export function createUserlandApprovalService(deps: {
       options,
     });
     if (result.kind === "choice") {
-      const resolved = resolvePromptChoice(promptOptions, result.choice);
+      const resolved = resolvePromptChoice(promptOptions, options, result.choice);
       if (!resolved.record) return { kind: "choice", choice: resolved.choice };
       try {
         await deps.grantStore.record(
@@ -548,12 +548,24 @@ function isCachedChoiceValid(
 
 function resolvePromptChoice(
   promptOptions: UserlandApprovalRequest["promptOptions"] | undefined,
+  options: UserlandApprovalOption[],
   choice: string
 ):
   | { choice: string; record: false }
   | { choice: string; record: true; scope: UserlandApprovalGrantScope } {
   if ((promptOptions ?? "scoped") !== "scoped") {
-    return { choice, record: true, scope: "caller" };
+    // Preserve exact declared options before interpreting the UI's one-shot
+    // envelope, and only unwrap an envelope that targets a real option.
+    if (options.some((option) => option.value === choice)) {
+      return { choice, record: true, scope: "caller" };
+    }
+    if (choice.startsWith("once:")) {
+      const oneTimeChoice = choice.slice("once:".length);
+      if (options.some((option) => option.value === oneTimeChoice)) {
+        return { choice: oneTimeChoice, record: false };
+      }
+    }
+    throw new ServiceError(SERVICE_NAME, "request", `Invalid approval choice: ${choice}`, "EINVAL");
   }
   if (choice === "once") return { choice: "allow", record: false };
   if (choice === "session") return { choice: "allow", record: true, scope: "session" };

@@ -305,6 +305,23 @@ describe("userlandApprovalService", () => {
     warn.mockRestore();
   });
 
+  it("supports a one-time envelope only when it names a declared custom choice", async () => {
+    const { service, queued, record } = createDeps();
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "once:allow" });
+
+    await expect(service.handler(workerCtx, "request", [validRequest])).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+    });
+    expect(record).not.toHaveBeenCalled();
+
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "once:not-declared" });
+    await expect(service.handler(workerCtx, "request", [validRequest])).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it("defaults to scoped allow options and records trust-version choices as allow", async () => {
     const { service, queued, record } = createDeps();
     queued.mockResolvedValueOnce({ kind: "choice", choice: "version" });

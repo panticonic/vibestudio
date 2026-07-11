@@ -37,6 +37,10 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
 
     await clearShellCredential().catch((clearError) => {
       console.warn("[SettingsScreen] Failed to clear WebRTC credentials:", clearError);
+      Alert.alert(
+        "Could not clear the saved pairing",
+        clearError instanceof Error ? clearError.message : String(clearError)
+      );
     });
     try {
       await resetToNativeBootstrap();
@@ -78,7 +82,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <ConnectionBar onRepair={() => void performDisconnect()} />
+      <ConnectionBar onRepair={handleDisconnect} />
 
       <View style={styles.content}>
         <View style={styles.headerRow}>

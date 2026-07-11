@@ -63,7 +63,7 @@ The panel prefetches them into the sandbox module map. The resident scribe's
 \`eval\` tool picks them up automatically, and you can use them in inline JSX
 blocks in this doc without redeclaring imports.
 
-Delete this file or replace its contents when you're ready.
+Replace these starter contents when you're ready.
 `;
 
 export interface EditorPaneProps {

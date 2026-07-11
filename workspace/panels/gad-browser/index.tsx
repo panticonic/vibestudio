@@ -4,12 +4,14 @@ import {
   Box,
   Badge,
   Button,
+  Callout,
   DropdownMenu,
   Flex,
   Grid,
   Heading,
   IconButton,
   ScrollArea,
+  Spinner,
   Switch,
   Table,
   Tabs,
@@ -534,6 +536,7 @@ function App() {
   const [integrity, setIntegrity] = useState<Row[]>([]);
   const [gitRows, setGitRows] = useState<GitStatusRow[]>([]);
   const [gitLoading, setGitLoading] = useState(false);
+  const [gitPollError, setGitPollError] = useState<string | null>(null);
   const [gitPendingRepo, setGitPendingRepo] = useState<string | null>(null);
   const [gitPullPreview, setGitPullPreview] = useState<{
     repoPath: string;
@@ -776,13 +779,13 @@ function App() {
         const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : [], {
           fetch: fetchRemote,
         });
-        if (!cancelled) setGitRows(rows);
+        if (!cancelled) {
+          setGitRows(rows);
+          setGitPollError(null);
+        }
       } catch (err) {
         if (!cancelled) {
-          setOperationFailed(true);
-          setOperationStatus(
-            `Git status failed: ${err instanceof Error ? err.message : String(err)}`
-          );
+          setGitPollError(err instanceof Error ? err.message : String(err));
         }
       } finally {
         if (showLoading && !cancelled) setGitLoading(false);
@@ -987,117 +990,138 @@ function App() {
                 </Tabs.List>
                 <Box pt="3" style={{ flex: 1, minHeight: 0 }}>
                   <ScrollArea type="auto" scrollbars="both" style={{ height: "100%" }}>
-                    {diffTarget && compareEntry ? (
-                      <Tabs.Content value="compare">
-                        <CompareView
-                          target={diffTarget}
-                          entry={compareEntry}
-                          fetchContent={fetchContent}
-                          appearance={highlightAppearance}
-                          oldLocation={oldLocation}
-                          newLocation={newLocation}
-                          onGoToBranch={goToBranch}
-                        />
-                      </Tabs.Content>
-                    ) : null}
-                    <Tabs.Content value="branches">
-                      <DataTable
-                        rows={branches}
-                        columns={[
-                          "trajectory_id",
-                          "branch_id",
-                          "head_event_id",
-                          "head_event_hash",
-                          "head_state_hash",
-                          "updated_at",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="events">
-                      <DataTable
-                        rows={events}
-                        columns={[
-                          "seq",
-                          "eventId",
-                          "eventHash",
-                          "prevEventHash",
-                          "kind",
-                          "turnId",
-                          "createdAt",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="envelopes">
-                      <DataTable
-                        rows={envelopes}
-                        columns={[
-                          "channel_id",
-                          "seq",
-                          "envelope_id",
-                          "payload_kind",
-                          "published_at",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="files">
-                      {diffTarget && focusActive && visibleFiles.length === 0 ? (
-                        <Text color="gray" size="2">
-                          No file matching “{diffTarget.path}” on this branch. It may live on a
-                          different branch — clear the filter above to browse all files.
-                        </Text>
-                      ) : (
-                        <DataTable
-                          rows={visibleFiles}
-                          columns={["path", "content_hash", "mode", "file_version_id"]}
-                        />
-                      )}
-                    </Tabs.Content>
-                    <Tabs.Content value="git">
-                      <GitTab
-                        rows={gitRows}
-                        loading={gitLoading}
-                        pendingRepo={gitPendingRepo}
-                        pullPreview={gitPullPreview}
-                        onRefresh={() => void refreshGitStatus(true, true)}
-                        onPush={pushGit}
-                        onForcePush={forcePushGit}
-                        onPullPreview={previewPullGit}
-                        onConfirmPull={confirmPullGit}
-                        onCancelPull={() => setGitPullPreview(null)}
-                        onToggleAutoPush={toggleAutoPush}
-                        onDetach={detachUpstream}
-                        onViewDiff={viewGitDiff}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="invocations">
-                      <DataTable
-                        rows={invocations}
-                        columns={[
-                          "invocation_id",
-                          "kind",
-                          "status",
-                          "started_event_id",
-                          "completed_event_id",
-                          "updated_at",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="integrity">
-                      <DataTable
-                        rows={integrity}
-                        columns={[
-                          "type",
-                          "message",
-                          "entryId",
-                          "eventId",
-                          "stateHash",
-                          "manifestRootHash",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="status">
-                      <DataTable rows={status} columns={["metric", "value"]} />
-                    </Tabs.Content>
+                    {loading ? (
+                      <Flex align="center" justify="center" gap="2" py="6">
+                        <Spinner />
+                        <Text color="gray">Loading repository data…</Text>
+                      </Flex>
+                    ) : operationFailed ? (
+                      <Flex direction="column" align="start" gap="2" p="3" role="alert">
+                        <Text color="red">{operationStatus}</Text>
+                        <Button size="1" variant="soft" color="red" onClick={() => void refresh()}>
+                          <ReloadIcon /> Retry
+                        </Button>
+                      </Flex>
+                    ) : (
+                      <>
+                        {diffTarget && compareEntry ? (
+                          <Tabs.Content value="compare">
+                            <CompareView
+                              target={diffTarget}
+                              entry={compareEntry}
+                              fetchContent={fetchContent}
+                              appearance={highlightAppearance}
+                              oldLocation={oldLocation}
+                              newLocation={newLocation}
+                              onGoToBranch={goToBranch}
+                            />
+                          </Tabs.Content>
+                        ) : null}
+                        <Tabs.Content value="branches">
+                          <DataTable
+                            rows={branches}
+                            columns={[
+                              "trajectory_id",
+                              "branch_id",
+                              "head_event_id",
+                              "head_event_hash",
+                              "head_state_hash",
+                              "updated_at",
+                            ]}
+                          />
+                        </Tabs.Content>
+                        <Tabs.Content value="events">
+                          <DataTable
+                            rows={events}
+                            columns={[
+                              "seq",
+                              "eventId",
+                              "eventHash",
+                              "prevEventHash",
+                              "kind",
+                              "turnId",
+                              "createdAt",
+                            ]}
+                          />
+                        </Tabs.Content>
+                        <Tabs.Content value="envelopes">
+                          <DataTable
+                            rows={envelopes}
+                            columns={[
+                              "channel_id",
+                              "seq",
+                              "envelope_id",
+                              "payload_kind",
+                              "published_at",
+                            ]}
+                          />
+                        </Tabs.Content>
+                        <Tabs.Content value="files">
+                          {diffTarget && focusActive && visibleFiles.length === 0 ? (
+                            <Text color="gray" size="2">
+                              No file matching “{diffTarget.path}” on this branch. It may live on a
+                              different branch — clear the filter above to browse all files.
+                            </Text>
+                          ) : (
+                            <DataTable
+                              rows={visibleFiles}
+                              columns={["path", "content_hash", "mode", "file_version_id"]}
+                            />
+                          )}
+                        </Tabs.Content>
+                        <Tabs.Content value="git">
+                          {gitPollError ? (
+                            <Callout.Root color="red" size="1" mb="2" role="alert">
+                              <Callout.Text>Git status failed: {gitPollError}</Callout.Text>
+                            </Callout.Root>
+                          ) : null}
+                          <GitTab
+                            rows={gitRows}
+                            loading={gitLoading}
+                            pendingRepo={gitPendingRepo}
+                            pullPreview={gitPullPreview}
+                            onRefresh={() => void refreshGitStatus(true, true)}
+                            onPush={pushGit}
+                            onForcePush={forcePushGit}
+                            onPullPreview={previewPullGit}
+                            onConfirmPull={confirmPullGit}
+                            onCancelPull={() => setGitPullPreview(null)}
+                            onToggleAutoPush={toggleAutoPush}
+                            onDetach={detachUpstream}
+                            onViewDiff={viewGitDiff}
+                          />
+                        </Tabs.Content>
+                        <Tabs.Content value="invocations">
+                          <DataTable
+                            rows={invocations}
+                            columns={[
+                              "invocation_id",
+                              "kind",
+                              "status",
+                              "started_event_id",
+                              "completed_event_id",
+                              "updated_at",
+                            ]}
+                          />
+                        </Tabs.Content>
+                        <Tabs.Content value="integrity">
+                          <DataTable
+                            rows={integrity}
+                            columns={[
+                              "type",
+                              "message",
+                              "entryId",
+                              "eventId",
+                              "stateHash",
+                              "manifestRootHash",
+                            ]}
+                          />
+                        </Tabs.Content>
+                        <Tabs.Content value="status">
+                          <DataTable rows={status} columns={["metric", "value"]} />
+                        </Tabs.Content>
+                      </>
+                    )}
                   </ScrollArea>
                 </Box>
               </Tabs.Root>

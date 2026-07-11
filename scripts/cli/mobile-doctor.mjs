@@ -25,7 +25,8 @@ function capture(command, args) {
 
 function signingConfig() {
   const file = path.join(iosDir, "Signing.local.xcconfig");
-  if (!fs.existsSync(file)) return { exists: false, team: "", bundleId: "", push: false, domains: false };
+  if (!fs.existsSync(file))
+    return { exists: false, team: "", bundleId: "", push: false, domains: false };
   const text = fs.readFileSync(file, "utf8");
   const value = (name) => text.match(new RegExp(`^${name}\\s*=\\s*(.+)$`, "m"))?.[1]?.trim() ?? "";
   return {
@@ -39,15 +40,16 @@ function signingConfig() {
 
 function checks() {
   const signing = signingConfig();
-  const identities = process.platform === "darwin"
-    ? capture("security", ["find-identity", "-v", "-p", "codesigning"])
-    : { ok: false, stdout: "", stderr: "" };
+  const identities =
+    process.platform === "darwin"
+      ? capture("security", ["find-identity", "-v", "-p", "codesigning"])
+      : { ok: false, stdout: "", stderr: "" };
   const googleInfo = path.join(iosDir, "Vibestudio", "GoogleService-Info.plist");
   const googleTemplate = path.join(iosDir, "Vibestudio", "GoogleService-Info.template.plist");
   const androidGoogle = path.join(androidDir, "app", "google-services.json");
   const androidGoogleTemplate = path.join(androidDir, "app", "google-services.template.json");
 
-  return [
+  const result = [
     {
       name: "android.adb",
       ok: has("adb", ["version"]),
@@ -57,7 +59,7 @@ function checks() {
     {
       name: "android.java",
       ok: has("java", ["-version"]),
-      severity: "error",
+      severity: "warn",
       fix: "Install a JDK supported by the Android Gradle plugin for --from-source builds.",
     },
     {
@@ -103,7 +105,10 @@ function checks() {
     },
     {
       name: "ios.signing-identity",
-      ok: process.platform === "darwin" && identities.ok && /\)\s+[A-F0-9]{40}\s+"/.test(identities.stdout),
+      ok:
+        process.platform === "darwin" &&
+        identities.ok &&
+        /\)\s+[A-F0-9]{40}\s+"/.test(identities.stdout),
       severity: "error",
       fix: "Sign in to Xcode with an Apple ID and create an iOS Development signing identity.",
     },
@@ -123,6 +128,16 @@ function checks() {
       detail: signing.push ? "push requested" : "push off",
     },
   ];
+  if (process.platform !== "darwin") {
+    for (const check of result) {
+      if (check.name.startsWith("ios.")) {
+        check.ok = true;
+        check.skipped = true;
+        check.detail = "skipped off macOS";
+      }
+    }
+  }
+  return result;
 }
 
 const result = checks();
@@ -132,7 +147,13 @@ if (process.argv.includes("--json")) {
   console.log(JSON.stringify({ ok, checks: result }, null, 2));
 } else {
   for (const check of result) {
-    const status = check.ok ? "ok" : check.severity === "warn" ? "warn" : "fail";
+    const status = check.skipped
+      ? "skip"
+      : check.ok
+        ? "ok"
+        : check.severity === "warn"
+          ? "warn"
+          : "fail";
     console.log(
       `${status} ${check.name}` +
         (check.detail ? ` (${check.detail})` : "") +

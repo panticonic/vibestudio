@@ -4,7 +4,7 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 export const savedPermissionGrantSchema = z
   .object({
     id: z.string().min(1),
-    kind: z.enum(["capability", "userland"]),
+    kind: z.enum(["capability", "userland", "credential-use"]),
     callerLabel: z.string().min(1),
     scopeLabel: z.string().min(1),
     capability: z.string().optional(),
@@ -19,7 +19,7 @@ export type SavedPermissionGrant = z.infer<typeof savedPermissionGrantSchema>;
 
 export const permissionsMethods = defineServiceMethods({
   list: {
-    description: "List durable capability and userland grants for the trusted permissions page.",
+    description: "List active session and durable capability, userland, and credential-use grants.",
     args: z.tuple([]),
     returns: z.array(savedPermissionGrantSchema),
     access: { sensitivity: "read" },
@@ -27,7 +27,12 @@ export const permissionsMethods = defineServiceMethods({
   revoke: {
     description: "Revoke one durable permission grant by its opaque id.",
     args: z.tuple([
-      z.object({ kind: z.enum(["capability", "userland"]), id: z.string().min(1) }).strict(),
+      z
+        .object({
+          kind: z.enum(["capability", "userland", "credential-use"]),
+          id: z.string().min(1),
+        })
+        .strict(),
     ]),
     returns: z.void(),
     access: { sensitivity: "write" },

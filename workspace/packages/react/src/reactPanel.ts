@@ -138,7 +138,28 @@ export function createReactPanelMount(
             { style: { fontSize: 18, fontWeight: 600, marginBottom: 8 } },
             "Connection lost"
           ),
-          ReactLib.createElement("div", { style: { fontSize: 14, opacity: 0.7 } }, connError.reason)
+          ReactLib.createElement(
+            "div",
+            { style: { fontSize: 14, opacity: 0.7 } },
+            connError.reason
+          ),
+          ReactLib.createElement(
+            "button",
+            {
+              type: "button",
+              onClick: () => globalThis.location?.reload(),
+              style: {
+                marginTop: 16,
+                padding: "8px 14px",
+                borderRadius: 6,
+                border: "1px solid currentColor",
+                background: "transparent",
+                color: "inherit",
+                cursor: "pointer",
+              },
+            },
+            "Retry panel"
+          )
         )
       );
     }

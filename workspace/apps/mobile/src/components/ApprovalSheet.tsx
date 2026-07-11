@@ -62,6 +62,7 @@ import {
 } from "@vibestudio/shared/approvalCopy";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
+import { Toast } from "./Toast";
 
 declare const require: (id: string) => unknown;
 
@@ -370,24 +371,22 @@ export function ApprovalSheet({
 
   if (minimized) {
     return (
-      <Modal visible transparent animationType="fade" presentationStyle="overFullScreen">
-        <View pointerEvents="box-none" style={styles.minimizedRoot}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Review pending approval: ${copy.title}`}
-            onPress={() => setMinimized(false)}
-            style={({ pressed }) => [
-              styles.minimizedApproval,
-              { backgroundColor: colors.surface, borderColor: colors.warning },
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={[styles.minimizedApprovalText, { color: colors.text }]}>
-              Approval waiting · Review
-            </Text>
-          </Pressable>
-        </View>
-      </Modal>
+      <View pointerEvents="box-none" style={styles.minimizedRoot}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Review pending approval: ${copy.title}`}
+          onPress={() => setMinimized(false)}
+          style={({ pressed }) => [
+            styles.minimizedApproval,
+            { backgroundColor: colors.surface, borderColor: colors.warning },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={[styles.minimizedApprovalText, { color: colors.text }]}>
+            Approval waiting · Review
+          </Text>
+        </Pressable>
+      </View>
     );
   }
 
@@ -585,6 +584,7 @@ export function ApprovalSheet({
             </Animated.View>
           </SafeAreaView>
         </KeyboardAvoidingView>
+        <Toast />
       </View>
     </Modal>
   );

@@ -12,10 +12,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
-import {
-  createServerInvocation,
-  serverEntryArg,
-} from "./lib/server-entry.mjs";
+import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
 import { createConnectDeepLink, parseConnectLink } from "./lib/connect-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -384,9 +381,11 @@ function buildConnectLinkFromLog(loggedLink) {
 }
 
 function extractPairingLink(text) {
-  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
-    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
-    ?? null;
+  return (
+    text.match(/vibestudio:\/\/connect\?\S+/)?.[0] ??
+    text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0] ??
+    null
+  );
 }
 
 function createServerArgs(readyFilePath) {
@@ -473,7 +472,9 @@ async function startLocalTurn() {
   const child = spawnManaged("turnserver", ["-c", confPath], { label: "coturn" });
   await sleep(1_500); // coturn has no health endpoint; let it bind.
   if (child.exitCode != null) {
-    throw new Error(`coturn (turnserver) exited before ready (code ${child.exitCode}) — is it installed?`);
+    throw new Error(
+      `coturn (turnserver) exited before ready (code ${child.exitCode}) — is it installed?`
+    );
   }
   return { child, host: lanIp, port: String(port), user, pass };
 }
@@ -485,17 +486,20 @@ async function startSignaling(port, turn = null) {
   if (turn) {
     // The signaling worker's mintIceServers returns this relay to both peers.
     vars.push(
-      "--var", `VIBESTUDIO_LOCAL_TURN_HOST:${turn.host}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_PORT:${turn.port}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_PASS:${turn.pass}`
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_HOST:${turn.host}`,
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_PORT:${turn.port}`,
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_PASS:${turn.pass}`
     );
   }
-  const child = spawnManaged(
-    wranglerBin,
-    ["dev", "--port", String(port), "--local", ...vars],
-    { cwd: signalingDir, label: "signaling" }
-  );
+  const child = spawnManaged(wranglerBin, ["dev", "--port", String(port), "--local", ...vars], {
+    cwd: signalingDir,
+    label: "signaling",
+  });
   for (let i = 0; i < 90; i++) {
     if (child.exitCode != null) {
       throw new Error(`wrangler dev (signaling) exited before healthy (code ${child.exitCode})`);
@@ -1014,10 +1018,10 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         stableVisualAgentPolls = 1;
       }
       if (stableVisualAgentPolls >= 3) {
-        const suffix = options.requireNoUnresolvedApproval
-          ? " with no pending approvals"
-          : "";
-        console.log(`[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`);
+        const suffix = options.requireNoUnresolvedApproval ? " with no pending approvals" : "";
+        console.log(
+          `[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`
+        );
         return;
       }
     } else {
@@ -1087,8 +1091,7 @@ function visibleAgentTurnState(labels) {
     /No provider details available/i.test(agentText);
   const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
   const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
-  const hasAgentOutput =
-    hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
+  const hasAgentOutput = hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
   return {
     hasAgentOutput,
     hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
@@ -1152,7 +1155,7 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   let agentTurnCompleted = true;
   try {
     const waitOptions = options.realModel
-        ? {
+      ? {
           requireVisibleAgentOutput: true,
           rejectTestModelResponse: true,
           failOnCredentialSetup: true,
@@ -1563,20 +1566,36 @@ async function main() {
     printHelp();
     return;
   }
+  if (
+    !(await fsp
+      .stat(androidDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false))
+  ) {
+    throw new Error(
+      "mobile smoke requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap`."
+    );
+  }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
       throw new Error("iOS smoke requires macOS with Xcode and a booted simulator.");
     }
-    await runCommand(process.execPath, [
-      path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
-      "--platform",
-      "ios",
-      "--simulator",
-      "--configuration",
-      "Debug",
-      "--launch",
-    ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
-    console.log("[mobile-smoke] iOS shell installed and launched; pair it with `vibestudio mobile pair`.");
+    await runCommand(
+      process.execPath,
+      [
+        path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
+        "--platform",
+        "ios",
+        "--simulator",
+        "--configuration",
+        "Debug",
+        "--launch",
+      ],
+      { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
+    );
+    console.log(
+      "[mobile-smoke] iOS shell installed and launched; pair it with `vibestudio mobile pair`."
+    );
     return;
   }
 
@@ -1742,7 +1761,9 @@ async function main() {
           Math.min(prewarmBudgetMs, Math.max(1_000, deadlineMs - Date.now()))
         );
       }
-      console.log(`[mobile-smoke] pre-warm: ${warm ? "react-native app built" : "timed out, proceeding"}`);
+      console.log(
+        `[mobile-smoke] pre-warm: ${warm ? "react-native app built" : "timed out, proceeding"}`
+      );
     }
 
     // Embedded WebRTC flow (the host pairs + connects over the DTLS pipe in JS;
