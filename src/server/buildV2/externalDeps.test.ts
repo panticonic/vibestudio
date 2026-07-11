@@ -16,7 +16,7 @@ vi.mock("@vibestudio/env-paths", () => ({
 }));
 
 vi.mock("@vibestudio/shared/npmInstaller", () => ({
-  runNpmInstall: vi.fn((cwd: string) => {
+  runNpmInstall: vi.fn(async (cwd: string) => {
     fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
   }),
 }));

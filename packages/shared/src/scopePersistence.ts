@@ -23,14 +23,9 @@ export interface ScopePersistence {
   loadCurrent(channelId: string, panelId: string): Promise<ScopeEntry | null>;
   get(id: string): Promise<ScopeEntry | null>;
   list(channelId: string): Promise<ScopeListEntry[]>;
-  /**
-   * Content-addressed blob store for spilled (too-large-to-inline) scope values. Optional: a
-   * persistence without these falls back to dropping oversized values.
-   *  - `putBlob(json)` -> content digest.
-   *  - `getBlob(digest)` -> the stored JSON, or null if absent.
-   *  - `sweepBlobs()` -> optional lifecycle cleanup for stores that own their blobs.
-   */
-  putBlob?(valueJson: string): Promise<string>;
-  getBlob?(digest: string): Promise<string | null>;
+  /** Content-addressed storage for values too large to inline in a scope row. */
+  putBlob(valueJson: string): Promise<string>;
+  getBlob(digest: string): Promise<string | null>;
+  /** Optional lifecycle cleanup for stores that own their blobs. */
   sweepBlobs?(): Promise<void>;
 }

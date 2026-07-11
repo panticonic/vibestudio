@@ -8,8 +8,8 @@ import type { MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
 // Pure read of the resolved settings/model-role config; touches no persistent
-// state. The service-level `policy` remains the enforced caller gate (we omit
-// `access.callers` here).
+// state. The service-level `policy` is the enforced caller gate; `access`
+// intentionally contains descriptive sensitivity metadata only.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };

@@ -4,7 +4,6 @@ import {
   hasWorkspaceAppTrust,
   isAuthorizedChromeAppCaller,
   isAuthorizedChromeAppSource,
-  isAuthorizedConnectionManagementAppSource,
   normalizeAppSourcePath,
   setWorkspaceAppTrust,
 } from "./chromeTrust.js";
@@ -17,7 +16,6 @@ import {
  */
 const GRANTS = {
   chromeApps: ["apps/shell", "apps/mobile"],
-  connectionManagementApps: ["apps/shell", "apps/remote-cli"],
 };
 
 afterEach(() => {
@@ -35,23 +33,14 @@ describe("seeded workspace app trust (manifest-declared)", () => {
     expect(isAuthorizedChromeAppSource("apps/remote-cli")).toBe(false);
   });
 
-  it("authorizes exactly the declared connection-management apps", () => {
-    setWorkspaceAppTrust(GRANTS);
-    expect(isAuthorizedConnectionManagementAppSource("apps/shell")).toBe(true);
-    expect(isAuthorizedConnectionManagementAppSource("apps/remote-cli")).toBe(true);
-    expect(isAuthorizedConnectionManagementAppSource("apps/mobile")).toBe(false);
-  });
-
-  it("denies everything when the manifest declares empty lists", () => {
-    setWorkspaceAppTrust({ chromeApps: [], connectionManagementApps: [] });
+  it("denies everything when the manifest declares an empty list", () => {
+    setWorkspaceAppTrust({ chromeApps: [] });
     expect(isAuthorizedChromeAppSource("apps/shell")).toBe(false);
-    expect(isAuthorizedConnectionManagementAppSource("apps/shell")).toBe(false);
   });
 
   it("normalizes declared and checked sources the same way", () => {
     setWorkspaceAppTrust({
       chromeApps: ["workspace/apps/shell"],
-      connectionManagementApps: [],
     });
     expect(isAuthorizedChromeAppSource("apps/shell")).toBe(true);
     expect(isAuthorizedChromeAppSource("workspace/apps/shell")).toBe(true);
@@ -60,7 +49,7 @@ describe("seeded workspace app trust (manifest-declared)", () => {
 
   it("re-seeding replaces the previous grants (meta-change reload)", () => {
     setWorkspaceAppTrust(GRANTS);
-    setWorkspaceAppTrust({ chromeApps: ["apps/kiosk"], connectionManagementApps: [] });
+    setWorkspaceAppTrust({ chromeApps: ["apps/kiosk"] });
     expect(isAuthorizedChromeAppSource("apps/shell")).toBe(false);
     expect(isAuthorizedChromeAppSource("apps/kiosk")).toBe(true);
   });
@@ -71,7 +60,6 @@ describe("unseeded process (no workspace manifest loaded)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(hasWorkspaceAppTrust()).toBe(false);
     expect(isAuthorizedChromeAppSource("apps/anything")).toBe(true);
-    expect(isAuthorizedConnectionManagementAppSource("apps/anything")).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     // Second check does not warn again.
     expect(isAuthorizedChromeAppSource("apps/other")).toBe(true);
@@ -83,7 +71,6 @@ describe("unseeded process (no workspace manifest loaded)", () => {
     expect(isAuthorizedChromeAppSource(null)).toBe(false);
     expect(isAuthorizedChromeAppSource(undefined)).toBe(false);
     expect(isAuthorizedChromeAppSource("")).toBe(false);
-    expect(isAuthorizedConnectionManagementAppSource(null)).toBe(false);
   });
 });
 

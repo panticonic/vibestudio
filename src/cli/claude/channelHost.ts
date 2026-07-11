@@ -44,7 +44,7 @@ const CLAUDE_CODE_PROVIDER = "claudeCode";
 
 export interface BridgeConfig {
   mode: "launched" | "adopted";
-  /** http(s) base the RpcClient dials (normalized from the ws form). */
+  /** Canonical server base the RpcClient dials. */
   serverUrl: string;
   agentToken: string;
   entityId: string;
@@ -78,14 +78,9 @@ function subagentFromEnv(env: Record<string, string | undefined>): BridgeSubagen
   };
 }
 
-/** Normalize `ws(s)://host:port/rpc` (legacy launch-profile form) to the http base. */
+/** Validate a canonical launch-profile server base URL. */
 export function normalizeServerUrl(raw: string): string {
   return normalizeServerBaseUrl(raw);
-}
-
-/** Derive the vessel DO target id when the profile predates VESSEL_REF. */
-export function deriveVesselRef(entityId: string): string {
-  return `do:workers/linked-agent:LinkedAgentWorker:linked:${entityId}`;
 }
 
 export interface AdoptionEnvironment {
@@ -121,10 +116,11 @@ export async function resolveBridgeConfig(
     const entityId = env["VIBESTUDIO_ENTITY_ID"];
     const contextId = env["VIBESTUDIO_CONTEXT_ID"];
     const channelId = env["VIBESTUDIO_CHANNEL_ID"];
-    if (!serverUrl || !entityId || !contextId || !channelId) {
+    const vesselRef = env["VIBESTUDIO_VESSEL_REF"];
+    if (!serverUrl || !entityId || !contextId || !channelId || !vesselRef) {
       throw new CliError(
         "incomplete launch profile env: VIBESTUDIO_AGENT_TOKEN is set but " +
-          "SERVER_URL/ENTITY_ID/CONTEXT_ID/CHANNEL_ID are not all present"
+          "SERVER_URL/ENTITY_ID/CONTEXT_ID/CHANNEL_ID/VESSEL_REF are not all present"
       );
     }
     const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
@@ -136,7 +132,7 @@ export async function resolveBridgeConfig(
       entityId,
       contextId,
       channelId,
-      vesselRef: env["VIBESTUDIO_VESSEL_REF"] ?? deriveVesselRef(entityId),
+      vesselRef,
       hookSocketPaths: [
         ...(profile ? [path.join(profile, "hook.sock")] : []),
         agentSocketPath(contextId),
@@ -209,8 +205,8 @@ async function adopt(adoption: AdoptionEnvironment): Promise<BridgeConfig> {
   const env = prepared.env;
   const agentToken = env["VIBESTUDIO_AGENT_TOKEN"];
   const serverUrl = env["VIBESTUDIO_SERVER_URL"];
-  if (!agentToken || !serverUrl) {
-    throw new CliError("extension prepare returned no agent credential env");
+  if (!agentToken || !serverUrl || !prepared.vesselRef) {
+    throw new CliError("extension prepare returned incomplete agent connection coordinates");
   }
   const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
   const subagent = subagentFromEnv(env);
@@ -221,8 +217,7 @@ async function adopt(adoption: AdoptionEnvironment): Promise<BridgeConfig> {
     entityId: prepared.entityId,
     contextId: prepared.contextId,
     channelId: prepared.channelId,
-    vesselRef:
-      prepared.vesselRef || env["VIBESTUDIO_VESSEL_REF"] || deriveVesselRef(prepared.entityId),
+    vesselRef: prepared.vesselRef,
     hookSocketPaths: [
       // Adopted sessions' hooks have no profile env — they fall back to the
       // per-context socket; listen on the profile sock too for good measure.
@@ -354,8 +349,7 @@ export function createSkillResources(call: <T>(method: string, args: unknown[]) 
         "workspace.listSkills",
         []
       );
-      // Keyed by dirPath (repo-local skills made bare names non-unique);
-      // readSkill accepts repo paths and legacy bare names alike.
+      // Keyed by canonical repo path because skill display names are not unique.
       return skills.map((skill) => ({
         uri: skillResourceUri(skill.dirPath ?? skill.name),
         name: skill.name,
@@ -597,7 +591,8 @@ export async function runChannelHostLoop(
 
   const scheduleReattach = (): void => {
     if (shuttingDown || reattachTimer) return;
-    const delay = REATTACH_BACKOFF_MS[Math.min(backoffIdx, REATTACH_BACKOFF_MS.length - 1)]!;
+    const delay =
+      REATTACH_BACKOFF_MS[Math.min(backoffIdx, REATTACH_BACKOFF_MS.length - 1)] ?? 30_000;
     backoffIdx += 1;
     reattachTimer = setTimeout(() => {
       reattachTimer = null;

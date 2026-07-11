@@ -49,6 +49,7 @@ const TERMINAL_APP_CONNECTION_GRANT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class TerminalAppRunner {
   private readonly running = new Map<string, RunningTerminalApp>();
+  private readonly starts = new Map<string, { buildKey: string; promise: Promise<void> }>();
 
   constructor(private readonly deps: TerminalAppRunnerDeps) {}
 
@@ -61,7 +62,25 @@ export class TerminalAppRunner {
     return !!running && !running.stopping && running.launch.buildKey === buildKey;
   }
 
-  async start(launch: TerminalAppLaunch): Promise<void> {
+  async start(launch: TerminalAppLaunch, options: { forceRestart?: boolean } = {}): Promise<void> {
+    if (!options.forceRestart && this.isRunningBuild(launch.appId, launch.buildKey)) return;
+    const inFlight = this.starts.get(launch.appId);
+    if (!options.forceRestart && inFlight?.buildKey === launch.buildKey) {
+      await inFlight.promise;
+      return;
+    }
+    if (inFlight) await inFlight.promise.catch(() => undefined);
+    const promise = this.startOnce(launch);
+    const tracked = { buildKey: launch.buildKey, promise };
+    this.starts.set(launch.appId, tracked);
+    try {
+      await promise;
+    } finally {
+      if (this.starts.get(launch.appId) === tracked) this.starts.delete(launch.appId);
+    }
+  }
+
+  private async startOnce(launch: TerminalAppLaunch): Promise<void> {
     await this.stop(launch.appId, "restart");
     const artifact = (launch.build.artifacts ?? []).find(
       (candidate) => candidate.role === "primary"
@@ -70,7 +89,7 @@ export class TerminalAppRunner {
     const entryPath = artifactFilePath(launch.build, artifact);
     const rpcGrant = this.deps.connectionGrants.grant(
       launch.appId,
-      "terminal-app-runner",
+      "server",
       TERMINAL_APP_CONNECTION_GRANT_TTL_MS
     );
     const connectionId = `terminal:${launch.appId}:${launch.buildKey}`;

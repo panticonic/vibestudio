@@ -4,7 +4,7 @@
  * These compose existing GitClient methods into higher-level workflows.
  */
 
-import type { GitClient, FsPromisesLike } from "./client.js";
+import { SYSTEM_GIT_AUTHOR, type GitClient, type FsPromisesLike } from "./client.js";
 
 // Inline posix path helpers to avoid Node.js `path` dependency (breaks in browser bundles)
 function posixJoin(...segments: string[]): string {
@@ -77,7 +77,7 @@ export async function initAndPush(
 
   let didCommit = false;
   if (hasChanges) {
-    await client.commit({ dir, message });
+    await client.commit({ dir, message, author: SYSTEM_GIT_AUTHOR });
     didCommit = true;
   }
 

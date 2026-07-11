@@ -297,6 +297,7 @@ export function createUserlandApprovalService(deps: {
       kind: "secret-input",
       callerId: principal.callerId,
       callerKind: principal.callerKind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: principal.repoPath,
       effectiveVersion: principal.effectiveVersion,
       title: decoratedReq.title,
@@ -338,6 +339,7 @@ export function createUserlandApprovalService(deps: {
     const result = await deps.approvalQueue.requestUserland({
       principal,
       issuer,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       ...decoratedReq,
       promptOptions,
       options,
@@ -408,6 +410,7 @@ export function createUserlandApprovalService(deps: {
         kind: "external-agent",
         callerId: principal.callerId,
         callerKind: principal.callerKind,
+        ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
         repoPath: principal.repoPath,
         effectiveVersion: principal.effectiveVersion,
         ...(principal.requesterCategory ? { requesterCategory: principal.requesterCategory } : {}),

@@ -7,9 +7,9 @@ describe("server pairing banner", () => {
     const pairing: ConnectPairing = {
       room: "11111111-2222-3333-4444-555555555555",
       fp: "AA".repeat(32),
-      code: "A".repeat(24),
+      code: "A".repeat(32),
       sig: "wss://signal.example/",
-      v: 1,
+      v: 2,
       ice: "all",
     };
     expect(formatPairUrlLine(pairing)).toBe(`  Pair URL:     ${createConnectDeepLink(pairing)}`);

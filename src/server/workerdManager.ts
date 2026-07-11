@@ -2387,7 +2387,7 @@ export default { fetch() { return new Response("universal-do host"); } };
 
   private reconcileManifestRoutesForSource(
     source: string,
-    authoritativeDoClasses?: Array<{ className: string }>
+    authoritativeDoClasses: Array<{ className: string }> | null = null
   ): void {
     if (!this.deps.routeRegistry || !this.deps.getManifestRoutes || !this.deps.singletonRegistry)
       return;
@@ -2683,9 +2683,8 @@ export default { fetch() { return new Response("universal-do host"); } };
    * Restarts HEAD-tracking instances (no ref) running the given source.
    *
    * DO class reconciliation:
-   *   - `doClasses === undefined`: caller doesn't know the current DO shape
-   *     for this source, leave DO services untouched (legacy/conservative
-   *     behavior).
+   *   - `doClasses === null`: the rebuild is not for the authoritative main
+   *     manifest, so DO service membership is unchanged.
    *   - `doClasses` is an explicit array (possibly empty): treat it as the
    *     authoritative current list. Classes in the list that aren't yet
    *     registered get registered; classes registered but missing from the
@@ -2698,7 +2697,7 @@ export default { fetch() { return new Response("universal-do host"); } };
    */
   async onSourceRebuilt(
     source: string,
-    doClasses?: Array<{ className: string }>,
+    doClasses: Array<{ className: string }> | null,
     trigger?: StateAdvancedEvent,
     completedBuildKey?: string
   ): Promise<void> {
@@ -2762,7 +2761,7 @@ export default { fetch() { return new Response("universal-do host"); } };
 
     // Reconcile DO classes for this source against the new manifest — add new,
     // drop removed. All loader-cache changes; no restart.
-    if (doClasses && head === "main") {
+    if (doClasses !== null && head === "main") {
       const newClassNames = new Set(doClasses.map((c) => c.className));
       for (const [serviceKey, svc] of Array.from(this.doServices.entries())) {
         if (svc.source !== source || newClassNames.has(svc.className)) continue;

@@ -5,14 +5,30 @@ import {
 } from "@vibestudio/shared/approvalContract";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createApprovalPushBridge } from "./approvalPushBridge.js";
-import type { PushSendResult, PushServiceInternal } from "./pushService.js";
+import type {
+  PushDeliveryTarget,
+  PushRegistration,
+  PushSendResult,
+  PushServiceInternal,
+} from "./pushService.js";
 
 const SENT_PUSH_RESULT: PushSendResult = {
+  userId: "user-1",
   clientId: "mobile-1",
   platform: "android",
   sent: true,
   logOnly: false,
 };
+const DELIVERED_TARGETS = [
+  { userId: "user-1", clientId: "mobile-1" },
+  { userId: "user-2", clientId: "mobile-2" },
+];
+const USER_1_TARGETS = [DELIVERED_TARGETS[0]!];
+
+// The emitting child's workspace members (WP4 §4.4). The bridge routes each
+// approval to exactly these userIds — every member's devices,
+// and no non-member device. Multiple members make the per-user routing explicit.
+const MEMBER_USER_IDS = ["user-1", "user-2"];
 
 function createQueue() {
   return createApprovalQueue({ eventService: { emit: vi.fn() } as never });
@@ -20,11 +36,36 @@ function createQueue() {
 
 function createPushMock(): PushServiceInternal & { triggerRegistrationsChanged(): void } {
   const registrationListeners = new Set<() => void>();
+  const registrations: PushRegistration[] = [
+    {
+      userId: "user-1",
+      clientId: "mobile-1",
+      platform: "android",
+      token: "token-1",
+      registeredAt: 1,
+    },
+    {
+      userId: "user-2",
+      clientId: "mobile-2",
+      platform: "ios",
+      token: "token-2",
+      registeredAt: 1,
+    },
+  ];
   return {
     send: vi.fn(),
-    sendBatch: vi.fn(async () => [SENT_PUSH_RESULT]),
+    sendToTargets: vi.fn(async (targets: readonly PushDeliveryTarget[]) =>
+      targets.map((target) => ({
+        userId: target.userId,
+        clientId: target.clientId,
+        platform: target.clientId === "mobile-1" ? ("android" as const) : ("ios" as const),
+        sent: true,
+        logOnly: false,
+      }))
+    ),
     cancel: vi.fn(async () => []),
-    listRegistrations: vi.fn(() => []),
+    listRegistrations: vi.fn(() => registrations),
+    unregisterUser: vi.fn(() => 0),
     onRegistrationsChanged: vi.fn((listener) => {
       registrationListeners.add(listener);
       return () => registrationListeners.delete(listener);
@@ -192,6 +233,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -203,8 +245,9 @@ describe("approvalPushBridge", () => {
     const second = requestCapability(queue);
     await flush();
 
-    expect(push.sendBatch).toHaveBeenCalledTimes(1);
-    expect(push.sendBatch).toHaveBeenCalledWith(
+    expect(push.sendToTargets).toHaveBeenCalledTimes(1);
+    expect(push.sendToTargets).toHaveBeenCalledWith(
+      DELIVERED_TARGETS,
       expect.objectContaining({
         category: APPROVAL_CATEGORY_DECIDE,
         data: expect.objectContaining({
@@ -226,6 +269,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -239,7 +283,33 @@ describe("approvalPushBridge", () => {
     queue.resolve(approvalId, "once");
     await flush();
 
-    expect(push.cancel).toHaveBeenCalledWith(approvalId);
+    expect(push.cancel).toHaveBeenCalledWith(DELIVERED_TARGETS, approvalId);
+    await expect(promise).resolves.toBe("once");
+  });
+
+  it("cancels the successful delivery snapshot when workspace membership changes", async () => {
+    const queue = createQueue();
+    const push = createPushMock();
+    let members: readonly string[] = ["user-1"];
+    createApprovalPushBridge({
+      approvalQueue: queue,
+      push,
+      workspaceMemberUserIds: () => members,
+      shellPresence: {
+        isAnyShellActive: () => false,
+        markActive: vi.fn(),
+        getActiveShellCount: () => 0,
+      },
+    });
+    const promise = requestCapability(queue);
+    await flush();
+    const approvalId = queue.listPending()[0]!.approvalId;
+
+    members = ["user-2"];
+    queue.resolve(approvalId, "once");
+    await flush();
+
+    expect(push.cancel).toHaveBeenCalledWith(USER_1_TARGETS, approvalId);
     await expect(promise).resolves.toBe("once");
   });
 
@@ -250,6 +320,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -262,11 +333,11 @@ describe("approvalPushBridge", () => {
     });
 
     const promise = requestCapability(queue);
-    expect(push.sendBatch).not.toHaveBeenCalled();
+    expect(push.sendToTargets).not.toHaveBeenCalled();
 
     timers.advanceByTime(10_000);
     await flush();
-    expect(push.sendBatch).toHaveBeenCalledTimes(1);
+    expect(push.sendToTargets).toHaveBeenCalledTimes(1);
 
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
     await expect(promise).resolves.toBe("deny");
@@ -280,6 +351,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => active,
         markActive: vi.fn(),
@@ -296,7 +368,7 @@ describe("approvalPushBridge", () => {
     timers.advanceByTime(6_000);
     await flush();
 
-    expect(push.sendBatch).toHaveBeenCalledTimes(1);
+    expect(push.sendToTargets).toHaveBeenCalledTimes(1);
 
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
     await expect(promise).resolves.toBe("deny");
@@ -309,6 +381,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -326,7 +399,7 @@ describe("approvalPushBridge", () => {
     timers.advanceByTime(10_000);
     await flush();
 
-    expect(push.sendBatch).not.toHaveBeenCalled();
+    expect(push.sendToTargets).not.toHaveBeenCalled();
     expect(push.cancel).not.toHaveBeenCalled();
     await expect(promise).resolves.toBe("deny");
   });
@@ -337,6 +410,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -358,7 +432,8 @@ describe("approvalPushBridge", () => {
     });
     await flush();
 
-    expect(push.sendBatch).toHaveBeenCalledWith(
+    expect(push.sendToTargets).toHaveBeenCalledWith(
+      DELIVERED_TARGETS,
       expect.objectContaining({
         category: APPROVAL_CATEGORY_INPUT_REQUIRED,
         data: expect.objectContaining({
@@ -377,6 +452,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -387,7 +463,8 @@ describe("approvalPushBridge", () => {
     const promise = requestAppSourceChange(queue);
     await flush();
 
-    expect(push.sendBatch).toHaveBeenCalledWith(
+    expect(push.sendToTargets).toHaveBeenCalledWith(
+      DELIVERED_TARGETS,
       expect.objectContaining({
         data: expect.objectContaining({
           approvalKind: "unit-batch",
@@ -411,6 +488,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -421,7 +499,8 @@ describe("approvalPushBridge", () => {
     const promise = requestUnitManagement(queue);
     await flush();
 
-    expect(push.sendBatch).toHaveBeenCalledWith(
+    expect(push.sendToTargets).toHaveBeenCalledWith(
+      DELIVERED_TARGETS,
       expect.objectContaining({
         data: expect.objectContaining({
           approvalKind: "unit-batch",
@@ -444,6 +523,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -454,7 +534,7 @@ describe("approvalPushBridge", () => {
     const promise = requestStartupUnit(queue);
     await flush();
 
-    expect(push.sendBatch).not.toHaveBeenCalled();
+    expect(push.sendToTargets).not.toHaveBeenCalled();
     queue.resolve(queue.listPending()[0]!.approvalId, "once");
     await expect(promise).resolves.toBe("once");
   });
@@ -465,6 +545,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -475,7 +556,8 @@ describe("approvalPushBridge", () => {
     const promise = requestDoCapability(queue);
     await flush();
 
-    expect(push.sendBatch).toHaveBeenCalledWith(
+    expect(push.sendToTargets).toHaveBeenCalledWith(
+      DELIVERED_TARGETS,
       expect.objectContaining({
         body: expect.stringContaining("DO"),
       })
@@ -488,10 +570,11 @@ describe("approvalPushBridge", () => {
   it("resends pending approvals when a push registration appears later", async () => {
     const queue = createQueue();
     const push = createPushMock();
-    vi.mocked(push.sendBatch).mockResolvedValueOnce([]).mockResolvedValueOnce([SENT_PUSH_RESULT]);
+    vi.mocked(push.sendToTargets).mockResolvedValueOnce([]);
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),
@@ -501,17 +584,107 @@ describe("approvalPushBridge", () => {
 
     const promise = requestCapability(queue);
     await flush();
-    expect(push.sendBatch).toHaveBeenCalledTimes(1);
+    expect(push.sendToTargets).toHaveBeenCalledTimes(1);
 
     push.triggerRegistrationsChanged();
     await flush();
-    expect(push.sendBatch).toHaveBeenCalledTimes(2);
+    expect(push.sendToTargets).toHaveBeenCalledTimes(2);
 
     const approvalId = queue.listPending()[0]!.approvalId;
     queue.resolve(approvalId, "deny");
     await flush();
 
-    expect(push.cancel).toHaveBeenCalledWith(approvalId);
+    expect(push.cancel).toHaveBeenCalledWith(DELIVERED_TARGETS, approvalId);
+    await expect(promise).resolves.toBe("deny");
+  });
+
+  it("retries only outstanding devices after a partial delivery", async () => {
+    const queue = createQueue();
+    const push = createPushMock();
+    const timers = createTimerHarness();
+    vi.mocked(push.sendToTargets)
+      .mockResolvedValueOnce([
+        SENT_PUSH_RESULT,
+        {
+          userId: "user-2",
+          clientId: "mobile-2",
+          platform: "ios",
+          sent: false,
+          logOnly: false,
+          error: "transient",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          userId: "user-2",
+          clientId: "mobile-2",
+          platform: "ios",
+          sent: true,
+          logOnly: false,
+        },
+      ]);
+    createApprovalPushBridge({
+      approvalQueue: queue,
+      push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      shellPresence: {
+        isAnyShellActive: () => false,
+        markActive: vi.fn(),
+        getActiveShellCount: () => 0,
+      },
+      retryMs: 100,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    const promise = requestCapability(queue);
+    await flush();
+    expect(push.sendToTargets).toHaveBeenNthCalledWith(1, DELIVERED_TARGETS, expect.any(Object));
+
+    timers.advanceByTime(100);
+    await flush();
+    expect(push.sendToTargets).toHaveBeenNthCalledWith(
+      2,
+      [{ userId: "user-2", clientId: "mobile-2" }],
+      expect.any(Object)
+    );
+
+    const approvalId = queue.listPending()[0]!.approvalId;
+    queue.resolve(approvalId, "deny");
+    await flush();
+    expect(push.cancel).toHaveBeenCalledWith(DELIVERED_TARGETS, approvalId);
+    await expect(promise).resolves.toBe("deny");
+  });
+
+  it("polls shared registration state while an approval remains pending", async () => {
+    const queue = createQueue();
+    const push = createPushMock();
+    const timers = createTimerHarness();
+    vi.mocked(push.listRegistrations).mockReturnValueOnce([]);
+    createApprovalPushBridge({
+      approvalQueue: queue,
+      push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      shellPresence: {
+        isAnyShellActive: () => false,
+        markActive: vi.fn(),
+        getActiveShellCount: () => 0,
+      },
+      retryMs: 100,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    const promise = requestCapability(queue);
+    await flush();
+    expect(push.sendToTargets).not.toHaveBeenCalled();
+
+    timers.advanceByTime(100);
+    await flush();
+    expect(push.sendToTargets).toHaveBeenCalledWith(DELIVERED_TARGETS, expect.any(Object));
+
+    const approvalId = queue.listPending()[0]!.approvalId;
+    queue.resolve(approvalId, "deny");
     await expect(promise).resolves.toBe("deny");
   });
 
@@ -522,6 +695,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => true,
         markActive: vi.fn(),
@@ -539,7 +713,7 @@ describe("approvalPushBridge", () => {
     timers.advanceByTime(10_000);
     await flush();
 
-    expect(push.sendBatch).not.toHaveBeenCalled();
+    expect(push.sendToTargets).not.toHaveBeenCalled();
     expect(push.cancel).not.toHaveBeenCalled();
     await expect(promise).resolves.toBe("deny");
   });
@@ -547,8 +721,9 @@ describe("approvalPushBridge", () => {
   it("does not send a cancel when every push attempt fails", async () => {
     const queue = createQueue();
     const push = createPushMock();
-    vi.mocked(push.sendBatch).mockResolvedValue([
+    vi.mocked(push.sendToTargets).mockResolvedValue([
       {
+        userId: "user-1",
         clientId: "mobile-1",
         platform: "android",
         sent: false,
@@ -559,6 +734,7 @@ describe("approvalPushBridge", () => {
     createApprovalPushBridge({
       approvalQueue: queue,
       push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
       shellPresence: {
         isAnyShellActive: () => false,
         markActive: vi.fn(),

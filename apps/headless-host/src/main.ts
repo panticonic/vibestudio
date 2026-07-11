@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 /**
- * Entry point. Config sources, in precedence order:
- *  1. fork-IPC init message {type:"init", token, serverUrl, idleExitMs?}
- *     (server auto-spawn path — keeps the token out of env/argv)
- *  2. CLI flags (--url, --token, ...)
- *  3. env (VIBESTUDIO_SERVER_URL, VIBESTUDIO_HEADLESS_TOKEN, ...)
+ * Entry point. Authentication is accepted only from the fork-IPC init message
+ * `{type:"init", token, serverUrl, idleExitMs?}`. Public argv/env token paths
+ * do not exist, so capability material never appears in process listings.
  */
 import { resolveConfig, type ConfigOverrides } from "./config.js";
 import { HeadlessHost } from "./headlessHost.js";
@@ -25,12 +23,6 @@ function parseArgs(argv: string[]): ConfigOverrides {
     const arg = argv[index]!;
     const next = () => argv[++index];
     switch (arg) {
-      case "--url":
-        overrides.serverUrl = next();
-        break;
-      case "--token":
-        overrides.token = next();
-        break;
       case "--label":
         overrides.label = next();
         break;
@@ -50,7 +42,7 @@ function parseArgs(argv: string[]): ConfigOverrides {
         overrides.leanBrowser = true;
         break;
       default:
-        break;
+        throw new Error(`headless-host: unknown argument ${arg}`);
     }
   }
   return overrides;
@@ -80,7 +72,7 @@ async function main(): Promise<void> {
   const ipcInit = await awaitIpcInit();
   if (ipcInit) {
     overrides.serverUrl = ipcInit.serverUrl;
-    overrides.token = ipcInit.token;
+    overrides.ipcToken = ipcInit.token;
     if (ipcInit.idleExitMs !== undefined) overrides.idleExitMs = ipcInit.idleExitMs;
     if (ipcInit.label) overrides.label = ipcInit.label;
   }

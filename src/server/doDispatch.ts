@@ -87,6 +87,14 @@ export interface DOCallerEnvelope {
   callerId: string;
   callerKind: "server" | "worker" | "panel" | "do" | "shell" | "unknown";
   callerPanelId?: string;
+  /**
+   * Owning user (WP4 §2.4), populated from the `AuthenticatedCaller.userId` so a
+   * Channel-DO / workspace-DO handler reads `env.caller.userId` for attribution
+   * (WP6/WP7 message authorship, WP5 GAD actor). ATTRIBUTION ONLY — the DO never
+   * re-validates it as a capability (authority gates on the instance token /
+   * code identity, WP0 §6). Absent for server-originated and bootstrap dispatches.
+   */
+  userId?: string;
 }
 
 /**
@@ -239,14 +247,7 @@ export function verifyInstanceTokenEnvelope(
 // DODispatch — generic HTTP POST dispatch to DOs
 // ---------------------------------------------------------------------------
 
-/**
- * A dispatcher function that makes HTTP POST to a /_w/ URL and returns
- * the parsed JSON response. Injected by the server wiring.
- */
-export type HttpDispatcher = (urlPath: string, args: unknown[]) => Promise<unknown>;
-
 export class DODispatch {
-  private dispatcher: HttpDispatcher | null = null;
   private ensureDOFn:
     | ((source: string, className: string, objectKey: string) => Promise<void>)
     | null = null;
@@ -255,14 +256,6 @@ export class DODispatch {
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
   private getWorkerdGatewayToken: (() => string) | null = null;
-
-  /**
-   * Set the HTTP dispatcher function used by dispatch().
-   * Must be called before any dispatch calls.
-   */
-  setDispatcher(fn: HttpDispatcher): void {
-    this.dispatcher = fn;
-  }
 
   /**
    * Set the ensureDO callback for retry-on-failure.
@@ -394,21 +387,39 @@ export class DODispatch {
   ): Promise<unknown> {
     await Promise.resolve(this.beforeDispatchFn?.(ref));
 
-    // Token-based path: use postToDOWithToken when tokenManager + getWorkerdUrl are set.
+    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
+      throw new Error("DODispatch requires token-backed workerd configuration");
+    }
+
     // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.run,
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
     // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
-    if (this.tokenManager && this.getWorkerdUrl && this.getWorkerdGatewayToken) {
-      const buildDeps = (): PostToDOWithTokenDeps => ({
-        tokenManager: assertPresent(this.tokenManager),
-        workerdUrl: assertPresent(this.getWorkerdUrl)(),
-        workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
-        dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-        ...(held ? { heldConnection: true } : {}),
-      });
-      const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
-      try {
+    const buildDeps = (): PostToDOWithTokenDeps => ({
+      tokenManager: assertPresent(this.tokenManager),
+      workerdUrl: assertPresent(this.getWorkerdUrl)(),
+      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
+      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
+      ...(held ? { heldConnection: true } : {}),
+    });
+    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    try {
+      return await postToDOWithToken(
+        ref,
+        method,
+        args,
+        buildDeps(),
+        "main",
+        serverCaller,
+        invocationToken
+      );
+    } catch (err) {
+      if (this.ensureDOFn && this.isRetryable(err)) {
+        console.warn(
+          `[DODispatch] ${doRefKey(ref)}.${method} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
+        );
+        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+        await Promise.resolve(this.beforeDispatchFn?.(ref));
         return await postToDOWithToken(
           ref,
           method,
@@ -418,42 +429,6 @@ export class DODispatch {
           serverCaller,
           invocationToken
         );
-      } catch (err) {
-        if (this.ensureDOFn && this.isRetryable(err)) {
-          console.warn(
-            `[DODispatch] ${doRefKey(ref)}.${method} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
-          );
-          await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-          await Promise.resolve(this.beforeDispatchFn?.(ref));
-          return await postToDOWithToken(
-            ref,
-            method,
-            args,
-            buildDeps(),
-            "main",
-            serverCaller,
-            invocationToken
-          );
-        }
-        throw err;
-      }
-    }
-
-    // Legacy path: use raw dispatcher (no token headers)
-    if (!this.dispatcher) {
-      throw new Error("DODispatch: no dispatcher configured");
-    }
-    const urlPath = doRefUrl(ref, method);
-    try {
-      return await this.dispatcher(urlPath, args);
-    } catch (err) {
-      if (this.ensureDOFn && this.isRetryable(err)) {
-        console.warn(
-          `[DODispatch] ${doRefKey(ref)}.${method} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
-        );
-        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-        await Promise.resolve(this.beforeDispatchFn?.(ref));
-        return await this.dispatcher(urlPath, args);
       }
       throw err;
     }
@@ -477,15 +452,32 @@ export class DODispatch {
     const lifecycleMethod = `__lifecycle/${method}`;
     await Promise.resolve(this.beforeDispatchFn?.(ref));
 
-    if (this.tokenManager && this.getWorkerdUrl && this.getWorkerdGatewayToken) {
-      const buildDeps = (): PostToDOWithTokenDeps => ({
-        tokenManager: assertPresent(this.tokenManager),
-        workerdUrl: assertPresent(this.getWorkerdUrl)(),
-        workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
-        dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-      });
-      const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
-      try {
+    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
+      throw new Error("DODispatch requires token-backed workerd configuration");
+    }
+    const buildDeps = (): PostToDOWithTokenDeps => ({
+      tokenManager: assertPresent(this.tokenManager),
+      workerdUrl: assertPresent(this.getWorkerdUrl)(),
+      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
+      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
+    });
+    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    try {
+      return await postToDOWithToken(
+        ref,
+        lifecycleMethod,
+        [arg],
+        buildDeps(),
+        "main",
+        serverCaller
+      );
+    } catch (err) {
+      if (this.ensureDOFn && this.isRetryable(err)) {
+        console.warn(
+          `[DODispatch] ${doRefKey(ref)}.${lifecycleMethod} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
+        );
+        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+        await Promise.resolve(this.beforeDispatchFn?.(ref));
         return await postToDOWithToken(
           ref,
           lifecycleMethod,
@@ -494,30 +486,9 @@ export class DODispatch {
           "main",
           serverCaller
         );
-      } catch (err) {
-        if (this.ensureDOFn && this.isRetryable(err)) {
-          console.warn(
-            `[DODispatch] ${doRefKey(ref)}.${lifecycleMethod} failed (${err instanceof Error ? err.message : String(err)}), calling ensureDO and retrying`
-          );
-          await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-          await Promise.resolve(this.beforeDispatchFn?.(ref));
-          return await postToDOWithToken(
-            ref,
-            lifecycleMethod,
-            [arg],
-            buildDeps(),
-            "main",
-            serverCaller
-          );
-        }
-        throw err;
       }
+      throw err;
     }
-
-    if (!this.dispatcher) {
-      throw new Error("DODispatch: no dispatcher configured");
-    }
-    return await this.dispatcher(doRefUrl(ref, lifecycleMethod), [arg]);
   }
 
   /**
@@ -532,30 +503,26 @@ export class DODispatch {
   private async dispatchAlarmImpl(ref: DORef): Promise<unknown> {
     await Promise.resolve(this.beforeDispatchFn?.(ref));
 
-    if (this.tokenManager && this.getWorkerdUrl && this.getWorkerdGatewayToken) {
-      const buildDeps = (): PostToDOWithTokenDeps => ({
-        tokenManager: assertPresent(this.tokenManager),
-        workerdUrl: assertPresent(this.getWorkerdUrl)(),
-        workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
-        dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-      });
-      const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
-      try {
+    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
+      throw new Error("DODispatch requires token-backed workerd configuration");
+    }
+    const buildDeps = (): PostToDOWithTokenDeps => ({
+      tokenManager: assertPresent(this.tokenManager),
+      workerdUrl: assertPresent(this.getWorkerdUrl)(),
+      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
+      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
+    });
+    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    try {
+      return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
+    } catch (err) {
+      if (this.ensureDOFn && this.isRetryable(err)) {
+        await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+        await Promise.resolve(this.beforeDispatchFn?.(ref));
         return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
-      } catch (err) {
-        if (this.ensureDOFn && this.isRetryable(err)) {
-          await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
-          await Promise.resolve(this.beforeDispatchFn?.(ref));
-          return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
-        }
-        throw err;
       }
+      throw err;
     }
-
-    if (!this.dispatcher) {
-      throw new Error("DODispatch: no dispatcher configured");
-    }
-    return await this.dispatcher(doRefUrl(ref, "__alarm"), []);
   }
 
   private isRetryable(err: unknown): boolean {

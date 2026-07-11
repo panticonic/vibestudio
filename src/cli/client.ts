@@ -7,24 +7,28 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { appendServerPath, isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
+import { isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
 import {
   clearCliCredentials,
   loadCliCredentials,
   saveCliCredentials,
   credentialPath,
-  isWebRtcCredential,
 } from "./credentialStore.js";
 import {
-  createPairingInvite,
-  createPairingInviteWithAdmin,
+  addRemoteWorkspaceMember,
+  inviteRemoteUser,
+  listRemoteDevices,
+  listRemoteWorkspaceMembers,
   listRemoteWorkspaces,
+  pairRemoteDevice,
   pairRemoteServer,
+  removeRemoteWorkspaceMember,
+  revokeRemoteDevice,
   selectRemoteWorkspace,
   type PairOptions,
   type RemoteWorkspaceEntry,
 } from "./remoteClient.js";
-import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
+import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { runTerminalLaunchGate } from "./terminalLaunchGate.js";
 import { agentCommands } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
@@ -58,7 +62,6 @@ const require = createRequire(import.meta.url);
 const qrcode = require("qrcode-terminal") as {
   generate(value: string, options?: { small?: boolean }): void;
 };
-const DEFAULT_REMOTE_INVITE_URL = "http://127.0.0.1:3030";
 
 // ───────────────────────────────────────────────────────────────────────────
 // remote commands
@@ -66,19 +69,17 @@ const DEFAULT_REMOTE_INVITE_URL = "http://127.0.0.1:3030";
 
 async function remotePair(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
-  const opts: { url?: string; code?: string; link?: string; label?: string } = {};
-  if (typeof inv.flags["url"] === "string") opts.url = inv.flags["url"];
-  if (typeof inv.flags["code"] === "string") opts.code = inv.flags["code"];
-  if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
+  const label = typeof inv.flags["label"] === "string" ? inv.flags["label"] : undefined;
   const positional = inv.positionals[0];
-  if (
-    positional?.startsWith("vibestudio://") ||
-    positional?.startsWith("https://vibestudio.app/pair")
-  )
-    opts.link = positional;
-  else if (positional) opts.url = positional;
   try {
-    const creds = await pairRemoteServer(opts);
+    if (
+      !positional ||
+      (!positional.startsWith("vibestudio://") &&
+        !positional.startsWith("https://vibestudio.app/pair"))
+    ) {
+      throw new UsageError("pass a vibestudio://connect pairing link");
+    }
+    const creds = await pairRemoteServer({ link: positional, ...(label ? { label } : {}) });
     saveCliCredentials(creds);
     const result = { url: creds.url, credentialPath: credentialPath() };
     printResult(result, {
@@ -104,47 +105,84 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
         "no remote workspace selected - run `vibestudio remote select <workspace>`"
       );
     }
-    if (isWebRtcCredential(creds)) {
-      const rpc = new RpcClient(creds);
-      try {
-        const info = await rpc.call<Record<string, unknown>>("auth.getConnectionInfo", []);
-        const result = {
-          url: creds.url,
-          workspaceId: typeof info["workspaceId"] === "string" ? info["workspaceId"] : undefined,
-          serverId: typeof info["serverId"] === "string" ? info["serverId"] : undefined,
-        };
-        printResult(result, {
-          json,
-          human: () => {
-            console.log(`connected: ${result.url}`);
-            if (result.workspaceId) console.log(`workspace: ${result.workspaceId}`);
-            if (result.serverId) console.log(`server: ${result.serverId}`);
-          },
-        });
-        return 0;
-      } finally {
-        await rpc.close();
-      }
+    const rpc = new RpcClient(creds);
+    try {
+      const info = await rpc.call<Record<string, unknown>>("auth.getConnectionInfo", []);
+      const result = {
+        url: creds.url,
+        workspaceId: typeof info["workspaceId"] === "string" ? info["workspaceId"] : undefined,
+        serverId: typeof info["serverId"] === "string" ? info["serverId"] : creds.serverId,
+      };
+      printResult(result, {
+        json,
+        human: () => {
+          console.log(`connected: ${result.url}`);
+          if (result.workspaceId) console.log(`workspace: ${result.workspaceId}`);
+          console.log(`server: ${result.serverId}`);
+        },
+      });
+      return 0;
+    } finally {
+      await rpc.close();
     }
-    const refresh = await refreshShell(creds);
-    const response = await fetch(appendServerPath(creds.url, "/healthz"));
-    if (!response.ok) throw new AuthError(`unreachable (${response.status})`);
-    const body = (await response.json()) as Record<string, unknown>;
-    const result = {
-      url: creds.url,
-      version: typeof body["version"] === "string" ? body["version"] : undefined,
-      workspaceId:
-        refresh.workspaceId ??
-        (typeof body["workspaceId"] === "string" ? body["workspaceId"] : undefined),
-      serverId: refresh.serverId,
-    };
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+function requirePairedCredentials(): DeviceCredential {
+  const credentials = loadCliCredentials();
+  if (!credentials) throw new AuthError("not paired");
+  return credentials;
+}
+
+function ttlFrom(inv: ParsedInvocation): number | undefined {
+  const raw = inv.flags["ttl-ms"];
+  if (raw === undefined) return undefined;
+  const ttlMs = Number(raw);
+  if (!Number.isInteger(ttlMs) || ttlMs < 30_000 || ttlMs > 3_600_000) {
+    throw new UsageError("--ttl-ms must be an integer from 30000 to 3600000");
+  }
+  return ttlMs;
+}
+
+function printPairingInvite(invite: { pairUrl: string; code: string; expiresAt: number }): void {
+  console.log(`Pairing code: ${invite.code}`);
+  console.log(`Pair URL: ${invite.pairUrl}`);
+  console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
+  console.log();
+  qrcode.generate(invite.pairUrl, { small: true });
+}
+
+async function remoteInviteUser(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const handle = typeof inv.flags["handle"] === "string" ? inv.flags["handle"].trim() : "";
+    const workspaces = inv
+      .flagsMulti("workspace")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (!handle) throw new UsageError("--handle is required");
+    if (workspaces.length === 0) throw new UsageError("at least one --workspace is required");
+    const displayName =
+      typeof inv.flags["display-name"] === "string" ? inv.flags["display-name"].trim() : undefined;
+    const role = inv.flags["role"];
+    if (role !== undefined && role !== "admin" && role !== "member") {
+      throw new UsageError('--role must be "admin" or "member"');
+    }
+    const ttlMs = ttlFrom(inv);
+    const result = await inviteRemoteUser(requirePairedCredentials(), {
+      handle,
+      workspaces,
+      ...(displayName ? { displayName } : {}),
+      ...(role ? { role } : {}),
+      ...(ttlMs ? { ttlMs } : {}),
+    });
     printResult(result, {
       json,
       human: () => {
-        console.log(`connected: ${result.url}`);
-        if (result.version) console.log(`version: ${result.version}`);
-        if (result.workspaceId) console.log(`workspace: ${result.workspaceId}`);
-        if (result.serverId) console.log(`server: ${result.serverId}`);
+        console.log(`Invited @${handle} to ${workspaces.join(", ")}`);
+        printPairingInvite(result.pairing);
       },
     });
     return 0;
@@ -153,61 +191,74 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
   }
 }
 
-async function remoteInvite(inv: ParsedInvocation): Promise<number> {
+async function remotePairDevice(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    let ttlMs: number | undefined;
-    if (typeof inv.flags["ttl-ms"] === "string") {
-      const value = Number(inv.flags["ttl-ms"]);
-      if (!Number.isFinite(value)) {
-        throw new UsageError(`--ttl-ms must be a number, got: ${inv.flags["ttl-ms"]}`);
-      }
-      ttlMs = value;
-    }
     const workspace =
-      typeof inv.flags["workspace"] === "string" && inv.flags["workspace"].trim()
-        ? inv.flags["workspace"].trim()
-        : undefined;
-    const explicitUrl =
-      typeof inv.flags["url"] === "string" && inv.flags["url"].trim()
-        ? inv.flags["url"].trim()
-        : undefined;
-    const adminToken =
-      typeof inv.flags["admin-token"] === "string" && inv.flags["admin-token"].trim()
-        ? inv.flags["admin-token"].trim()
-        : undefined;
-    const localAdminUrl = explicitUrl ?? remoteInviteUrlFromPort(inv.flags["port"]);
-    const creds = loadCliCredentials();
-    let invite;
-    if (creds && !explicitUrl && !adminToken) {
-      if (isWebRtcCredential(creds)) {
-        invite = await createPairingInvite(creds, { ttlMs, workspace });
-      } else {
-        if (!creds.hubUrl) {
-          throw new AuthError(
-            "stored credential is missing a hub URL; pair again, or pass --url/--admin-token"
-          );
-        }
-        invite = await createPairingInvite({ ...creds, url: creds.hubUrl }, { ttlMs, workspace });
-      }
-    } else {
-      invite = await createPairingInviteWithAdmin({
-        url: localAdminUrl,
-        adminToken,
-        ttlMs,
-        workspace,
-      });
-    }
-    printResult(invite, {
+      typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : undefined;
+    const ttlMs = ttlFrom(inv);
+    const result = await pairRemoteDevice(requirePairedCredentials(), {
+      ...(workspace ? { workspace } : {}),
+      ...(ttlMs ? { ttlMs } : {}),
+    });
+    printResult(result, { json, human: () => printPairingInvite(result.pairing) });
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+function memberRef(inv: ParsedInvocation): { userId?: string; handle?: string } {
+  const userId = typeof inv.flags["user-id"] === "string" ? inv.flags["user-id"].trim() : "";
+  const handle = typeof inv.flags["handle"] === "string" ? inv.flags["handle"].trim() : "";
+  if (Boolean(userId) === Boolean(handle)) {
+    throw new UsageError("exactly one of --user-id or --handle is required");
+  }
+  return { ...(userId ? { userId } : {}), ...(handle ? { handle } : {}) };
+}
+
+async function remoteMutateMember(inv: ParsedInvocation, remove: boolean): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const workspace =
+      typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : "";
+    if (!workspace) throw new UsageError("--workspace is required");
+    const input = { workspace, ...memberRef(inv) };
+    const result = remove
+      ? await removeRemoteWorkspaceMember(requirePairedCredentials(), input)
+      : await addRemoteWorkspaceMember(requirePairedCredentials(), input);
+    printResult(result, {
       json,
       human: () => {
-        console.log(`Pairing code: ${invite.code}`);
-        console.log(`Pair URL: ${invite.pairUrl}`);
-        if (typeof invite.expiresAt === "number") {
-          console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
+        if (remove && !result.removed) {
+          console.log(`not a member of ${workspace}`);
+          return;
         }
-        console.log();
-        qrcode.generate(invite.pairUrl, { small: true });
+        console.log(`${remove ? "removed from" : "added to"} ${workspace}`);
+      },
+    });
+    if (remove && !result.removed) return 1;
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+async function remoteListUsers(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const workspace =
+      typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : "";
+    if (!workspace) throw new UsageError("--workspace is required");
+    const result = await listRemoteWorkspaceMembers(requirePairedCredentials(), workspace);
+    printResult(result, {
+      json,
+      human: () => {
+        for (const member of result.members) {
+          console.log(
+            `@${String(member["handle"] ?? member["userId"])}  ${String(member["role"] ?? "member")}`
+          );
+        }
       },
     });
     return 0;
@@ -216,13 +267,38 @@ async function remoteInvite(inv: ParsedInvocation): Promise<number> {
   }
 }
 
-function remoteInviteUrlFromPort(flag: ParsedInvocation["flags"][string] | undefined): string {
-  if (typeof flag !== "string" || !flag.trim()) return DEFAULT_REMOTE_INVITE_URL;
-  const port = Number(flag);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new UsageError(`--port must be an integer from 1 to 65535, got: ${flag}`);
+async function remoteListDevices(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const result = await listRemoteDevices(requirePairedCredentials());
+    printResult(result, {
+      json,
+      human: () => {
+        for (const device of result.devices) console.log(`${device.deviceId}  ${device.label}`);
+      },
+    });
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
   }
-  return `http://127.0.0.1:${port}`;
+}
+
+async function remoteRevokeDevice(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const deviceId = inv.positionals[0] ?? "";
+    if (!deviceId) throw new UsageError("device id is required");
+    const credentials = requirePairedCredentials();
+    const result = await revokeRemoteDevice(credentials, deviceId);
+    printResult(result, {
+      json,
+      human: () => console.log(result.revoked ? "revoked" : "not found"),
+    });
+    if (result.revoked && credentials.deviceId === deviceId) clearCliCredentials();
+    return result.revoked ? 0 : 1;
+  } catch (error) {
+    return printError(error, { json });
+  }
 }
 
 async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
@@ -280,27 +356,32 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
 }
 
 function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
-  const opts: PairOptions = {};
-  if (typeof inv.flags["pair"] === "string") opts.link = inv.flags["pair"];
-  if (typeof inv.flags["url"] === "string") opts.url = inv.flags["url"];
-  if (typeof inv.flags["code"] === "string") opts.code = inv.flags["code"];
-  if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
+  let link = typeof inv.flags["pair"] === "string" ? inv.flags["pair"] : undefined;
+  const label = typeof inv.flags["label"] === "string" ? inv.flags["label"] : undefined;
 
   const positional = inv.positionals[0];
-  if (positional?.startsWith("vibestudio://")) opts.link = positional;
-  else if (positional) {
+  if (
+    positional?.startsWith("vibestudio://") ||
+    positional?.startsWith("https://vibestudio.app/pair")
+  ) {
+    if (link)
+      throw new UsageError("pass the pairing link once, either positionally or with --pair");
+    link = positional;
+  } else if (positional) {
     throw new UsageError(
       `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link with --pair.`
     );
   }
 
-  if (opts.link || opts.url || opts.code) {
-    if (!opts.label) opts.label = `Terminal on ${os.hostname()}`;
-    opts.platform = "terminal";
-    return opts;
+  if (link) {
+    return {
+      link,
+      label: label || `Terminal on ${os.hostname()}`,
+      platform: "terminal",
+    };
   }
-  if (opts.label) {
-    throw new UsageError("--label is only valid when pairing with --pair or --url/--code");
+  if (label) {
+    throw new UsageError("--label is only valid when pairing with --pair");
   }
   return null;
 }
@@ -327,7 +408,7 @@ async function terminalCredentials(
     creds = loaded;
   }
 
-  if (requestedWorkspace || !creds.workspaceName) {
+  if (requestedWorkspace) {
     creds = await chooseTerminalWorkspace(creds, { requestedWorkspace, json });
     saveCliCredentials(creds);
   }
@@ -343,7 +424,6 @@ async function chooseTerminalWorkspace(
   creds: DeviceCredential,
   opts: { requestedWorkspace?: string; json: boolean }
 ): Promise<DeviceCredential> {
-  if (!creds.hubUrl) throw new AuthError("stored credential is missing a hub URL; pair again");
   if (opts.requestedWorkspace) {
     return await selectRemoteWorkspace(creds, opts.requestedWorkspace);
   }
@@ -440,7 +520,6 @@ function scriptCommand(
   scriptName: string,
   summary: string,
   options: {
-    aliases?: string[];
     usage?: string;
     prependArgs?: string[];
     passthroughHelp?: boolean;
@@ -449,7 +528,6 @@ function scriptCommand(
   return {
     group,
     name,
-    aliases: options.aliases,
     summary,
     usage: options.usage,
     passthrough: true,
@@ -466,12 +544,13 @@ const remoteCommands: CliCommand[] = [
     "Deploy/manage a systemd user remote server",
     {
       usage:
-        "vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030] [--workspace default]",
+        "vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030]",
       passthroughHelp: true,
     }
   ),
   scriptCommand("remote", "doctor", "remote-doctor.mjs", "Run remote WebRTC preflight checks", {
-    usage: "vibestudio remote doctor [--signal-url <url>] [--identity <identity.pem>]",
+    usage:
+      "vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]",
     passthroughHelp: true,
   }),
   scriptCommand(
@@ -480,22 +559,12 @@ const remoteCommands: CliCommand[] = [
     "remote-repair-identity.mjs",
     "Regenerate the WebRTC identity file",
     {
-      usage: "vibestudio remote repair-identity --yes [--identity <identity.pem>]",
-      passthroughHelp: true,
-    }
-  ),
-  scriptCommand(
-    "remote",
-    "setup-signaling",
-    "remote-setup-signaling.mjs",
-    "Deploy/configure the signaling Worker",
-    {
-      usage: "vibestudio remote setup-signaling [--url <wss-url>]",
+      usage:
+        "vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]",
       passthroughHelp: true,
     }
   ),
   scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
-    aliases: ["server"],
     usage: "vibestudio remote serve [--port 3030]",
     // The pair server's own help documents the resolved server entry.
     passthroughHelp: true,
@@ -506,8 +575,6 @@ const remoteCommands: CliCommand[] = [
     summary: "Save a CLI device credential without launching Electron",
     usage: 'vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"',
     flags: [
-      { name: "url", takesValue: true, description: "Server URL (with --code)" },
-      { name: "code", takesValue: true, description: "Pairing code (with --url)" },
       { name: "label", takesValue: true, description: "Device label shown on the server" },
       JSON_FLAG,
     ],
@@ -515,18 +582,87 @@ const remoteCommands: CliCommand[] = [
   },
   {
     group: "remote",
-    name: "invite",
-    summary: "Create a pairing invite for another device",
-    usage: "vibestudio remote invite [--workspace <name>] [--ttl-ms <milliseconds>] [--port 3030]",
+    name: "invite-user",
+    summary: "Create an account, grant workspace access, and invite its first device",
+    usage:
+      "vibestudio remote invite-user --handle <handle> --workspace <name> [--workspace <name>...]",
     flags: [
-      { name: "workspace", takesValue: true },
-      { name: "ttl-ms", takesValue: true },
-      { name: "port", takesValue: true },
-      { name: "url", takesValue: true },
-      { name: "admin-token", takesValue: true },
+      { name: "handle", takesValue: true, description: "Unique account handle" },
+      { name: "display-name", takesValue: true, description: "Human-readable account name" },
+      { name: "role", takesValue: true, description: "Account role: admin or member" },
+      {
+        name: "workspace",
+        takesValue: true,
+        multiple: true,
+        description: "Workspace to grant (repeatable)",
+      },
+      { name: "ttl-ms", takesValue: true, description: "Invite lifetime (30000-3600000 ms)" },
       JSON_FLAG,
     ],
-    run: remoteInvite,
+    run: remoteInviteUser,
+  },
+  {
+    group: "remote",
+    name: "pair-device",
+    summary: "Invite another device for the current account",
+    usage: "vibestudio remote pair-device [--workspace <name>] [--ttl-ms <milliseconds>]",
+    flags: [
+      { name: "workspace", takesValue: true, description: "Workspace opened after pairing" },
+      { name: "ttl-ms", takesValue: true, description: "Invite lifetime (30000-3600000 ms)" },
+      JSON_FLAG,
+    ],
+    run: remotePairDevice,
+  },
+  {
+    group: "remote",
+    name: "add-member",
+    summary: "Grant an existing account access to a workspace",
+    usage: "vibestudio remote add-member --workspace <name> (--user-id <id> | --handle <handle>)",
+    flags: [
+      { name: "workspace", takesValue: true },
+      { name: "user-id", takesValue: true },
+      { name: "handle", takesValue: true },
+      JSON_FLAG,
+    ],
+    run: (inv) => remoteMutateMember(inv, false),
+  },
+  {
+    group: "remote",
+    name: "remove-member",
+    summary: "Revoke an account's access to a workspace",
+    usage:
+      "vibestudio remote remove-member --workspace <name> (--user-id <id> | --handle <handle>)",
+    flags: [
+      { name: "workspace", takesValue: true },
+      { name: "user-id", takesValue: true },
+      { name: "handle", takesValue: true },
+      JSON_FLAG,
+    ],
+    run: (inv) => remoteMutateMember(inv, true),
+  },
+  {
+    group: "remote",
+    name: "list-users",
+    summary: "List the members of a workspace",
+    usage: "vibestudio remote list-users --workspace <name>",
+    flags: [{ name: "workspace", takesValue: true }, JSON_FLAG],
+    run: remoteListUsers,
+  },
+  {
+    group: "remote",
+    name: "list-devices",
+    summary: "List paired devices",
+    usage: "vibestudio remote list-devices",
+    flags: [JSON_FLAG],
+    run: remoteListDevices,
+  },
+  {
+    group: "remote",
+    name: "revoke-device",
+    summary: "Revoke a paired device and close its live sessions",
+    usage: "vibestudio remote revoke-device <device-id>",
+    flags: [JSON_FLAG],
+    run: remoteRevokeDevice,
   },
   {
     group: "remote",
@@ -563,8 +699,6 @@ const remoteCommands: CliCommand[] = [
         takesValue: true,
         description: "Pair from a vibestudio://connect link before starting",
       },
-      { name: "url", takesValue: true, description: "Server URL for --code pairing" },
-      { name: "code", takesValue: true, description: "Pairing code for --url pairing" },
       { name: "label", takesValue: true, description: "Device label used while pairing" },
       { name: "workspace", takesValue: true, description: "Remote workspace to open" },
       {
@@ -592,18 +726,11 @@ const remoteCommands: CliCommand[] = [
   {
     group: "remote",
     name: "host",
-    aliases: ["headless-host"],
     summary: "Run a headless Chromium panel host against the paired server",
     usage:
-      "vibestudio remote host [--url <serverUrl> --token <shellToken>] [--label <name>] " +
+      "vibestudio remote host [--label <name>] " +
       "[--max-panels 8] [--idle-unload-min 5] [--idle-exit-min 0] [--chromium-path <bin>] [--lean-browser]",
     flags: [
-      { name: "url", takesValue: true, description: "Server URL (defaults to the paired server)" },
-      {
-        name: "token",
-        takesValue: true,
-        description: "Shell token (defaults to device-credential refresh)",
-      },
       { name: "label", takesValue: true, description: "Client label shown in lease holders" },
       { name: "max-panels", takesValue: true, description: "Concurrent hosted panels (default 8)" },
       {
@@ -631,7 +758,6 @@ const terminalCommands: CliCommand[] = [
   {
     group: "terminal",
     name: "start",
-    aliases: ["launch"],
     summary: "Review approvals and start the selected terminal app",
     usage: "vibestudio terminal start [--pair <link>] [--workspace <name>] [--yes]",
     flags: [
@@ -640,8 +766,6 @@ const terminalCommands: CliCommand[] = [
         takesValue: true,
         description: "Pair from a vibestudio://connect link before starting",
       },
-      { name: "url", takesValue: true, description: "Server URL for --code pairing" },
-      { name: "code", takesValue: true, description: "Pairing code for --url pairing" },
       { name: "label", takesValue: true, description: "Device label used while pairing" },
       { name: "workspace", takesValue: true, description: "Remote workspace to open" },
       {
@@ -672,7 +796,9 @@ function headlessHostEntryPath(): string {
 }
 
 async function createWebRtcHeadlessHostOverrides(
-  creds: DeviceCredential & { pairing: NonNullable<DeviceCredential["pairing"]> },
+  creds: DeviceCredential & {
+    workspacePairing: NonNullable<DeviceCredential["workspacePairing"]>;
+  },
   opts: { label?: string }
 ): Promise<Record<string, unknown>> {
   const [{ WebRtcRpcClient }, { startPanelAssetFacade }, { RemoteCdpHostBridgeSocket }] =
@@ -686,7 +812,7 @@ async function createWebRtcHeadlessHostOverrides(
   const label = opts.label ?? "Headless";
   const token = `refresh:${creds.deviceId}:${creds.refreshToken}`;
   const client = new WebRtcRpcClient({
-    pairing: creds.pairing,
+    pairing: creds.workspacePairing,
     callerId: `shell:${creds.deviceId}`,
     getToken: () => token,
     connectionId: clientSessionId,
@@ -796,56 +922,23 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
     return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : undefined;
   };
 
-  const explicitUrl = flagStr("url");
-  const explicitToken = flagStr("token");
-  if (explicitUrl && !isSelectedWorkspaceUrl(explicitUrl)) {
-    console.error("remote host requires a selected workspace URL");
+  const creds = loadCliCredentials();
+  if (!creds) {
+    console.error("not paired — run `vibestudio remote pair` first");
     return 3;
   }
-  let configOverrides:
-    | { serverUrl: string; token: string }
-    | { deviceCredential: { serverUrl: string; deviceId: string; refreshToken: string } }
-    | Record<string, unknown>;
-  let cleanup: (() => Promise<void>) | null = null;
-  if (explicitUrl && explicitToken) {
-    configOverrides = { serverUrl: explicitUrl, token: explicitToken };
-  } else {
-    const creds = loadCliCredentials();
-    if (!creds) {
-      console.error("not paired — run `vibestudio remote pair` first or pass --url and --token");
-      return 3;
-    }
-    if (!explicitUrl && !creds.workspaceName) {
-      console.error("no remote workspace selected — run `vibestudio remote select <workspace>`");
-      return 3;
-    }
-    if (!explicitUrl && !isSelectedWorkspaceUrl(creds.url)) {
-      console.error("stored remote credential is not scoped to a workspace");
-      return 3;
-    }
-    if (isWebRtcCredential(creds)) {
-      if (explicitUrl) {
-        console.error("remote host does not support overriding --url for WebRTC credentials");
-        return 3;
-      }
-      configOverrides = await createWebRtcHeadlessHostOverrides(creds, {
-        label: flagStr("label"),
-      });
-      cleanup =
-        typeof configOverrides["cleanup"] === "function"
-          ? (configOverrides["cleanup"] as () => Promise<void>)
-          : null;
-      delete configOverrides["cleanup"];
-    } else {
-      configOverrides = {
-        deviceCredential: {
-          serverUrl: explicitUrl ?? creds.url,
-          deviceId: creds.deviceId,
-          refreshToken: creds.refreshToken,
-        },
-      };
-    }
+  if (!isSelectedWorkspaceUrl(creds.url)) {
+    console.error("stored remote credential is not scoped to a workspace");
+    return 3;
   }
+  const configOverrides: Record<string, unknown> = await createWebRtcHeadlessHostOverrides(creds, {
+    label: flagStr("label"),
+  });
+  const cleanup =
+    typeof configOverrides["cleanup"] === "function"
+      ? (configOverrides["cleanup"] as () => Promise<void>)
+      : null;
+  delete configOverrides["cleanup"];
 
   const entry = headlessHostEntryPath();
   const { HeadlessHost, resolveConfig } = (await import(pathToFileURL(entry).href)) as {

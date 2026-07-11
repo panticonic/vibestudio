@@ -27,9 +27,9 @@ import type { WorkspaceNode } from "../types.js";
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
-// methods (which all share identical access metadata). `callers` are
-// deliberately omitted (the legacy per-method `policy` remains the enforced gate
-// during migration); this carries the sensitivity doc metadata only. Mutators
+// methods (which all share identical access metadata). Caller-kind authorization
+// belongs exclusively to the service/method `policy`; this descriptor carries
+// sensitivity metadata only. Mutators
 // declare a method-specific `access.sensitivity` inline rather than sharing a
 // generic constant.
 
@@ -90,6 +90,7 @@ export type HostTargetLaunchSession = z.infer<typeof HostTargetLaunchSessionSnap
 // ─── Workspace data schemas ───────────────────────────────────────────────────
 
 export const WorkspaceEntrySchema = z.object({
+  workspaceId: z.string(),
   name: z.string(),
   lastOpened: z.number(),
 });
@@ -336,7 +337,9 @@ export const workspaceMethods = defineServiceMethods({
       path: z.string().describe("Absolute path to the workspace source tree."),
       statePath: z.string().describe("Absolute path to the workspace's persisted state directory."),
       contextsPath: z.string().describe("Absolute path to the workspace's `.contexts` directory."),
-      config: WorkspaceConfigSchema.describe("The resolved workspace config (meta/vibestudio.yml)."),
+      config: WorkspaceConfigSchema.describe(
+        "The resolved workspace config (meta/vibestudio.yml)."
+      ),
     }),
     access: READ_ACCESS,
   },
@@ -467,17 +470,15 @@ export const workspaceMethods = defineServiceMethods({
   },
   readSkill: {
     description:
-      "Return raw SKILL.md contents by legacy bare skill name (`code-review` -> skills/code-review/SKILL.md) or workspace repo path (`packages/foo`, `workers/bar`, `meta`). Path traversal is rejected.",
-    args: z.tuple([
-      z.string().describe("Legacy skill name under skills/ or workspace repo path containing SKILL.md."),
-    ]),
+      "Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected.",
+    args: z.tuple([z.string().describe("Canonical workspace repo path containing SKILL.md.")]),
     returns: z.string(),
     access: READ_ACCESS,
     // Read-only widening for agent callers (see listSkills).
     policy: {
       allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
     },
-    examples: [{ args: ["code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
+    examples: [{ args: ["skills/code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
   sourceTree: {
     description: "Return the workspace source tree, annotating units, launchables, and skills.",
@@ -488,9 +489,7 @@ export const workspaceMethods = defineServiceMethods({
   ensureContextFolder: {
     description:
       "Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree.",
-    args: z.tuple([
-      z.string().describe("Context id whose working folder to materialize."),
-    ]),
+    args: z.tuple([z.string().describe("Context id whose working folder to materialize.")]),
     returns: z.object({
       dir: z.string().describe("Absolute path to the materialized context folder."),
     }),

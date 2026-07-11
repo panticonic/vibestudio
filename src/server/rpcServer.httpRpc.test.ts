@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { WebSocket } from "ws";
-import { RpcServer } from "./rpcServer.js";
+import { RpcServer, type UserSubjectSource } from "./rpcServer.js";
 import { Gateway } from "./gateway.js";
 import type {
   ServiceDispatcher,
@@ -10,6 +10,7 @@ import type {
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { EntityCache } from "../../packages/shared/src/runtime/entityCache.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
+import type { UserSubject } from "../../packages/shared/src/users/types.js";
 
 function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
   return {
@@ -26,7 +27,11 @@ function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): E
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function createTestSetup(opts?: { entityCache?: EntityCache }) {
+function createTestSetup(opts?: {
+  entityCache?: EntityCache;
+  userSubjectSource?: UserSubjectSource;
+  membershipGate?: (subject: UserSubject | undefined) => boolean;
+}) {
   const tokenManager = new TokenManager();
   const adminToken = "test-admin-token";
   tokenManager.setAdminToken(adminToken);
@@ -74,6 +79,8 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
     tokenManager,
     dispatcher,
     entityCache,
+    userSubjectSource: opts?.userSubjectSource,
+    membershipGate: opts?.membershipGate,
   });
 
   return {
@@ -92,11 +99,8 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
 }
 
 /**
- * POST to the envelope-native `/rpc`. Tests still pass the legacy-shaped body
- * (`{method,args}` / `{type:"call",targetId,…}` / `{type:"emit",…}` / deferrable)
- * for readability; this helper wraps it into an `RpcEnvelope` and unwraps the
- * response envelope back into the legacy `{result}`/`{error,errorCode}`/`{deferred}`
- * shape the assertions expect.
+ * Build the canonical envelope accepted by `/rpc` from concise test inputs.
+ * The wire request and successful wire response remain envelope-native.
  */
 function toEnvelope(body: Record<string, unknown>): Record<string, unknown> {
   const caller = { callerId: "test-caller", callerKind: "shell" };
@@ -138,7 +142,7 @@ function toEnvelope(body: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-/** Wrap a legacy `{targetId,method,args}` stream body into a stream-request envelope. */
+/** Build a canonical stream-request envelope from concise test inputs. */
 function toStreamEnvelope(body: Record<string, unknown>): Record<string, unknown> {
   const caller = { callerId: "test-caller", callerKind: "shell" };
   return {
@@ -259,6 +263,81 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(setup.dispatched[setup.dispatched.length - 1]?.ctx.caller.runtime).toEqual({
         id: "shell:remote-test",
         kind: "shell",
+      });
+    });
+
+    it("re-evaluates membership on every HTTP request", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+      let isMember = true;
+      setup = createTestSetup({
+        userSubjectSource: {
+          resolve: (callerId) =>
+            callerId === "shell:remote-test" ? { userId: "usr_remote", handle: "remote" } : null,
+        },
+        membershipGate: (subject) => isMember && subject?.userId === "usr_remote",
+      });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+
+      await expect(
+        postRpc(port, setup.remoteShellToken, { method: "build.status", args: [] })
+      ).resolves.toMatchObject({ status: 200 });
+      isMember = false;
+      const rejected = await postRpc(port, setup.remoteShellToken, {
+        method: "build.status",
+        args: [],
+      });
+      expect(rejected).toEqual({
+        status: 403,
+        body: { error: "Not a member of this workspace", code: "EACCES" },
+      });
+      expect(setup.dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("admits a concrete system-owned DO through the HTTP membership gate", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+      const callerId = "do:workers/model-settings:ModelSettingsDO:workspace-model-settings";
+      const entityCache = new EntityCache();
+      entityCache._onActivate(
+        makeDoRecord(callerId, "workers/model-settings", "model-settings-version")
+      );
+      setup = createTestSetup({
+        entityCache,
+        userSubjectSource: {
+          resolve: (id) => (id === callerId ? { userId: "system", handle: "system" } : null),
+        },
+        membershipGate: (subject) => subject?.userId === "system",
+      });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+      const serviceToken = setup.tokenManager.ensureToken(
+        "do-service:workers/model-settings:ModelSettingsDO",
+        "worker"
+      );
+
+      const result = await postRpc(
+        port,
+        serviceToken,
+        { method: "build.status", args: [] },
+        { "X-vibestudio-Runtime-Id": callerId }
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(setup.dispatched.at(-1)?.ctx.caller.subject).toEqual({
+        userId: "system",
+        handle: "system",
       });
     });
 

@@ -374,7 +374,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.createViaPanelTree(
       source,
       {
-        parentId: caller ? asPanelSlotId(callerId) : null,
+        parentId: options?.isRoot ? null : caller ? asPanelSlotId(callerId) : null,
         name: options?.name,
         contextId: options?.contextId,
         ref: options?.ref,
@@ -958,11 +958,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // =========================================================================
 
   async initializePanelTree(): Promise<void> {
-    // The server is the sole tree authority and seeds initPanels server-side
-    // (seedPanelTreeIfEmpty, awaited before the panelTree service is ready), so
-    // loadTree() returns the seeded/persisted tree. The desktop never seeds:
-    // it loads the authoritative tree and restores metadata. The hosted shell
-    // chooses the visible panel and asks this local host to load it on focus.
+    // The server is the sole tree authority. Per-account init panels seed on
+    // the hosted shell's first authenticated panelTree read, so this early host
+    // mirror load may legitimately be empty. The later authoritative broadcast
+    // populates it; the desktop itself never creates defaults.
     await this.shellCore.loadTree();
     await this.syncRuntimeLeaseSnapshot().catch((error: unknown) => {
       log.warn(
@@ -1185,7 +1184,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async applyServerPanelTreeSnapshot(snapshot: PanelTreeSnapshot): Promise<void> {
     if (snapshot.revision <= this.lastAppliedServerPanelTreeRevision) return;
     this.lastAppliedServerPanelTreeRevision = snapshot.revision;
-    const rootPanels = this.preserveExplicitTitlesInSnapshot(snapshot.rootPanels);
+    const rootPanels = this.preserveExplicitTitlesInSnapshot(
+      snapshot.forest.flatMap((group) => group.rootPanels)
+    );
     if (this.panelTreesMatchSemantically(this.registry.getRootPanels(), rootPanels)) {
       return;
     }
@@ -1316,6 +1317,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private panelsMatchSemantically(current: Panel, incoming: Panel): boolean {
     if (current.id !== incoming.id) return false;
     if (current.title !== incoming.title) return false;
+    if ((current.owner ?? null) !== (incoming.owner ?? null)) return false;
     if ((current.positionId ?? null) !== (incoming.positionId ?? null)) return false;
     if ((current.selectedChildId ?? null) !== (incoming.selectedChildId ?? null)) return false;
     if (!this.panelSnapshotsMatchSemantically(current, incoming)) return false;
@@ -1334,6 +1336,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   private panelsMatchIgnoringTitle(current: Panel, incoming: Panel): boolean {
     if (current.id !== incoming.id) return false;
+    if ((current.owner ?? null) !== (incoming.owner ?? null)) return false;
     if ((current.positionId ?? null) !== (incoming.positionId ?? null)) return false;
     if ((current.selectedChildId ?? null) !== (incoming.selectedChildId ?? null)) return false;
     if (!this.panelSnapshotsMatchSemantically(current, incoming)) return false;
@@ -1400,10 +1403,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       : undefined;
 
     const treeSnapshot = this.registry.getPanelTreeSnapshot();
+    const treeRootPanels = treeSnapshot.forest.flatMap((group) => group.rootPanels);
     this.eventService.emit("panel:snapshot", {
       revision: treeSnapshot.revision,
       viewRevision: this.viewRevision,
-      rootPanels: treeSnapshot.rootPanels,
+      rootPanels: treeRootPanels,
       collapsedIds,
       focusedPanelId,
       focus,
@@ -1411,7 +1415,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return {
       revision: treeSnapshot.revision,
       viewRevision: this.viewRevision,
-      rootPanels: treeSnapshot.rootPanels,
+      rootPanels: treeRootPanels,
       collapsedIds,
       focusedPanelId,
       focus,

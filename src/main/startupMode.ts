@@ -100,14 +100,8 @@ export function resolveStartupMode(
     return resolveLocalStartupMode(centralData);
   }
 
-  const lastTarget =
-    typeof centralData.getLastWorkspaceTarget === "function"
-      ? centralData.getLastWorkspaceTarget()
-      : null;
-  if (lastTarget?.kind === "local") {
-    return resolveLocalStartupMode(centralData, lastTarget.name);
-  }
-
+  // Pre-session startup has no authenticated user. Use the catalog's machine
+  // MRU for bootstrap; authenticated resume cursors are resolved by the hub.
   return resolveLocalStartupMode(centralData);
 }
 
@@ -137,6 +131,7 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg === DEV_WEBRTC_REMOTE_ARG) continue;
     if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
     if (arg?.startsWith("vibestudio://connect")) continue;
+    if (arg?.startsWith("vibestudio://panel")) continue;
     if (arg !== undefined) filteredArgs.push(arg);
   }
   return filteredArgs;

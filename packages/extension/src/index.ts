@@ -196,12 +196,12 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
     if (!cached) {
       cached = extensionsService
         .streamingMethods(name)
-        .then((methods) => new Set(methods ?? []))
-        .catch(() => {
-          // Don't pin a transient failure as "no streaming methods" for the
-          // client's lifetime — drop the entry so the next call re-fetches.
+        .then((methods) => new Set(methods))
+        .catch((error) => {
+          // A failed declaration lookup cannot safely be treated as an empty
+          // declaration: doing so would route streaming methods over unary RPC.
           streamingCache.delete(name);
-          return new Set<string>();
+          throw error;
         });
       streamingCache.set(name, cached);
     }

@@ -1,23 +1,18 @@
 import * as os from "node:os";
 import {
-  isLoopbackHost,
+  normalizeFingerprint,
   parseConnectLink,
-  serverAuthRouteUrl,
-  serverWorkspaceRouteUrl,
-  PAIRING_CODE_PATTERN,
-  parseConnectServerUrl,
+  parseSignalingEndpoint,
   selectedWorkspacePath,
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
-import { loadPersistedAdminToken } from "@vibestudio/shared/centralAuth";
-import { AuthError } from "./output.js";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import {
-  isWebRtcCredential,
-  type CliHubCredential,
-  type CliStoredPairing,
-} from "./credentialStore.js";
+  hubControlMethods,
+  type HubPairingInvite,
+  type HubWorkspaceRoute,
+} from "@vibestudio/shared/serviceSchemas/hubControl";
+import type { CliStoredPairing } from "./credentialStore.js";
+import { AuthError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { typedClient } from "./typedClients.js";
 
@@ -25,100 +20,46 @@ export type { DeviceCredential } from "./rpcClient.js";
 export { refreshShell, type RefreshShellResponse } from "./rpcClient.js";
 
 export interface PairOptions {
-  url?: string;
-  code?: string;
-  link?: string;
+  link: string;
   label?: string;
   platform?: string;
 }
 
-export interface PairingInvite {
-  code: string;
-  deepLink: string;
-  pairUrl: string;
-  room: string;
-  fp: string;
-  sig: string;
-  ice?: "all" | "relay";
-  srv?: string;
-  serverUrl?: string;
-  expiresAt?: number;
-  expiresInMs?: number;
-}
-
-export interface PairingInviteOptions {
-  ttlMs?: number;
-  workspace?: string;
-}
-
-export interface AdminPairingInviteOptions extends PairingInviteOptions {
-  url: string;
-  adminToken?: string;
-}
-
-interface WorkspaceSelectResult {
-  workspaceName?: string;
-  serverUrl?: string;
-  pairing?: {
-    deepLink?: string;
-  } | null;
-}
-
 export interface RemoteWorkspaceEntry {
+  workspaceId: string;
   name: string;
   lastOpened: number;
-  running?: boolean;
+  running: boolean;
   ephemeral?: boolean;
 }
 
-export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
-  if (options.link) {
-    return await pairRemoteServerViaWebRtc(options.link, {
-      label: options.label,
-    });
-  }
-  const parsed = parsePairOptions(options);
-  let response: Response;
-  try {
-    response = await fetch(serverAuthRouteUrl(parsed.url, "complete-pairing"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code: parsed.code,
-        label: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
-        platform: options.platform ?? "desktop",
-      }),
-    });
-  } catch (error) {
-    throw new AuthError(
-      `cannot reach ${parsed.url}: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  const body = (await response.json().catch(() => ({}))) as {
-    deviceId?: unknown;
-    refreshToken?: unknown;
-    error?: unknown;
-  };
-  if (!response.ok || typeof body.deviceId !== "string" || typeof body.refreshToken !== "string") {
-    throw new AuthError(
-      remoteErrorMessage(body, `pairing failed (${response.status} ${response.statusText})`)
-    );
-  }
-  return {
-    schemaVersion: 1,
-    kind: "device",
-    url: parsed.url,
-    hubUrl: parsed.url,
-    deviceId: body.deviceId,
-    refreshToken: body.refreshToken,
-  };
+export interface InviteUserOptions {
+  handle: string;
+  displayName?: string;
+  role?: "admin" | "member";
+  workspaces: string[];
+  ttlMs?: number;
 }
 
-async function pairRemoteServerViaWebRtc(
-  link: string,
-  options: { label?: string; workspaceName?: string; hubCredential?: CliHubCredential } = {}
-): Promise<DeviceCredential> {
-  const pairing = parsePairingLink(link);
+function controlClient(rpc: RpcClient) {
+  return typedClient("hubControl", hubControlMethods, rpc);
+}
+
+async function withControl<T>(
+  creds: DeviceCredential,
+  operation: (client: ReturnType<typeof controlClient>) => Promise<T>
+): Promise<T> {
+  const rpc = new RpcClient({ ...creds, workspacePairing: creds.controlPairing });
+  try {
+    return await operation(controlClient(rpc));
+  } finally {
+    await rpc.close();
+  }
+}
+
+export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
+  if (!options.link) throw new AuthError("pair requires a vibestudio://connect link");
+  const pairing = parsePairingLink(options.link);
   const issuedRef: { current: { deviceId: string; refreshToken: string } | null } = {
     current: null,
   };
@@ -135,269 +76,140 @@ async function pairRemoteServerViaWebRtc(
   try {
     await client.ready();
     const issued = issuedRef.current;
-    if (!issued) {
-      throw new AuthError("pairing did not return a device credential");
+    if (!issued) throw new AuthError("pairing did not return a device credential");
+    const workspaceName = await client.call<unknown>("workspace.getActive", []);
+    const connectionInfo = await client.call<Record<string, unknown>>("auth.getConnectionInfo", []);
+    if (typeof workspaceName !== "string" || !workspaceName) {
+      throw new AuthError("paired child did not report an active workspace");
     }
-    const storedPairing = storePairing(pairing);
-    const workspaceName = options.workspaceName ?? (await detectActiveWorkspace(client));
-    const url = workspaceName
-      ? webrtcSelectedUrl(storedPairing, workspaceName)
-      : webrtcBaseUrl(storedPairing);
+    if (typeof connectionInfo["serverId"] !== "string") {
+      throw new AuthError("paired child did not report its server identity");
+    }
+    const route = await client.call<HubWorkspaceRoute>("hubControl.routeWorkspace", [
+      { workspace: workspaceName },
+    ]);
+    if (route.serverId !== connectionInfo["serverId"]) {
+      throw new AuthError("workspace route changed server identity during pairing");
+    }
+    const controlPairing = storeReach(route.controlReach);
+    const workspacePairing = storeReach(route.workspaceReach);
     return {
-      schemaVersion: 1,
+      schemaVersion: 3,
       kind: "device",
-      url,
-      hubUrl: options.hubCredential?.url ?? webrtcBaseUrl(storedPairing),
-      ...(workspaceName ? { workspaceName } : {}),
+      url: selectedUrl(workspacePairing, route.workspace),
+      workspaceName: route.workspace,
+      serverId: route.serverId,
       deviceId: issued.deviceId,
       refreshToken: issued.refreshToken,
-      pairing: storedPairing,
+      controlPairing,
+      workspacePairing,
       pairedAt: Date.now(),
-      ...(options.hubCredential ? { hubCredential: options.hubCredential } : {}),
     };
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
+    throw new AuthError(
+      `pairing failed: ${error instanceof Error ? error.message : String(error)}`
+    );
   } finally {
     await client.close().catch(() => undefined);
   }
 }
 
-async function postHubWorkspaceJson(
-  creds: Pick<DeviceCredential, "hubUrl" | "deviceId" | "refreshToken">,
-  route: string,
-  body: Record<string, unknown> = {}
-): Promise<Record<string, unknown>> {
-  if (!creds.hubUrl) {
-    throw new AuthError("stored credential is missing a hub URL; pair again");
-  }
-  const response = await fetch(serverWorkspaceRouteUrl(creds.hubUrl, route), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ...body,
-      deviceId: creds.deviceId,
-      refreshToken: creds.refreshToken,
-    }),
-  });
-  const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok) {
-    throw new AuthError(remoteErrorMessage(json, `workspace ${route} failed (${response.status})`));
-  }
-  return json;
-}
-
 export async function listRemoteWorkspaces(
-  creds: Pick<DeviceCredential, "url" | "hubUrl" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "pairing" | "hubCredential">>
+  creds: DeviceCredential
 ): Promise<RemoteWorkspaceEntry[]> {
-  if (isWebRtcCredential(creds)) {
-    const workspace = typedClient(
-      "workspace",
-      workspaceMethods,
-      new RpcClient(hubCredential(creds))
-    );
-    const result = await workspace.list();
-    return parseWorkspaceEntries(Array.isArray(result) ? result : []);
-  }
-  const json = await postHubWorkspaceJson(creds, "list");
-  return parseWorkspaceEntries(Array.isArray(json["workspaces"]) ? json["workspaces"] : []);
-}
-
-function parseWorkspaceEntries(workspaces: unknown[]): RemoteWorkspaceEntry[] {
-  const result: RemoteWorkspaceEntry[] = [];
-  for (const entry of workspaces) {
-    const record = entry as Record<string, unknown>;
-    if (typeof record["name"] !== "string") continue;
-    result.push({
-      name: record["name"],
-      lastOpened: typeof record["lastOpened"] === "number" ? record["lastOpened"] : 0,
-      running: typeof record["running"] === "boolean" ? record["running"] : undefined,
-      ephemeral: typeof record["ephemeral"] === "boolean" ? record["ephemeral"] : undefined,
-    });
-  }
-  return result;
+  return await withControl(creds, (client) => client.listWorkspaces());
 }
 
 export async function selectRemoteWorkspace(
   creds: DeviceCredential,
   name: string
 ): Promise<DeviceCredential> {
-  if (isWebRtcCredential(creds)) {
-    const hub = hubCredential(creds);
-    const workspace = typedClient("workspace", workspaceMethods, new RpcClient(hub));
-    const selected = (await workspace.select(name)) as unknown as WorkspaceSelectResult | undefined;
-    const workspaceName =
-      typeof selected?.workspaceName === "string" ? selected.workspaceName : name;
-    const deepLink =
-      selected?.pairing && typeof selected.pairing.deepLink === "string"
-        ? selected.pairing.deepLink
-        : undefined;
-    if (!deepLink) {
-      throw new AuthError(
-        `workspace "${workspaceName}" did not return a WebRTC pairing link; cannot select it remotely`
-      );
-    }
-    return await pairRemoteServerViaWebRtc(deepLink, {
-      workspaceName,
-      hubCredential: stripHubCredential(hub),
-    });
+  const route: HubWorkspaceRoute = await withControl(creds, (client) =>
+    client.routeWorkspace({ workspace: name })
+  );
+  if (route.serverId !== creds.serverId) {
+    throw new AuthError("workspace route changed the paired server identity");
   }
-  const json = await postHubWorkspaceJson(creds, "select", { name });
-  const serverUrl = typeof json["serverUrl"] === "string" ? json["serverUrl"] : null;
-  const workspaceName = typeof json["workspaceName"] === "string" ? json["workspaceName"] : name;
-  if (!serverUrl) throw new AuthError("server did not return a workspace URL");
+  const controlPairing = storeReach(route.controlReach);
+  const workspacePairing = storeReach(route.workspaceReach);
   return {
     ...creds,
-    url: serverUrl,
-    workspaceName,
+    url: selectedUrl(workspacePairing, route.workspace),
+    workspaceName: route.workspace,
+    serverId: creds.serverId,
+    controlPairing,
+    workspacePairing,
   };
 }
 
-export async function createPairingInvite(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">,
-  options: PairingInviteOptions = {}
-): Promise<PairingInvite> {
-  const auth = typedClient("auth", authMethods, new RpcClient(creds));
-  return await auth.createPairingInvite(pairingInviteArgs(options));
+export async function inviteRemoteUser(
+  creds: DeviceCredential,
+  options: InviteUserOptions
+): Promise<{ user: unknown; workspaces: string[]; pairing: HubPairingInvite }> {
+  return await withControl(creds, (client) => client.inviteUser(options));
 }
 
-export async function createPairingInviteWithAdmin(
-  options: AdminPairingInviteOptions
-): Promise<PairingInvite> {
-  const endpoint = new URL(options.url);
-  if (endpoint.protocol === "http:" && !isLoopbackHost(endpoint.hostname)) {
-    throw new AuthError(
-      "admin-token invite creation over cleartext HTTP is only allowed on loopback"
-    );
-  }
-  const adminToken = options.adminToken ?? loadPersistedAdminToken();
-  if (!adminToken) {
-    throw new AuthError(
-      "not paired and no local admin token found; run on the remote host or pass --admin-token"
-    );
-  }
-  const response = await fetch(serverAuthRouteUrl(endpoint, "create-pairing-code"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${adminToken}`,
-    },
-    body: JSON.stringify(pairingInviteArgs(options)),
-  });
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok) {
-    throw new AuthError(
-      remoteErrorMessage(body, `invite failed (${response.status} ${response.statusText})`)
-    );
-  }
-  if (typeof body["code"] !== "string" || typeof body["pairUrl"] !== "string") {
-    throw new Error("invite failed: server returned an unexpected response");
-  }
-  return body as unknown as PairingInvite;
+export async function pairRemoteDevice(
+  creds: DeviceCredential,
+  options: { workspace?: string; ttlMs?: number } = {}
+): Promise<{ userId: string; handle: string; workspace: string; pairing: HubPairingInvite }> {
+  return await withControl(creds, (client) => client.pairDevice(options));
 }
 
-function remoteErrorMessage(body: { error?: unknown; code?: unknown }, fallback: string): string {
-  const message = typeof body.error === "string" ? body.error : fallback;
-  const code = typeof body.code === "string" ? body.code : undefined;
-  return code ? `${message} [${code}]` : message;
+export async function addRemoteWorkspaceMember(
+  creds: DeviceCredential,
+  options: { workspace: string; userId?: string; handle?: string }
+): Promise<Record<string, unknown>> {
+  return await withControl(creds, (client) => client.addWorkspaceMember(options));
 }
 
-function pairingInviteArgs(options: PairingInviteOptions): { ttlMs?: number; workspace?: string } {
-  return {
-    ...(typeof options.ttlMs === "number" ? { ttlMs: options.ttlMs } : {}),
-    ...(typeof options.workspace === "string" && options.workspace.trim()
-      ? { workspace: options.workspace.trim() }
-      : {}),
-  };
+export async function removeRemoteWorkspaceMember(
+  creds: DeviceCredential,
+  options: { workspace: string; userId?: string; handle?: string }
+): Promise<{ removed: boolean; closedSessions: number }> {
+  return await withControl(creds, (client) => client.removeWorkspaceMember(options));
 }
 
-function parsePairOptions(options: PairOptions): { url: string; code: string } {
-  if (options.link) {
-    throw new Error("internal error: WebRTC pairing link reached HTTP pair parser");
-  }
-  if (!options.url || !options.code) {
-    throw new Error("pair requires --url and --code");
-  }
-  if (!PAIRING_CODE_PATTERN.test(options.code)) {
-    throw new Error("pairing code has an unexpected format");
-  }
-  const parsedUrl = parseConnectServerUrl(options.url);
-  if (parsedUrl.kind === "error") throw new Error(parsedUrl.reason);
-  // parseConnectServerUrl's declared return type unions in ConnectLink, whose ok
-  // variant (now WebRTC room/fp, no `url`) it never actually produces — narrow to
-  // the origin-bearing result.
-  if (!("url" in parsedUrl)) throw new Error("server URL did not resolve to an origin");
-  return { url: parsedUrl.url, code: options.code };
+export async function listRemoteWorkspaceMembers(
+  creds: DeviceCredential,
+  workspace: string
+): Promise<{ workspace: string; workspaceId: string; members: Record<string, unknown>[] }> {
+  return await withControl(creds, (client) => client.listWorkspaceMembers({ workspace }));
+}
+
+export async function listRemoteDevices(creds: DeviceCredential) {
+  return await withControl(creds, (client) => client.listDevices());
+}
+
+export async function revokeRemoteDevice(creds: DeviceCredential, deviceId: string) {
+  return await withControl(creds, (client) => client.revokeDevice(deviceId));
+}
+
+export function pairingDeepLink(invite: HubPairingInvite): string {
+  return invite.deepLink;
 }
 
 function parsePairingLink(link: string): ConnectPairing {
   const parsed = parseConnectLink(link);
-  if (parsed.kind === "error") throw new Error(parsed.reason);
+  if (parsed.kind === "error") throw new AuthError(parsed.reason);
   const { kind: _kind, ...pairing } = parsed;
   return pairing;
 }
 
-function storePairing(pairing: ConnectPairing): CliStoredPairing {
+function storeReach(reach: HubWorkspaceRoute["controlReach"]): CliStoredPairing {
+  const signaling = parseSignalingEndpoint(reach.sig);
+  if (signaling.kind === "error") throw new AuthError(signaling.reason);
   return {
-    room: pairing.room,
-    fp: pairing.fp,
-    sig: pairing.sig,
-    v: pairing.v,
-    ice: pairing.ice,
-    srv: pairing.srv,
+    room: reach.room,
+    fp: normalizeFingerprint(reach.fp),
+    sig: signaling.url,
+    v: reach.v,
+    ice: reach.ice,
+    ...(reach.srv ? { srv: reach.srv } : {}),
   };
 }
 
-function webrtcBaseUrl(pairing: Pick<CliStoredPairing, "room">): string {
-  return `webrtc://${pairing.room}`;
-}
-
-function webrtcSelectedUrl(pairing: Pick<CliStoredPairing, "room">, workspaceName: string): string {
-  return `${webrtcBaseUrl(pairing)}${selectedWorkspacePath(workspaceName)}`;
-}
-
-async function detectActiveWorkspace(client: {
-  call<T = unknown>(method: string, args?: unknown[]): Promise<T>;
-}): Promise<string | undefined> {
-  try {
-    const active = await client.call("workspace.getActive", []);
-    return typeof active === "string" && active ? active : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function hubCredential(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "pairing" | "hubCredential">>
-): DeviceCredential {
-  if (creds.hubCredential) {
-    return {
-      schemaVersion: 1,
-      kind: "device",
-      url: creds.hubCredential.url,
-      hubUrl: creds.hubCredential.url,
-      deviceId: creds.hubCredential.deviceId,
-      refreshToken: creds.hubCredential.refreshToken,
-      ...(creds.hubCredential.pairing ? { pairing: creds.hubCredential.pairing } : {}),
-      ...(creds.hubCredential.pairedAt ? { pairedAt: creds.hubCredential.pairedAt } : {}),
-    };
-  }
-  return {
-    schemaVersion: 1,
-    kind: "device",
-    url: creds.url,
-    hubUrl: creds.url,
-    deviceId: creds.deviceId,
-    refreshToken: creds.refreshToken,
-    ...(creds.pairing ? { pairing: creds.pairing } : {}),
-  };
-}
-
-function stripHubCredential(creds: DeviceCredential): CliHubCredential {
-  return {
-    url: creds.url,
-    deviceId: creds.deviceId,
-    refreshToken: creds.refreshToken,
-    ...(creds.pairing ? { pairing: creds.pairing } : {}),
-    ...(creds.pairedAt ? { pairedAt: creds.pairedAt } : {}),
-  };
+function selectedUrl(pairing: Pick<CliStoredPairing, "room">, workspaceName: string): string {
+  return `webrtc://${pairing.room}${selectedWorkspacePath(workspaceName)}`;
 }

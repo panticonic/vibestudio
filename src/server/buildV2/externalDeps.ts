@@ -471,7 +471,7 @@ async function ensureDepsInstalled(
   fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
 
   try {
-    runNpmInstall(tmpDir, { ignoreScripts: options.ignoreScripts });
+    await runNpmInstall(tmpDir, { ignoreScripts: options.ignoreScripts });
 
     // Write sentinel inside tmpDir BEFORE rename so winner is always complete
     fs.writeFileSync(path.join(tmpDir, ".ready"), new Date().toISOString());

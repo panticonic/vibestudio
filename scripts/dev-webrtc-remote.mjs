@@ -28,6 +28,7 @@ const defaultReadyFile = path.join(os.tmpdir(), `vibestudio-dev-webrtc-ready-${p
 const children = new Set();
 let cleanupStarted = false;
 let ownedReadyFile = true;
+let disposableServerHome = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,8 +47,6 @@ function parseArgs(argv) {
     signalPort: null,
     signalUrl: null,
     timeoutMs: 180_000,
-    workspace: null,
-    workspaceDir: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -78,18 +77,11 @@ function parseArgs(argv) {
       options.signalUrl = requireValue(argv[++i], "--signal-url");
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = parsePositiveInt(argv[++i], "--timeout-ms");
-    } else if (arg === "--workspace") {
-      options.workspace = requireValue(argv[++i], "--workspace");
-    } else if (arg === "--workspace-dir") {
-      options.workspaceDir = path.resolve(requireValue(argv[++i], "--workspace-dir"));
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
-  if (options.ephemeral && (options.workspace || options.workspaceDir)) {
-    throw new Error("--ephemeral cannot be combined with --workspace or --workspace-dir");
-  }
   if (options.signalUrl && options.signalPort) {
     throw new Error("--signal-url cannot be combined with --signal-port");
   }
@@ -131,11 +123,7 @@ Usage:
   pnpm dev:webrtc [options]
 
 Options:
-  --workspace <name>       Serve a named local workspace, creating it if needed.
-                           Defaults to the same last/default workspace resolution
-                           as a standalone local server.
-  --workspace-dir <path>   Serve a workspace directory, creating it if needed.
-  --ephemeral              Serve a disposable dev workspace copied from template.
+  --ephemeral              Route a disposable dev workspace copied from template.
   --signal-url <url>       Use an existing signaling endpoint instead of local
                            wrangler dev. ws/http are accepted only for loopback.
   --signal-port <port>     Local wrangler dev port. Defaults to a free port.
@@ -148,10 +136,10 @@ Options:
   --no-build               Skip the initial node build.mjs step.
   --no-type-check          Do not start the background pnpm type-check.
 
-The harness starts a local workspace server as a WebRTC answerer and launches
-Electron with a vibestudio://connect link plus --skip-remote-pairing, so stored
-remote credentials do not take over this run. Fresh credentials from this dev
-pairing are not persisted.
+The harness starts an isolated local hub, routes its default workspace child as
+the WebRTC answerer, and launches Electron with the root-bootstrap
+vibestudio://connect link plus --skip-remote-pairing. Stored credentials do not
+take over this run, and fresh credentials from this dev pairing are not persisted.
 `);
 }
 
@@ -284,8 +272,6 @@ function createServerArgs(options) {
     repoRoot,
     "--ready-file",
     options.readyFile,
-    "--serve-panels",
-    "--print-credentials",
     "--host",
     "127.0.0.1",
     "--bind-host",
@@ -293,8 +279,6 @@ function createServerArgs(options) {
   ];
   if (options.gatewayPort) args.push("--gateway-port", String(options.gatewayPort));
   if (options.ephemeral) args.push("--ephemeral");
-  if (options.workspace) args.push("--workspace", options.workspace, "--init");
-  if (options.workspaceDir) args.push("--workspace-dir", options.workspaceDir, "--init");
   return args;
 }
 
@@ -317,34 +301,6 @@ async function waitForServerReady(readyFile, serverChild, minMtimeMs, timeoutMs)
     }
   }
   throw new Error(`Timed out waiting for server ready file: ${readyFile}`);
-}
-
-function waitForPairingLink(serverChild, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
-      if (match) {
-        cleanup();
-        resolve(match[0]);
-      }
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          "Timed out waiting for the server's WebRTC pairing link. " +
-            "If node-datachannel is missing, run `pnpm rebuild node-datachannel`."
-        )
-      );
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
-  });
 }
 
 function startBackgroundTypeCheck() {
@@ -383,6 +339,10 @@ async function cleanup() {
     } catch {
       // It may not have been written yet.
     }
+  }
+  if (disposableServerHome) {
+    await fsp.rm(disposableServerHome, { recursive: true, force: true });
+    disposableServerHome = null;
   }
 }
 
@@ -433,10 +393,15 @@ async function main() {
 
   const serverArgs = createServerArgs(options);
   const serverInvocation = createServerInvocation(serverArgs);
+  disposableServerHome = await fsp.mkdtemp(
+    path.join(os.tmpdir(), "vibestudio-dev-webrtc-home-")
+  );
+  const serverXdgConfig = path.join(disposableServerHome, ".config");
   const serverEnv = {
     ...process.env,
+    HOME: disposableServerHome,
+    XDG_CONFIG_HOME: serverXdgConfig,
     NODE_ENV: "development",
-    VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
     VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
   };
   const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
@@ -448,9 +413,12 @@ async function main() {
 
   const timeoutMs = options.timeoutMs;
   const readyStartedAt = Date.now();
-  const pairingLinkPromise = waitForPairingLink(serverChild, timeoutMs);
   const ready = await waitForServerReady(options.readyFile, serverChild, readyStartedAt, timeoutMs);
-  const parsedPairing = parseConnectLink(await pairingLinkPromise);
+  const rootPairingLink = ready.rootInvites?.desktop?.deepLink;
+  if (typeof rootPairingLink !== "string" || rootPairingLink.length === 0) {
+    throw new Error("Fresh dev hub did not publish a complete desktop root invite");
+  }
+  const parsedPairing = parseConnectLink(rootPairingLink);
   if (parsedPairing.kind !== "ok") {
     throw new Error(`Server logged an invalid WebRTC pairing link: ${parsedPairing.reason}`);
   }
@@ -459,9 +427,7 @@ async function main() {
 
   console.log("[dev-webrtc] Ready");
   console.log(
-    `[dev-webrtc] Workspace: ${ready.workspaceName ?? "unknown"}${
-      ready.isEphemeral ? " (ephemeral)" : ""
-    }`
+    `[dev-webrtc] Workspaces: ${(ready.workspaces ?? []).map((entry) => entry.name).join(", ") || "none"}`
   );
   console.log(`[dev-webrtc] Gateway:   ${ready.gatewayUrl ?? "unknown"}`);
   console.log(`[dev-webrtc] Signaling: ${signalUrl}`);

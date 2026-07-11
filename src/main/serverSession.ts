@@ -4,22 +4,20 @@
  * Subsumes local attach-or-spawn vs remote connect and workspace info fetch.
  * Returns a single SessionConnection with everything needed to continue
  * startup. There is ONE auth model in all topologies: device pairing +
- * refresh credentials. Locally the desktop is a paired device of a detached
- * workspace server over loopback WS; remotely it is a paired device over the
- * WebRTC pipe.
+ * refresh credentials. Locally the desktop owns a detached hub and routes into
+ * a child over its loopback proxy; remotely it reaches the child over WebRTC.
  */
 
 import { app } from "electron";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot } from "./paths.js";
-import { LocalServerManager } from "./localServerManager.js";
+import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
-  loadDeviceCredentialByWorkspaceId,
   loadStoredRemotePairing,
   saveDeviceCredential,
   type StoredRemote,
@@ -32,7 +30,18 @@ import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
-import { serverRpcWsUrl, type ConnectPairing } from "@vibestudio/shared/connect";
+import {
+  HubWorkspaceRouteSchema,
+  type HubWorkspaceRoute,
+} from "@vibestudio/shared/serviceSchemas/hubControl";
+import {
+  normalizeFingerprint,
+  PAIRING_PROTOCOL_VERSION,
+  PAIRING_ROOM_PATTERN,
+  parseSignalingEndpoint,
+  serverAuthRouteUrl,
+  type ConnectPairing,
+} from "@vibestudio/shared/connect";
 
 const log = createDevLogger("ServerSession");
 
@@ -40,7 +49,7 @@ export interface SessionConnection {
   connectionMode: "local" | "remote";
   /**
    * Who controls the server process: "desktop-local" means this app manages a
-   * detached local workspace server (quit policy applies); "external" means
+   * detached local hub (quit policy applies); "external" means
    * someone else owns it (remote WebRTC server).
    */
   serverOwnership: "desktop-local" | "external";
@@ -54,7 +63,7 @@ export interface SessionConnection {
   statePath: string;
   workspaceConfig: WorkspaceConfig;
   serverClient: ServerClient;
-  localServerManager: LocalServerManager | null;
+  hubProcessManager: HubProcessManager | null;
   panelHttpServer: PanelHttpServerLike;
   serverInfo: ServerInfo;
   /**
@@ -152,134 +161,114 @@ export async function establishServerSession(args: {
 
   const protocol = "http" as const;
   const externalHost = "localhost";
-
-  const localServerManager = new LocalServerManager({
-    wsDir: mode.wsDir,
+  const hubProcessManager = new HubProcessManager({
     workspaceName: mode.workspaceName,
-    workspaceId: mode.workspaceId,
     appRoot: getAppRoot(),
     appVersion: app.getVersion(),
-    isEphemeral: mode.isEphemeral,
-    autoApproveStartupUnits: mode.autoApproveStartupUnits,
     centralData: args.centralData,
     onCrash: (code) => {
-      console.error(`[App] Local server died and could not be recovered (code ${code ?? "?"})`);
+      console.error(`[App] Local hub died and could not be recovered (code ${code ?? "?"})`);
       relaunchApp({ exitCode: 1 });
     },
   });
-
-  const target = await localServerManager.attachOrSpawn();
+  const target = await hubProcessManager.attachOrSpawn();
   log.info(
-    `[Server] ${target.attached ? "Attached to" : "Spawned"} local server (Gateway: ${target.gatewayPort}, boot ${target.serverBootId})`
+    `[Server] ${target.attached ? "Attached to" : "Spawned"} local hub and routed ${mode.workspaceName}`
   );
-  const gatewayConfig = { serverUrl: `http://127.0.0.1:${target.gatewayPort}` };
+  const gatewayConfig = { serverUrl: target.serverUrl };
 
-  // Shell bearer for the CDP host socket, exchanged from the persisted refresh
-  // credential over loopback. Re-fetched on every transition into "connected"
-  // (a server restart invalidates the previous in-memory bearer).
   let cdpAuthToken = "";
   const refreshCdpAuthToken = async (): Promise<void> => {
-    const credential = loadDeviceCredentialByWorkspaceId(mode.workspaceId);
-    const port = localServerManager.getGatewayPort() ?? target.gatewayPort;
-    if (!credential) return;
+    const serverUrl = hubProcessManager.getCurrentServerUrl();
+    if (!serverUrl) return;
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/refresh-shell`, {
+      const response = await fetch(serverAuthRouteUrl(serverUrl, "refresh-shell"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          deviceId: credential.deviceId,
-          refreshToken: credential.refreshToken,
+          deviceId: target.deviceId,
+          refreshToken: target.refreshToken,
         }),
       });
       if (!response.ok) {
-        log.warn(`[Server] /refresh-shell failed with ${response.status}`);
+        log.warn(`[Server] child refresh-shell failed with ${response.status}`);
         return;
       }
       const payload = (await response.json()) as { shellToken?: string };
       if (payload.shellToken) cdpAuthToken = payload.shellToken;
     } catch (error) {
       log.warn(
-        `[Server] /refresh-shell error: ${error instanceof Error ? error.message : String(error)}`
+        `[Server] child refresh-shell error: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
   const serverClient = await createServerClient(target.gatewayPort, target.authToken, {
     reconnect: true,
-    getWsUrl: () =>
-      localServerManager.getCurrentGatewayUrl() ??
-      serverRpcWsUrl(`http://127.0.0.1:${target.gatewayPort}`),
-    refreshAuthToken: async () => localServerManager.getAuthToken(),
-    // A fresh spawn pairs with the startup pairing code; the issued device
-    // credential is persisted so reconnects and future launches use
-    // refresh:<deviceId>:<token> — identical to the remote path.
-    onPaired: (credential) => {
-      localServerManager.persistPairedCredential(credential);
-      void refreshCdpAuthToken();
-    },
+    getWsUrl: () => hubProcessManager.getCurrentWsUrl() ?? target.wsUrl,
+    refreshAuthToken: async () => hubProcessManager.getAuthToken(),
     onConnectionStatusChanged: (status) => {
-      if (status === "connecting") {
-        // Supervision: probe the process behind a dropped socket; respawn if dead.
-        localServerManager.handleDisconnect();
-      }
-      if (status === "connected") {
-        void refreshCdpAuthToken();
-      }
+      if (status === "connecting") hubProcessManager.handleDisconnect();
+      if (status === "connected") void refreshCdpAuthToken();
       args.onConnectionStatusChanged?.(status);
     },
     onRecovery: args.onRecovery,
-    onDisconnect: () => {
-      console.error("[App] Local server connection closed");
-    },
+    onDisconnect: () => console.error("[App] Local workspace connection closed"),
     onServerEvent,
   });
-  await refreshCdpAuthToken();
+  try {
+    await refreshCdpAuthToken();
 
-  log.info("[Server] Shell client connected");
+    log.info("[Server] Shell client connected through the local hub");
 
-  const getClient = () => serverClient;
-  const serverInfo = buildServerInfo(
-    target.gatewayPort,
-    externalHost,
-    protocol,
-    gatewayConfig,
-    getClient
-  );
+    const getClient = () => serverClient;
+    const serverInfo = buildServerInfo(
+      target.gatewayPort,
+      externalHost,
+      protocol,
+      gatewayConfig,
+      getClient
+    );
 
-  // Get workspace metadata from server
-  const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
-    serverClient.call(svc, m, a)
-  );
-  const wsInfo = await workspaceClient.getInfo();
-  log.info(`[Workspace] Server workspace: ${wsInfo.config.id}`);
+    // Get workspace metadata from server
+    const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
+      serverClient.call(svc, m, a)
+    );
+    const wsInfo = await workspaceClient.getInfo();
+    log.info(`[Workspace] Server workspace: ${wsInfo.config.id}`);
 
-  const gatewayPort = target.gatewayPort;
-  const panelHttpServer: PanelHttpServerLike = {
-    hasBuild: () => false,
-    getBuildRevision: () => undefined,
-    invalidateBuild: () => {},
-    getPort: () => gatewayPort,
-  };
+    const gatewayPort = target.gatewayPort;
+    const panelHttpServer: PanelHttpServerLike = {
+      hasBuild: () => false,
+      getBuildRevision: () => undefined,
+      invalidateBuild: () => {},
+      getPort: () => gatewayPort,
+    };
 
-  return {
-    connectionMode: "local",
-    serverOwnership: "desktop-local",
-    protocol,
-    gatewayPort,
-    externalHost,
-    gatewayConfig,
-    workerdPort: 0,
-    workspaceId: wsInfo.config.id,
-    workspacePath: wsInfo.path,
-    /** The local server's own state directory (same host). */
-    statePath: wsInfo.statePath,
-    workspaceConfig: wsInfo.config,
-    serverClient,
-    localServerManager,
-    panelHttpServer,
-    serverInfo,
-    getCdpAuthToken: () => cdpAuthToken,
-  };
+    return {
+      connectionMode: "local",
+      serverOwnership: "desktop-local",
+      protocol,
+      gatewayPort,
+      externalHost,
+      gatewayConfig,
+      workerdPort: 0,
+      workspaceId: wsInfo.config.id,
+      workspacePath: wsInfo.path,
+      /** The local server's own state directory (same host). */
+      statePath: wsInfo.statePath,
+      workspaceConfig: wsInfo.config,
+      serverClient,
+      hubProcessManager,
+      panelHttpServer,
+      serverInfo,
+      getCdpAuthToken: () => cdpAuthToken,
+    };
+  } catch (error) {
+    hubProcessManager.detach();
+    await serverClient.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 /** The connect-callback subset both remote-session paths forward to the pipe. */
@@ -300,7 +289,7 @@ async function establishRemoteSession(
   args: RemoteConnectArgs
 ): Promise<SessionConnection> {
   const serverClient = await connectRemoteViaWebRtc(
-    { ...stored.pairing, code: "" },
+    { ...stored.workspacePairing, code: "" },
     {
       callerId: `shell:${stored.deviceId}`,
       getShellToken: () => `refresh:${stored.deviceId}:${stored.refreshToken}`,
@@ -318,8 +307,14 @@ async function establishRemoteSession(
       onRecovery: args.onRecovery,
     }
   );
-  log.info("[Server] Shell client connected over WebRTC remote pipe (returning device)");
-  return buildRemoteSessionConnection(serverClient);
+  try {
+    const connection = await buildRemoteSessionConnection(serverClient);
+    log.info("[Server] Shell client connected over WebRTC remote pipe (returning device)");
+    return connection;
+  } catch (error) {
+    await serverClient.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 /**
@@ -333,6 +328,18 @@ async function establishFreshPairSession(
   pairing: ConnectPairing,
   args: RemoteConnectArgs
 ): Promise<SessionConnection> {
+  if (pairing.v !== PAIRING_PROTOCOL_VERSION || !pairing.ice) {
+    throw new Error("Fresh WebRTC pairing requires the current version and explicit ICE policy");
+  }
+  const fingerprint = normalizeFingerprint(pairing.fp);
+  const signaling = parseSignalingEndpoint(pairing.sig);
+  if (
+    !PAIRING_ROOM_PATTERN.test(pairing.room) ||
+    !/^[0-9A-F]{64}$/.test(fingerprint) ||
+    signaling.kind === "error"
+  ) {
+    throw new Error("Fresh WebRTC pairing coordinates are not canonicalizable");
+  }
   const issuedCredential: { current: { deviceId: string; refreshToken: string } | null } = {
     current: null,
   };
@@ -351,29 +358,56 @@ async function establishFreshPairSession(
     onConnectionStatusChanged: args.onConnectionStatusChanged,
     onRecovery: args.onRecovery,
   });
-  if (!issuedCredential.current) {
-    throw new Error("Fresh WebRTC pairing completed without an issued device credential");
+  try {
+    if (!issuedCredential.current) {
+      throw new Error("Fresh WebRTC pairing completed without an issued device credential");
+    }
+    const authClient = createTypedServiceClient("auth", authMethods, (svc, m, a) =>
+      serverClient.call(svc, m, a)
+    );
+    const info = await authClient.getConnectionInfo();
+    const workspaceName = await serverClient.call("workspace", "getActive", []);
+    if (typeof workspaceName !== "string" || !workspaceName) {
+      throw new Error("Fresh WebRTC pairing did not report an active workspace");
+    }
+    const route = HubWorkspaceRouteSchema.parse(
+      await serverClient.call("hubControl", "routeWorkspace", [{ workspace: workspaceName }])
+    );
+    if (route.serverId !== info.serverId) {
+      throw new Error("Workspace route changed server identity during pairing");
+    }
+    const controlPairing = storedReach(route.controlReach);
+    const workspacePairing = storedReach(route.workspaceReach);
+    saveDeviceCredential({
+      serverId: info.serverId,
+      transport: "webrtc",
+      controlPairing,
+      workspacePairing,
+      workspaceName: route.workspace,
+      deviceId: issuedCredential.current.deviceId,
+      refreshToken: issuedCredential.current.refreshToken,
+      pairedAt: Date.now(),
+    });
+    const connection = await buildRemoteSessionConnection(serverClient);
+    log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
+    return connection;
+  } catch (error) {
+    await serverClient.close().catch(() => undefined);
+    throw error;
   }
-  const authClient = createTypedServiceClient("auth", authMethods, (svc, m, a) =>
-    serverClient.call(svc, m, a)
-  );
-  const info = await authClient.getConnectionInfo();
-  saveDeviceCredential({
-    serverId: info.serverId,
-    transport: "webrtc",
-    pairing: {
-      room: pairing.room,
-      fp: pairing.fp,
-      sig: pairing.sig,
-      ice: pairing.ice,
-      srv: pairing.srv,
-    },
-    deviceId: issuedCredential.current.deviceId,
-    refreshToken: issuedCredential.current.refreshToken,
-    pairedAt: Date.now(),
-  });
-  log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
-  return buildRemoteSessionConnection(serverClient);
+}
+
+function storedReach(reach: HubWorkspaceRoute["controlReach"]): StoredRemote["controlPairing"] {
+  const signaling = parseSignalingEndpoint(reach.sig);
+  if (signaling.kind === "error") throw new Error(signaling.reason);
+  return {
+    room: reach.room,
+    fp: normalizeFingerprint(reach.fp),
+    sig: signaling.url,
+    v: reach.v,
+    ice: reach.ice,
+    ...(reach.srv ? { srv: reach.srv } : {}),
+  };
 }
 
 /**
@@ -398,55 +432,60 @@ async function buildRemoteSessionConnection(
   const facade = await startPanelAssetFacade(serverClient, {
     stateDir: path.join(app.getPath("userData"), "panel-asset-facade"),
   });
-  const gatewayConfig = { serverUrl: `http://127.0.0.1:${facade.port}` };
+  try {
+    const gatewayConfig = { serverUrl: `http://127.0.0.1:${facade.port}` };
 
-  const serverInfo = buildServerInfo(
-    facade.port,
-    externalHost,
-    protocol,
-    gatewayConfig,
-    () => serverClient
-  );
+    const serverInfo = buildServerInfo(
+      facade.port,
+      externalHost,
+      protocol,
+      gatewayConfig,
+      () => serverClient
+    );
 
-  // Mirror the local path: read the remote workspace's identity + config over
-  // the pipe so the shell can label and route the session.
-  const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
-    serverClient.call(svc, m, a)
-  );
-  const wsInfo = await workspaceClient.getInfo();
-  log.info(`[Workspace] Remote workspace: ${wsInfo.config.id}`);
+    // Mirror the local path: read the remote workspace's identity + config over
+    // the pipe so the shell can label and route the session.
+    const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
+      serverClient.call(svc, m, a)
+    );
+    const wsInfo = await workspaceClient.getInfo();
+    log.info(`[Workspace] Remote workspace: ${wsInfo.config.id}`);
 
-  const panelHttpServer: PanelHttpServerLike = {
-    hasBuild: () => false,
-    getBuildRevision: () => undefined,
-    invalidateBuild: () => {},
-    getPort: () => facade.port,
-  };
+    const panelHttpServer: PanelHttpServerLike = {
+      hasBuild: () => false,
+      getBuildRevision: () => undefined,
+      invalidateBuild: () => {},
+      getPort: () => facade.port,
+    };
 
-  // Local consumers (shellCore, app state, diagnostics) WRITE to statePath, so it
-  // must be a locally-writable path — the remote `wsInfo.statePath` describes the
-  // server's host, not ours. Scope a local scratch dir under userData.
-  const statePath = path.join(app.getPath("userData"), "remote-state");
+    // Local consumers (shellCore, app state, diagnostics) WRITE to statePath, so it
+    // must be a locally-writable path — the remote `wsInfo.statePath` describes the
+    // server's host, not ours. Scope a local scratch dir under userData.
+    const statePath = path.join(app.getPath("userData"), "remote-state");
 
-  return {
-    connectionMode: "remote",
-    serverOwnership: "external",
-    protocol,
-    gatewayPort: facade.port,
-    externalHost,
-    gatewayConfig,
-    workerdPort: 0,
-    workspaceId: wsInfo.config.id,
-    // Remote manifests and assets are served through panelAssetFacade. The
-    // remote path remains metadata for labels and workspace identity only.
-    workspacePath: wsInfo.path,
-    statePath,
-    workspaceConfig: wsInfo.config,
-    serverClient,
-    localServerManager: null,
-    panelHttpServer,
-    serverInfo,
-    // CDP over the pipe uses the RPC-channel socket, not a bearer.
-    getCdpAuthToken: () => "",
-  };
+    return {
+      connectionMode: "remote",
+      serverOwnership: "external",
+      protocol,
+      gatewayPort: facade.port,
+      externalHost,
+      gatewayConfig,
+      workerdPort: 0,
+      workspaceId: wsInfo.config.id,
+      // Remote manifests and assets are served through panelAssetFacade. The
+      // remote path remains metadata for labels and workspace identity only.
+      workspacePath: wsInfo.path,
+      statePath,
+      workspaceConfig: wsInfo.config,
+      serverClient,
+      hubProcessManager: null,
+      panelHttpServer,
+      serverInfo,
+      // CDP over the pipe uses the RPC-channel socket, not a bearer.
+      getCdpAuthToken: () => "",
+    };
+  } catch (error) {
+    await facade.close().catch(() => undefined);
+    throw error;
+  }
 }

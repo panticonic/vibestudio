@@ -6,7 +6,7 @@ commands with `pnpm cli`.
 ## First contact with a server
 
 ```bash
-vibestudio remote pair "vibestudio://connect?url=https://host.ts.net&code=ABC123"
+vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all"
 vibestudio remote status                      # verify credential + reachability
 vibestudio agent attach                       # session "default"
 vibestudio agent services | head              # what can I call?
@@ -17,7 +17,7 @@ One-shot variant — when no credential is stored yet, attach can pair first
 (if already paired this is a usage error; `vibestudio remote logout` to re-pair):
 
 ```bash
-vibestudio agent attach work --url https://host.ts.net --code ABC123
+vibestudio agent attach work "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all"
 ```
 
 ## Explore, edit, commit, and push a repo (the build-gated loop)
@@ -343,7 +343,9 @@ vibestudio agent detach featureA --rm       # clean up: retire + delete context
 ## Invite another device
 
 ```bash
-vibestudio remote invite --ttl-ms 600000    # prints a pairing code + vibestudio:// link
+vibestudio remote pair-device --ttl-ms 600000
+# For a different account instead:
+vibestudio remote invite-user --handle alice --workspace dev --ttl-ms 600000
 ```
 
 ## Install this skill into a project
@@ -435,6 +437,7 @@ contrast, empty/loading/error states, overflow at narrow widths. If the panel
 renders blank, `panel console --errors` almost always names the exception.
 
 Notes:
+
 - `panel list` marks panels in your context with `*`. Screenshot/console of a
   panel in ANOTHER context is denied for agents by design (you could not see
   your edits there anyway) — open your own preview instance instead.

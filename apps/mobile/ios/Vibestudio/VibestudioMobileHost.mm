@@ -30,14 +30,6 @@ static NSString *const VibestudioActiveBundleSource = @"activeBundle.source";
   return @{ @"firebaseConfigured": @(firebaseConfigured) };
 }
 
-RCT_EXPORT_METHOD(clearCredentials:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
-{
-  [self closeBundleStream];
-  [self clearActiveBundle];
-  resolve(nil);
-}
-
 RCT_EXPORT_METHOD(resetToNativeBootstrap:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {

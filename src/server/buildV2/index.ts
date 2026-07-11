@@ -272,6 +272,8 @@ export interface BuildSystemRootOptions {
    * under user data but dependencies are installed from <appRoot>/workspace.
    */
   dependencyWorkspaceRoot?: string;
+  /** Defer non-critical cache warming until the host has published readiness. */
+  deferInitialBuildPrewarm?: boolean;
 }
 
 export interface BuildSystemV2 extends RepoPushValidator {
@@ -437,6 +439,9 @@ export interface BuildSystemV2 extends RepoPushValidator {
     callback: (source: string, trigger?: StateAdvancedEvent, buildKey?: string) => void
   ): void;
 
+  /** Start the optional background cache warm exactly once. */
+  startInitialBuildPrewarm(): void;
+
   /** Shut down (stop state trigger) */
   shutdown(): Promise<void>;
 }
@@ -520,6 +525,7 @@ export async function initBuildSystemV2(
   });
   let shuttingDown = false;
   let initialBuildPrewarm: Promise<void> = Promise.resolve();
+  let initialBuildPrewarmStarted = false;
 
   // Step 4: Start the state trigger (subscribes to vcs state advances)
   const trigger = new StateTransitionTrigger({
@@ -579,7 +585,9 @@ export async function initBuildSystemV2(
     }
   });
 
-  if (missingInitialBuilds.length > 0) {
+  const startInitialBuildPrewarm = (): void => {
+    if (initialBuildPrewarmStarted || shuttingDown || missingInitialBuilds.length === 0) return;
+    initialBuildPrewarmStarted = true;
     console.log(
       `[BuildV2] Prewarming ${missingInitialBuilds.length} missing non-app units in background...`
     );
@@ -605,8 +613,12 @@ export async function initBuildSystemV2(
         });
       });
     });
-  } else {
+  };
+
+  if (missingInitialBuilds.length === 0) {
     console.log(`[BuildV2] All builds up-to-date`);
+  } else if (!rootOptions.deferInitialBuildPrewarm) {
+    startInitialBuildPrewarm();
   }
 
   // ---------------------------------------------------------------------------
@@ -899,7 +911,8 @@ export async function initBuildSystemV2(
     options?: ValidateRepoPushOptions
   ): Promise<RepoBuildReport[]> => {
     const candidate = await viewAt(candidateView);
-    const base: GraphView | null = options?.baseView ? await viewAt(options.baseView) : null;
+    const baseView = options?.baseView;
+    const base: GraphView | null = baseView ? await viewAt(baseView) : null;
 
     const reports: RepoBuildReport[] = [];
     const pushedUnitNames = new Set<string>();
@@ -995,10 +1008,10 @@ export async function initBuildSystemV2(
         // failed dependent gates absolutely (the documented `baseView`-omitted
         // contract) rather than slipping through as non-required.
         if (report.status === "failed") {
-          if (!base) {
+          if (!base || !baseView) {
             report.required = true; // no base → gate absolutely
           } else {
-            const baseReport = await buildUnitReport(node, base, options!.baseView!, "dependent");
+            const baseReport = await buildUnitReport(node, base, baseView, "dependent");
             // Pre-existing red on the base is informational; newly red blocks.
             report.required = baseReport.status !== "failed";
           }
@@ -1649,6 +1662,8 @@ export async function initBuildSystemV2(
         }
       );
     },
+
+    startInitialBuildPrewarm,
 
     async shutdown(): Promise<void> {
       shuttingDown = true;

@@ -953,7 +953,8 @@ export class EgressProxy {
             attribution,
             params.credentialUse,
             params.method,
-            params.gitIntent
+            params.gitIntent,
+            caller?.subject?.userId
           )
         : null;
       if (caller && attribution && !credential) {
@@ -993,13 +994,20 @@ export class EgressProxy {
     if (
       callerId &&
       (params.gitIntent?.force ||
-        !this.isCallerAllowed(credential, callerId, attribution, usage.sessionResource))
+        !this.isCallerAllowed(credential, attribution, usage.sessionResource))
     ) {
-      await this.requestCredentialUseGrant(credential, binding, callerId, attribution, {
-        targetUrl: params.targetUrl,
-        method: params.method,
-        gitIntent: params.gitIntent,
-      });
+      await this.requestCredentialUseGrant(
+        credential,
+        binding,
+        callerId,
+        attribution,
+        {
+          targetUrl: params.targetUrl,
+          method: params.method,
+          gitIntent: params.gitIntent,
+        },
+        params.caller?.subject?.userId
+      );
     }
 
     return {
@@ -1067,7 +1075,8 @@ export class EgressProxy {
     attribution: RequestAttribution,
     use: CredentialBindingUse = "fetch",
     method = "GET",
-    gitIntent?: GitIntentMetadata
+    gitIntent?: GitIntentMetadata,
+    requestedByUserId?: string
   ): Promise<Credential | null> {
     const listUrlBound = this.deps.credentialStore.listUrlBound;
     if (!listUrlBound) {
@@ -1093,12 +1102,7 @@ export class EgressProxy {
         const usage = credentialUseResource(binding, targetUrl, method);
         if (
           gitIntent?.force ||
-          !this.isCallerAllowed(
-            credential,
-            attribution.callerId,
-            attribution,
-            usage.sessionResource
-          )
+          !this.isCallerAllowed(credential, attribution, usage.sessionResource)
         ) {
           await this.requestCredentialUseGrant(
             credential,
@@ -1109,7 +1113,8 @@ export class EgressProxy {
               targetUrl,
               method,
               gitIntent,
-            }
+            },
+            requestedByUserId
           );
         }
       }
@@ -1180,7 +1185,8 @@ export class EgressProxy {
     binding: CredentialBinding,
     callerId: string,
     attribution: RequestAttribution | null,
-    operation: { targetUrl: URL; method: string; gitIntent?: GitIntentMetadata }
+    operation: { targetUrl: URL; method: string; gitIntent?: GitIntentMetadata },
+    requestedByUserId?: string
   ): Promise<void> {
     if (!this.deps.approvalQueue || !attribution || !credential.id) {
       throw new ForwardRejection(
@@ -1201,6 +1207,7 @@ export class EgressProxy {
     const decision = await this.deps.approvalQueue.request({
       callerId,
       callerKind: attribution.callerKind,
+      ...(requestedByUserId ? { requestedByUserId } : {}),
       repoPath: attribution.repoPath,
       effectiveVersion: attribution.effectiveVersion,
       credentialId: credential.id,
@@ -1241,7 +1248,7 @@ export class EgressProxy {
     const now = Date.now();
     await this.persistCredentialUseGrant(
       credential as Credential & { id: string },
-      grantForDecision(callerId, attribution, decision, now, binding, usage),
+      grantForDecision(attribution, decision, now, binding, usage),
       now
     );
     this.resolvePendingCredentialUseGrants(credential.id, attribution, decision, usage);
@@ -1266,7 +1273,6 @@ export class EgressProxy {
         return false;
       }
       if (decision === "session") return approval.callerId === attribution.callerId;
-      if (decision === "repo") return approval.repoPath === attribution.repoPath;
       return (
         approval.repoPath === attribution.repoPath &&
         approval.effectiveVersion === attribution.effectiveVersion
@@ -1294,7 +1300,6 @@ export class EgressProxy {
 
   private isCallerAllowed(
     credential: Credential,
-    callerId: string,
     attribution: RequestAttribution | null,
     resource: CredentialSessionGrantResource
   ): boolean {
@@ -1308,7 +1313,6 @@ export class EgressProxy {
     }
     return isCallerAllowed(
       credential,
-      callerId,
       attribution,
       resource,
       this.persistentCredentialUseGrants(credential)
@@ -1919,7 +1923,6 @@ export function createEgressProxy(deps: EgressProxyDeps): EgressProxy {
 
 function isCallerAllowed(
   credential: Credential,
-  callerId: string,
   attribution: RequestAttribution | null,
   resource: CredentialSessionGrantResource,
   grants = credential.grants ?? []
@@ -1929,12 +1932,10 @@ function isCallerAllowed(
       grant.bindingId === resource.bindingId &&
       grant.resource === resource.resource &&
       grant.action === resource.action &&
-      ((grant.scope === "caller" && grant.callerId === callerId) ||
-        (!!attribution &&
-          ((grant.scope === "repo" && grant.repoPath === attribution.repoPath) ||
-            (grant.scope === "version" &&
-              grant.repoPath === attribution.repoPath &&
-              grant.effectiveVersion === attribution.effectiveVersion))))
+      !!attribution &&
+      grant.scope === "version" &&
+      grant.repoPath === attribution.repoPath &&
+      grant.effectiveVersion === attribution.effectiveVersion
   );
 }
 
@@ -2552,7 +2553,6 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 function grantForDecision(
-  callerId: string,
   attribution: RequestAttribution,
   decision: Exclude<GrantedDecision, "deny" | "once" | "session">,
   grantedAt: number,
@@ -2567,18 +2567,12 @@ function grantForDecision(
     grantedAt,
     grantedBy: decision,
   };
-  if (decision === "repo") {
-    return { ...base, scope: "repo", repoPath: attribution.repoPath };
-  }
-  if (decision === "version") {
-    return {
-      ...base,
-      scope: "version",
-      repoPath: attribution.repoPath,
-      effectiveVersion: attribution.effectiveVersion,
-    };
-  }
-  return { ...base, scope: "caller", callerId };
+  return {
+    ...base,
+    scope: "version",
+    repoPath: attribution.repoPath,
+    effectiveVersion: attribution.effectiveVersion,
+  };
 }
 
 function upsertCredentialUseGrant(
@@ -2598,8 +2592,7 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
     grant.resource,
     grant.action,
     grant.scope,
-    grant.callerId ?? "",
-    grant.repoPath ?? "",
-    grant.effectiveVersion ?? "",
+    grant.repoPath,
+    grant.effectiveVersion,
   ].join("\x00");
 }

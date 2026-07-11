@@ -76,7 +76,6 @@ export const serializedServiceMethodSchema = z.object({
   examples: z.array(z.unknown()).optional(),
   errors: z.array(z.unknown()).optional(),
   seeAlso: z.array(z.string()).optional(),
-  deprecated: z.record(z.unknown()).optional(),
   argsSchema: z.record(z.unknown()),
   returnsSchema: z.record(z.unknown()).optional(),
 });

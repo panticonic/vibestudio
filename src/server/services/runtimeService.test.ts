@@ -41,7 +41,7 @@ function approvalQueueMock(
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(() => 0),
+    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitCredentialInput: vi.fn(),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -533,6 +533,17 @@ describe("runtimeService.createEntity context policy", () => {
       doCreateSpec({ contextId: "ctx-other" }),
     ])) as { contextId: string };
     expect(handle.contextId).toBe("ctx-other");
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps trusted host authority for a panel-tree-mediated server caller", async () => {
+    const { service, approvalQueue, entityCache } = await buildDeps();
+    const mediated = createVerifiedCaller("panel:tree/about-new", "server");
+    const handle = (await service.handler({ caller: mediated }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-other" }),
+    ])) as EntityRecord;
+    expect(handle.contextId).toBe("ctx-other");
+    expect(entityCache.resolveActive(handle.id)?.parentId).toBe("panel:tree/about-new");
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 

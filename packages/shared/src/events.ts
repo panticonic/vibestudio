@@ -15,6 +15,7 @@ import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { CallerKind } from "./principalKinds.js";
 import type { VcsHeadAdvance, VcsWorkingAdvance } from "./serviceSchemas/vcs.js";
+import type { WorkspacePresenceEntry } from "./serviceSchemas/workspacePresence.js";
 import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
 /**
@@ -36,6 +37,7 @@ export type EventName =
   | "panel:snapshot"
   | "system-theme-changed"
   | "panel-tree-updated"
+  | "workspace-presence-changed"
   | "open-workspace-switcher"
   | "open-command-palette"
   | "toggle-address-bar"
@@ -53,6 +55,7 @@ export type EventName =
   | "notification:show"
   | "notification:dismiss"
   | "notification:action"
+  | "user-notifications-changed"
   | "server-connection-changed"
   | "server-health"
   | "host-targets:changed"
@@ -146,6 +149,12 @@ export interface HostTargetChangedPayload {
 export interface EventPayloads {
   "system-theme-changed": "light" | "dark";
   "panel-tree-updated": PanelTreeSnapshot;
+  /**
+   * WP8 §4 host workspace-presence: the full list of present (+ recently
+   * departed) workspace members, re-broadcast whenever a user's presence
+   * changes (connect/drop). Pure session-derived attribution — no channel data.
+   */
+  "workspace-presence-changed": WorkspacePresenceEntry[];
   "panel:runtimeLeaseChanged": PanelRuntimeLeaseChangedEvent;
   "panel-title-updated": { panelId: string; title: string; explicit?: boolean };
   "panel:snapshot": PanelRecoverySnapshot;
@@ -202,6 +211,8 @@ export interface EventPayloads {
   "notification:show": NotificationPayload;
   "notification:dismiss": { id: string };
   "notification:action": { id: string; actionId: string };
+  /** Opaque account-targeted nudge; consumers reconcile from the durable inbox. */
+  "user-notifications-changed": { changedAt: number };
   "server-connection-changed": {
     /** Current connection status */
     status: "connected" | "connecting" | "disconnected";
@@ -283,6 +294,7 @@ export interface EventPayloads {
 export const VALID_EVENT_NAMES: EventName[] = [
   "system-theme-changed",
   "panel-tree-updated",
+  "workspace-presence-changed",
   "panel:runtimeLeaseChanged",
   "panel-title-updated",
   "panel:snapshot",
@@ -303,6 +315,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "notification:show",
   "notification:dismiss",
   "notification:action",
+  "user-notifications-changed",
   "server-connection-changed",
   "server-health",
   "host-targets:changed",

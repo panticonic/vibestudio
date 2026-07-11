@@ -36,13 +36,6 @@ export interface MethodError {
   description: string;
 }
 
-/** Deprecation marker for a method. */
-export interface MethodDeprecation {
-  since?: string;
-  replacedBy?: string;
-  reason?: string;
-}
-
 /**
  * Pure-data schema for one RPC method (no handler — that's server-side).
  *
@@ -55,11 +48,7 @@ export interface MethodSchema {
   description?: string;
   args: z.ZodType;
   returns?: z.ZodType;
-  /**
-   * @deprecated Prefer service-level or method-level `policy` for caller-kind
-   * gates, and `access` for descriptive sensitivity/restriction metadata.
-   * Retained transitionally while services migrate older schema definitions.
-   */
+  /** Enforced caller-kind gate. Overrides the service policy for this method. */
   policy?: ServicePolicy;
   /** Unified access & restrictedness descriptor (caller kinds, conditional
    *  restrictions, sensitivity, side-effects, approval/grant gates). */
@@ -70,8 +59,6 @@ export interface MethodSchema {
   errors?: MethodError[];
   /** Related methods, as qualified names (e.g. "eval.getRun"). */
   seeAlso?: string[];
-  /** Deprecation marker. */
-  deprecated?: MethodDeprecation;
 }
 
 export type ServiceMethodSchemas = Record<string, MethodSchema>;

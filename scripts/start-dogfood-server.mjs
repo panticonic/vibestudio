@@ -77,26 +77,6 @@ function copyWorkspaceTemplate(wsDir) {
   fs.mkdirSync(path.join(wsDir, "state"), { recursive: true });
 }
 
-function registerWorkspace(name) {
-  const configDir = platformDefault();
-  const dataPath = path.join(configDir, "data.json");
-  let data = { workspaces: [] };
-  if (fs.existsSync(dataPath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-    } catch {
-      data = { workspaces: [] };
-    }
-  }
-  if (!Array.isArray(data.workspaces)) data.workspaces = [];
-  data.workspaces = data.workspaces.filter((entry) => entry?.name !== name);
-  data.workspaces.unshift({ name, lastOpened: Date.now() });
-  fs.mkdirSync(configDir, { recursive: true });
-  const tmpPath = `${dataPath}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.renameSync(tmpPath, dataPath);
-}
-
 function currentBranch(cwd) {
   const branch = tryRun("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])?.trim();
   return branch && branch !== "HEAD" ? branch : "main";
@@ -166,8 +146,6 @@ export function bootstrapWorkspace(name, opts = {}) {
     console.log(`[dogfood] Creating workspace "${name}" at ${wsDir}`);
     copyWorkspaceTemplate(wsDir);
   }
-  registerWorkspace(name);
-
   const projectDir = path.join(wsDir, "source", projectPath);
   if (fs.existsSync(projectDir)) {
     if (!fs.existsSync(path.join(projectDir, ".git"))) {
@@ -253,7 +231,7 @@ export function createDogfoodPairHooks({ workspaceName }) {
   const restartTimes = [];
 
   return {
-    beforeStart({ options, selectedHost }) {
+    beforeStart({ options }) {
       if (options.dev) {
         throw new Error(
           "dogfood-server always uses a persistent managed workspace; --dev is not supported"
@@ -272,13 +250,14 @@ export function createDogfoodPairHooks({ workspaceName }) {
         host,
         "--gateway-port",
         String(options.port),
+        "--bootstrap-workspace",
+        workspaceName,
         "--serve-panels",
-        "--print-credentials",
         ...(options.appRoot ? ["--app-root", options.appRoot] : []),
       ];
     },
-    buildEnv(baseEnv, { options, selectedHost }) {
-      const dogfoodGatewayAlias = `http://${selectedHost.address}:${options.port}`;
+    buildEnv(baseEnv, { options }) {
+      const dogfoodGatewayAlias = `http://127.0.0.1:${options.port}`;
       return {
         ...baseEnv,
         VIBESTUDIO_DOGFOOD: "1",
@@ -332,9 +311,8 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
   const config = {
     commandName: "dogfood-server",
     logPrefix: "dogfood",
-    portEnv: ["VIBESTUDIO_DOGFOOD_PORT", "VIBESTUDIO_GATEWAY_PORT", "VIBESTUDIO_PAIR_PORT"],
+    portEnv: ["VIBESTUDIO_DOGFOOD_PORT"],
     devEnv: "VIBESTUDIO_DOGFOOD_DEV",
-    restartCommand: "pnpm dev:self:server",
     usage: ["pnpm dev:self:server", "pnpm dev:self:server --port 3030"],
     startupHint:
       "[dogfood] Self-update mirroring is unsupported under GAD VCS; workspace edits stay in the managed workspace.",

@@ -16,7 +16,7 @@ the repo: `pnpm cli ...`).
   (`vibestudio agent attach`). Sessions are durable server entities; a session
   named `default` is used when `--session NAME` is omitted.
 - **Paths are remote.** `fs`/`vcs`/`eval` operate inside the session's
-  *context folder on the server*, not the local filesystem. The context is a
+  _context folder on the server_, not the local filesystem. The context is a
   copy-on-write checkout of the workspace tree (e.g. `panels/notes/...`).
   Context folders are **sparse**: repos materialize on disk on demand, so a
   fresh checkout can look almost empty to local `ls`/glob. Discover the tree
@@ -52,14 +52,14 @@ the repo: `pnpm cli ...`).
      an explicit `vcs.merge`. A push that returns `build-failed` did **NOT**
      advance `main` — its structured diagnostics (`file:line:col`) are your next
      task. Fix them and re-push; never leave a repo red.
-  Builds happen **at push** (use `vcs.previewBuild` for a dev preview without
-  committing). The push report is the **primary build signal** — prefer it over
-  polling diagnostics after the fact. See [BUILDING.md](BUILDING.md).
+     Builds happen **at push** (use `vcs.previewBuild` for a dev preview without
+     committing). The push report is the **primary build signal** — prefer it over
+     polling diagnostics after the fact. See [BUILDING.md](BUILDING.md).
 
 ## Quick start
 
 ```bash
-vibestudio remote pair "vibestudio://connect?url=...&code=..."   # once per machine
+vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all" # once
 vibestudio agent attach                  # create/reuse session "default"
 vibestudio fs ls /                       # list the session context root
 vibestudio agent call workspace.listSkills '[]'
@@ -130,9 +130,9 @@ vibestudio panel console <panelId> --errors    # render errors, exceptions
 
 Screenshots force-paint hidden/unslotted panels, so the panel does not need to
 be visible on anyone's screen (a headless renderer serves it if no desktop
-shell holds it). **Scope rule:** you may only automate panels in *your own
-context* — a foreign-context panel is denied with guidance, not prompted. That
-is the correct loop anyway: your code edits only render in *your* context's
+shell holds it). **Scope rule:** you may only automate panels in _your own
+context_ — a foreign-context panel is denied with guidance, not prompted. That
+is the correct loop anyway: your code edits only render in _your_ context's
 build, so open your own preview instance and iterate on it:
 
 ```bash
@@ -164,16 +164,16 @@ Two directions, both one-way:
 
 ## Command groups
 
-| Group | Commands | Purpose |
-|-------|----------|---------|
-| `vibestudio remote` | `pair`, `status`, `invite`, `logout`, `discover`, `start`, `serve` | Device pairing and credentials |
-| `vibestudio agent` | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill` | Sessions, raw RPC, introspection |
-| `vibestudio fs` | `ls`, `read`, `write`, `rm`, `mv`, `cp`, `mkdir`, `stat`, `grep`, `glob` | Files in the session context |
-| `vibestudio vcs` | `push`, `push-status`, `status`, `diff`, `log`, `fork-repo` | Per-repo, build-gated VCS (push). `vcs.edit`/`vcs.commit`/`vcs.merge` are RPCs — see below |
-| `vibestudio eval` | `run`, `repl-reset` | Sandboxed TS/JS against the server — **the full-power surface** (see below) |
-| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster` | Conversation channels: read/post messages, follow live, inspect the roster |
-| `vibestudio context` | `mirror` | Materialize a context's repos into a local dir (`--watch` writes local edits back as context edit ops) |
-| `vibestudio panel` | `list`, `screenshot`, `console` | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
+| Group                | Commands                                                                                | Purpose                                                                                                                                       |
+| -------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio remote`  | `pair`, `status`, `invite`, `logout`, `discover`, `start`, `serve`                      | Device pairing and credentials                                                                                                                |
+| `vibestudio agent`   | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill` | Sessions, raw RPC, introspection                                                                                                              |
+| `vibestudio fs`      | `ls`, `read`, `write`, `rm`, `mv`, `cp`, `mkdir`, `stat`, `grep`, `glob`                | Files in the session context                                                                                                                  |
+| `vibestudio vcs`     | `push`, `push-status`, `status`, `diff`, `log`, `fork-repo`                             | Per-repo, build-gated VCS (push). `vcs.edit`/`vcs.commit`/`vcs.merge` are RPCs — see below                                                    |
+| `vibestudio eval`    | `run`, `repl-reset`                                                                     | Sandboxed TS/JS against the server — **the full-power surface** (see below)                                                                   |
+| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster`                                             | Conversation channels: read/post messages, follow live, inspect the roster                                                                    |
+| `vibestudio context` | `mirror`                                                                                | Materialize a context's repos into a local dir (`--watch` writes local edits back as context edit ops)                                        |
+| `vibestudio panel`   | `list`, `screenshot`, `console`                                                         | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
 
 `--help` works at the group level (`vibestudio fs --help`) and per command
 (`vibestudio fs write --help`).
@@ -191,10 +191,10 @@ context branch, pass both `contextId` and an explicit build ref such as
 
 ## Files in this skill
 
-| File | Read when |
-|------|-----------|
-| [FILES.md](FILES.md) | Doing file or VCS operations (`fs`/`vcs` flags, binary handling, repo paths, the edit→commit→push loop, `vcs.edit`/`vcs.commit`/`vcs.merge`/`vcs.discardEdits`, provenance queries, creating/forking a repo, `VcsPushResult`) |
-| [BUILDING.md](BUILDING.md) | A push returned `build-failed` or `diverged`, or you need a dev preview (`vcs.previewBuild`) or to read a package's multi-target report — how the push gate builds, esbuild vs tsc diagnostics, group pushes, first push |
-| [EVAL.md](EVAL.md) | Running code with `vibestudio eval` (bindings, imports, persistent scope) |
-| [API.md](API.md) | Looking up which RPC services/methods exist (generated reference) |
-| [RECIPES.md](RECIPES.md) | End-to-end workflows (edit→push→fix loop, data analysis, debugging units) |
+| File                       | Read when                                                                                                                                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [FILES.md](FILES.md)       | Doing file or VCS operations (`fs`/`vcs` flags, binary handling, repo paths, the edit→commit→push loop, `vcs.edit`/`vcs.commit`/`vcs.merge`/`vcs.discardEdits`, provenance queries, creating/forking a repo, `VcsPushResult`) |
+| [BUILDING.md](BUILDING.md) | A push returned `build-failed` or `diverged`, or you need a dev preview (`vcs.previewBuild`) or to read a package's multi-target report — how the push gate builds, esbuild vs tsc diagnostics, group pushes, first push      |
+| [EVAL.md](EVAL.md)         | Running code with `vibestudio eval` (bindings, imports, persistent scope)                                                                                                                                                     |
+| [API.md](API.md)           | Looking up which RPC services/methods exist (generated reference)                                                                                                                                                             |
+| [RECIPES.md](RECIPES.md)   | End-to-end workflows (edit→push→fix loop, data analysis, debugging units)                                                                                                                                                     |

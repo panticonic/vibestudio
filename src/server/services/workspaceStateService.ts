@@ -122,8 +122,15 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           return;
         }
         case "slot.move": {
-          const [slotId, parentSlotId, positionId] = args as [string, string | null, string];
-          await dispatch<undefined>("slotMove", [slotId, parentSlotId, positionId]);
+          // 4th arg (ownerUserId) is optional — the acting mover's subject for
+          // the WP3 §10.1 subtree re-own; forwarded when present.
+          const [slotId, parentSlotId, positionId, ownerUserId] = args as [
+            string,
+            string | null,
+            string,
+            string | undefined,
+          ];
+          await dispatch<undefined>("slotMove", [slotId, parentSlotId, positionId, ownerUserId]);
           deps.onSlotStateChanged?.();
           return;
         }

@@ -9,7 +9,7 @@ the context root (`/` = context root). All commands accept `--json`.
 ## Sessions
 
 ```bash
-vibestudio agent attach [NAME] [--url U --code C]   # create or reuse; --url/--code pair first (errors if already paired)
+vibestudio agent attach [NAME] [PAIRING_LINK] [--workspace NAME] # create/reuse; link pairs first if needed
 vibestudio agent status [NAME]                      # verify the entity is live (exit 5 if stale)
 vibestudio agent sessions                           # list local sessions, live/stale
 vibestudio agent detach [NAME] [--rm]               # retire entity; --rm also deletes the context folder
@@ -67,7 +67,7 @@ Changes flow through **three distinct layers** on your context head:
 2. **commit** — `vcs.commit(message)` folds your uncommitted edits into one
    deliberate, **messaged** snapshot, advancing the repo's context head. The
    `message` is **mandatory**; `exclude` holds paths back. Commits are what
-   `vcs.log` shows, and a commit *owns* exactly the edits it sealed
+   `vcs.log` shows, and a commit _owns_ exactly the edits it sealed
    (`vcs.commitEdits`).
 3. **push** — `vibestudio vcs push --repo <p>` is the **only** way to advance
    `main`. It is **fast-forward-only** and **build-gated** (see below).
@@ -103,11 +103,11 @@ The CLI has dedicated commands only for push and the read/status family; the
 edit and commit layers are RPCs via `vibestudio agent call` (and `fs write` is the
 ergonomic front-door for `vcs.edit`):
 
-| RPC | shape | what it does |
-|-----|-------|--------------|
-| `vcs.edit` | `[{"edits":[…],"repoPath":"panels/notes"}]` | Record WORKING edits on your ctx head. No commit, no build, not in `vcs.log`. Returns `{head, stateHash, committed:false, status:"uncommitted", editSeq, changedPaths}`. Rejects a `main` head. |
-| `vcs.commit` | `[{"message":"…","repoPaths":?,"exclude":?}]` | Fold uncommitted edits into a messaged snapshot **per repo**. `message` mandatory; omit `repoPaths` to commit every repo your context has edits in; `exclude` leaves listed paths uncommitted (inverse of `git add`). Returns `VcsCommitResult[]` (`{repoPath, head, stateHash, eventId, headHash, editCount, status:"committed"\|"unchanged", changedPaths}`). Rejects `main`. |
-| `vcs.discardEdits` | `["panels/notes"]` | Drop a repo's uncommitted edits **and** clear any in-progress merge, restoring the committed head on disk. Returns `{discarded, stateHash}`. |
+| RPC                | shape                                         | what it does                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vcs.edit`         | `[{"edits":[…],"repoPath":"panels/notes"}]`   | Record WORKING edits on your ctx head. No commit, no build, not in `vcs.log`. Returns `{head, stateHash, committed:false, status:"uncommitted", editSeq, changedPaths}`. Rejects a `main` head.                                                                                                                                                                                 |
+| `vcs.commit`       | `[{"message":"…","repoPaths":?,"exclude":?}]` | Fold uncommitted edits into a messaged snapshot **per repo**. `message` mandatory; omit `repoPaths` to commit every repo your context has edits in; `exclude` leaves listed paths uncommitted (inverse of `git add`). Returns `VcsCommitResult[]` (`{repoPath, head, stateHash, eventId, headHash, editCount, status:"committed"\|"unchanged", changedPaths}`). Rejects `main`. |
+| `vcs.discardEdits` | `["panels/notes"]`                            | Drop a repo's uncommitted edits **and** clear any in-progress merge, restoring the committed head on disk. Returns `{discarded, stateHash}`.                                                                                                                                                                                                                                    |
 
 An edit op is discriminated by `kind` (`replace`/`write`/`create`/`delete`/
 `chmod`); `{path, content:"…"}` is accepted shorthand for a write.
@@ -118,8 +118,8 @@ An edit op is discriminated by `kind` (`replace`/`write`/`create`/`delete`/
 since you forked, push returns `status:"diverged"` (it does **not** merge for
 you). Reconcile with an explicit `vcs.merge`, then re-push:
 
-| RPC | shape | what it does |
-|-----|-------|--------------|
+| RPC         | shape              | what it does                                                                                                                                                    |
+| ----------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `vcs.merge` | `["panels/notes"]` | Pull `main` into your ctx head as a **merge commit**. Returns `{status, stateHash, conflicts, mergeable:"clean"\|"conflict", upstreamCommits, conflictPaths?}`. |
 
 - **`mergeable:"clean"`** — no overlapping changes; the merge commits with **no
@@ -140,12 +140,12 @@ the `diverged` push result so you can decide before merging. See
 Every working edit is recorded with full provenance (actor, turn, invocation),
 and commits index the edits they own — so you can trace any line:
 
-| RPC | shape | returns |
-|-----|-------|---------|
-| `vcs.fileHistory` | `["panels/notes","src/index.tsx"]` | Every edit to a path in commit-lineage order (committed first, then the uncommitted working tail) — file history / blame. |
-| `vcs.commitEdits` | `["panels/notes",{"eventId":"evt-123"}]` | The edit-ops a commit owns (commit → its edits). |
-| `vcs.commitAncestors` | `["panels/notes","evt-123"]` | Walk a commit's ancestry in the event-keyed commit DAG. |
-| `vcs.previewBuild` | `[{"repoPaths":["panels/notes"]}]` | On-demand build of your **working** content (committed head + uncommitted edits), scoped — a dev preview that does **not** touch the published baseline. Builds happen authoritatively only at push. |
+| RPC                   | shape                                    | returns                                                                                                                                                                                              |
+| --------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vcs.fileHistory`     | `["panels/notes","src/index.tsx"]`       | Every edit to a path in commit-lineage order (committed first, then the uncommitted working tail) — file history / blame.                                                                            |
+| `vcs.commitEdits`     | `["panels/notes",{"eventId":"evt-123"}]` | The edit-ops a commit owns (commit → its edits).                                                                                                                                                     |
+| `vcs.commitAncestors` | `["panels/notes","evt-123"]`             | Walk a commit's ancestry in the event-keyed commit DAG.                                                                                                                                              |
+| `vcs.previewBuild`    | `[{"repoPaths":["panels/notes"]}]`       | On-demand build of your **working** content (committed head + uncommitted edits), scoped — a dev preview that does **not** touch the published baseline. Builds happen authoritatively only at push. |
 
 ### Creating a brand-new repo (first push)
 
@@ -224,12 +224,12 @@ you get the errors back.
 
 `VcsPushResult` is a discriminated union on `status`:
 
-| `status`       | shape                                            | meaning |
-|----------------|--------------------------------------------------|---------|
-| `pushed`       | `{ repoPaths, reports: RepoBuildReport[] }`       | main advanced for every repo |
-| `up-to-date`   | `{ repoPaths, reports }`                          | nothing to push |
-| `diverged`     | `{ divergences: VcsRepoDivergence[] }`            | `main` moved past your base; **no head advanced** — `vcs.merge` then re-push |
-| `build-failed` | `{ reports: RepoBuildReport[] }`                  | build/type errors; **no head advanced** |
+| `status`       | shape                                       | meaning                                                                      |
+| -------------- | ------------------------------------------- | ---------------------------------------------------------------------------- |
+| `pushed`       | `{ repoPaths, reports: RepoBuildReport[] }` | main advanced for every repo                                                 |
+| `up-to-date`   | `{ repoPaths, reports }`                    | nothing to push                                                              |
+| `diverged`     | `{ divergences: VcsRepoDivergence[] }`      | `main` moved past your base; **no head advanced** — `vcs.merge` then re-push |
+| `build-failed` | `{ reports: RepoBuildReport[] }`            | build/type errors; **no head advanced**                                      |
 
 Each `VcsRepoDivergence` is `{ repoPath, base, mainTip, upstreamCommits,
 mergeable:"clean"|"conflict", conflictPaths? }` — the same reconcile fields
@@ -250,7 +250,7 @@ not a blob, so parse it directly.
 
 ### Context isolation, drift, and rebase
 
-Your session **context** is a *pinned snapshot* of the workspace. Reads resolve
+Your session **context** is a _pinned snapshot_ of the workspace. Reads resolve
 against a fixed base captured when the context started — they do **not** drift as
 other contexts push and advance `main` under you. Repos you edit live on your own
 `ctx:` head (forked lazily on first edit); everything else reads the pinned base.
@@ -291,21 +291,21 @@ the session's contextId as their first argument (get it from
 `vibestudio agent status --json`). The per-repo VCS methods have these exact arg
 shapes (mind which are positional vs object):
 
-| RPC call | `ARGS_JSON` |
-|----------|-------------|
-| `vcs.edit` | `[{"edits":[…],"repoPath":"panels/notes"}]` — record WORKING edits (no commit/build) |
-| `vcs.commit` | `[{"message":"…"}]` — fold uncommitted edits into a snapshot (add `"repoPaths"`/`"exclude"` to scope) |
-| `vcs.discardEdits` | `["panels/notes"]` — positional `(repoPath, head?)`; drop uncommitted edits + clear merge |
-| `vcs.merge` | `["panels/notes"]` — positional `(repoPath, head?)`; pull `main` in (merge commit) |
-| `vcs.status` | `["panels/notes", "ctx:<id>"]` — **positional** `(repoPath, head?)`; result includes `uncommitted` |
-| `vcs.log` | `["panels/notes", 10]` — positional `(repoPath, limit?, head?)`; commits only |
-| `vcs.pushStatus` | `[["panels/notes"]]` — one array arg; each result has `uncommitted` + `diverged` |
-| `vcs.previewBuild` | `[{"repoPaths":["panels/notes"]}]` — dev build of working content (no baseline write) |
-| `vcs.fileHistory` | `["panels/notes","src/index.tsx"]` — positional `(repoPath, path, head?, limit?)` |
-| `vcs.commitEdits` | `["panels/notes",{"eventId":"evt-123"}]` — a commit's edits |
-| `vcs.forkRepo` | `["panels/chat","panels/mychat"]` — positional `(fromPath, toPath)` |
-| `vcs.contextStatus` | `[]` — per-repo `{repoPath, forked, ahead, behind, deleted}` for your context |
-| `vcs.rebaseContext` | `[]` — pull latest `main` into your edits + re-pin your base |
+| RPC call            | `ARGS_JSON`                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `vcs.edit`          | `[{"edits":[…],"repoPath":"panels/notes"}]` — record WORKING edits (no commit/build)                  |
+| `vcs.commit`        | `[{"message":"…"}]` — fold uncommitted edits into a snapshot (add `"repoPaths"`/`"exclude"` to scope) |
+| `vcs.discardEdits`  | `["panels/notes"]` — positional `(repoPath, head?)`; drop uncommitted edits + clear merge             |
+| `vcs.merge`         | `["panels/notes"]` — positional `(repoPath, head?)`; pull `main` in (merge commit)                    |
+| `vcs.status`        | `["panels/notes", "ctx:<id>"]` — **positional** `(repoPath, head?)`; result includes `uncommitted`    |
+| `vcs.log`           | `["panels/notes", 10]` — positional `(repoPath, limit?, head?)`; commits only                         |
+| `vcs.pushStatus`    | `[["panels/notes"]]` — one array arg; each result has `uncommitted` + `diverged`                      |
+| `vcs.previewBuild`  | `[{"repoPaths":["panels/notes"]}]` — dev build of working content (no baseline write)                 |
+| `vcs.fileHistory`   | `["panels/notes","src/index.tsx"]` — positional `(repoPath, path, head?, limit?)`                     |
+| `vcs.commitEdits`   | `["panels/notes",{"eventId":"evt-123"}]` — a commit's edits                                           |
+| `vcs.forkRepo`      | `["panels/chat","panels/mychat"]` — positional `(fromPath, toPath)`                                   |
+| `vcs.contextStatus` | `[]` — per-repo `{repoPath, forked, ahead, behind, deleted}` for your context                         |
+| `vcs.rebaseContext` | `[]` — pull latest `main` into your edits + re-pin your base                                          |
 
 Push is intentionally not a raw host `vcs.*` RPC. Use `vibestudio vcs push --repo <p>`;
 the CLI resolves the userland `vcs` service and calls the gad-store DO's `vcsPush`.

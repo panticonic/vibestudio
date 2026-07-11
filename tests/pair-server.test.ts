@@ -1,5 +1,7 @@
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import { runPairServer } from "../scripts/cli/lib/pair-server.mjs";
+// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
+import { parseHubReadyPayload } from "../scripts/cli/lib/hub-ready.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import fs from "node:fs";
@@ -22,14 +24,58 @@ const config = {
   commandName: "pair-test",
   usage: ["pair-test"],
   logPrefix: "pair-test",
-  hostEnv: ["VIBESTUDIO_PAIR_TEST_HOST"],
   portEnv: ["VIBESTUDIO_PAIR_TEST_PORT"],
   devEnv: "VIBESTUDIO_PAIR_TEST_DEV",
-  restartCommand: "pnpm pair-test",
   bannerTitle: "Pair Test",
   deepLinkLabel: "Deep link",
   instructions: "Pair from test.",
 };
+
+const fixedCode = (label: string) => label.padEnd(32, "_").slice(0, 32);
+const READY_CODE = fixedCode("PAIRING_READY_CODE");
+const READY_QR_CODE = fixedCode("PAIRING_READY_QR_CODE");
+const CUSTOM_CODE = fixedCode("PAIRING_CUSTOM_CODE");
+const REMOTE_CODE = fixedCode("PAIRING_REMOTE_CODE");
+const REMOTE_QR_CODE = fixedCode("PAIRING_REMOTE_QR_CODE");
+const SERVER_ID = `srv_${"S".repeat(24)}`;
+const SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
+
+function invite(room: string, fp: string, sig: string, code: string) {
+  const params =
+    `room=${encodeURIComponent(room)}&fp=${encodeURIComponent(fp)}&code=${encodeURIComponent(code)}` +
+    `&sig=${encodeURIComponent(sig)}&v=2&ice=all`;
+  return {
+    room,
+    fp,
+    sig,
+    code,
+    v: 2 as const,
+    ice: "all" as const,
+    deepLink: `vibestudio://connect?${params}`,
+    pairUrl: `https://vibestudio.app/pair#${params}`,
+    expiresInMs: 60_000,
+    expiresAt: 2_000_000_000_000,
+    serverId: SERVER_ID,
+    serverBootId: SERVER_BOOT_ID,
+  };
+}
+
+function hubReady(
+  rootInvites: { desktop: ReturnType<typeof invite>; mobile: ReturnType<typeof invite> } | null
+) {
+  return {
+    mode: "hub",
+    gatewayUrl: "http://127.0.0.1:3456",
+    connectUrl: "http://127.0.0.1:3456",
+    rootInvites,
+    serverId: SERVER_ID,
+    serverBootId: SERVER_BOOT_ID,
+    gatewayPort: 3456,
+    pid: 4242,
+    version: "0.1.0-test",
+    workspaces: [],
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -52,17 +98,25 @@ describe("pair-server runner", () => {
         const readyIndex = serverArgs.indexOf("--ready-file");
         readyFile = serverArgs[readyIndex + 1] ?? "";
         setTimeout(() => {
+          const fp = "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a";
           fs.writeFileSync(
             readyFile,
-            JSON.stringify({
-              pairing: {
-                room: "room-ready-7f3a9c2b",
-                fp: "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a",
-                sig: "wss://signal.vibestudio.dev",
-              },
-              pairingCode: "PAIRING_READY_CODE_123",
-              qrPairingCode: "PAIRING_QR_CODE_123",
-            })
+            JSON.stringify(
+              hubReady({
+                desktop: invite(
+                  "room-ready-7f3a9c2b",
+                  fp,
+                  "wss://signal.vibestudio.dev",
+                  READY_CODE
+                ),
+                mobile: invite(
+                  "room-mobile-7f3a9c2b",
+                  fp,
+                  "wss://signal.vibestudio.dev",
+                  READY_QR_CODE
+                ),
+              })
+            )
           );
         }, 10);
         return child;
@@ -70,25 +124,22 @@ describe("pair-server runner", () => {
       onChildExit: () => true,
     });
 
-    await waitFor(() => logText(logSpy).includes("PAIRING_READY_CODE_123"));
+    await waitFor(() => logText(logSpy).includes(READY_CODE));
     const output = logText(logSpy);
     expect(output).toContain("Pair Test");
     expect(output).toContain("Room:");
     expect(output).toContain("room-ready-7f3a9c2b");
     expect(output).toContain("Fingerprint:");
-    expect(output).toContain(
-      "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a"
-    );
+    expect(output).toContain("4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a");
     expect(output).toContain("Signaling:");
     expect(output).toContain("wss://signal.vibestudio.dev");
-    expect(output).toMatch(/Pair code:\s+PAIRING_READY_CODE_123/);
-    expect(output).toMatch(/QR code:\s+PAIRING_QR_CODE_123/);
+    expect(output).toMatch(new RegExp(`Pair code:\\s+${READY_CODE}`));
+    expect(output).toMatch(new RegExp(`QR code:\\s+${READY_QR_CODE}`));
     expect(output).toContain(
-      "https://vibestudio.app/pair#room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_READY_CODE_123&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all"
+      `https://vibestudio.app/pair#room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=${READY_CODE}&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all`
     );
-    expect(output).toContain(
-      "https://vibestudio.app/pair#room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_QR_CODE_123&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all"
-    );
+    expect(output).toContain("room-mobile-7f3a9c2b");
+    expect(output).toContain(READY_QR_CODE);
     expect(output).toContain("Pair from test.");
 
     child.emit("exit", 0, null);
@@ -109,16 +160,16 @@ describe("pair-server runner", () => {
         spawnServer({ serverArgs }: { serverArgs: string[] }) {
           expect(serverArgs).toEqual(["dist/server.mjs", "--ready-file", readyFile]);
           setTimeout(() => {
+            const fp = "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66";
+            const rootInvite = invite(
+              "room-custom-1a2b3c4d",
+              fp,
+              "ws://127.0.0.1:8787",
+              CUSTOM_CODE
+            );
             fs.writeFileSync(
               readyFile,
-              JSON.stringify({
-                pairing: {
-                  room: "room-custom-1a2b3c4d",
-                  fp: "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
-                  sig: "ws://127.0.0.1:8787",
-                },
-                pairingCode: "PAIRING_CUSTOM_CODE_123",
-              })
+              JSON.stringify(hubReady({ desktop: rootInvite, mobile: rootInvite }))
             );
           }, 10);
           return child;
@@ -126,11 +177,11 @@ describe("pair-server runner", () => {
         onChildExit: () => true,
       });
 
-      await waitFor(() => logText(logSpy).includes("PAIRING_CUSTOM_CODE_123"));
+      await waitFor(() => logText(logSpy).includes(CUSTOM_CODE));
       const output = logText(logSpy);
-      expect(output).toMatch(/Pair code:\s+PAIRING_CUSTOM_CODE_123/);
+      expect(output).toMatch(new RegExp(`Pair code:\\s+${CUSTOM_CODE}`));
       expect(output).toContain(
-        "https://vibestudio.app/pair#room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=PAIRING_CUSTOM_CODE_123&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=2&ice=all"
+        `https://vibestudio.app/pair#room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=${CUSTOM_CODE}&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=2&ice=all`
       );
       child.emit("exit", 0, null);
       expect(fs.existsSync(readyDir)).toBe(true);
@@ -160,17 +211,25 @@ describe("pair-server runner", () => {
           const readyIndex = serverArgs.indexOf("--ready-file");
           readyFile = serverArgs[readyIndex + 1] ?? "";
           setTimeout(() => {
+            const fp = "11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab";
             fs.writeFileSync(
               readyFile,
-              JSON.stringify({
-                pairing: {
-                  room: "room-remote-9z8y7x6w",
-                  fp: "11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab",
-                  sig: "wss://signal.example.org",
-                },
-                pairingCode: "PAIRING_REMOTE_CODE_123",
-                qrPairingCode: "PAIRING_REMOTE_QR_123",
-              })
+              JSON.stringify(
+                hubReady({
+                  desktop: invite(
+                    "room-remote-9z8y7x6w",
+                    fp,
+                    "wss://signal.example.org",
+                    REMOTE_CODE
+                  ),
+                  mobile: invite(
+                    "room-remote-mobile",
+                    fp,
+                    "wss://signal.example.org",
+                    REMOTE_QR_CODE
+                  ),
+                })
+              )
             );
           }, 10);
           return child;
@@ -179,17 +238,16 @@ describe("pair-server runner", () => {
       }
     );
 
-    await waitFor(() => logText(logSpy).includes("PAIRING_REMOTE_CODE_123"));
+    await waitFor(() => logText(logSpy).includes(REMOTE_CODE));
     const output = logText(logSpy);
     expect(output).toContain("Signaling:");
     expect(output).toContain("wss://signal.example.org");
-    expect(output).toMatch(/Pair code:\s+PAIRING_REMOTE_CODE_123/);
+    expect(output).toMatch(new RegExp(`Pair code:\\s+${REMOTE_CODE}`));
     expect(output).toContain(
-      "https://vibestudio.app/pair#room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_CODE_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
+      `https://vibestudio.app/pair#room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=${REMOTE_CODE}&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all`
     );
-    expect(output).toContain(
-      "https://vibestudio.app/pair#room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_QR_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
-    );
+    expect(output).toContain("room-remote-mobile");
+    expect(output).toContain(REMOTE_QR_CODE);
 
     child.emit("exit", 0, null);
   });
@@ -201,7 +259,30 @@ describe("pair-server runner", () => {
           throw new Error("should not spawn");
         },
       })
-    ).toThrow(/Forwarding raw server flags is no longer supported/);
+    ).toThrow(/Raw server flag forwarding is unsupported/);
+  });
+
+  it("rejects every retired pairing-server flag as an unknown argument", () => {
+    for (const argv of [
+      ["--gateway-port", "3456"],
+      ["--signaling-url", "wss://signal.test"],
+      ["--ephemeral"],
+      ["--workspace", "dev"],
+      ["--workspace-dir", "/tmp/dev"],
+      ["--host", "0.0.0.0"],
+      ["--protocol", "https"],
+      ["--public-url", "https://server.test"],
+      ["--require-public-url"],
+      ["--no-init"],
+    ]) {
+      expect(() =>
+        runPairServer(config, argv, {
+          spawnServer() {
+            throw new Error("should not spawn");
+          },
+        })
+      ).toThrow(/^Unknown argument:/);
+    }
   });
 
   it("uses the hosted signaling endpoint when no signaling flag/env/config is present", () => {
@@ -264,41 +345,54 @@ describe("pair-server runner", () => {
     expect(spawnServer).not.toHaveBeenCalled();
   });
 
-  it("reads pairing material and a distinct QR pairing code from stdout", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  it("rejects the removed pre-hub ready-file shape instead of scraping stdout", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const child = new FakeChild();
+    let readyFile = "";
 
     runPairServer(config, ["--port", "3456"], {
-      spawnServer() {
+      spawnServer({ serverArgs }: { serverArgs: string[] }) {
+        readyFile = serverArgs[serverArgs.indexOf("--ready-file") + 1] ?? "";
         setTimeout(() => {
-          child.stdout.write("VIBESTUDIO_PAIRING_ROOM=room-stdout-5q6r7s8t\n");
-          child.stdout.write(
-            "VIBESTUDIO_PAIRING_FP=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb\n"
-          );
-          child.stdout.write("VIBESTUDIO_PAIRING_SIG=wss://signal.stdout.test\n");
-          // The QR-specific code arrives before the primary code; the banner only
-          // prints once room/fp/sig + a pairing code are all present, so by then
-          // both deep links carry their respective codes.
-          child.stdout.write("QR pairing code: PAIRING_STDOUT_QR_123\n");
-          child.stdout.write("Pairing code: PAIRING_STDOUT_CODE_123\n");
+          fs.writeFileSync(readyFile, JSON.stringify({ pairingCode: "OLD", pairing: {} }));
         }, 10);
         return child;
       },
       onChildExit: () => true,
     });
 
-    await waitFor(() => logText(logSpy).includes("PAIRING_STDOUT_QR_123"));
-    const output = logText(logSpy);
-    expect(output).toContain(
-      "https://vibestudio.app/pair#room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_CODE_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
-    );
-    expect(output).toContain(
-      "https://vibestudio.app/pair#room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_QR_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
-    );
+    await waitFor(() => child.kill.mock.calls.length > 0);
+    expect(logText(errorSpy)).toMatch(/unsupported fields|missing fields/);
+  });
 
-    child.emit("exit", 0, null);
+  it("rejects unknown nested invite fields and mismatched pairing links", () => {
+    const current = invite(
+      "room-strict-contract",
+      "AA".repeat(32),
+      "wss://signal.test",
+      READY_CODE
+    );
+    const valid = hubReady({ desktop: current, mobile: current });
+    expect(parseHubReadyPayload(valid)).toEqual(valid);
+    expect(() =>
+      parseHubReadyPayload({
+        ...valid,
+        rootInvites: {
+          ...valid.rootInvites,
+          desktop: { ...current, serverUrl: "https://legacy.example" },
+        },
+      })
+    ).toThrow(/unsupported fields/);
+    expect(() =>
+      parseHubReadyPayload({
+        ...valid,
+        rootInvites: {
+          ...valid.rootInvites,
+          desktop: { ...current, room: "room-different" },
+        },
+      })
+    ).toThrow(/does not match the invite coordinates/);
   });
 
   it("uses the live TypeScript server entry when requested", async () => {
@@ -332,35 +426,6 @@ describe("pair-server runner", () => {
     child.emit("exit", 0, null);
   });
 
-  it("rejects --host as no longer supported (loopback-only WebRTC cutover)", () => {
-    expect(() =>
-      runPairServer(config, ["--host", "127.0.0.1"], {
-        spawnServer() {
-          throw new Error("should not spawn");
-        },
-      })
-    ).toThrow(/--host is no longer supported; remote reach is WebRTC and the server binds loopback only/);
-  });
-
-  it("rejects --protocol as no longer supported (loopback-only WebRTC cutover)", () => {
-    expect(() =>
-      runPairServer(config, ["--protocol", "https"], {
-        spawnServer() {
-          throw new Error("should not spawn");
-        },
-      })
-    ).toThrow(/--protocol is no longer supported; remote reach is WebRTC and the server binds loopback only/);
-  });
-
-  it("rejects --public-url as no longer supported (loopback-only WebRTC cutover)", () => {
-    expect(() =>
-      runPairServer(config, ["--public-url", "https://example.org"], {
-        spawnServer() {
-          throw new Error("should not spawn");
-        },
-      })
-    ).toThrow(/--public-url is no longer supported; remote reach is WebRTC and the server binds loopback only/);
-  });
 });
 
 function logText(spy: { mock: { calls: unknown[][] } }): string {

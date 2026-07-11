@@ -56,7 +56,12 @@ function browserNavigationSource(source: string): string | null {
 // =============================================================================
 
 export interface PanelManagerServerInfo {
-  gatewayConfig: { serverUrl: string; token?: string; aliases?: readonly string[] };
+  gatewayConfig: {
+    serverUrl: string;
+    token?: string;
+    aliases?: readonly string[];
+    workspace?: string;
+  };
 }
 
 export interface CreatePanelOptions {
@@ -69,6 +74,12 @@ export interface CreatePanelOptions {
   isRoot?: boolean;
   addAsRoot?: boolean;
   autoArchiveWhenEmpty?: boolean;
+  /**
+   * Owning-user id (WP3) — the creating caller's `subject.userId`, threaded from
+   * `panelTreeService`. Stamped onto the slot + the in-memory panel so the new
+   * tree groups under its owner. Absent for system/bootstrap seeds.
+   */
+  ownerUserId?: string;
 }
 
 export interface CreatePanelResult {
@@ -212,18 +223,17 @@ export class PanelManager {
    * current entity, and repopulate the local panel registry. Called at boot
    * and after any operation that wants a fresh view.
    */
-  async syncSnapshot(): Promise<{ rootPanels: Panel[] }> {
+  async syncSnapshot(): Promise<void> {
     await this.ensureViewStateLoaded();
     const tree = await this.fetchPanelTree();
     this.registry.repopulate(tree, [...this.collapsedIds]);
-    return { rootPanels: tree };
   }
 
-  async loadTree(): Promise<{ rootPanels: Panel[]; collapsedIds: string[] }> {
+  async loadTree(): Promise<{ collapsedIds: string[] }> {
     await this.ensureViewStateLoaded();
     const tree = await this.fetchPanelTree();
     this.registry.repopulate(tree, [...this.collapsedIds]);
-    return { rootPanels: tree, collapsedIds: [...this.collapsedIds] };
+    return { collapsedIds: [...this.collapsedIds] };
   }
 
   // ===========================================================================
@@ -281,6 +291,7 @@ export class PanelManager {
         slotId,
         parentSlotId: opts?.parentId ?? null,
         positionId,
+        ...(opts?.ownerUserId ? { ownerUserId: opts.ownerUserId } : {}),
         initialEntry: {
           entryKey: historyEntryKey,
           entityId,
@@ -305,6 +316,7 @@ export class PanelManager {
       title: manifest.title,
       runtimeEntityId: entityId,
       effectiveVersion: handle.source.effectiveVersion,
+      ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
       snapshot,
@@ -330,7 +342,7 @@ export class PanelManager {
   async createBrowser(
     parentId: PanelSlotId | null,
     url: string,
-    opts?: { name?: string; addAsRoot?: boolean }
+    opts?: { name?: string; addAsRoot?: boolean; ownerUserId?: string }
   ): Promise<CreatePanelResult & { url: string }> {
     if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
       throw new Error(
@@ -371,6 +383,7 @@ export class PanelManager {
         slotId,
         parentSlotId: parentId,
         positionId,
+        ...(opts?.ownerUserId ? { ownerUserId: opts.ownerUserId } : {}),
         initialEntry: {
           entryKey: historyEntryKey,
           entityId,
@@ -395,6 +408,7 @@ export class PanelManager {
       title,
       runtimeEntityId: entityId,
       effectiveVersion: handle.source.effectiveVersion,
+      ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
       snapshot,
@@ -440,29 +454,40 @@ export class PanelManager {
   // Close
   // ===========================================================================
 
-  async close(slotId: PanelSlotId): Promise<{ closedIds: PanelSlotId[] }> {
+  async close(
+    slotId: PanelSlotId,
+    options: { strict?: boolean } = {}
+  ): Promise<{ closedIds: PanelSlotId[] }> {
     const closedIds = this.collectSubtree(slotId);
 
     // Retire each current panel entity (deepest-first to match cleanup ordering).
     for (const id of [...closedIds].reverse()) {
       const entityId = this.currentEntityBySlot.get(id);
       if (entityId) {
-        await this.runtime.retireEntity(entityId).catch((error: unknown) => {
-          log.warn(
-            `Failed to retire panel entity ${entityId} for slot ${id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        });
+        if (options.strict) {
+          await this.runtime.retireEntity(entityId);
+        } else {
+          await this.runtime.retireEntity(entityId).catch((error: unknown) => {
+            log.warn(
+              `Failed to retire panel entity ${entityId} for slot ${id}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          });
+        }
       }
     }
 
     for (const id of [...closedIds].reverse()) {
-      await this.workspaceState.closeSlot(id).catch((error: unknown) => {
-        log.warn(
-          `Failed to close slot ${id}: ${error instanceof Error ? error.message : String(error)}`
-        );
-      });
+      if (options.strict) {
+        await this.workspaceState.closeSlot(id);
+      } else {
+        await this.workspaceState.closeSlot(id).catch((error: unknown) => {
+          log.warn(
+            `Failed to close slot ${id}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
+      }
     }
 
     for (const id of closedIds) {
@@ -472,6 +497,31 @@ export class PanelManager {
       this.slotOptionsByEntryKey.delete(id);
     }
     return { closedIds };
+  }
+
+  /**
+   * Idempotently archive every open root owned by one account. Strict mode is
+   * intentional: revocation cleanup is acknowledged/retried by the hub and may
+   * never report success after silently skipping a runtime or durable slot.
+   * Other owners' roots are never traversed or modified.
+   */
+  async archiveOwnedRoots(
+    ownerUserId: string
+  ): Promise<{ archivedRootIds: PanelSlotId[]; closedIds: PanelSlotId[] }> {
+    const roots = (await this.workspaceState.listSlots())
+      .filter(
+        (slot) =>
+          slot.closed_at == null &&
+          slot.parent_slot_id === null &&
+          slot.owner_user_id === ownerUserId
+      )
+      .map((slot) => slot.slot_id);
+    const closedIds: PanelSlotId[] = [];
+    for (const rootId of roots) {
+      const result = await this.close(rootId, { strict: true });
+      closedIds.push(...result.closedIds);
+    }
+    return { archivedRootIds: roots, closedIds };
   }
 
   // ===========================================================================
@@ -761,11 +811,42 @@ export class PanelManager {
   async movePanel(
     slotId: PanelSlotId,
     newParentId: PanelSlotId | null,
-    targetPosition: number
+    targetPosition: number,
+    /**
+     * Acting mover's `subject.userId` (WP3 §10.1). The server re-owns the moved
+     * subtree to the destination root's owner; on a promote-to-root this becomes
+     * the new tree's owner. The local registry mirrors that stamp immediately so
+     * its first broadcast cannot briefly place a promoted root in the old band.
+     */
+    ownerUserId?: string
   ): Promise<void> {
+    const movingPanel = this.registry.getPanel(slotId);
+    let destinationOwner = ownerUserId ?? movingPanel?.owner;
+    if (newParentId !== null) {
+      let rootId: string = newParentId;
+      const visited = new Set<string>();
+      let parentId = this.registry.findParentId(rootId);
+      while (parentId !== null) {
+        if (visited.has(rootId)) {
+          throw new Error(`Cannot resolve owner through cyclic panel tree at ${rootId}`);
+        }
+        visited.add(rootId);
+        rootId = parentId;
+        parentId = this.registry.findParentId(rootId);
+      }
+      destinationOwner = this.registry.getPanel(rootId)?.owner;
+    }
+
     const positionId = this.rankForPosition(newParentId, targetPosition, slotId);
-    await this.workspaceState.moveSlot(slotId, newParentId, positionId);
+    await this.workspaceState.moveSlot(slotId, newParentId, positionId, ownerUserId);
     this.registry.movePanel(slotId, newParentId, targetPosition);
+    const restampOwner = (panel: Panel): void => {
+      if (destinationOwner) panel.owner = destinationOwner;
+      else delete panel.owner;
+      for (const child of panel.children) restampOwner(child);
+    };
+    const movedPanel = this.registry.getPanel(slotId);
+    if (movedPanel) restampOwner(movedPanel);
   }
 
   // ===========================================================================
@@ -869,6 +950,7 @@ export class PanelManager {
         serverUrl: this.serverInfo.gatewayConfig.serverUrl,
         token,
         aliases: this.serverInfo.gatewayConfig.aliases,
+        workspace: this.serverInfo.gatewayConfig.workspace,
       },
       env: (getPanelOptions(panel).env ?? {}) as Record<string, string>,
       stateArgs: (getPanelStateArgs(panel) ?? {}) as Record<string, unknown>,
@@ -984,6 +1066,7 @@ export class PanelManager {
         title,
         runtimeEntityId: currentEntityId,
         effectiveVersion: entitySource?.effectiveVersion ?? null,
+        ...(slot.owner_user_id ? { owner: slot.owner_user_id } : {}),
         children: [],
         positionId: slot.position_id,
         snapshot,

@@ -257,7 +257,11 @@ export function createEvalService(deps: {
     return { ownerId: callerId, contextId };
   }
 
-  async function ensureEvalDO(owner: EvalOwner, subKey: string): Promise<{ objectKey: string }> {
+  async function ensureEvalDO(
+    owner: EvalOwner,
+    subKey: string,
+    ownerUserId: string | undefined
+  ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
     // Fast path: the EvalDO entity is sticky (idle-eviction aborts the instance
@@ -287,6 +291,10 @@ export function createEvalService(deps: {
       // resolve to root. With it, the walk continues owner → owner's panel, so the sub-agent's panels
       // nest under the owner's panel. ownerId is stable; the panel is re-resolved live at walk time.
       parentId: ownerId,
+      // Attribute the EvalDO to the human whose subject launched this run (WP0
+      // §6). Write-once, so the first activation's owner sticks; undefined for a
+      // bootstrap caller with no subject.
+      ownerUserId,
       stateArgs: { ownerPrincipalId: ownerId, subKey },
     });
     return { objectKey };
@@ -341,7 +349,11 @@ export function createEvalService(deps: {
           ownerId: runArgs.ownerId,
           contextId: runArgs.contextId,
         });
-        const { objectKey } = await ensureEvalDO(owner, runArgs.subKey ?? "default");
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          runArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
         // Give the sandbox a `chat` binding ONLY when an agent DO supplies a channelId — the EvalDO
         // forwards every chat op back to this agent (agentRef = the verified caller). CLI/panel
         // callers (non-"do") get no chat.
@@ -418,7 +430,11 @@ export function createEvalService(deps: {
           ownerId: getArgs.ownerId,
           contextId: getArgs.contextId,
         });
-        const { objectKey } = await ensureEvalDO(owner, getArgs.subKey ?? "default");
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          getArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
         return deps.doDispatch.dispatch(
           { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
           "getRun",
@@ -435,7 +451,11 @@ export function createEvalService(deps: {
           ownerId: resetArgs.ownerId,
           contextId: resetArgs.contextId,
         });
-        const { objectKey } = await ensureEvalDO(owner, resetArgs.subKey ?? "default");
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          resetArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
         return deps.doDispatch.dispatch(
           { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
           "reset"
@@ -452,7 +472,11 @@ export function createEvalService(deps: {
           ownerId: cancelArgs.ownerId,
           contextId: cancelArgs.contextId,
         });
-        const { objectKey } = await ensureEvalDO(owner, cancelArgs.subKey ?? "default");
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          cancelArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
         return deps.doDispatch.dispatch(
           { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
           "cancel",
@@ -469,7 +493,11 @@ export function createEvalService(deps: {
           ownerId: forceArgs.ownerId,
           contextId: forceArgs.contextId,
         });
-        const { objectKey } = await ensureEvalDO(owner, forceArgs.subKey ?? "default");
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          forceArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
         return deps.doDispatch.dispatch(
           { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
           "forceReset"

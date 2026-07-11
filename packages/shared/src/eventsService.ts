@@ -46,6 +46,8 @@ export interface Subscriber {
 export interface EventSession extends Subscriber {
   callerId: string;
   connectionId: string;
+  /** Host-verified owning account; absent for connectionless/system sessions. */
+  userId?: string;
 }
 
 /**
@@ -55,7 +57,10 @@ export class WsSubscriber implements Subscriber {
   private destroyed = false;
   private destroyHandlers: (() => void)[] = [];
 
-  constructor(private ws: WebSocket, public callerKind: CallerKind) {
+  constructor(
+    private ws: WebSocket,
+    public callerKind: CallerKind
+  ) {
     ws.on("close", () => {
       this.destroyed = true;
       for (const handler of this.destroyHandlers) handler();
@@ -75,7 +80,7 @@ export class WsSubscriber implements Subscriber {
       // but it must be observable rather than silently swallowed.
       console.warn(
         `[EventService] failed to deliver "${channel}" to a ${this.callerKind} subscriber:`,
-        err,
+        err
       );
     }
   }
@@ -95,6 +100,7 @@ export class WsEventSession extends WsSubscriber implements EventSession {
     callerKind: CallerKind,
     public callerId: string,
     public connectionId: string,
+    public userId?: string
   ) {
     super(ws, callerKind);
   }
@@ -108,7 +114,7 @@ export class WsEventSession extends WsSubscriber implements EventSession {
 export type DoEventPushDelivery = (
   callerId: string,
   channel: string,
-  payload: unknown,
+  payload: unknown
 ) => Promise<void>;
 
 /**
@@ -160,7 +166,7 @@ export class DoPushSubscriber implements Subscriber {
     public readonly callerId: string,
     public callerKind: CallerKind,
     private readonly deliver: DoEventPushDelivery,
-    opts: DoPushRetryOptions = {},
+    opts: DoPushRetryOptions = {}
   ) {
     this.maxAttempts = opts.maxAttempts ?? 4;
     this.sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -188,7 +194,7 @@ export class DoPushSubscriber implements Subscriber {
           console.warn(
             `[EventService] push to ${this.callerKind} ${this.callerId} for "${channel}" hit a ` +
               `terminal error; reaping subscription:`,
-            err,
+            err
           );
           this.destroy();
           return;
@@ -201,7 +207,7 @@ export class DoPushSubscriber implements Subscriber {
           console.warn(
             `[EventService] push to ${this.callerKind} ${this.callerId} for "${channel}" failed ` +
               `after ${this.maxAttempts} attempts; reaping subscription:`,
-            err,
+            err
           );
           this.destroy();
           return;
@@ -233,7 +239,7 @@ export class DoPushSubscriber implements Subscriber {
 /**
  * Event service for managing subscriptions and emitting events.
  *
- * Two independent delivery surfaces, intentionally kept distinct:
+ * Four delivery surfaces, intentionally kept distinct:
  *
  *   1. **`emit(event, data)` — pub/sub broadcast.** Fans `data` out to every
  *      subscriber that called `events.subscribe(event)`. Iterates the
@@ -248,14 +254,19 @@ export class DoPushSubscriber implements Subscriber {
  *      `EventSession`). Use when all live instances for one durable caller
  *      should receive a message.
  *
- *   3. **`emitToConnection(callerId, connectionId, event, data)` — direct
+ *   3. **`emitToUser(userId, event, data)` — direct account address.**
+ *      Delivers to every live transport whose admission-time caller carries
+ *      that host-verified account subject. This is the cross-device nudge path;
+ *      it never trusts an account id supplied by a client connection.
+ *
+ *   4. **`emitToConnection(callerId, connectionId, event, data)` — direct
  *      session address.** Delivers to exactly one transport instance. Use for
  *      request/response-adjacent handoffs where delivering to a sibling shell
  *      or panel connection would be surprising.
  *
- * The two tables overlap deliberately. A caller who calls `events.subscribe`
+ * The indexes overlap deliberately. A caller who calls `events.subscribe`
  * for event X AND is authenticated will receive a `broadcast(X)` via `emit`
- * AND a direct-address via `emitToCaller/emitToConnection(event=X)`. That's
+ * AND a direct-address via `emitToCaller/emitToUser/emitToConnection(event=X)`. That's
  * fine — direct delivery doesn't consult `subscribers`, and `emit` iterates
  * `subscribers` only. A caller who `events.unsubscribe`s from X still
  * receives direct delivery because direct-address semantics aren't governed by
@@ -267,6 +278,8 @@ export class EventService {
 
   private subscribers = new Map<EventName, Map<string, Map<string, Subscriber>>>();
   private sessionsByCallerId = new Map<string, Map<string, EventSession>>();
+  /** Live transport sessions grouped by their host-verified account subject. */
+  private sessionsByUserId = new Map<string, Set<EventSession>>();
   /**
    * Server→DO event push. Set once at wiring time. Lets a connectionless DO
    * receive real `events.subscribe` pushes (e.g. `vcs.subscribeHead`) — without
@@ -287,7 +300,7 @@ export class EventService {
   private getSessionBucket(callerId: string, create?: false): Map<string, EventSession> | undefined;
   private getSessionBucket(
     callerId: string,
-    create = false,
+    create = false
   ): Map<string, EventSession> | undefined {
     let bucket = this.sessionsByCallerId.get(callerId);
     if (!bucket && create) {
@@ -305,6 +318,15 @@ export class EventService {
       }
       if (bucket.size === 0) {
         this.sessionsByCallerId.delete(callerId);
+      }
+    }
+
+    if (subscriber && "userId" in subscriber) {
+      const userId = (subscriber as EventSession).userId;
+      if (userId) {
+        const sessions = this.sessionsByUserId.get(userId);
+        sessions?.delete(subscriber as EventSession);
+        if (sessions?.size === 0) this.sessionsByUserId.delete(userId);
       }
     }
 
@@ -328,7 +350,7 @@ export class EventService {
     event: EventName,
     callerId: string,
     subscriber: Subscriber,
-    connectionId?: string,
+    connectionId?: string
   ): void {
     if (!this.subscribers.has(event)) {
       this.subscribers.set(event, new Map());
@@ -422,11 +444,7 @@ export class EventService {
   }
 
   /** Direct-address every live connection for one durable caller identity. */
-  emitToCaller<E extends EventName>(
-    callerId: string,
-    event: E,
-    data?: EventPayloads[E],
-  ): boolean {
+  emitToCaller<E extends EventName>(callerId: string, event: E, data?: EventPayloads[E]): boolean {
     const callerSubs = this.sessionsByCallerId.get(callerId);
     if (!callerSubs || callerSubs.size === 0) return false;
 
@@ -443,12 +461,30 @@ export class EventService {
     return delivered;
   }
 
+  /** Direct-address every live transport belonging to one verified account. */
+  emitToUser<E extends EventName>(userId: string, event: E, data?: EventPayloads[E]): boolean {
+    const sessions = this.sessionsByUserId.get(userId);
+    if (!sessions || sessions.size === 0) return false;
+
+    let delivered = false;
+    const channel = `event:${event}`;
+    for (const session of [...sessions]) {
+      if (session.isAlive) {
+        session.send(channel, data);
+        delivered = true;
+      } else {
+        this.removeSubscriber(session.callerId, session.connectionId, session);
+      }
+    }
+    return delivered;
+  }
+
   /** Direct-address exactly one live transport connection for a caller. */
   emitToConnection<E extends EventName>(
     callerId: string,
     connectionId: string,
     event: E,
-    data?: EventPayloads[E],
+    data?: EventPayloads[E]
   ): boolean {
     const resolvedConnectionId = this.getConnectionId(connectionId);
     const subscriber = this.sessionsByCallerId.get(callerId)?.get(resolvedConnectionId);
@@ -482,6 +518,14 @@ export class EventService {
       this.removeSubscriber(session.callerId, resolvedConnectionId, existing);
     }
     this.getSessionBucket(session.callerId, true).set(resolvedConnectionId, session);
+    if (session.userId) {
+      let sessions = this.sessionsByUserId.get(session.userId);
+      if (!sessions) {
+        sessions = new Set();
+        this.sessionsByUserId.set(session.userId, sessions);
+      }
+      sessions.add(session);
+    }
     session.onDestroyed(() => {
       this.removeSubscriber(session.callerId, resolvedConnectionId, session);
     });
@@ -515,11 +559,7 @@ export class EventService {
       // `vcs.subscribeHead` / `workspace.units.watch` real on a DO.
       const kind = ctx.caller.runtime.kind;
       if ((kind === "do" || kind === "worker") && this.doPushDelivery) {
-        const subscriber = new DoPushSubscriber(
-          ctx.caller.runtime.id,
-          kind,
-          this.doPushDelivery,
-        );
+        const subscriber = new DoPushSubscriber(ctx.caller.runtime.id, kind, this.doPushDelivery);
         this.registerSubscriber(ctx.caller.runtime.id, subscriber, connectionId);
         return subscriber;
       }
@@ -539,7 +579,13 @@ export class EventService {
       this.removeSubscriber(ctx.caller.runtime.id, connectionId, existing);
     }
 
-    const session = new WsEventSession(ws, ctx.caller.runtime.kind, ctx.caller.runtime.id, connectionId);
+    const session = new WsEventSession(
+      ws,
+      ctx.caller.runtime.kind,
+      ctx.caller.runtime.id,
+      connectionId,
+      ctx.caller.subject?.userId
+    );
     this.registerSession(session);
     return session;
   }
@@ -555,7 +601,7 @@ export type EventSnapshotProviders = {
  */
 export function createEventsServiceDefinition(
   eventService: EventService,
-  opts: { snapshots?: EventSnapshotProviders } = {},
+  opts: { snapshots?: EventSnapshotProviders } = {}
 ): ServiceDefinition {
   return {
     name: "events",

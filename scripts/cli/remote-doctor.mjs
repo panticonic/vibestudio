@@ -11,16 +11,27 @@ const require = createRequire(import.meta.url);
 function parseArgs(argv) {
   const options = {
     signalUrl: null,
-    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? null,
+    identity: null,
+    workspace: "default",
     json: false,
     help: false,
   };
+  let identityExplicit = false;
+  let workspaceExplicit = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--signal-url" || arg === "--signaling-url") {
+    if (arg === "--signal-url") {
       options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--identity") {
-      options.identity = path.resolve(argv[++i] ?? "");
+      identityExplicit = true;
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) throw new Error("--identity requires a path");
+      options.identity = path.resolve(value);
+    } else if (arg === "--workspace") {
+      workspaceExplicit = true;
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) throw new Error("--workspace requires a name");
+      options.workspace = value;
     } else if (arg === "--json") {
       options.json = true;
     } else if (arg === "--help") {
@@ -29,6 +40,13 @@ function parseArgs(argv) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
+  if (identityExplicit && workspaceExplicit) {
+    throw new Error("pass --workspace or --identity, not both");
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
+    throw new Error("--workspace must contain only letters, numbers, hyphens, and underscores");
+  }
+  options.identity ??= identityDefaultPath(options.workspace);
   return options;
 }
 
@@ -36,11 +54,12 @@ function printHelp() {
   console.log(`vibestudio remote doctor
 
 Usage:
-  vibestudio remote doctor [--signal-url <wss-url>] [--identity <identity.pem>] [--json]
+  vibestudio remote doctor [--signal-url <wss-url>]
+    [--workspace <name> | --identity <identity.pem>] [--json]
 
 Checks:
   node-datachannel native addon, signaling endpoint policy/reachability, single
-  identity.pem layout, and deleted legacy WebRTC cert/key env vars.
+  workspace identity.pem layout.
 `);
 }
 
@@ -48,25 +67,18 @@ function check(condition, name, ok, fail, meta = {}) {
   return { name, ok: Boolean(condition), message: condition ? ok : fail, ...meta };
 }
 
-function identityDefaultPath() {
+function identityDefaultPath(workspace) {
   const configRoot = process.env.XDG_CONFIG_HOME
     ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
     : path.join(os.homedir(), ".config", "vibestudio");
-  return path.join(configRoot, "webrtc", "identity.pem");
+  return path.join(configRoot, "workspaces", workspace, "state", "webrtc", "identity.pem");
 }
 
 function inspectIdentity(identityPath) {
-  if (!identityPath) identityPath = identityDefaultPath();
-  const dir = path.dirname(identityPath);
-  const legacy = ["server.pem", "server.key"].filter((name) => fs.existsSync(path.join(dir, name)));
-  if (legacy.length > 0) {
-    return check(false, "identity", "", `legacy WebRTC identity remnants found: ${legacy.join(", ")}`, {
-      path: identityPath,
-      legacy,
-    });
-  }
   if (!fs.existsSync(identityPath)) {
-    return check(false, "identity", "", `identity file is missing: ${identityPath}`, { path: identityPath });
+    return check(false, "identity", "", `identity file is missing: ${identityPath}`, {
+      path: identityPath,
+    });
   }
   const text = fs.readFileSync(identityPath, "utf8");
   const hasCert = text.includes("-----BEGIN CERTIFICATE-----");
@@ -81,22 +93,40 @@ function inspectIdentity(identityPath) {
 }
 
 async function checkSignaling(signalUrl) {
-  const resolved = resolveSignalingUrl({ flag: signalUrl ?? undefined, defaultUrl: DEFAULT_SIGNAL_URL });
+  const resolved = resolveSignalingUrl({
+    flag: signalUrl ?? undefined,
+    defaultUrl: DEFAULT_SIGNAL_URL,
+  });
   const url = resolved.url.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
   return new Promise((resolve) => {
     const socket = new WebSocket(url);
     const timer = setTimeout(() => {
       socket.terminate();
-      resolve(check(false, "signaling", "", `timed out connecting to ${url}`, { url, source: resolved.source }));
+      resolve(
+        check(false, "signaling", "", `timed out connecting to ${url}`, {
+          url,
+          source: resolved.source,
+        })
+      );
     }, 5000);
     socket.once("open", () => {
       clearTimeout(timer);
       socket.close();
-      resolve(check(true, "signaling", `reachable: ${url} (${resolved.source})`, "", { url, source: resolved.source }));
+      resolve(
+        check(true, "signaling", `reachable: ${url} (${resolved.source})`, "", {
+          url,
+          source: resolved.source,
+        })
+      );
     });
     socket.once("error", (error) => {
       clearTimeout(timer);
-      resolve(check(false, "signaling", "", `cannot connect to ${url}: ${error.message}`, { url, source: resolved.source }));
+      resolve(
+        check(false, "signaling", "", `cannot connect to ${url}: ${error.message}`, {
+          url,
+          source: resolved.source,
+        })
+      );
     });
   });
 }
@@ -112,16 +142,10 @@ async function main() {
     require("node-datachannel");
     checks.push(check(true, "node-datachannel", "native addon loads", ""));
   } catch (error) {
-    checks.push(check(false, "node-datachannel", "", `native addon failed to load: ${error.message}`));
+    checks.push(
+      check(false, "node-datachannel", "", `native addon failed to load: ${error.message}`)
+    );
   }
-  checks.push(
-    check(
-      !process.env.VIBESTUDIO_WEBRTC_CERT && !process.env.VIBESTUDIO_WEBRTC_KEY,
-      "legacy-env",
-      "legacy VIBESTUDIO_WEBRTC_CERT/KEY env vars are absent",
-      "remove VIBESTUDIO_WEBRTC_CERT and VIBESTUDIO_WEBRTC_KEY; use VIBESTUDIO_WEBRTC_IDENTITY"
-    )
-  );
   checks.push(inspectIdentity(options.identity));
   checks.push(await checkSignaling(options.signalUrl));
   const ok = checks.every((entry) => entry.ok);
@@ -135,7 +159,9 @@ async function main() {
   return ok ? 0 : 1;
 }
 
-main().then((code) => process.exit(code)).catch((error) => {
-  console.error(`[remote-doctor] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-});
+main()
+  .then((code) => process.exit(code))
+  .catch((error) => {
+    console.error(`[remote-doctor] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });

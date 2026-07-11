@@ -6,12 +6,11 @@
  * and parse panel navigation targets.
  */
 
-export interface ParsedPanelUrl {
-  source: string;
-  contextId?: string;
-  ref?: string;
+import type { PanelDisposition, PanelLocation } from "../panelLocation.js";
+import { isPanelStateArgs } from "../panelLocation.js";
+
+export interface ParsedPanelUrl extends PanelLocation {
   options: { name?: string; contextId?: string; focus?: boolean; ref?: string };
-  stateArgs?: Record<string, unknown>;
 }
 
 interface ParsedUrlLike {
@@ -85,17 +84,60 @@ export function isManagedHost(url: string, externalHost: string): boolean {
   return !expected.port || parsed.port === expected.port;
 }
 
+function normalizeBasePath(basePath: string): string {
+  if (!basePath || basePath === "/") return "";
+  const withLeadingSlash = basePath.startsWith("/") ? basePath : `/${basePath}`;
+  return withLeadingSlash.replace(/\/+$/, "");
+}
+
+function workspaceFromBasePath(basePath: string): string | undefined {
+  const match = normalizeBasePath(basePath).match(/^\/_workspace\/([^/]+)$/);
+  if (!match?.[1]) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
+}
+
+function stripBasePath(url: string, basePath: string): string | null {
+  const normalizedBasePath = normalizeBasePath(basePath);
+  if (!normalizedBasePath) return url;
+
+  const parsed = parseUrlLike(url);
+  if (!parsed) return null;
+  if (
+    parsed.pathname !== normalizedBasePath &&
+    !parsed.pathname.startsWith(`${normalizedBasePath}/`)
+  ) {
+    return null;
+  }
+
+  const match = url.match(/^(https?:\/\/[^/?#]+)([^?#]*)(\?[^#]*)?(#.*)?$/i);
+  if (!match) return null;
+  const [, origin, rawPath = "/", query = "", hash = ""] = match;
+  const nextPath = rawPath.slice(normalizedBasePath.length) || "/";
+  return `${origin}${nextPath}${query}${hash}`;
+}
+
 /**
  * Parse a panel URL into its constituent parts (source, contextId, options, stateArgs).
  * Returns null if the URL is not a valid panel URL.
  *
  * @param url - The URL to parse
  * @param externalHost - The managed host domain (e.g. "vibestudio.example.com")
+ * @param basePath - Optional selected-workspace route prefix to strip before parsing the source
  */
-export function parsePanelUrl(url: string, externalHost: string): ParsedPanelUrl | null {
-  const parsed = parseUrlLike(url);
+export function parsePanelUrl(
+  url: string,
+  externalHost: string,
+  basePath = ""
+): ParsedPanelUrl | null {
+  const strippedUrl = stripBasePath(url, basePath);
+  if (!strippedUrl) return null;
+  const parsed = parseUrlLike(strippedUrl);
   if (!parsed) return null;
-  if (!isManagedHost(url, externalHost)) return null;
+  if (!isManagedHost(strippedUrl, externalHost)) return null;
 
   const match = parsed.pathname.match(/^\/([^/]+\/[^/]+)(\/.*)?$/);
   if (!match) return null;
@@ -113,27 +155,44 @@ export function parsePanelUrl(url: string, externalHost: string): ParsedPanelUrl
   const ref = parsed.queryParams.get("ref");
   const name = parsed.queryParams.get("name");
   const focus = parsed.queryParams.get("focus");
+  if (focus !== undefined && focus !== "true" && focus !== "false") return null;
+  const disposition = parsed.queryParams.get("disposition");
+  if (
+    disposition !== undefined &&
+    disposition !== "current" &&
+    disposition !== "child" &&
+    disposition !== "root"
+  ) {
+    return null;
+  }
   const rawStateArgs = parsed.queryParams.get("stateArgs");
+  let stateArgs: Record<string, unknown> | undefined;
+  if (rawStateArgs !== undefined) {
+    try {
+      const decoded = JSON.parse(rawStateArgs) as unknown;
+      if (!isPanelStateArgs(decoded)) return null;
+      stateArgs = decoded;
+    } catch {
+      return null;
+    }
+  }
 
   return {
     source,
+    ...(workspaceFromBasePath(basePath) !== undefined
+      ? { workspace: workspaceFromBasePath(basePath) }
+      : {}),
     contextId: contextId ?? undefined,
     ref: ref ?? undefined,
+    ...(stateArgs !== undefined ? { stateArgs } : {}),
+    ...(name !== undefined ? { name } : {}),
+    ...(focus !== undefined ? { focus: focus === "true" } : {}),
+    ...(disposition !== undefined ? { disposition: disposition as PanelDisposition } : {}),
     options: {
       contextId: contextId ?? undefined,
       ref: ref ?? undefined,
       name: name ?? undefined,
-      focus: focus === "true" || undefined,
+      focus: focus !== undefined ? focus === "true" : undefined,
     },
-    stateArgs:
-      rawStateArgs != null
-        ? (() => {
-            try {
-              return JSON.parse(rawStateArgs) as Record<string, unknown>;
-            } catch {
-              return undefined;
-            }
-          })()
-        : undefined,
   };
 }

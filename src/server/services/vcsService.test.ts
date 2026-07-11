@@ -19,6 +19,7 @@ function agentCaller(entityId: string, contextId: string) {
     contextId,
     channelId: "chan-1",
     agentId: `agent:${entityId}`,
+    userId: "usr_test",
   });
 }
 

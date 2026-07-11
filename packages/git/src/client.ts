@@ -37,6 +37,54 @@ export class GitAuthError extends Error {
 }
 
 /**
+ * The acting user's identity threaded to the VCS layer for commit attribution
+ * (WP9 §7). `caller.subject` carries the stable `{userId, handle}`; the display
+ * name and (optional) profile email come from the same identity row. The git
+ * layer never sees the userId — only what belongs in a commit signature.
+ */
+export interface GitAuthorIdentity {
+  /** Human display name; falls back to the handle when unset. */
+  displayName?: string;
+  /** Stable @handle (WP6); drives the synthesized commit email. */
+  handle: string;
+  /** Real commit email from the user's profile, when they've set one (WP9 §10.3). */
+  email?: string;
+}
+
+/**
+ * Derive an isomorphic-git author signature from the acting user's identity
+ * (WP9 §7 / decision §10.3):
+ *   name  = displayName || handle
+ *   email = profile email || `<handle>@vibestudio.local` (synthesized)
+ * Agent/worker commits pass the OWNING user's identity (WP0 §6 inheritance), so
+ * workspace-source history stays attributable to a human.
+ */
+export function gitAuthorFromIdentity(identity: GitAuthorIdentity): {
+  name: string;
+  email: string;
+} {
+  const handle = identity.handle.trim();
+  const displayName = identity.displayName?.trim();
+  const email = identity.email?.trim();
+  return {
+    name: displayName && displayName.length > 0 ? displayName : handle,
+    email: email && email.length > 0 ? email : `${handle}@vibestudio.local`,
+  };
+}
+
+/**
+ * Explicit author for bootstrap/scaffolding commits made with no acting user
+ * (e.g. `initAndPush` seeding a brand-new repo). Deliberately a generic
+ * system signature — NOT a fake human like the retired
+ * "Vibestudio Panel <panel@vibestudio.local>" identity (WP9 §7 / WP10 §3).
+ * Real commits carry the acting user's author threaded from `caller.subject`.
+ */
+export const SYSTEM_GIT_AUTHOR: { name: string; email: string } = {
+  name: "Vibestudio",
+  email: "vibestudio@vibestudio.local",
+};
+
+/**
  * Minimal fs/promises interface expected by GitClient.
  * Compatible with Node's fs/promises and @vibestudio/runtime's RuntimeFs.
  */
@@ -47,25 +95,31 @@ export interface FsPromisesLike {
   readdir(path: string): Promise<string[]>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<string | undefined>;
   rmdir(path: string): Promise<void>;
-  stat(path: string): Promise<{ isDirectory(): boolean; isFile(): boolean }>;
+  stat(path: string): Promise<{
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+  }>;
+  lstat(path: string): Promise<{
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+  }>;
+  readlink(path: string): Promise<string>;
+  symlink(target: string, path: string): Promise<void>;
+  chmod(path: string, mode: number): Promise<void>;
 }
 
 /**
  * Wrap fs/promises-like interface into isomorphic-git's FsClient format.
- * Handles quirks: always recursive mkdir, lstat fallback, symlink stubs.
+ * Parent directories are created recursively before writes; every other
+ * filesystem operation is forwarded to the required concrete implementation.
  */
 function wrapFsForGit(fsPromises: FsPromisesLike): FsClient {
-  let warnedSymlink = false;
-  let warnedReadlink = false;
-
   const ensureParentDir = async (filePath: string): Promise<void> => {
-    try {
-      const dir = filePath.slice(0, filePath.lastIndexOf("/"));
-      if (dir) {
-        await fsPromises.mkdir(dir, { recursive: true });
-      }
-    } catch {
-      // Best effort
+    const dir = filePath.slice(0, filePath.lastIndexOf("/"));
+    if (dir) {
+      await fsPromises.mkdir(dir, { recursive: true });
     }
   };
 
@@ -101,32 +155,13 @@ function wrapFsForGit(fsPromises: FsPromisesLike): FsClient {
 
       stat: async (path: string) => fsPromises.stat(path),
 
-      lstat: async (path: string) => fsPromises.stat(path), // fallback to stat for compatibility
+      lstat: async (path: string) => fsPromises.lstat(path),
 
-      readlink: async (path: string) => {
-        if (!warnedReadlink) {
-          console.warn("readlink not supported in fs adapter; returning placeholder");
-          warnedReadlink = true;
-        }
-        return path;
-      },
+      readlink: async (path: string) => fsPromises.readlink(path),
 
-      symlink: async (target: string, linkPath: string) => {
-        if (!warnedSymlink) {
-          console.warn("symlink not supported in fs adapter; performing best-effort copy");
-          warnedSymlink = true;
-        }
-        try {
-          const data = await fsPromises.readFile(target);
-          await fsPromises.writeFile(linkPath, data);
-        } catch {
-          // Ignore if source missing
-        }
-      },
+      symlink: async (target: string, linkPath: string) => fsPromises.symlink(target, linkPath),
 
-      chmod: async () => {
-        // No-op in fs adapter
-      },
+      chmod: async (path: string, mode: number) => fsPromises.chmod(path, mode),
     },
   };
 }
@@ -768,17 +803,23 @@ export class GitClient {
   private fs: FsClient;
   private fsPromises: FsPromisesLike;
   private http: HttpClient;
-  private author: { name: string; email: string };
+  private author: { name: string; email: string } | null;
   public readonly methods: string[];
 
-  constructor(fs: FsPromisesLike, options: GitClientOptions) {
+  constructor(
+    fs: FsPromisesLike,
+    options: GitClientOptions & { authorIdentity?: GitAuthorIdentity }
+  ) {
     this.fs = wrapFsForGit(fs);
     this.fsPromises = fs;
     this.http = options.http;
-    this.author = options.author ?? {
-      name: "Vibestudio Panel",
-      email: "panel@vibestudio.local",
-    };
+    // Commit author, in priority order (WP9 §7): an explicit `{name,email}` or
+    // the acting user's identity synthesized into a signature. A client with no
+    // default may perform read/network operations, but commit() then requires an
+    // explicit author; attribution is never silently invented.
+    this.author =
+      options.author ??
+      (options.authorIdentity ? gitAuthorFromIdentity(options.authorIdentity) : null);
     this.methods = Object.getOwnPropertyNames(GitClient.prototype).filter(
       (name) =>
         name !== "constructor" &&
@@ -875,6 +916,11 @@ export class GitClient {
    */
   async pull(options: PullOptions): Promise<void> {
     const author = options.author ?? this.author;
+    if (!author) {
+      throw new Error(
+        "git.pull: an explicit author or constructor authorIdentity is required for merge attribution"
+      );
+    }
     const onProgress = options.onProgress
       ? (progress: { phase?: string; loaded?: number; total?: number }) => {
           options.onProgress?.({
@@ -1056,12 +1102,18 @@ export class GitClient {
     if (!options.message) {
       throw new Error("git.commit: 'message' is required");
     }
+    const resolvedAuthor = options.author ?? this.author;
+    if (!resolvedAuthor) {
+      throw new Error(
+        "git.commit: an explicit author or constructor authorIdentity is required for attribution"
+      );
+    }
 
     const sha = await git.commit({
       fs: this.fs,
       dir: options.dir,
       message: options.message,
-      author: options.author ?? this.author,
+      author: resolvedAuthor,
     });
 
     return sha;

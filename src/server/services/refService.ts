@@ -570,10 +570,12 @@ export function createRefService(deps: RefServiceDeps): RefService {
         return { updated };
       };
 
-      const acquire = (index: number): Promise<UpdateMainsResult> =>
-        index >= keys.length
+      const acquire = (index: number): Promise<UpdateMainsResult> => {
+        const key = keys[index];
+        return key === undefined
           ? runBatch()
-          : serializeByKey(chains, keys[index]!, () => acquire(index + 1));
+          : serializeByKey(chains, key, () => acquire(index + 1));
+      };
       const result = await acquire(0);
       // Dumb post-commit signal — fired after the swap committed and the queues
       // released, awaited so callers observe a fully-reacted host on return.

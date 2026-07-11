@@ -412,8 +412,9 @@ function isTreeObjectBytes(bytes: Buffer): boolean {
  * Sweep unreferenced tree-object blobs from the shared CAS.
  *
  * A5 (owner-derived roots only): `referenced` MUST be the OWNER-DERIVED live
- * set — mains reachability ∪ the DO's `runGadGcMark().liveBlobDigests`, as
- * `WorkspaceVcs.runGc` (the sole caller) supplies it. It is deliberately an
+ * set — mains/composed reachability plus every tree/content digest reachable
+ * from the DO's `runGadGcMark().liveStateHashes`, as `WorkspaceVcs.runGc`
+ * (the sole caller) supplies it. It is deliberately an
  * internal pure-function seam, NOT an RPC: a caller-supplied `referenced` list
  * is never authority, so there is no `blobstore.prune*` method to reach it from
  * userland (the old `pruneUnreferencedBlobs` RPC was deleted). Do not re-expose
@@ -598,9 +599,8 @@ export async function hasTreeObject(blobsDir: string, hash: string): Promise<boo
  * node's presence implies the complete tree beneath it is present, which is
  * exactly the cheap already-mirrored fast path here.
  *
- * `expectStateHash` is the integrity check for listings fetched from the gad
- * store: when the re-encoded state hash disagrees (truncated/corrupt listing),
- * this throws BEFORE writing anything.
+ * `expectStateHash` verifies a caller's precomputed state identity: when the
+ * re-encoded state hash disagrees, this throws BEFORE writing anything.
  *
  * Unlike `putTree` (the userland RPC ingress), this does NOT verify that file
  * blobs exist: every internal state-minting path streams file bytes into this
@@ -703,8 +703,7 @@ export async function listTree(
 
   let entries = await readTreeNode(blobsDir, rootHash);
   if (!entries) return null;
-  for (let i = 0; i < segments.length; i += 1) {
-    const segment = segments[i]!;
+  for (const [i, segment] of segments.entries()) {
     const entry = entries.find((candidate) => candidate.name === segment);
     if (!entry) return [];
     if (entry.kind === "file") {
@@ -771,8 +770,7 @@ export async function readFileAtTree(
   if (!rootHash) return null;
   let entries = await readTreeNode(blobsDir, rootHash);
   if (!entries) return null;
-  for (let i = 0; i < segments.length; i += 1) {
-    const segment = segments[i]!;
+  for (const [i, segment] of segments.entries()) {
     const entry = entries.find((candidate) => candidate.name === segment);
     if (!entry) return null;
     const last = i === segments.length - 1;
@@ -815,8 +813,7 @@ export async function resolveTreePath(
   if (segments.length === 0) return { kind: "dir", treeHash: rootHash };
   let entries = await readTreeNode(blobsDir, rootHash);
   if (!entries) return null;
-  for (let i = 0; i < segments.length; i += 1) {
-    const segment = segments[i]!;
+  for (const [i, segment] of segments.entries()) {
     const entry = entries.find((candidate) => candidate.name === segment);
     if (!entry) return null;
     const last = i === segments.length - 1;

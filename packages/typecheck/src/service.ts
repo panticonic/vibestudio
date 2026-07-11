@@ -165,9 +165,7 @@ export class TypeCheckService {
   // ===========================================================================
 
   check(filePath?: string): TypeCheckResult {
-    const diagnostics = filePath
-      ? this.getFileDiagnostics(filePath)
-      : this.getAllDiagnostics();
+    const diagnostics = filePath ? this.getFileDiagnostics(filePath) : this.getAllDiagnostics();
 
     return {
       panelPath: this.config.panelPath,
@@ -222,7 +220,9 @@ export class TypeCheckService {
       column = startPos.character + 1;
 
       if (diagnostic.length !== undefined) {
-        const endPos = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start + diagnostic.length);
+        const endPos = diagnostic.file.getLineAndCharacterOfPosition(
+          diagnostic.start + diagnostic.length
+        );
         endLine = endPos.line + 1;
         endColumn = endPos.character + 1;
       }
@@ -243,9 +243,12 @@ export class TypeCheckService {
 
   private categoryToSeverity(category: ts.DiagnosticCategory): "error" | "warning" | "info" {
     switch (category) {
-      case ts.DiagnosticCategory.Error: return "error";
-      case ts.DiagnosticCategory.Warning: return "warning";
-      default: return "info";
+      case ts.DiagnosticCategory.Error:
+        return "error";
+      case ts.DiagnosticCategory.Warning:
+        return "warning";
+      default:
+        return "info";
     }
   }
 
@@ -276,7 +279,11 @@ export class TypeCheckService {
     return this.languageService.getCompletionsAtPosition(filePath, position, undefined);
   }
 
-  getDefinition(filePath: string, line: number, column: number): readonly ts.DefinitionInfo[] | undefined {
+  getDefinition(
+    filePath: string,
+    line: number,
+    column: number
+  ): readonly ts.DefinitionInfo[] | undefined {
     const position = this.getPosition(filePath, line, column);
     if (position === undefined) return undefined;
     return this.languageService.getDefinitionAtPosition(filePath, position);
@@ -306,7 +313,12 @@ export class TypeCheckService {
     const file = this.files.get(filePath);
     if (!file) return undefined;
 
-    const tempSourceFile = ts.createSourceFile(filePath, file.content, ts.ScriptTarget.Latest, true);
+    const tempSourceFile = ts.createSourceFile(
+      filePath,
+      file.content,
+      ts.ScriptTarget.Latest,
+      true
+    );
     try {
       return tempSourceFile.getPositionOfLineAndCharacter(line - 1, column - 1);
     } catch {
@@ -350,18 +362,27 @@ export class TypeCheckService {
         if (file) return file.content;
         if (this.isVirtualPath(filePath)) return undefined;
         if (this.diskFileExists(filePath)) {
-          try { return fs.readFileSync(filePath, "utf-8"); } catch { return undefined; }
+          try {
+            return fs.readFileSync(filePath, "utf-8");
+          } catch {
+            return undefined;
+          }
         }
         return undefined;
       },
       directoryExists: (dirPath) => {
         if (this.isVirtualPath(dirPath)) return false;
-        try { return fs.statSync(dirPath).isDirectory(); } catch { return false; }
+        try {
+          return fs.statSync(dirPath).isDirectory();
+        } catch {
+          return false;
+        }
       },
       getDirectories: (dirPath) => {
         if (this.isVirtualPath(dirPath)) return [];
         try {
-          return fs.readdirSync(dirPath, { withFileTypes: true })
+          return fs
+            .readdirSync(dirPath, { withFileTypes: true })
             .filter((e) => e.isDirectory())
             .map((e) => e.name);
         } catch {
@@ -369,7 +390,11 @@ export class TypeCheckService {
         }
       },
       realpath: (p) => {
-        try { return fs.realpathSync(p); } catch { return p; }
+        try {
+          return fs.realpathSync(p);
+        } catch {
+          return p;
+        }
       },
 
       resolveModuleNameLiterals(
@@ -447,23 +472,38 @@ export class TypeCheckService {
         const file = this.files.get(p);
         if (file) return file.content;
         if (this.isVirtualPath(p)) return undefined;
-        try { return fs.readFileSync(p, "utf-8"); } catch { return undefined; }
+        try {
+          return fs.readFileSync(p, "utf-8");
+        } catch {
+          return undefined;
+        }
       },
       directoryExists: (p) => {
         if (this.isVirtualPath(p)) return false;
-        try { return fs.statSync(p).isDirectory(); } catch { return false; }
+        try {
+          return fs.statSync(p).isDirectory();
+        } catch {
+          return false;
+        }
       },
       getDirectories: (p) => {
         if (this.isVirtualPath(p)) return [];
         try {
-          return fs.readdirSync(p, { withFileTypes: true })
+          return fs
+            .readdirSync(p, { withFileTypes: true })
             .filter((e) => e.isDirectory())
             .map((e) => e.name);
         } catch {
           return [];
         }
       },
-      realpath: (p) => { try { return fs.realpathSync(p); } catch { return p; } },
+      realpath: (p) => {
+        try {
+          return fs.realpathSync(p);
+        } catch {
+          return p;
+        }
+      },
     };
   }
 
@@ -474,7 +514,7 @@ export class TypeCheckService {
    * `@scope/foo/sub` match package `@scope/foo` with subpath `./sub`.
    */
   private resolveFromWorkspaceContext(
-    moduleName: string,
+    moduleName: string
   ): ts.ResolvedModuleWithFailedLookupLocations | null {
     const ctx = this.workspaceContext;
     if (!ctx) return null;
@@ -498,17 +538,16 @@ export class TypeCheckService {
    * parent-directory node_modules walk.
    */
   private resolveFromNodeModulesPaths(
-    moduleName: string,
+    moduleName: string
   ): ts.ResolvedModuleWithFailedLookupLocations | null {
     if (moduleName.startsWith(".") || path.isAbsolute(moduleName)) return null;
 
     const parts = moduleName.split("/");
-    const packageName = moduleName.startsWith("@")
-      ? parts.slice(0, 2).join("/")
-      : parts[0]!;
-    const subpath = parts.length > (moduleName.startsWith("@") ? 2 : 1)
-      ? parts.slice(moduleName.startsWith("@") ? 2 : 1).join("/")
-      : null;
+    const packageName = moduleName.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+    const subpath =
+      parts.length > (moduleName.startsWith("@") ? 2 : 1)
+        ? parts.slice(moduleName.startsWith("@") ? 2 : 1).join("/")
+        : null;
 
     for (const nodeModulesPath of this.config.nodeModulesPaths ?? []) {
       const resolved = this.resolveFromNodeModulesRoot(nodeModulesPath, packageName, subpath);
@@ -528,13 +567,15 @@ export class TypeCheckService {
   private resolveFromNodeModulesRoot(
     nodeModulesPath: string,
     packageName: string,
-    subpath: string | null,
+    subpath: string | null
   ): ts.ResolvedModuleWithFailedLookupLocations | null {
     const packageDir = path.join(nodeModulesPath, packageName);
     if (!this.diskFileExists(path.join(packageDir, "package.json"))) return null;
 
     try {
-      const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf-8")) as {
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(packageDir, "package.json"), "utf-8")
+      ) as {
         exports?: unknown;
         types?: string;
         typings?: string;
@@ -553,8 +594,14 @@ export class TypeCheckService {
    */
   private resolvePackageSubpath(
     packageDir: string,
-    packageJson: { exports?: unknown; types?: string; typings?: string; main?: string; module?: string },
-    subpath: string | null,
+    packageJson: {
+      exports?: unknown;
+      types?: string;
+      typings?: string;
+      main?: string;
+      module?: string;
+    },
+    subpath: string | null
   ): ts.ResolvedModuleWithFailedLookupLocations | null {
     let resolvedFile: string | null = null;
 
@@ -563,7 +610,7 @@ export class TypeCheckService {
       const target = resolveExportSubpath(
         packageJson.exports as Record<string, unknown>,
         exportKey,
-        WORKSPACE_CONDITIONS,
+        WORKSPACE_CONDITIONS
       );
       if (target) {
         resolvedFile = path.join(packageDir, target);
@@ -571,21 +618,35 @@ export class TypeCheckService {
     }
 
     if (!resolvedFile && !subpath) {
-      const candidates = [packageJson.types, packageJson.typings, packageJson.module, packageJson.main];
+      const candidates = [
+        packageJson.types,
+        packageJson.typings,
+        packageJson.module,
+        packageJson.main,
+      ];
       for (const candidate of candidates) {
-        if (candidate) { resolvedFile = path.join(packageDir, candidate); break; }
+        if (candidate) {
+          resolvedFile = path.join(packageDir, candidate);
+          break;
+        }
       }
       if (!resolvedFile) {
         for (const ext of [".ts", ".tsx", ".d.ts"]) {
           const indexPath = path.join(packageDir, `index${ext}`);
-          if (this.diskFileExists(indexPath)) { resolvedFile = indexPath; break; }
+          if (this.diskFileExists(indexPath)) {
+            resolvedFile = indexPath;
+            break;
+          }
         }
       }
       if (!resolvedFile) {
         // Some packages put their entry in src/
         for (const ext of [".ts", ".tsx", ".d.ts"]) {
           const indexPath = path.join(packageDir, "src", `index${ext}`);
-          if (this.diskFileExists(indexPath)) { resolvedFile = indexPath; break; }
+          if (this.diskFileExists(indexPath)) {
+            resolvedFile = indexPath;
+            break;
+          }
         }
       }
     }
@@ -594,12 +655,18 @@ export class TypeCheckService {
       // Subpath import that didn't match exports — try direct file lookup.
       for (const ext of [".ts", ".tsx", ".d.ts", ".js"]) {
         const candidate = path.join(packageDir, `${subpath}${ext}`);
-        if (this.diskFileExists(candidate)) { resolvedFile = candidate; break; }
+        if (this.diskFileExists(candidate)) {
+          resolvedFile = candidate;
+          break;
+        }
       }
       if (!resolvedFile) {
         for (const ext of [".ts", ".tsx", ".d.ts"]) {
           const candidate = path.join(packageDir, subpath, `index${ext}`);
-          if (this.diskFileExists(candidate)) { resolvedFile = candidate; break; }
+          if (this.diskFileExists(candidate)) {
+            resolvedFile = candidate;
+            break;
+          }
         }
       }
     }
@@ -710,7 +777,10 @@ export class TypeCheckService {
 
     let configPath: string | null = null;
     for (const candidate of candidates) {
-      if (this.diskFileExists(candidate)) { configPath = candidate; break; }
+      if (this.diskFileExists(candidate)) {
+        configPath = candidate;
+        break;
+      }
     }
     if (!configPath) {
       this.tsconfigOptionsCache = {};
@@ -719,7 +789,11 @@ export class TypeCheckService {
 
     try {
       const readResult = ts.readConfigFile(configPath, (p) => {
-        try { return fs.readFileSync(p, "utf-8"); } catch { return undefined; }
+        try {
+          return fs.readFileSync(p, "utf-8");
+        } catch {
+          return undefined;
+        }
       });
       if (readResult.error || !readResult.config) {
         this.tsconfigOptionsCache = {};
@@ -728,7 +802,7 @@ export class TypeCheckService {
       const parsed = ts.parseJsonConfigFileContent(
         readResult.config,
         ts.sys,
-        path.dirname(configPath),
+        path.dirname(configPath)
       );
       const options: ts.CompilerOptions = { ...parsed.options };
 
@@ -770,9 +844,4 @@ export class TypeCheckService {
   private invalidateTsResolutionCache(): void {
     this.tsResolutionCache = null;
   }
-}
-
-/** Factory wrapper — kept for back-compat with existing call sites. */
-export function createTypeCheckService(config: TypeCheckServiceConfig): TypeCheckService {
-  return new TypeCheckService(config);
 }

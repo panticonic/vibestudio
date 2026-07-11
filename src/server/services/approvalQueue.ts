@@ -37,15 +37,45 @@ import type {
   CredentialInjection,
   UrlAudience,
 } from "@vibestudio/shared/credentials/types";
+import type { UserSubject } from "@vibestudio/shared/users/types";
+import type {
+  ApprovalProvenanceKind,
+  ApprovalRequestedBy,
+  ApprovalResolvedBy,
+  ApprovalResolvedEvent,
+  ApprovalResource,
+  GrantScopeStored,
+  ResolvedVia,
+} from "@vibestudio/shared/governance/types";
 
 /** Terminal decision surfaced back to queue waiters (dismiss collapses to deny). */
-export type GrantedDecision = "once" | "session" | "version" | "repo" | "deny";
+export type GrantedDecision = "once" | "session" | "version" | "deny";
+
+/**
+ * The resolver's verified identity + surface (WP5 §4/§5), threaded from the
+ * service handler (which holds `ctx.caller.subject`) into the queue's `settle`
+ * coordinator. Identity is host-verified, never accepted from the wire (INV-3).
+ * Absent → the resolution is a programmatic/system settle (no provenance record
+ * and no live `resolved` surface — only the enumerated bootstrap principals or
+ * cleanup paths, which have no human resolver).
+ */
+export interface ApprovalResolver {
+  subject: UserSubject;
+  via: ResolvedVia;
+  deviceId?: string;
+  deviceLabel?: string;
+}
 
 interface ApprovalQueueRequestBase {
   callerId: string;
   callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
   effectiveVersion: string;
+  /**
+   * The REQUESTING user's `subject.userId` (WP5 §5.1), stamped by the enqueuing
+   * service so a resolution record can name both parties. Attribution only.
+   */
+  requestedByUserId?: string;
   requesterCategory?: ApprovalRequesterCategory;
   operation?: ApprovalOperationDescriptor;
   /**
@@ -137,6 +167,8 @@ export interface SecretInputApprovalQueueRequest extends ApprovalQueueRequestBas
 
 export interface UserlandApprovalQueueRequest {
   principal: ApprovalPrincipal;
+  /** The requesting user's `subject.userId` (WP5 §5.1); attribution only. */
+  requestedByUserId?: string;
   /** Issuer of the request — defaults to principal when omitted. */
   issuer?: import("@vibestudio/shared/approvals").UserlandApprovalIssuer;
   subject: UserlandApprovalSubject;
@@ -237,12 +269,16 @@ interface ExternalAgentQueueWaiter {
 interface QueueEntry {
   approval: PendingApproval;
   dedupKey: string;
+  /** The requesting user's `subject.userId`, captured at enqueue time (WP5 §5.1). */
+  requestedByUserId?: string;
   waiters: Map<number, QueueWaiter>;
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
   userlandWaiters: Map<number, UserlandQueueWaiter>;
   deviceCodeWaiters: Map<number, DeviceCodeQueueWaiter>;
   externalAgentWaiters: Map<number, ExternalAgentQueueWaiter>;
   nextWaiterId: number;
+  /** The single in-flight human settlement; competing verdicts are rejected. */
+  settlement?: Promise<void>;
 }
 
 export interface ApprovalQueue {
@@ -258,9 +294,17 @@ export interface ApprovalQueue {
   ): Promise<ExternalAgentApprovalResult>;
   presentDeviceCode(req: DeviceCodeApprovalQueueRequest): DeviceCodeApprovalHandle;
   onPendingChanged?(listener: (pending: PendingApproval[]) => void): () => void;
-  resolve(approvalId: string, decision: ApprovalDecision): void;
-  resolveUserland(approvalId: string, choice: string): void;
-  resolveExternalAgent(approvalId: string, behavior: "allow" | "deny"): void;
+  resolve(
+    approvalId: string,
+    decision: ApprovalDecision,
+    resolver?: ApprovalResolver
+  ): Promise<void>;
+  resolveUserland(approvalId: string, choice: string, resolver?: ApprovalResolver): Promise<void>;
+  resolveExternalAgent(
+    approvalId: string,
+    behavior: "allow" | "deny",
+    resolver?: ApprovalResolver
+  ): Promise<void>;
   /**
    * Record a user verdict on the external-agent approval matched by
    * (channelId, requestId, resolveToken) — the inline conversation card
@@ -273,8 +317,9 @@ export interface ApprovalQueue {
     channelId: string,
     requestId: string,
     resolveToken: string,
-    behavior: "allow" | "deny"
-  ): number;
+    behavior: "allow" | "deny",
+    resolver?: ApprovalResolver
+  ): Promise<number>;
   /**
    * Quiet-settle every external-agent approval matching `predicate` (answered at
    * the terminal / bridge detached): removes the card and resolves the pending
@@ -289,9 +334,21 @@ export interface ApprovalQueue {
     predicate: (approval: PendingApproval) => boolean,
     choice: string
   ): number;
-  submitClientConfig(approvalId: string, values: Record<string, string>): void;
-  submitCredentialInput(approvalId: string, values: Record<string, string>): void;
-  submitSecretInput(approvalId: string, values: Record<string, string>): void;
+  submitClientConfig(
+    approvalId: string,
+    values: Record<string, string>,
+    resolver?: ApprovalResolver
+  ): Promise<void>;
+  submitCredentialInput(
+    approvalId: string,
+    values: Record<string, string>,
+    resolver?: ApprovalResolver
+  ): Promise<void>;
+  submitSecretInput(
+    approvalId: string,
+    values: Record<string, string>,
+    resolver?: ApprovalResolver
+  ): Promise<void>;
   listPending(): PendingApproval[];
   /** Cleanup hook: cancel any pending approvals associated with a caller id. */
   cancelForCaller(callerId: string): void;
@@ -332,6 +389,15 @@ export function createApprovalQueue(deps: {
     requesterCategory?: ApprovalRequesterCategory;
   }) => ApprovalRequesterIdentity;
   autoApprove?: ApprovalQueueAutoApproveOptions | boolean;
+  /**
+   * Host governance writer (WP5 §6 step 4). The single `settle` coordinator
+   * hands it the same workspace-neutral snapshot it broadcasts on
+   * `shell-approval:resolved`. The authenticated hub route stamps the
+   * authoritative workspace id; child callers cannot supply or spoof it. A
+   * human resolution does not settle until this write is acknowledged. Absent
+   * → provenance is not persisted (the live surface still fires).
+   */
+  recordProvenance?: (record: ApprovalResolvedEvent) => void | Promise<void>;
 }): ApprovalQueueWithListeners {
   const { eventService } = deps;
   const resolveTitle = deps.resolveTitle ?? (() => undefined);
@@ -356,6 +422,156 @@ export function createApprovalQueue(deps: {
   function removeEntry(entry: QueueEntry): void {
     entriesById.delete(entry.approval.approvalId);
     entriesByDedupKey.delete(entry.dedupKey);
+  }
+
+  /**
+   * Broadcast the live resolved surface (WP5 §6). The `shell-approval:resolved`
+   * event name is registered in `packages/shared/src/events.ts` at integration
+   * (like `shell-approval:pending-changed`); it is typed here through a narrow
+   * view so the queue compiles independently of that registration. Until the
+   * name is registered `emit` simply finds no subscribers and returns — no crash.
+   */
+  function emitResolved(event: ApprovalResolvedEvent): void {
+    (
+      eventService as unknown as {
+        emit(name: "shell-approval:resolved", data: ApprovalResolvedEvent): void;
+      }
+    ).emit("shell-approval:resolved", event);
+  }
+
+  function buildRequestedBy(entry: QueueEntry): ApprovalRequestedBy {
+    const approval = entry.approval;
+    return {
+      callerId: approval.callerId,
+      callerKind: approval.callerKind,
+      ...(approval.repoPath ? { repoPath: approval.repoPath } : {}),
+      ...(approval.effectiveVersion ? { effectiveVersion: approval.effectiveVersion } : {}),
+      ...(entry.requestedByUserId ? { userId: entry.requestedByUserId } : {}),
+    };
+  }
+
+  /** A compact, kind-agnostic descriptor of WHAT was approved (WP5 §5). */
+  function deriveResource(approval: PendingApproval): ApprovalResource | undefined {
+    switch (approval.kind) {
+      case "capability":
+        return {
+          capability: approval.capability,
+          ...(approval.resource?.value ? { value: approval.resource.value } : {}),
+        };
+      case "credential":
+        return { credentialId: approval.credentialId, value: approval.credentialLabel };
+      case "credential-input":
+        return { value: approval.credentialLabel };
+      case "client-config":
+        return { value: approval.configId };
+      case "device-code":
+        return { value: approval.credentialLabel };
+      case "userland":
+        return { subjectId: approval.subject.id };
+      case "external-agent":
+        return { capability: approval.capability, value: approval.operationName };
+      case "secret-input":
+      case "unit-batch":
+        return { value: approval.title };
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * The SINGLE settlement coordinator (WP5 §6) every human resolve/submit path
+   * funnels through — it fixes the delete-before-emit bug by snapshotting and
+   * durably recording and broadcasting the resolution BEFORE removal:
+   *   1. snapshot `{ approvalId, decision, granted, resolvedBy, requestedBy,
+   *      resource, grantScopeStored, … }` from the still-present entry + resolver;
+   *   2. await the governance writer's durable acknowledgement;
+   *   3. emit `shell-approval:resolved` (the live `resolvedBy` surface);
+   *   4. settle coalesced waiters + remove the entry (`settleWaiters`), then
+   *      refresh `pending-changed` (now reflecting the removal).
+   * The same snapshot feeds the durable and live surfaces. If persistence
+   * fails, the entry stays pending and no resolution is broadcast.
+   * A resolution with no `resolver` (programmatic/cleanup settle) skips the
+   * snapshot/event/record and just settles waiters + refreshes pending.
+   */
+  async function settle(
+    entry: QueueEntry,
+    resolution: {
+      decision: ApprovalResolvedEvent["decision"];
+      granted: boolean;
+      grantScopeStored?: GrantScopeStored;
+      resolver?: ApprovalResolver;
+      /** Overrides the resource derived from the pending approval (e.g. userland choice). */
+      resource?: ApprovalResource;
+    },
+    settleWaiters: (entry: QueueEntry) => void
+  ): Promise<void> {
+    if (entry.settlement) {
+      throw new Error(`Approval ${entry.approval.approvalId} is already being resolved`);
+    }
+    let acknowledgeSettlement!: () => void;
+    let rejectSettlement!: (error: unknown) => void;
+    const settlement = new Promise<void>((resolve, reject) => {
+      acknowledgeSettlement = resolve;
+      rejectSettlement = reject;
+    });
+    // Install the lock before invoking any provenance hook. The settlement
+    // body still runs immediately so resolver-free cleanup keeps its historical
+    // synchronous behavior.
+    entry.settlement = settlement;
+    const runSettlement = async () => {
+      let event: ApprovalResolvedEvent | undefined;
+
+      // (1) Snapshot from the STILL-PRESENT entry + the resolver's verified subject.
+      if (resolution.resolver) {
+        const resolvedBy: ApprovalResolvedBy = {
+          userId: resolution.resolver.subject.userId,
+          handle: resolution.resolver.subject.handle,
+          ...(resolution.resolver.deviceId ? { deviceId: resolution.resolver.deviceId } : {}),
+          ...(resolution.resolver.deviceLabel
+            ? { deviceLabel: resolution.resolver.deviceLabel }
+            : {}),
+        };
+        const resource = resolution.resource ?? deriveResource(entry.approval);
+        event = {
+          approvalId: entry.approval.approvalId,
+          approvalKind: entry.approval.kind as ApprovalProvenanceKind,
+          decision: resolution.decision,
+          granted: resolution.granted,
+          resolvedAt: Date.now(),
+          resolvedBy,
+          resolvedVia: resolution.resolver.via,
+          requestedBy: buildRequestedBy(entry),
+          ...(resource ? { resource } : {}),
+          ...(resolution.grantScopeStored !== undefined
+            ? { grantScopeStored: resolution.grantScopeStored }
+            : {}),
+        };
+      }
+
+      // (2) Acknowledge durable provenance before exposing or settling success.
+      if (event) await deps.recordProvenance?.(event);
+
+      // (3) Emit the live resolved surface BEFORE removal (the §6 fix).
+      if (event) emitResolved(event);
+
+      // (4) Remove the entry + settle coalesced waiters.
+      settleWaiters(entry);
+
+      // pending-changed now reflects removal.
+      emitPendingChanged();
+    };
+    void runSettlement().then(acknowledgeSettlement, rejectSettlement);
+    try {
+      await settlement;
+    } catch (error) {
+      if (entry.settlement === settlement) delete entry.settlement;
+      throw error;
+    }
+  }
+
+  /** Grant scope the server persisted for a decision (null for once/deny/dismiss). */
+  function grantScopeFor(decision: GrantedDecision): GrantScopeStored {
+    return decision === "session" || decision === "version" ? decision : null;
   }
 
   function dedupKeyFor(req: ApprovalQueueRequest): string {
@@ -678,6 +894,7 @@ export function createApprovalQueue(deps: {
       entry = {
         approval,
         dedupKey,
+        requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         userlandWaiters: new Map(),
@@ -706,6 +923,7 @@ export function createApprovalQueue(deps: {
             resolve({ decision: "deny" });
             return;
           }
+          if (e.settlement) return;
           e.fieldInputWaiters.delete(waiterId);
           if (
             e.waiters.size === 0 &&
@@ -733,14 +951,8 @@ export function createApprovalQueue(deps: {
     });
   }
 
-  function submitFieldInput(
-    approvalId: string,
-    expectedKind: "client-config" | "credential-input" | "secret-input",
-    values: Record<string, string>
-  ): void {
-    const entry = entriesById.get(approvalId);
-    if (!entry || entry.approval.kind !== expectedKind) return;
-
+  /** Settle a field-input entry's waiters (submit succeeds; siblings deny). No emit. */
+  function settleFieldInputEntry(entry: QueueEntry, values: Record<string, string>): void {
     removeEntry(entry);
 
     for (const waiter of entry.fieldInputWaiters.values()) {
@@ -771,8 +983,22 @@ export function createApprovalQueue(deps: {
       waiter.resolve({ behavior: "deny" });
     }
     entry.externalAgentWaiters.clear();
+  }
 
-    emitPendingChanged();
+  async function submitFieldInput(
+    approvalId: string,
+    expectedKind: "client-config" | "credential-input" | "secret-input",
+    values: Record<string, string>,
+    resolver?: ApprovalResolver
+  ): Promise<void> {
+    const entry = entriesById.get(approvalId);
+    if (!entry || entry.approval.kind !== expectedKind) return;
+
+    // Route through the single settle coordinator so a submit also snapshots +
+    // broadcasts `shell-approval:resolved` and records provenance (WP5 §6).
+    await settle(entry, { decision: "submit", granted: true, resolver }, (e) =>
+      settleFieldInputEntry(e, values)
+    );
   }
 
   function settleDecisionEntry(entry: QueueEntry, decision: GrantedDecision): void {
@@ -883,6 +1109,7 @@ export function createApprovalQueue(deps: {
         entry = {
           approval,
           dedupKey,
+          requestedByUserId: req.requestedByUserId,
           waiters: new Map(),
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
@@ -907,6 +1134,7 @@ export function createApprovalQueue(deps: {
               resolve("deny");
               return;
             }
+            if (e.settlement) return;
             e.waiters.delete(waiterId);
             if (
               e.waiters.size === 0 &&
@@ -964,6 +1192,7 @@ export function createApprovalQueue(deps: {
       const entry: QueueEntry = {
         approval,
         dedupKey,
+        requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         userlandWaiters: new Map(),
@@ -989,9 +1218,10 @@ export function createApprovalQueue(deps: {
         cancelled: controller.signal,
         dispose: () => {
           if (disposed) return;
-          disposed = true;
           const e = entriesById.get(approval.approvalId);
           if (!e) return;
+          if (e.settlement) return;
+          disposed = true;
           removeEntry(e);
           e.deviceCodeWaiters.clear();
           emitPendingChanged();
@@ -1069,6 +1299,7 @@ export function createApprovalQueue(deps: {
         entry = {
           approval,
           dedupKey,
+          requestedByUserId: req.requestedByUserId,
           waiters: new Map(),
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
@@ -1097,6 +1328,7 @@ export function createApprovalQueue(deps: {
               resolve({ kind: "dismissed" });
               return;
             }
+            if (e.settlement) return;
             e.userlandWaiters.delete(waiterId);
             if (
               e.waiters.size === 0 &&
@@ -1170,6 +1402,7 @@ export function createApprovalQueue(deps: {
       const entry: QueueEntry = {
         approval,
         dedupKey,
+        requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         userlandWaiters: new Map(),
@@ -1193,6 +1426,7 @@ export function createApprovalQueue(deps: {
               resolve({ behavior: "deny" });
               return;
             }
+            if (e.settlement) return;
             e.externalAgentWaiters.delete(waiterId);
             if (e.externalAgentWaiters.size === 0) {
               removeEntry(e);
@@ -1220,17 +1454,24 @@ export function createApprovalQueue(deps: {
       };
     },
 
-    resolve(approvalId, decision) {
+    async resolve(approvalId, decision, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
 
       const granted: GrantedDecision = decision === "dismiss" ? "deny" : decision;
-      settleDecisionEntry(entry, granted);
-
-      emitPendingChanged();
+      await settle(
+        entry,
+        {
+          decision,
+          granted: granted !== "deny",
+          grantScopeStored: grantScopeFor(granted),
+          resolver,
+        },
+        (e) => settleDecisionEntry(e, granted)
+      );
     },
 
-    resolveUserland(approvalId, choice) {
+    async resolveUserland(approvalId, choice, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry || entry.approval.kind !== "userland") return;
 
@@ -1238,19 +1479,37 @@ export function createApprovalQueue(deps: {
         throw new Error(`Unknown userland approval choice: ${choice}`);
       }
 
-      settleUserlandEntry(entry, choice);
-
-      emitPendingChanged();
+      // A userland choice is a one-shot allow; the chosen option value rides in
+      // `resource.key` so provenance records WHICH option was picked. Hoist the
+      // subject id before `settle` so the narrowing survives the closure arg.
+      const subjectId = entry.approval.subject.id;
+      await settle(
+        entry,
+        {
+          decision: "once",
+          granted: true,
+          resolver,
+          resource: { subjectId, key: choice },
+        },
+        (e) => settleUserlandEntry(e, choice)
+      );
     },
 
-    resolveExternalAgent(approvalId, behavior) {
+    async resolveExternalAgent(approvalId, behavior, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry || entry.approval.kind !== "external-agent") return;
-      settleExternalAgentEntry(entry, behavior);
-      emitPendingChanged();
+      await settle(
+        entry,
+        {
+          decision: behavior === "allow" ? "once" : "deny",
+          granted: behavior === "allow",
+          resolver,
+        },
+        (e) => settleExternalAgentEntry(e, behavior)
+      );
     },
 
-    resolveExternalAgentByRequest(channelId, requestId, resolveToken, behavior) {
+    async resolveExternalAgentByRequest(channelId, requestId, resolveToken, behavior, resolver) {
       const matching = Array.from(entriesById.values()).filter(
         (entry) =>
           entry.approval.kind === "external-agent" &&
@@ -1260,17 +1519,27 @@ export function createApprovalQueue(deps: {
       );
       // Real verdict (allow/deny) — the waiter resolves with the user's choice,
       // exactly as the by-approvalId path does, but keyed on the runtime's
-      // (channelId, requestId, resolveToken) that the inline conversation card carries.
+      // (channelId, requestId, resolveToken) that the inline conversation card
+      // carries. Routed through the same `settle` coordinator so this inline path
+      // is attributed too (WP5 §4/§6).
       for (const entry of matching) {
-        settleExternalAgentEntry(entry, behavior);
+        await settle(
+          entry,
+          {
+            decision: behavior === "allow" ? "once" : "deny",
+            granted: behavior === "allow",
+            resolver,
+          },
+          (e) => settleExternalAgentEntry(e, behavior)
+        );
       }
-      if (matching.length > 0) emitPendingChanged();
       return matching.length;
     },
 
     settleExternalAgent(predicate) {
       const matching = Array.from(entriesById.values()).filter(
-        (entry) => entry.approval.kind === "external-agent" && predicate(entry.approval)
+        (entry) =>
+          !entry.settlement && entry.approval.kind === "external-agent" && predicate(entry.approval)
       );
       // Quiet settle: the request resolves as `deny` (the caller already has its
       // answer from elsewhere and ignores this) but no user-facing deny is
@@ -1283,8 +1552,8 @@ export function createApprovalQueue(deps: {
     },
 
     resolveMatching(predicate, decision) {
-      const matching = Array.from(entriesById.values()).filter((entry) =>
-        predicate(entry.approval)
+      const matching = Array.from(entriesById.values()).filter(
+        (entry) => !entry.settlement && predicate(entry.approval)
       );
       for (const entry of matching) {
         settleDecisionEntry(entry, decision);
@@ -1295,7 +1564,8 @@ export function createApprovalQueue(deps: {
 
     resolveMatchingUserland(predicate, choice) {
       const matching = Array.from(entriesById.values()).filter(
-        (entry) => entry.approval.kind === "userland" && predicate(entry.approval)
+        (entry) =>
+          !entry.settlement && entry.approval.kind === "userland" && predicate(entry.approval)
       );
       for (const entry of matching) {
         settleUserlandEntry(entry, choice);
@@ -1304,16 +1574,16 @@ export function createApprovalQueue(deps: {
       return matching.length;
     },
 
-    submitClientConfig(approvalId, values) {
-      submitFieldInput(approvalId, "client-config", values);
+    async submitClientConfig(approvalId, values, resolver) {
+      await submitFieldInput(approvalId, "client-config", values, resolver);
     },
 
-    submitCredentialInput(approvalId, values) {
-      submitFieldInput(approvalId, "credential-input", values);
+    async submitCredentialInput(approvalId, values, resolver) {
+      await submitFieldInput(approvalId, "credential-input", values, resolver);
     },
 
-    submitSecretInput(approvalId, values) {
-      submitFieldInput(approvalId, "secret-input", values);
+    async submitSecretInput(approvalId, values, resolver) {
+      await submitFieldInput(approvalId, "secret-input", values, resolver);
     },
 
     listPending() {
@@ -1324,7 +1594,7 @@ export function createApprovalQueue(deps: {
       // Best-effort: dismiss every pending approval attributed to this caller.
       // Called by `runtime.retireEntity` after the durable retire commits.
       const matching = Array.from(entriesById.values()).filter(
-        (entry) => entry.approval.callerId === callerId
+        (entry) => !entry.settlement && entry.approval.callerId === callerId
       );
       for (const entry of matching) {
         removeEntry(entry);

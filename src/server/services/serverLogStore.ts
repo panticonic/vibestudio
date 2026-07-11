@@ -229,7 +229,8 @@ export function createServerLogStore(
       // Scan newest→oldest so `limit` keeps the most recent matches, then
       // restore ascending order for the caller.
       for (let i = buffer.length - 1; i >= 0 && matched.length < limit; i--) {
-        const record = buffer[i]!;
+        const record = buffer[i];
+        if (!record) continue;
         if (query.sinceSeq !== undefined && record.seq <= query.sinceSeq) break;
         if (query.since !== undefined && record.timestamp < query.since) break;
         if (query.until !== undefined && record.timestamp > query.until) continue;

@@ -224,7 +224,6 @@ export interface ApprovalActionCopy {
   /** Null when the decision is not offered (e.g. force pushes are once-only). */
   session: { label: string; description: string } | null;
   version: { label: string; description: string } | null;
-  repo: { label: string; description: string } | null;
   denyDescription: string;
 }
 
@@ -247,10 +246,6 @@ export function getStandardActionCopy(
           label: trustVersionLabel(approval),
           description: `Save and allow ${exactTrustSubject(approval)} to use it.`,
         },
-        repo: {
-          label: "Trust repo",
-          description: "Save and allow this workspace repo to use it.",
-        },
         denyDescription: "Do not connect this service.",
       };
     }
@@ -266,7 +261,6 @@ export function getStandardActionCopy(
           },
           session: null,
           version: null,
-          repo: null,
           denyDescription: "Do not allow this force push.",
         };
       }
@@ -287,12 +281,6 @@ export function getStandardActionCopy(
             ? `Allow ${exactTrustSubject(approval)} to push to this remote.`
             : `Allow ${exactTrustSubject(approval)} to read from this remote.`,
         },
-        repo: {
-          label: "Trust repo",
-          description: isWrite
-            ? "Allow this workspace project to push to this remote."
-            : "Allow this workspace project to read from this remote.",
-        },
         denyDescription: isWrite ? "Do not allow this git push." : "Do not allow this git read.",
       };
     }
@@ -309,10 +297,6 @@ export function getStandardActionCopy(
         label: trustVersionLabel(approval),
         description: `Allow ${exactTrustSubject(approval)} to use ${formatCredentialUseTarget(approval)}.`,
       },
-      repo: {
-        label: "Trust repo",
-        description: `Allow this workspace project to use ${formatCredentialUseTarget(approval)}.`,
-      },
       denyDescription: "Do not use this service.",
     };
   }
@@ -327,7 +311,6 @@ export function getStandardActionCopy(
         label: trustVersionLabel(approval),
         description: `Allow this sign-in origin for ${exactTrustSubject(approval)}.`,
       },
-      repo: { label: "Trust repo", description: "Allow this sign-in origin for this workspace." },
       denyDescription: "Do not open this sign-in flow.",
     };
   }
@@ -350,10 +333,6 @@ export function getStandardActionCopy(
           label: trustVersionLabel(approval),
           description: `Allow ${trustSubject(approval)} to update ${destination}.`,
         },
-        repo: {
-          label: "Trust repo",
-          description: `Allow this workspace project to update ${destination}.`,
-        },
         denyDescription: "Do not allow this workspace source change.",
       };
     }
@@ -375,12 +354,6 @@ export function getStandardActionCopy(
           ? `Allow ${trustSubject(approval)} to edit workspace config.`
           : `Allow ${trustSubject(approval)} to write to this repository.`,
       },
-      repo: {
-        label: "Trust repo",
-        description: isMeta
-          ? "Allow this workspace project to edit workspace config."
-          : "Allow this workspace project to write to this repository.",
-      },
       denyDescription: isMeta ? "Do not allow this config edit." : "Do not allow this git write.",
     };
   }
@@ -395,10 +368,6 @@ export function getStandardActionCopy(
         label: trustVersionLabel(approval),
         description: `Allow ${trustSubject(approval)} to change shared remotes.`,
       },
-      repo: {
-        label: "Trust repo",
-        description: "Allow this workspace project to change shared remotes.",
-      },
       denyDescription: "Do not change this shared remote.",
     };
   }
@@ -412,10 +381,6 @@ export function getStandardActionCopy(
       version: {
         label: trustVersionLabel(approval),
         description: `Allow ${trustSubject(approval)} to import project repos.`,
-      },
-      repo: {
-        label: "Trust repo",
-        description: "Allow this workspace project to import project repos.",
       },
       denyDescription: "Do not import this project.",
     };
@@ -435,11 +400,6 @@ export function getStandardActionCopy(
         label: networkTrustLabel(approval),
         description: `Allow ${exactTrustSubject(approval)} to use network access without asking for each origin.`,
       },
-      repo: {
-        label: "Trust repo with network",
-        description:
-          "Allow this workspace project to use network access without asking for each origin.",
-      },
       denyDescription: `Do not connect to ${destination}.`,
     };
   }
@@ -458,11 +418,6 @@ export function getStandardActionCopy(
         label: corsTrustLabel(approval),
         description: `Allow ${exactTrustSubject(approval)} to read cross-origin responses without asking for each origin.`,
       },
-      repo: {
-        label: "Trust repo with CORS",
-        description:
-          "Allow this workspace project to read cross-origin responses without asking for each origin.",
-      },
       denyDescription: `Do not read responses from ${destination}.`,
     };
   }
@@ -477,7 +432,6 @@ export function getStandardActionCopy(
         label: trustVersionLabel(approval),
         description: `Allow this browser origin for ${exactTrustSubject(approval)}.`,
       },
-      repo: { label: "Trust repo", description: "Allow this browser origin for this workspace." },
       denyDescription: "Do not open this site.",
     };
   }
@@ -491,10 +445,6 @@ export function getStandardActionCopy(
     version: {
       label: trustVersionLabel(approval),
       description: `Allow ${exactTrustSubject(approval)} to request ${target}.`,
-    },
-    repo: {
-      label: "Trust repo",
-      description: `Allow this workspace project to request ${target}.`,
     },
     denyDescription: `Do not allow ${target}.`,
   };

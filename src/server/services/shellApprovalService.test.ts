@@ -46,7 +46,7 @@ describe("shellApprovalService", () => {
         requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
         resolveExternalAgent: vi.fn(),
         settleExternalAgent: vi.fn(() => 0),
-        resolveExternalAgentByRequest: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(async () => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -55,7 +55,7 @@ describe("shellApprovalService", () => {
       },
     });
 
-    for (const decision of ["once", "session", "version", "repo", "deny", "dismiss"] as const) {
+    for (const decision of ["once", "session", "version", "deny", "dismiss"] as const) {
       expect(() => service.methods["resolve"]?.args.parse(["approval-1", decision])).not.toThrow();
     }
   });
@@ -77,7 +77,7 @@ describe("shellApprovalService", () => {
         requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
         resolveExternalAgent: vi.fn(),
         settleExternalAgent: vi.fn(() => 0),
-        resolveExternalAgentByRequest: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(async () => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -98,15 +98,30 @@ describe("shellApprovalService", () => {
         ]),
         cancelForCaller: vi.fn(),
       },
+      deviceLabelFor: (deviceId) => (deviceId === "dev_1" ? "Gabriel's phone" : undefined),
     });
 
+    // WP5 §4: the verified subject is threaded to the queue as the resolver, so
+    // the resolution is attributable (userId + surface).
     await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
-        "approval-1",
-        "allow",
-      ])
+      service.handler(
+        {
+          caller: createVerifiedCaller("shell:dev_1", "shell", null, null, {
+            userId: "usr_1",
+            handle: "gabriel",
+          }),
+          wsClient: { clientPlatform: "mobile" } as never,
+        },
+        "resolveUserland",
+        ["approval-1", "allow"]
+      )
     ).resolves.toBeUndefined();
-    expect(resolveUserland).toHaveBeenCalledWith("approval-1", "allow");
+    expect(resolveUserland).toHaveBeenCalledWith("approval-1", "allow", {
+      subject: { userId: "usr_1", handle: "gabriel" },
+      via: "mobile-notification",
+      deviceId: "dev_1",
+      deviceLabel: "Gabriel's phone",
+    });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
@@ -115,13 +130,14 @@ describe("shellApprovalService", () => {
       ])
     ).rejects.toMatchObject({ name: "ServiceError", code: "EINVAL" });
 
+    // A subject-less bootstrap-era caller yields no resolver (undefined).
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
         "approval-1",
         "dismiss",
       ])
     ).resolves.toBeUndefined();
-    expect(resolve).toHaveBeenCalledWith("approval-1", "dismiss");
+    expect(resolve).toHaveBeenCalledWith("approval-1", "dismiss", undefined);
   });
 
   it("uses typed errors for missing userland approvals and unknown methods", async () => {
@@ -139,7 +155,7 @@ describe("shellApprovalService", () => {
         requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
         resolveExternalAgent: vi.fn(),
         settleExternalAgent: vi.fn(() => 0),
-        resolveExternalAgentByRequest: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(async () => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -175,7 +191,7 @@ describe("shellApprovalService", () => {
         requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
         resolveExternalAgent: vi.fn(),
         settleExternalAgent: vi.fn(() => 0),
-        resolveExternalAgentByRequest: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(async () => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -222,7 +238,7 @@ describe("shellApprovalService", () => {
         requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
         resolveExternalAgent: vi.fn(),
         settleExternalAgent: vi.fn(() => 0),
-        resolveExternalAgentByRequest: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(async () => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -237,13 +253,13 @@ describe("shellApprovalService", () => {
       "resolveBootstrap",
       ["startup-1", "once"]
     );
-    expect(resolve).toHaveBeenCalledWith("startup-1", "once");
+    expect(resolve).toHaveBeenCalledWith("startup-1", "once", undefined);
     expect(metrics.snapshot().approval_resolved_total).toMatchObject({
       "decision=once,source=app": 1,
     });
   });
 
-  it("leaves double resolves idempotent and records resolution metrics", async () => {
+  it("rejects a second verdict and records only the accepted resolution", async () => {
     const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
     const metrics = createPushMetrics();
     const service = createShellApprovalService({ approvalQueue, metrics });
@@ -262,10 +278,12 @@ describe("shellApprovalService", () => {
       approvalId,
       "once",
     ]);
-    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolve", [
-      approvalId,
-      "deny",
-    ]);
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolve", [
+        approvalId,
+        "deny",
+      ])
+    ).rejects.toMatchObject({ name: "ServiceError", code: "ENOENT" });
 
     await expect(pendingPromise).resolves.toBe("once");
     expect(approvalQueue.listPending()).toEqual([]);

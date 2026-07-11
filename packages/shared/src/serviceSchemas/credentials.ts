@@ -26,8 +26,8 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 
 // Access descriptors shared across the credentials method groups. The
-// service-level `policy` on the registration is still the enforced caller gate
-// (we deliberately omit `access.callers` here); these descriptors carry the
+// service-level `policy` on the registration is the enforced caller gate; these
+// descriptors carry the
 // doc/safety metadata (sensitivity, approval gates) the capability catalog
 // reads. `approval` entries declare the human-approval gates the handler may
 // open at runtime; the dispatcher guard still performs the actual prompting.
@@ -46,7 +46,7 @@ const STORE_CREDENTIAL_ACCESS: MethodAccessDescriptor = {
     {
       when: "caller is a userland runtime (panel/app/worker/do)",
       operation: { kind: "credential", verb: "Store credential" },
-      grantScopes: ["once", "session", "version", "repo"],
+      grantScopes: ["once", "session", "version"],
       reason: "Persisting a credential the agent supplied requires the user to approve it.",
     },
   ],
@@ -60,7 +60,7 @@ const CONNECT_ACCESS: MethodAccessDescriptor = {
     {
       when: "interactive flow / userland runtime caller",
       operation: { kind: "credential", verb: "Connect credential" },
-      grantScopes: ["once", "session", "version", "repo"],
+      grantScopes: ["once", "session", "version"],
       reason:
         "Running an OAuth/browser sign-in flow and storing the result requires the user to authorize the connection.",
     },
@@ -73,7 +73,7 @@ const REQUEST_CREDENTIAL_INPUT_ACCESS: MethodAccessDescriptor = {
   approval: [
     {
       operation: { kind: "credential", verb: "Enter credential" },
-      grantScopes: ["once", "session", "version", "repo"],
+      grantScopes: ["once", "session", "version"],
       reason: "Collecting a secret from the user and storing it requires explicit user input.",
     },
   ],
@@ -113,7 +113,7 @@ const RESOLVE_CREDENTIAL_ACCESS: MethodAccessDescriptor = {
     {
       when: "caller is not already granted use of the matched credential",
       operation: { kind: "credential", verb: "Use credential" },
-      grantScopes: ["once", "session", "version", "repo"],
+      grantScopes: ["once", "session", "version"],
       reason: "Handing a stored credential to an agent for use requires the user to authorize it.",
     },
   ],
@@ -443,7 +443,6 @@ export const RequestClientConfigParamsSchema = z
 
 export const CredentialFlowTypeSchema = z.enum([
   "oauth2-auth-code-pkce",
-  "oauth2-auth-code",
   "oauth2-device-code",
   "oauth2-client-credentials",
   "oauth1a",
@@ -556,24 +555,6 @@ export const ConnectCredentialSpecSchema = z
             allowMissingExpiry: z.boolean().optional(),
             accountValidation: OAuthAccountValidationSchema.optional(),
             revocationUrl: z.string().url().optional(),
-          })
-          .strict(),
-        z
-          .object({
-            type: z.literal("oauth2-auth-code"),
-            authorizeUrl: z.string().url().optional(),
-            tokenUrl: z.string().url().optional(),
-            clientId: z.string().min(1).max(512).optional(),
-            clientConfigId: IdentifierSchema.optional(),
-            scopes: z.array(z.string().max(256)).optional(),
-            extraAuthorizeParams: z.record(z.string(), z.string()).optional(),
-            tokenAuth: TokenAuthSchema.optional(),
-            persistRefreshToken: z.boolean().optional(),
-            accountValidation: OAuthAccountValidationSchema.optional(),
-            revocationUrl: z.string().url().optional(),
-            pkce: z.literal(false),
-            compatibilityReason: z.string().min(1).max(1024),
-            requiresConfidentialClient: z.boolean().optional(),
           })
           .strict(),
         z
@@ -933,10 +914,9 @@ const CredentialAccessGrantSummarySchema = z
     use: z.enum(["fetch", "git-http", "git-ssh"]),
     resource: z.string(),
     action: z.enum(["read", "write", "use"]),
-    scope: z.enum(["caller", "version", "repo"]),
-    callerId: z.string().optional(),
-    repoPath: z.string().optional(),
-    effectiveVersion: z.string().optional(),
+    scope: z.literal("version"),
+    repoPath: z.string(),
+    effectiveVersion: z.string(),
     grantedAt: z.number(),
     grantedBy: z.string(),
     subjects: z.array(CredentialAccessSubjectSummarySchema),

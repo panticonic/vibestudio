@@ -5,8 +5,8 @@ try {
   runPairServer({
     commandName: "vibestudio remote serve",
     logPrefix: "pair",
-    portEnv: ["VIBESTUDIO_PAIR_PORT", "VIBESTUDIO_MOBILE_PORT"],
-    devEnv: "VIBESTUDIO_MOBILE_DEV",
+    portEnv: ["VIBESTUDIO_PAIR_PORT"],
+    devEnv: "VIBESTUDIO_PAIR_DEV",
     usage: ["vibestudio remote serve", "vibestudio remote serve --dev", "vibestudio remote serve --port 3030"],
     startupHint:
       "[pair] Scan with the Vibestudio mobile app or paste the pairing code in Connection Settings.",

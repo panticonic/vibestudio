@@ -96,13 +96,6 @@ export interface CentralConfig {
   models?: ModelRoleConfig;
   /** Build cache configuration */
   cache?: CacheConfig;
-  /** Remote server configuration (Electron connects to a standalone server) */
-  remote?: {
-    /** Full URL to the remote server gateway (e.g., "http://my-server:3000") */
-    url?: string;
-    /** Admin token for the remote server */
-    token?: string;
-  };
 }
 
 /**
@@ -363,13 +356,11 @@ export interface WorkspaceProvidersDecl {
  * the existing main-advance approval flow — trust changes stay user-gated.
  *
  * A workspace app listed under `chromeApps` may render host chrome
- * (panel-hosting); one under `connectionManagementApps` may mint pairing
- * invites / manage connections. An app NOT listed here never receives the
- * corresponding capability even if its own unit manifest requests it.
+ * (`panel-hosting`). An app not listed never receives that capability even if
+ * its own unit manifest requests it.
  */
 export interface WorkspaceTrustDecl {
   chromeApps?: string[];
-  connectionManagementApps?: string[];
 }
 
 /**
@@ -474,8 +465,7 @@ export interface WorkspaceConfig {
    */
   providers?: WorkspaceProvidersDecl;
   /**
-   * App trust grants (chrome rendering, connection management). Approval-gated
-   * via the meta repo like every other manifest edit.
+   * App trust grants for chrome rendering. Approval-gated via the meta repo.
    */
   trust?: WorkspaceTrustDecl;
   /** Preferred app (and startup-ordering constraints) per host target. */
@@ -522,33 +512,7 @@ export interface CentralConfigPaths {
   secretsPath: string;
   /** Absolute path to .env */
   envPath: string;
-  /** Absolute path to data.json (recent workspaces, etc.) */
-  dataPath: string;
 }
 
-// =============================================================================
-// Central Data Types (for persistence)
-// =============================================================================
-
-// Re-export shared IPC types for convenience
+// Re-export shared IPC types for convenience.
 export type { WorkspaceEntry, SettingsData } from "../types.js";
-
-// Import for use in CentralData
-import type { WorkspaceEntry } from "../types.js";
-
-/**
- * Central data persisted in ~/.config/vibestudio/data.json
- */
-export interface CentralData {
-  /** Managed workspaces (sorted by lastOpened desc) */
-  workspaces: WorkspaceEntry[];
-  /** Last workspace target opened by this client. */
-  lastWorkspaceTarget?:
-    | { kind: "local"; name: string; lastOpened: number }
-    | { kind: "remote"; url: string; workspaceName?: string; lastOpened: number };
-  /**
-   * Remembered quit-prompt choice (global): keep the local workspace server
-   * running for background tasks when the app quits. Absent = ask each time.
-   */
-  keepServerOnQuit?: boolean;
-}

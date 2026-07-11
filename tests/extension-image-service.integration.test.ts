@@ -8,9 +8,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
   gatewayUrl: string;
-  adminToken: string;
-  workspaceName: string;
-  isEphemeral: boolean;
+  connectUrl: string;
+  rootInvites: { desktop: { code: string } } | null;
+  workspaces: Array<{ name: string; workspaceId: string }>;
 }
 
 const RUN_SERVER_INTEGRATION = process.env["VIBESTUDIO_RUN_SERVER_INTEGRATION"] === "1";
@@ -45,13 +45,14 @@ maybeDescribe("image-service extension server smoke", () => {
     const readyFile = path.join(tempRoot, "ready.json");
     proc = spawn(
       process.execPath,
-      [serverPath, "--ephemeral", "--init", "--serve-panels", "--ready-file", readyFile],
+      [serverPath, "--ephemeral", "--serve-panels", "--ready-file", readyFile],
       {
         cwd: process.cwd(),
         env: {
           ...process.env,
           NODE_ENV: "development",
-          VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+          HOME: tempRoot,
+          XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
@@ -67,23 +68,42 @@ maybeDescribe("image-service extension server smoke", () => {
       appendServerOutput(chunk);
     });
 
-    const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
-    const shellToken = await issueShellToken(ready);
+    try {
+      const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
+      const shellToken = await issueShellToken(ready);
 
-    // Extensions are declared in meta/vibestudio.yml; the startup reconcile raises
-    // one joint approval. Approve it as the shell would, then wait for the
-    // image-service process to come up.
-    const approvalId = await waitForUnitBatchApproval(ready, shellToken);
-    await rpc(ready, shellToken, "shellApproval.resolve", [approvalId, "once"]);
-    await waitForExtensionRunning(ready, shellToken, "@workspace-extensions/image-service");
+      // Extensions are declared in meta/vibestudio.yml; the startup reconcile raises
+      // one joint approval. Approve it as the shell would, then wait for the
+      // image-service process to come up.
+      const approvalId = await waitForUnitBatchApproval(ready, shellToken);
+      await rpc(ready, shellToken, "shellApproval.resolve", [approvalId, "once"]);
+      const provenance = await rpc<Array<{ approvalId: string; workspaceId: string }>>(
+        ready,
+        shellToken,
+        "governance.list",
+        [{ filter: { recordKind: "approval" } }]
+      );
+      expect(provenance).toContainEqual(
+        expect.objectContaining({
+          approvalId,
+          workspaceId: ready.workspaces[0]!.workspaceId,
+        })
+      );
+      await waitForExtensionRunning(ready, shellToken, "@workspace-extensions/image-service");
 
-    await expect(
-      rpc(ready, shellToken, "extensions.invoke", [
-        "@workspace-extensions/image-service",
-        "detectMimeType",
-        [[137, 80, 78, 71, 13, 10, 26, 10]],
-      ])
-    ).resolves.toBe("image/png");
+      await expect(
+        rpc(ready, shellToken, "extensions.invoke", [
+          "@workspace-extensions/image-service",
+          "detectMimeType",
+          [[137, 80, 78, 71, 13, 10, 26, 10]],
+        ])
+      ).resolves.toBe("image/png");
+    } catch (error) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\nServer output:\n${serverOutput}`,
+        { cause: error }
+      );
+    }
   }, 120_000);
 });
 
@@ -143,19 +163,70 @@ async function waitForReadyFile(
 }
 
 async function issueShellToken(ready: ReadyPayload): Promise<string> {
-  const response = await fetch(`${ready.gatewayUrl}/_r/s/auth/issue-device`, {
+  const code = ready.rootInvites?.desktop.code;
+  const workspace = ready.workspaces[0]?.name;
+  if (!code || !workspace) throw new Error("fresh hub did not advertise a root invite/workspace");
+  const pairedResponse = await fetch(`${ready.connectUrl}/_r/s/auth/complete-pairing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      handle: "extension-smoke",
+      displayName: "Extension Smoke",
+      label: "Vitest extension smoke",
+      platform: "test",
+    }),
+  });
+  const paired = (await pairedResponse.json()) as {
+    deviceId?: unknown;
+    refreshToken?: unknown;
+    shellToken?: unknown;
+    error?: unknown;
+  };
+  if (
+    !pairedResponse.ok ||
+    typeof paired.deviceId !== "string" ||
+    typeof paired.refreshToken !== "string" ||
+    typeof paired.shellToken !== "string"
+  ) {
+    throw new Error(
+      `failed to pair root device (${pairedResponse.status}): ${JSON.stringify(paired)}`
+    );
+  }
+  const routeResponse = await fetch(`${ready.connectUrl}/rpc`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${ready.adminToken}`,
+      Authorization: `Bearer ${paired.shellToken}`,
     },
-    body: JSON.stringify({ label: "Vitest extension smoke", platform: "test" }),
+    body: JSON.stringify({
+      method: "hubControl.routeWorkspace",
+      args: [{ workspace }],
+    }),
   });
-  const body = (await response.json()) as { shellToken?: unknown; error?: unknown };
-  if (!response.ok || typeof body.shellToken !== "string") {
-    throw new Error(`failed to issue shell token (${response.status}): ${JSON.stringify(body)}`);
+  const routePayload = (await routeResponse.json()) as {
+    result?: { serverUrl?: unknown };
+    error?: unknown;
+  };
+  const route = routePayload.result;
+  if (!routeResponse.ok || typeof route?.serverUrl !== "string") {
+    throw new Error(
+      `failed to route workspace (${routeResponse.status}): ${JSON.stringify(routePayload)}`
+    );
   }
-  return body.shellToken;
+  ready.gatewayUrl = route.serverUrl;
+  const refreshResponse = await fetch(`${route.serverUrl}/_r/s/auth/refresh-shell`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: paired.deviceId, refreshToken: paired.refreshToken }),
+  });
+  const refreshed = (await refreshResponse.json()) as { shellToken?: unknown; error?: unknown };
+  if (!refreshResponse.ok || typeof refreshed.shellToken !== "string") {
+    throw new Error(
+      `failed to refresh child shell (${refreshResponse.status}): ${JSON.stringify(refreshed)}`
+    );
+  }
+  return refreshed.shellToken;
 }
 
 async function rpc<T = unknown>(
@@ -164,27 +235,33 @@ async function rpc<T = unknown>(
   method: string,
   args: unknown[]
 ): Promise<T> {
-  const response = await fetch(`${ready.gatewayUrl}/rpc`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${shellToken}`,
-    },
-    body: JSON.stringify(
-      envelopeFromMessage({
-        from: "extension-image-service-integration",
-        target: "main",
-        callerKind: "shell",
-        message: {
-          type: "request",
-          requestId: randomUUID(),
-          fromId: "extension-image-service-integration",
-          method,
-          args,
-        },
-      })
-    ),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${ready.gatewayUrl}/rpc`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${shellToken}`,
+      },
+      body: JSON.stringify(
+        envelopeFromMessage({
+          from: "extension-image-service-integration",
+          target: "main",
+          callerKind: "shell",
+          message: {
+            type: "request",
+            requestId: randomUUID(),
+            fromId: "extension-image-service-integration",
+            method,
+            args,
+          },
+        })
+      ),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    throw new Error(`RPC ${method} did not respond`, { cause: error });
+  }
   const json = (await response.json()) as
     | { error?: string }
     | { message?: { result?: T; error?: string } }

@@ -7,10 +7,10 @@
  *    the latter also records the snapshot in the gad-store DO as provenance),
  *  - editable checkout of a state onto disk (`materializeState`, driven by
  *    the DiskProjector follower),
- *  - the state-mirroring invariant's lazy half (`ensureStateMirrored`) and
+ *  - strict enforcement of the state-mirroring invariant (`ensureStateMirrored`) and
  *    content-store listings (`listStateFiles`, `collectTreeFiles`),
  *  - the narrow gad-store DO passthroughs the above need (`resolveWorktreeRef`
- *    / `resolveWorktreeHead`, the DO listing fallback, context-head fork).
+ *    / `resolveWorktreeHead`, context-head fork).
  *
  * The `.gad/` sidecar (`CHECKOUT.json`) is a P1 cache — derivation "stat() of
  * every file at the last snapshot/materialize"; deleting it only costs a
@@ -620,9 +620,8 @@ export class WorktreeStore {
 
   /**
    * Full file listing of a state, in the {@link TargetFile} shape — CONTENT
-   * STORE FIRST (the tree authority): `ensureStateMirrored` guarantees the
-   * tree (one stat when already mirrored; a DO listing fetch + verified
-   * mirror otherwise), then the listing is read from the CAS tree objects.
+   * STORE ONLY (the tree authority): `ensureStateMirrored` verifies the
+   * canonical tree exists, then the listing is read from the CAS tree objects.
    * This keeps every listing consumer (materialize, decompose, indexes)
    * working for states the gad DO has not (yet) recorded — composed views
    * minted server-side and fresh scan states the async provenance follower
@@ -642,19 +641,11 @@ export class WorktreeStore {
   }
 
   /**
-   * Ensure the content store holds the full tree for a worktree state — the
-   * LAZY half of the mirroring invariant: *any state hash the system hands out
-   * can be resolved to a full tree in the content store, eagerly or on first
-   * read.* Server paths that hold the file list in memory mirror eagerly at
-   * mint time; states minted inside the DO where the server never saw the
-   * listing (composed workspace/context views, subtree states, historical
-   * states) go through here before a tree read.
-   *
-   * Already-mirrored states cost one stat (the `state:` node's presence
-   * implies the complete tree — it is always written last). Otherwise the
-   * listing is fetched from the DO, re-encoded with the shared (byte-identical)
-   * worktree hashing, ASSERTED to reproduce the requested state hash — a
-   * truncated/corrupt listing fails loudly and writes nothing — and mirrored.
+   * Verify the content store holds the full canonical tree for a worktree
+   * state. Every current state producer mirrors before publishing the hash;
+   * absence is an invariant violation and is never repaired from a second
+   * authority. The `state:` node is written last, so its presence implies the
+   * complete tree.
    */
   async ensureStateMirrored(stateHash: string): Promise<void> {
     if (await hasTreeObject(this.deps.blobsDir, stateHash)) return;
@@ -663,13 +654,8 @@ export class WorktreeStore {
       await mirrorWorktreeTree(this.deps.blobsDir, []);
       return;
     }
-    // DO fallback (historical states minted inside the store before the
-    // mirroring invariant): fetch the listing and mirror it, verified.
-    const files = await this.deps.gad.call<TargetFile[]>("listStateFiles", { stateHash });
-    await mirrorWorktreeTree(
-      this.deps.blobsDir,
-      files.map((file) => ({ path: file.path, contentHash: file.content_hash, mode: file.mode })),
-      { expectStateHash: stateHash }
+    throw new Error(
+      `state ${stateHash} is missing its canonical content-store tree; the producing operation did not satisfy the mirroring invariant`
     );
   }
 

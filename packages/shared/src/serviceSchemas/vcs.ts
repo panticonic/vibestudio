@@ -10,10 +10,9 @@ import {
 
 const nullableString = z.string().nullable();
 
-// Access descriptors shared across the read/write method groups. The legacy
-// caller-kind gate stays on the service `policy` (allowed: shell/panel/app/
-// server/worker/do/extension), so these carry only doc/safety metadata
-// (sensitivity) and deliberately OMIT `callers`.
+// Access descriptors shared across the read/write method groups carry
+// documentation and safety metadata. The service policy is the enforced
+// caller-kind gate.
 //
 // Reads are pure projections of GAD state (status/log/diff/readFile/
 // resolveHead/recall). Writes are tracked WORKING edits (edit/revert) or head

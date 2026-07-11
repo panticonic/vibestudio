@@ -525,6 +525,36 @@ describe("SignalingRoom", () => {
     expect(body.error).toContain("mint failed");
   });
 
+  it("rejects a non-array Cloudflare TURN response instead of accepting an old shape", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          iceServers: {
+            urls: "turn:turn.cloudflare.com:3478?transport=udp",
+            username: "user",
+            credential: "pass",
+          },
+        }),
+      }))
+    );
+    const { room } = makeRoom({
+      ENVIRONMENT: "test",
+      TURN_KEY_ID: "key-1",
+      TURN_KEY_API_TOKEN: "secret-1",
+    });
+
+    const res = await room.fetch(iceRequest());
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toMatchObject({
+      error: expect.stringContaining("non-empty `iceServers` array"),
+    });
+  });
+
   it("rejects a non-websocket request to the room path", async () => {
     const { room } = makeRoom();
     const res = await room.fetch({

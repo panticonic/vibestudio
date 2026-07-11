@@ -6,7 +6,6 @@ import type { RpcClient } from "../rpcClient.js";
 import {
   bridgeInstructions,
   createSkillResources,
-  deriveVesselRef,
   normalizeServerUrl,
   resolveBridgeConfig,
   skillNameFromUri,
@@ -28,19 +27,37 @@ afterEach(() => {
 
 const LAUNCH_ENV = {
   VIBESTUDIO_AGENT_TOKEN: "agent:agt_1:secret",
-  VIBESTUDIO_SERVER_URL: "ws://127.0.0.1:4123/rpc",
+  VIBESTUDIO_SERVER_URL: "http://127.0.0.1:4123",
   VIBESTUDIO_ENTITY_ID: "ent-1",
   VIBESTUDIO_CONTEXT_ID: "ctx-1",
   VIBESTUDIO_CHANNEL_ID: "chan-1",
+  VIBESTUDIO_VESSEL_REF: "do:workers/linked-agent:LinkedAgentWorker:linked:ent-1",
 } as NodeJS.ProcessEnv;
 
 const DEVICE_CREDS = {
-  schemaVersion: 1,
+  schemaVersion: 3,
   kind: "device",
-  url: "http://127.0.0.1:4123",
-  deviceId: "dev_1",
-  refreshToken: "rt",
-} as unknown as NonNullable<ReturnType<typeof import("../credentialStore.js").loadCliCredentials>>;
+  url: "webrtc://room-1234/_workspace/dev",
+  workspaceName: "dev",
+  serverId: `srv_${"S".repeat(24)}`,
+  deviceId: `dev_${"D".repeat(24)}`,
+  refreshToken: "R".repeat(43),
+  controlPairing: {
+    room: "room-control",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example/",
+    v: 2,
+    ice: "all",
+  },
+  workspacePairing: {
+    room: "room-1234",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example/",
+    v: 2,
+    ice: "all",
+  },
+  pairedAt: 1,
+} satisfies NonNullable<ReturnType<typeof import("../credentialStore.js").loadCliCredentials>>;
 
 function fakeClient(handlers: Record<string, (args: unknown[]) => unknown>): RpcClient {
   return {
@@ -69,27 +86,24 @@ function preparedFor(contextFolder: string) {
   };
 }
 
-describe("normalizeServerUrl / deriveVesselRef", () => {
-  it("normalizes the ws rpc form to the http base", () => {
-    expect(normalizeServerUrl("ws://127.0.0.1:4123/rpc")).toBe("http://127.0.0.1:4123");
-    expect(normalizeServerUrl("wss://host.example:443/rpc")).toBe("https://host.example");
+describe("normalizeServerUrl", () => {
+  it("accepts a canonical base and rejects websocket endpoint aliases", () => {
     expect(normalizeServerUrl("http://127.0.0.1:4123")).toBe("http://127.0.0.1:4123");
-  });
-
-  it("derives the vessel DO target id from the entity", () => {
-    expect(deriveVesselRef("ent-1")).toBe("do:workers/linked-agent:LinkedAgentWorker:linked:ent-1");
+    expect(() => normalizeServerUrl("ws://127.0.0.1:4123/rpc")).toThrow(
+      /Unsupported server URL protocol/
+    );
   });
 });
 
 describe("resolveBridgeConfig", () => {
-  it("prefers the launch-profile env and derives the vessel ref", async () => {
+  it("prefers the complete canonical launch-profile env", async () => {
     const config = await resolveBridgeConfig(
       { ...LAUNCH_ENV, VIBESTUDIO_LAUNCH_PROFILE: tmpRoot },
       { cwd: tmpRoot }
     );
     expect(config.mode).toBe("launched");
     expect(config.serverUrl).toBe("http://127.0.0.1:4123");
-    expect(config.vesselRef).toBe(deriveVesselRef("ent-1"));
+    expect(config.vesselRef).toBe(LAUNCH_ENV["VIBESTUDIO_VESSEL_REF"]);
     expect(config.hookSocketPaths[0]).toBe(path.join(tmpRoot, "hook.sock"));
     // Fallback per-context socket is always listened on too.
     expect(config.hookSocketPaths[1]).toContain("agent-sockets");

@@ -44,25 +44,22 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
     try {
       const raw = fs.readFileSync(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as unknown;
-      const records = Array.isArray(parsed)
-        ? parsed
-        : parsed &&
-            typeof parsed === "object" &&
-            Array.isArray((parsed as { grants?: unknown }).grants)
-          ? (parsed as { grants: unknown[] }).grants
-          : [];
-      this.grants = records.filter(isStoredCredentialUseGrant);
+      if (!isStoredCredentialUseGrantFile(parsed)) {
+        throw new Error("expected the current exact { grants } schema");
+      }
+      this.grants = parsed.grants;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         this.grants = [];
         return;
       }
       console.warn(
-        `[CredentialUseGrantStore] Ignoring unreadable grant store ${this.filePath}: ${
+        `[CredentialUseGrantStore] Resetting invalid grant store ${this.filePath}: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
       this.grants = [];
+      this.save();
     }
   }
 
@@ -72,18 +69,47 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
   }
 }
 
+function isStoredCredentialUseGrantFile(
+  value: unknown
+): value is { grants: StoredCredentialUseGrant[] } {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    Array.isArray((value as { grants?: unknown }).grants) &&
+    (value as { grants: unknown[] }).grants.every(isStoredCredentialUseGrant)
+  );
+}
+
 function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUseGrant {
   if (!value || typeof value !== "object") return false;
   const grant = value as Partial<StoredCredentialUseGrant>;
   return (
+    Object.keys(grant).every((key) =>
+      [
+        "credentialId",
+        "bindingId",
+        "use",
+        "resource",
+        "action",
+        "scope",
+        "repoPath",
+        "effectiveVersion",
+        "grantedAt",
+        "grantedBy",
+      ].includes(key)
+    ) &&
     typeof grant.credentialId === "string" &&
     typeof grant.bindingId === "string" &&
-    typeof grant.use === "string" &&
+    (grant.use === "fetch" || grant.use === "git-http" || grant.use === "git-ssh") &&
     typeof grant.resource === "string" &&
-    typeof grant.action === "string" &&
-    typeof grant.scope === "string" &&
-    typeof grant.grantedAt === "number" &&
-    typeof grant.grantedBy === "string"
+    (grant.action === "read" || grant.action === "write" || grant.action === "use") &&
+    grant.scope === "version" &&
+    Number.isFinite(grant.grantedAt) &&
+    typeof grant.grantedBy === "string" &&
+    typeof grant.repoPath === "string" &&
+    typeof grant.effectiveVersion === "string"
   );
 }
 
@@ -95,8 +121,7 @@ function storedCredentialUseGrantKey(grant: StoredCredentialUseGrant): string {
     grant.resource,
     grant.action,
     grant.scope,
-    grant.callerId ?? "",
-    grant.repoPath ?? "",
-    grant.effectiveVersion ?? "",
+    grant.repoPath,
+    grant.effectiveVersion,
   ].join("\x00");
 }

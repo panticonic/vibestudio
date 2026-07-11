@@ -238,7 +238,13 @@ export class HostTargetLaunchCoordinator {
     const appHost = this.deps.getAppHost();
     if (!appHost) return unavailableResult(target, "App host is not available", []);
 
-    const launch = await appHost.launchHostTarget(target);
+    let launch = await appHost.launchHostTarget(target);
+    if (launch.status === "preparing" && target !== "react-native") {
+      launch = {
+        ...launch,
+        details: this.hostTargetPreparingDetails(target, launch.details),
+      };
+    }
     if (
       target === "react-native" &&
       launch.status === "unavailable" &&
@@ -372,6 +378,28 @@ export class HostTargetLaunchCoordinator {
       ...details,
       ...building.map((unit) => `${unit.name} (${unit.source}) status: ${unit.status}`),
     ];
+  }
+
+  private hostTargetPreparingDetails(target: HostTarget, details: string[]): string[] {
+    const appSource = this.deps.getAppHost()?.selectedHostTargetAppSource(target) ?? null;
+    const appPackageName = appSource ? tryWorkspaceAppPackageName(appSource) : null;
+    const building = this.deps
+      .getTrustedUnitHosts()
+      .flatMap((host) => host.listWorkspaceUnits())
+      .filter(
+        (unit) =>
+          unit.status === "building" &&
+          (unit.kind === "extension" ||
+            (appSource !== null && unit.source === appSource) ||
+            (appPackageName !== null && unit.name === appPackageName))
+      );
+    const visible = building
+      .slice(0, 8)
+      .map((unit) => `${unit.name} (${unit.source}) status: ${unit.status}`);
+    if (building.length > visible.length) {
+      visible.push(`${building.length - visible.length} more privileged units are building`);
+    }
+    return [...details, ...visible];
   }
 
   private emitPayload(payload: HostTargetChangedPayload): void {

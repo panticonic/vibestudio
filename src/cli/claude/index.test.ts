@@ -20,7 +20,7 @@ describe("findContextMarker", () => {
     const marker = {
       contextId: "ctx-42",
       workspaceId: "ws",
-      serverUrl: "http://127.0.0.1:5000/rpc",
+      serverUrl: "http://127.0.0.1:5000/_workspace/dev",
     };
     fs.writeFileSync(path.join(tmpRoot, ".vibestudio-context.json"), JSON.stringify(marker));
     const nested = path.join(tmpRoot, "a", "b", "c");
@@ -29,7 +29,7 @@ describe("findContextMarker", () => {
     const found = findContextMarker(nested);
     expect(found).not.toBeNull();
     expect(found?.contextId).toBe("ctx-42");
-    expect(found?.serverUrl).toBe("http://127.0.0.1:5000/rpc");
+    expect(found?.serverUrl).toBe("http://127.0.0.1:5000/_workspace/dev");
   });
 
   it("returns null when no marker exists in any ancestor", () => {
@@ -40,6 +40,14 @@ describe("findContextMarker", () => {
 
   it("returns null for an invalid marker file", () => {
     fs.writeFileSync(path.join(tmpRoot, ".vibestudio-context.json"), "{ not json");
+    expect(findContextMarker(tmpRoot)).toBeNull();
+  });
+
+  it("rejects marker fields outside the canonical schema", () => {
+    fs.writeFileSync(
+      path.join(tmpRoot, ".vibestudio-context.json"),
+      JSON.stringify({ contextId: "ctx-1", entityHint: "retired-alias" })
+    );
     expect(findContextMarker(tmpRoot)).toBeNull();
   });
 });

@@ -2,23 +2,38 @@
  * Push Notification Service — manages push notification registrations
  * for mobile/remote shell clients and delivers approval pushes through FCM.
  *
- * Registrations are persisted to ~/.config/vibestudio/push-registrations.json
- * so they survive server restarts. Delivery gracefully degrades to log-only
- * when Firebase credentials or firebase-admin are unavailable.
+ * Registrations are persisted as independently addressable SQLite rows so
+ * multiple workspace processes cannot overwrite one another. Delivery
+ * gracefully degrades to log-only when Firebase is unavailable.
  */
 
 import * as fs from "fs";
 import * as path from "path";
+import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { PushApprovalDataPayload } from "@vibestudio/shared/approvalContract";
 import { pushMethods } from "@vibestudio/shared/serviceSchemas/push";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  assertCanonicalSqliteSchema,
+  initializeCanonicalSqliteSchema,
+  isTrulyEmptySqliteDatabase,
+  type CanonicalSqliteSchema,
+} from "@vibestudio/shared/sqliteSchema";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 export interface PushRegistration {
   token: string;
   platform: "ios" | "android" | "web";
   clientId: string;
+  /**
+   * Owning user (WP4 §4.2), stamped from the host-verified `ctx.caller.subject`
+   * at `register` time (INV-3) — NEVER from the client's `register` args (which
+   * carry only token/platform/clientId). The device asserts its FCM token; the
+   * host asserts whose it is. Target selection uses this field so a workspace's
+   * approval reaches only member devices, never every device on the machine.
+   */
+  userId: string;
   registeredAt: number;
 }
 
@@ -38,6 +53,7 @@ export interface PushBroadcastOptions {
 }
 
 export interface PushSendResult {
+  userId: string;
   clientId: string;
   platform: PushRegistration["platform"];
   sent: boolean;
@@ -45,13 +61,35 @@ export interface PushSendResult {
   error?: string;
 }
 
+export interface PushDeliveryTarget {
+  userId: string;
+  clientId: string;
+}
+
 export interface PushServiceInternal {
-  send(opts: PushSendOptions): Promise<PushSendResult>;
-  sendBatch(opts: PushBroadcastOptions): Promise<PushSendResult[]>;
-  cancel(approvalId: string, cancelKey?: string): Promise<PushSendResult[]>;
+  send(userId: string, opts: PushSendOptions): Promise<PushSendResult>;
+  /**
+   * Deliver to the exact user/client registrations selected by the caller.
+   * Missing or concurrently removed registrations are skipped.
+   */
+  sendToTargets(
+    targets: readonly PushDeliveryTarget[],
+    opts: PushBroadcastOptions
+  ): Promise<PushSendResult[]>;
+  /**
+   * Cancel an approval on the exact user/client targets that successfully
+   * received it. The caller snapshots these identities at delivery time.
+   */
+  cancel(
+    targets: readonly PushDeliveryTarget[],
+    approvalId: string,
+    cancelKey?: string
+  ): Promise<PushSendResult[]>;
   listRegistrations(): PushRegistration[];
   onRegistrationsChanged(listener: () => void): () => void;
-  unregister(clientId: string): boolean;
+  unregister(userId: string, clientId: string): boolean;
+  /** Idempotent revocation cascade: remove every persisted device for a user. */
+  unregisterUser(userId: string): number;
 }
 
 export interface PushServiceResult {
@@ -66,46 +104,130 @@ interface FirebaseMessagingClient {
 type FirebaseAdminLoader = () => Promise<FirebaseMessagingClient | null>;
 
 interface PushServiceDeps {
-  registrationsPath?: string;
+  databasePath?: string;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
   firebaseAdminLoader?: FirebaseAdminLoader;
   metrics?: PushMetrics;
 }
 
-/** File path for persisted push registrations */
-function getRegistrationsPath(): string {
-  const configDir = getCentralDataPath();
-  return path.join(configDir, "push-registrations.json");
+const PUSH_DATABASE_SCHEMA: CanonicalSqliteSchema = {
+  version: 1,
+  objects: [
+    {
+      type: "table",
+      name: "push_registrations",
+      sql: `CREATE TABLE push_registrations (
+        user_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        platform TEXT NOT NULL CHECK(platform IN ('ios', 'android', 'web')),
+        registered_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, client_id)
+      )`,
+    },
+    {
+      type: "index",
+      name: "push_registrations_by_user",
+      sql: "CREATE INDEX push_registrations_by_user ON push_registrations(user_id)",
+    },
+  ],
+};
+
+function getPushDatabasePath(): string {
+  return path.join(getCentralDataPath(), "server-auth", "push.db");
 }
 
-/** Load registrations from disk. Returns an empty map on any failure. */
-function loadRegistrations(filePath = getRegistrationsPath()): Map<string, PushRegistration> {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return new Map();
+function rowToRegistration(row: Record<string, SQLOutputValue>): PushRegistration {
+  return {
+    userId: row["user_id"] as string,
+    clientId: row["client_id"] as string,
+    token: row["token"] as string,
+    platform: row["platform"] as PushRegistration["platform"],
+    registeredAt: row["registered_at"] as number,
+  };
+}
+
+class PushRegistrationStore {
+  private readonly db: DatabaseSync;
+
+  constructor(databasePath: string) {
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+    this.db = new DatabaseSync(databasePath);
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    try {
+      if (isTrulyEmptySqliteDatabase(this.db)) {
+        initializeCanonicalSqliteSchema(this.db, PUSH_DATABASE_SCHEMA);
+      } else {
+        assertCanonicalSqliteSchema(
+          this.db,
+          PUSH_DATABASE_SCHEMA,
+          `push schema in ${databasePath}`
+        );
+      }
+      this.db.exec("PRAGMA journal_mode = WAL");
+    } catch (error) {
+      this.db.close();
+      throw error;
     }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const entries = JSON.parse(raw) as Array<[string, PushRegistration]>;
-    return new Map(entries);
-  } catch (error) {
-    console.warn("[PushService] Failed to load registrations from disk:", error);
-    return new Map();
   }
-}
 
-/** Save registrations to disk. Logs a warning on failure. */
-function saveRegistrations(
-  registrations: Map<string, PushRegistration>,
-  filePath = getRegistrationsPath()
-): void {
-  try {
-    const dir = path.dirname(filePath);
-    fs.mkdirSync(dir, { recursive: true });
-    const entries = [...registrations.entries()];
-    fs.writeFileSync(filePath, JSON.stringify(entries, null, 2), "utf-8");
-  } catch (error) {
-    console.warn("[PushService] Failed to save registrations to disk:", error);
+  list(): PushRegistration[] {
+    return this.db
+      .prepare("SELECT * FROM push_registrations ORDER BY registered_at, user_id, client_id")
+      .all()
+      .map(rowToRegistration);
+  }
+
+  get(userId: string, clientId: string): PushRegistration | null {
+    const row = this.db
+      .prepare("SELECT * FROM push_registrations WHERE user_id = ? AND client_id = ?")
+      .get(userId, clientId);
+    return row ? rowToRegistration(row) : null;
+  }
+
+  upsert(registration: PushRegistration): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // An FCM token identifies one physical installation. Moving it between
+      // accounts must remove the old owner atomically.
+      this.db.prepare("DELETE FROM push_registrations WHERE token = ?").run(registration.token);
+      this.db
+        .prepare(
+          `INSERT INTO push_registrations
+             (user_id, client_id, token, platform, registered_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, client_id) DO UPDATE SET
+             token = excluded.token,
+             platform = excluded.platform,
+             registered_at = excluded.registered_at`
+        )
+        .run(
+          registration.userId,
+          registration.clientId,
+          registration.token,
+          registration.platform,
+          registration.registeredAt
+        );
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  delete(userId: string, clientId: string): boolean {
+    return (
+      this.db
+        .prepare("DELETE FROM push_registrations WHERE user_id = ? AND client_id = ?")
+        .run(userId, clientId).changes > 0
+    );
+  }
+
+  deleteUser(userId: string): number {
+    return Number(
+      this.db.prepare("DELETE FROM push_registrations WHERE user_id = ?").run(userId).changes
+    );
   }
 }
 
@@ -262,8 +384,7 @@ function isInvalidTokenError(error: unknown): boolean {
 }
 
 export function createPushService(deps: PushServiceDeps = {}): PushServiceResult {
-  const registrationsPath = deps.registrationsPath ?? getRegistrationsPath();
-  const registrations = loadRegistrations(registrationsPath);
+  const store = new PushRegistrationStore(deps.databasePath ?? getPushDatabasePath());
   const now = deps.now ?? (() => Date.now());
   const metrics = deps.metrics ?? pushMetrics;
   const loadFirebase =
@@ -280,8 +401,9 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
     }
   }
 
-  if (registrations.size > 0) {
-    console.log(`[PushService] Loaded ${registrations.size} persisted registration(s)`);
+  const initialRegistrationCount = store.list().length;
+  if (initialRegistrationCount > 0) {
+    console.log(`[PushService] Loaded ${initialRegistrationCount} persisted registration(s)`);
   }
 
   async function sendToRegistration(
@@ -295,6 +417,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
         console.log(`[PushService] Log-only push for ${registration.clientId}: ${opts.title}`);
         metrics.recordPushSend({ platform: registration.platform, category, outcome: "log-only" });
         return {
+          userId: registration.userId,
           clientId: registration.clientId,
           platform: registration.platform,
           sent: true,
@@ -305,6 +428,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
       await client.send(buildFirebaseMessage(registration, opts));
       metrics.recordPushSend({ platform: registration.platform, category, outcome: "sent" });
       return {
+        userId: registration.userId,
         clientId: registration.clientId,
         platform: registration.platform,
         sent: true,
@@ -312,8 +436,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
       };
     } catch (error) {
       if (isInvalidTokenError(error)) {
-        registrations.delete(registration.clientId);
-        saveRegistrations(registrations, registrationsPath);
+        store.delete(registration.userId, registration.clientId);
         emitRegistrationsChanged();
       }
       metrics.recordPushSend({ platform: registration.platform, category, outcome: "failed" });
@@ -322,8 +445,8 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
   }
 
   const internal: PushServiceInternal = {
-    async send(opts) {
-      const registration = registrations.get(opts.clientId);
+    async send(userId, opts) {
+      const registration = store.get(userId, opts.clientId);
       if (!registration) {
         metrics.recordPushSend({
           platform: "unknown",
@@ -335,14 +458,20 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
       return sendToRegistration(registration, opts);
     },
 
-    async sendBatch(opts) {
+    async sendToTargets(deliveryTargets, opts) {
       const results: PushSendResult[] = [];
-      for (const registration of registrations.values()) {
+      const targets = new Map(
+        deliveryTargets.map((target) => [`${target.userId}\0${target.clientId}`, target])
+      );
+      for (const target of targets.values()) {
+        const registration = store.get(target.userId, target.clientId);
+        if (!registration) continue;
         try {
           results.push(await sendToRegistration(registration, opts));
         } catch (error) {
           console.warn(`[PushService] Push send failed for ${registration.clientId}:`, error);
           results.push({
+            userId: registration.userId,
             clientId: registration.clientId,
             platform: registration.platform,
             sent: false,
@@ -354,9 +483,9 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
       return results;
     },
 
-    async cancel(approvalId, cancelKey) {
+    async cancel(targets, approvalId, cancelKey) {
       metrics.recordPushCancel();
-      return internal.sendBatch({
+      return internal.sendToTargets(targets, {
         title: "",
         data: {
           kind: "approval-cancel",
@@ -367,7 +496,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
     },
 
     listRegistrations() {
-      return [...registrations.values()];
+      return store.list();
     },
 
     onRegistrationsChanged(listener) {
@@ -375,14 +504,19 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
       return () => registrationListeners.delete(listener);
     },
 
-    unregister(clientId) {
-      const existed = registrations.delete(clientId);
+    unregister(userId, clientId) {
+      const existed = store.delete(userId, clientId);
       if (existed) {
-        saveRegistrations(registrations, registrationsPath);
         console.log(`[PushService] Unregistered device for client ${clientId}`);
         emitRegistrationsChanged();
       }
       return existed;
+    },
+
+    unregisterUser(userId) {
+      const removed = store.deleteUser(userId);
+      if (removed > 0) emitRegistrationsChanged();
+      return removed;
     },
   };
 
@@ -391,22 +525,32 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
     description: "Push notification device registration and delivery",
     policy: { allowed: ["shell", "app", "server"] },
     methods: pushMethods,
-    handler: async (_ctx, method, args) => {
+    handler: async (ctx, method, args) => {
       switch (method) {
         case "register": {
           const [opts] = args as [
             { token: string; platform: "ios" | "android" | "web"; clientId: string },
           ];
+          // Single source of truth for routing (WP4 §4.2 / INV-3): the owning
+          // user is the HOST-VERIFIED subject on the caller context, never the
+          // client's strict `register` args. Retired client-owned `userId`
+          // fields are rejected at the service-schema boundary.
+          const userId = ctx.caller.subject?.userId;
+          if (!userId) {
+            throw new Error(
+              "push.register requires an attributed caller (no subject on ctx.caller)"
+            );
+          }
           const registration: PushRegistration = {
             token: opts.token,
             platform: opts.platform,
             clientId: opts.clientId,
+            userId,
             registeredAt: now(),
           };
-          registrations.set(opts.clientId, registration);
-          saveRegistrations(registrations, registrationsPath);
+          store.upsert(registration);
           console.log(
-            `[PushService] Registered device for client ${opts.clientId} (${opts.platform})`
+            `[PushService] Registered device for client ${opts.clientId} (${opts.platform}) → user ${userId}`
           );
           emitRegistrationsChanged();
           return { registered: true };
@@ -414,12 +558,22 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
 
         case "unregister": {
           const [clientId] = args as [string];
-          return { unregistered: internal.unregister(clientId) };
+          const userId = ctx.caller.subject?.userId;
+          if (!userId) {
+            throw new Error(
+              "push.unregister requires an attributed caller (no subject on ctx.caller)"
+            );
+          }
+          return { unregistered: internal.unregister(userId, clientId) };
         }
 
         case "send": {
           const [opts] = args as [PushSendOptions];
-          return internal.send(opts);
+          const userId = ctx.caller.subject?.userId;
+          if (!userId) {
+            throw new Error("push.send requires an attributed caller (no subject on ctx.caller)");
+          }
+          return internal.send(userId, opts);
         }
 
         case "listRegistrations": {

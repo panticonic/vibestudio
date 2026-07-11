@@ -73,8 +73,8 @@ export class PanelInitClient {
         callVoid("workspace-state.slot.setParent", [slotId, parentSlotId]),
       setSlotPosition: (slotId, positionId) =>
         callVoid("workspace-state.slot.setPosition", [slotId, positionId]),
-      moveSlot: (slotId, parentSlotId, positionId) =>
-        callVoid("workspace-state.slot.move", [slotId, parentSlotId, positionId]),
+      moveSlot: (slotId, parentSlotId, positionId, ownerUserId) =>
+        callVoid("workspace-state.slot.move", [slotId, parentSlotId, positionId, ownerUserId]),
       closeSlot: (slotId) => callVoid("workspace-state.slot.close", [slotId]),
     };
 

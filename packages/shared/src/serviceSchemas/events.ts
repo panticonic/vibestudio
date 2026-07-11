@@ -7,8 +7,8 @@ import type { MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
 // Access descriptors shared across the events methods. The service-level
-// `policy` on the registration stays the enforced caller gate (we omit
-// `access.callers` here); these carry the doc/safety metadata the read-only
+// `policy` on the registration is the enforced caller gate; these carry the
+// doc/safety metadata the read-only
 // gate and capability catalog read. Subscription bookkeeping mutates the
 // caller's server-side subscriber table, so subscribe/unsubscribe are writes.
 const SUBSCRIBE_ACCESS: MethodAccessDescriptor = {

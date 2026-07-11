@@ -3,29 +3,26 @@ export const CONNECT_DEEP_LINK_HOST = "connect";
 export const PAIR_LINK_ORIGIN = "https://vibestudio.app";
 export const PAIR_LINK_PATH = "/pair";
 export const DEFAULT_SIGNAL_URL = "wss://signal.vibestudio.app/";
-export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{16,512}$/;
+/** Current pairing issuer output: exactly 24 random bytes encoded as base64url. */
+export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 /** Signaling rendezvous room id (UUID or base64url token). */
 export const PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 /** DTLS SHA-256 fingerprint after stripping colons: 32 bytes = 64 hex chars. */
 const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
+const CONNECT_PARAMETER_KEYS = new Set(["room", "fp", "code", "sig", "v", "ice", "srv"]);
 /**
- * v2 = room-per-invite pairing (multi-client redesign). The parser REQUIRES
- * exactly this version: v1 links carried a per-server singleton room that no
- * longer exists, so they are rejected outright — re-pair with a current link.
+ * Current room-per-invite pairing protocol. Parsers require this exact version.
  */
 export const PAIRING_PROTOCOL_VERSION = 2;
 
 export type TurnPolicy = "all" | "relay";
 export type ConnectLinkCarrier = "scheme" | "https";
-export type SignalingResolutionSource = "flag" | "env" | "config" | "default";
+export type SignalingResolutionSource = "flag" | "env" | "default";
 
 /**
- * The WebRTC pairing payload carried in the QR / deep link. Replaces the old
- * `url`+`code` server-origin link OUTRIGHT (no versioned shim): the shell no
- * longer dials a server URL — it joins a signaling room and pins the server's
- * DTLS fingerprint. `room`/`fp`/`code`/`sig` are required; `v`/`ice`/`srv` are
- * optional with documented defaults.
+ * The exact WebRTC pairing payload carried in the QR / deep link. The shell
+ * joins a signaling room and pins the server's DTLS fingerprint.
  */
 export interface ConnectPairing {
   /** Unguessable signaling rendezvous room id. */
@@ -36,17 +33,15 @@ export interface ConnectPairing {
   code: string;
   /** Signaling endpoint (decouples us from a hard-coded host). */
   sig: string;
-  /** Protocol version (defaults to PAIRING_PROTOCOL_VERSION; must be 2). */
-  v?: number;
-  /** TURN policy — force `relay` to validate TURN-over-TLS:443 (defaults `all`). */
-  ice?: TurnPolicy;
+  /** Exact current protocol version. */
+  v: typeof PAIRING_PROTOCOL_VERSION;
+  /** TURN policy — `relay` forces TURN-over-TLS:443 validation. */
+  ice: TurnPolicy;
   /** Optional server/workspace label to disambiguate servers. */
   srv?: string;
 }
 
-export type ConnectLink =
-  | ({ kind: "ok" } & ConnectPairing)
-  | { kind: "error"; reason: string };
+export type ConnectLink = ({ kind: "ok" } & ConnectPairing) | { kind: "error"; reason: string };
 export type SignalingResolution = { url: string; source: SignalingResolutionSource };
 type QueryParseResult =
   | { kind: "ok"; values: Map<string, string> }
@@ -59,13 +54,33 @@ export function normalizeFingerprint(fp: string): string {
 }
 
 function encodeConnectParams(pairing: ConnectPairing): string {
+  const signaling = parseSignalingEndpoint(pairing.sig);
+  if (!PAIRING_ROOM_PATTERN.test(pairing.room)) {
+    throw new Error("Cannot create pairing link: room has an unexpected format");
+  }
+  const fingerprint = normalizeFingerprint(pairing.fp);
+  if (!FINGERPRINT_HEX_PATTERN.test(fingerprint)) {
+    throw new Error("Cannot create pairing link: fingerprint must be SHA-256");
+  }
+  if (!PAIRING_CODE_PATTERN.test(pairing.code)) {
+    throw new Error("Cannot create pairing link: code has an unexpected format");
+  }
+  if (signaling.kind === "error") {
+    throw new Error(`Cannot create pairing link: ${signaling.reason}`);
+  }
+  if (pairing.v !== PAIRING_PROTOCOL_VERSION) {
+    throw new Error(`Cannot create pairing link: expected v=${PAIRING_PROTOCOL_VERSION}`);
+  }
+  if (pairing.ice !== "all" && pairing.ice !== "relay") {
+    throw new Error("Cannot create pairing link: ice must be `all` or `relay`");
+  }
   const params: string[] = [
     `room=${encodeURIComponent(pairing.room)}`,
-    `fp=${encodeURIComponent(pairing.fp)}`,
+    `fp=${encodeURIComponent(fingerprint)}`,
     `code=${encodeURIComponent(pairing.code)}`,
-    `sig=${encodeURIComponent(pairing.sig)}`,
-    `v=${encodeURIComponent(String(pairing.v ?? PAIRING_PROTOCOL_VERSION))}`,
-    `ice=${encodeURIComponent(pairing.ice ?? "all")}`,
+    `sig=${encodeURIComponent(signaling.url)}`,
+    `v=${encodeURIComponent(String(pairing.v))}`,
+    `ice=${encodeURIComponent(pairing.ice)}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
   return params.join("&");
@@ -101,7 +116,7 @@ export function appendServerPath(baseUrl: string | URL, suffix: string): URL {
 }
 
 // These take a BASE server URL (an origin, or a /_workspace/<name> selected-workspace URL) and
-// append the canonical RPC path — the same contract as serverAuthRouteUrl/serverWorkspaceRouteUrl.
+// append the canonical RPC path — the same contract as serverAuthRouteUrl.
 // Never pass an already-suffixed URL; there is deliberately no idempotency, so a workspace literally
 // named "rpc" (URL .../_workspace/rpc) is handled correctly instead of colliding with the suffix.
 export function serverRpcHttpUrl(baseUrl: string | URL): URL {
@@ -127,10 +142,6 @@ export function serverCdpHostWsUrl(baseUrl: string | URL, hostConnectionId: stri
 
 export function serverAuthRouteUrl(baseUrl: string | URL, route: string): URL {
   return appendServerPath(baseUrl, `/_r/s/auth/${route.replace(/^\/+/, "")}`);
-}
-
-export function serverWorkspaceRouteUrl(baseUrl: string | URL, route: string): URL {
-  return appendServerPath(baseUrl, `/_r/s/workspaces/${route.replace(/^\/+/, "")}`);
 }
 
 export function selectedWorkspacePath(workspaceName: string): string {
@@ -170,7 +181,7 @@ export function parseConnectLink(raw: string): ConnectLink {
   const prefix = `${CONNECT_DEEP_LINK_SCHEME}//${CONNECT_DEEP_LINK_HOST}`;
   const httpsPrefix = `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}`;
   let rawParams: string;
-  if (raw.startsWith(prefix)) {
+  if (raw.startsWith(`${prefix}?`)) {
     const queryStart = raw.indexOf("?");
     if (queryStart < 0) {
       return { kind: "error", reason: "Deep link is missing pairing parameters" };
@@ -199,14 +210,11 @@ export function parseConnectLink(raw: string): ConnectLink {
   const params = parseQuery(rawParams);
   if (params.kind === "error") return params;
 
-  // Version gate FIRST so every stale link — whatever its exact shape — gets
-  // the actionable message instead of a confusing missing-param complaint.
+  // Version gate first so an incompatible link gets one precise error.
   if (params.values.get("v") !== String(PAIRING_PROTOCOL_VERSION)) {
     return {
       kind: "error",
-      reason:
-        "This pairing link uses an old protocol version — re-pair with a current link " +
-        `(expected v=${PAIRING_PROTOCOL_VERSION})`,
+      reason: `Unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION})`,
     };
   }
 
@@ -214,8 +222,9 @@ export function parseConnectLink(raw: string): ConnectLink {
   const fp = params.values.get("fp");
   const code = params.values.get("code");
   const sig = params.values.get("sig");
-  if (!room || !fp || !code || !sig) {
-    return { kind: "error", reason: "Deep link is missing `room`, `fp`, `code`, or `sig`" };
+  const ice = params.values.get("ice");
+  if (!room || !fp || !code || !sig || !ice) {
+    return { kind: "error", reason: "Deep link is missing `room`, `fp`, `code`, `sig`, or `ice`" };
   }
 
   if (!PAIRING_ROOM_PATTERN.test(room)) {
@@ -230,8 +239,7 @@ export function parseConnectLink(raw: string): ConnectLink {
   const sigParsed = parseSignalingEndpoint(sig);
   if (sigParsed.kind === "error") return sigParsed;
 
-  const ice = params.values.get("ice");
-  if (ice && ice !== "all" && ice !== "relay") {
+  if (ice !== "all" && ice !== "relay") {
     return { kind: "error", reason: "TURN policy `ice` must be `all` or `relay`" };
   }
 
@@ -242,7 +250,7 @@ export function parseConnectLink(raw: string): ConnectLink {
     code,
     sig: sigParsed.url,
     v: PAIRING_PROTOCOL_VERSION,
-    ice: (ice as TurnPolicy | undefined) ?? "all",
+    ice,
     srv: params.values.get("srv") || undefined,
   };
 }
@@ -251,31 +259,36 @@ export function resolveSignalingUrl(options: {
   flag?: string | null;
   env?: Record<string, string | undefined>;
   envKeys?: readonly string[];
-  configUrl?: string | null;
   defaultUrl?: string;
 }): SignalingResolution {
   const envKeys = options.envKeys ?? ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
   const env = options.env ?? {};
-  const candidates: Array<{ value: string | null | undefined; source: SignalingResolutionSource }> = [
-    { value: options.flag, source: "flag" },
-    {
-      value: envKeys.map((key) => env[key]).find((value) => value !== undefined && value !== ""),
-      source: "env",
-    },
-    { value: options.configUrl, source: "config" },
-    { value: options.defaultUrl ?? DEFAULT_SIGNAL_URL, source: "default" },
-  ];
-  const selected = candidates.find((candidate) => candidate.value !== undefined && candidate.value !== "");
+  const candidates: Array<{ value: string | null | undefined; source: SignalingResolutionSource }> =
+    [
+      { value: options.flag, source: "flag" },
+      {
+        value: envKeys.map((key) => env[key]).find((value) => value !== undefined && value !== ""),
+        source: "env",
+      },
+      { value: options.defaultUrl ?? DEFAULT_SIGNAL_URL, source: "default" },
+    ];
+  const selected = candidates.find(
+    (candidate) => candidate.value !== undefined && candidate.value !== ""
+  );
   const raw = selected?.value ?? DEFAULT_SIGNAL_URL;
   const parsed = parseSignalingEndpoint(raw);
   if (parsed.kind === "error") {
-    throw new Error(`Invalid WebRTC signaling endpoint from ${selected?.source ?? "default"}: ${parsed.reason}`);
+    throw new Error(
+      `Invalid WebRTC signaling endpoint from ${selected?.source ?? "default"}: ${parsed.reason}`
+    );
   }
   return { url: parsed.url, source: selected?.source ?? "default" };
 }
 
 /** The signaling endpoint is a public wss/https URL (ws/http allowed for loopback dev). */
-export function parseSignalingEndpoint(raw: string): { kind: "ok"; url: string } | { kind: "error"; reason: string } {
+export function parseSignalingEndpoint(
+  raw: string
+): { kind: "ok"; url: string } | { kind: "error"; reason: string } {
   let endpoint: URL;
   try {
     endpoint = new URL(raw);
@@ -284,10 +297,16 @@ export function parseSignalingEndpoint(raw: string): { kind: "ok"; url: string }
   }
   const proto = endpoint.protocol;
   if (proto !== "wss:" && proto !== "https:" && proto !== "ws:" && proto !== "http:") {
-    return { kind: "error", reason: `Signaling endpoint must be ws(s)/http(s) (got ${proto || "no scheme"})` };
+    return {
+      kind: "error",
+      reason: `Signaling endpoint must be ws(s)/http(s) (got ${proto || "no scheme"})`,
+    };
   }
   if ((proto === "ws:" || proto === "http:") && !isLoopbackHost(endpoint.hostname)) {
-    return { kind: "error", reason: `Cleartext signaling is only allowed for loopback. Use wss:// for ${endpoint.hostname}.` };
+    return {
+      kind: "error",
+      reason: `Cleartext signaling is only allowed for loopback. Use wss:// for ${endpoint.hostname}.`,
+    };
   }
   return { kind: "ok", url: endpoint.toString() };
 }
@@ -295,7 +314,7 @@ export function parseSignalingEndpoint(raw: string): { kind: "ok"; url: string }
 function parseQuery(raw: string): QueryParseResult {
   const values = new Map<string, string>();
   for (const part of raw.split("&")) {
-    if (!part) continue;
+    if (!part) return { kind: "error", reason: "Deep link contains an empty parameter" };
     const separator = part.indexOf("=");
     const key = separator >= 0 ? part.slice(0, separator) : part;
     const value = separator >= 0 ? part.slice(separator + 1) : "";
@@ -303,6 +322,18 @@ function parseQuery(raw: string): QueryParseResult {
     const decodedValue = decodeQueryComponent(value);
     if (decodedKey.kind === "error") return decodedKey;
     if (decodedValue.kind === "error") return decodedValue;
+    if (!CONNECT_PARAMETER_KEYS.has(decodedKey.value)) {
+      return {
+        kind: "error",
+        reason: `Deep link contains unsupported parameter \`${decodedKey.value}\``,
+      };
+    }
+    if (values.has(decodedKey.value)) {
+      return {
+        kind: "error",
+        reason: `Deep link contains duplicate parameter \`${decodedKey.value}\``,
+      };
+    }
     values.set(decodedKey.value, decodedValue.value);
   }
   return { kind: "ok", values };
@@ -314,48 +345,6 @@ function decodeQueryComponent(raw: string): QueryDecodeResult {
   } catch {
     return { kind: "error", reason: "Deep link is not a valid URL" };
   }
-}
-
-export function parseConnectServerUrl(raw: string): { kind: "ok"; url: string } | ConnectLink {
-  let server: URL;
-  try {
-    server = new URL(raw);
-  } catch {
-    return { kind: "error", reason: `Server URL is not parseable: ${raw}` };
-  }
-
-  if (server.protocol !== "http:" && server.protocol !== "https:") {
-    return {
-      kind: "error",
-      reason: `Server URL must use http:// or https:// (got ${server.protocol || "no scheme"})`,
-    };
-  }
-
-  if (!server.hostname) {
-    return { kind: "error", reason: "Server URL is missing a hostname" };
-  }
-
-  if (
-    server.username ||
-    server.password ||
-    (server.pathname !== "" && server.pathname !== "/") ||
-    server.search ||
-    server.hash
-  ) {
-    return {
-      kind: "error",
-      reason: "Server URL must be an origin without a path, query, or fragment",
-    };
-  }
-
-  if (server.protocol === "http:" && !isLoopbackHost(server.hostname)) {
-    return {
-      kind: "error",
-      reason: `Cleartext HTTP is only allowed for loopback. Use https:// for ${server.hostname}.`,
-    };
-  }
-
-  return { kind: "ok", url: `${server.protocol}//${server.host}` };
 }
 
 /**

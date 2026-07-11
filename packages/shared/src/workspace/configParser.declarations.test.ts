@@ -39,8 +39,6 @@ trust:
   chromeApps:
     - apps/shell
     - "@workspace-apps/mobile"
-  connectionManagementApps:
-    - apps/shell
 hostTargets:
   electron:
     app: apps/shell
@@ -63,13 +61,11 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
   it("resolves trust grants to canonical repo paths (both identity forms)", () => {
     const grants = resolveWorkspaceTrustGrants(parse(FULL_MANIFEST));
     expect(grants.chromeApps).toEqual(["apps/shell", "apps/mobile"]);
-    expect(grants.connectionManagementApps).toEqual(["apps/shell"]);
   });
 
   it("resolves empty grants when trust is absent — trust is never assumed", () => {
     const grants = resolveWorkspaceTrustGrants(parse("initPanels: []\n"));
     expect(grants.chromeApps).toEqual([]);
-    expect(grants.connectionManagementApps).toEqual([]);
   });
 
   it("resolves host target declarations (canonical forms + requires)", () => {
@@ -105,11 +101,9 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
 
   it("rejects malformed trust lists", () => {
     expect(() => parse("trust:\n  chromeApps: apps/shell\n")).toThrow(/must be a list/);
-    expect(() => parse("trust:\n  chromeApps:\n    - panels/chat\n")).toThrow(
-      /trust\.chromeApps/
-    );
+    expect(() => parse("trust:\n  chromeApps:\n    - panels/chat\n")).toThrow(/trust\.chromeApps/);
     expect(() =>
-      parse("trust:\n  chromeApps:\n    - apps/shell\n    - \"@workspace-apps/shell\"\n")
+      parse('trust:\n  chromeApps:\n    - apps/shell\n    - "@workspace-apps/shell"\n')
     ).toThrow(/duplicate/);
   });
 
@@ -123,10 +117,8 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
   });
 
   it("rejects provider slots without a source", () => {
-    expect(() => parse("providers:\n  evalEngine: {}\n")).toThrow(
-      /providers\.evalEngine\.source/
-    );
-    expect(() => parse("providers:\n  evalRuntime:\n    source: \"\"\n")).toThrow(
+    expect(() => parse("providers:\n  evalEngine: {}\n")).toThrow(/providers\.evalEngine\.source/);
+    expect(() => parse('providers:\n  evalRuntime:\n    source: ""\n')).toThrow(
       /providers\.evalRuntime\.source/
     );
   });

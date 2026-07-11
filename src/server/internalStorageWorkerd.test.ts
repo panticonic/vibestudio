@@ -819,27 +819,26 @@ describe("internal storage DOs under workerd", () => {
       objectKey: "workspace-gad",
     };
     const userMessageId = "01900000-0000-7000-8000-000000000001";
-    await harness.callDurableObject(ref, "appendTrajectoryBatch", {
-      trajectoryId: "trajectory-live",
-      branchId: "branch-live",
+    await harness.callDurableObject(ref, "appendLogEvent", {
+      logId: "trajectory-live",
+      head: "branch-live",
+      logKind: "trajectory",
       owner: { kind: "agent", id: "test" },
       events: [
         {
-          eventId: userMessageId,
-          event: {
-            kind: "message.completed",
-            actor: { kind: "user", id: "user" },
-            causality: { messageId: userMessageId },
-            payload: {
-              protocol: "agentic.trajectory.v1",
-              role: "user",
-              blocks: [
-                { blockId: `${userMessageId}:block:0`, type: "text", content: "write the file" },
-              ],
-              outcome: "completed",
-            },
-            createdAt: new Date(1).toISOString(),
+          envelopeId: userMessageId,
+          actor: { kind: "user", id: "user" },
+          payloadKind: "message.completed",
+          causality: { messageId: userMessageId },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            role: "user",
+            blocks: [
+              { blockId: `${userMessageId}:block:0`, type: "text", content: "write the file" },
+            ],
+            outcome: "completed",
           },
+          appendedAt: new Date(1).toISOString(),
         },
       ],
     });

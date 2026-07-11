@@ -80,7 +80,7 @@ describe("TerminalAppRunner", () => {
 
     expect(grants.grant).toHaveBeenCalledWith(
       "@workspace-apps/remote-cli",
-      "terminal-app-runner",
+      "server",
       expect.any(Number)
     );
     expect(processMocks.createProcessAdapter).toHaveBeenCalledWith(
@@ -142,5 +142,35 @@ describe("TerminalAppRunner", () => {
       status: "error",
       error: "Terminal app exited with code 7",
     });
+  });
+
+  it("coalesces concurrent starts for the same build without revoking the fresh grant", async () => {
+    const proc = new MockProcess();
+    processMocks.createProcessAdapter.mockReturnValue(proc);
+    const grants = {
+      grant: vi.fn(() => ({ token: "grant-token", expiresAt: Date.now() + 1000 })),
+      revokeForPrincipal: vi.fn(),
+    };
+    const runner = new TerminalAppRunner({
+      connectionGrants: grants,
+      onStatus: vi.fn(),
+      onLog: vi.fn(),
+    });
+    const launch = {
+      appId: "@workspace-apps/remote-cli",
+      source: "apps/remote-cli",
+      buildKey: "build-cli",
+      effectiveVersion: "ev-cli",
+      gatewayUrl: "http://127.0.0.1:1234",
+      build: tempBuild(),
+    };
+
+    await Promise.all([runner.start(launch), runner.start(launch), runner.start(launch)]);
+    await runner.start(launch);
+
+    expect(grants.grant).toHaveBeenCalledTimes(1);
+    expect(grants.revokeForPrincipal).toHaveBeenCalledTimes(1);
+    expect(processMocks.createProcessAdapter).toHaveBeenCalledTimes(1);
+    expect(runner.isRunningBuild(launch.appId, launch.buildKey)).toBe(true);
   });
 });

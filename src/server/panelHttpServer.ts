@@ -234,11 +234,6 @@ export class PanelHttpServer {
   }
   private handlersInitialized = false;
 
-  /** Set the port (used when gateway owns the socket). */
-  setPort(port: number): void {
-    this.port = port;
-  }
-
   getPort(): number {
     if (this.port === null) throw new Error("PanelHttpServer not started");
     return this.port;

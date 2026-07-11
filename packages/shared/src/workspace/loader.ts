@@ -8,16 +8,14 @@
  * Workspace resolution: CLI --workspace=name → VIBESTUDIO_WORKSPACE env → null (show init UI)
  */
 
-import * as fs from "fs";
+import fs from "node:fs";
 import * as path from "path";
 import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibestudio/env-paths";
 import YAML from "yaml";
 import dotenv from "dotenv";
+import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
-import {
-  parseWorkspaceConfigContentWithId,
-  resolveWorkspaceTrustGrants,
-} from "./configParser.js";
+import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "../chromeTrust.js";
 export { resolveDeclaredApps, resolveDeclaredExtensions } from "./configParser.js";
 
@@ -34,10 +32,7 @@ import {
   getExistingWorkspaceTemplateDir,
   getWorkspaceTemplateCandidates,
 } from "../runtimePaths.js";
-import {
-  WORKSPACE_SOURCE_DIRS,
-  WORKSPACE_STATE_DIRS,
-} from "./sourceDirs.js";
+import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "./sourceDirs.js";
 
 const WORKSPACE_CONFIG_FILE = "meta/vibestudio.yml";
 const CENTRAL_CONFIG_FILE = "config.yml";
@@ -45,6 +40,50 @@ const SECRETS_FILE = ".secrets.yml";
 const ENV_FILE = ".env";
 const WORKSPACE_DELETE_MAX_RETRIES = 10;
 const WORKSPACE_DELETE_RETRY_DELAY_MS = 100;
+const WORKSPACE_DELETION_MARKER = "deletion.json";
+const WORKSPACE_DELETION_MARKER_VERSION = 1;
+
+const ModelConfigSchema = z
+  .object({
+    provider: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().optional(),
+    topP: z.number().min(0).max(1).optional(),
+    topK: z.number().int().nonnegative().optional(),
+    presencePenalty: z.number().min(-2).max(2).optional(),
+    frequencyPenalty: z.number().min(-2).max(2).optional(),
+    stopSequences: z.array(z.string()).optional(),
+  })
+  .strict()
+  .refine((value) => value.provider !== "claude-agent", {
+    message: "The claude-agent model provider is not supported",
+    path: ["provider"],
+  });
+
+const ModelRoleValueSchema = z.union([
+  z
+    .string()
+    .regex(/^[^:\s]+:[^\s]+$/, "Expected a provider:model reference")
+    .refine((value) => !value.startsWith("claude-agent:"), {
+      message: "The claude-agent model provider is not supported",
+    }),
+  ModelConfigSchema,
+]);
+
+export const CentralConfigSchema = z
+  .object({
+    models: z.record(z.string().min(1), ModelRoleValueSchema).optional(),
+    cache: z
+      .object({
+        maxEntries: z.number().int().positive().optional(),
+        maxSize: z.number().int().positive().optional(),
+        expirationMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict() satisfies z.ZodType<CentralConfig>;
 
 // =============================================================================
 // Central Config
@@ -64,8 +103,6 @@ export function getCentralConfigDir(): string {
 // central-data concern, not a workspace concern.
 import { ensureCentralConfigDir } from "../centralAuth.js";
 
-const DATA_FILE = "data.json";
-
 /**
  * Get all central config paths
  */
@@ -76,53 +113,7 @@ export function getCentralConfigPaths(): CentralConfigPaths {
     configPath: path.join(configDir, CENTRAL_CONFIG_FILE),
     secretsPath: path.join(configDir, SECRETS_FILE),
     envPath: path.join(configDir, ENV_FILE),
-    dataPath: path.join(configDir, DATA_FILE),
   };
-}
-
-/**
- * Map old `claude-agent:*` model role values to their Pi-compatible
- * `anthropic:*` equivalents. Pi handles all provider routing now, so the
- * Claude Agent CLI provider was deleted in Phase 5; older user configs are
- * silently upgraded on first load and persisted back to disk.
- *
- * Returns the migrated value or null if the input was not a claude-agent ref.
- */
-function migrateClaudeAgentModelValue(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const match = value.match(/^claude-agent:(.+)$/);
-  if (!match) return null;
-  const suffix = match[1]!;
-  switch (suffix) {
-    case "opus":
-      return "anthropic:claude-opus-4-5";
-    case "sonnet":
-      return "anthropic:claude-sonnet-4-20250514";
-    case "haiku":
-      return "anthropic:claude-haiku-4-5-20251001";
-    default:
-      return `anthropic:${suffix}`;
-  }
-}
-
-/**
- * Walk parsed.models.* and migrate any claude-agent:* values to anthropic:*.
- * Mutates the input object. Returns true if any value was changed.
- */
-function migrateClaudeAgentModelsConfig(parsed: CentralConfig): boolean {
-  if (!parsed.models || typeof parsed.models !== "object") return false;
-  let mutated = false;
-  for (const [role, value] of Object.entries(parsed.models)) {
-    const migrated = migrateClaudeAgentModelValue(value);
-    if (migrated !== null) {
-      console.warn(
-        `[Vibestudio] Migrated old model role 'claude-agent:${(value as string).slice("claude-agent:".length)}' → '${migrated}' in models.${role}`
-      );
-      (parsed.models as Record<string, unknown>)[role] = migrated;
-      mutated = true;
-    }
-  }
-  return mutated;
 }
 
 /**
@@ -137,36 +128,9 @@ export function loadCentralConfig(): CentralConfig {
 
   try {
     const content = fs.readFileSync(paths.configPath, "utf-8");
-    const parsed = (YAML.parse(content) as CentralConfig) ?? {};
-
-    // One-time silent migration: rewrite claude-agent:* values to anthropic:*
-    // and persist the result so the warning doesn't repeat on every load.
-    const mutated = migrateClaudeAgentModelsConfig(parsed);
-    if (mutated) {
-      try {
-        // Audit finding #51: secret-bearing config writes must be 0o600
-        // regardless of dir perms.
-        fs.writeFileSync(paths.configPath, YAML.stringify(parsed), {
-          encoding: "utf-8",
-          mode: 0o600,
-        });
-        try {
-          fs.chmodSync(paths.configPath, 0o600);
-        } catch {
-          /* best-effort */
-        }
-      } catch (writeErr) {
-        console.warn(
-          `[Config] Failed to persist migrated config back to ${paths.configPath}:`,
-          writeErr
-        );
-      }
-    }
-
-    return parsed;
+    return CentralConfigSchema.parse(YAML.parse(content) ?? {});
   } catch (error) {
-    console.warn(`[Config] Failed to load ${paths.configPath}:`, error);
-    return {};
+    throw new Error(`Failed to load central config at ${paths.configPath}`, { cause: error });
   }
 }
 
@@ -252,7 +216,11 @@ export function saveCentralConfig(config: CentralConfig): void {
     ensureCentralConfigDir();
     // Audit finding #51: central config may carry provider references that
     // imply token presence; treat as secret-adjacent and lock to 0o600.
-    fs.writeFileSync(paths.configPath, YAML.stringify(config), { encoding: "utf-8", mode: 0o600 });
+    const canonical = CentralConfigSchema.parse(config);
+    fs.writeFileSync(paths.configPath, YAML.stringify(canonical), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     if (process.platform !== "win32") {
       try {
         fs.chmodSync(paths.configPath, 0o600);
@@ -349,7 +317,7 @@ export function resolveWorkspaceTemplateDir(appRoot: string): string | null {
 /**
  * Initialize a new managed workspace directory.
  *
- * Source options (mutually exclusive, at most one):
+ * Source options (mutually exclusive, exactly one):
  * - `templateDir`: Copy source dirs from a local directory (e.g., the shipped workspace template)
  * - `forkFrom`:   Copy source dirs from another managed workspace by name
  *
@@ -363,26 +331,20 @@ export function initWorkspace(
   validateWorkspaceName(name);
 
   const wsDir = getWorkspaceDir(name);
-  const sourceRoot = path.join(wsDir, "source");
-  const stateRoot = path.join(wsDir, "state");
 
   if (fs.existsSync(wsDir)) {
     throw new Error(`Workspace directory already exists: ${wsDir}`);
   }
 
-  // Ensure parent workspaces/ dir exists
-  fs.mkdirSync(getWorkspacesDir(), { recursive: true });
-
   // Resolve template source directory for template/fork
   let templateSrc: string | null = null;
-  let templateSourceKind: "template" | "fork" | null = null;
-
-  if (opts?.templateDir) {
+  if (opts?.templateDir && opts.forkFrom) {
+    throw new Error("Workspace creation accepts exactly one of templateDir or forkFrom");
+  } else if (opts?.templateDir) {
     templateSrc = opts.templateDir;
-    templateSourceKind = "template";
   } else if (opts?.forkFrom) {
+    validateWorkspaceName(opts.forkFrom);
     templateSrc = path.join(getWorkspaceDir(opts.forkFrom), "source");
-    templateSourceKind = "fork";
     if (!fs.existsSync(path.join(templateSrc, WORKSPACE_CONFIG_FILE))) {
       throw new Error(`Source workspace "${opts.forkFrom}" does not exist`);
     }
@@ -391,32 +353,56 @@ export function initWorkspace(
     throw new Error("Workspace creation requires a templateDir or forkFrom workspace");
   }
 
-  fs.mkdirSync(sourceRoot, { recursive: true });
-  for (const dir of WORKSPACE_SOURCE_DIRS) {
-    const src = path.join(templateSrc, dir);
-    if (fs.existsSync(src)) {
-      copyDirRecursive(src, path.join(sourceRoot, dir));
+  const workspacesDir = getWorkspacesDir();
+  fs.mkdirSync(workspacesDir, { recursive: true });
+  const stagingDir = fs.mkdtempSync(path.join(workspacesDir, `.create-${name}-`));
+  const stagedSourceRoot = path.join(stagingDir, "source");
+  const stagedStateRoot = path.join(stagingDir, "state");
+  let published = false;
+
+  try {
+    fs.mkdirSync(stagedSourceRoot, { recursive: true });
+    for (const dir of WORKSPACE_SOURCE_DIRS) {
+      const src = path.join(templateSrc, dir);
+      if (fs.existsSync(src)) {
+        copyDirRecursive(src, path.join(stagedSourceRoot, dir));
+      }
+    }
+
+    for (const dir of WORKSPACE_SOURCE_DIRS) {
+      fs.mkdirSync(path.join(stagedSourceRoot, dir), { recursive: true });
+    }
+
+    fs.mkdirSync(stagedStateRoot, { recursive: true });
+    for (const dir of WORKSPACE_STATE_DIRS) {
+      fs.mkdirSync(path.join(stagedStateRoot, dir), { recursive: true });
+    }
+
+    const stagedConfigPath = path.join(stagedSourceRoot, WORKSPACE_CONFIG_FILE);
+    if (!fs.existsSync(stagedConfigPath)) {
+      throw new Error(`Workspace template is missing ${WORKSPACE_CONFIG_FILE}: ${templateSrc}`);
+    }
+
+    // Validate against the FINAL managed path before publishing. Parsing the
+    // staged file directly would derive the temporary directory name as the
+    // workspace id and would let malformed manifests become visible on disk.
+    parseWorkspaceConfigContent(
+      fs.readFileSync(stagedConfigPath, "utf-8"),
+      path.join(wsDir, "source")
+    );
+
+    fs.renameSync(stagingDir, wsDir);
+    published = true;
+  } finally {
+    if (!published && fs.existsSync(stagingDir)) {
+      fs.rmSync(stagingDir, {
+        recursive: true,
+        force: true,
+        maxRetries: WORKSPACE_DELETE_MAX_RETRIES,
+        retryDelay: WORKSPACE_DELETE_RETRY_DELAY_MS,
+      });
     }
   }
-
-  // Scaffold source directories
-  for (const dir of WORKSPACE_SOURCE_DIRS) {
-    fs.mkdirSync(path.join(sourceRoot, dir), { recursive: true });
-  }
-
-  // Scaffold state directories
-  fs.mkdirSync(stateRoot, { recursive: true });
-  for (const dir of WORKSPACE_STATE_DIRS) {
-    fs.mkdirSync(path.join(stateRoot, dir), { recursive: true });
-  }
-
-  // Template/forked workspaces must provide their own config.
-  const configPath = path.join(sourceRoot, WORKSPACE_CONFIG_FILE);
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Workspace template is missing ${WORKSPACE_CONFIG_FILE}: ${templateSrc}`);
-  }
-
-  void templateSourceKind;
   log.info(`[Workspace] Created managed workspace "${name}" at ${wsDir}`);
 }
 
@@ -436,33 +422,16 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
-
 export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
-
-/**
- * Delete a managed workspace directory.
- */
-export function deleteWorkspaceDir(name: string): void {
-  const wsDir = getWorkspaceDir(name);
-  if (fs.existsSync(wsDir)) {
-    fs.rmSync(wsDir, {
-      recursive: true,
-      force: true,
-      maxRetries: WORKSPACE_DELETE_MAX_RETRIES,
-      retryDelay: WORKSPACE_DELETE_RETRY_DELAY_MS,
-    });
-    log.info(`[Workspace] Deleted workspace directory "${name}"`);
-  }
-}
 
 /**
  * Load and parse vibestudio.yml from a workspace directory.
  *
  * Loading the ACTIVE workspace manifest also seeds this process's workspace
- * app trust grants (`trust.chromeApps` / `trust.connectionManagementApps` →
- * chromeTrust.ts). This is the single establishment point for manifest-
- * declared app trust: any process that owns a workspace on disk (server,
- * local Electron main) enforces the declared lists; parse-only consumers
+ * app trust grants (`trust.chromeApps` → chromeTrust.ts). This is the single
+ * establishment point for manifest-declared app trust: any process that owns
+ * a workspace on disk (server, local Electron main) enforces the declared list;
+ * parse-only consumers
  * (historical-commit previews via `parseWorkspaceConfigContent*`) do NOT
  * seed, so previewing a candidate manifest never changes live trust.
  */
@@ -594,10 +563,6 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
     if (!opts.init) {
       throw new Error(`Workspace not found at ${wsDir}`);
     }
-    // Clean up partial directory from a previously interrupted create
-    if (fs.existsSync(wsDir)) {
-      fs.rmSync(wsDir, { recursive: true, force: true });
-    }
     const templateDir = opts.appRoot ? resolveWorkspaceTemplateDir(opts.appRoot) : null;
     initWorkspace(name, templateDir ? { templateDir } : undefined);
     created = true;
@@ -623,8 +588,253 @@ export function createAndRegisterWorkspace(
   }
   const resolvedOpts = resolveWorkspaceCreationOpts(opts);
   initWorkspace(name, resolvedOpts);
-  centralData.addWorkspace(name);
-  return { name, lastOpened: Date.now() };
+  try {
+    return centralData.addWorkspace(name);
+  } catch (error) {
+    try {
+      removeWorkspaceTree(getWorkspaceDir(name));
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Workspace "${name}" registration failed and its published directory could not be removed`
+      );
+    }
+    throw error;
+  }
+}
+
+interface StagedWorkspaceDeletion {
+  workspaceDir: string;
+  trashRoot: string;
+  trashWorkspaceDir: string;
+}
+
+interface WorkspaceDeletionMarker {
+  version: typeof WORKSPACE_DELETION_MARKER_VERSION;
+  name: string;
+  workspaceId: string;
+}
+
+export interface WorkspaceDeletionRecoveryFailure {
+  trashRoot: string;
+  message: string;
+}
+
+export interface WorkspaceDeletionRecoveryReport {
+  finalized: string[];
+  restored: string[];
+  failures: WorkspaceDeletionRecoveryFailure[];
+}
+
+/**
+ * Remove a managed workspace from the visible filesystem namespace and the
+ * SQLite registry as one compensated lifecycle operation.
+ *
+ * The initial rename is atomic and same-filesystem. If the catalog transaction
+ * fails, the original directory is restored before the error escapes. The
+ * central-data transaction itself removes memberships, resume targets, and
+ * revocation-cleanup rows together with the catalog row.
+ */
+export function deleteAndUnregisterWorkspace(
+  name: string,
+  centralData: CentralDataManager
+): string | null {
+  validateWorkspaceName(name);
+  const workspaceDir = getWorkspaceDir(name);
+  const entry = centralData.getWorkspaceEntry(name);
+  const existsOnDisk = fs.existsSync(workspaceDir);
+
+  if (!entry && !existsOnDisk) return null;
+  if (!entry || !existsOnDisk) {
+    throw new Error(
+      `Workspace "${name}" is inconsistent: catalog=${entry ? "present" : "missing"}, directory=${existsOnDisk ? "present" : "missing"}`
+    );
+  }
+
+  const staged = stageWorkspaceDeletion(name, entry.workspaceId, workspaceDir);
+  let removedWorkspaceId: string | null;
+  try {
+    removedWorkspaceId = centralData.removeWorkspace(name);
+    if (removedWorkspaceId !== entry.workspaceId) {
+      throw new Error(`Workspace "${name}" changed while it was being deleted`);
+    }
+  } catch (error) {
+    try {
+      restoreWorkspaceDeletion(staged);
+    } catch (restoreError) {
+      throw new AggregateError(
+        [error, restoreError],
+        `Workspace "${name}" registry deletion failed and its directory could not be restored`
+      );
+    }
+    throw error;
+  }
+
+  try {
+    removeWorkspaceTree(staged.trashRoot);
+  } catch (error) {
+    log.warn(
+      `[Workspace] Deleted managed workspace "${name}"; filesystem cleanup remains queued at ${staged.trashRoot}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  log.info(`[Workspace] Deleted managed workspace "${name}"`);
+  return removedWorkspaceId;
+}
+
+/**
+ * Recover filesystem deletion records left by a crash or a post-commit cleanup
+ * failure. The central catalog is the commit record: a present matching row
+ * restores a pre-commit rename, while an absent row finalizes the deletion.
+ */
+export function recoverStagedWorkspaceDeletions(
+  centralData: CentralDataManager
+): WorkspaceDeletionRecoveryReport {
+  const report: WorkspaceDeletionRecoveryReport = {
+    finalized: [],
+    restored: [],
+    failures: [],
+  };
+  const workspacesDir = getWorkspacesDir();
+  if (!fs.existsSync(workspacesDir)) return report;
+
+  for (const entry of fs.readdirSync(workspacesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(".delete-")) continue;
+    const trashRoot = path.join(workspacesDir, entry.name);
+    try {
+      const marker = readWorkspaceDeletionMarker(trashRoot);
+      const workspaceDir = getWorkspaceDir(marker.name);
+      const trashWorkspaceDir = path.join(trashRoot, "workspace");
+      const catalogEntry = centralData.getWorkspaceEntry(marker.name);
+
+      if (!catalogEntry) {
+        removeWorkspaceTree(trashRoot);
+        report.finalized.push(marker.name);
+        continue;
+      }
+      if (catalogEntry.workspaceId !== marker.workspaceId) {
+        throw new Error(
+          `catalog id ${catalogEntry.workspaceId} does not match deletion id ${marker.workspaceId}`
+        );
+      }
+      if (fs.existsSync(workspaceDir)) {
+        throw new Error(`catalog and live directory already exist for ${marker.name}`);
+      }
+      if (!fs.existsSync(trashWorkspaceDir)) {
+        throw new Error(`staged workspace directory is missing for ${marker.name}`);
+      }
+      fs.renameSync(trashWorkspaceDir, workspaceDir);
+      removeWorkspaceTree(trashRoot);
+      report.restored.push(marker.name);
+    } catch (error) {
+      const failure = {
+        trashRoot,
+        message: error instanceof Error ? error.message : String(error),
+      };
+      report.failures.push(failure);
+      log.warn(
+        `[Workspace] Staged deletion recovery remains pending at ${failure.trashRoot}: ${failure.message}`
+      );
+    }
+  }
+  return report;
+}
+
+/**
+ * Delete a deliberately unregistered workspace directory, currently used for
+ * the hub's random on-disk ephemeral dev child. Requiring the catalog handle
+ * here prevents this narrow path from becoming an escape hatch around the
+ * coordinated registered-workspace deletion above.
+ */
+export function deleteUnregisteredWorkspace(
+  name: string,
+  centralData: CentralDataManager
+): boolean {
+  validateWorkspaceName(name);
+  if (centralData.hasWorkspace(name)) {
+    throw new Error(
+      `Workspace "${name}" is registered and must be deleted with deleteAndUnregisterWorkspace`
+    );
+  }
+  const workspaceDir = getWorkspaceDir(name);
+  if (!fs.existsSync(workspaceDir)) return false;
+  const staged = stageWorkspaceDeletion(name, `unregistered:${name}`, workspaceDir);
+  removeWorkspaceTree(staged.trashRoot);
+  log.info(`[Workspace] Deleted unregistered ephemeral workspace "${name}"`);
+  return true;
+}
+
+function stageWorkspaceDeletion(
+  name: string,
+  workspaceId: string,
+  workspaceDir: string
+): StagedWorkspaceDeletion {
+  const trashRoot = fs.mkdtempSync(path.join(getWorkspacesDir(), `.delete-${name}-`));
+  const trashWorkspaceDir = path.join(trashRoot, "workspace");
+  try {
+    const marker: WorkspaceDeletionMarker = {
+      version: WORKSPACE_DELETION_MARKER_VERSION,
+      name,
+      workspaceId,
+    };
+    fs.writeFileSync(path.join(trashRoot, WORKSPACE_DELETION_MARKER), JSON.stringify(marker), {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    fs.renameSync(workspaceDir, trashWorkspaceDir);
+  } catch (error) {
+    removeWorkspaceTree(trashRoot);
+    throw error;
+  }
+  return { workspaceDir, trashRoot, trashWorkspaceDir };
+}
+
+function restoreWorkspaceDeletion(staged: StagedWorkspaceDeletion): void {
+  if (fs.existsSync(staged.workspaceDir)) {
+    throw new Error(
+      `Cannot restore workspace because its directory was recreated: ${staged.workspaceDir}`
+    );
+  }
+  fs.renameSync(staged.trashWorkspaceDir, staged.workspaceDir);
+  removeWorkspaceTree(staged.trashRoot);
+}
+
+function removeWorkspaceTree(target: string): void {
+  fs.rmSync(target, {
+    recursive: true,
+    force: true,
+    maxRetries: WORKSPACE_DELETE_MAX_RETRIES,
+    retryDelay: WORKSPACE_DELETE_RETRY_DELAY_MS,
+  });
+}
+
+function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker {
+  const value = JSON.parse(
+    fs.readFileSync(path.join(trashRoot, WORKSPACE_DELETION_MARKER), "utf-8")
+  ) as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid workspace deletion marker");
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.join(",") !== "name,version,workspaceId") {
+    throw new Error("workspace deletion marker has an unsupported shape");
+  }
+  if (record["version"] !== WORKSPACE_DELETION_MARKER_VERSION) {
+    throw new Error("workspace deletion marker has an unsupported version");
+  }
+  if (typeof record["name"] !== "string") {
+    throw new Error("workspace deletion marker name is required");
+  }
+  validateWorkspaceName(record["name"]);
+  if (typeof record["workspaceId"] !== "string" || !record["workspaceId"].trim()) {
+    throw new Error("workspace deletion marker workspaceId is required");
+  }
+  return {
+    version: WORKSPACE_DELETION_MARKER_VERSION,
+    name: record["name"],
+    workspaceId: record["workspaceId"],
+  };
 }
 
 function resolveWorkspaceCreationOpts(opts?: { templateDir?: string; forkFrom?: string }): {

@@ -111,23 +111,9 @@ export function ensurePersistentCert(opts: {
 }): PersistentCert {
   const { identityPemFile } = opts;
   const identityState = classifyIdentityFile(identityPemFile);
-  const legacyCertFile = path.join(path.dirname(identityPemFile), "server.pem");
-  const legacyKeyFile = path.join(path.dirname(identityPemFile), "server.key");
-  const legacyCertState = classifyIdentityFile(legacyCertFile);
-  const legacyKeyState = classifyIdentityFile(legacyKeyFile);
 
   const consequence =
     "regenerate with `vibestudio remote repair-identity` after accepting that all paired devices must re-pair";
-
-  if (legacyCertState !== "absent" || legacyKeyState !== "absent") {
-    throw new CertIdentityError(
-      "[webrtc-cert] deleted two-file identity layout is present; refusing to start:\n" +
-        `  ${describeIdentityFile("legacy cert", legacyCertFile, legacyCertState)}\n` +
-        `  ${describeIdentityFile("legacy key", legacyKeyFile, legacyKeyState)}\n` +
-        `  identity (${identityPemFile}): ${identityState}\n` +
-        `${consequence}.`
-    );
-  }
 
   if (identityState === "present") {
     // Already provisioned — reuse so the fingerprint stays stable across restarts.

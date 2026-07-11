@@ -92,7 +92,10 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
           let bytes = 0;
           let index = from;
           for (; index < files.length; index++) {
-            const file = files[index]!;
+            const file = files[index];
+            if (!file) {
+              throw new Error(`mirror.objects file index ${index} is unexpectedly absent`);
+            }
             // Always include at least one file per page so a single oversized
             // file still transfers (as its own page).
             if (page.length > 0 && bytes >= MAX_PAGE_BYTES) break;

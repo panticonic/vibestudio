@@ -51,6 +51,10 @@ describe("GitClient", () => {
     mkdir: vi.fn(),
     rmdir: vi.fn(),
     stat: vi.fn(),
+    lstat: vi.fn(),
+    readlink: vi.fn(),
+    symlink: vi.fn(),
+    chmod: vi.fn(),
   } satisfies FsPromisesLike;
 
   it("exposes the raw isomorphic-git status matrix", async () => {
@@ -84,5 +88,15 @@ describe("GitClient", () => {
       "git.fetch: expected fetch({ dir: string, remote?: string, ref?: string })"
     );
     expect(statusMatrix).not.toHaveBeenCalled();
+  });
+
+  it("refuses to create an unattributed commit", async () => {
+    const commit = vi.spyOn(git, "commit");
+    const client = new GitClient(fs, { http });
+
+    await expect(client.commit({ dir: "/repo", message: "change" })).rejects.toThrow(
+      /explicit author.*required/
+    );
+    expect(commit).not.toHaveBeenCalled();
   });
 });

@@ -639,7 +639,7 @@ describe("WorkerdManager", () => {
       const before = mgr.getWorkerVersion("hello");
       await mgr.onSourceRebuilt(
         "workers/hello",
-        undefined,
+        null,
         {
           head: "main",
           stateHash: "state:next",
@@ -650,6 +650,7 @@ describe("WorkerdManager", () => {
           actor: { id: "user", kind: "user" },
           transitionKind: "snapshot",
           changedPaths: ["workers/hello/index.ts"],
+          repoPath: "workers/hello",
           fileChanges: [],
           editOps: [],
         },
@@ -672,7 +673,7 @@ describe("WorkerdManager", () => {
 
       await mgr.onSourceRebuilt(
         "workers/hello",
-        undefined,
+        null,
         {
           head: "main",
           stateHash: "state:next",
@@ -683,6 +684,7 @@ describe("WorkerdManager", () => {
           actor: { id: "user", kind: "user" },
           transitionKind: "snapshot",
           changedPaths: ["workers/hello/index.ts"],
+          repoPath: "workers/hello",
           fileChanges: [],
           editOps: [],
         },
@@ -733,7 +735,7 @@ describe("WorkerdManager", () => {
       // Ref-targeted instance should not restart on HEAD push
       await mgr.onSourceRebuilt(
         "workers/hello",
-        undefined,
+        null,
         {
           head: "main",
           stateHash: "state:next",
@@ -744,6 +746,7 @@ describe("WorkerdManager", () => {
           actor: { id: "user", kind: "user" },
           transitionKind: "snapshot",
           changedPaths: ["workers/hello/index.ts"],
+          repoPath: "workers/hello",
           fileChanges: [],
           editOps: [],
         },
@@ -763,7 +766,7 @@ describe("WorkerdManager", () => {
       await mgr.startWorker(startArgs());
       const spawnsBefore = vi.mocked(spawn).mock.calls.length;
 
-      await mgr.onSourceRebuilt("workers/hello");
+      await mgr.onSourceRebuilt("workers/hello", null);
 
       // Dynamic loading: a rebuild is a loader-cache eviction, never a restart.
       expect(vi.mocked(spawn).mock.calls.length).toBe(spawnsBefore);
@@ -777,7 +780,7 @@ describe("WorkerdManager", () => {
       await mgr.startWorker(startArgs());
       const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
 
-      await mgr.onSourceRebuilt("workers/other");
+      await mgr.onSourceRebuilt("workers/other", null);
 
       // No additional bind calls (no restart triggered)
       expect(vi.mocked(deps.bindRuntimeImage).mock.calls.length).toBe(callsBefore);
@@ -804,16 +807,16 @@ describe("WorkerdManager", () => {
       expect(revokeSpy).not.toHaveBeenCalledWith("do-service:workers/agent:AgentDO");
     });
 
-    it("leaves DO services alone when doClasses is undefined", async () => {
+    it("leaves DO services alone for a non-authoritative rebuild", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
       await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
       const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
-      await mgr.onSourceRebuilt("workers/agent");
+      await mgr.onSourceRebuilt("workers/agent", null);
 
-      // No revokes — the caller passed `undefined` meaning "don't touch DOs".
+      // No revokes — null explicitly means this rebuild does not own the main manifest.
       expect(revokeSpy).not.toHaveBeenCalledWith(
         expect.stringContaining("do-service:workers/agent")
       );

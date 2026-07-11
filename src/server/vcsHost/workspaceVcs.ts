@@ -525,14 +525,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   // repoPath.
   // -------------------------------------------------------------------------
 
-  /**
-   * Log id for a repo (per-repo VCS). A repoPath is required — there is no
-   * whole-tree log to fall back to. The argument is typed `string | undefined`
-   * only so the many internal head-routing paths can forward an optional
-   * `opts.repoPath` through one chokepoint; an undefined value is a programming
-   * error (a head operation reached the store without a repo).
-   */
-  private repoLogId(repoPath: string | undefined): string {
+  /** Log id for a repo (per-repo VCS); there is no whole-tree log. */
+  private repoLogId(repoPath: string): string {
     if (!repoPath) {
       throw new Error(
         "per-repo VCS: a repoPath is required (no whole-tree vcs:workspace log exists)"
@@ -542,7 +536,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /** Working-tree dir for a (repoPath, head) — the projector owns the layout. */
-  private dirForRepoHead(repoPath: string | undefined, head: string): string {
+  private dirForRepoHead(repoPath: string, head: string): string {
     return this.projector.dirForRepoHead(repoPath, head);
   }
 
@@ -622,10 +616,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     opts: {
       summary?: string;
       actor?: { id: string; kind: string };
-      /** Repo the head lives on (per-repo VCS). Required in practice — there is
-       *  no whole-tree log; an undefined value throws in `repoLogId`. */
-      repoPath?: string;
-    } = {}
+      /** Repo the head lives on (per-repo VCS). */
+      repoPath: string;
+    }
   ): Promise<CommitResult> {
     if (head === VCS_MAIN_HEAD) {
       throw new Error(
@@ -784,9 +777,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (this.deps.refs.listMains().length > 0) return (await this.workspaceView()).stateHash;
       return null;
     }
+    if (!repoPath) {
+      throw new Error(`resolveHead: repoPath is required for named ref ${JSON.stringify(head)}`);
+    }
     if (head === VCS_MAIN_HEAD) {
-      this.repoLogId(repoPath); // per-repo VCS: a repoPath is required
-      return this.mainRefState(repoPath!);
+      return this.mainRefState(repoPath);
     }
     return await this.worktrees.resolveWorktreeRef(head, this.repoLogId(repoPath));
   }
@@ -873,33 +868,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     transitionKind: StateAdvancedEvent["transitionKind"];
     editOps?: StateAdvanceEditOp[];
     workspaceStateHash?: string;
-    /** When set, the diff/state are subtree-rooted on this repo's log; the
-     *  event is re-rooted to workspace-relative for the build trigger (finding
-     *  #1): changedPaths/fileChanges get the repo prefix and the build
-     *  `stateHash` becomes the composed workspace view. `repoPath` is carried as
-     *  routing metadata. */
-    repoPath?: string;
+    /** The diff/state are subtree-rooted on this repo's log; the event is
+     *  re-rooted to workspace-relative for the build trigger: changed paths
+     *  get the repo prefix and `stateHash` becomes the composed workspace view. */
+    repoPath: string;
   }): Promise<StateAdvancedEvent> {
     const fileChanges =
       input.previousStateHash === input.stateHash
         ? []
         : await this.diffFileChanges(input.previousStateHash, input.stateHash);
-
-    if (!input.repoPath) {
-      return {
-        head: input.head,
-        stateHash: input.stateHash,
-        repoStateHash: input.stateHash,
-        sinceStateHash: input.previousStateHash,
-        eventId: input.eventId,
-        headHash: input.headHash,
-        actor: input.actor,
-        transitionKind: input.transitionKind,
-        changedPaths: fileChanges.map((change) => change.path),
-        fileChanges,
-        editOps: input.editOps ?? [],
-      };
-    }
 
     // Per-repo advance: re-root the subtree-relative diff to workspace-relative
     // and point the build trigger at the composed workspace view, so
@@ -1384,8 +1361,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     sourceHead: string,
     opts: {
       actor?: { id: string; kind: string };
-      repoPath?: string;
-    } = {}
+      repoPath: string;
+    }
   ): Promise<MergeReconcileResult> {
     if (targetHead === VCS_MAIN_HEAD) {
       throw new Error(
@@ -1426,13 +1403,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           stateHash: outcome.stateHash,
           bestEffort: true,
         });
-        if (repoPath) {
-          this.noteContextMaterialized(
-            targetHead.slice("ctx:".length),
-            repoPath,
-            outcome.stateHash
-          );
-        }
+        this.noteContextMaterialized(targetHead.slice("ctx:".length), repoPath, outcome.stateHash);
         const event = await this.stateAdvancedEvent({
           head: targetHead,
           previousStateHash: outcome.previousStateHash,
@@ -1459,9 +1430,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // the summary file for non-content conflicts.
       await this.projector.project({ repoPath, head: targetHead, stateHash: outcome.stateHash });
       await this.gad().call("markPendingMergeMaterialized", { logId, head: targetHead });
-      if (repoPath) {
-        this.noteContextMaterialized(targetHead.slice("ctx:".length), repoPath, outcome.stateHash);
-      }
+      this.noteContextMaterialized(targetHead.slice("ctx:".length), repoPath, outcome.stateHash);
       await this.syncConflictSummary(targetHead, repoPath);
       return {
         status: "conflicted",
@@ -1481,7 +1450,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * only worktree-visible signal for CLI/agent/direct users. It is ignored by
    * snapshots (never committed) and removed when the merge resolves or aborts.
    */
-  private async syncConflictSummary(head: string, repoPath?: string): Promise<void> {
+  private async syncConflictSummary(head: string, repoPath: string): Promise<void> {
     const logId = this.repoLogId(repoPath);
     // Resolve the pending-merge DATA here (semantics); the projector owns the
     // disk write (follower).
@@ -1513,8 +1482,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     targetHead: string,
     opts: {
       actor?: { id: string; kind: string };
-      repoPath?: string;
-    } = {}
+      repoPath: string;
+    }
   ): Promise<{ aborted: boolean }> {
     const repoPath = opts.repoPath;
     const logId = this.repoLogId(repoPath);
@@ -1540,7 +1509,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async pendingMerge(
     targetHead: string,
-    repoPath?: string
+    repoPath: string
   ): Promise<{
     theirsHead: string;
     conflicts: Array<{ path: string; kind: string }>;
@@ -1581,7 +1550,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     baseStateHash?: string;
     edits: EditOp[];
     actor: { id: string; kind: string };
-    repoPath?: string;
+    repoPath: string;
     invocationId?: string;
     turnId?: string;
   }): Promise<RecordEditResult> {
@@ -1618,7 +1587,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async followWorkingAdvance(
     logId: string,
     head: string,
-    repoPath: string | undefined,
+    repoPath: string,
     actor: { id: string; kind: string },
     result: AppliedEditOpsResult
   ): Promise<RecordEditResult> {
@@ -1644,12 +1613,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       bestEffort: true,
     });
     this.lastState.set(this.stateKey(logId, head), result.stateHash);
-    if (repoPath && head.startsWith("ctx:")) {
+    if (head.startsWith("ctx:")) {
       this.noteContextMaterialized(head.slice("ctx:".length), repoPath, result.stateHash);
     }
-    const changedPaths = repoPath
-      ? result.changedPaths.map((p) => joinRepoPrefix(repoPath, p))
-      : result.changedPaths;
+    const changedPaths = result.changedPaths.map((p) => joinRepoPrefix(repoPath, p));
     this.emitter.emit("working-advanced", {
       head,
       repoPath,
@@ -1787,29 +1754,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   /** The committed base a `main`-target merge composes on when the repo has
    *  no main yet (ref creation): the protected ref, else the empty state.
    *  Ctx-head base resolution lives in the DO with the merge semantics. */
-  private async resolveCommittedBase(head: string, repoPath: string | undefined): Promise<string> {
-    this.repoLogId(repoPath); // per-repo VCS: a repoPath is required
+  private async resolveCommittedBase(head: string, repoPath: string): Promise<string> {
     if (head !== VCS_MAIN_HEAD) {
       throw new Error(`resolveCommittedBase: only main-target merges resolve here (got ${head})`);
     }
-    return this.mainRefState(repoPath!) ?? EMPTY_STATE_HASH;
+    return this.mainRefState(repoPath) ?? EMPTY_STATE_HASH;
   }
 
   /** Re-derive a head's working content IN THE DO (committed base + remaining
    *  uncommitted ops; staged + mirrored there) and project it to disk;
    *  returns the working state hash. */
-  private async reprojectWorking(
-    logId: string,
-    head: string,
-    repoPath: string | undefined
-  ): Promise<string> {
+  private async reprojectWorking(logId: string, head: string, repoPath: string): Promise<string> {
     const resolved = await this.gad().call<{ stateHash: string | null }>("resolveWorkingState", {
       logId,
       head,
     });
     const stateHash = resolved.stateHash ?? EMPTY_STATE_HASH;
     await this.projector.project({ repoPath, head, stateHash, clean: true, bestEffort: true });
-    if (head.startsWith("ctx:") && repoPath) {
+    if (head.startsWith("ctx:")) {
       this.noteContextMaterialized(head.slice("ctx:".length), repoPath, stateHash);
     }
     this.lastState.set(this.stateKey(logId, head), stateHash);
@@ -1899,7 +1861,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     head: string;
     target: { stateHash?: string; eventId?: string };
     actor: { id: string; kind: string };
-    repoPath?: string;
+    repoPath: string;
     invocationId?: string;
     turnId?: string;
   }): Promise<RecordEditResult> {
@@ -2015,10 +1977,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   enableMemoryIndexing(): void {
     this.onStateAdvanced((event) => {
       if (event.head !== VCS_MAIN_HEAD) return;
-      const repoPath = event.repoPath;
-      if (!repoPath) return; // per-repo only; legacy whole-tree advances ignored
       this.memoryIndexQueue = this.memoryIndexQueue
-        .then(() => this.indexRepoFiles(repoPath))
+        .then(() => this.indexRepoFiles(event.repoPath))
         .catch((error) => console.warn("[VcsMemory] index failed:", error));
     });
     // Catch up on whatever happened while the server was down: index each
@@ -2540,6 +2500,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       sweptManifests: number;
       sweptFileVersions: number;
       blobCandidates: number;
+      liveStateHashes: string[];
       liveBlobDigests?: string[];
     }>("runGadGcMark", roots);
     const sweep = await this.gad().call<{ digests: string[] }>("runGadGcSweep", {
@@ -2550,14 +2511,22 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     for (const digest of sweep.digests) {
       await fsp.rm(blobPath(this.deps.blobsDir, digest), { force: true }).catch(() => {});
     }
+    const liveTreeDigests = new Set(roots.protectedTreeDigests);
+    const liveContentDigests = new Set([
+      ...roots.protectedBlobDigests,
+      ...(mark.liveBlobDigests ?? []),
+    ]);
+    for (const stateHash of mark.liveStateHashes) {
+      if (!stateHash.startsWith("state:")) continue;
+      const reachable = await collectTreeReachableDigests(this.deps.blobsDir, stateHash);
+      if (!reachable) {
+        throw new Error(`GC live state ${stateHash} is missing its canonical content-store tree`);
+      }
+      for (const digest of reachable.treeDigests) liveTreeDigests.add(digest);
+      for (const digest of reachable.contentDigests) liveContentDigests.add(digest);
+    }
     const treeSweep = await pruneUnreferencedTreeObjects(this.deps.blobsDir, {
-      referenced: [
-        ...new Set([
-          ...roots.protectedBlobDigests,
-          ...roots.protectedTreeDigests,
-          ...(mark.liveBlobDigests ?? []),
-        ]),
-      ],
+      referenced: [...new Set([...liveContentDigests, ...liveTreeDigests])],
       olderThanMs: opts.minAgeMs ?? 60_000,
     });
     return {
@@ -2571,6 +2540,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async collectGcRoots(): Promise<WorkspaceGcRoots> {
+    // The empty state is a real canonical content-tree root, not a sentinel.
+    // Fresh workspaces can reach their first scheduled GC before any view has
+    // needed to materialize it, so establish the invariant before handing the
+    // root to the GAD marker.
+    await this.worktrees.ensureStateMirrored(EMPTY_STATE_HASH);
     const rootStateHashes = new Set<string>([EMPTY_STATE_HASH]);
     const protectedBlobDigests = new Set<string>();
     const protectedTreeDigests = new Set<string>();
@@ -2627,7 +2601,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    */
   async statusHead(
     head: string,
-    repoPath?: string
+    repoPath: string
   ): Promise<{
     stateHash: string | null;
     dirty: boolean;
@@ -2638,9 +2612,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     /** The repo was deleted from the workspace (its `main` is archived/gone). */
     deleted: boolean;
   }> {
-    this.repoLogId(repoPath); // per-repo VCS: a repoPath is required
     return await this.gad().call("vcsStatus", {
-      repoPath: normalizeRepoPathForLog(repoPath!),
+      repoPath: normalizeRepoPathForLog(repoPath),
       head,
     });
   }

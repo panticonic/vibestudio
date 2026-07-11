@@ -10,7 +10,6 @@ import { createViewService } from "./viewService.js";
 beforeEach(() => {
   setWorkspaceAppTrust({
     chromeApps: ["apps/shell", "apps/mobile"],
-    connectionManagementApps: ["apps/shell", "apps/remote-cli"],
   });
 });
 

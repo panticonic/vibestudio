@@ -1,12 +1,27 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { authMethods, CreatePairingInviteArgsSchema } from "@vibestudio/shared/serviceSchemas/auth";
+import {
+  authMethods,
+  RefreshAgentResponseSchema,
+  RefreshShellResponseSchema,
+} from "@vibestudio/shared/serviceSchemas/auth";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
-import type { DeviceAuthStore } from "./deviceAuthStore.js";
+import {
+  AGENT_ID_PATTERN,
+  AGENT_SECRET_PATTERN,
+  AGENT_TOKEN_PATTERN,
+  type DeviceAuthStore,
+  type IssuedDeviceCredential,
+} from "./deviceAuthStore.js";
+import {
+  DEVICE_ID_PATTERN,
+  DEVICE_REFRESH_TOKEN_PATTERN,
+} from "@vibestudio/shared/deviceCredentials";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { User } from "@vibestudio/shared/users/types";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/shared/credentials/audit";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
@@ -15,63 +30,46 @@ import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
   agentCallerId,
   connectionInfoResponse,
-  createPairingInviteResponse,
-  responseForCredential,
   shellCallerId,
   type AuthConnectionInfo,
-  type PairingRoomArmer,
 } from "./auth/model.js";
-import { auditPairingEvent } from "./auth/audit.js";
 import { refreshPrincipalGrantResponse } from "./auth/principalGrants.js";
 import { sendAuthError } from "./auth/httpErrors.js";
+import { authError } from "./auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
 
-const IssueDeviceBodySchema = z.object({
-  label: z.string().min(1).max(128).optional(),
-  platform: z.string().min(1).max(64).optional(),
-});
+export const RefreshShellBodySchema = z
+  .object({
+    deviceId: z.string().regex(DEVICE_ID_PATTERN, "Invalid device id format"),
+    refreshToken: z.string().regex(DEVICE_REFRESH_TOKEN_PATTERN, "Invalid refresh token format"),
+  })
+  .strict();
 
-const CreatePairingCodeBodySchema = z.object({
-  ttlMs: z
-    .number()
-    .int()
-    .min(30_000)
-    .max(60 * 60 * 1000)
-    .optional(),
-});
-
-const CompletePairingBodySchema = z.object({
-  code: z.string().min(16).max(512),
-  label: z.string().min(1).max(128).optional(),
-  platform: z.string().min(1).max(64).optional(),
-});
-
-const RefreshShellBodySchema = z.object({
-  deviceId: z.string().min(1).max(128),
-  refreshToken: z.string().min(16).max(512),
-});
-
-const RefreshPrincipalGrantBodySchema = RefreshShellBodySchema.extend({
+export const RefreshPrincipalGrantBodySchema = RefreshShellBodySchema.extend({
   principal: z.string().min(1).max(128).optional(),
   source: z.string().min(1).max(256).optional(),
-});
-const MobileAppBootstrapBodySchema = RefreshShellBodySchema.extend({
+}).strict();
+export const MobileAppBootstrapBodySchema = RefreshShellBodySchema.extend({
   source: z.string().min(1).max(256).optional(),
-});
+}).strict();
 
-const RevokeDeviceBodySchema = z.object({
-  deviceId: z.string().min(1).max(128),
-});
-
-const RefreshAgentBodySchema = z.object({
-  // The full presentable credential: `agent:<agentId>:<secret>`.
-  agentToken: z.string().min(8).max(512),
-});
+export const RefreshAgentBodySchema = z
+  .object({
+    // The full presentable credential: `agent:<agentId>:<secret>`.
+    agentToken: z.string().regex(AGENT_TOKEN_PATTERN, "Invalid agent token format"),
+  })
+  .strict();
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
+    const buffer = chunk as Buffer;
+    total += buffer.byteLength;
+    if (total > 64 * 1024) {
+      throw authError("REQUEST_BODY_TOO_LARGE", "Request body exceeds 64 KiB", 413);
+    }
+    chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -103,10 +101,20 @@ function sendJson(
 export function createPairingRedeemer(deps: {
   deviceAuthStore: DeviceAuthStore;
   tokenManager: TokenManager;
+  /**
+   * Redeem a code through the hub, the sole identity writer. Workspace children
+   * never consume pairing rows or issue device records themselves.
+   */
+  redeemPairingCode: (
+    code: string,
+    input: { label?: string; platform?: string }
+  ) => Promise<IssuedDeviceCredential>;
+  touchDevice?: (deviceId: string) => Promise<void>;
+  resolveUser: (userId: string) => User | null;
 }) {
   const REFRESH_PREFIX = "refresh:";
   const AGENT_PREFIX = "agent:";
-  return (token: string, ctx: { clientLabel?: string; clientPlatform?: string }) => {
+  return async (token: string, ctx: { clientLabel?: string; clientPlatform?: string }) => {
     if (token.startsWith(AGENT_PREFIX)) {
       // `agent:<agentId>:<secret>` — an entity-scoped agent credential (§3.2).
       // Redeems to the `agent:<entityId>` principal, kind `agent`, and carries a
@@ -122,6 +130,9 @@ export function createPairingRedeemer(deps: {
         contextId: binding.contextId,
         channelId: binding.channelId,
         agentId: binding.agentId,
+        // The human whose lineage spawned the agent (WP0 §3.3) — inherited
+        // subject, carried onto the connection for attribution.
+        userId: binding.userId,
       };
       deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
       return {
@@ -136,32 +147,38 @@ export function createPairingRedeemer(deps: {
       if (sep <= 0) return null;
       const deviceId = rest.slice(0, sep);
       const refreshToken = rest.slice(sep + 1);
-      if (!refreshToken) return null;
+      if (!DEVICE_ID_PATTERN.test(deviceId) || !DEVICE_REFRESH_TOKEN_PATTERN.test(refreshToken)) {
+        return null;
+      }
       try {
         deps.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+        await deps.touchDevice?.(deviceId);
       } catch {
         return null;
       }
       deps.tokenManager.ensureToken(shellCallerId(deviceId), "shell");
       return { callerId: shellCallerId(deviceId), callerKind: "shell" as const };
     }
-    if (!deps.deviceAuthStore.hasPendingPairingCode(token)) return null;
-    let credential;
     try {
-      credential = deps.deviceAuthStore.completePairing({
-        code: token,
+      const credential = await deps.redeemPairingCode(token, {
         label: ctx.clientLabel,
         platform: ctx.clientPlatform,
       });
+      const user = deps.resolveUser(credential.userId);
+      if (!user || user.revokedAt !== undefined) return null;
+      deps.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell");
+      return {
+        callerId: shellCallerId(credential.deviceId),
+        callerKind: "shell" as const,
+        deviceCredential: {
+          deviceId: credential.deviceId,
+          refreshToken: credential.refreshToken,
+        },
+        subject: { userId: user.id, handle: user.handle },
+      };
     } catch {
       return null;
     }
-    deps.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell");
-    return {
-      callerId: shellCallerId(credential.deviceId),
-      callerKind: "shell" as const,
-      deviceCredential: { deviceId: credential.deviceId, refreshToken: credential.refreshToken },
-    };
   };
 }
 
@@ -174,21 +191,104 @@ function parseAgentToken(token: string): { agentId: string; secret: string } | n
   if (sep <= 0) return null;
   const agentId = rest.slice(0, sep);
   const secret = rest.slice(sep + 1);
-  if (!secret) return null;
+  if (!AGENT_ID_PATTERN.test(agentId) || !AGENT_SECRET_PATTERN.test(secret)) return null;
   return { agentId, secret };
+}
+
+// =============================================================================
+// User bootstrap / invite / self-pair (WP0 §4)
+//
+// Hub-side identity operations. The hub is the sole identity writer, so these
+// take a read-write `UserStore`/`MembershipStore`. Caller-ROLE gates
+// (`inviteUser` is root/admin-only, `pairDevice` is any member for their own
+// devices) are applied by the caller/WP9 against `subject.role`; these
+// functions implement the OPERATION only. WP1 wires them onto the hub's auth
+// surface (RPC method + startup bootstrap print).
+// =============================================================================
+
+/**
+ * Synthetic subject for in-process/bootstrap spawns with no human on the
+ * connection (WP0 §5.4). Agents minted by the `server` principal attribute to
+ * `system` rather than a real account; excluded from presence/account joins.
+ */
+const SYSTEM_USER_ID = "system";
+
+/**
+ * The runtime deputy entity kinds retired on user revocation (WP9 §6.5 step 4).
+ * A revoked user's agent/worker/DO deputies keep ACTING autonomously; panels
+ * (UI surfaces) are excluded — a revoked user's panel TREES are ARCHIVED (soft-
+ * closed, recoverable by root) per §6.5 step 5, not torn down here. `session`
+ * covers inert agent-session entities that carry agent credentials.
+ */
+const REVOCABLE_DEPUTY_KINDS: ReadonlySet<EntityRecord["kind"]> = new Set([
+  "worker",
+  "do",
+  "session",
+]);
+
+/**
+ * WP9 §6.5 step 4 — retire a revoked user's running deputies.
+ *
+ * Agents/workers/DOs a user spawned inherit their `userId` (WP0 §6) and would
+ * otherwise keep acting "as" the now-revoked human. This retires every ACTIVE
+ * deputy entity owned by `userId` through the runtime's existing retire path,
+ * which already revokes the entity's agent credentials
+ * (`deviceAuthStore.revokeAgentCredentialsForEntity`) and its live
+ * `agent:<entityId>` token — so no deputy can re-authenticate or keep
+ * approving/committing on a revoked account.
+ *
+ * Runs in the OWNING workspace child (which holds the entity store + runtime).
+ * The hub's identity teardown (`UserStore.revokeUser`) — account/devices/agent-
+ * creds/membership cascade — is a SEPARATE step; the revoke flow drives this per
+ * workspace child after the account is flagged revoked. See the followups for
+ * the one-line `revokeUser` wiring seam (index.ts / hub own that trigger).
+ */
+export async function retireRevokedUserDeputies(
+  deps: {
+    /** Snapshot of live runtime entities (e.g. the entity store's `listActive`). */
+    listActiveEntities: () => Promise<EntityRecord[]> | EntityRecord[];
+    /** Administrative retire of ONE entity by id (the runtime retire path). */
+    retireEntity: (id: string) => Promise<void>;
+  },
+  userId: string
+): Promise<{ retired: string[] }> {
+  // The synthetic `system` subject is not a revocable human — never sweep it.
+  if (!userId || userId === SYSTEM_USER_ID) return { retired: [] };
+  const active = await deps.listActiveEntities();
+  const deputies = active.filter(
+    (entity) =>
+      entity.ownerUserId === userId &&
+      entity.status === "active" &&
+      REVOCABLE_DEPUTY_KINDS.has(entity.kind)
+  );
+  const retired: string[] = [];
+  for (const entity of deputies) {
+    await deps.retireEntity(entity.id);
+    retired.push(entity.id);
+  }
+  return { retired };
 }
 
 export function createAuthService(deps: {
   tokenManager: TokenManager;
   deviceAuthStore: DeviceAuthStore;
+  /** Read-only live-role lookup. Omission denies role-gated operations. */
+  roleOf?: (userId: string) => "root" | "admin" | "member" | null;
+  /** All agent-credential mutations cross the child→hub capability channel. */
+  agentCredentialWriter?: {
+    mint(input: {
+      entityId: string;
+      contextId: string;
+      channelId: string;
+      userId: string;
+      ttlMs?: number;
+      scopes?: string[];
+    }): Promise<{ agentId: string; agentToken: string }>;
+    revoke(agentId: string): Promise<boolean>;
+  };
   getServerBootId: () => string;
   getWorkspaceId: () => string;
-  getConnectionInfo?: () => AuthConnectionInfo;
-  /**
-   * The live WebRTC ingress pool (null when WebRTC is off). Pairing invites
-   * mint one fresh signaling room each and arm it here (plan §2.1).
-   */
-  getWebRtcIngress?: () => PairingRoomArmer | null;
+  getConnectionInfo: () => AuthConnectionInfo;
   connectionGrants?: ConnectionGrantService;
   auditLog?: Pick<AuditLog, "append">;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
@@ -210,7 +310,15 @@ export function createAuthService(deps: {
 }): ServiceWithRoutes {
   const capabilityAuthorizer =
     deps.capabilityAuthorizer ??
-    createCapabilityAuthorizer({ hasAppCapability: deps.hasAppCapability });
+    createCapabilityAuthorizer({
+      hasAppCapability: deps.hasAppCapability,
+      // WP9 §3: resolve the caller's LIVE role from the hub-owned identity DB so
+      // `isRootOrAdmin` reflects promotions/demotions immediately (never a value
+      // frozen onto the connection). Both hub and child hold a read handle;
+      // undefined where no identity store is wired, in which case role gates
+      // deny (no role can be affirmed).
+      roleOf: deps.roleOf,
+    });
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
@@ -241,18 +349,6 @@ export function createAuthService(deps: {
           ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
         };
       }
-      if (method === "createPairingInvite") {
-        capabilityAuthorizer.require(ctx.caller, "connection-management");
-        const body = CreatePairingInviteArgsSchema.parse(args[0] ?? {});
-        const response = createPairingInviteResponse(deps, body.ttlMs);
-        await auditPairingEvent(deps, {
-          type: "device_pairing.invite_created",
-          callerId: ctx.caller.runtime.id,
-          expiresAt: typeof response["expiresAt"] === "number" ? response["expiresAt"] : undefined,
-          method: "rpc",
-        });
-        return response;
-      }
       async function resolveAgentCredentialTarget(
         methodName: string,
         entityId: string
@@ -281,6 +377,7 @@ export function createAuthService(deps: {
       }
 
       if (method === "mintAgentCredential") {
+        if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
         const input = args[0] as {
           entityId: string;
           channelId: string;
@@ -291,12 +388,16 @@ export function createAuthService(deps: {
         if (ctx.caller.runtime.kind !== "server") {
           assertAgentCredentialOwner("mintAgentCredential", ctx.caller.runtime.id, record);
         }
-        return deps.deviceAuthStore.mintAgentCredential({
+        return await deps.agentCredentialWriter.mint({
           ...input,
           contextId: record.contextId,
+          // The agent inherits the spawning caller's subject (WP0 §3.3); a
+          // subject-less server/bootstrap spawn attributes to `system` (§5.4).
+          userId: ctx.caller.subject?.userId ?? SYSTEM_USER_ID,
         });
       }
       if (method === "revokeAgentCredential") {
+        if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
         const agentId = args[0] as string;
         const existing = deps.deviceAuthStore.getAgentCredential(agentId);
         if (!existing) return { revoked: false };
@@ -308,33 +409,8 @@ export function createAuthService(deps: {
         if (ctx.caller.runtime.kind !== "server") {
           assertAgentCredentialOwner("revokeAgentCredential", ctx.caller.runtime.id, record);
         }
-        const revoked = deps.deviceAuthStore.revokeAgentCredential(agentId);
+        const revoked = await deps.agentCredentialWriter.revoke(agentId);
         if (revoked) deps.tokenManager.revokeToken(agentCallerId(existing.entityId));
-        return { revoked };
-      }
-      if (method === "listDevices") {
-        return {
-          serverId: deps.deviceAuthStore.getServerId(),
-          // Strip secrets AND the device's signaling room — knowing another
-          // device's room lets a caller squat/evict its signaling slot.
-          devices: deps.deviceAuthStore
-            .listDevices()
-            .map(({ refreshTokenHash: _secret, room: _room, ...device }) => device),
-        };
-      }
-      if (method === "revokeDevice") {
-        const deviceId = args[0] as string;
-        const revoked = deps.deviceAuthStore.revokeDevice(deviceId);
-        deps.tokenManager.revokeToken(shellCallerId(deviceId));
-        deps.retireMobileAppPrincipal?.(deviceId);
-        if (revoked) {
-          await auditPairingEvent(deps, {
-            type: "device_pairing.device_revoked",
-            callerId: ctx.caller.runtime.id,
-            deviceId,
-            method: "rpc",
-          });
-        }
         return { revoked };
       }
       throw new Error(`Unknown auth method: ${method}`);
@@ -342,73 +418,6 @@ export function createAuthService(deps: {
   };
 
   const routes: ServiceRouteDecl[] = [
-    {
-      serviceName: "auth",
-      path: "/issue-device",
-      methods: ["POST"],
-      auth: "admin-token",
-      handler: async (req, res) => {
-        try {
-          const body = IssueDeviceBodySchema.parse(await readJson(req));
-          const credential = deps.deviceAuthStore.issueDevice({
-            label: body.label ?? "Vibestudio client",
-            platform: body.platform,
-          });
-          sendJson(res, 200, responseForCredential(deps, credential, { includeShellToken: true }));
-        } catch (error) {
-          sendAuthError(res, error, 400);
-        }
-      },
-    },
-    {
-      serviceName: "auth",
-      path: "/create-pairing-code",
-      methods: ["POST"],
-      auth: "admin-token",
-      handler: async (req, res) => {
-        try {
-          const body = CreatePairingCodeBodySchema.parse(await readJson(req));
-          const response = createPairingInviteResponse(deps, body.ttlMs);
-          await auditPairingEvent(deps, {
-            type: "device_pairing.invite_created",
-            callerId: "admin-token",
-            expiresAt:
-              typeof response["expiresAt"] === "number" ? response["expiresAt"] : undefined,
-            method: "http-admin",
-          });
-          sendJson(res, 200, response);
-        } catch (error) {
-          sendAuthError(res, error, 400);
-        }
-      },
-    },
-    {
-      serviceName: "auth",
-      path: "/complete-pairing",
-      methods: ["POST"],
-      auth: "public",
-      handler: async (req, res) => {
-        try {
-          const body = CompletePairingBodySchema.parse(await readJson(req));
-          const credential = deps.deviceAuthStore.completePairing({
-            code: body.code,
-            label: body.label,
-            platform: body.platform,
-          });
-          await auditPairingEvent(deps, {
-            type: "device_pairing.redeemed",
-            callerId: "public-pairing-code",
-            deviceId: credential.deviceId,
-            label: credential.label,
-            platform: credential.platform,
-            method: "http-public",
-          });
-          sendJson(res, 200, responseForCredential(deps, credential, { includeShellToken: true }));
-        } catch (error) {
-          sendAuthError(res, error, 401);
-        }
-      },
-    },
     {
       serviceName: "auth",
       path: "/refresh-shell",
@@ -419,17 +428,21 @@ export function createAuthService(deps: {
           const body = RefreshShellBodySchema.parse(await readJson(req));
           const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
           const shellToken = deps.tokenManager.ensureToken(shellCallerId(body.deviceId), "shell");
-          sendJson(res, 200, {
-            shellToken,
-            callerId: shellCallerId(body.deviceId),
-            deviceId: body.deviceId,
-            label: device.label,
-            serverId: deps.deviceAuthStore.getServerId(),
-            serverBootId: deps.getServerBootId(),
-            workspaceId: deps.getWorkspaceId(),
-          });
+          sendJson(
+            res,
+            200,
+            RefreshShellResponseSchema.parse({
+              shellToken,
+              callerId: shellCallerId(body.deviceId),
+              deviceId: body.deviceId,
+              label: device.label,
+              serverId: deps.deviceAuthStore.getServerId(),
+              serverBootId: deps.getServerBootId(),
+              workspaceId: deps.getWorkspaceId(),
+            })
+          );
         } catch (error) {
-          sendAuthError(res, error, 401);
+          sendAuthError(res, error, 400);
         }
       },
     },
@@ -463,22 +476,28 @@ export function createAuthService(deps: {
             contextId: binding.contextId,
             channelId: binding.channelId,
             agentId: binding.agentId,
+            // Inherited spawning-user subject (WP0 §3.3).
+            userId: binding.userId,
           };
           const token = deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
-          sendJson(res, 200, {
-            token,
-            callerId,
-            callerKind: "agent",
-            entityId: binding.entityId,
-            contextId: binding.contextId,
-            channelId: binding.channelId,
-            agentId: binding.agentId,
-            serverId: deps.deviceAuthStore.getServerId(),
-            serverBootId: deps.getServerBootId(),
-            workspaceId: deps.getWorkspaceId(),
-          });
+          sendJson(
+            res,
+            200,
+            RefreshAgentResponseSchema.parse({
+              token,
+              callerId,
+              callerKind: "agent",
+              entityId: binding.entityId,
+              contextId: binding.contextId,
+              channelId: binding.channelId,
+              agentId: binding.agentId,
+              serverId: deps.deviceAuthStore.getServerId(),
+              serverBootId: deps.getServerBootId(),
+              workspaceId: deps.getWorkspaceId(),
+            })
+          );
         } catch (error) {
-          sendAuthError(res, error, 401);
+          sendAuthError(res, error, 400);
         }
       },
     },
@@ -492,7 +511,7 @@ export function createAuthService(deps: {
           const body = RefreshPrincipalGrantBodySchema.parse(await readJson(req));
           sendJson(res, 200, await refreshPrincipalGrantResponse(deps, body));
         } catch (error) {
-          sendAuthError(res, error, 401);
+          sendAuthError(res, error, 400);
         }
       },
     },
@@ -539,45 +558,6 @@ export function createAuthService(deps: {
             workspaceId: deps.getWorkspaceId(),
             bootstrap,
           });
-        } catch (error) {
-          sendAuthError(res, error, 401);
-        }
-      },
-    },
-    {
-      serviceName: "auth",
-      path: "/devices",
-      methods: ["GET"],
-      auth: "admin-token",
-      handler: async (_req, res) => {
-        sendJson(res, 200, {
-          serverId: deps.deviceAuthStore.getServerId(),
-          devices: deps.deviceAuthStore
-            .listDevices()
-            .map(({ refreshTokenHash: _secret, room: _room, ...device }) => device),
-        });
-      },
-    },
-    {
-      serviceName: "auth",
-      path: "/revoke-device",
-      methods: ["POST"],
-      auth: "admin-token",
-      handler: async (req, res) => {
-        try {
-          const body = RevokeDeviceBodySchema.parse(await readJson(req));
-          const revoked = deps.deviceAuthStore.revokeDevice(body.deviceId);
-          deps.tokenManager.revokeToken(shellCallerId(body.deviceId));
-          deps.retireMobileAppPrincipal?.(body.deviceId);
-          if (revoked) {
-            await auditPairingEvent(deps, {
-              type: "device_pairing.device_revoked",
-              callerId: "admin-token",
-              deviceId: body.deviceId,
-              method: "http-admin",
-            });
-          }
-          sendJson(res, 200, { revoked });
         } catch (error) {
           sendAuthError(res, error, 400);
         }

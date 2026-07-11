@@ -1,19 +1,36 @@
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { UserRole } from "@vibestudio/shared/users/types";
 
 export interface CapabilityTrustDeps {
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   hasPlatformCapability?: (caller: VerifiedCaller, capability: AppCapability) => boolean;
+  /**
+   * Live role lookup from the shared identity DB (WP9 §3) — resolves the
+   * CURRENT role of `subject.userId` (never a value snapshotted onto the
+   * connection), so a promotion/demotion takes effect immediately. Backs
+   * `capabilityAuthorizer.isRootOrAdmin`, the gate for host-administrative ops
+   * (invite/revoke user, workspace create/delete). Wired from the hub-owned
+   * `UserStore.getUser(id)?.role`; undefined where no identity store is in
+   * reach, in which case the role gate denies (no role can be affirmed). NEVER
+   * consulted in capability-grant matching, which stays code-identity-scoped.
+   */
+  roleOf?: (userId: string) => UserRole | null | undefined;
 }
 
-const TRUSTED_PLATFORM_CAPABILITIES = ["panel-hosting", "connection-management"] as const;
-const PANEL_HOST_CAPABILITIES = ["panel-hosting"] as const;
+/**
+ * Genuinely-platform capabilities granted by concrete platform principal.
+ *
+ * `panel-hosting` is the only platform capability. Account/device management is
+ * exposed exclusively by the typed hub control plane and its live role gates.
+ */
+const PLATFORM_HOST_CAPABILITIES = ["panel-hosting"] as const;
 
 const PLATFORM_PRINCIPAL_CAPABILITIES: Readonly<Record<string, readonly AppCapability[]>> = {
-  shell: TRUSTED_PLATFORM_CAPABILITIES,
-  server: TRUSTED_PLATFORM_CAPABILITIES,
-  "electron-main": TRUSTED_PLATFORM_CAPABILITIES,
-  "headless-host": PANEL_HOST_CAPABILITIES,
+  shell: PLATFORM_HOST_CAPABILITIES,
+  server: PLATFORM_HOST_CAPABILITIES,
+  "electron-main": PLATFORM_HOST_CAPABILITIES,
+  "headless-host": PLATFORM_HOST_CAPABILITIES,
 };
 
 function platformCapabilitiesForCaller(caller: VerifiedCaller): readonly AppCapability[] | null {
@@ -30,7 +47,7 @@ function platformCapabilitiesForCaller(caller: VerifiedCaller): readonly AppCapa
   // Device-scoped shell principals are issued by pairing/device auth as
   // concrete ids like shell:<deviceId>. This keeps trust keyed on the principal
   // namespace rather than on every caller with kind:"shell".
-  if (kind === "shell" && id.startsWith("shell:")) return TRUSTED_PLATFORM_CAPABILITIES;
+  if (kind === "shell" && id.startsWith("shell:")) return PLATFORM_HOST_CAPABILITIES;
   return null;
 }
 

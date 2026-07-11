@@ -50,6 +50,8 @@ export interface DurableObjectRelayDeps {
   callerId?: string;
   callerKind?: string;
   callerPanelId?: string;
+  /** Host-verified owning account projected into the userland caller envelope. */
+  userId?: string;
   /** Correlation id for this call; lets the DO match a later deferred reply. */
   requestId?: string;
   /** Host-minted on-behalf-of correlation nonce for vcs-DO dispatches
@@ -82,6 +84,7 @@ function callerFromDeps(deps: DurableObjectRelayDeps): AuthenticatedCaller {
     callerId: deps.callerId ?? "main",
     callerKind: (deps.callerKind as CallerKind | undefined) ?? "server",
     ...(deps.callerPanelId ? { callerPanelId: deps.callerPanelId } : {}),
+    ...(deps.userId ? { userId: deps.userId } : {}),
   };
 }
 
@@ -155,10 +158,7 @@ async function postEnvelopeToDO(
 }
 
 function unwrapResponseEnvelope(raw: unknown): unknown {
-  const responseEnvelope =
-    raw && typeof raw === "object" && "envelope" in raw
-      ? (raw as { envelope?: RpcEnvelope }).envelope
-      : (raw as RpcEnvelope | undefined);
+  const responseEnvelope = raw as RpcEnvelope | undefined;
   const message = responseEnvelope?.message as RpcResponse | undefined;
   if (message && message.type === "response") {
     if ("error" in message) {
@@ -169,11 +169,7 @@ function unwrapResponseEnvelope(raw: unknown): unknown {
     }
     return message.result;
   }
-  // Defensive: a base that produced a bare `{error}` (e.g. respond timeout).
-  if (raw && typeof raw === "object" && "error" in raw) {
-    throw new Error(String((raw as { error: unknown }).error));
-  }
-  return undefined;
+  throw new Error("DO RPC relay returned a malformed response envelope");
 }
 
 /** Relay an RpcClient method call to a DO as a request envelope; returns the unwrapped result. */

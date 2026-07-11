@@ -116,6 +116,7 @@ describe("workerdRpcRelay", () => {
         callerId: "panel:parent-entity",
         callerKind: "panel",
         callerPanelId: "parent-slot",
+        userId: "usr_alice",
       }
     );
 
@@ -124,6 +125,7 @@ describe("workerdRpcRelay", () => {
       callerId: "panel:parent-entity",
       callerKind: "panel",
       callerPanelId: "parent-slot",
+      userId: "usr_alice",
     });
   });
 });

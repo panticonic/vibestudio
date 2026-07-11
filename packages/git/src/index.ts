@@ -10,7 +10,10 @@
  * import { promises as fsPromises } from "fs"; // RPC-backed in panels
  *
  * // Use a host-mediated credential HTTP adapter for external remotes:
- * const git = new GitClient(fsPromises, { http: credentials.gitHttp() });
+ * const git = new GitClient(fsPromises, {
+ *   http: credentials.gitHttp(),
+ *   authorIdentity: { handle: "alice", displayName: "Alice" },
+ * });
  *
  * // Clone a repository
  * await git.clone({
@@ -26,7 +29,13 @@
  * ```
  */
 
-export { GitClient, GitAuthError, type FsPromisesLike } from "./client.js";
+export {
+  GitClient,
+  GitAuthError,
+  SYSTEM_GIT_AUTHOR,
+  type FsPromisesLike,
+  type GitAuthorIdentity,
+} from "./client.js";
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";
 
 export type {

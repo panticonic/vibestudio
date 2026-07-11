@@ -2863,6 +2863,7 @@ async function smokeTestExtensionBuild(
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
+        VIBESTUDIO_EXTENSION_SMOKE: "1",
         VIBESTUDIO_EXTENSION_SMOKE_BUNDLE: bundlePath,
       },
       timeout: 15_000,
@@ -2932,7 +2933,8 @@ function createExtensionSmokeContext() {
       },
     },
     rpc: {
-      async call() {
+      async call(_target, method) {
+        if (method === "workspace.getConfig") return { id: "smoke" };
         return null;
       },
     },

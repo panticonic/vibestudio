@@ -522,6 +522,7 @@ export function createMainAdvanceApprovalGate(deps: {
         kind: "unit-batch",
         callerId: candidate.caller.runtime.id,
         callerKind,
+        ...(candidate.caller.subject ? { requestedByUserId: candidate.caller.subject.userId } : {}),
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         dedupKey: `unit-meta-change:${candidate.caller.runtime.id}:${candidate.stateHash}`,

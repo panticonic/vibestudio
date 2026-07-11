@@ -1,11 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { createServerEventBridge } from "./serverEventBridge.js";
+import type { HubWorkspaceRoute } from "@vibestudio/shared/serviceSchemas/hubControl";
+
+const workspaceRoute: HubWorkspaceRoute = {
+  workspace: "other-ws",
+  workspaceId: "ws_other",
+  running: true,
+  serverUrl: "https://hub.example.test/w/other-ws",
+  controlReach: {
+    room: "room_123456789012345678901234",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example.test",
+    v: 2,
+    ice: "all",
+  },
+  workspaceReach: {
+    room: "room_abcdefghijklmnopqrstuvwx",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example.test",
+    v: 2,
+    ice: "all",
+  },
+  serverId: "srv_123456789012345678901234",
+  serverBootId: "boot_123456789012345678901234",
+};
 
 function createHarness(
   opts: {
     resolveAppAvailableEvent?: (payload: unknown) => unknown;
-    onWorkspaceRelaunchRequested?: (name: string) => void;
+    onWorkspaceRelaunchRequested?: (name: string, route: HubWorkspaceRoute) => void;
     onCredentialCaptureRequest?: (
       payload: Record<string, unknown>
     ) => Promise<Record<string, unknown>>;
@@ -83,10 +107,20 @@ describe("createServerEventBridge", () => {
     const onWorkspaceRelaunchRequested = vi.fn();
     const { handle, eventService } = createHarness({ onWorkspaceRelaunchRequested });
 
+    handle("event:workspace:relaunch-requested", { name: "other-ws", route: workspaceRoute });
+
+    expect(onWorkspaceRelaunchRequested).toHaveBeenCalledWith("other-ws", workspaceRoute);
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a relaunch event without exact device reaches", () => {
+    const onWorkspaceRelaunchRequested = vi.fn();
+    const { handle, warn } = createHarness({ onWorkspaceRelaunchRequested });
+
     handle("event:workspace:relaunch-requested", { name: "other-ws" });
 
-    expect(onWorkspaceRelaunchRequested).toHaveBeenCalledWith("other-ws");
-    expect(eventService.emit).not.toHaveBeenCalled();
+    expect(onWorkspaceRelaunchRequested).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith("[workspace] ignored malformed relaunch route");
   });
 
   it("answers credential:capture-request with credentials.completeCapture", async () => {

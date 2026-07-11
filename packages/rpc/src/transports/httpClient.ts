@@ -116,7 +116,9 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
       if (response.status === 401) throw new Error("RPC authentication failed");
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
-        throw new Error(`RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+        throw new Error(
+          `RPC endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+        );
       }
       return response.json();
     }
@@ -150,11 +152,12 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         return;
       }
       const response = (await postEnvelope(envelope)) as unknown;
-      const returnedEnvelope =
-        response && typeof response === "object" && "envelope" in response
-          ? (response as { envelope?: RpcEnvelope }).envelope
-          : (response as RpcEnvelope | undefined);
-      if (returnedEnvelope && typeof returnedEnvelope === "object" && "message" in returnedEnvelope) {
+      const returnedEnvelope = response as RpcEnvelope | undefined;
+      if (
+        returnedEnvelope &&
+        typeof returnedEnvelope === "object" &&
+        "message" in returnedEnvelope
+      ) {
         deliverToListeners(returnedEnvelope);
       }
     },
@@ -193,7 +196,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
                 // is untouched.
                 console.warn(
                   `[httpClientTransport:${config.selfId}] respond() timed out after ${timeoutMs}ms ` +
-                    `for "${(message as RpcRequest).method}" (requestId=${requestId})`,
+                    `for "${(message as RpcRequest).method}" (requestId=${requestId})`
                 );
                 resolve({
                   from: inbound.target,
@@ -235,7 +238,9 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
             [runtimeIdHeader]: config.selfId,
           },
           body: JSON.stringify(envelope),
-          signal: signal ?? undefined,
+          // Cast bridges the DOM vs React-Native `AbortSignal` identity clash when this
+          // module is typechecked under the RN-lib mobile program; identity under host lib.
+          signal: (signal ?? undefined) as RequestInit["signal"],
         });
       } catch (error) {
         throw rpcFetchError(streamUrl, error);
@@ -243,7 +248,9 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
       if (response.status === 401) throw new Error("RPC streaming authentication failed");
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
-        throw new Error(`RPC streaming endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+        throw new Error(
+          `RPC streaming endpoint returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+        );
       }
       if (!response.body) throw new Error("RPC streaming response has no body");
       return decodeFramedResponseToStreaming(response.body, "", signal ?? null);

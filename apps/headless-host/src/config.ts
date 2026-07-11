@@ -4,15 +4,7 @@ import * as path from "node:path";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { CdpHostBridgeDiagnostic, CdpHostBridgeSocket } from "./hostBridge.js";
 
-export interface DeviceCredentialAuth {
-  kind: "device";
-  /** Base server URL the credential pairs with. */
-  serverUrl: string;
-  deviceId: string;
-  refreshToken: string;
-}
-
-export interface TokenAuth {
+export interface IpcTokenAuth {
   kind: "token";
   token: string;
 }
@@ -33,7 +25,7 @@ export interface HeadlessHostServerConnection {
 export interface HeadlessHostConfig {
   /** Base server URL, e.g. http://127.0.0.1:3030 */
   serverUrl: string;
-  auth: TokenAuth | DeviceCredentialAuth | InjectedAuth;
+  auth: IpcTokenAuth | InjectedAuth;
   label: string;
   clientSessionId: string;
   maxPanels: number;
@@ -58,8 +50,8 @@ export interface HeadlessHostConfig {
 
 export interface ConfigOverrides {
   serverUrl?: string;
-  token?: string;
-  deviceCredential?: { serverUrl: string; deviceId: string; refreshToken: string };
+  /** Server-spawned child capability received over the private IPC channel. */
+  ipcToken?: string;
   label?: string;
   clientSessionId?: string;
   maxPanels?: number;
@@ -86,23 +78,19 @@ export function resolveConfig(
   overrides: ConfigOverrides = {},
   env = process.env
 ): HeadlessHostConfig {
-  const serverUrl =
-    overrides.serverUrl ?? overrides.deviceCredential?.serverUrl ?? env["VIBESTUDIO_SERVER_URL"];
+  const serverUrl = overrides.serverUrl ?? env["VIBESTUDIO_SERVER_URL"];
   if (!serverUrl) {
-    throw new Error("headless-host: serverUrl is required (--url or VIBESTUDIO_SERVER_URL)");
+    throw new Error("headless-host: serverUrl is required");
   }
-  const token = overrides.token ?? env["VIBESTUDIO_HEADLESS_TOKEN"];
-  const auth: HeadlessHostConfig["auth"] = overrides.deviceCredential
-    ? { kind: "device", ...overrides.deviceCredential }
-    : token
-      ? { kind: "token", token }
-      : overrides.connectionFactory
-        ? { kind: "injected" }
-        : (() => {
-            throw new Error(
-              "headless-host: auth is required (--token or a paired device credential)"
-            );
-          })();
+  const auth: HeadlessHostConfig["auth"] = overrides.connectionFactory
+    ? { kind: "injected" }
+    : overrides.ipcToken
+      ? { kind: "token", token: overrides.ipcToken }
+      : (() => {
+          throw new Error(
+            "headless-host: auth requires private server IPC or an injected connection"
+          );
+        })();
 
   const idleExitEnv = env["VIBESTUDIO_HEADLESS_IDLE_EXIT_MS"];
   return {
@@ -116,7 +104,8 @@ export function resolveConfig(
     chromiumPath: overrides.chromiumPath ?? env["VIBESTUDIO_CHROMIUM_PATH"],
     cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "vibestudio", "chromium"),
     profileDir:
-      overrides.profileDir ?? path.join(os.homedir(), ".local", "state", "vibestudio", "headless-host"),
+      overrides.profileDir ??
+      path.join(os.homedir(), ".local", "state", "vibestudio", "headless-host"),
     leanBrowser: overrides.leanBrowser ?? false,
     connectionFactory: overrides.connectionFactory,
     bridgeSocketFactory: overrides.bridgeSocketFactory,

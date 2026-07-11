@@ -15,6 +15,7 @@ function buildTrigger(path: string) {
     actor: { id: "user", kind: "user" },
     transitionKind: "snapshot" as const,
     changedPaths: [path],
+    repoPath: path.split("/").slice(0, 2).join("/"),
     fileChanges: [],
     editOps: [],
   };

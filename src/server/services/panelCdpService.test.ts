@@ -32,7 +32,7 @@ function approvalQueueMock(
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(() => 0),
+    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
@@ -520,6 +520,7 @@ describe("panelCdpService", () => {
       contextId: "ctx-agent",
       channelId: "chan-1",
       agentId: "agt_1",
+      userId: "usr_test",
     });
 
     await expect(
@@ -559,6 +560,7 @@ describe("panelCdpService", () => {
       contextId: "ctx-agent",
       channelId: "chan-1",
       agentId: "agt_1",
+      userId: "usr_test",
     });
 
     await expect(

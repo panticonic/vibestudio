@@ -142,7 +142,7 @@ describe("buildUnit app builds", () => {
           app: {
             target: "terminal",
             entry: "index.ts",
-            capabilities: ["connection-management"],
+            capabilities: ["clipboard"],
           },
         },
         dependencies: {

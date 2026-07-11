@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { writeFileAtomicSync } from "../atomicFile.js";
 
 /**
  * Local record of an agent CLI session: a durable `session` runtime entity
@@ -42,14 +43,32 @@ export function loadAgentSession(name: string): AgentSession | null {
   } catch {
     return null;
   }
+  const allowedKeys = new Set([
+    "schemaVersion",
+    "name",
+    "serverUrl",
+    "entityId",
+    "contextId",
+    "scopeKey",
+    "createdAt",
+  ]);
   if (
+    Object.keys(parsed).some((key) => !allowedKeys.has(key)) ||
     parsed.schemaVersion !== 1 ||
     typeof parsed.name !== "string" ||
+    !isValidSessionName(parsed.name) ||
+    parsed.name !== name ||
     typeof parsed.serverUrl !== "string" ||
+    !parsed.serverUrl ||
     typeof parsed.entityId !== "string" ||
+    !parsed.entityId ||
     typeof parsed.contextId !== "string" ||
+    !parsed.contextId ||
     typeof parsed.scopeKey !== "string" ||
-    typeof parsed.createdAt !== "number"
+    !parsed.scopeKey ||
+    typeof parsed.createdAt !== "number" ||
+    !Number.isFinite(parsed.createdAt) ||
+    parsed.createdAt <= 0
   ) {
     return null;
   }
@@ -58,9 +77,7 @@ export function loadAgentSession(name: string): AgentSession | null {
 
 export function saveAgentSession(session: AgentSession): void {
   const p = sessionPath(session.name);
-  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(p, JSON.stringify(session, null, 2), { mode: 0o600 });
-  fs.chmodSync(p, 0o600);
+  writeFileAtomicSync(p, JSON.stringify(session, null, 2), { mode: 0o600 });
 }
 
 export function deleteAgentSession(name: string): void {

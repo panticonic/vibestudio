@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   cdpDefaultHostAssignmentError,
+  createOwnerPanelSeedStore,
+  createOwnerSeedingPanelTreeBridge,
   createServerPanelTreeBridge,
   panelHostCommandAssignmentError,
   seedPanelTreeIfEmpty,
   snapshotBrowserPanelFromCdpBridge,
 } from "./panelRuntimeRegistration.js";
 import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 
 describe("cdpDefaultHostAssignmentError", () => {
   it("classifies non-CDP mobile holders distinctly", () => {
@@ -162,7 +168,7 @@ describe("createServerPanelTreeBridge reload", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -256,7 +262,7 @@ describe("createServerPanelTreeBridge reload", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -355,7 +361,7 @@ describe("createServerPanelTreeBridge reload", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -527,7 +533,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -554,9 +560,12 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     // The broadcast tree must contain BOTH roots — the new root must not have
     // wiped the pre-existing one (the addAsRoot fix).
     const treeEmits = eventService.emit.mock.calls.filter((c) => c[0] === "panel-tree-updated");
-    const lastTree = treeEmits.at(-1)?.[1] as { rootPanels: Array<{ id: string }> };
-    expect(lastTree.rootPanels).toHaveLength(2);
-    expect(lastTree.rootPanels.map((p) => p.id)).toContain("slot-existing");
+    const lastTree = treeEmits.at(-1)?.[1] as {
+      forest: Array<{ rootPanels: Array<{ id: string }> }>;
+    };
+    const roots = lastTree.forest.flatMap((group) => group.rootPanels);
+    expect(roots).toHaveLength(2);
+    expect(roots.map((p) => p.id)).toContain("slot-existing");
   });
 
   it("returns the resolved owning slot parent when a panel entity creates a child", async () => {
@@ -600,95 +609,99 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     });
 
     let entityCounter = 0;
-    const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
-      if (service === "workspace-state") {
-        switch (method) {
-          case "slot.list":
-            return [...slots.values()].filter((s) => s["closed_at"] == null);
-          case "slot.get":
-            return slots.get(args[0] as string) ?? null;
-          case "slot.history":
-            return histories.get(args[0] as string) ?? [];
-          case "entity.resolveActive":
-            return entities.get(args[0] as string) ?? null;
-          case "slot.resolveByEntity": {
-            const entityId = args[0] as string;
-            for (const s of slots.values()) {
-              if (s["current_entity_id"] === entityId && s["closed_at"] == null)
-                return s["slot_id"];
+    const dispatch = vi.fn(
+      async (ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
+        if (service === "workspace-state") {
+          switch (method) {
+            case "slot.list":
+              return [...slots.values()].filter((s) => s["closed_at"] == null);
+            case "slot.get":
+              return slots.get(args[0] as string) ?? null;
+            case "slot.history":
+              return histories.get(args[0] as string) ?? [];
+            case "entity.resolveActive":
+              return entities.get(args[0] as string) ?? null;
+            case "slot.resolveByEntity": {
+              const entityId = args[0] as string;
+              for (const s of slots.values()) {
+                if (s["current_entity_id"] === entityId && s["closed_at"] == null)
+                  return s["slot_id"];
+              }
+              return null;
             }
-            return null;
-          }
-          case "panel.search":
-            return [];
-          case "panel.index":
-            return null;
-          case "slot.create": {
-            const input = args[0] as {
-              slotId: string;
-              parentSlotId: string | null;
-              positionId: string;
-              initialEntry: {
-                entryKey: string;
-                entityId: string;
-                source: string;
-                contextId: string;
-                stateArgs?: unknown;
+            case "panel.search":
+              return [];
+            case "panel.index":
+              return null;
+            case "slot.create": {
+              const input = args[0] as {
+                slotId: string;
+                parentSlotId: string | null;
+                positionId: string;
+                initialEntry: {
+                  entryKey: string;
+                  entityId: string;
+                  source: string;
+                  contextId: string;
+                  stateArgs?: unknown;
+                };
               };
-            };
-            slots.set(input.slotId, {
-              slot_id: input.slotId,
-              parent_slot_id: input.parentSlotId ?? null,
-              current_entity_id: input.initialEntry.entityId,
-              current_entity_title: null,
-              current_entry_key: input.initialEntry.entryKey,
-              position_id: input.positionId,
-              created_at: 2,
-              closed_at: null,
-            });
-            histories.set(input.slotId, [
-              {
+              slots.set(input.slotId, {
                 slot_id: input.slotId,
-                cursor: 0,
-                entry_key: input.initialEntry.entryKey,
-                entity_id: input.initialEntry.entityId,
-                source: input.initialEntry.source,
-                context_id: input.initialEntry.contextId,
-                state_args: input.initialEntry.stateArgs ?? null,
-                recorded_at: 2,
-              },
-            ]);
-            return;
+                parent_slot_id: input.parentSlotId ?? null,
+                current_entity_id: input.initialEntry.entityId,
+                current_entity_title: null,
+                current_entry_key: input.initialEntry.entryKey,
+                position_id: input.positionId,
+                created_at: 2,
+                closed_at: null,
+              });
+              histories.set(input.slotId, [
+                {
+                  slot_id: input.slotId,
+                  cursor: 0,
+                  entry_key: input.initialEntry.entryKey,
+                  entity_id: input.initialEntry.entityId,
+                  source: input.initialEntry.source,
+                  context_id: input.initialEntry.contextId,
+                  state_args: input.initialEntry.stateArgs ?? null,
+                  recorded_at: 2,
+                },
+              ]);
+              return;
+            }
           }
         }
+        if (service === "runtime" && method === "createEntity") {
+          const spec = args[0] as { source: string; contextId: string; key: string };
+          const id = `panel:nav-new-${++entityCounter}`;
+          const record = {
+            id,
+            kind: "panel",
+            source: { repoPath: spec.source, effectiveVersion: "ev-child" },
+            contextId: spec.contextId,
+            key: spec.key,
+            parentId: ctx.caller.runtime.id,
+            ownerUserId: ctx.caller.subject?.userId,
+            createdAt: 2,
+            status: "active",
+            cleanupComplete: false,
+          };
+          entities.set(id, record);
+          return {
+            id,
+            kind: "panel",
+            source: record.source,
+            contextId: spec.contextId,
+            targetId: id,
+          };
+        }
+        if (service === "build" && method === "getPanelMetadata") return { title: "Child" };
+        if (service === "presence" && method === "markPanelActive") return undefined;
+        if (service === "auth" && method === "grantConnection") return { token: "t" };
+        throw new Error(`Unexpected dispatch: ${service}.${method}`);
       }
-      if (service === "runtime" && method === "createEntity") {
-        const spec = args[0] as { source: string; contextId: string; key: string };
-        const id = `panel:nav-new-${++entityCounter}`;
-        const record = {
-          id,
-          kind: "panel",
-          source: { repoPath: spec.source, effectiveVersion: "ev-child" },
-          contextId: spec.contextId,
-          key: spec.key,
-          createdAt: 2,
-          status: "active",
-          cleanupComplete: false,
-        };
-        entities.set(id, record);
-        return {
-          id,
-          kind: "panel",
-          source: record.source,
-          contextId: spec.contextId,
-          targetId: id,
-        };
-      }
-      if (service === "build" && method === "getPanelMetadata") return { title: "Child" };
-      if (service === "presence" && method === "markPanelActive") return undefined;
-      if (service === "auth" && method === "grantConnection") return { token: "t" };
-      throw new Error(`Unexpected dispatch: ${service}.${method}`);
-    });
+    );
 
     const bridge = await createServerPanelTreeBridge({
       container: { get: vi.fn(() => ({})) },
@@ -697,7 +710,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: {
@@ -711,6 +724,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     const result = await bridge({
       callerId: parentEntityId,
       callerKind: "panel",
+      subject: { userId: "usr_alice", handle: "alice" },
       method: "create",
       args: ["panels/child", {}],
     });
@@ -720,6 +734,18 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       contextId: expect.any(String),
       source: "panels/child",
       runtimeEntityId: expect.stringMatching(/^panel:nav-new-/),
+    });
+    const createdEntity = entities.get((result as { runtimeEntityId: string }).runtimeEntityId);
+    expect(createdEntity).toMatchObject({
+      parentId: parentEntityId,
+      ownerUserId: "usr_alice",
+    });
+    const runtimeCreate = dispatch.mock.calls.find(
+      ([, service, method]) => service === "runtime" && method === "createEntity"
+    );
+    expect(runtimeCreate?.[0].caller).toMatchObject({
+      runtime: { id: parentEntityId, kind: "server" },
+      subject: { userId: "usr_alice", handle: "alice" },
     });
   });
 });
@@ -779,7 +805,7 @@ describe("createServerPanelTreeBridge self-heal", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: { resolveHostForSlot: vi.fn(() => null) },
@@ -795,9 +821,10 @@ describe("createServerPanelTreeBridge self-heal", () => {
       callerKind: "server",
       method: "getTreeSnapshot",
       args: [],
-    })) as { rootPanels: Array<{ id: string }> };
+    })) as { forest: Array<{ rootPanels: Array<{ id: string }> }> };
 
-    expect(snapshot.rootPanels).toEqual([expect.objectContaining({ id: "panel:tree/slot-a" })]);
+    const roots = snapshot.forest.flatMap((group) => group.rootPanels);
+    expect(roots).toEqual([expect.objectContaining({ id: "panel:tree/slot-a" })]);
     expect(slotListCalls).toBe(2);
   });
 
@@ -853,7 +880,7 @@ describe("createServerPanelTreeBridge self-heal", () => {
       workspacePath: "/tmp/workspace",
       workspaceConfig: {},
       adminToken: "admin-token",
-      centralData: null,
+      workspaceCatalog: {} as never,
       hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
       isIpcMode: false,
       panelRuntimeCoordinator: { resolveHostForSlot: vi.fn(() => null) },
@@ -892,7 +919,7 @@ describe("createServerPanelTreeBridge self-heal", () => {
 
 describe("seedPanelTreeIfEmpty", () => {
   const makeBridge = (
-    roots: Array<{ id?: string; panelId?: string; source?: string }>,
+    roots: Array<{ id?: string; panelId?: string; source?: string; owner?: string }>,
     stateArgsByRoot: Record<string, Record<string, unknown>> = {}
   ) => {
     const calls: PanelTreeBridgeRequest[] = [];
@@ -907,10 +934,11 @@ describe("seedPanelTreeIfEmpty", () => {
 
   it("seeds each init panel as the server when the tree is empty", async () => {
     const { bridge, calls } = makeBridge([]);
-    await seedPanelTreeIfEmpty(bridge, [
-      { source: "panels/chat" },
-      { source: "panels/notes", stateArgs: { folder: "inbox" } },
-    ]);
+    await seedPanelTreeIfEmpty(
+      bridge,
+      [{ source: "panels/chat" }, { source: "panels/notes", stateArgs: { folder: "inbox" } }],
+      { userId: "alice", handle: "alice" }
+    );
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(2);
     expect(creates.every((c) => c.callerId === "server" && c.callerKind === "server")).toBe(true);
@@ -919,28 +947,159 @@ describe("seedPanelTreeIfEmpty", () => {
   });
 
   it("seeds missing init panels when a previous seed only partially completed", async () => {
-    const { bridge, calls } = makeBridge([{ panelId: "panel:tree/chat", source: "panels/chat" }], {
-      "panel:tree/chat": {},
-    });
-    await seedPanelTreeIfEmpty(bridge, [
-      { source: "panels/chat" },
-      { source: "panels/notes", stateArgs: { folder: "inbox" } },
-    ]);
+    const { bridge, calls } = makeBridge(
+      [{ panelId: "panel:tree/chat", source: "panels/chat", owner: "alice" }],
+      { "panel:tree/chat": {} }
+    );
+    await seedPanelTreeIfEmpty(
+      bridge,
+      [{ source: "panels/chat" }, { source: "panels/notes", stateArgs: { folder: "inbox" } }],
+      { userId: "alice", handle: "alice" }
+    );
 
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(1);
     expect(creates[0]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
   });
 
-  it("is a no-op when the tree already has unrelated roots (existing workspace)", async () => {
-    const { bridge, calls } = makeBridge([{ panelId: "panel:existing", source: "panels/custom" }]);
-    await seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }]);
+  it("reconciles only the attaching owner's roots and stamps every create", async () => {
+    const { bridge, calls } = makeBridge(
+      [
+        { panelId: "panel:alice/chat", source: "panels/chat", owner: "alice" },
+        { panelId: "panel:bob/chat", source: "panels/chat", owner: "bob" },
+      ],
+      {
+        "panel:alice/chat": {},
+        "panel:bob/chat": {},
+      }
+    );
+
+    await seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }, { source: "panels/notes" }], {
+      userId: "alice",
+      handle: "alice",
+    });
+
+    const creates = calls.filter((call) => call.method === "create");
+    expect(creates).toHaveLength(1);
+    expect(creates[0]).toMatchObject({
+      subject: { userId: "alice", handle: "alice" },
+      args: ["panels/notes", { stateArgs: undefined }],
+    });
+  });
+
+  it("seeds once per authenticated owner and never seeds system requests", async () => {
+    const roots: Array<{ panelId: string; source: string; owner: string }> = [];
+    const calls: PanelTreeBridgeRequest[] = [];
+    const bridge = vi.fn(async (request: PanelTreeBridgeRequest): Promise<unknown> => {
+      calls.push(request);
+      if (request.method === "roots") return roots;
+      if (request.method === "create") {
+        roots.push({
+          panelId: `panel:${request.subject?.userId}`,
+          source: String(request.args[0]),
+          owner: String(request.subject?.userId),
+        });
+        return { id: roots.at(-1)?.panelId };
+      }
+      return [];
+    });
+    const wrapped = createOwnerSeedingPanelTreeBridge(bridge, [{ source: "panels/chat" }]);
+
+    await Promise.all([
+      wrapped({
+        callerId: "panel:a",
+        callerKind: "panel",
+        subject: { userId: "alice", handle: "alice" },
+        method: "getTreeSnapshot",
+        args: [],
+      }),
+      wrapped({
+        callerId: "panel:b",
+        callerKind: "panel",
+        subject: { userId: "alice", handle: "alice" },
+        method: "roots",
+        args: [],
+      }),
+    ]);
+    await wrapped({
+      callerId: "server",
+      callerKind: "server",
+      subject: { userId: "system", handle: "system" },
+      method: "roots",
+      args: [],
+    });
+
+    expect(calls.filter((call) => call.method === "create")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "create")[0]?.subject?.userId).toBe("alice");
+  });
+
+  it("persists first attach so archiving every default does not reseed after restart", async () => {
+    const seededOwners = new Set<string>();
+    const seedStore = {
+      isSeeded: vi.fn(async (ownerUserId: string) => seededOwners.has(ownerUserId)),
+      markSeeded: vi.fn(async (ownerUserId: string) => {
+        seededOwners.add(ownerUserId);
+      }),
+    };
+    const bridge = vi.fn(async (request: PanelTreeBridgeRequest): Promise<unknown> => {
+      if (request.method === "roots") return [];
+      return {};
+    });
+    const request: PanelTreeBridgeRequest = {
+      callerId: "shell:alice",
+      callerKind: "shell",
+      subject: { userId: "alice", handle: "alice" },
+      method: "getTreeSnapshot",
+      args: [],
+    };
+
+    await createOwnerSeedingPanelTreeBridge(
+      bridge,
+      [{ source: "panels/chat" }],
+      seedStore
+    )(request);
+    expect(bridge.mock.calls.filter(([call]) => call.method === "create")).toHaveLength(1);
+    expect(seedStore.markSeeded).toHaveBeenCalledWith("alice");
+
+    bridge.mockClear();
+    await createOwnerSeedingPanelTreeBridge(
+      bridge,
+      [{ source: "panels/chat" }],
+      seedStore
+    )(request);
+    expect(bridge.mock.calls.map(([call]) => call.method)).toEqual(["getTreeSnapshot"]);
+  });
+
+  it("stores first-attach markers durably in workspace state", async () => {
+    const statePath = await mkdtemp(join(tmpdir(), "vibestudio-owner-seed-"));
+    try {
+      const firstProcess = createOwnerPanelSeedStore(statePath);
+      expect(await firstProcess.isSeeded("alice")).toBe(false);
+      await firstProcess.markSeeded("alice");
+
+      const restartedProcess = createOwnerPanelSeedStore(statePath);
+      expect(await restartedProcess.isSeeded("alice")).toBe(true);
+      expect(await restartedProcess.isSeeded("bob")).toBe(false);
+      await expect(restartedProcess.markSeeded("alice")).resolves.toBeUndefined();
+    } finally {
+      await rm(statePath, { recursive: true, force: true });
+    }
+  });
+
+  it("is a no-op when the owner's tree already has unrelated roots", async () => {
+    const { bridge, calls } = makeBridge([
+      { panelId: "panel:existing", source: "panels/custom", owner: "alice" },
+    ]);
+    await seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }], {
+      userId: "alice",
+      handle: "alice",
+    });
     expect(calls.filter((c) => c.method === "create")).toHaveLength(0);
   });
 
   it("does nothing when there are no init panels configured", async () => {
     const { bridge, calls } = makeBridge([]);
-    await seedPanelTreeIfEmpty(bridge, []);
+    await seedPanelTreeIfEmpty(bridge, [], { userId: "alice", handle: "alice" });
     expect(calls).toHaveLength(0); // no probe, no create
   });
 
@@ -948,8 +1107,11 @@ describe("seedPanelTreeIfEmpty", () => {
     const bridge = async (): Promise<unknown> => {
       throw new Error("bridge down");
     };
-    await expect(seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }])).rejects.toThrow(
-      "bridge down"
-    );
+    await expect(
+      seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }], {
+        userId: "alice",
+        handle: "alice",
+      })
+    ).rejects.toThrow("bridge down");
   });
 });

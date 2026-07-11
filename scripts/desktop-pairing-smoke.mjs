@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end desktop pairing smoke over WebRTC. Spawns the signaling worker
 // (`wrangler dev apps/signaling`), starts a disposable server as a WebRTC
-// answerer, parses the `vibestudio://connect` pairing link it logs, then launches
+// answerer, reads its strict ready-file handoff, then launches
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
@@ -26,7 +26,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
-import { createConnectDeepLink, parseConnectLink } from "./cli/lib/connect-utils.mjs";
+import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
@@ -35,7 +35,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const mainPath = path.join(repoRoot, "dist", "main.cjs");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
-const defaultReadyFile = path.join(os.tmpdir(), `vibestudio-desktop-smoke-ready-${process.pid}.json`);
+const defaultReadyFile = path.join(
+  os.tmpdir(),
+  `vibestudio-desktop-smoke-ready-${process.pid}.json`
+);
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = readWorkspacePackageName("apps", "shell");
 
@@ -102,8 +105,8 @@ Runner options:
   --help                    Show this help message.
 
 The smoke spawns the signaling worker (wrangler dev apps/signaling), starts a
-disposable server as a WebRTC answerer, parses the vibestudio://connect pairing
-link it logs, and launches Electron with that deep link so the desktop shell
+disposable server as a WebRTC answerer, reads its validated desktop root invite,
+and launches Electron with that deep link so the desktop shell
 connects over the encrypted WebRTC pipe. It then clicks the bootstrap launch
 approval and asserts the hosted shell loads.
 
@@ -183,8 +186,19 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs) {
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
-      return JSON.parse(content);
-    } catch {
+      let value;
+      try {
+        value = JSON.parse(content);
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          await sleep(250);
+          continue;
+        }
+        throw error;
+      }
+      return parseHubReadyPayload(value);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
       await sleep(250);
     }
   }
@@ -202,7 +216,6 @@ function createServerArgs(readyFilePath) {
     readyFilePath,
     "--ephemeral",
     "--serve-panels",
-    "--print-credentials",
     "--host",
     "127.0.0.1",
     "--bind-host",
@@ -244,58 +257,6 @@ async function startSignaling(port) {
   throw new Error("wrangler dev (signaling) did not become healthy");
 }
 
-function extractPairingLink(text) {
-  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
-    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
-    ?? null;
-}
-
-function buildConnectDeepLinkFromLog(loggedLink) {
-  const parsed = parseConnectLink(loggedLink);
-  if (parsed.kind !== "ok") {
-    throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
-  }
-  return createConnectDeepLink({
-    room: parsed.room,
-    fp: parsed.fp,
-    code: parsed.code,
-    sig: parsed.sig,
-    ice: parsed.ice,
-    srv: parsed.srv,
-  });
-}
-
-// Watch the answerer's stdout for either pairing carrier. Human-facing server
-// banners print https pair URLs; command-line smoke injection uses the canonical
-// vibestudio:// carrier rebuilt from the same payload.
-function waitForPairingLink(serverChild, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const link = extractPairingLink(buffer);
-      if (link) {
-        cleanup();
-        resolve(link);
-      }
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          "Timed out waiting for the server's pairing link. " +
-            "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
-        )
-      );
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
-  });
-}
-
 function hasElectronDisplay() {
   if (process.platform !== "linux") return true;
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -319,6 +280,7 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
     ELECTRON_DISABLE_SANDBOX: "1",
     HOME: path.join(tempRoot, "home"),
     XDG_CONFIG_HOME: path.join(tempRoot, "xdg"),
+    APPDATA: path.join(tempRoot, "appdata"),
   };
 
   await fsp.mkdir(env.HOME, { recursive: true });
@@ -551,7 +513,6 @@ async function main() {
   let electronApp = null;
   let cleanedUp = false;
   let tempRoot = "";
-  let readyInfo = null;
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = async () => {
@@ -586,14 +547,6 @@ async function main() {
     if (tempRoot) {
       await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
-    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
-      try {
-        await fsp.access(readyInfo.workspaceDir);
-        console.warn(
-          `[desktop-smoke] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
-        );
-      } catch {}
-    }
   };
 
   process.on("SIGINT", () => {
@@ -608,6 +561,12 @@ async function main() {
       await fsp.unlink(options.readyFile);
     } catch {}
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
+    const serverHome = path.join(tempRoot, "server-home");
+    const serverConfig = path.join(tempRoot, "server-xdg-config");
+    await Promise.all([
+      fsp.mkdir(serverHome, { recursive: true }),
+      fsp.mkdir(serverConfig, { recursive: true }),
+    ]);
 
     // 1. Local signaling (Cloudflare local runtime) — the WebRTC rendezvous.
     const signalPort = await findFreePort();
@@ -615,9 +574,8 @@ async function main() {
     children.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs a pairing link whose
-    //    `fp` pins its persistent DTLS cert.
+    // 2. A disposable hub. It creates/routes the ephemeral workspace child and
+    //    publishes the child's complete root pairing invite in its ready file.
     const serverArgs = createServerArgs(options.readyFile);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
@@ -625,40 +583,26 @@ async function main() {
       env: {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
-        // Run a single ephemeral workspace server (not the public hub): the WebRTC
-        // answerer is the per-workspace pipe (hubServer.ts:820 "remote reach is the
-        // per-workspace WebRTC pipe"), so the thing a client pairs with is a
-        // workspace server. The hub→workspace remote-selection flow is separate.
-        VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
         VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
+        HOME: serverHome,
+        XDG_CONFIG_HOME: serverConfig,
+        APPDATA: path.join(tempRoot, "server-appdata"),
       },
       label: "server",
     });
     await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
     children.push(serverChild);
-    // Start scanning stdout for the pairing link now, before readiness, so the
-    // line is never missed.
-    const pairingLinkPromise = waitForPairingLink(
-      serverChild,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
-
     const ready = await waitForServerReady(
       options.readyFile,
       serverChild,
       Math.max(1_000, deadlineMs - Date.now())
     );
-    readyInfo = ready;
-
-    // 3. Parse the answerer's pairing link and rebuild the scheme deep link
-    //    with the canonical builder for argv injection.
-    const loggedLink = await pairingLinkPromise;
-    const deepLink = buildConnectDeepLinkFromLog(loggedLink);
-    const parsed = parseConnectLink(deepLink);
-    if (parsed.kind !== "ok") {
-      throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
+    const invite = ready.rootInvites?.desktop;
+    if (!invite) {
+      throw new Error("Fresh isolated hub did not publish a desktop root invite");
     }
-    console.log(`[desktop-smoke] WebRTC pairing: room=${parsed.room} fp=${parsed.fp}`);
+    const deepLink = invite.deepLink;
+    console.log(`[desktop-smoke] WebRTC pairing: room=${invite.room} fp=${invite.fp}`);
     console.log(`[desktop-smoke] Deep link: ${deepLink}`);
 
     electronApp = await launchDesktopApp(deepLink, tempRoot, options.launchTimeoutMs);

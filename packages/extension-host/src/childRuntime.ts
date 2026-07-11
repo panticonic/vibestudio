@@ -162,13 +162,13 @@ function createExtensionsClient(): ExtensionsClient {
   const declaredStreaming = (name: string): Promise<Set<string>> => {
     let cached = streamingCache.get(name);
     if (!cached) {
-      cached = rpcCall<string[] | null>("extensions.streamingMethods", [name])
-        .then((methods) => new Set(methods ?? []))
-        .catch(() => {
-          // Don't pin a transient failure as "no streaming methods" for the
-          // client's lifetime — drop the entry so the next call re-fetches.
+      cached = rpcCall<string[]>("extensions.streamingMethods", [name])
+        .then((methods) => new Set(methods))
+        .catch((error) => {
+          // A failed declaration lookup cannot safely be treated as an empty
+          // declaration: doing so would route streaming methods over unary RPC.
           streamingCache.delete(name);
-          return new Set<string>();
+          throw error;
         });
       streamingCache.set(name, cached);
     }

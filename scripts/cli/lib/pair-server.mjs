@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { printConnectBanner, resolveSignalingUrl } from "./connect-utils.mjs";
+import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -11,7 +12,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 // Loopback host the co-located server binds. Remote reach is WebRTC (the QR
 // carries room/fp/sig); there is no LAN/Tailscale/public-URL origin anymore.
 const LOOPBACK_HOST = "127.0.0.1";
-const DEFAULT_SIGNAL_ENV = ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
+const SIGNAL_ENV = ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
 
 function parsePort(value, label) {
   const port = Number(value);
@@ -22,7 +23,6 @@ function parsePort(value, label) {
 }
 
 export function parsePairArgs(argv, config) {
-  const signalEnv = signalEnvFor(config);
   const options = {
     port: parsePort(
       firstDefined(config.portEnv.map((key) => process.env[key])) ?? "3030",
@@ -38,24 +38,16 @@ export function parsePairArgs(argv, config) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
-      throw new Error("Forwarding raw server flags is no longer supported");
-    } else if (arg === "--port" || arg === "--gateway-port") {
+      throw new Error("Raw server flag forwarding is unsupported");
+    } else if (arg === "--port") {
       options.port = parsePort(argv[++i], arg);
-    } else if (arg === "--host" || arg === "--protocol" || arg === "--public-url" || arg === "--require-public-url") {
-      throw new Error(
-        `${arg} is no longer supported; remote reach is WebRTC and the server binds loopback only`
-      );
-    } else if (arg === "--workspace" || arg === "--workspace-dir") {
-      throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
       options.appRoot = argv[++i] ?? "";
-    } else if (arg === "--signal-url" || arg === "--signaling-url") {
+    } else if (arg === "--signal-url") {
       options.signalUrl = argv[++i] ?? "";
       options.signalSource = "flag";
-    } else if (arg === "--dev" || arg === "--ephemeral") {
+    } else if (arg === "--dev") {
       options.dev = true;
-    } else if (arg === "--no-init") {
-      throw new Error("--no-init is no longer supported; choose or create a workspace after pairing");
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -64,7 +56,7 @@ export function parsePairArgs(argv, config) {
   }
 
   if (!options.help) {
-    const resolved = resolveSignalingEndpoint(options.signalUrl, signalEnv, config);
+    const resolved = resolveSignalingEndpoint(options.signalUrl);
     options.signalUrl = resolved.url;
     options.signalSource = resolved.source;
   }
@@ -83,15 +75,15 @@ Usage:
 ${config.usage.map((line) => `  ${line}`).join("\n")}
 
 Options:
-  --port, --gateway-port <port>
+  --port <port>
       Stable gateway port for the loopback server. Defaults through ${config.portEnv.join(", ")} or 3030.
   --app-root <path>
       Application root passed to the server.
-  --signal-url, --signaling-url <url>
-      WebRTC signaling endpoint. Resolution: flag > ${signalEnvFor(config).join(", ")} > config > hosted default.
+  --signal-url <url>
+      WebRTC signaling endpoint. Resolution: flag > ${SIGNAL_ENV[0]} > hosted default.
       Use wss:// or https:// for remote endpoints; ws:// and http:// are only
       accepted for loopback development.
-  --dev, --ephemeral
+  --dev
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
   --help
@@ -146,19 +138,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   };
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 
-  // WebRTC pairing material advertised by the running server (the seam between
-  // the server's WebRTC cert + per-invite rooms and this banner). `room`/`fp`/
-  // `sig` come from the server; until all three plus a pairing code arrive the
-  // banner waits. `deepLink`/`pairUrl` are the server's OWN per-invite links
-  // (v=2: each invite has its own room, so codes must not be recombined with
-  // another invite's room locally).
-  let pairing = { room: null, fp: null, sig: null };
-  let pairingCode = null;
-  let qrPairingCode = null;
-  let deepLink = null;
-  let qrDeepLink = null;
-  let pairUrl = null;
-  let qrPairUrl = null;
+  // The hub ready file is the only pairing contract. Each complete invite owns
+  // its own room/code/link; the CLI never reconstructs or scrapes credentials.
+  let desktopInvite = null;
+  let mobileInvite = null;
   let bannerPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
@@ -181,13 +164,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     buffer = "";
     stderrBuffer = "";
     if (hasSpawned) {
-      pairing = { room: null, fp: null, sig: null };
-      pairingCode = null;
-      qrPairingCode = null;
-      deepLink = null;
-      qrDeepLink = null;
-      pairUrl = null;
-      qrPairUrl = null;
+      desktopInvite = null;
+      mobileInvite = null;
       bannerPrinted = false;
       if (ownedReadyDir) {
         try {
@@ -212,34 +190,18 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   };
 
   const applyReadyPayload = (payload) => {
-    const advertised = payload?.pairing;
-    if (advertised && typeof advertised === "object") {
-      if (typeof advertised.room === "string" && advertised.room) pairing.room = advertised.room;
-      if (typeof advertised.fp === "string" && advertised.fp) pairing.fp = advertised.fp;
-      if (typeof advertised.sig === "string" && advertised.sig) pairing.sig = advertised.sig;
-      if (typeof advertised.deepLink === "string" && advertised.deepLink) {
-        deepLink = advertised.deepLink;
+    const ready = parseHubReadyPayload(payload);
+    if (ready.rootInvites === null) {
+      if (!bannerPrinted) {
+        bannerPrinted = true;
+        console.log(
+          `[${config.logPrefix}] Root account already exists; create invites from a paired device.`
+        );
       }
-      if (typeof advertised.pairUrl === "string" && advertised.pairUrl) {
-        pairUrl = advertised.pairUrl;
-      }
-      if (typeof advertised.qrDeepLink === "string" && advertised.qrDeepLink) {
-        qrDeepLink = advertised.qrDeepLink;
-      }
-      if (typeof advertised.qrPairUrl === "string" && advertised.qrPairUrl) {
-        qrPairUrl = advertised.qrPairUrl;
-      }
+      return;
     }
-    if (typeof payload?.pairingCode === "string" && payload.pairingCode) {
-      pairingCode = payload.pairingCode;
-    }
-    if (typeof payload?.qrPairingCode === "string" && payload.qrPairingCode) {
-      qrPairingCode = payload.qrPairingCode;
-    } else if (typeof payload?.pairingCodes?.qr === "string" && payload.pairingCodes.qr) {
-      qrPairingCode = payload.pairingCodes.qr;
-    } else if (typeof payload?.pairingCodes?.mobile === "string" && payload.pairingCodes.mobile) {
-      qrPairingCode = payload.pairingCodes.mobile;
-    }
+    desktopInvite = ready.rootInvites.desktop;
+    mobileInvite = ready.rootInvites.mobile;
     tryPrintBanner();
   };
 
@@ -256,25 +218,30 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           clearInterval(readyPoll);
           readyPoll = null;
         }
-      } catch {
-        // The server writes readiness after startup settles; stdout remains a fallback.
+      } catch (error) {
+        if (fs.existsSync(readyFile)) {
+          console.error(
+            `[${config.logPrefix}] Invalid hub ready file: ${error instanceof Error ? error.message : String(error)}`
+          );
+          clearInterval(readyPoll);
+          readyPoll = null;
+          child?.kill("SIGTERM");
+        }
       }
     }, 100);
   };
 
   const tryPrintBanner = () => {
     if (bannerPrinted) return;
-    if (!pairing.room || !pairing.fp || !pairing.sig || !pairingCode) return;
-    bannerPrinted = true;
+    if (!desktopInvite || !mobileInvite) return;
     printConnectBanner({
       title: config.bannerTitle,
-      pairing: { room: pairing.room, fp: pairing.fp, sig: pairing.sig, code: pairingCode },
-      qrPairingCode,
-      qrDeepLink: qrPairUrl || pairUrl || qrDeepLink,
-      deepLink: pairUrl || deepLink,
+      invite: desktopInvite,
+      qrInvite: mobileInvite,
       deepLinkLabel: config.deepLinkLabel,
       instructions: config.instructions,
     });
+    bannerPrinted = true;
   };
 
   const control = {
@@ -329,23 +296,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
   const handleLine = (line) => {
     const handled = hooks.onServerLine?.(line, control);
-    if (handled) return;
-    if (hooks.onServerLine) process.stdout.write(`${line}\n`);
-
-    const roomMatch = line.match(/VIBESTUDIO_PAIRING_ROOM=(\S+)/);
-    if (roomMatch) pairing.room = roomMatch[1];
-    const fpMatch = line.match(/VIBESTUDIO_PAIRING_FP=(\S+)/);
-    if (fpMatch) pairing.fp = fpMatch[1];
-    const sigMatch = line.match(/VIBESTUDIO_PAIRING_SIG=(\S+)/);
-    if (sigMatch) pairing.sig = sigMatch[1];
-    const pairingMatch = line.match(/(?:VIBESTUDIO_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
-    if (pairingMatch) pairingCode = pairingMatch[1];
-    const qrPairingMatch = line.match(
-      /(?:VIBESTUDIO_QR_PAIRING_CODE=|QR pairing code:\s+)([A-Za-z0-9_-]+)/
-    );
-    if (qrPairingMatch) qrPairingCode = qrPairingMatch[1];
-
-    tryPrintBanner();
+    if (!handled && hooks.onServerLine) process.stdout.write(`${line}\n`);
   };
 
   const wireChild = (childProcess) => {
@@ -400,7 +351,6 @@ function buildServerArgs(options, config = {}) {
     "--gateway-port",
     String(options.port),
     "--serve-panels",
-    "--print-credentials",
   ];
 
   if (options.dev) args.push("--ephemeral");
@@ -423,17 +373,10 @@ function firstDefined(values) {
   return values.find((value) => value !== undefined && value !== "");
 }
 
-function signalEnvFor(config) {
-  return Array.isArray(config.signalEnv) && config.signalEnv.length > 0
-    ? config.signalEnv
-    : DEFAULT_SIGNAL_ENV;
-}
-
-function resolveSignalingEndpoint(raw, signalEnv, config) {
+function resolveSignalingEndpoint(raw) {
   return resolveSignalingUrl({
     flag: raw,
     env: process.env,
-    envKeys: signalEnv,
-    configUrl: typeof config.signalingUrl === "string" ? config.signalingUrl : undefined,
+    envKeys: SIGNAL_ENV,
   });
 }

@@ -6,9 +6,10 @@ import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
+import { envelopeFromMessage } from "@vibestudio/rpc";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
+import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
-const READY_FILE = path.join(os.tmpdir(), `vibestudio-terminal-smoke-${process.pid}.json`);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REMOTE_CLI = readWorkspacePackageName("apps", "remote-cli");
 
@@ -25,11 +26,21 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForReady(filePath, timeoutMs = 120_000) {
+async function waitForReady(filePath, timeoutMs = 300_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+      let value;
+      try {
+        value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          await wait(250);
+          continue;
+        }
+        throw error;
+      }
+      return parseHubReadyPayload(value);
     }
     await wait(500);
   }
@@ -68,33 +79,48 @@ async function rpc(url, shellToken, method, args = []) {
       target: "main",
       delivery: { caller },
       provenance: [caller],
-      message: { type: "request", requestId: crypto.randomUUID(), fromId: caller.callerId, method, args },
+      message: {
+        type: "request",
+        requestId: crypto.randomUUID(),
+        fromId: caller.callerId,
+        method,
+        args,
+      },
     }),
   });
   const body = await res.json();
   const message = (body?.envelope ?? body)?.message;
-  if (!res.ok || message?.error) throw new Error(message?.error ?? body?.error ?? `/rpc failed ${res.status}`);
+  if (!res.ok || message?.error)
+    throw new Error(message?.error ?? body?.error ?? `/rpc failed ${res.status}`);
   return message?.result;
 }
 
 async function pairShellToken(ready) {
-  const url = ready.connectUrl || ready.gatewayUrl;
-  const code = ready.pairingCode || ready.pairingCodes?.desktop;
+  const url = ready.connectUrl;
+  const code = ready.rootInvites?.desktop?.code;
   if (!url) throw new Error("Server ready file did not include a pairing URL");
   if (!code) throw new Error("Server ready file did not include a terminal pairing code");
   const issued = await postJson(url, "/_r/s/auth/complete-pairing", {
     code,
+    handle: "terminal-smoke",
+    displayName: "Terminal Smoke",
     label: "Terminal app smoke",
     platform: "desktop",
   });
-  if (typeof issued.deviceId !== "string" || typeof issued.refreshToken !== "string") {
-    throw new Error("Pairing response did not include a device refresh credential");
+  if (
+    typeof issued.deviceId !== "string" ||
+    typeof issued.refreshToken !== "string" ||
+    typeof issued.shellToken !== "string"
+  ) {
+    throw new Error("Pairing response did not include complete device and shell credentials");
   }
-  const selected = await postJson(url, "/_r/s/workspaces/select", {
-    deviceId: issued.deviceId,
-    refreshToken: issued.refreshToken,
-    name: "dev",
-  });
+  const routed = await postJson(
+    url,
+    "/rpc",
+    { method: "hubControl.routeWorkspace", args: [{ workspace: "dev" }] },
+    issued.shellToken
+  );
+  const selected = routed.result;
   if (typeof selected.serverUrl !== "string") {
     throw new Error("Workspace selection response did not include a server URL");
   }
@@ -164,16 +190,23 @@ async function createShellEventClient(url, shellToken) {
         }
         for (const event of events) {
           requestIndex += 1;
+          const envelope = envelopeFromMessage({
+            from: "terminal-smoke",
+            target: "main",
+            callerKind: "shell",
+            message: {
+              type: "request",
+              requestId: `terminal-smoke-subscribe-${requestIndex}`,
+              fromId: "terminal-smoke",
+              method: "events.subscribe",
+              args: [event],
+            },
+          });
           ws.send(
             JSON.stringify({
               type: "ws:rpc",
-              message: {
-                type: "request",
-                requestId: `terminal-smoke-subscribe-${requestIndex}`,
-                fromId: "terminal-smoke",
-                method: "events.subscribe",
-                args: [event],
-              },
+              envelope,
+              message: envelope.message,
             })
           );
         }
@@ -239,13 +272,16 @@ async function waitForRunning(url, shellToken, events) {
         `${REMOTE_CLI} errored: ${remoteCli.lastError}\n${JSON.stringify(logs, null, 2)}`
       );
     }
-    await events.wait(Math.max(1, deadline - Date.now()), before);
+    await events.wait(Math.min(1_000, Math.max(1, deadline - Date.now())), before);
   }
   throw new Error(`${REMOTE_CLI} did not reach running status`);
 }
 
 async function launchTerminalWithGate(url, shellToken, events) {
-  const deadline = Date.now() + 120_000;
+  // A pristine isolated HOME has no shared external-dependency cache. Building
+  // the approved native extensions before the terminal app can legitimately
+  // take several minutes on a cold registry/network path.
+  const deadline = Date.now() + 600_000;
   let session = await rpc(url, shellToken, "workspace.hostTargets.beginLaunch", ["terminal"]);
   while (Date.now() < deadline) {
     const before = events.checkpoint();
@@ -274,9 +310,12 @@ async function launchTerminalWithGate(url, shellToken, events) {
       );
     }
     if (session.status === "preparing" || session.status === "starting") {
-      const observed = await events.wait(Math.max(1, deadline - Date.now()), before);
-      const refreshed = await rpc(url, shellToken, "workspace.hostTargets.getLaunchSession", [
-        session.sessionId,
+      const observed = await events.wait(
+        Math.min(1_000, Math.max(1, deadline - Date.now())),
+        before
+      );
+      const refreshed = await rpc(url, shellToken, "workspace.hostTargets.beginLaunch", [
+        "terminal",
       ]);
       if (refreshed) {
         session = refreshed;
@@ -293,7 +332,7 @@ async function launchTerminalWithGate(url, shellToken, events) {
       "once",
     ]);
   }
-  throw new Error("Terminal launch gate did not settle");
+  throw new Error(`Terminal launch gate did not settle: ${JSON.stringify(session)}`);
 }
 
 async function waitForLogLine(url, shellToken, events, needle) {
@@ -312,7 +351,7 @@ async function waitForLogLine(url, shellToken, events, needle) {
         `${REMOTE_CLI} errored before logging ${needle}:\n${JSON.stringify(lastLogs, null, 2)}`
       );
     }
-    await events.wait(Math.max(1, deadline - Date.now()), before);
+    await events.wait(Math.min(1_000, Math.max(1, deadline - Date.now())), before);
   }
   throw new Error(
     `${REMOTE_CLI} ran but did not log ${needle}:\n${JSON.stringify(lastLogs, null, 2)}`
@@ -333,27 +372,41 @@ async function stopServer(child) {
 }
 
 async function main() {
-  fs.rmSync(READY_FILE, { force: true });
-  const serverInvocation = createServerInvocation([
-    serverEntryArg(),
-    "--app-root",
-    repoRoot,
-    "--ephemeral",
-    "--ready-file",
-    READY_FILE,
-    "--print-credentials",
-  ]);
-  const child = spawn(serverInvocation.command, serverInvocation.args, {
-    cwd: repoRoot,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NODE_ENV: process.env.NODE_ENV ?? "development" },
-  });
-  child.stdout.on("data", (chunk) => process.stdout.write(chunk));
-  child.stderr.on("data", (chunk) => process.stderr.write(chunk));
-
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-smoke-"));
+  const readyFile = path.join(tempRoot, "hub-ready.json");
+  const serverHome = path.join(tempRoot, "server-home");
+  const serverConfig = path.join(tempRoot, "server-xdg-config");
+  fs.mkdirSync(serverHome, { recursive: true });
+  fs.mkdirSync(serverConfig, { recursive: true });
   let events = null;
+  let child = null;
   try {
-    const ready = await waitForReady(READY_FILE);
+    const serverInvocation = createServerInvocation([
+      serverEntryArg(),
+      "--app-root",
+      repoRoot,
+      "--ephemeral",
+      "--ready-file",
+      readyFile,
+    ]);
+    child = spawn(serverInvocation.command, serverInvocation.args, {
+      cwd: repoRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        NODE_ENV: process.env.NODE_ENV ?? "development",
+        HOME: serverHome,
+        XDG_CONFIG_HOME: serverConfig,
+        APPDATA: path.join(tempRoot, "server-appdata"),
+        npm_config_cache:
+          process.env.npm_config_cache ??
+          path.join(repoRoot, "node_modules", ".cache", "terminal-smoke-npm"),
+      },
+    });
+    child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+
+    const ready = await waitForReady(readyFile);
     const { url, shellToken } = await pairShellToken(ready);
     events = await createShellEventClient(url, shellToken);
 
@@ -366,8 +419,8 @@ async function main() {
     );
   } finally {
     await events?.close();
-    await stopServer(child);
-    fs.rmSync(READY_FILE, { force: true });
+    if (child) await stopServer(child);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 

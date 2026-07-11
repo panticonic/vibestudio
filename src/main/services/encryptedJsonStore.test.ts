@@ -35,7 +35,6 @@ function makeStore(cipher: StoreCipher) {
       filePath,
       cipher,
       fs,
-      dirname: path.dirname,
       validate: isSample,
       secretDescription: "the test secret",
     }),

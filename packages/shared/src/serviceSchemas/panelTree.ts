@@ -179,6 +179,16 @@ export const panelTreeMethods = defineServiceMethods({
     returns: z.custom<PanelLifecycleResult>(),
     access: ARCHIVE_ACCESS,
   },
+  archiveOwnedRoots: {
+    description: "Internal revocation cleanup: archive every root owned by one account.",
+    args: z.tuple([z.string().min(1)]),
+    returns: z.object({
+      archivedRootIds: z.array(z.string()),
+      closedIds: z.array(z.string()),
+    }),
+    access: ARCHIVE_ACCESS,
+    policy: { allowed: ["server"] },
+  },
   unload: {
     description:
       "Unload a panel's runtime/view to free resources while keeping the panel in the tree.",

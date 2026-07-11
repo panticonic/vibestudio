@@ -207,8 +207,8 @@ describe("WorktreeStore snapshot/materialize", () => {
       ".git/HEAD": "noise",
     });
     const snap = await vcs.snapshotDir(workDir, { logId: FIXTURE_LOG });
-    const files = gad.instance.listStateFiles({ stateHash: snap.stateHash });
-    expect(files.map((f) => f["path"]).sort()).toEqual([".gadignore", "keep.ts"]);
+    const files = await vcs.listStateFiles(snap.stateHash);
+    expect(files.map((file) => file.path).sort()).toEqual([".gadignore", "keep.ts"]);
   });
 
   it("ignores the merge-conflict summary only at the worktree root", async () => {
@@ -218,10 +218,7 @@ describe("WorktreeStore snapshot/materialize", () => {
       "keep.ts": "ok",
     });
     const snap = await vcs.snapshotDir(workDir, { logId: FIXTURE_LOG });
-    const paths = gad.instance
-      .listStateFiles({ stateHash: snap.stateHash })
-      .map((f) => f["path"])
-      .sort();
+    const paths = (await vcs.listStateFiles(snap.stateHash)).map((file) => file.path).sort();
     expect(paths).toContain("docs/MERGE_CONFLICTS.md");
     expect(paths).toContain("keep.ts");
     expect(paths).not.toContain("MERGE_CONFLICTS.md");

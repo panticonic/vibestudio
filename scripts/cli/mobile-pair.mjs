@@ -5,10 +5,8 @@ try {
   runPairServer({
     commandName: "vibestudio mobile pair",
     logPrefix: "mobile-pair",
-    hostEnv: ["VIBESTUDIO_MOBILE_HOST", "VIBESTUDIO_DEV_HOST"],
     portEnv: ["VIBESTUDIO_MOBILE_PORT"],
     devEnv: "VIBESTUDIO_MOBILE_DEV",
-    restartCommand: "vibestudio mobile pair",
     usage: [
       "vibestudio mobile pair",
       "vibestudio mobile pair --dev",

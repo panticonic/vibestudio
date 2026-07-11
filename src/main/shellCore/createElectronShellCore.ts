@@ -56,8 +56,13 @@ export function createElectronShellCore(deps: {
       call<undefined>("workspace-state", "slot.setParent", [slotId, parentSlotId]),
     setSlotPosition: (slotId, positionId) =>
       call<undefined>("workspace-state", "slot.setPosition", [slotId, positionId]),
-    moveSlot: (slotId, parentSlotId, positionId) =>
-      call<undefined>("workspace-state", "slot.move", [slotId, parentSlotId, positionId]),
+    moveSlot: (slotId, parentSlotId, positionId, ownerUserId) =>
+      call<undefined>("workspace-state", "slot.move", [
+        slotId,
+        parentSlotId,
+        positionId,
+        ownerUserId,
+      ]),
     closeSlot: (slotId) => call<undefined>("workspace-state", "slot.close", [slotId]),
   };
 

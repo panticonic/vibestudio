@@ -460,6 +460,7 @@ async function ensureWorkspaceConfigWritePermission(
     kind: "unit-batch",
     callerId: ctx.caller.runtime.id,
     callerKind: ctx.caller.runtime.kind,
+    ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
     repoPath: identity.repoPath,
     effectiveVersion: identity.effectiveVersion,
     dedupKey: `git-import-config:${unitPath}:${remote.name}:${remote.url}:${remote.branch ?? ""}`,

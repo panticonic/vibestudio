@@ -68,7 +68,7 @@ export interface CredentialOwner {
   label: string;
 }
 
-export type CredentialGrantScope = "caller" | "version" | "repo";
+export type CredentialGrantScope = "version";
 export type CredentialGrantAction = "read" | "write" | "use";
 
 export interface CredentialUseGrant {
@@ -77,9 +77,8 @@ export interface CredentialUseGrant {
   resource: string;
   action: CredentialGrantAction;
   scope: CredentialGrantScope;
-  callerId?: string;
-  repoPath?: string;
-  effectiveVersion?: string;
+  repoPath: string;
+  effectiveVersion: string;
   grantedAt: number;
   grantedBy: string;
 }
@@ -113,9 +112,8 @@ export interface CredentialAccessGrantSummary {
   resource: string;
   action: CredentialGrantAction;
   scope: CredentialGrantScope;
-  callerId?: string;
-  repoPath?: string;
-  effectiveVersion?: string;
+  repoPath: string;
+  effectiveVersion: string;
   grantedAt: number;
   grantedBy: string;
   subjects: CredentialAccessSubjectSummary[];
@@ -152,7 +150,6 @@ export interface StoreUrlBoundCredentialRequest {
 
 export type CredentialFlowType =
   | "oauth2-auth-code-pkce"
-  | "oauth2-auth-code"
   | "oauth2-device-code"
   | "oauth2-client-credentials"
   | "oauth1a"
@@ -205,23 +202,6 @@ export interface OAuth2AuthCodePkceFlowSpec {
   accountValidation?: OAuthAccountValidationSpec;
   tokenAuth?: OAuthTokenAuthMethod;
   revocationUrl?: string;
-}
-
-export interface OAuth2AuthCodeFlowSpec {
-  type: "oauth2-auth-code";
-  authorizeUrl?: string;
-  tokenUrl?: string;
-  clientId?: string;
-  clientConfigId?: string;
-  scopes?: string[];
-  extraAuthorizeParams?: Record<string, string>;
-  tokenAuth?: OAuthTokenAuthMethod;
-  persistRefreshToken?: boolean;
-  accountValidation?: OAuthAccountValidationSpec;
-  revocationUrl?: string;
-  pkce: false;
-  compatibilityReason: string;
-  requiresConfidentialClient?: boolean;
 }
 
 export interface OAuth2DeviceCodeFlowSpec {
@@ -351,7 +331,6 @@ export interface SamlBrowserSessionFlowSpec {
 
 export type CredentialFlowSpec =
   | OAuth2AuthCodePkceFlowSpec
-  | OAuth2AuthCodeFlowSpec
   | OAuth2DeviceCodeFlowSpec
   | OAuth2ClientCredentialsFlowSpec
   | OAuth2JwtBearerFlowSpec

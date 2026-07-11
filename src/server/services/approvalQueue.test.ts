@@ -804,7 +804,9 @@ describe("approvalQueue", () => {
       const promise = queue.requestUserland(userlandRequest);
       const pending = queue.listPending()[0]!;
 
-      expect(() => queue.resolveUserland(pending.approvalId, "maybe")).toThrow(/Unknown userland/);
+      await expect(queue.resolveUserland(pending.approvalId, "maybe")).rejects.toThrow(
+        /Unknown userland/
+      );
       expect(queue.listPending()).toHaveLength(1);
 
       queue.resolve(pending.approvalId, "dismiss");
@@ -998,17 +1000,17 @@ describe("approvalQueue", () => {
         })
       );
       // Matches on channel + request id + token; the other same requestId is untouched.
-      expect(
+      await expect(
         queue.resolveExternalAgentByRequest(
           "channel-1",
           "byreq-allow",
           "resolve-token-123",
           "allow"
         )
-      ).toBe(1);
-      expect(
+      ).resolves.toBe(1);
+      await expect(
         queue.resolveExternalAgentByRequest("channel-1", "byreq-deny", "resolve-token-123", "deny")
-      ).toBe(1);
+      ).resolves.toBe(1);
       await expect(allow).resolves.toEqual({ behavior: "allow" });
       await expect(deny).resolves.toEqual({ behavior: "deny" });
       // The unmatched entity-2 request remains pending.
@@ -1019,12 +1021,12 @@ describe("approvalQueue", () => {
       });
     });
 
-    it("resolveExternalAgentByRequest returns 0 when nothing matches", () => {
+    it("resolveExternalAgentByRequest returns 0 when nothing matches", async () => {
       const { queue } = createQueue();
       void queue.requestExternalAgent(externalRequest({ requestId: "present" }));
-      expect(
+      await expect(
         queue.resolveExternalAgentByRequest("channel-1", "absent", "resolve-token-123", "allow")
-      ).toBe(0);
+      ).resolves.toBe(0);
       expect(queue.listPending()).toHaveLength(1);
     });
 
@@ -1052,6 +1054,187 @@ describe("approvalQueue", () => {
       expect(queue.listPending()).toHaveLength(1);
       queue.resolveExternalAgent(queue.listPending()[0]!.approvalId, "deny");
       await expect(b).resolves.toEqual({ behavior: "deny" });
+    });
+  });
+
+  describe("WP5 provenance & settlement coordinator", () => {
+    function capabilityRequest(requestedByUserId?: string) {
+      return {
+        kind: "capability" as const,
+        callerId: "panel-1",
+        callerKind: "panel" as const,
+        repoPath: "panels/example",
+        effectiveVersion: "hash-1",
+        capability: "external-browser-open",
+        title: "Open external browser",
+        resource: { type: "url" as const, label: "URL", value: "https://example.com" },
+        ...(requestedByUserId ? { requestedByUserId } : {}),
+      };
+    }
+
+    it("resolving with a resolver snapshots resolvedBy, emits resolved before removal, and records provenance", async () => {
+      const recordProvenance = vi.fn();
+      const { queue, emit } = createQueue({ recordProvenance });
+      const promise = queue.request(capabilityRequest("usr_req"));
+      const approvalId = queue.listPending()[0]!.approvalId;
+
+      await queue.resolve(approvalId, "version", {
+        subject: { userId: "usr_2", handle: "alice" },
+        via: "shell",
+        deviceId: "dev-1",
+      });
+      await expect(promise).resolves.toBe("version");
+
+      // §6: the live `resolved` event carries `resolvedBy` — proving the snapshot
+      // was taken while the entry still existed (the delete-before-emit fix).
+      const resolvedEmit = emit.mock.calls.find(([name]) => name === "shell-approval:resolved");
+      expect(resolvedEmit).toBeDefined();
+      expect(resolvedEmit![1]).toMatchObject({
+        approvalId,
+        decision: "version",
+        granted: true,
+        resolvedBy: { userId: "usr_2", handle: "alice", deviceId: "dev-1" },
+        resolvedVia: "shell",
+      });
+      // Neither child-owned surface carries the hub-owned workspace identity.
+      expect(resolvedEmit![1]).not.toHaveProperty("workspaceId");
+
+      // §5: one durable record, naming both parties + the resource + grant scope.
+      expect(recordProvenance).toHaveBeenCalledTimes(1);
+      expect(recordProvenance.mock.calls[0]![0]).toMatchObject({
+        approvalKind: "capability",
+        decision: "version",
+        granted: true,
+        resolvedBy: { userId: "usr_2", handle: "alice", deviceId: "dev-1" },
+        resolvedVia: "shell",
+        requestedBy: { callerId: "panel-1", callerKind: "panel", userId: "usr_req" },
+        resource: { capability: "external-browser-open", value: "https://example.com" },
+        grantScopeStored: "version",
+      });
+      expect(recordProvenance.mock.calls[0]![0]).not.toHaveProperty("workspaceId");
+      // The entry is gone by the time the queue settles (no re-prompt lingering).
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("a deny records granted:false with a null grant scope", async () => {
+      const recordProvenance = vi.fn();
+      const { queue } = createQueue({ recordProvenance });
+      const promise = queue.request(capabilityRequest());
+      const approvalId = queue.listPending()[0]!.approvalId;
+
+      await queue.resolve(approvalId, "deny", {
+        subject: { userId: "usr_2", handle: "alice" },
+        via: "app",
+      });
+      await expect(promise).resolves.toBe("deny");
+      expect(recordProvenance.mock.calls[0]![0]).toMatchObject({
+        decision: "deny",
+        granted: false,
+        grantScopeStored: null,
+      });
+    });
+
+    it("a programmatic settle with no resolver records no provenance and emits no resolved event", async () => {
+      const recordProvenance = vi.fn();
+      const { queue, emit } = createQueue({ recordProvenance });
+      const promise = queue.request(capabilityRequest());
+      const approvalId = queue.listPending()[0]!.approvalId;
+
+      await queue.resolve(approvalId, "once");
+      await expect(promise).resolves.toBe("once");
+      expect(recordProvenance).not.toHaveBeenCalled();
+      expect(emit.mock.calls.some(([name]) => name === "shell-approval:resolved")).toBe(false);
+    });
+
+    it("keeps the approval pending and emits no success when durable provenance fails", async () => {
+      const recordProvenance = vi.fn(async () => {
+        throw new Error("hub unavailable");
+      });
+      const { queue, emit } = createQueue({ recordProvenance });
+      const decision = queue.request(capabilityRequest("usr_req"));
+      const approvalId = queue.listPending()[0]!.approvalId;
+
+      await expect(
+        queue.resolve(approvalId, "once", {
+          subject: { userId: "usr_2", handle: "alice" },
+          via: "shell",
+        })
+      ).rejects.toThrow("hub unavailable");
+
+      expect(queue.listPending().map((approval) => approval.approvalId)).toEqual([approvalId]);
+      expect(emit.mock.calls.some(([name]) => name === "shell-approval:resolved")).toBe(false);
+
+      await queue.resolve(approvalId, "deny");
+      await expect(decision).resolves.toBe("deny");
+    });
+
+    it("rejects a competing human verdict while one durable settlement is in flight", async () => {
+      let acknowledge!: () => void;
+      const recordProvenance = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            acknowledge = resolve;
+          })
+      );
+      const { queue, emit } = createQueue({ recordProvenance });
+      const decision = queue.request(capabilityRequest("usr_req"));
+      const approvalId = queue.listPending()[0]!.approvalId;
+      const resolver = {
+        subject: { userId: "usr_2", handle: "alice" },
+        via: "shell" as const,
+      };
+
+      const first = queue.resolve(approvalId, "once", resolver);
+      const second = queue.resolve(approvalId, "deny", resolver);
+      const competingVerdict = expect(second).rejects.toThrow(
+        `Approval ${approvalId} is already being resolved`
+      );
+      expect(recordProvenance).toHaveBeenCalledTimes(1);
+      expect(queue.listPending()).toHaveLength(1);
+
+      acknowledge();
+      await Promise.all([first, competingVerdict]);
+      await expect(decision).resolves.toBe("once");
+      expect(recordProvenance).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls.filter(([name]) => name === "shell-approval:resolved")).toHaveLength(
+        1
+      );
+    });
+
+    it("lets an in-flight human settlement win over abort and caller cleanup", async () => {
+      let acknowledge!: () => void;
+      const recordProvenance = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            acknowledge = resolve;
+          })
+      );
+      const { queue, emit } = createQueue({ recordProvenance });
+      const abort = new AbortController();
+      const decision = queue.request({
+        ...capabilityRequest("usr_req"),
+        signal: abort.signal,
+      });
+      const approvalId = queue.listPending()[0]!.approvalId;
+
+      const settlement = queue.resolve(approvalId, "once", {
+        subject: { userId: "usr_2", handle: "alice" },
+        via: "shell",
+      });
+      await vi.waitFor(() => expect(recordProvenance).toHaveBeenCalledTimes(1));
+
+      abort.abort();
+      queue.cancelForCaller("panel-1");
+      expect(queue.listPending().map((approval) => approval.approvalId)).toEqual([approvalId]);
+
+      acknowledge();
+      await settlement;
+      await expect(decision).resolves.toBe("once");
+      expect(recordProvenance).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls.filter(([name]) => name === "shell-approval:resolved")).toHaveLength(
+        1
+      );
+      expect(queue.listPending()).toEqual([]);
     });
   });
 });

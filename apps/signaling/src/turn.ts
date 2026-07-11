@@ -47,12 +47,16 @@ const DEFAULT_TTL_SECONDS = 86_400;
  */
 export async function mintIceServers(
   env: TurnEnv,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = fetch
 ): Promise<{ iceServers: RtcIceServer[]; turn: boolean }> {
   // Local-dev coturn (emulator NAT testing) takes precedence — both peers fetch
   // `/ice-servers`, so returning this here reaches the answerer AND the client,
   // and `VIBESTUDIO_WEBRTC_ICE=relay` forces the pipe through it.
-  if (env.VIBESTUDIO_LOCAL_TURN_HOST && env.VIBESTUDIO_LOCAL_TURN_USER && env.VIBESTUDIO_LOCAL_TURN_PASS) {
+  if (
+    env.VIBESTUDIO_LOCAL_TURN_HOST &&
+    env.VIBESTUDIO_LOCAL_TURN_USER &&
+    env.VIBESTUDIO_LOCAL_TURN_PASS
+  ) {
     const port = env.VIBESTUDIO_LOCAL_TURN_PORT ?? "3478";
     return {
       iceServers: [
@@ -86,24 +90,21 @@ export async function mintIceServers(
         "content-type": "application/json",
       },
       body: JSON.stringify({ ttl }),
-    },
+    }
   );
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(
-      `Cloudflare TURN credential mint failed: ${res.status} ${res.statusText} ${detail}`.trim(),
+      `Cloudflare TURN credential mint failed: ${res.status} ${res.statusText} ${detail}`.trim()
     );
   }
 
-  // Cloudflare returns { iceServers: [...] }. Keep accepting a single object for
-  // compatibility with older/internal test doubles, but do not guess on absence.
-  const data = (await res.json()) as { iceServers?: RtcIceServer | RtcIceServer[] };
-  const minted = data.iceServers;
-  if (!minted) {
-    throw new Error("Cloudflare TURN response missing `iceServers`");
+  const data = (await res.json()) as { iceServers?: unknown };
+  if (!Array.isArray(data.iceServers) || data.iceServers.length === 0) {
+    throw new Error("Cloudflare TURN response must contain a non-empty `iceServers` array");
   }
-  const iceServers = Array.isArray(minted) ? minted : [minted];
+  const iceServers = data.iceServers as RtcIceServer[];
   for (const server of iceServers) {
     if (!server || server.urls === undefined) {
       throw new Error("Cloudflare TURN response server missing `urls`");

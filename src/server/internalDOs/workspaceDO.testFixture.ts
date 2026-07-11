@@ -27,6 +27,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         state_args TEXT,
         agent_binding TEXT,
         parent_id TEXT,
+        owner_user_id TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
@@ -50,12 +51,16 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         current_entity_id TEXT REFERENCES entities(id),
         current_entry_key TEXT,
         position_id TEXT NOT NULL DEFAULT '000001000000',
+        owner_user_id TEXT,
         created_at INTEGER NOT NULL,
         closed_at INTEGER
       )
     `);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_slots_parent ON slots(parent_slot_id)`);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_slots_current ON slots(current_entity_id)`);
+    sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`
+    );
     sql.exec(`
       CREATE TABLE IF NOT EXISTS slot_history (
         slot_id TEXT NOT NULL REFERENCES slots(slot_id),

@@ -63,7 +63,7 @@ function cleanActionLabel(verb: string): string {
 }
 
 function lowerFirst(value: string): string {
-  return value.length === 0 ? value : `${value[0]!.toLowerCase()}${value.slice(1)}`;
+  return value.length === 0 ? value : `${value.charAt(0).toLowerCase()}${value.slice(1)}`;
 }
 
 function contextDescription(

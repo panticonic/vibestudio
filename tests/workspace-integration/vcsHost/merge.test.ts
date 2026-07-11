@@ -736,8 +736,8 @@ describe("WorkspaceVcs gc", () => {
     const log = await gad.instance.vcsLog(REPO, 10, VCS_MAIN_HEAD);
     expect(log).toHaveLength(2);
     const headState = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
-    const files = gad.instance.listStateFiles({ stateHash: headState! });
-    expect(files.map((f) => f["path"])).toEqual(["keep.txt"]);
+    const files = await vcs.worktrees.listStateFiles(headState!);
+    expect(files.map((file) => file.path)).toEqual(["keep.txt"]);
     const status = await vcs.statusHead(VCS_MAIN_HEAD, REPO);
     expect(status.dirty).toBe(false);
 
@@ -770,7 +770,7 @@ describe("WorkspaceVcs gc", () => {
       logId: REPO_LOG,
       head: ctxHead,
     }).info!;
-    const files = gad.instance.listStateFiles({ stateHash: provisional.provisionalStateHash });
+    const files = await vcs.worktrees.listStateFiles(provisional.provisionalStateHash);
     expect(files.length).toBeGreaterThan(0);
     void result;
   });
@@ -953,19 +953,17 @@ describe("WorkspaceVcs memory (WS4)", () => {
             outcome: "completed",
           },
         },
-        {
-          envelopeId: "claim:c1",
-          actor: { id: "agent-1", kind: "agent" },
-          payloadKind: "knowledge.claim_recorded",
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            claimId: "c1",
-            subject: "build system",
-            predicate: "uses",
-            object: "zirconium hashing",
-          },
-        },
       ],
+    });
+    await gad.instance.knowledgeRecordClaim({
+      logId: "traj-1",
+      head: "main",
+      claim: {
+        subject: "build system",
+        predicate: "uses",
+        object: "zirconium hashing",
+      },
+      force: true,
     });
 
     const message = gad.instance.recallMemory({ query: "gadolinium" });

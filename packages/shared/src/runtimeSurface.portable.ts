@@ -60,6 +60,11 @@ export const CREDENTIALS_MEMBERS = [
 
 export const GIT_MEMBERS = [
   "http",
+  "upstreamStatus",
+  "pushUpstream",
+  "pullUpstream",
+  "publishRepo",
+  "configureUpstream",
   "importProject",
   "completeWorkspaceDependencies",
   "setSharedRemote",
@@ -105,7 +110,6 @@ export const GAD_MEMBERS = [
   "status",
   "ensureBlob",
   "getTrajectoryBranchHead",
-  "appendTrajectoryBatch",
   "listTrajectoryEvents",
   "appendChannelEnvelope",
   "getChannelEnvelope",

@@ -19,7 +19,7 @@ import { normalizeServerBaseUrl, serverUrlsReferToSameBase } from "../serverUrl.
  *      credential or session file is involved);
  *   3. cwd-upward search for `.vibestudio-context.json` (its contextId +
  *      serverUrl, dispatched over the paired device credential);
- *   4. the named default session file (the historical behavior).
+ *   4. the named default session file.
  *
  * The returned `session` is a {@link ScopeIdentity}: a session-file loaded from
  * disk in tier 4, or a synthesized identity (entity/scope from env or the
@@ -87,7 +87,6 @@ interface ContextMarker {
   contextId: string;
   workspaceId?: string;
   serverUrl?: string;
-  entityHint?: string;
 }
 
 function readContextMarker(filePath: string): ContextMarker | null {
@@ -97,12 +96,21 @@ function readContextMarker(filePath: string): ContextMarker | null {
   } catch {
     return null;
   }
-  if (typeof parsed.contextId !== "string" || parsed.contextId.length === 0) return null;
+  const allowedKeys = new Set(["contextId", "workspaceId", "serverUrl"]);
+  if (
+    Object.keys(parsed).some((key) => !allowedKeys.has(key)) ||
+    typeof parsed.contextId !== "string" ||
+    parsed.contextId.length === 0 ||
+    (parsed.workspaceId !== undefined &&
+      (typeof parsed.workspaceId !== "string" || !parsed.workspaceId)) ||
+    (parsed.serverUrl !== undefined && (typeof parsed.serverUrl !== "string" || !parsed.serverUrl))
+  ) {
+    return null;
+  }
   return {
     contextId: parsed.contextId,
-    workspaceId: typeof parsed.workspaceId === "string" ? parsed.workspaceId : undefined,
-    serverUrl: typeof parsed.serverUrl === "string" ? parsed.serverUrl : undefined,
-    entityHint: typeof parsed.entityHint === "string" ? parsed.entityHint : undefined,
+    ...(parsed.workspaceId ? { workspaceId: parsed.workspaceId } : {}),
+    ...(parsed.serverUrl ? { serverUrl: parsed.serverUrl } : {}),
   };
 }
 
@@ -203,8 +211,7 @@ function resolveMarkerScope(
     );
   }
   const contextId = contextOverride ?? marker.contextId;
-  const entityId =
-    process.env["VIBESTUDIO_ENTITY_ID"] ?? marker.entityHint ?? scopeKeyForContext(contextId);
+  const entityId = process.env["VIBESTUDIO_ENTITY_ID"] ?? scopeKeyForContext(contextId);
   const client = new RpcClient(creds);
   return {
     client,
@@ -240,7 +247,7 @@ function resolveExplicitContextScope(contextId: string): SessionScope {
   };
 }
 
-/** Tier 4 — the named session file (historical behavior). */
+/** Tier 4 — the named session file. */
 function resolveSessionFileScope(name: string): SessionScope {
   if (!isValidSessionName(name)) {
     throw new UsageError(`Invalid session name: ${name} (use letters, digits, "_", "-")`);

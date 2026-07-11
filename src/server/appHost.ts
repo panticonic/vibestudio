@@ -30,7 +30,6 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
 import {
   isAuthorizedChromeAppSource,
-  isAuthorizedConnectionManagementAppSource,
   normalizeAppSourcePath,
 } from "@vibestudio/shared/chromeTrust";
 import type {
@@ -302,6 +301,7 @@ interface ApprovalQueueLike {
     kind: "unit-batch";
     callerId: string;
     callerKind: "panel" | "app" | "worker" | "do" | "system";
+    requestedByUserId?: string;
     repoPath: string;
     effectiveVersion: string;
     dedupKey?: string | null;
@@ -310,7 +310,7 @@ interface ApprovalQueueLike {
     description: string;
     units: PendingUnitBatchApproval["units"];
     configWrite?: PendingUnitBatchApproval["configWrite"];
-  }): Promise<"once" | "session" | "version" | "repo" | "deny">;
+  }): Promise<"once" | "session" | "version" | "deny">;
   listPending(): PendingApproval[];
 }
 
@@ -375,7 +375,6 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   private readonly pendingReactNativeLaunchPreflightKeys = new Set<string>();
   private readonly approvedReactNativeLaunchPreflights = new Map<string, WorkspaceAppDeclaration>();
   private readonly loggedUnauthorizedPanelHostingSources = new Set<string>();
-  private readonly loggedUnauthorizedConnectionManagementSources = new Set<string>();
   private readonly appLogs = new Map<
     string,
     Array<{
@@ -1059,25 +1058,15 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     ) {
       return false;
     }
-    if (
-      capability === "connection-management" &&
-      entry &&
-      isCapabilityActiveStatus(entry.status) &&
-      entry.capabilities.includes(capability) &&
-      !this.isTrustGatedCapabilityAuthorized(entry.source.repo, capability)
-    ) {
-      return false;
-    }
     return (
       !!entry && isCapabilityActiveStatus(entry.status) && entry.capabilities.includes(capability)
     );
   }
 
   /**
-   * Authorization check for trust-gated capabilities. `panel-hosting` (host
-   * chrome) and `connection-management` may only be granted to app sources that
-   * appear in the corresponding trust list; any other capability is ungated and
-   * always passes through. Emits a one-time warning when a gated capability is
+   * Authorization check for the trust-gated `panel-hosting` capability. It may
+   * only be granted to app sources in `trust.chromeApps`; every other capability
+   * is ungated. Emits a one-time warning when the gated capability is
    * self-declared by an unauthorized source, matching the historical
    * `hasAppCapability` logging behavior.
    */
@@ -1093,24 +1082,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       }
       return false;
     }
-    if (capability === "connection-management") {
-      if (isAuthorizedConnectionManagementAppSource(repo)) return true;
-      const source = normalizeAppSourcePath(repo);
-      if (!this.loggedUnauthorizedConnectionManagementSources.has(source)) {
-        this.loggedUnauthorizedConnectionManagementSources.add(source);
-        console.warn(
-          `[AppHost] Ignoring connection-management declaration from unauthorized app source '${source}'`
-        );
-      }
-      return false;
-    }
     return true;
   }
 
   /**
    * The server-vetted capability set for an app entry: the self-declared
-   * capabilities with trust-gated ones (panel-hosting, connection-management)
-   * removed unless the app's source is authorized. This is the set that MUST be
+   * capabilities with `panel-hosting` removed unless the app's source is
+   * authorized. This is the set that MUST be
    * projected onto client-facing surfaces (e.g. the `apps:available` event), so
    * that a client can never treat an unauthorized self-declaration as granted.
    */
@@ -1170,6 +1148,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
             kind: "unit-batch",
             callerId: sourceChange.caller.runtime.id,
             callerKind,
+            ...(sourceChange.caller.subject
+              ? { requestedByUserId: sourceChange.caller.subject.userId }
+              : {}),
             repoPath: identity.repoPath,
             effectiveVersion: identity.effectiveVersion,
             dedupKey: `app-source-change:${installed.entry.name}:${sourceChange.branch}`,
@@ -2273,6 +2254,14 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     if (!this.deps.entityCache || !entry.activeEv) return;
     const existing = this.deps.entityCache.resolve(entry.name);
     const sourceRepo = normalizeRepoPath(entry.source.repo);
+    // WP3 §6: the shared workspace app is ONE instance every member reads and
+    // drives (mutual invocation, plan §0.0). The context is keyed on
+    // (workspaceId, app, name, source) and is deliberately NOT salted by
+    // userId — salting would fragment the shared surface the product wants.
+    // Concurrent-session ephemeral view state (cursor/scroll/transient
+    // selection) lives per session/runtime — in the panel's per-slot context
+    // (`generateContextId(slotId)`) or the device-scoped principal below — not
+    // in this shared durable context, so two sessions never clobber.
     const contextId = createHash("sha256")
       .update(`${this.deps.workspaceId}\x00app\x00${entry.name}\x00${sourceRepo}`)
       .digest("hex");
@@ -2296,6 +2285,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const sourceRepo = normalizeRepoPath(entry.source.repo);
     const principalId = mobileAppPrincipalId(sourceRepo, deviceId);
     const existing = this.deps.entityCache.resolve(principalId);
+    // WP3 §6: this is the per-runtime/session scratch context — keyed by
+    // deviceId, one per live session, so concurrent sessions on the same shared
+    // app keep independent ephemeral view state without clobbering each other.
+    // Durable app data still lives in the shared app context above. The salt is
+    // the session's deviceId, NOT userId (shared state stays shared).
     const contextId = createHash("sha256")
       .update(`${this.deps.workspaceId}\x00app-device\x00${sourceRepo}\x00${deviceId}`)
       .digest("hex");
@@ -2721,7 +2715,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     if (entry.target !== "terminal") {
       throw new Error(`App ${entry.name} is not restartable by the terminal runner`);
     }
-    await this.startTerminalApp(entry);
+    await this.startTerminalApp(entry, { forceRestart: true });
   }
 
   private async syncTerminalRuntime(
@@ -2729,6 +2723,16 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     previous: AppRegistryEntry | null = null
   ): Promise<void> {
     if (entry.target !== "terminal") return;
+    if (
+      !previous &&
+      entry.activeBundleKey &&
+      this.terminalRunner?.isRunningBuild(entry.name, entry.activeBundleKey)
+    ) {
+      // Declaration/provider reconciliation can overlap an active launch. An
+      // unchanged build already owns a live process and connection grant; keep
+      // both intact instead of turning a pure reconciliation into a stop.
+      return;
+    }
     const wasRunning = previous ? this.terminalRunner?.isRunning(previous.name) === true : false;
     if (wasRunning) {
       await this.startTerminalApp(entry);
@@ -2738,7 +2742,10 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     }
   }
 
-  private async startTerminalApp(entry: AppRegistryEntry): Promise<void> {
+  private async startTerminalApp(
+    entry: AppRegistryEntry,
+    options: { forceRestart?: boolean } = {}
+  ): Promise<void> {
     if (!this.terminalRunner) {
       this.registry.patch(entry.name, {
         status: "error",
@@ -2751,15 +2758,18 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
     if (!build) throw new Error(`Terminal app build is missing: ${entry.activeBundleKey}`);
     this.validateBuildForTarget(entry.name, "terminal", build);
-    await this.terminalRunner.start({
-      appId: entry.name,
-      source: normalizeRepoPath(entry.source.repo),
-      buildKey: entry.activeBundleKey,
-      effectiveVersion: entry.activeEv,
-      gatewayUrl: this.deps.getGatewayUrl(),
-      build,
-      interactive: entry.interactive ?? false,
-    });
+    await this.terminalRunner.start(
+      {
+        appId: entry.name,
+        source: normalizeRepoPath(entry.source.repo),
+        buildKey: entry.activeBundleKey,
+        effectiveVersion: entry.activeEv,
+        gatewayUrl: this.deps.getGatewayUrl(),
+        build,
+        interactive: entry.interactive ?? false,
+      },
+      options
+    );
   }
 
   private async stopTerminalApp(appId: string): Promise<void> {

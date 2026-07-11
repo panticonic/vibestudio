@@ -11,61 +11,35 @@ interface RpcRequest {
   targetId?: string;
 }
 
-/**
- * Stub fetch for a paired server: answers refresh-shell and routes /rpc
- * bodies through `handle`.
- */
+const transportMock = vi.hoisted(() => ({
+  handle: null as ((body: RpcRequest) => unknown) | null,
+  rpcBodies: [] as RpcRequest[],
+}));
+
+vi.mock("../webrtcClient.js", () => ({
+  WebRtcRpcClient: class {
+    async ready(): Promise<void> {}
+    async call(method: string, args: unknown[] = []): Promise<unknown> {
+      const body = { method, args };
+      transportMock.rpcBodies.push(body);
+      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      return transportMock.handle(body);
+    }
+    async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+      const body = { type: "call", targetId, method, args };
+      transportMock.rpcBodies.push(body);
+      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      return transportMock.handle(body);
+    }
+    async close(): Promise<void> {}
+  },
+}));
+
+/** Configure the canonical WebRTC RPC transport used by a paired CLI device. */
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
-  const rpcBodies: RpcRequest[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: URL, init?: RequestInit) => {
-      if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-        return new Response(
-          JSON.stringify({ shellToken: "tok", callerId: "shell:dev_cli", deviceId: "dev_cli" })
-        );
-      }
-      // Envelope-native /rpc: unwrap the request envelope into the legacy
-      // {type,targetId,method,args} shape tests assert on, and reply with a
-      // response envelope the CLI client unwraps.
-      const envelope = JSON.parse(String(init?.body ?? "{}")) as {
-        from?: string;
-        target?: string;
-        message?: {
-          type?: string;
-          requestId?: string;
-          method?: string;
-          args?: unknown[];
-          event?: string;
-          payload?: unknown;
-        };
-      };
-      const msg = envelope.message ?? {};
-      const target = envelope.target;
-      const body = (msg.type === "event"
-        ? { type: "emit", targetId: target, event: msg.event, payload: msg.payload }
-        : target && target !== "main"
-          ? { type: "call", targetId: target, method: msg.method, args: msg.args ?? [] }
-          : { method: msg.method, args: msg.args ?? [] }) as unknown as RpcRequest;
-      rpcBodies.push(body);
-      const respond = (payload: { result?: unknown; error?: string }): Response =>
-        new Response(
-          JSON.stringify({
-            from: envelope.target,
-            target: envelope.from,
-            delivery: { caller: { callerId: "main", callerKind: "server" } },
-            provenance: [],
-            message: { type: "response", requestId: msg.requestId, ...payload },
-          })
-        );
-      try {
-        return respond({ result: handle(body) });
-      } catch (error) {
-        return respond({ error: error instanceof Error ? error.message : String(error) });
-      }
-    })
-  );
-  return { rpcBodies };
+  transportMock.rpcBodies = [];
+  transportMock.handle = handle;
+  return { rpcBodies: transportMock.rpcBodies };
 }
 
 function writeCredentials(tmpDir: string): void {
@@ -74,12 +48,28 @@ function writeCredentials(tmpDir: string): void {
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 3,
       kind: "device",
-      url: "https://host.tailnet.ts.net",
+      url: "webrtc://room-cli/_workspace/dev",
       workspaceName: "dev",
-      deviceId: "dev_cli",
-      refreshToken: "refresh_cli",
+      serverId: `srv_${"S".repeat(24)}`,
+      deviceId: `dev_${"D".repeat(24)}`,
+      refreshToken: "R".repeat(43),
+      controlPairing: {
+        room: "room-control",
+        fp: "AA".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      workspacePairing: {
+        room: "room-cli",
+        fp: "AA".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      pairedAt: 1,
     })
   );
 }
@@ -108,6 +98,8 @@ describe("vibestudio agent commands", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-agent-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
+    transportMock.handle = null;
+    transportMock.rpcBodies = [];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -141,7 +133,7 @@ describe("vibestudio agent commands", () => {
     expect(stored).toMatchObject({
       schemaVersion: 1,
       name: "work",
-      serverUrl: "https://host.tailnet.ts.net",
+      serverUrl: "webrtc://room-cli/_workspace/dev",
       entityId: "session:work",
       contextId: "ctx_1",
       scopeKey: "work",
@@ -190,13 +182,13 @@ describe("vibestudio agent commands", () => {
     expect(jsonOutput()).toMatchObject({ entityId: "session:work2", contextId: "ctx_2" });
   });
 
-  it("attach rejects pairing options when already paired (exit 2)", async () => {
+  it("attach rejects a new pairing link when already paired (exit 2)", async () => {
     writeCredentials(tmpDir);
     const { main } = await import("../client.js");
-    await expect(
-      main(["agent", "attach", "work", "--url", "https://other.ts.net", "--code", "ABC", "--json"])
-    ).resolves.toBe(2);
-    await expect(main(["agent", "attach", "work", "--code", "ABC", "--json"])).resolves.toBe(2);
+    const link =
+      `vibestudio://connect?room=other-room&fp=${"BB".repeat(32)}` +
+      `&code=${"C".repeat(32)}&sig=wss%3A%2F%2Fsignal.example%2F&v=2`;
+    await expect(main(["agent", "attach", "work", link, "--json"])).resolves.toBe(2);
   });
 
   it("attach warns on stderr before overwriting a session from another server", async () => {
@@ -227,7 +219,7 @@ describe("vibestudio agent commands", () => {
     >;
     expect(stored).toMatchObject({
       entityId: "session:work",
-      serverUrl: "https://host.tailnet.ts.net",
+      serverUrl: "webrtc://room-cli/_workspace/dev",
     });
   });
 

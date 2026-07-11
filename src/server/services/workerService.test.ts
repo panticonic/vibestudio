@@ -11,6 +11,12 @@ import {
 import { createWorkerService } from "./workerService.js";
 
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };
+const ownedPanelCtx: ServiceContext = {
+  caller: createVerifiedCaller("panel-owned", "panel", null, null, {
+    userId: "usr_alice",
+    handle: "alice",
+  }),
+};
 
 function createDeps() {
   const workspaceDecls: WorkspaceDeclarations = {
@@ -403,6 +409,29 @@ describe("workerService userland service resolution", () => {
       className: "ExampleStoreDO",
       objectKey: "chat-1",
       buildRef: "main",
+    });
+  });
+
+  it("stamps an on-demand durable object with the resolving caller's owner", async () => {
+    const deps = createDeps();
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({ ...(deps as object), activateDurableObject } as never)
+    );
+    dispatcher.markInitialized();
+
+    await dispatcher.dispatch(ownedPanelCtx, "workers", "resolveService", [
+      "example.store.v1",
+      "owned-channel",
+    ]);
+
+    expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/example-store",
+      className: "ExampleStoreDO",
+      objectKey: "owned-channel",
+      buildRef: "main",
+      ownerUserId: "usr_alice",
     });
   });
 

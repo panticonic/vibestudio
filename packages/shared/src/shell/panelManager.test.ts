@@ -31,6 +31,7 @@ function createWorkspaceMemory() {
     closed_at: number | null;
     current_entity_id: PanelEntityId | null;
     current_entry_key: string | null;
+    owner_user_id: string | null;
   }
   interface MemHistoryEntry {
     entry_key: string;
@@ -128,6 +129,7 @@ function createWorkspaceMemory() {
         closed_at: null,
         current_entity_id: input.initialEntry?.entityId ?? null,
         current_entry_key: input.initialEntry?.entryKey ?? null,
+        owner_user_id: input.ownerUserId ?? null,
       });
       if (input.initialEntry) {
         history.set(input.slotId, [
@@ -326,6 +328,44 @@ describe("PanelManager", () => {
     await expect(manager.createBrowser(null, "javascript:alert(1)")).rejects.toThrow(
       "Invalid browser panel URL"
     );
+  });
+
+  it("mirrors subtree ownership immediately when a panel moves between owner trees", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const aliceRoot = await manager.createBrowser(null, "https://alice.example", {
+      name: "alice-root",
+      addAsRoot: true,
+      ownerUserId: "alice",
+    });
+    const bobRoot = await manager.createBrowser(null, "https://bob.example", {
+      name: "bob-root",
+      addAsRoot: true,
+      ownerUserId: "bob",
+    });
+    const bobChild = await manager.createBrowser(bobRoot.panelId, "https://child.example", {
+      name: "bob-child",
+      ownerUserId: "bob",
+    });
+    const bobGrandchild = await manager.createBrowser(
+      bobChild.panelId,
+      "https://grandchild.example",
+      { name: "bob-grandchild", ownerUserId: "bob" }
+    );
+
+    await manager.movePanel(bobChild.panelId, aliceRoot.panelId, 0, "bob");
+
+    expect(registry.getPanel(bobChild.panelId)?.owner).toBe("alice");
+    expect(registry.getPanel(bobGrandchild.panelId)?.owner).toBe("alice");
+
+    await manager.movePanel(bobChild.panelId, null, 1, "carol");
+    expect(registry.getPanel(bobChild.panelId)?.owner).toBe("carol");
+    expect(registry.getPanel(bobGrandchild.panelId)?.owner).toBe("carol");
   });
 
   it("coerces human-readable create names to panel id segments", async () => {
@@ -655,6 +695,39 @@ describe("PanelManager", () => {
     expect(registry.getRootPanels()).toEqual([]);
     expect(registry.getPanel(child.panelId)).toBeUndefined();
     expect(registry.getPanel(grandchild.panelId)).toBeUndefined();
+  });
+
+  it("strictly archives only the revoked user's owned roots and is retryable", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const aliceRoot = await manager.createBrowser(null, "https://alice.example", {
+      name: "alice-root",
+      addAsRoot: true,
+      ownerUserId: "usr_alice",
+    });
+    const aliceChild = await manager.createBrowser(aliceRoot.panelId, "https://child.example", {
+      name: "alice-child",
+      ownerUserId: "usr_alice",
+    });
+    const bobRoot = await manager.createBrowser(null, "https://bob.example", {
+      name: "bob-root",
+      addAsRoot: true,
+      ownerUserId: "usr_bob",
+    });
+
+    const retire = vi.spyOn(deps.runtime, "retireEntity");
+    retire.mockRejectedValueOnce(new Error("runtime busy"));
+    await expect(manager.archiveOwnedRoots("usr_alice")).rejects.toThrow("runtime busy");
+    expect(mem.state.slots.get(aliceRoot.panelId)?.closed_at).toBeNull();
+
+    const result = await manager.archiveOwnedRoots("usr_alice");
+    expect(result.archivedRootIds).toEqual([aliceRoot.panelId]);
+    expect(result.closedIds).toEqual([aliceRoot.panelId, aliceChild.panelId]);
+    expect(mem.state.slots.get(aliceRoot.panelId)?.closed_at).not.toBeNull();
+    expect(mem.state.slots.get(aliceChild.panelId)?.closed_at).not.toBeNull();
+    expect(mem.state.slots.get(bobRoot.panelId)?.closed_at).toBeNull();
+    expect(registry.getPanel(bobRoot.panelId)).toBeDefined();
   });
 
   it("pushes navigation into history and traverses it via back/forward", async () => {

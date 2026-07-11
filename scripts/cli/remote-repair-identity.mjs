@@ -4,22 +4,40 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-function defaultIdentityPath() {
+function defaultIdentityPath(workspace) {
   const configRoot = process.env.XDG_CONFIG_HOME
     ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
     : path.join(os.homedir(), ".config", "vibestudio");
-  return path.join(configRoot, "webrtc", "identity.pem");
+  return path.join(configRoot, "workspaces", workspace, "state", "webrtc", "identity.pem");
 }
 
 function parseArgs(argv) {
-  const options = { identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? defaultIdentityPath(), yes: false, help: false };
+  const options = { identity: null, workspace: "default", yes: false, help: false };
+  let identityExplicit = false;
+  let workspaceExplicit = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--identity") options.identity = path.resolve(argv[++i] ?? "");
-    else if (arg === "--yes") options.yes = true;
+    if (arg === "--identity") {
+      identityExplicit = true;
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) throw new Error("--identity requires a path");
+      options.identity = path.resolve(value);
+    } else if (arg === "--workspace") {
+      workspaceExplicit = true;
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) throw new Error("--workspace requires a name");
+      options.workspace = value;
+    } else if (arg === "--yes") options.yes = true;
     else if (arg === "--help") options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
+  if (identityExplicit && workspaceExplicit) {
+    throw new Error("pass --workspace or --identity, not both");
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
+    throw new Error("--workspace must contain only letters, numbers, hyphens, and underscores");
+  }
+  options.identity ??= defaultIdentityPath(options.workspace);
   return options;
 }
 
@@ -27,10 +45,11 @@ function printHelp() {
   console.log(`vibestudio remote repair-identity
 
 Usage:
-  vibestudio remote repair-identity --yes [--identity <identity.pem>]
+  vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]
 
-Backs up any existing identity.pem and deleted server.pem/server.key remnants,
-then writes a fresh combined certificate/private-key identity file.
+Backs up one workspace child's existing identity.pem, then writes a fresh
+combined certificate/private-key identity file. The default workspace is
+"default".
 `);
 }
 
@@ -48,32 +67,35 @@ function main() {
     return 0;
   }
   if (!options.yes) {
-    throw new Error("refusing to replace identity material without --yes; every paired device must re-pair afterwards");
+    throw new Error(
+      "refusing to replace identity material without --yes; every paired device must re-pair afterwards"
+    );
   }
   const identity = path.resolve(options.identity);
   fs.mkdirSync(path.dirname(identity), { recursive: true });
-  const backups = [backupIfExists(identity)];
-  for (const legacy of ["server.pem", "server.key"]) {
-    backups.push(backupIfExists(path.join(path.dirname(identity), legacy)));
-  }
+  const backup = backupIfExists(identity);
   const cert = `${identity}.cert.tmp`;
   const key = `${identity}.key.tmp`;
-  const result = spawnSync("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-sha256",
-    "-days",
-    "3650",
-    "-subj",
-    "/CN=Vibestudio WebRTC",
-    "-keyout",
-    key,
-    "-out",
-    cert,
-  ], { stdio: "pipe" });
+  const result = spawnSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-sha256",
+      "-days",
+      "3650",
+      "-subj",
+      "/CN=Vibestudio WebRTC",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+    ],
+    { stdio: "pipe" }
+  );
   if (result.status !== 0) {
     throw new Error(`openssl failed: ${result.stderr.toString() || result.stdout.toString()}`);
   }
@@ -82,7 +104,7 @@ function main() {
   fs.rmSync(cert, { force: true });
   fs.rmSync(key, { force: true });
   console.log(`[remote-repair-identity] wrote ${identity}`);
-  for (const backup of backups.filter(Boolean)) {
+  if (backup) {
     console.log(`[remote-repair-identity] backup ${backup}`);
   }
   console.log("[remote-repair-identity] all existing devices must re-pair");
@@ -92,6 +114,8 @@ function main() {
 try {
   process.exit(main());
 } catch (error) {
-  console.error(`[remote-repair-identity] ${error instanceof Error ? error.message : String(error)}`);
+  console.error(
+    `[remote-repair-identity] ${error instanceof Error ? error.message : String(error)}`
+  );
   process.exit(1);
 }

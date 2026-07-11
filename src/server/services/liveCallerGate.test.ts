@@ -1,0 +1,184 @@
+import { describe, expect, it } from "vitest";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createLiveCallerGate } from "./liveCallerGate.js";
+
+describe("createLiveCallerGate", () => {
+  function fixture() {
+    let userRevoked = false;
+    let member = true;
+    let deviceLive = true;
+    let agentLive = true;
+    let extensionLive = true;
+    const gate = createLiveCallerGate({
+      workspaceId: "ws_alpha",
+      userStore: {
+        getUser: (userId: string) =>
+          userId === "usr_alice"
+            ? ({
+                id: userId,
+                handle: "alice",
+                displayName: "Alice",
+                role: "member",
+                createdAt: 1,
+                ...(userRevoked ? { revokedAt: 2 } : {}),
+              } as const)
+            : null,
+      },
+      membershipStore: { has: () => member },
+      deviceAuthStore: {
+        userFor: () => (deviceLive ? "usr_alice" : null),
+        getAgentCredential: () =>
+          agentLive
+            ? ({
+                agentId: "agt_1",
+                entityId: "session:one",
+                contextId: "ctx_1",
+                channelId: "channel_1",
+                userId: "usr_alice",
+                tokenHash: "hash",
+                createdAt: 1,
+              } as const)
+            : null,
+      },
+      entityCache: {
+        resolveActive: () => ({ kind: "app", ownerUserId: "usr_alice" }) as never,
+      },
+      isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
+      isLiveSystemRuntime: (callerId, callerKind) =>
+        callerId === "do:workers/gad-store:GadStore:workspace" && callerKind === "do",
+      now: () => 10,
+    });
+    return {
+      gate,
+      revokeUser: () => {
+        userRevoked = true;
+      },
+      removeMembership: () => {
+        member = false;
+      },
+      revokeDevice: () => {
+        deviceLive = false;
+      },
+      revokeAgent: () => {
+        agentLive = false;
+      },
+      retireExtension: () => {
+        extensionLive = false;
+      },
+    };
+  }
+
+  it("re-checks the concrete shell device, account, and membership on every call", () => {
+    const subject = { userId: "usr_alice", handle: "alice" };
+
+    const device = fixture();
+    const shell = createVerifiedCaller("shell:dev_1", "shell", null, null, subject);
+    expect(device.gate(shell)).toBe(true);
+    device.revokeDevice();
+    expect(device.gate(shell)).toBe(false);
+
+    const account = fixture();
+    expect(account.gate(shell)).toBe(true);
+    account.revokeUser();
+    expect(account.gate(shell)).toBe(false);
+
+    const membership = fixture();
+    expect(membership.gate(shell)).toBe(true);
+    membership.removeMembership();
+    expect(membership.gate(shell)).toBe(false);
+  });
+
+  it("rejects a cached agent as soon as its credential is no longer live", () => {
+    const state = fixture();
+    const agent = createVerifiedCaller(
+      "agent:session:one",
+      "agent",
+      null,
+      {
+        agentId: "agt_1",
+        entityId: "session:one",
+        contextId: "ctx_1",
+        channelId: "channel_1",
+        userId: "usr_alice",
+      },
+      { userId: "usr_alice", handle: "alice" }
+    );
+    expect(state.gate(agent)).toBe(true);
+    state.revokeAgent();
+    expect(state.gate(agent)).toBe(false);
+  });
+
+  it("binds a shared app connection to its live grant issuer without assigning a global owner", () => {
+    const state = fixture();
+    const app = createVerifiedCaller("app:shared", "app", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    expect(state.gate(app)).toBe(false);
+    expect(state.gate(app, "shell:dev_1")).toBe(true);
+    state.revokeDevice();
+    expect(state.gate(app, "shell:dev_1")).toBe(false);
+  });
+
+  it("admits only the canonical system-owned extension identity", () => {
+    const state = fixture();
+    expect(
+      state.gate(
+        createVerifiedCaller("@workspace-extensions/host", "extension", null, null, {
+          userId: "system",
+          handle: "system",
+        })
+      )
+    ).toBe(true);
+    expect(
+      state.gate(
+        createVerifiedCaller("@workspace-extensions/fake", "extension", null, null, {
+          userId: "system",
+          handle: "system",
+        })
+      )
+    ).toBe(false);
+    state.retireExtension();
+    expect(
+      state.gate(
+        createVerifiedCaller("@workspace-extensions/host", "extension", null, null, {
+          userId: "system",
+          handle: "system",
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("keeps a live server-spawned shared app authorized without inventing a user owner", () => {
+    const state = fixture();
+    const app = createVerifiedCaller("@workspace-apps/remote-cli", "app", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+
+    expect(state.gate(app, "server")).toBe(true);
+    expect(state.gate(app)).toBe(false);
+    expect(state.gate(app, "shell:dev_1")).toBe(false);
+  });
+
+  it("admits only the declared system-owned runtime identity", () => {
+    const state = fixture();
+    const systemSubject = { userId: "system", handle: "system" };
+    expect(
+      state.gate(
+        createVerifiedCaller(
+          "do:workers/gad-store:GadStore:workspace",
+          "do",
+          null,
+          null,
+          systemSubject
+        )
+      )
+    ).toBe(true);
+    expect(
+      state.gate(
+        createVerifiedCaller("do:workers/gad-store:GadStore:other", "do", null, null, systemSubject)
+      )
+    ).toBe(false);
+  });
+});

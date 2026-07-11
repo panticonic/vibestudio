@@ -1,169 +1,104 @@
-/**
- * remoteCred service method schemas.
- */
+/** Electron-owned persistence and connection actions for a paired WebRTC device. */
 
 import { z } from "zod";
-import { CreatePairingInviteArgsSchema } from "./auth.js";
 import type { MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
+import { HubDeviceSchema, HubPairingInviteSchema } from "./hubControl.js";
 
-// Access descriptors shared across the remoteCred method groups. These manage
-// the Electron-side remote-server credential store, so reads are 'read' and the
-// mutators that persist credentials / pair / relaunch are 'admin'.
-const REMOTE_CRED_READ_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "read",
-};
-const REMOTE_CRED_SAVE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
-};
-const REMOTE_CRED_PAIR_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
-};
-const REMOTE_CRED_INVITE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
-};
-const REMOTE_CRED_REVOKE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
-};
-const REMOTE_CRED_CLEAR_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
-};
-const REMOTE_CRED_RELAUNCH_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
-};
+const readAccess: MethodAccessDescriptor = { sensitivity: "read" };
+const adminAccess: MethodAccessDescriptor = { sensitivity: "admin" };
+const destructiveAccess: MethodAccessDescriptor = { sensitivity: "destructive" };
 
-export const RemoteCredSaveArgsSchema = z.object({
-  url: z.string().describe("Selected-workspace server URL (http/https) to connect to."),
-  token: z.string().describe("Admin token used to authenticate against the remote server."),
-});
-export type RemoteCredSaveArgs = z.infer<typeof RemoteCredSaveArgsSchema>;
-
-export const RemoteCredPairingCodeArgsSchema = z.object({
-  link: z
-    .string()
-    .describe("A `vibestudio://connect?...` or `https://vibestudio.app/pair#...` link carrying the WebRTC pairing material."),
-  label: z.string().optional().describe("Human-readable label for the new device credential."),
-});
-export type RemoteCredPairingCodeArgs = z.infer<typeof RemoteCredPairingCodeArgsSchema>;
+export const RemotePairArgsSchema = z
+  .object({
+    link: z
+      .string()
+      .min(1)
+      .describe(
+        "A vibestudio://connect or https://vibestudio.app/pair link containing WebRTC pairing material."
+      ),
+  })
+  .strict();
+export type RemotePairArgs = z.infer<typeof RemotePairArgsSchema>;
 
 export const RemoteCredCurrentSchema = z.object({
+  connected: z.boolean(),
   configured: z.boolean(),
   isActive: z.boolean(),
-  bootstrap: z.enum(["device", "admin-token", "hybrid", "none"]),
-  url: z.string().optional(),
-  tokenPreview: z.string().optional(),
   deviceId: z.string().optional(),
-  hubUrl: z.string().optional(),
   workspaceName: z.string().optional(),
 });
 export type RemoteCredCurrent = z.infer<typeof RemoteCredCurrentSchema>;
 
-export const RemoteCredTestConnectionResultSchema = z.object({
+const PairResultSchema = z.object({
   ok: z.boolean(),
-  error: z.enum(["invalid-url", "unreachable", "unauthorized", "unknown"]).optional(),
+  error: z.literal("invalid-link").optional(),
   message: z.string().optional(),
-  serverVersion: z.string().optional(),
-  serverId: z.string().optional(),
-  workspaceId: z.string().optional(),
 });
-export type RemoteCredTestConnectionResult = z.infer<typeof RemoteCredTestConnectionResultSchema>;
-
-export const RemoteCredDeviceRecordSchema = z.object({
-  deviceId: z.string(),
-  label: z.string(),
-  platform: z.string().optional(),
-  createdAt: z.number(),
-  lastUsedAt: z.number().optional(),
-  revokedAt: z.number().optional(),
-});
-export type RemoteCredDeviceRecord = z.infer<typeof RemoteCredDeviceRecordSchema>;
-
-export const RemoteCredPairingInviteSchema = z.object({
-  code: z.string(),
-  deepLink: z.string(),
-  pairUrl: z.string(),
-  room: z.string(),
-  fp: z.string(),
-  sig: z.string(),
-  ice: z.enum(["all", "relay"]).optional(),
-  srv: z.string().optional(),
-  serverUrl: z.string(),
-  publicUrl: z.string().nullable().optional(),
-  protocol: z.enum(["http", "https"]).optional(),
-  externalHost: z.string().optional(),
-  gatewayPort: z.number().nullable().optional(),
-  expiresAt: z.number(),
-  expiresInMs: z.number(),
-  serverId: z.string(),
-  serverBootId: z.string(),
-  workspaceId: z.string().nullable().optional(),
-});
-export type RemoteCredPairingInvite = z.infer<typeof RemoteCredPairingInviteSchema>;
 
 const OkResultSchema = z.object({ ok: z.boolean() });
 
 export const remoteCredMethods = defineServiceMethods({
   getCurrent: {
-    description:
-      "Report the locally stored remote-server credential: whether it's configured/active, bootstrap kind, URL, workspace, and a masked token preview.",
+    description: "Report whether this desktop has a stored WebRTC device pairing and a live session.",
     args: z.tuple([]),
     returns: RemoteCredCurrentSchema,
-    access: REMOTE_CRED_READ_ACCESS,
+    access: readAccess,
   },
-  save: {
-    description:
-      "Persist an admin-token credential for the selected remote workspace URL (replaces any existing stored credential).",
-    args: z.tuple([RemoteCredSaveArgsSchema]),
-    returns: OkResultSchema,
-    access: REMOTE_CRED_SAVE_ACCESS,
-    examples: [{ args: [{ url: "https://hub.example/ws/main", token: "admin-secret" }] }],
+  pair: {
+    description: "Validate a WebRTC pairing link and relaunch into the one-time pairing session.",
+    args: z.tuple([RemotePairArgsSchema]),
+    returns: PairResultSchema,
+    access: adminAccess,
   },
-  testConnection: {
-    description:
-      "Probe the remote server's admin-token auth without saving anything; reports reachability and server identity.",
-    args: z.tuple([RemoteCredSaveArgsSchema]),
-    returns: RemoteCredTestConnectionResultSchema,
-    access: REMOTE_CRED_READ_ACCESS,
-  },
-  exchangePairingCode: {
-    description:
-      "Redeem a `vibestudio://connect` pairing link over WebRTC for a durable device credential and persist it locally for auto-reconnect.",
-    args: z.tuple([RemoteCredPairingCodeArgsSchema]),
-    returns: RemoteCredTestConnectionResultSchema,
-    access: REMOTE_CRED_PAIR_ACCESS,
-  },
-  createPairingInvite: {
-    description:
-      "Create a device-pairing invite on the connected remote server (only available while running in remote mode).",
-    args: z.tuple([CreatePairingInviteArgsSchema.optional()]),
-    returns: RemoteCredPairingInviteSchema,
-    access: REMOTE_CRED_INVITE_ACCESS,
-    examples: [{ args: [{ ttlMs: 300_000 }] }],
+  pairDevice: {
+    description: "Create an invite for another device belonging to the authenticated account.",
+    args: z.tuple([
+      z
+        .object({
+          workspace: z.string().min(1).optional(),
+          ttlMs: z.number().int().min(30_000).max(3_600_000).optional(),
+        })
+        .strict()
+        .optional(),
+    ]),
+    returns: z.object({
+      userId: z.string(),
+      handle: z.string(),
+      workspace: z.string(),
+      pairing: HubPairingInviteSchema,
+    }),
+    access: adminAccess,
   },
   listDevices: {
-    description:
-      "List devices paired with the connected remote server; returns an empty list when not in remote mode.",
+    description: "List paired devices visible to the authenticated account.",
     args: z.tuple([]),
-    returns: z.array(RemoteCredDeviceRecordSchema),
-    access: REMOTE_CRED_READ_ACCESS,
+    returns: z.array(HubDeviceSchema),
+    access: readAccess,
   },
   revokeDevice: {
-    description:
-      "Revoke a paired device on the remote server; if it is this client's own device the local credential is cleared and the app relaunches.",
-    args: z.tuple([z.string()]),
-    returns: z.object({ revoked: z.boolean() }),
-    access: REMOTE_CRED_REVOKE_ACCESS,
+    description: "Revoke a device and close all of its live workspace sessions.",
+    args: z.tuple([z.string().min(1)]),
+    returns: z.object({
+      revoked: z.boolean(),
+      closedSessions: z.number(),
+      currentDevice: z.boolean(),
+    }),
+    access: destructiveAccess,
   },
   clear: {
-    description: "Delete the locally stored remote-server credential.",
+    description: "Delete this desktop's stored WebRTC device pairing.",
     args: z.tuple([]),
     returns: OkResultSchema,
-    access: REMOTE_CRED_CLEAR_ACCESS,
+    access: destructiveAccess,
   },
   relaunch: {
-    description: "Relaunch the Electron app (e.g. to apply a changed remote credential).",
+    description: "Relaunch Electron so a connection change takes effect.",
     args: z.tuple([]),
     returns: OkResultSchema,
-    access: REMOTE_CRED_RELAUNCH_ACCESS,
+    access: adminAccess,
   },
 });
+
+export type RemoteCredDeviceRecord = z.infer<typeof HubDeviceSchema>;
+export type RemoteCredPairingInvite = z.infer<typeof HubPairingInviteSchema>;

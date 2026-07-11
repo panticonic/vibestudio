@@ -13,6 +13,7 @@ import type { ServicePolicy } from "./servicePolicy.js";
 import { checkServiceAccess } from "./servicePolicy.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
+import type { UserSubject } from "./users/types.js";
 export type { CallerKind } from "./principalKinds.js";
 
 /**
@@ -176,6 +177,11 @@ export interface AgentBinding {
   contextId: string;
   channelId: string;
   agentId: string;
+  /**
+   * The user whose lineage spawned the agent (WP0 §3.3) — stamped from the
+   * agent credential at auth time. Attribution/routing only, never authority.
+   */
+  userId: string;
 }
 
 export interface VerifiedCaller {
@@ -188,18 +194,26 @@ export interface VerifiedCaller {
   code?: VerifiedCodeIdentity;
   /** Entity/context binding for `agent`-kind callers (host-verified; §3.2). */
   agentBinding?: AgentBinding;
+  /**
+   * Host-verified account subject (WP0 §3.4) — derived and stamped by the
+   * host at auth time, never accepted from the wire. Absent only for the
+   * enumerated pre-identity bootstrap principals (WP0 §5.4).
+   */
+  subject?: UserSubject;
 }
 
 export function createVerifiedCaller(
   callerId: string,
   callerKind: CallerKind,
   code?: VerifiedCodeIdentity | null,
-  agentBinding?: AgentBinding | null
+  agentBinding?: AgentBinding | null,
+  subject?: UserSubject | null
 ): VerifiedCaller {
   return {
     runtime: { id: callerId, kind: callerKind },
     ...(code ? { code } : {}),
     ...(agentBinding ? { agentBinding } : {}),
+    ...(subject ? { subject } : {}),
   };
 }
 
@@ -210,7 +224,13 @@ export function createVerifiedCaller(
  * server's `VerifiedCaller` keeps its richer capability/code identity on top.
  */
 export function authenticatedCallerOf(caller: VerifiedCaller): AuthenticatedCaller {
-  return { callerId: caller.runtime.id, callerKind: caller.runtime.kind };
+  return {
+    callerId: caller.runtime.id,
+    callerKind: caller.runtime.kind,
+    // Copy the host-verified owning user through to userland (WP4 §2.4).
+    // Attribution only — never re-validated as a capability by the receiver.
+    ...(caller.subject ? { userId: caller.subject.userId } : {}),
+  };
 }
 
 /**
@@ -224,6 +244,9 @@ export interface WsClientInfo {
   caller: VerifiedCaller;
   connectionId: string;
   authenticated: boolean;
+  /** Host-recorded client metadata from the authenticated transport. */
+  clientLabel?: string;
+  clientPlatform?: "desktop" | "headless" | "mobile";
 }
 
 /**

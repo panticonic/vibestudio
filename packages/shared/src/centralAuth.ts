@@ -1,12 +1,15 @@
 /**
  * centralAuth — central-config auth artifacts (admin token).
  *
- * Extracted from `workspace/loader.ts` because the admin token is a
- * *central* concept (one token per machine, not per workspace): it lives
- * under `~/.config/vibestudio/admin-token` alongside `config.yml`, `.secrets.yml`,
- * and `remote-credentials.json`. Keeping it in `workspace/loader.ts`
- * conflated "workspace configuration" with "credential storage for the
- * local machine."
+ * The admin token is a LOCAL operator break-glass for the diagnostic
+ * `admin-token` HTTP routes and hub→child loopback plumbing — it is NOT a
+ * human identity (WP9 §4 retired admin-token-as-root; root is a `User` in the
+ * identity DB, and RPC auth rejects the admin token outright). It stays a
+ * *central* concept (one diagnostic token per machine, not per workspace),
+ * living under `~/.config/vibestudio/admin-token` alongside `config.yml`,
+ * `.secrets.yml`, and `remote-credentials.json` — which is why it is here and
+ * not in `workspace/loader.ts` ("workspace configuration" must not be
+ * conflated with "credential storage for the local machine").
  */
 
 import * as fs from "fs";

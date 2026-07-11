@@ -48,14 +48,8 @@ function setArgv(args: string[]) {
   process.argv = [...ORIGINAL_ARGV.slice(0, 2), ...args];
 }
 
-type LastWorkspaceTarget = ReturnType<
-  import("@vibestudio/shared/centralData").CentralDataManager["getLastWorkspaceTarget"]
->;
-
-function testCentralData(lastTarget: LastWorkspaceTarget = null) {
-  return {
-    getLastWorkspaceTarget: vi.fn(() => lastTarget),
-  } as never;
+function testCentralData() {
+  return {} as never;
 }
 
 describe("resolveStartupMode interactive desktop policy", () => {
@@ -131,22 +125,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
     });
   });
 
-  it("launches a persisted local target before falling back to generic local resolution", () => {
-    expect(
-      mod.resolveStartupMode(
-        testCentralData({ kind: "local", name: "client-work", lastOpened: 123 }),
-        {
-          interactiveDesktop: true,
-        }
-      )
-    ).toMatchObject({
-      kind: "local",
-    });
-    expect(mockResolveLocalWorkspaceStartup).toHaveBeenLastCalledWith(
-      expect.objectContaining({ name: "client-work" })
-    );
-  });
-
   it("marks chooser-launched local workspaces as create-if-missing", () => {
     expect(mod.workspaceRelaunchArgs("default", ["--foo", "--workspace", "old"])).toEqual([
       "--foo",
@@ -175,6 +153,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
         "--foo",
         mod.DEV_WEBRTC_REMOTE_ARG,
         "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
+        "vibestudio://panel?v=1&source=about%2Fserver-logs",
       ])
     ).toEqual(["--foo", "--workspace", "default", mod.WORKSPACE_CREATE_IF_MISSING_ARG]);
   });

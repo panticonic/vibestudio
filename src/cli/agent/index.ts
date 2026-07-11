@@ -75,28 +75,28 @@ async function sessionEntityExists(client: RpcClient, entityId: string): Promise
 async function attach(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const link = inv.positionals.find((arg) => arg.startsWith("vibestudio://"));
+    const isPairingLink = (value: string) =>
+      value.startsWith("vibestudio://") || value.startsWith("https://vibestudio.app/pair");
+    const link = inv.positionals.find(isPairingLink);
     const workspace =
       typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : "";
     const name = sessionName({
       ...inv,
-      positionals: inv.positionals.filter((arg) => !arg.startsWith("vibestudio://")),
+      positionals: inv.positionals.filter((arg) => !isPairingLink(arg)),
     });
     let creds = loadCliCredentials();
-    const url = typeof inv.flags["url"] === "string" ? inv.flags["url"] : undefined;
-    const code = typeof inv.flags["code"] === "string" ? inv.flags["code"] : undefined;
-    if (creds && (link || url || code)) {
+    if (creds && link) {
       throw new UsageError(
-        "already paired — run `vibestudio remote logout` to re-pair, or attach without --url/--code"
+        "already paired — run `vibestudio remote logout` to re-pair, or attach without a pairing link"
       );
     }
     if (!creds) {
-      if (link || (url && code)) {
-        creds = await pairRemoteServer({ link, url, code });
+      if (link) {
+        creds = await pairRemoteServer({ link });
         saveCliCredentials(creds);
       } else if (process.stdin.isTTY) {
         throw new AuthError(
-          "not paired — pass --url and --code (or a vibestudio:// link) to pair while attaching"
+          "not paired — pass a vibestudio://connect pairing link to pair while attaching"
         );
       } else {
         throw new AuthError("not paired and no pairing options given");
@@ -482,42 +482,13 @@ async function diag(inv: ParsedInvocation): Promise<number> {
   }
 }
 
-async function turn(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const model = typeof inv.flags["model"] === "string" ? inv.flags["model"].trim() : "";
-    const message = typeof inv.flags["message"] === "string" ? inv.flags["message"].trim() : "";
-    if (!model) throw new UsageError("agent turn requires --model <ref>");
-    if (!message) throw new UsageError("agent turn requires --message <text>");
-    const result = {
-      status: "not yet wired",
-      model,
-      todo: "Wire through the existing channel create/join and agent-vessel turn driver when that CLI plumbing exists.",
-    };
-    printResult(result, {
-      json,
-      human: () => {
-        console.log("not yet wired");
-        console.log(
-          "TODO: wire this through existing channel create/join and agent-vessel turn plumbing."
-        );
-      },
-    });
-    return 1;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
 export const agentCommands: CliCommand[] = [
   {
     group: "agent",
     name: "attach",
     summary: "Attach (create or reuse) a durable agent session entity",
-    usage: "vibestudio agent attach [NAME] [--url U --code C] [--workspace NAME]",
+    usage: "vibestudio agent attach [NAME] [PAIRING_LINK] [--workspace NAME]",
     flags: [
-      { name: "url", takesValue: true, description: "Server URL (pairs first when not paired)" },
-      { name: "code", takesValue: true, description: "Pairing code (with --url)" },
       { name: "workspace", takesValue: true, description: "Select a workspace before attaching" },
       JSON_FLAG,
     ],
@@ -599,18 +570,6 @@ export const agentCommands: CliCommand[] = [
       JSON_FLAG,
     ],
     run: diag,
-  },
-  {
-    group: "agent",
-    name: "turn",
-    summary: "Run one headless agent turn (not yet wired)",
-    usage: "vibestudio agent turn --model <ref> --message <text> [--json]",
-    flags: [
-      { name: "model", takesValue: true, description: "Model ref to use for the turn" },
-      { name: "message", takesValue: true, description: "User message text" },
-      JSON_FLAG,
-    ],
-    run: turn,
   },
   skillCommand,
 ];

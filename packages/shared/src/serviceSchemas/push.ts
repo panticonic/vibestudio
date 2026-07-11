@@ -49,11 +49,13 @@ export const PushSendResultSchema = z.object({
 });
 export type PushSendResult = z.infer<typeof PushSendResultSchema>;
 
-export const PushRegisterRequestSchema = z.object({
-  token: z.string().describe("Platform push token (APNs/FCM/Web Push)."),
-  platform: PushPlatformSchema.describe("Device platform the token belongs to."),
-  clientId: z.string().describe("Stable client identifier to register the device under."),
-});
+export const PushRegisterRequestSchema = z
+  .object({
+    token: z.string().describe("Platform push token (APNs/FCM/Web Push)."),
+    platform: PushPlatformSchema.describe("Device platform the token belongs to."),
+    clientId: z.string().describe("Stable client identifier to register the device under."),
+  })
+  .strict();
 export type PushRegisterRequest = z.infer<typeof PushRegisterRequestSchema>;
 
 export const pushMethods = defineServiceMethods({

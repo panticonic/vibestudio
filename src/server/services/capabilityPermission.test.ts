@@ -35,7 +35,7 @@ function createApprovalQueueMock(
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(() => 0),
+    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
@@ -72,12 +72,18 @@ describe("capabilityPermission", () => {
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     };
     const request = {
-      caller: createVerifiedCaller("panel-source", "panel", {
-        callerId: "panel-source",
-        callerKind: "panel",
-        repoPath: "panels/source",
-        effectiveVersion: "version-1",
-      }),
+      caller: createVerifiedCaller(
+        "panel-source",
+        "panel",
+        {
+          callerId: "panel-source",
+          callerKind: "panel",
+          repoPath: "panels/source",
+          effectiveVersion: "version-1",
+        },
+        null,
+        { userId: "usr_requester", handle: "requester" }
+      ),
       capability: "example-capability",
       resource: {
         type: "example",
@@ -99,6 +105,7 @@ describe("capabilityPermission", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
+        requestedByUserId: "usr_requester",
         resource: {
           type: "example",
           label: "Example",
@@ -108,8 +115,8 @@ describe("capabilityPermission", () => {
     );
   });
 
-  it.each(["version", "repo"] as const)("reuses %s-scoped capability grants", async (decision) => {
-    const approvalQueue = createApprovalQueueMock(decision);
+  it("reuses version-scoped capability grants", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
     const deps = {
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
@@ -177,7 +184,7 @@ describe("capabilityPermission", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
   });
 
-  it("does not reuse legacy internal version grants without a caller identity", () => {
+  it("destructively resets legacy internal version grants without a caller identity", () => {
     const statePath = tempStatePath();
     fs.writeFileSync(
       path.join(statePath, "capability-grants.json"),
@@ -204,6 +211,45 @@ describe("capabilityPermission", () => {
         effectiveVersion: "internal",
       })
     ).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(statePath, "capability-grants.json"), "utf8"))
+    ).toEqual({
+      grants: [],
+    });
+  });
+
+  it("destructively resets retired repository-scoped grants", () => {
+    const statePath = tempStatePath();
+    const filePath = path.join(statePath, "capability-grants.json");
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        grants: [
+          {
+            capability: "external-browser-open",
+            resourceKey: "https://example.com",
+            resourceScope: { kind: "exact", key: "https://example.com" },
+            scope: "repo",
+            repoPath: "workers/source",
+            grantedAt: 1,
+          },
+        ],
+      })
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const grantStore = new CapabilityGrantStore({ statePath });
+
+    expect(
+      grantStore.hasGrant("external-browser-open", "https://example.com", {
+        callerId: "worker:source",
+        repoPath: "workers/source",
+        effectiveVersion: "version-1",
+      })
+    ).toBe(false);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({ grants: [] });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Resetting invalid grant store"));
+    warn.mockRestore();
   });
 
   it("keys session-scoped capability grants to the concrete caller identity", async () => {

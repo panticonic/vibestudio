@@ -99,11 +99,26 @@ export class PanelRegistry implements PanelRelationshipProvider {
     return this.treeRevision;
   }
 
+  /**
+   * Serialize the tree grouped into a per-user forest (WP3). Every owner's roots
+   * are included (mutual visibility, plan §0.0); roots are bucketed by their
+   * `owner` in first-appearance order. Unowned roots (pre-identity/system)
+   * collapse under the empty-string owner.
+   */
   getPanelTreeSnapshot(): PanelTreeSnapshot {
-    return {
-      revision: this.treeRevision,
-      rootPanels: this.getSerializablePanelTree(),
-    };
+    const forest: Array<{ owner: string; rootPanels: Panel[] }> = [];
+    const byOwner = new Map<string, { owner: string; rootPanels: Panel[] }>();
+    for (const panel of this.getSerializablePanelTree()) {
+      const owner = panel.owner ?? "";
+      let group = byOwner.get(owner);
+      if (!group) {
+        group = { owner, rootPanels: [] };
+        byOwner.set(owner, group);
+        forest.push(group);
+      }
+      group.rootPanels.push(panel);
+    }
+    return { revision: this.treeRevision, forest };
   }
 
   /**

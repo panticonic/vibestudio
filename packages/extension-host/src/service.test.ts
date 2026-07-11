@@ -37,7 +37,7 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
 
 function makeHost(
   overrides: {
-    approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
+    approvalDecision?: "once" | "session" | "version" | "deny";
     activeEv?: string | null;
     depEv?: string | null;
     activeDepEv?: string | null;

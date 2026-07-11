@@ -1,4 +1,23 @@
 {
+  "account": {
+    "service": ["app", "panel", "server", "shell"],
+    "methods": {
+      "getProfile": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
+      "isMember": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
+      "listWorkspaceMembers": [
+        "agent",
+        "app",
+        "do",
+        "extension",
+        "panel",
+        "server",
+        "shell",
+        "worker"
+      ],
+      "resolveProfiles": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
+      "updateProfile": null
+    }
+  },
   "audit": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
@@ -8,7 +27,6 @@
   "auth": {
     "service": ["server", "shell"],
     "methods": {
-      "createPairingInvite": ["app", "server", "shell"],
       "getConnectionInfo": [
         "agent",
         "app",
@@ -20,10 +38,8 @@
         "worker"
       ],
       "grantConnection": ["app", "server", "shell"],
-      "listDevices": null,
       "mintAgentCredential": ["extension", "server"],
-      "revokeAgentCredential": ["extension", "server"],
-      "revokeDevice": null
+      "revokeAgentCredential": ["extension", "server"]
     }
   },
   "blobstore": {
@@ -166,16 +182,48 @@
     "methods": {
       "completeWorkspaceDependencies": null,
       "importProject": null,
+      "publishRepo": null,
+      "pullUpstream": null,
+      "pushUpstream": null,
       "removeSharedRemote": null,
       "removeUpstream": null,
+      "setAutoPush": null,
       "setSharedRemote": null,
-      "setUpstream": null
+      "setUpstream": null,
+      "upstreamStatus": null
+    }
+  },
+  "governance": {
+    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "methods": {
+      "list": null
     }
   },
   "hostLifecycle": {
     "service": ["server", "shell"],
     "methods": {
       "shutdown": null
+    }
+  },
+  "hubControl": {
+    "service": ["app", "panel", "server", "shell"],
+    "methods": {
+      "addWorkspaceMember": null,
+      "createWorkspace": null,
+      "deleteWorkspace": null,
+      "getProfile": null,
+      "inviteUser": null,
+      "listDevices": null,
+      "listUserPresence": null,
+      "listWorkspaceMembers": null,
+      "listWorkspaces": null,
+      "pairDevice": null,
+      "removeWorkspaceMember": null,
+      "revokeDevice": null,
+      "revokeUser": null,
+      "routeWorkspace": null,
+      "setRole": null,
+      "updateProfile": null
     }
   },
   "mirror": {
@@ -190,6 +238,7 @@
     "methods": {
       "dismiss": null,
       "reportAction": null,
+      "signalUserInbox": ["do", "server"],
       "show": null
     }
   },
@@ -230,6 +279,7 @@
     "service": ["app", "do", "panel", "server", "shell", "worker"],
     "methods": {
       "archive": null,
+      "archiveOwnedRoots": ["server"],
       "callAgent": null,
       "close": null,
       "create": null,
@@ -274,15 +324,6 @@
       ],
       "markPanelActive": null,
       "markPanelsOwned": null
-    }
-  },
-  "push": {
-    "service": ["app", "server", "shell"],
-    "methods": {
-      "listRegistrations": ["server"],
-      "register": null,
-      "send": ["server"],
-      "unregister": null
     }
   },
   "refs": {
@@ -336,16 +377,6 @@
     "service": ["app", "server", "shell"],
     "methods": {
       "heartbeat": null
-    }
-  },
-  "tokens": {
-    "service": ["server", "shell"],
-    "methods": {
-      "create": null,
-      "ensure": null,
-      "get": null,
-      "revoke": null,
-      "rotateAdmin": null
     }
   },
   "userlandApproval": {
@@ -490,6 +521,12 @@
       "slot.setParent": ["app", "server", "shell"],
       "slot.setPosition": ["app", "server", "shell"],
       "slot.updateCurrentStateArgs": ["app", "server", "shell"]
+    }
+  },
+  "workspacePresence": {
+    "service": ["app", "panel", "server", "shell"],
+    "methods": {
+      "list": null
     }
   },
   "worktree": {

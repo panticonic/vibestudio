@@ -6,9 +6,8 @@ import { z } from "zod";
 import type { MethodAccessDescriptor, ServicePolicy } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
-// Access descriptors shared across the runtime method groups. `callers` is left
-// unset (the legacy `policy` stays the gate during migration); these carry
-// sensitivity doc + metadata.
+// Access descriptors carry sensitivity metadata; caller-kind authorization
+// belongs exclusively to the service/method `policy`.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };

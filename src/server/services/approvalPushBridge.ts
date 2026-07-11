@@ -8,17 +8,26 @@ import {
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ApprovalQueueWithListeners } from "./approvalQueue.js";
-import type { PushServiceInternal } from "./pushService.js";
+import type { PushDeliveryTarget, PushServiceInternal } from "./pushService.js";
 import type { ShellPresenceInternal } from "./shellPresenceService.js";
 
 interface ApprovalPushBridgeDeps {
   approvalQueue: Pick<ApprovalQueueWithListeners, "listPending" | "onPendingChanged">;
   push: PushServiceInternal;
   shellPresence: ShellPresenceInternal;
+  /**
+   * This child's workspace member userIds (WP4 §4.4, WP2-backed). A child process
+   * IS one workspace, so its members are exactly the push audience for that
+   * child's approvals — every member may approve (plan §6.1), so every member's
+   * devices may be notified and no non-member device is. Read live (not cached)
+   * from the shared identity DB by `index.ts`.
+   */
+  workspaceMemberUserIds: () => readonly string[];
   delayMs?: number;
   presenceMaxAgeMs?: number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
+  retryMs?: number;
 }
 
 export interface ApprovalPushBridge {
@@ -28,7 +37,8 @@ export interface ApprovalPushBridge {
 interface TrackedApproval {
   approval: PendingApproval;
   timers: ReturnType<typeof setTimeout>[];
-  sent: boolean;
+  deliveredTargets: PushDeliveryTarget[];
+  sending: boolean;
 }
 
 function categoryFor(approval: PendingApproval): string {
@@ -108,6 +118,7 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
   const presenceMaxAgeMs = deps.presenceMaxAgeMs ?? 6_000;
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
+  const retryMs = deps.retryMs ?? 15_000;
   const tracked = new Map<string, TrackedApproval>();
 
   function clearTrackedTimers(trackedApproval: TrackedApproval): void {
@@ -117,7 +128,8 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
     trackedApproval.timers = [];
   }
 
-  async function sendApproval(approval: PendingApproval): Promise<boolean> {
+  async function sendApproval(trackedApproval: TrackedApproval): Promise<PushDeliveryTarget[]> {
+    const approval = trackedApproval.approval;
     const category = categoryFor(approval);
     const copy = getApprovalCopy(approval);
     const description = copy.warning ? `${copy.summary} ${copy.warning}` : copy.summary;
@@ -125,24 +137,61 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
     // notification names who's asking semantically, never a raw id.
     const requester = approval.callerTitle?.trim() || callerLabel(approval);
     const body = `${requester} · ${description}`;
-    const results = await deps.push.sendBatch({
+    const members = new Set(deps.workspaceMemberUserIds());
+    const delivered = new Set(
+      trackedApproval.deliveredTargets.map((target) => `${target.userId}\0${target.clientId}`)
+    );
+    const targets = deps.push
+      .listRegistrations()
+      .filter((registration) => members.has(registration.userId))
+      .map((registration) => ({ userId: registration.userId, clientId: registration.clientId }))
+      .filter((target) => !delivered.has(`${target.userId}\0${target.clientId}`));
+    if (targets.length === 0) return [];
+    const results = await deps.push.sendToTargets(targets, {
       title: copy.title,
       body,
       category,
       data: payloadFor(approval, copy.title, body, category),
     });
-    return results.some((result) => result.sent);
+    return results
+      .filter((result) => result.sent)
+      .map((result) => ({ userId: result.userId, clientId: result.clientId }));
   }
 
   async function attemptSend(
     trackedApproval: TrackedApproval,
-    logContext: "immediate" | "delayed" | "registration"
+    logContext: "immediate" | "delayed" | "registration" | "retry"
   ): Promise<void> {
+    if (trackedApproval.sending) return;
+    trackedApproval.sending = true;
+    clearTrackedTimers(trackedApproval);
     try {
-      const sent = await sendApproval(trackedApproval.approval);
-      trackedApproval.sent = sent;
+      const delivered = await sendApproval(trackedApproval);
+      if (tracked.get(trackedApproval.approval.approvalId) !== trackedApproval) {
+        if (delivered.length > 0) {
+          await deps.push.cancel(delivered, trackedApproval.approval.approvalId);
+        }
+        return;
+      }
+      const targets = new Map(
+        trackedApproval.deliveredTargets.map((target) => [
+          `${target.userId}\0${target.clientId}`,
+          target,
+        ])
+      );
+      for (const target of delivered) {
+        targets.set(`${target.userId}\0${target.clientId}`, target);
+      }
+      trackedApproval.deliveredTargets = [...targets.values()];
     } catch (error) {
       console.warn(`[ApprovalPushBridge] ${logContext} push send failed:`, error);
+    } finally {
+      trackedApproval.sending = false;
+      if (tracked.get(trackedApproval.approval.approvalId) === trackedApproval) {
+        trackedApproval.timers.push(
+          setTimeoutFn(() => void attemptSend(trackedApproval, "retry"), retryMs)
+        );
+      }
     }
   }
 
@@ -151,12 +200,13 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
     const trackedApproval: TrackedApproval = {
       approval,
       timers: [],
-      sent: false,
+      deliveredTargets: [],
+      sending: false,
     };
     tracked.set(approval.approvalId, trackedApproval);
 
     const sendIfPending = (reason: "presence-stale" | "deadline") => {
-      if (!tracked.has(approval.approvalId) || trackedApproval.sent) return;
+      if (!tracked.has(approval.approvalId)) return;
       if (reason === "presence-stale" && deps.shellPresence.isAnyShellActive(presenceMaxAgeMs)) {
         return;
       }
@@ -180,8 +230,10 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
     if (!existing) return;
     clearTrackedTimers(existing);
     tracked.delete(approvalId);
-    if (!existing.sent) return;
-    void deps.push.cancel(approvalId).catch((error) => {
+    if (existing.deliveredTargets.length === 0) return;
+    // Cancel the exact successful delivery targets. Membership and registration
+    // changes after the prompt must not alter its cancellation audience.
+    void deps.push.cancel(existing.deliveredTargets, approvalId).catch((error) => {
       console.warn("[ApprovalPushBridge] push cancel failed:", error);
     });
   }
@@ -203,7 +255,6 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
   const unsubscribe = deps.approvalQueue.onPendingChanged(onPendingChanged);
   const unsubscribePushRegistrations = deps.push.onRegistrationsChanged(() => {
     for (const trackedApproval of tracked.values()) {
-      if (trackedApproval.sent) continue;
       clearTrackedTimers(trackedApproval);
       void attemptSend(trackedApproval, "registration");
     }

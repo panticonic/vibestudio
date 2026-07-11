@@ -4,13 +4,14 @@ import { fileURLToPath } from "node:url";
 import { createTypedServiceClient } from "../typedServiceClient.js";
 import type { ServiceMethodSchemas } from "../typedServiceClient.js";
 import { appMethods } from "./app.js";
+import { accountMethods } from "./account.js";
 import { authMethods } from "./auth.js";
 import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
 import { corsApprovalMethods } from "./corsApproval.js";
-import { credentialsMethods } from "./credentials.js";
+import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
@@ -18,6 +19,7 @@ import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
 import { gitInteropMethods } from "./gitInterop.js";
 import { hostLifecycleMethods } from "./hostLifecycle.js";
+import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
@@ -27,18 +29,18 @@ import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
 import { panelTreeMethods } from "./panelTree.js";
-import { pushMethods } from "./push.js";
+import { pushMethods, PushRegisterRequestSchema } from "./push.js";
 import { refsMethods } from "./refs.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
 import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
-import { tokensMethods } from "./tokens.js";
 import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
+import { workspacePresenceMethods } from "./workspacePresence.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { worktreeMethods } from "./worktree.js";
 
@@ -49,6 +51,7 @@ type ServiceTable = {
 };
 
 const serviceTables: ServiceTable[] = [
+  { service: "account", file: "account.ts", methods: accountMethods },
   { service: "app", file: "app.ts", methods: appMethods },
   { service: "auth", file: "auth.ts", methods: authMethods },
   { service: "autofill", file: "autofill.ts", methods: autofillMethods },
@@ -64,6 +67,7 @@ const serviceTables: ServiceTable[] = [
   { service: "fs", file: "fs.ts", methods: fsMethods },
   { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
   { service: "hostLifecycle", file: "hostLifecycle.ts", methods: hostLifecycleMethods },
+  { service: "hubControl", file: "hubControl.ts", methods: hubControlMethods },
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
@@ -80,11 +84,15 @@ const serviceTables: ServiceTable[] = [
   { service: "eval", file: "eval.ts", methods: evalMethods },
   { service: "settings", file: "settings.ts", methods: settingsMethods },
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
-  { service: "tokens", file: "tokens.ts", methods: tokensMethods },
   { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },
+  {
+    service: "workspacePresence",
+    file: "workspacePresence.ts",
+    methods: workspacePresenceMethods,
+  },
   { service: "workspace-state", file: "workspaceState.ts", methods: workspaceStateMethods },
   { service: "worktree", file: "worktree.ts", methods: worktreeMethods },
 ];
@@ -130,6 +138,41 @@ describe("service schema contracts", () => {
     for (const { service, methods } of serviceTables) {
       expect(() => createTypedServiceClient(service, methods, async () => undefined)).not.toThrow();
     }
+  });
+
+  it("rejects the retired client-owned push userId", () => {
+    expect(
+      PushRegisterRequestSchema.safeParse({
+        token: "token",
+        platform: "ios",
+        clientId: "client",
+        userId: "spoofed",
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects the retired non-PKCE authorization-code flow", () => {
+    expect(
+      ConnectCredentialSpecSchema.safeParse({
+        flow: {
+          type: "oauth2-auth-code",
+          authorizeUrl: "https://accounts.example.test/authorize",
+          tokenUrl: "https://accounts.example.test/token",
+          clientId: "client",
+          pkce: false,
+          compatibilityReason: "old provider",
+        },
+        credential: {
+          label: "Example",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: {
+            type: "header",
+            name: "authorization",
+            valueTemplate: "Bearer {token}",
+          },
+        },
+      }).success
+    ).toBe(false);
   });
 
   // Doc-coverage gate (replaces the deleted check:*-docs staleness gates).

@@ -7,7 +7,13 @@ import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
-import { createConnectDeepLink, parseConnectLink } from "./lib/connect-utils.mjs";
+import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import {
+  requiresLocalTurn,
+  relayOnlyServerEnv,
+  signalingTurnVars,
+  startLocalTurnRelay,
+} from "./lib/local-turn.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -89,7 +95,8 @@ Usage:
 
 Runner options:
   --platform <name> android or ios. Defaults to android.
-  --avd <name>      Start this AVD if no device is connected
+  --avd <name>      Start this AVD if no device is connected; requires coturn
+                    (\`turnserver\`) and forces relay-only WebRTC through it
   --device <serial> Use a specific adb device serial
   --reset-app       Clear app data before launch
   --no-metro        Do not start Metro
@@ -124,7 +131,11 @@ function spawnManaged(command, args, options = {}) {
   });
   pipeChildOutput(child, options.label ?? command);
   child.once("error", (error) => {
-    prefixAndWrite(options.label ?? command, `Failed to start ${command}: ${error.message}`, process.stderr);
+    prefixAndWrite(
+      options.label ?? command,
+      `Failed to start ${command}: ${error.message}`,
+      process.stderr
+    );
   });
   return child;
 }
@@ -147,7 +158,8 @@ function waitForSpawn(child, command, args, timeoutMs = 1_000) {
     child.once("spawn", onSpawn);
     child.once("error", onError);
     if (child.pid) finish();
-    if (child.exitCode != null) finish(new Error(`${command} ${args.join(" ")} exited before startup`));
+    if (child.exitCode != null)
+      finish(new Error(`${command} ${args.join(" ")} exited before startup`));
   });
 }
 
@@ -188,7 +200,9 @@ function runCommand(command, args, options = {}) {
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`));
+        reject(
+          new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`)
+        );
       }
     });
   });
@@ -202,8 +216,19 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs = 120_000) {
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
-      return JSON.parse(content);
-    } catch {
+      let value;
+      try {
+        value = JSON.parse(content);
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          await sleep(250);
+          continue;
+        }
+        throw error;
+      }
+      return parseHubReadyPayload(value);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
       await sleep(250);
     }
   }
@@ -223,10 +248,18 @@ function findFreePort() {
 
 // Cloudflare's local runtime (Miniflare) hosting the real SignalingRoom DO, the
 // WebRTC rendezvous — exactly as tests/webrtc-system.e2e.test.ts drives it.
-async function startSignaling(port) {
+async function startSignaling(port, turn = null) {
   const child = spawnManaged(
     wranglerBin,
-    ["dev", "--port", String(port), "--local", "--var", "ENVIRONMENT:test"],
+    [
+      "dev",
+      "--port",
+      String(port),
+      "--local",
+      "--var",
+      "ENVIRONMENT:test",
+      ...signalingTurnVars(turn),
+    ],
     { cwd: signalingDir, label: "signaling" }
   );
   for (let i = 0; i < 90; i++) {
@@ -242,37 +275,6 @@ async function startSignaling(port) {
     await sleep(1_000);
   }
   throw new Error("wrangler dev (signaling) did not become healthy");
-}
-
-// Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// vibestudio://connect?...` line. Attach this BEFORE the link can be printed so no
-// chunk is missed.
-function waitForPairingLink(serverChild, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
-      if (match) {
-        cleanup();
-        resolve(match[0]);
-      }
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          "Timed out waiting for the server's [webrtc-answerer] pairing link. " +
-            "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
-        )
-      );
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
-  });
 }
 
 function makeAdbArgs(device, args) {
@@ -354,7 +356,9 @@ async function main() {
   }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
-      throw new Error("iOS dev requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac.");
+      throw new Error(
+        "iOS dev requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac."
+      );
     }
     const startedChildren = [];
     try {
@@ -373,15 +377,19 @@ async function main() {
         await sleep(3000);
       }
       if (!options.noInstall) {
-        await runCommand(process.execPath, [
-          path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
-          "--platform",
-          "ios",
-          "--simulator",
-          "--configuration",
-          "Debug",
-          ...(options.noLaunch ? [] : ["--launch"]),
-        ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
+        await runCommand(
+          process.execPath,
+          [
+            path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
+            "--platform",
+            "ios",
+            "--simulator",
+            "--configuration",
+            "Debug",
+            ...(options.noLaunch ? [] : ["--launch"]),
+          ],
+          { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
+        );
       }
       console.log("[mobile-dev] iOS shell is running. Start pairing with: vibestudio mobile pair");
       await new Promise((resolve) => {
@@ -400,15 +408,14 @@ async function main() {
   const startedChildren = [];
   let cleanedUp = false;
   let emulatorChild = null;
-  let readyInfo = null;
+  let launchedEmulator = false;
+  let tempRoot = "";
+  let readyFilePath = "";
+  let cleanupTurnArtifacts = null;
 
   const cleanup = async (exitCode = 0) => {
     if (cleanedUp) return;
     cleanedUp = true;
-
-    try {
-      await fsp.unlink(readyFilePath);
-    } catch {}
 
     for (const child of startedChildren.reverse()) {
       if (child.exitCode == null && !child.killed) {
@@ -422,34 +429,44 @@ async function main() {
     if (emulatorChild) {
       await waitForChildExit(emulatorChild);
     }
-    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
-      try {
-        await fsp.access(readyInfo.workspaceDir);
-        console.warn(`[mobile-dev] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`);
-      } catch {
-        // Server cleanup completed.
-      }
+    for (const child of startedChildren) {
+      if (child.exitCode == null) child.kill("SIGKILL");
     }
+    await Promise.all(startedChildren.map((child) => waitForChildExit(child, 2_000)));
+    if (cleanupTurnArtifacts) await cleanupTurnArtifacts().catch(() => undefined);
+    if (readyFilePath) await fsp.rm(readyFilePath, { force: true }).catch(() => undefined);
+    if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     process.exit(exitCode);
   };
 
   process.on("SIGINT", () => void cleanup(0));
   process.on("SIGTERM", () => void cleanup(0));
 
-  const readyFilePath = path.join(os.tmpdir(), `vibestudio-mobile-ready-${process.pid}.json`);
-
   try {
-    if (!await hasAdbDevice(options.device)) {
-      if (!options.avd) {
-        throw new Error("No Android device/emulator detected. Start one first or pass --avd <name>.");
-      }
-      emulatorChild = spawnManaged(process.env.ANDROID_EMULATOR ?? "emulator", ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"], {
-        label: "emulator",
-      });
-    }
+    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-dev-"));
+    readyFilePath = path.join(tempRoot, "hub-ready.json");
+    const serverHome = path.join(tempRoot, "server-home");
+    const serverConfig = path.join(tempRoot, "server-xdg-config");
+    await Promise.all([
+      fsp.mkdir(serverHome, { recursive: true }),
+      fsp.mkdir(serverConfig, { recursive: true }),
+    ]);
 
-    if (emulatorChild) {
-      startedChildren.push(emulatorChild);
+    if (!(await hasAdbDevice(options.device))) {
+      if (!options.avd) {
+        throw new Error(
+          "No Android device/emulator detected. Start one first or pass --avd <name>."
+        );
+      }
+      emulatorChild = spawnManaged(
+        process.env.ANDROID_EMULATOR ?? "emulator",
+        ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"],
+        {
+          label: "emulator",
+        }
+      );
+      await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
+      launchedEmulator = true;
     }
 
     await waitForAndroidBoot(options.device);
@@ -481,13 +498,26 @@ async function main() {
     // Local signaling (Cloudflare local runtime) — the WebRTC rendezvous. The
     // phone reaches it over loopback via the adb-reversed signaling port.
     const signalPort = await findFreePort();
-    const signalingChild = await startSignaling(signalPort);
+    const useTurn = requiresLocalTurn({ launchedEmulator, device: options.device });
+    let turn = null;
+    if (useTurn) {
+      turn = await startLocalTurnRelay({ spawnManaged, waitForSpawn, sleep });
+      startedChildren.push(turn.child);
+      cleanupTurnArtifacts = turn.cleanupArtifacts;
+      console.log(`[mobile-dev] Local TURN relay (emulator NAT): turn:${turn.host}:${turn.port}`);
+      turn.child.on("exit", (code) => {
+        if (!cleanedUp) {
+          console.error(`[mobile-dev] Required local TURN relay exited with code ${code ?? 1}`);
+          void cleanup(code && code !== 0 ? code : 1);
+        }
+      });
+    }
+    const signalingChild = await startSignaling(signalPort, turn);
     startedChildren.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // The server runs as a WebRTC answerer. It mints the per-invite room +
-    // pairing code itself, presents its persistent DTLS cert, and logs the
-    // vibestudio://connect link whose `fp` pins that cert.
+    // The server publishes the complete mobile root invite through its strict
+    // ready-file handoff.
     const serverArgs = [
       serverEntryArg(),
       "--app-root",
@@ -503,30 +533,23 @@ async function main() {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
         VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
+        HOME: serverHome,
+        XDG_CONFIG_HOME: serverConfig,
+        APPDATA: path.join(tempRoot, "server-appdata"),
+        ...relayOnlyServerEnv(turn),
       },
       label: "server",
     });
     await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
     startedChildren.push(serverChild);
-    // Capture the answerer's pairing link from stdout now (before readiness).
-    const pairingLinkPromise = waitForPairingLink(serverChild, 120_000);
-
     const ready = await waitForServerReady(readyFilePath, serverChild);
-    readyInfo = ready;
-    // Rebuild the WebRTC pairing link via the canonical builder (the server
-    // contributed `fp`; we own room/code/sig). The phone joins the loopback
-    // signaling room (adb-reversed) and pins the server's DTLS fingerprint.
-    const parsedPairing = parseConnectLink(await pairingLinkPromise);
-    if (parsedPairing.kind !== "ok") {
-      throw new Error(`Server logged an invalid pairing link: ${parsedPairing.reason}`);
+    const invite = ready.rootInvites?.mobile;
+    if (!invite) {
+      throw new Error("Fresh isolated hub did not publish a mobile root invite");
     }
-    const connectLink = createConnectDeepLink({
-      room: parsedPairing.room,
-      fp: parsedPairing.fp,
-      code: parsedPairing.code,
-      sig: parsedPairing.sig,
-      ice: parsedPairing.ice,
-    });
+    const connectLink = invite.deepLink;
+    const workspace = ready.workspaces.find((entry) => entry.ephemeral) ?? ready.workspaces[0];
+    if (!workspace) throw new Error("Hub ready file did not include a workspace");
 
     await adb(options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
     await adb(options.device, "reverse", `tcp:${signalPort}`, `tcp:${signalPort}`);
@@ -551,7 +574,9 @@ async function main() {
     }
 
     console.log(`[mobile-dev] Ready`);
-    console.log(`[mobile-dev] Workspace: ${ready.workspaceName}${ready.isEphemeral ? " (ephemeral)" : ""}`);
+    console.log(
+      `[mobile-dev] Workspace: ${workspace.name}${workspace.ephemeral ? " (ephemeral)" : ""}`
+    );
     console.log(`[mobile-dev] Gateway:   ${ready.gatewayUrl}`);
     console.log(`[mobile-dev] Device:    ${options.device ?? "default adb device"}`);
 

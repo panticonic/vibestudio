@@ -45,7 +45,7 @@ export interface AccessApproval {
   capability?: string;
   /** Operation descriptor for approval UI grouping/copy. */
   operation: { kind: string; verb: string; groupKeyTemplate?: string };
-  /** Scopes this approval can persist as (e.g. "once"|"session"|"version"|"repo"|"origin"). */
+  /** Scopes this approval can persist as (e.g. "once"|"session"|"version"|"origin"). */
   grantScopes?: string[];
   severity?: "standard" | "severe";
   reason: string;

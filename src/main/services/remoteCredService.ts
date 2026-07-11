@@ -1,17 +1,19 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import {
+  HubWorkspaceRouteSchema,
+  hubControlMethods,
+  type HubWorkspaceRoute,
+} from "@vibestudio/shared/serviceSchemas/hubControl";
 import type { ViewManager } from "../viewManager.js";
 import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
 import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred";
-import type { StartupMode } from "../startupMode.js";
-import { createServerClient, type ServerClient } from "../serverClient.js";
+import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
 import {
-  isLoopbackHost,
-  selectedWorkspaceNameFromUrl,
-  parseConnectLink,
   createConnectDeepLink,
+  normalizeFingerprint,
+  parseConnectLink,
 } from "@vibestudio/shared/connect";
 import {
   clearStoredRemotePairing as clearStoredRemotePairingInStore,
@@ -20,273 +22,148 @@ import {
   type StoredRemote,
 } from "./deviceCredentialStore.js";
 
-/**
- * Client-side persistence of a WebRTC remote pairing. A desktop client that has
- * paired with a remote server over WebRTC (DTLS-fingerprint pinned, §8c) keeps,
- * encrypted at rest under `safeStorage`:
- *   - the pairing material (`room`/`fp`/`sig`/`ice`/`srv`) MINUS the one-time
- *     `code`, so it can re-dial the same answerer, and
- *   - the durable device credential (`deviceId`/`refreshToken`) the server
- *     issued, so it can re-authenticate without re-pairing (`refresh:…`).
- *
- */
 function remoteCredentialPersistenceDisabled(): boolean {
   const value = process.env["VIBESTUDIO_DISABLE_REMOTE_CRED_PERSISTENCE"];
   return value === "1" || value === "true";
 }
 
-/** Read the persisted WebRTC remote pairing, if any (consumed by serverSession). */
+/** Read the encrypted WebRTC pairing used by serverSession auto-reconnect. */
 export function loadStoredRemotePairing(): StoredRemote | null {
   return loadStoredRemotePairingFromStore();
 }
 
-/**
- * Drop the persisted WebRTC remote pairing. Used by the startup recovery path
- * when a returning device's credential is terminally rejected (revoked/reset/cert
- * regenerated): clearing it makes the next launch fall back to the server chooser
- * instead of re-dialing a dead pairing forever (a permanent-lockout otherwise).
- */
+/** Forget the paired remote after an explicit disconnect or terminal rejection. */
 export function clearStoredRemotePairing(): void {
   clearStoredRemotePairingInStore();
 }
 
-/**
- * Persist via the store, surfacing (loudly) a refusal to write the refresh secret
- * in plaintext (OS secure storage unavailable) rather than crashing the live
- * session. The pipe stays up; the device simply re-pairs on the next launch.
- */
-function persistOrWarn(label: string, persist: () => void): void {
-  try {
-    persist();
-  } catch (error) {
-    console.error(
-      `[remoteCred] ${label}: ${error instanceof Error ? error.message : String(error)} ` +
-        "— the device will need to re-pair on next launch."
-    );
-  }
-}
-
-/**
- * Persist a rotated device credential against the existing stored pairing. Fired
- * from the reconnect path's `onPaired` if the server hands back a fresh
- * refresh token, so the next launch authenticates with the current secret.
- * No-ops when nothing is stored (there is no pairing to attach it to).
- */
-export function persistRotatedRemoteCredential(cred: {
+/** Persist a refresh-token rotation against the existing encrypted pairing. */
+export function persistRotatedRemoteCredential(credential: {
   deviceId: string;
   refreshToken: string;
 }): void {
   if (remoteCredentialPersistenceDisabled()) return;
   const existing = loadStoredRemotePairingFromStore();
-  if (!existing) return;
-  persistOrWarn("could not persist rotated credential", () =>
-    saveDeviceCredential({
-      ...existing,
-      deviceId: cred.deviceId,
-      refreshToken: cred.refreshToken,
-      rotatedAt: Date.now(),
-    })
+  if (!existing) {
+    throw new Error("Cannot persist a rotated device credential without its stored pairing");
+  }
+  saveDeviceCredential({
+    ...existing,
+    deviceId: credential.deviceId,
+    refreshToken: credential.refreshToken,
+    rotatedAt: Date.now(),
+  });
+}
+
+/** Persist a freshly paired WebRTC device using Electron safeStorage. */
+export function saveStoredRemote(value: StoredRemote): void {
+  if (remoteCredentialPersistenceDisabled()) return;
+  saveDeviceCredential(value);
+}
+
+/** Persist a device-specific workspace route before the desktop relaunches. */
+export function persistStoredRemoteWorkspaceRoute(rawRoute: HubWorkspaceRoute): boolean {
+  const existing = loadStoredRemotePairingFromStore();
+  if (!existing) return false;
+  const route = HubWorkspaceRouteSchema.parse(rawRoute);
+  if (route.serverId !== existing.serverId) {
+    throw new Error("Workspace route changed the paired server identity");
+  }
+  const storedReach = (reach: HubWorkspaceRoute["controlReach"]) => ({
+    room: reach.room,
+    fp: normalizeFingerprint(reach.fp),
+    sig: reach.sig,
+    v: reach.v,
+    ice: reach.ice,
+    ...(reach.srv ? { srv: reach.srv } : {}),
+  });
+  saveDeviceCredential({
+    ...existing,
+    workspaceName: route.workspace,
+    controlPairing: storedReach(route.controlReach),
+    workspacePairing: storedReach(route.workspaceReach),
+  });
+  return true;
+}
+
+function hubControlClientFor(client: ServerClient) {
+  return createTypedServiceClient("hubControl", hubControlMethods, (service, method, args) =>
+    client.call(service, method, args)
   );
 }
 
-/**
- * Persist a freshly-paired WebRTC remote — the pairing material (minus the
- * one-time `code`) plus the device credential the server issued. Called from the
- * fresh-pair session's `onPaired` (serverSession.establishFreshPairSession) so
- * the NEXT launch reconnects with the refresh token instead of re-pairing.
- */
-export function saveStoredRemote(value: StoredRemote): void {
-  if (remoteCredentialPersistenceDisabled()) return;
-  persistOrWarn("could not persist remote pairing", () => saveDeviceCredential(value));
-}
-
-export interface RemoteCredCurrent {
-  configured: boolean;
-  isActive: boolean;
-  bootstrap: "device" | "admin-token" | "hybrid" | "none";
-  url?: string;
-  tokenPreview?: string;
-  deviceId?: string;
-  hubUrl?: string;
-  workspaceName?: string;
-}
-
-export interface TestConnectionResult {
-  ok: boolean;
-  error?: "invalid-url" | "unreachable" | "unauthorized" | "unknown";
-  message?: string;
-  serverVersion?: string;
-  serverId?: string;
-  workspaceId?: string;
-}
-
-export interface DeviceRecord {
-  deviceId: string;
-  label: string;
-  platform?: string;
-  createdAt: number;
-  lastUsedAt?: number;
-  revokedAt?: number;
-}
-
-export interface PairingInvite {
-  code: string;
-  deepLink: string;
-  pairUrl: string;
-  room: string;
-  fp: string;
-  sig: string;
-  ice?: "all" | "relay";
-  srv?: string;
-  serverUrl: string;
-  expiresAt: number;
-  expiresInMs: number;
-  serverId: string;
-  serverBootId: string;
-  workspaceId?: string | null;
-}
-
-// `exchangePairingCode` (the throwaway redeem-then-relaunch) was removed: the
-// bootstrap now hands a parsed pairing straight to
-// `establishServerSession({ pendingPairing })`, and that single WebRTC pipe
-// authenticates with the one-time code and stays as the session.
-
-function authClientFor(client: ServerClient) {
-  return createTypedServiceClient("auth", authMethods, (svc, m, a) => client.call(svc, m, a));
-}
-
 export function createRemoteCredService(deps: {
-  startupMode: StartupMode;
   getServerClient?: () => ServerClient | null;
   getViewManager?: () => ViewManager;
 }): ServiceDefinition {
-  const liveServerClient = (): ServerClient | null => deps.getServerClient?.() ?? null;
+  const requireLiveClient = (): ServerClient => {
+    const client = deps.getServerClient?.() ?? null;
+    if (!client?.isConnected()) throw new Error("Not connected to a Vibestudio server");
+    return client;
+  };
+
   return {
     name: "remoteCred",
-    description: "Manage the Electron-side remote-server credential store",
-    // Hosted workspace chrome is an `app`; native-host `shell` also calls here.
-    // App callers are gated to authorized chrome (panel-hosting) so no arbitrary
-    // app can manage creds.
+    description: "Manage this desktop's encrypted WebRTC device pairing",
     policy: { allowed: ["shell", "app"] },
     methods: remoteCredMethods,
-    handler: async (_ctx, method, args) => {
-      if (_ctx.caller.runtime.kind === "app") {
+    handler: async (ctx, method, args) => {
+      if (ctx.caller.runtime.kind === "app") {
         if (!deps.getViewManager) {
           throw new Error(`remoteCred.${method} app capability unavailable`);
         }
-        requireChromeAppCallerOrHost(_ctx, deps.getViewManager(), `remoteCred.${method}`);
+        requireChromeAppCallerOrHost(ctx, deps.getViewManager(), `remoteCred.${method}`);
       }
+
       switch (method) {
         case "getCurrent": {
-          // Reflect the persisted WebRTC pairing. A stored remote means this
-          // process connected to it remotely (establishServerSession picks it up
-          // before spawning local), so "active" is "stored + live pipe".
-          const stored = loadStoredRemotePairing();
-          const client = liveServerClient();
+          const stored = loadStoredRemotePairingFromStore();
+          const client = deps.getServerClient?.() ?? null;
           return {
-            configured: !!stored,
-            isActive: !!stored && (client?.isConnected() ?? false),
-            bootstrap: stored ? "device" : "none",
+            connected: client?.isConnected() ?? false,
+            configured: stored !== null,
+            isActive: stored !== null && (client?.isConnected() ?? false),
             deviceId: stored?.deviceId,
             workspaceName: stored?.workspaceName,
-          } satisfies RemoteCredCurrent;
+          };
         }
-        case "save":
-          // Admin-token remote persistence rode the deleted cleartext-remote
-          // store (§8c). Remote servers are paired by WebRTC QR now; fail loud
-          // rather than pretend to persist an admin-token remote.
-          throw new Error(
-            "Admin-token remote persistence was removed (§8c). Pair a server over WebRTC instead."
-          );
-        case "testConnection": {
-          // Rewritten to drop the TLS fingerprint probe: just validate the URL
-          // resolves to a loopback gateway and that the token authenticates. The
-          // only cleartext origin allowed post-cutover is loopback; a remote
-          // server is reached over WebRTC, not tested by URL here.
-          const payload = args[0] as { url: string; token: string };
-          let selected: ReturnType<typeof parseSelectedWorkspaceUrl>;
-          try {
-            selected = parseSelectedWorkspaceUrl(payload.url);
-          } catch (error) {
-            return {
-              ok: false,
-              error: "invalid-url",
-              message: error instanceof Error ? error.message : String(error),
-            } satisfies TestConnectionResult;
-          }
-          const parsed = new URL(selected.serverUrl);
-          const gatewayPort = parseInt(parsed.port, 10) || 80;
-          let client: Awaited<ReturnType<typeof createServerClient>> | null = null;
-          try {
-            // createServerClient dials the fixed loopback gateway for the port.
-            client = await createServerClient(gatewayPort, payload.token, { reconnect: false });
-          } catch (err) {
-            const msg = (err as Error).message ?? "auth failed";
-            const isAuth = /auth|unauthorized|401|token/i.test(msg);
-            const isReach = /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|timed out|timeout/i.test(msg);
-            return {
-              ok: false,
-              error: isAuth ? "unauthorized" : isReach ? "unreachable" : "unknown",
-              message: msg,
-            } satisfies TestConnectionResult;
-          } finally {
-            try {
-              await client?.close();
-            } catch {
-              /* ignore */
-            }
-          }
-          return { ok: true } satisfies TestConnectionResult;
-        }
-        case "exchangePairingCode": {
-          // New model: there is NO separate redeem step — the WebRTC pipe
-          // authenticates with the one-time code on connect (establishServerSession),
-          // so this can't redeem in-process. Relaunch carrying the pairing as a
-          // `vibestudio://` deep-link arg; the startup's enqueueFirstArgvLink →
-          // getPendingConnectLink hands it to establishServerSession, which dials it
-          // and KEEPS the pipe as the session (the issued device credential persists
-          // on onPaired). The shell-reachable analogue of the bootstrap pair-remote IPC.
-          const { link } = (args[0] ?? {}) as { link?: string };
-          const parsed = parseConnectLink(typeof link === "string" ? link : "");
+        case "pair": {
+          const { link } = args[0] as { link: string };
+          const parsed = parseConnectLink(link);
           if (parsed.kind === "error") {
-            return {
-              ok: false,
-              error: "invalid-url",
-              message: parsed.reason,
-            } satisfies TestConnectionResult;
+            return { ok: false, error: "invalid-link", message: parsed.reason };
           }
           const { kind: _kind, ...pairing } = parsed;
           const deepLink = createConnectDeepLink(pairing);
-          // Drop any prior pairing arg so relaunches don't accumulate stale links.
-          const relaunchArgs = process.argv.slice(1).filter((a) => !a.startsWith("vibestudio://"));
+          const relaunchArgs = process.argv
+            .slice(1)
+            .filter(
+              (arg) =>
+                !arg.startsWith("vibestudio://") && !arg.startsWith("https://vibestudio.app/pair")
+            );
           relaunchArgs.push(deepLink);
           relaunchApp({ args: relaunchArgs });
-          return { ok: true } satisfies TestConnectionResult; // unreachable; relaunchApp exits
+          return { ok: true };
         }
-        case "createPairingInvite": {
-          // Mint a pairing invite on the currently-connected server (local OR
-          // remote). Available whenever a server session exists — it never
-          // depended on the client-side store.
-          const client = liveServerClient();
-          if (!client) throw new Error("Not connected to a server");
-          const payload = (args[0] ?? {}) as { ttlMs?: number };
-          return await authClientFor(client).createPairingInvite({ ttlMs: payload.ttlMs });
+        case "pairDevice": {
+          const client = hubControlClientFor(requireLiveClient());
+          return await client.pairDevice(
+            args[0] as { workspace?: string; ttlMs?: number } | undefined
+          );
         }
         case "listDevices": {
-          const client = liveServerClient();
-          if (!client) return [];
-          const response = await authClientFor(client).listDevices();
+          const response = await hubControlClientFor(requireLiveClient()).listDevices();
           return response.devices;
         }
         case "revokeDevice": {
           const deviceId = args[0] as string;
-          const client = liveServerClient();
-          if (!client) throw new Error("Not connected to a server");
-          return await authClientFor(client).revokeDevice(deviceId);
+          const stored = loadStoredRemotePairingFromStore();
+          const result = await hubControlClientFor(requireLiveClient()).revokeDevice(deviceId);
+          const currentDevice = result.revoked && stored?.deviceId === deviceId;
+          if (currentDevice) clearStoredRemotePairingInStore();
+          return { ...result, currentDevice };
         }
         case "clear":
-          // Forget the persisted WebRTC pairing; the next launch starts unpaired
-          // (local chooser) until a new server is paired.
           clearStoredRemotePairingInStore();
           return { ok: true };
         case "relaunch":
@@ -296,41 +173,5 @@ export function createRemoteCredService(deps: {
           throw new Error(`Unknown remoteCred method: ${method}`);
       }
     },
-  };
-}
-
-function parseSelectedWorkspaceUrl(raw: string): {
-  serverUrl: string;
-  hubUrl: string;
-  workspaceName: string;
-} {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error(`Server URL is not parseable: ${raw}`);
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`Server URL must use http:// or https:// (got ${url.protocol || "no scheme"})`);
-  }
-  if (!url.hostname) throw new Error("Server URL is missing a hostname");
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error("Workspace URL must not include credentials, query, or fragment");
-  }
-  if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
-    throw new Error(
-      `Cleartext HTTP is only allowed for loopback. A remote server is reached over WebRTC, not by URL. Use https:// for ${url.hostname}.`
-    );
-  }
-  const workspaceName = selectedWorkspaceNameFromUrl(url);
-  if (!workspaceName) {
-    throw new Error("Remote credentials require a selected workspace URL");
-  }
-  const pathName = url.pathname.replace(/\/+$/, "");
-  const hubUrl = `${url.protocol}//${url.host}`;
-  return {
-    serverUrl: `${hubUrl}${pathName}`,
-    hubUrl,
-    workspaceName,
   };
 }

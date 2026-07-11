@@ -44,6 +44,7 @@ import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   parseServiceMethod,
+  authenticatedCallerOf,
   createVerifiedCaller,
   isDeferredResult,
   ServiceDispatcher,
@@ -53,6 +54,7 @@ import {
   type WsClientInfo,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import type { UserSubject } from "@vibestudio/shared/users/types";
 import { DeferralRegistry } from "./services/deferralRegistry.js";
 import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -92,6 +94,49 @@ function parseDOTarget(targetId: string): { source: string; className: string; o
 
 /** The server's identity stamped onto response envelopes it returns over /rpc. */
 const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
+
+/**
+ * Resolves the host-verified account `subject` for an authenticated caller
+ * (WP0 §5.2/§5.5). Hub-backed in production — it reads the shared identity DB to
+ * map `shell:<deviceId>` → owning user (`deviceAuthStore.userFor`), an
+ * `agent:<id>` binding → its spawner (`AgentBinding.userId`), a
+ * `panel:`/`do:`/`worker:` principal → its lineage owner
+ * (`resolveUserSubject(entityCache, …)`, §6), and the local-console bootstrap
+ * principals (`electron-main`/`headless-host`) → the machine root under the
+ * trusted-console rule (§5.4) — and fakeable in tests. Returns null when no
+ * account can be attributed to the caller.
+ */
+export interface UserSubjectSource {
+  resolve(
+    callerId: string,
+    callerKind: CallerKind,
+    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+  ): UserSubject | null;
+}
+
+/**
+ * The in-process `server` principal's synthetic subject (WP0 §5.4). It is NOT a
+ * `UserStore` row — it is excluded from account joins and presence surfaces
+ * (WP8 §4, WP5 render) — but is stamped so every in-process `ServiceContext`
+ * still carries a subject rather than a null one.
+ */
+export const SYSTEM_SUBJECT: UserSubject = { userId: "system", handle: "system" };
+
+/**
+ * Resolve the `userId` to denormalize onto a connection whose `VerifiedCaller`
+ * carries no host-verified `subject` (WP4 §2.1). Only the in-process `server`
+ * principal is intentionally synthetic. Every shell, including the local
+ * desktop, must resolve to a real account from the hub-owned identity store;
+ * there is no subject-less local-console compatibility mode.
+ */
+function assertBootstrapSubject(caller: VerifiedCaller): string {
+  const { id, kind } = caller.runtime;
+  if (kind === "server") return SYSTEM_SUBJECT.userId;
+  throw new Error(
+    `Caller ${kind}:${id} reached connection admission without a host-verified subject ` +
+      `(the WP0 §5.4 bootstrap set is closed)`
+  );
+}
 
 function envelopeForWsDelivery(
   fromId: string,
@@ -133,6 +178,13 @@ function envelopeTransportFromWsServer(transport: WsServerTransportInternal): En
 export interface WsClientState extends WsClientInfo {
   ws: WebSocket;
   authenticatedAt: number;
+  /**
+   * Owning user (WP4 §2.1) — a denormalized, non-null mirror of
+   * `caller.subject.userId`, stamped once at connection admission so the hot
+   * presence/routing paths (`ConnectionRegistry.usersByUserId`) don't re-walk
+   * `subject` on every read and a missing subject is caught at construction.
+   */
+  userId: string;
   authorizedBy?: string;
   clientLabel?: string;
   clientSessionId?: string;
@@ -155,6 +207,8 @@ type RelayCallMeta = {
 };
 
 type RelayCallerScope = {
+  /** Exact caller stamped at transport admission (never re-resolved by runtime id). */
+  authenticatedCaller: VerifiedCaller;
   /** Host-resolved parent caller to record in a VCS invocation token. */
   invocationCaller: VerifiedCaller;
   /** Caller id whose context registration should scope a routed VCS dispatch. */
@@ -230,6 +284,13 @@ class ConnectionRegistry {
   private callerConnections = new Map<string, Map<string, WsClientState>>();
   private bridges = new Map<string, Map<string, RpcClient>>();
   private transports = new Map<string, Map<string, WsServerTransportInternal>>();
+  /**
+   * Reverse index userId → concrete live connections (WP4 §2.3). The same
+   * shared runtime principal can have independently authorized connections for
+   * different users, so indexing only callerIds would cross-attribute presence.
+   */
+  private usersByUserId = new Map<string, Set<WsClientState>>();
+  private connectionsChangedListeners = new Set<() => void>();
 
   getBySocket(ws: WebSocket): WsClientState | undefined {
     return this.clients.get(ws);
@@ -260,13 +321,26 @@ class ConnectionRegistry {
   }
 
   addClient(client: WsClientState): void {
-    this.clients.set(client.ws, client);
     let callerClients = this.callerConnections.get(client.caller.runtime.id);
     if (!callerClients) {
       callerClients = new Map();
       this.callerConnections.set(client.caller.runtime.id, callerClients);
     }
+    const replaced = callerClients.get(client.connectionId);
+    if (replaced && replaced !== client) {
+      this.removeClient(replaced);
+      callerClients = this.callerConnections.get(client.caller.runtime.id) ?? new Map();
+      this.callerConnections.set(client.caller.runtime.id, callerClients);
+    }
+    this.clients.set(client.ws, client);
     callerClients.set(client.connectionId, client);
+    let userClients = this.usersByUserId.get(client.userId);
+    if (!userClients) {
+      userClients = new Set();
+      this.usersByUserId.set(client.userId, userClients);
+    }
+    userClients.add(client);
+    this.emitConnectionsChanged();
   }
 
   removeClient(client: WsClientState): boolean {
@@ -278,10 +352,59 @@ class ConnectionRegistry {
       if (callerClients?.size === 0) {
         this.callerConnections.delete(client.caller.runtime.id);
       }
+      const userClients = this.usersByUserId.get(client.userId);
+      userClients?.delete(client);
+      if (userClients?.size === 0) this.usersByUserId.delete(client.userId);
       this.removeBridge(client.caller.runtime.id, client.connectionId);
     }
     this.clients.delete(client.ws);
+    if (removedActive) this.emitConnectionsChanged();
     return removedActive;
+  }
+
+  /**
+   * userIds with ≥1 OPEN connection to this workspace child (WP4 §2.3/§5) — a
+   * pure transport fact consumed by WP8 presence. No channel/roster concept.
+   */
+  listUsersWithLiveConnections(): string[] {
+    return [...this.usersByUserId.keys()].filter((userId) => this.isUserOnline(userId));
+  }
+
+  isUserOnline(userId: string): boolean {
+    return this.getUserConnections(userId).length > 0;
+  }
+
+  /** All active OPEN connections authorized for `userId`. */
+  getUserConnections(userId: string): WsClientState[] {
+    return [...(this.usersByUserId.get(userId) ?? [])].filter(
+      (client) => client.ws.readyState === WebSocket.OPEN && this.isActiveClient(client)
+    );
+  }
+
+  /**
+   * Change signal for WP8 presence (WP4 §5): fired from `addClient`/`removeClient`
+   * and — via {@link notifyConnectionsChanged} — from session expiry, so
+   * `workspacePresence` can recompute without polling. WP4 owns the hook; WP8
+   * owns the service/event.
+   */
+  onConnectionsChanged(listener: () => void): () => void {
+    this.connectionsChangedListeners.add(listener);
+    return () => this.connectionsChangedListeners.delete(listener);
+  }
+
+  /** Fire the change signal from outside the registry (e.g. session-TTL expiry). */
+  notifyConnectionsChanged(): void {
+    this.emitConnectionsChanged();
+  }
+
+  private emitConnectionsChanged(): void {
+    for (const listener of this.connectionsChangedListeners) {
+      try {
+        listener();
+      } catch (err) {
+        log.warn(`connections-changed listener failed: ${(err as Error).message}`);
+      }
+    }
   }
 
   setBridge(
@@ -372,8 +495,10 @@ class ConnectionRegistry {
     }
     this.clients.clear();
     this.callerConnections.clear();
+    this.usersByUserId.clear();
     this.bridges.clear();
     this.transports.clear();
+    this.emitConnectionsChanged();
   }
 }
 
@@ -532,6 +657,34 @@ export class RpcServer {
       >;
       fsService?: Pick<import("@vibestudio/shared/fsService").FsService, "closeHandlesForCaller">;
       entityCache?: EntityCache;
+      /**
+       * Optional: resolves the host-verified account `subject` for a caller at
+       * auth time (WP0 §5.2/§5.5). Hub-backed in production (reads the shared
+       * identity DB via `deviceAuthStore.userFor`, agent bindings, and entity
+       * lineage), fakeable in tests. When absent, only the in-process `server`
+       * receives its synthetic subject; every external caller is unattributed.
+       */
+      userSubjectSource?: UserSubjectSource;
+      /**
+       * Optional membership entry gate (WP2 §4, authoritative-at-child). A
+       * hub-spawned workspace child carries the opaque VIBESTUDIO_WORKSPACE_ID
+       * and the shared identity DB; `handleAuth` calls this with the connecting
+       * caller's host-verified `subject` right after subject resolution and
+       * refuses (`EACCES`, WS close) a non-member before any session state is
+       * created. Wired from `index.ts` to `membershipStore.has(userId, wsId)`;
+       * production supplies a fail-closed predicate: only the synthetic
+       * in-process `system` subject bypasses it; unattributed callers are denied.
+       * Absent only in test or non-workspace hosts.
+       */
+      membershipGate?: (subject: UserSubject | undefined) => boolean;
+      /**
+       * Live identity gate for persistent WS/WebRTC sessions. Authentication
+       * stamps a caller once, but revocation and workspace membership are
+       * mutable. Production re-checks the shared identity DB before every
+       * subsequent inbound frame so a failed administrative socket teardown
+       * cannot leave a cached device, agent, or user usable.
+       */
+      liveCallerGate?: (caller: VerifiedCaller, authorizedBy?: string) => boolean;
       connectionGrants?: ConnectionGrantService;
       resolveExtensionInvocation?: (
         extensionName: string,
@@ -564,17 +717,28 @@ export class RpcServer {
       redeemPairingCredential?: (
         token: string,
         ctx: { clientLabel?: string; clientPlatform?: ClientPlatform }
-      ) => {
-        callerId: string;
-        callerKind: CallerKind;
-        deviceCredential?: { deviceId: string; refreshToken: string };
-        /**
-         * Entity/context binding for an `agent:`-prefixed credential (§3.2),
-         * stamped onto the connection's VerifiedCaller. Host-verified — never
-         * from client input.
-         */
-        agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
-      } | null;
+      ) =>
+        | {
+            callerId: string;
+            callerKind: CallerKind;
+            deviceCredential?: { deviceId: string; refreshToken: string };
+            /**
+             * Entity/context binding for an `agent:`-prefixed credential (§3.2),
+             * stamped onto the connection's VerifiedCaller. Host-verified — never
+             * from client input.
+             */
+            agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
+            /** Host-verified account subject for the redeemed credential. */
+            subject?: UserSubject;
+          }
+        | null
+        | Promise<{
+            callerId: string;
+            callerKind: CallerKind;
+            deviceCredential?: { deviceId: string; refreshToken: string };
+            agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
+            subject?: UserSubject;
+          } | null>;
       uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
   ) {
@@ -599,6 +763,11 @@ export class RpcServer {
       ttlMs: deps.sessionTtlMs,
       onSessionExpire: (callerId, callerKind) => {
         this.deps.onClientDisconnect?.(callerId, callerKind);
+        // Session-TTL expiry ends the reconnect-grace window (WP4 §5): fan a
+        // change signal so WP8 presence can flap a truly-departed user without
+        // polling. Connection maps are already updated on disconnect; this
+        // covers the delayed grace boundary.
+        this.connections.notifyConnectionsChanged();
       },
     });
   }
@@ -606,7 +775,8 @@ export class RpcServer {
   private verifiedCallerFor(
     callerId: string,
     callerKind: CallerKind,
-    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding,
+    subject?: UserSubject
   ): VerifiedCaller {
     const code =
       callerKind === "extension"
@@ -614,7 +784,44 @@ export class RpcServer {
         : this.deps.entityCache
           ? resolveCodeIdentity(this.deps.entityCache, callerId)
           : null;
-    return createVerifiedCaller(callerId, callerKind, code, agentBinding);
+    // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
+    // otherwise resolve it from the caller id (§5.2/§5.4).
+    const resolvedSubject = subject ?? this.resolveSubject(callerId, callerKind, agentBinding);
+    return createVerifiedCaller(callerId, callerKind, code, agentBinding, resolvedSubject);
+  }
+
+  /**
+   * Resolve the host-verified account subject for a caller (WP0 §5.2/§5.4).
+   * The in-process `server` principal maps to the synthetic system subject — the
+   * one bootstrap subject the host can determine without any identity DB. Every
+   * other caller — a local console principal (`electron-main`/`headless-host`,
+   * resolved to the machine root), a
+   * `shell:`/`agent:` credential, or a `panel:`/`do:`/`worker:` lineage — routes
+   * through the hub-backed `userSubjectSource`. Returning null means admission
+   * must fail for every external caller.
+   */
+  private resolveSubject(
+    callerId: string,
+    callerKind: CallerKind,
+    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+  ): UserSubject | null {
+    if (callerKind === "server") return SYSTEM_SUBJECT;
+    if (callerKind === "extension") {
+      return this.deps.resolveExtensionCodeIdentity?.(callerId) ? SYSTEM_SUBJECT : null;
+    }
+    return this.deps.userSubjectSource?.resolve(callerId, callerKind, agentBinding) ?? null;
+  }
+
+  /** Re-evaluate workspace membership at every stateless HTTP admission. */
+  private isWorkspaceMember(
+    callerId: string,
+    callerKind: CallerKind,
+    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+  ): boolean {
+    if (!this.deps.membershipGate) return true;
+    return this.deps.membershipGate(
+      this.resolveSubject(callerId, callerKind, agentBinding) ?? undefined
+    );
   }
 
   private serviceContextFor(
@@ -696,13 +903,13 @@ export class RpcServer {
   private relayCallerScopeForRpcMessage(
     client: WsClientState,
     message: Pick<RpcRequest, "parentInvocationToken">
-  ): RelayCallerScope | undefined {
+  ): RelayCallerScope {
     const parent = this.resolveExtensionParentCaller(client, message);
-    if (!parent) return undefined;
     return {
-      invocationCaller: parent.caller,
-      contextCallerId: parent.code.callerId,
-      ...(parent.contextId ? { callerContextId: parent.contextId } : {}),
+      authenticatedCaller: client.caller,
+      invocationCaller: parent?.caller ?? client.caller,
+      contextCallerId: parent?.code.callerId ?? client.caller.runtime.id,
+      ...(parent?.contextId ? { callerContextId: parent.contextId } : {}),
     };
   }
 
@@ -823,14 +1030,14 @@ export class RpcServer {
         return;
       }
 
-      this.handleAuth(
+      void this.handleAuth(
         ws,
         msg.token,
         msg.connectionId,
         msg.clientLabel,
         msg.clientSessionId,
         msg.clientPlatform
-      );
+      ).catch((error) => this.abortFailedAuthentication(ws, error));
     };
 
     ws.on("message", onFirstMessage);
@@ -842,14 +1049,15 @@ export class RpcServer {
     });
   }
 
-  private handleAuth(
+  private async handleAuth(
     ws: WebSocket,
     token: string,
     requestedConnectionId?: string,
     clientLabel?: string,
     clientSessionId?: string,
     clientPlatform?: ClientPlatform
-  ): void {
+  ): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN) return;
     // Admin tokens are management-only. RPC clients must use caller tokens.
     if (this.deps.tokenManager.validateAdminToken(token)) {
       const msg: WsServerMessage = {
@@ -862,10 +1070,17 @@ export class RpcServer {
       return;
     }
 
-    const grant = this.deps.connectionGrants?.redeem(token);
+    const grant =
+      this.deps.connectionGrants?.redeem(token) ??
+      this.deps.connectionGrants?.validate(token) ??
+      null;
     let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
     let deviceCredential: { deviceId: string; refreshToken: string } | undefined;
     let agentBinding: import("@vibestudio/shared/serviceDispatcher").AgentBinding | undefined;
+    // Host-verified subject for a device/agent credential redeemed over the pipe
+    // (§5.1/§5.3). Absent for the caller-token path (§5.2), where
+    // `verifiedCallerFor` resolves it from the caller id via `userSubjectSource`.
+    let subject: UserSubject | undefined;
     try {
       entry = grant
         ? {
@@ -874,6 +1089,9 @@ export class RpcServer {
           }
         : this.deps.tokenManager.validateToken(token);
       if (entry?.agentBinding) agentBinding = entry.agentBinding;
+      if (grant && entry?.callerKind === "app") {
+        subject = this.subjectForGrantIssuer(grant.issuedBy) ?? undefined;
+      }
     } catch {
       entry = null;
     }
@@ -883,13 +1101,35 @@ export class RpcServer {
       // token. The refresh secret only exists at completePairing time (the store
       // keeps just its hash), so a freshly issued device credential rides back on
       // the auth-result for the client to persist for reconnects.
-      const paired = this.deps.redeemPairingCredential?.(token, { clientLabel, clientPlatform });
+      let paired: {
+        callerId: string;
+        callerKind: CallerKind;
+        deviceCredential?: { deviceId: string; refreshToken: string };
+        agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
+        subject?: UserSubject;
+      } | null = null;
+      if (this.deps.redeemPairingCredential) {
+        try {
+          paired =
+            (await this.deps.redeemPairingCredential(token, {
+              clientLabel,
+              clientPlatform,
+            })) ?? null;
+        } catch {
+          paired = null;
+        }
+      }
       if (paired) {
         entry = { callerId: paired.callerId, callerKind: paired.callerKind };
         deviceCredential = paired.deviceCredential;
         agentBinding = paired.agentBinding;
+        subject = paired.subject;
       }
     }
+    // Pairing redemption crosses the child→hub boundary. The unauthenticated
+    // socket may disappear while that durable operation is in flight; never
+    // create session/lease/bridge state for a transport that is already gone.
+    if (ws.readyState !== WebSocket.OPEN) return;
     if (!entry) {
       const msg: WsServerMessage = {
         type: "ws:auth-result",
@@ -949,14 +1189,47 @@ export class RpcServer {
       }
     }
 
+    // Membership entry gate (WP2 §4, authoritative-at-child): once the
+    // connecting caller's host-verified subject is known, a hub-spawned
+    // workspace child refuses a non-member before establishing any session
+    // state. The production gate allows only the synthetic in-process `system`
+    // subject or a live workspace member (root is implicit).
+    if (this.deps.membershipGate) {
+      const gateSubject =
+        subject ?? this.resolveSubject(callerId, callerKind, agentBinding) ?? undefined;
+      if (!this.deps.membershipGate(gateSubject)) {
+        const msg: WsServerMessage = {
+          type: "ws:auth-result",
+          success: false,
+          error: "Not a member of this workspace",
+        };
+        ws.send(JSON.stringify(msg));
+        ws.close(4403, "Not a member of this workspace");
+        return;
+      }
+    }
+
     const existing = this.connections.getConnection(callerId, connectionId);
     if (existing) {
       existing.ws.close(4002, "Replaced by new connection");
       this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
       this.cleanupClient(existing);
     }
+    const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
+    // Denormalize the host-verified owning user once, at admission (WP4 §2.1).
+    // Defensive invariant: only the in-process server can synthesize a subject;
+    // every external unattributed caller fails here.
+    let userId: string;
+    try {
+      userId = caller.subject?.userId ?? assertBootstrapSubject(caller);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const msg: WsServerMessage = { type: "ws:auth-result", success: false, error: message };
+      ws.send(JSON.stringify(msg));
+      ws.close(4006, "Unattributed caller");
+      return;
+    }
     const { sessionDirty } = this.sessions.markConnected(callerId, callerKind);
-    const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
 
     const client: WsClientState = {
       ws,
@@ -964,6 +1237,7 @@ export class RpcServer {
       connectionId,
       authenticated: true,
       authenticatedAt: Date.now(),
+      userId,
       authorizedBy: grant?.issuedBy,
       clientLabel,
       clientSessionId,
@@ -971,6 +1245,11 @@ export class RpcServer {
     };
 
     this.connections.addClient(client);
+    // Install teardown immediately after registry admission. Any exception in
+    // the remaining setup is rolled back by abortFailedAuthentication; a real
+    // network close from this point onward must run the normal close path.
+    ws.on("message", (data) => this.handleMessage(client, data));
+    ws.on("close", (code, reason) => this.handleClose(client, code, reason.toString()));
 
     if (callerKind === "panel") {
       this.deps.runtimeCoordinator?.markConnected(callerId, connectionId);
@@ -990,6 +1269,11 @@ export class RpcServer {
       transport: envelopeTransportFromWsServer(transport),
     });
     this.setBridge(callerId, connectionId, bridge, transport);
+
+    // Notify auth callback (e.g., for HarnessManager bridge resolution) before
+    // acknowledging success. A host integration failure must roll admission
+    // back instead of telling the client it owns a usable session.
+    this.deps.onClientAuthenticate?.(callerId, callerKind);
 
     // Send auth result
     const authResult: WsServerMessage = {
@@ -1021,19 +1305,52 @@ export class RpcServer {
     if (this.deps.eventService) {
       try {
         this.deps.eventService.registerSession(
-          new WsEventSession(ws, callerKind, callerId, connectionId)
+          new WsEventSession(ws, callerKind, callerId, connectionId, caller.subject?.userId)
         );
       } catch (err) {
         log.warn(`Failed to register event session for ${callerId}: ${(err as Error).message}`);
       }
     }
+  }
 
-    // Notify auth callback (e.g., for HarnessManager bridge resolution)
-    this.deps.onClientAuthenticate?.(callerId, callerKind);
-
-    // Set up message handling
-    ws.on("message", (data) => this.handleMessage(client, data));
-    ws.on("close", (code, reason) => this.handleClose(client, code, reason.toString()));
+  private abortFailedAuthentication(ws: WebSocket, error: unknown): void {
+    const client = this.connections.getBySocket(ws);
+    if (client && this.connections.removeClient(client)) {
+      if (client.caller.runtime.kind === "panel") {
+        try {
+          this.deps.runtimeCoordinator?.markDisconnected(
+            client.caller.runtime.id,
+            client.connectionId
+          );
+        } catch (rollbackError) {
+          log.error("failed to roll back panel runtime admission", {
+            callerId: client.caller.runtime.id,
+            connectionId: client.connectionId,
+            cause: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+          });
+        }
+      }
+      this.sessions.markDisconnected(client.caller.runtime.id, client.caller.runtime.kind);
+    }
+    log.error("authentication task failed", {
+      cause: error instanceof Error ? error.message : String(error),
+    });
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const message: WsServerMessage = {
+        type: "ws:auth-result",
+        success: false,
+        error: "Authentication failed",
+      };
+      ws.send(JSON.stringify(message));
+    } catch {
+      // The close below is the authoritative failure signal.
+    }
+    try {
+      ws.close(1011, "Authentication failed");
+    } catch {
+      // A concurrently closed socket already has the desired terminal state.
+    }
   }
 
   getConnectionForPrincipal(principalId: string): WsClientState | null {
@@ -1043,6 +1360,33 @@ export class RpcServer {
   /** Count live authenticated connections whose caller kind is in `kinds`. */
   countConnectedClients(kinds: readonly CallerKind[]): number {
     return this.connections.countByKinds(new Set(kinds));
+  }
+
+  /**
+   * Transport-fact presence accessors (WP4 §2.3/§5) consumed by WP8's host
+   * `workspacePresence` service: which users hold a live connection to this
+   * workspace child. Pure `{userId}`-level facts — no channel/roster concept.
+   */
+  listUsersWithLiveConnections(): string[] {
+    return this.connections.listUsersWithLiveConnections();
+  }
+
+  isUserOnline(userId: string): boolean {
+    return this.connections.isUserOnline(userId);
+  }
+
+  getUserConnections(userId: string): WsClientState[] {
+    return this.connections.getUserConnections(userId);
+  }
+
+  /** Administrative teardown surface for one concrete runtime principal. */
+  getPrincipalConnections(callerId: string): WsClientState[] {
+    return this.connections.getCallerConnections(callerId);
+  }
+
+  /** Subscribe to connection add/drop + session-expiry change signals (WP4 §5). */
+  onConnectionsChanged(listener: () => void): () => void {
+    return this.connections.onConnectionsChanged(listener);
   }
 
   getAuthorizingShell(principalId: string): WsClientState | null {
@@ -1057,6 +1401,20 @@ export class RpcServer {
     return callerKindForPrincipalKind(kind);
   }
 
+  private subjectForGrantIssuer(issuedBy: string): UserSubject | null {
+    if (issuedBy === "server") return SYSTEM_SUBJECT;
+    if (
+      issuedBy === "electron-main" ||
+      issuedBy === "headless-host" ||
+      issuedBy.startsWith("shell:")
+    ) {
+      return this.resolveSubject(issuedBy, "shell");
+    }
+    const kind = this.deps.entityCache?.resolveActive(issuedBy)?.kind;
+    if (!kind) return null;
+    return this.resolveSubject(issuedBy, callerKindForPrincipalKind(kind));
+  }
+
   private handleMessage(client: WsClientState, data: Buffer | ArrayBuffer | Buffer[]): void {
     if (!this.connections.isActiveClient(client)) return;
 
@@ -1069,6 +1427,20 @@ export class RpcServer {
         callerKind: client.caller.runtime.kind,
         cause: error instanceof Error ? error.message : String(error),
       });
+      return;
+    }
+
+    // Authentication is admission, not a lifetime grant. Account/device/agent
+    // revocation and workspace membership changes are read from their live
+    // stores before ANY post-auth frame is processed. This intentionally also
+    // gates routed responses/tool results: a revoked caller cannot keep acting
+    // merely because the hub's best-effort socket close failed.
+    if (
+      msg.type !== "ws:auth" &&
+      this.deps.liveCallerGate &&
+      !this.deps.liveCallerGate(client.caller, client.authorizedBy)
+    ) {
+      client.ws.close(4403, "Caller identity or workspace membership is no longer active");
       return;
     }
 
@@ -1860,6 +2232,12 @@ export class RpcServer {
       res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
       return;
     }
+    const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
+    if (!this.isWorkspaceMember(callerId, callerKind, httpAgentBinding)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not a member of this workspace", code: "EACCES" }));
+      return;
+    }
 
     // The body is an `RpcEnvelope`; `from`/`delivery.caller` are self-reported
     // and NOT trusted — the authenticated (callerId, callerKind) above are the
@@ -1896,7 +2274,7 @@ export class RpcServer {
       const result = await this.handleEnvelopeRequest(
         callerId,
         callerKind,
-        callerId === entry.callerId ? entry.agentBinding : undefined,
+        httpAgentBinding,
         envelope,
         message
       );
@@ -1994,11 +2372,25 @@ export class RpcServer {
     // Relay to another target
     const auth = this.checkRelayAuth(callerId, callerKind, targetId);
     if (!auth.ok) throw new Error(auth.reason);
-    return await this.relayCall(callerId, callerKind, targetId, method, args, undefined, {
-      ...(requestId ? { requestId } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(readOnly ? { readOnly: true } : {}),
-    });
+    const authenticatedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
+    return await this.relayCall(
+      callerId,
+      callerKind,
+      targetId,
+      method,
+      args,
+      undefined,
+      {
+        ...(requestId ? { requestId } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
+      },
+      {
+        authenticatedCaller,
+        invocationCaller: authenticatedCaller,
+        contextCallerId: callerId,
+      }
+    );
   }
 
   /** Dispatch an `event` envelope arriving over HTTP `/rpc` (relay to a target). */
@@ -2163,6 +2555,12 @@ export class RpcServer {
       res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
       return;
     }
+    const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
+    if (!this.isWorkspaceMember(callerId, callerKind, httpAgentBinding)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not a member of this workspace", code: "EACCES" }));
+      return;
+    }
 
     // Read request body (capped).
     const chunks: Buffer[] = [];
@@ -2196,7 +2594,7 @@ export class RpcServer {
     const targetId = streamEnvelope.target;
     const idempotencyKey = streamEnvelope.delivery?.idempotencyKey;
     const readOnly = streamEnvelope.delivery?.readOnly === true;
-    const agentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
+    const agentBinding = httpAgentBinding;
     const effectiveCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
 
     if (targetId && targetId !== "main") {
@@ -2504,8 +2902,7 @@ export class RpcServer {
             utf8Json({ status: frame.status, message: frame.message, code: frame.code })
           );
         }
-        // false = no registered streamId (client cancelled / session closed) —
-        // drop the frame, exactly as the shim's legacy JSON path did.
+        // false = no registered streamId (client cancelled / session closed).
         return written === false ? undefined : written;
       }
       // Plain WS encodes DATA frames as base64 in JSON (the `ws:rpc`
@@ -2941,6 +3338,10 @@ export class RpcServer {
         callerKind === "panel"
           ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
           : undefined;
+      const attributedCaller = relayCallerScope?.invocationCaller.subject
+        ? relayCallerScope.invocationCaller
+        : (relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind));
+      const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const result = await postToDurableObject(ref, method, args, {
         workerdUrl,
         workerdGatewayToken,
@@ -2948,6 +3349,7 @@ export class RpcServer {
         callerId,
         callerKind,
         ...(callerPanelId ? { callerPanelId } : {}),
+        ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
         ...(meta?.requestId ? { requestId: meta.requestId } : {}),
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
         ...(meta?.readOnly ? { readOnly: true } : {}),
@@ -3028,9 +3430,7 @@ export class RpcServer {
       throw new Error(`Worker relay to ${targetId} failed (${res.status}): ${text}`);
     }
 
-    const raw = (await res.json()) as { envelope?: RpcEnvelope; message?: RpcMessage } | undefined;
-    const responseEnvelope =
-      raw && "envelope" in raw ? raw.envelope : (raw as RpcEnvelope | undefined);
+    const responseEnvelope = (await res.json()) as RpcEnvelope | undefined;
     const responseMessage = responseEnvelope?.message as RpcResponse | undefined;
     if (responseMessage && responseMessage.type === "response") {
       if ("error" in responseMessage) {
@@ -3040,7 +3440,7 @@ export class RpcServer {
       }
       return responseMessage.result;
     }
-    return undefined;
+    throw new Error(`Worker relay to ${targetId} returned a malformed response envelope`);
   }
 
   /**

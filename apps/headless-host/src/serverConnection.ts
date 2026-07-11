@@ -1,7 +1,8 @@
 /**
  * Server RPC connection for the headless host: WS /rpc transport with
- * ws:auth fields declaring a headless client, token refresh for paired
- * device credentials, and event subscription for lease changes.
+ * ws:auth fields declaring a headless client and event subscription for lease
+ * changes. Public raw/device auth is intentionally absent: server-spawned hosts
+ * receive a capability over IPC; the CLI injects its paired WebRTC connection.
  */
 import { WebSocket } from "ws";
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
@@ -9,35 +10,13 @@ import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
-import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
+import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 
 const log = createDevLogger("HeadlessHost:rpc");
 
-/** Exchange a paired device credential for a short-lived shell token. */
-async function refreshShellToken(auth: {
-  serverUrl: string;
-  deviceId: string;
-  refreshToken: string;
-}): Promise<string> {
-  const response = await fetch(serverAuthRouteUrl(auth.serverUrl, "refresh-shell"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId: auth.deviceId, refreshToken: auth.refreshToken }),
-  });
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok || typeof body["shellToken"] !== "string") {
-    throw new Error(
-      typeof body["error"] === "string"
-        ? body["error"]
-        : `shell refresh failed (${response.status})`
-    );
-  }
-  return body["shellToken"];
-}
-
 export interface ServerConnection extends HeadlessHostServerConnection {
   rpc: RpcClient;
-  /** Current auth token (refreshed for device credentials). */
+  /** Current server-issued IPC capability. */
   getToken(): string;
   onServerEvent(listener: (event: string, payload: unknown) => void): void;
   onResubscribe(handler: () => void | Promise<void>): void;
@@ -52,8 +31,7 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
   if (config.auth.kind === "injected") {
     throw new Error("headless-host: injected auth requires connectionFactory");
   }
-  let currentToken =
-    config.auth.kind === "token" ? config.auth.token : await refreshShellToken(config.auth);
+  const currentToken = config.auth.token;
   const eventListeners = new Set<(event: string, payload: unknown) => void>();
   const wsUrl = serverRpcWsUrl(config.serverUrl);
 
@@ -74,15 +52,6 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => currentToken,
-      refreshAuthToken:
-        config.auth.kind === "device"
-          ? async () => {
-              currentToken = await refreshShellToken(
-                config.auth as { serverUrl: string; deviceId: string; refreshToken: string }
-              );
-              return currentToken;
-            }
-          : undefined,
       createSocket: (url) => new NodeWsLike(new WebSocket(url)),
     },
   });

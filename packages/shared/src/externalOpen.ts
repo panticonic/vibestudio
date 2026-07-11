@@ -3,13 +3,10 @@ export interface OpenExternalOptions {
 }
 
 export interface OpenExternalResult {
-  approvalDecision?: "once" | "session" | "version" | "repo";
+  approvalDecision?: "once" | "session" | "version";
 }
 
-export function assertAllowedOAuthExternalUrl(
-  rawUrl: string,
-  expectedRedirectUri: string,
-): void {
+export function assertAllowedOAuthExternalUrl(rawUrl: string, expectedRedirectUri: string): void {
   let url: URL;
   let redirectUri: URL;
   try {

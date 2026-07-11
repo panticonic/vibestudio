@@ -5,17 +5,22 @@
  * filesystem access, and token minting, but panel trees no longer live here.
  */
 
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { access, mkdir, writeFile } from "node:fs/promises";
+import nodePath from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
   createVerifiedCaller,
+  type CallerKind,
   type ServiceContext,
   type ServiceDispatcher,
+  type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import type { UserSubject } from "@vibestudio/shared/users/types";
 import type { Workspace, WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
-import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { HostConfig } from "@vibestudio/shared/hostConfig";
 import type {
   HostTarget,
@@ -26,6 +31,7 @@ import type {
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
+import type { WorkspaceCatalogClient } from "./services/workspaceService.js";
 import { assertPresent } from "../lintHelpers";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import {
@@ -191,30 +197,42 @@ type InitPanelRoot = {
   id?: unknown;
   panelId?: unknown;
   source?: unknown;
+  owner?: unknown;
 };
 
 /**
  * The SERVER is the single authority that seeds the initial panel tree from the workspace's
- * `initPanels`. Runs at workspace boot (before any client connects) and reconciles the
- * configured init-root multiset against roots that already look like init roots. That gives
- * retry semantics for a partial previous seed without re-seeding unrelated, established trees.
+ * `initPanels`. Reconciles the configured init-root multiset against roots that already look
+ * like init roots, giving retry semantics for a partial previous seed without re-seeding
+ * unrelated, established trees.
+ *
+ * WP3: seeding is **per-owner**. Only that user's roots are reconciled and every
+ * created root is stamped with its owner. Every account, including root, seeds
+ * on its first attach.
  */
 export async function seedPanelTreeIfEmpty(
   bridge: (
     request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
   ) => Promise<unknown>,
-  initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>
+  initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
+  ownerSubject: UserSubject
 ): Promise<void> {
   if (initPanels.length === 0) return;
-  const roots = (await bridge({
+  const ownerUserId = ownerSubject.userId;
+  const allRoots = (await bridge({
     callerId: "server",
     callerKind: "server",
     method: "roots",
     args: [],
   })) as InitPanelRoot[];
-  if (!Array.isArray(roots)) {
+  if (!Array.isArray(allRoots)) {
     throw new Error("panelTree.roots returned a non-array result during init-panel seed");
   }
+  // Reconcile only THIS owner's roots (mutual visibility means `roots` returns
+  // every owner's roots; we seed one user's tree at a time).
+  const roots = allRoots.filter(
+    (root) => (typeof root.owner === "string" ? root.owner : undefined) === ownerUserId
+  );
 
   const desiredCounts = new Map<string, number>();
   for (const entry of initPanels) {
@@ -258,8 +276,84 @@ export async function seedPanelTreeIfEmpty(
       callerKind: "server",
       method: "create",
       args: [entry.source, { stateArgs: entry.stateArgs }],
+      // Stamp the seeded root under its owner's tree (WP3).
+      subject: ownerSubject,
     });
   }
+}
+
+export interface OwnerPanelSeedStore {
+  isSeeded(ownerUserId: string): Promise<boolean>;
+  markSeeded(ownerUserId: string): Promise<void>;
+}
+
+/**
+ * Durable first-attach ledger. Without this marker, archiving every default
+ * panel followed by a server restart would incorrectly recreate them.
+ */
+export function createOwnerPanelSeedStore(statePath: string): OwnerPanelSeedStore {
+  const markerDir = nodePath.join(statePath, "panel-tree", "seeded-owners");
+  const markerPath = (ownerUserId: string) =>
+    nodePath.join(markerDir, createHash("sha256").update(ownerUserId).digest("hex"));
+
+  return {
+    async isSeeded(ownerUserId) {
+      try {
+        await access(markerPath(ownerUserId));
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      }
+    },
+    async markSeeded(ownerUserId) {
+      await mkdir(markerDir, { recursive: true });
+      try {
+        await writeFile(markerPath(ownerUserId), ownerUserId, { encoding: "utf8", flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    },
+  };
+}
+
+/**
+ * Wrap the authoritative bridge with per-account first-attach seeding. The
+ * wrapper deliberately ignores subject-less/system requests: infrastructure
+ * must never recreate the retired anonymous shared root tree.
+ */
+export function createOwnerSeedingPanelTreeBridge(
+  bridge: (
+    request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
+  ) => Promise<unknown>,
+  initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
+  seedStore?: OwnerPanelSeedStore
+): (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown> {
+  const ownerSeedPromises = new Map<string, Promise<void>>();
+
+  const seedForOwner = (ownerSubject: UserSubject): Promise<void> => {
+    const ownerUserId = ownerSubject.userId;
+    let pending = ownerSeedPromises.get(ownerUserId);
+    if (pending) return pending;
+    pending = (async () => {
+      if (seedStore && (await seedStore.isSeeded(ownerUserId))) return;
+      await seedPanelTreeIfEmpty(bridge, initPanels, ownerSubject);
+      await seedStore?.markSeeded(ownerUserId);
+    })().catch((error) => {
+      ownerSeedPromises.delete(ownerUserId);
+      throw error;
+    });
+    ownerSeedPromises.set(ownerUserId, pending);
+    return pending;
+  };
+
+  return async (request) => {
+    const ownerSubject = request.subject;
+    if (ownerSubject && ownerSubject.userId !== "system") {
+      await seedForOwner(ownerSubject);
+    }
+    return bridge(request);
+  };
 }
 
 export async function createServerPanelTreeBridge(
@@ -271,6 +365,14 @@ export async function createServerPanelTreeBridge(
   const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
   const call = <T>(service: string, method: string, args: unknown[]) =>
     deps.dispatcher.dispatch(serverCtx, service, method, args) as Promise<T>;
+  const runtimeCaller = new AsyncLocalStorage<VerifiedCaller>();
+  const callRuntime = <T>(method: string, args: unknown[]) =>
+    deps.dispatcher.dispatch(
+      { caller: runtimeCaller.getStore() ?? serverCtx.caller },
+      "runtime",
+      method,
+      args
+    ) as Promise<T>;
   const workspaceState: WorkspaceStateClient = {
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
@@ -293,14 +395,19 @@ export async function createServerPanelTreeBridge(
       call<undefined>("workspace-state", "slot.setParent", [slotId, parentSlotId]),
     setSlotPosition: (slotId, positionId) =>
       call<undefined>("workspace-state", "slot.setPosition", [slotId, positionId]),
-    moveSlot: (slotId, parentSlotId, positionId) =>
-      call<undefined>("workspace-state", "slot.move", [slotId, parentSlotId, positionId]),
+    moveSlot: (slotId, parentSlotId, positionId, ownerUserId) =>
+      call<undefined>("workspace-state", "slot.move", [
+        slotId,
+        parentSlotId,
+        positionId,
+        ownerUserId,
+      ]),
     closeSlot: (slotId) => call<undefined>("workspace-state", "slot.close", [slotId]),
   };
   const runtime: RuntimeClient = {
     createEntity: (spec: RuntimeEntityCreateSpec) =>
-      call<RuntimeEntityHandle>("runtime", "createEntity", [spec]),
-    retireEntity: (id) => call<undefined>("runtime", "retireEntity", [{ id }]),
+      callRuntime<RuntimeEntityHandle>("createEntity", [spec]),
+    retireEntity: (id) => callRuntime<undefined>("retireEntity", [{ id }]),
   };
   const searchIndex: PanelSearchIndex = {
     indexPanel: (panel: IndexablePanel) =>
@@ -449,6 +556,9 @@ export async function createServerPanelTreeBridge(
       : ("workspace" as const),
     parentId,
     contextId: getPanelContextId(panel),
+    // WP3: expose the owning-user id so per-user init seeding reconciles a
+    // user's own roots and consumers can group the forest.
+    owner: panel.owner ?? null,
   });
   const ensureDefaultLoaded = async (
     panelId: string,
@@ -622,16 +732,20 @@ export async function createServerPanelTreeBridge(
         // creates MUST set addAsRoot/isRoot — otherwise a root create would wipe
         // the in-memory mirror to one panel before the next sync restores it.
         const isRoot = parentId == null;
+        // WP3: stamp the acting user (threaded on the bridge request) as owner.
+        const ownerUserId = request.subject?.userId;
         const created = isBrowser
           ? await panelManager.createBrowser(parentId ?? null, source, {
               name: options.name,
               addAsRoot: isRoot,
+              ...(ownerUserId ? { ownerUserId } : {}),
             })
           : await panelManager.create(source, {
               ...options,
               parentId,
               isRoot,
               addAsRoot: isRoot,
+              ...(ownerUserId ? { ownerUserId } : {}),
             });
         emitTreeSnapshot();
         const runtimeEntityId = await panelManager.getCurrentEntityId(
@@ -697,6 +811,16 @@ export async function createServerPanelTreeBridge(
             : undefined,
         };
       }
+      case "archiveOwnedRoots": {
+        const userId = String(args[0]);
+        if (!userId || userId === "system") {
+          throw new Error("archiveOwnedRoots requires a revocable user id");
+        }
+        await sync({ force: true });
+        const result = await panelManager.archiveOwnedRoots(userId);
+        emitTreeSnapshot();
+        return result;
+      }
       case "unload": {
         const panelId = String(args[0]);
         const lease = deps.panelRuntimeCoordinator?.unloadSlot(panelId) ?? null;
@@ -718,7 +842,10 @@ export async function createServerPanelTreeBridge(
         const result = await panelManager.movePanel(
           asPanelSlotId(String(payload.panelId)),
           typeof payload.newParentId === "string" ? asPanelSlotId(payload.newParentId) : null,
-          typeof payload.targetPosition === "number" ? payload.targetPosition : 0
+          typeof payload.targetPosition === "number" ? payload.targetPosition : 0,
+          // WP3 §10.1: the acting mover; the subtree re-owns to the destination
+          // root's owner (or, on promote-to-root, to this mover).
+          request.subject?.userId
         );
         emitTreeSnapshot();
         return result;
@@ -860,7 +987,20 @@ export async function createServerPanelTreeBridge(
 
   // Every bridge request runs on the shared op-chain so mutations and the
   // self-heal reload never interleave (prevents mirror oscillation).
-  return (request) => serialize(() => handleBridgeRequest(request));
+  return (request) => {
+    // Panel-tree mutation is host-mediated, but runtime entity attribution must
+    // retain the verified acting user and the originating runtime id. Using a
+    // server-kind caller preserves host authority while recording the real
+    // parent id/owner instead of synthetic `server` lineage.
+    const mediatedCaller = createVerifiedCaller(
+      request.callerId,
+      "server",
+      null,
+      null,
+      request.subject
+    );
+    return serialize(() => runtimeCaller.run(mediatedCaller, () => handleBridgeRequest(request)));
+  };
 }
 
 export async function snapshotBrowserPanelFromCdpBridge(
@@ -903,13 +1043,16 @@ export interface CommonDeps {
   workspaceConfig: WorkspaceConfig;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
-  centralData: CentralDataManager | null;
+  /** Required hub-owned catalog proxy; child servers never mutate the catalog directly. */
+  workspaceCatalog: WorkspaceCatalogClient;
   hostConfig: HostConfig;
   tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
   eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  /** CURRENT role lookup; workspace administration fails closed without one. */
+  roleOf: (userId: string) => import("@vibestudio/shared/users/types").UserRole | null | undefined;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
   entityCache?: import("@vibestudio/shared/runtime/entityCache").EntityCache;
   /** True when the target context already holds state (active entity or materialized folder). */
@@ -1020,15 +1163,7 @@ export interface CommonDeps {
 }
 
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
-  const {
-    container,
-    workspace,
-    workspacePath,
-    workspaceConfig,
-    adminToken,
-    centralData,
-    hostConfig,
-  } = deps;
+  const { container, workspace, workspacePath, workspaceConfig, adminToken, hostConfig } = deps;
   const path = await import("path");
   let serverPanelTreeBridgePromise: Promise<
     (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
@@ -1050,7 +1185,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   };
   const requestPanelMetadataForServices = async (
     panelId: string,
-    caller: { id: string; kind: string } = { id: "server", kind: "server" }
+    caller: { id: string; kind: CallerKind } = { id: "server", kind: "server" }
   ): Promise<PanelAccessMetadata | null> => {
     const bridge = await getPanelTreeBridge();
     const meta = (await bridge({
@@ -1100,8 +1235,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");
-    const { createWorkspaceConfigManager, createAndRegisterWorkspace, deleteWorkspaceDir } =
-      await import("@vibestudio/shared/workspace/loader");
+    const { createWorkspaceConfigManager } = await import("@vibestudio/shared/workspace/loader");
     const wsConfigPath = path.join(workspacePath, "meta/vibestudio.yml");
     const wsConfigManager = createWorkspaceConfigManager(wsConfigPath, workspaceConfig);
 
@@ -1111,12 +1245,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         treeScanner: deps.treeScanner,
         getConfig: wsConfigManager.get,
         setConfigField: wsConfigManager.set as (key: string, value: unknown) => void,
-        centralData: centralData ?? null,
-        createWorkspace: (name, opts) => {
-          if (!centralData) throw new Error("Workspace creation not available");
-          return createAndRegisterWorkspace(name, centralData, opts);
-        },
-        deleteWorkspaceDir,
+        workspaceCatalog: deps.workspaceCatalog,
         eventService: deps.eventService,
         listUnits: deps.listWorkspaceUnits,
         restartUnit: deps.restartWorkspaceUnit,
@@ -1138,6 +1267,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         resolveHostTargetLaunchSessionApproval: deps.resolveHostTargetLaunchSessionApproval,
         cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
         hasAppCapability: deps.hasAppCapability,
+        roleOf: deps.roleOf,
         approvalQueue: deps.approvalQueue,
         ensureContextFolder: deps.ensureContextFolder,
       })
@@ -1398,9 +1528,13 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         );
         const { createPanelTreeService } = await import("./services/panelTreeService.js");
         const bridge = await getPanelTreeBridge();
-        // Seed the tree server-side before the service is marked ready (so clients that connect
-        // afterward mirror the seeded tree). See seedPanelTreeIfEmpty / plan Gate 3.
-        await seedPanelTreeIfEmpty(bridge, deps.workspaceConfig?.initPanels ?? []);
+        // Seed lazily for each authenticated account on its first panel-tree
+        // request; there is no ownerless boot tree.
+        const ownerAwareBridge = createOwnerSeedingPanelTreeBridge(
+          bridge,
+          deps.workspaceConfig?.initPanels ?? [],
+          createOwnerPanelSeedStore(deps.workspace.statePath)
+        );
         panelTreeDefinition = createPanelTreeService({
           ...panelGateDeps,
           approvalQueue: assertPresent(deps.approvalQueue),
@@ -1418,7 +1552,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               );
             }
           },
-          bridge,
+          bridge: ownerAwareBridge,
         });
       },
       getServiceDefinition() {

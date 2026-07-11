@@ -9,53 +9,68 @@ const mocks = vi.hoisted(() => ({
     getPath: vi.fn(() => "/tmp/vibestudio-remote-cred-test"),
   },
   safeStorage: {
-    encryptString: vi.fn((s: string) => Buffer.from(s, "utf8")),
-    decryptString: vi.fn((b: Buffer) => b.toString("utf8")),
-    isEncryptionAvailable: vi.fn(() => false),
+    encryptString: vi.fn((value: string) => Buffer.from(value, "utf8")),
+    decryptString: vi.fn((value: Buffer) => value.toString("utf8")),
+    isEncryptionAvailable: vi.fn(() => true),
   },
-  // In-memory backing for the (mocked) unified store so tests can drive the
-  // persisted-pairing state without touching disk or safeStorage.
-  store: { value: null as StoredRemote | null },
+  store: {
+    value: null as StoredRemote | null,
+    saveError: null as Error | null,
+    clearError: null as Error | null,
+  },
 }));
 
 vi.mock("electron", () => ({ app: mocks.app, safeStorage: mocks.safeStorage }));
-
 vi.mock("./deviceCredentialStore.js", () => ({
   loadStoredRemotePairing: () => mocks.store.value,
   saveDeviceCredential: (value: DeviceCredentialEntry) => {
-    mocks.store.value = value.transport === "webrtc" ? (value as StoredRemote) : mocks.store.value;
+    if (mocks.store.saveError) throw mocks.store.saveError;
+    if (value.transport === "webrtc") mocks.store.value = value as StoredRemote;
   },
   clearStoredRemotePairing: () => {
+    if (mocks.store.clearError) throw mocks.store.clearError;
     mocks.store.value = null;
   },
 }));
 
 const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
-
-const localStartupMode = {
-  kind: "local" as const,
-  wsDir: "/tmp/ws",
-  workspaceName: "ws",
-  workspaceId: "ws",
-  isEphemeral: false,
-  autoApproveStartupUnits: false,
-};
-
+const SELF_DEVICE_ID = `dev_${"d".repeat(24)}`;
+const NEXT_DEVICE_ID = `dev_${"n".repeat(24)}`;
+const NEXT_REFRESH_TOKEN = "n".repeat(43);
 const sampleStored: StoredRemote = {
-  serverId: "srv_remote",
+  serverId: `srv_${"s".repeat(24)}`,
   transport: "webrtc",
-  pairing: { room: "room-abc", fp: "AA".repeat(32), sig: "wss://sig.example/" },
-  deviceId: "dev_self",
-  refreshToken: "refresh-secret",
+  controlPairing: {
+    room: "room-control",
+    fp: "AA".repeat(32),
+    sig: "wss://sig.example/",
+    v: 2,
+    ice: "all",
+  },
+  workspacePairing: {
+    room: "room-abc",
+    fp: "AA".repeat(32),
+    sig: "wss://sig.example/",
+    v: 2,
+    ice: "all",
+  },
+  deviceId: SELF_DEVICE_ID,
+  refreshToken: "r".repeat(43),
   workspaceName: "main",
   pairedAt: 123,
 };
+
+function serverClient(call = vi.fn()) {
+  return { isConnected: () => true, call } as never;
+}
 
 describe("remoteCredService", () => {
   beforeEach(() => {
     mocks.app.relaunch.mockClear();
     mocks.app.exit.mockClear();
     mocks.store.value = null;
+    mocks.store.saveError = null;
+    mocks.store.clearError = null;
   });
 
   afterEach(() => {
@@ -63,183 +78,217 @@ describe("remoteCredService", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reports no configured remote when nothing is stored", async () => {
+  it("reports live connectivity independently from a stored remote pairing", async () => {
     const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(service.handler(shellCtx, "getCurrent", [])).resolves.toEqual({
-      configured: false,
-      isActive: false,
-      bootstrap: "none",
-    });
+    await expect(
+      createRemoteCredService({ getServerClient: () => serverClient() }).handler(
+        shellCtx,
+        "getCurrent",
+        []
+      )
+    ).resolves.toEqual({ connected: true, configured: false, isActive: false });
   });
 
-  it("reflects a stored pairing as a configured device, active when the pipe is up", async () => {
+  it("reports a stored pairing as active only while its server session is live", async () => {
     mocks.store.value = sampleStored;
     const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({
-      startupMode: localStartupMode,
-      getServerClient: () => ({ isConnected: () => true, call: vi.fn() }) as never,
-    });
-    await expect(service.handler(shellCtx, "getCurrent", [])).resolves.toMatchObject({
+    const active = createRemoteCredService({ getServerClient: () => serverClient() });
+    await expect(active.handler(shellCtx, "getCurrent", [])).resolves.toEqual({
+      connected: true,
       configured: true,
       isActive: true,
-      bootstrap: "device",
-      deviceId: "dev_self",
+      deviceId: SELF_DEVICE_ID,
       workspaceName: "main",
     });
-  });
 
-  it("reports a stored pairing as configured but inactive without a live client", async () => {
-    mocks.store.value = sampleStored;
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(service.handler(shellCtx, "getCurrent", [])).resolves.toMatchObject({
+    const inactive = createRemoteCredService({});
+    await expect(inactive.handler(shellCtx, "getCurrent", [])).resolves.toMatchObject({
+      connected: false,
       configured: true,
       isActive: false,
-      bootstrap: "device",
     });
   });
 
-  it("saveStoredRemote persists the fresh pairing + device credential", async () => {
-    // The throwaway exchangePairingCode redeem was removed; the fresh-pair session
-    // now persists the issued credential through saveStoredRemote (serverSession's
-    // establishFreshPairSession onPaired) so the next launch reconnects via refresh.
-    const { saveStoredRemote } = await import("./remoteCredService.js");
-    expect(mocks.store.value).toBeNull();
-    saveStoredRemote(sampleStored);
-    expect(mocks.store.value).toEqual(sampleStored);
-  });
-
-  it("can disable remote credential persistence for the dev WebRTC harness", async () => {
-    vi.stubEnv("VIBESTUDIO_DISABLE_REMOTE_CRED_PERSISTENCE", "1");
+  it("persists fresh and rotated WebRTC device credentials", async () => {
     const { persistRotatedRemoteCredential, saveStoredRemote } =
       await import("./remoteCredService.js");
-
     saveStoredRemote(sampleStored);
-    expect(mocks.store.value).toBeNull();
+    expect(mocks.store.value).toEqual(sampleStored);
+    persistRotatedRemoteCredential({
+      deviceId: NEXT_DEVICE_ID,
+      refreshToken: NEXT_REFRESH_TOKEN,
+    });
+    expect(mocks.store.value).toMatchObject({
+      deviceId: NEXT_DEVICE_ID,
+      refreshToken: NEXT_REFRESH_TOKEN,
+    });
+  });
 
+  it("atomically persists exact returning-device reaches before a workspace relaunch", async () => {
     mocks.store.value = sampleStored;
-    persistRotatedRemoteCredential({ deviceId: "dev_next", refreshToken: "next-refresh" });
+    const { persistStoredRemoteWorkspaceRoute } = await import("./remoteCredService.js");
+    const persisted = persistStoredRemoteWorkspaceRoute({
+      workspace: "second",
+      workspaceId: "ws_second",
+      running: true,
+      serverUrl: "https://hub.example.test/w/second",
+      controlReach: {
+        room: `room_${"c".repeat(24)}`,
+        fp: "BB".repeat(32),
+        sig: "wss://sig.example/",
+        v: 2,
+        ice: "relay",
+      },
+      workspaceReach: {
+        room: `room_${"w".repeat(24)}`,
+        fp: "CC".repeat(32),
+        sig: "wss://sig.example/",
+        v: 2,
+        ice: "all",
+      },
+      serverId: sampleStored.serverId,
+      serverBootId: `boot_${"b".repeat(24)}`,
+    });
+
+    expect(persisted).toBe(true);
+    expect(mocks.store.value).toMatchObject({
+      workspaceName: "second",
+      controlPairing: { room: `room_${"c".repeat(24)}`, fp: "BB".repeat(32), ice: "relay" },
+      workspacePairing: { room: `room_${"w".repeat(24)}`, fp: "CC".repeat(32), ice: "all" },
+    });
+  });
+
+  it("refuses to persist a workspace route for another server", async () => {
+    mocks.store.value = sampleStored;
+    const { persistStoredRemoteWorkspaceRoute } = await import("./remoteCredService.js");
+
+    expect(() =>
+      persistStoredRemoteWorkspaceRoute({
+        workspace: "second",
+        workspaceId: "ws_second",
+        running: true,
+        serverUrl: "https://hub.example.test/w/second",
+        controlReach: {
+          room: `room_${"c".repeat(24)}`,
+          fp: "BB".repeat(32),
+          sig: "wss://sig.example/",
+          v: 2,
+          ice: "all",
+        },
+        workspaceReach: {
+          room: `room_${"w".repeat(24)}`,
+          fp: "CC".repeat(32),
+          sig: "wss://sig.example/",
+          v: 2,
+          ice: "all",
+        },
+        serverId: `srv_${"x".repeat(24)}`,
+        serverBootId: `boot_${"b".repeat(24)}`,
+      })
+    ).toThrow(/server identity/);
     expect(mocks.store.value).toEqual(sampleStored);
   });
 
-  it("fails loud when asked to persist an admin-token remote (replaced by WebRTC pairing)", async () => {
+  it("surfaces fresh, rotated, and clear persistence failures", async () => {
+    const { clearStoredRemotePairing, persistRotatedRemoteCredential, saveStoredRemote } =
+      await import("./remoteCredService.js");
+    mocks.store.saveError = new Error("disk full");
+    expect(() => saveStoredRemote(sampleStored)).toThrow(/disk full/);
+
+    mocks.store.saveError = null;
+    mocks.store.value = sampleStored;
+    mocks.store.saveError = new Error("keychain unavailable");
+    expect(() =>
+      persistRotatedRemoteCredential({
+        deviceId: NEXT_DEVICE_ID,
+        refreshToken: NEXT_REFRESH_TOKEN,
+      })
+    ).toThrow(/keychain unavailable/);
+
+    mocks.store.clearError = new Error("permission denied");
+    expect(() => clearStoredRemotePairing()).toThrow(/permission denied/);
+    expect(mocks.store.value).toEqual(sampleStored);
+  });
+
+  it("can disable credential persistence for isolated transport harnesses", async () => {
+    vi.stubEnv("VIBESTUDIO_DISABLE_REMOTE_CRED_PERSISTENCE", "1");
+    const { saveStoredRemote } = await import("./remoteCredService.js");
+    saveStoredRemote(sampleStored);
+    expect(mocks.store.value).toBeNull();
+  });
+
+  it("validates a pairing link before relaunching into it", async () => {
     const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ startupMode: localStartupMode });
+    const service = createRemoteCredService({});
+    await expect(service.handler(shellCtx, "pair", [{ link: "not-a-link" }])).resolves.toEqual({
+      ok: false,
+      error: "invalid-link",
+      message: expect.any(String),
+    });
+    expect(mocks.app.relaunch).not.toHaveBeenCalled();
+
+    const link =
+      `vibestudio://connect?room=room-abc&fp=${"AA".repeat(32)}` +
+      `&code=${"B".repeat(32)}&sig=wss%3A%2F%2Fsig.example%2F&v=2&ice=all`;
+    await expect(service.handler(shellCtx, "pair", [{ link }])).resolves.toEqual({ ok: true });
+    expect(mocks.app.relaunch).toHaveBeenCalledWith({
+      args: expect.arrayContaining([expect.stringMatching(/^vibestudio:\/\/connect\?/)]),
+    });
+    expect(mocks.app.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("creates same-account device invites through hubControl", async () => {
+    const pairing = { code: "C".repeat(32), pairUrl: "https://vibestudio.app/pair#invite" };
+    const call = vi.fn(async (service: string, method: string, args: unknown[]) => {
+      expect([service, method, args]).toEqual([
+        "hubControl",
+        "pairDevice",
+        [{ workspace: "main", ttlMs: 60_000 }],
+      ]);
+      return { userId: "usr_1", handle: "alice", workspace: "main", pairing };
+    });
+    const { createRemoteCredService } = await import("./remoteCredService.js");
+    const service = createRemoteCredService({ getServerClient: () => serverClient(call) });
     await expect(
-      service.handler(shellCtx, "save", [
-        { url: "http://127.0.0.1:3030/_workspace/dev", token: "t" },
-      ])
-    ).rejects.toThrow(/removed/i);
+      service.handler(shellCtx, "pairDevice", [{ workspace: "main", ttlMs: 60_000 }])
+    ).resolves.toMatchObject({ pairing });
   });
 
-  it("rejects a non-loopback cleartext URL in testConnection", async () => {
+  it("lists devices through hubControl and fails truthfully while disconnected", async () => {
+    const devices = [
+      { deviceId: SELF_DEVICE_ID, userId: "usr_1", label: "This device", createdAt: 1 },
+    ];
+    const call = vi.fn(async () => ({ serverId: "srv", devices }));
     const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(
-      service.handler(shellCtx, "testConnection", [
-        { url: "http://server.example.com:3030/_workspace/dev", token: "t" },
-      ])
-    ).resolves.toMatchObject({ ok: false, error: "invalid-url" });
-  });
+    const connected = createRemoteCredService({ getServerClient: () => serverClient(call) });
+    await expect(connected.handler(shellCtx, "listDevices", [])).resolves.toEqual(devices);
+    expect(call).toHaveBeenCalledWith("hubControl", "listDevices", []);
 
-  it("rejects a URL without a selected workspace in testConnection", async () => {
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(
-      service.handler(shellCtx, "testConnection", [{ url: "http://127.0.0.1:3030", token: "t" }])
-    ).resolves.toMatchObject({ ok: false, error: "invalid-url" });
-  });
-
-  it("proxies pairing invite creation through the active server client", async () => {
-    const call = vi.fn(async (_service: string, method: string, args: unknown[]) => {
-      expect(method).toBe("createPairingInvite");
-      expect(args).toEqual([{ ttlMs: 60_000 }]);
-      return {
-        code: "A".repeat(24),
-        deepLink: `vibestudio://connect?room=room-abc&fp=${"AA".repeat(32)}&code=${"A".repeat(24)}&sig=wss%3A%2F%2Fsig.example%2F&v=2&ice=all`,
-        pairUrl: `https://vibestudio.app/pair#room=room-abc&fp=${"AA".repeat(32)}&code=${"A".repeat(24)}&sig=wss%3A%2F%2Fsig.example%2F&v=2&ice=all`,
-        room: "room-abc",
-        fp: "AA".repeat(32),
-        sig: "wss://sig.example/",
-        ice: "all",
-        serverUrl: "http://127.0.0.1:3030",
-        expiresAt: 123,
-        expiresInMs: 60_000,
-        serverId: "srv",
-        serverBootId: "boot",
-        workspaceId: "ws",
-      };
-    });
-
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({
-      startupMode: localStartupMode,
-      getServerClient: () => ({ call }) as never,
-    });
-
-    await expect(
-      service.handler(shellCtx, "createPairingInvite", [{ ttlMs: 60_000 }])
-    ).resolves.toMatchObject({ code: "A".repeat(24), serverUrl: "http://127.0.0.1:3030" });
-    expect(call).toHaveBeenCalledWith("auth", "createPairingInvite", [{ ttlMs: 60_000 }]);
-  });
-
-  it("lists devices via the active server client and is empty without one", async () => {
-    const call = vi.fn(async (_service: string, method: string) => {
-      if (method === "listDevices") {
-        return { devices: [{ deviceId: "dev_self", label: "This", createdAt: 1 }] };
-      }
-      throw new Error(method);
-    });
-
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-
-    const connected = createRemoteCredService({
-      startupMode: localStartupMode,
-      getServerClient: () => ({ call }) as never,
-    });
-    await expect(connected.handler(shellCtx, "listDevices", [])).resolves.toEqual([
-      { deviceId: "dev_self", label: "This", createdAt: 1 },
-    ]);
-
-    const offline = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(offline.handler(shellCtx, "listDevices", [])).resolves.toEqual([]);
-  });
-
-  it("revokes a device via the active server client and throws without one", async () => {
-    const call = vi.fn(async (_service: string, method: string) => {
-      if (method === "revokeDevice") return { revoked: true };
-      throw new Error(method);
-    });
-
-    const { createRemoteCredService } = await import("./remoteCredService.js");
-
-    const connected = createRemoteCredService({
-      startupMode: localStartupMode,
-      getServerClient: () => ({ call }) as never,
-    });
-    await expect(connected.handler(shellCtx, "revokeDevice", ["dev_self"])).resolves.toEqual({
-      revoked: true,
-    });
-    expect(call).toHaveBeenCalledWith("auth", "revokeDevice", ["dev_self"]);
-
-    const offline = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(offline.handler(shellCtx, "revokeDevice", ["dev_self"])).rejects.toThrow(
-      /Not connected to a server/
+    await expect(createRemoteCredService({}).handler(shellCtx, "listDevices", [])).rejects.toThrow(
+      /not connected/i
     );
   });
 
-  it("clears the persisted pairing", async () => {
+  it("revokes through hubControl and clears the credential when revoking this device", async () => {
     mocks.store.value = sampleStored;
+    const call = vi.fn(async () => ({ revoked: true, closedSessions: 3 }));
     const { createRemoteCredService } = await import("./remoteCredService.js");
-    const service = createRemoteCredService({ startupMode: localStartupMode });
-    await expect(service.handler(shellCtx, "clear", [])).resolves.toEqual({ ok: true });
+    const service = createRemoteCredService({ getServerClient: () => serverClient(call) });
+    await expect(service.handler(shellCtx, "revokeDevice", [SELF_DEVICE_ID])).resolves.toEqual({
+      revoked: true,
+      closedSessions: 3,
+      currentDevice: true,
+    });
+    expect(call).toHaveBeenCalledWith("hubControl", "revokeDevice", [SELF_DEVICE_ID]);
     expect(mocks.store.value).toBeNull();
   });
 
-  it("loadStoredRemotePairing reflects the store", async () => {
+  it("clears the persisted pairing explicitly", async () => {
     mocks.store.value = sampleStored;
-    const { loadStoredRemotePairing } = await import("./remoteCredService.js");
-    expect(loadStoredRemotePairing()).toEqual(sampleStored);
+    const { createRemoteCredService, loadStoredRemotePairing } =
+      await import("./remoteCredService.js");
+    const service = createRemoteCredService({});
+    await expect(service.handler(shellCtx, "clear", [])).resolves.toEqual({ ok: true });
+    expect(loadStoredRemotePairing()).toBeNull();
   });
 });

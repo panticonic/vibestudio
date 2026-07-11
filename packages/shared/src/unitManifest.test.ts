@@ -18,8 +18,8 @@ describe("validateUnitManifest", () => {
             contributes: { buildTargets: ["react-native"] },
           },
         },
-        { unitName: "@workspace-extensions/a" },
-      ),
+        { unitName: "@workspace-extensions/a" }
+      )
     ).not.toThrow();
   });
 
@@ -28,8 +28,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         { extension: { activationEvents: ["*"], contributes: { buildTargets: ["electron"] } } },
-        { unitName: "@workspace-extensions/a" },
-      ),
+        { unitName: "@workspace-extensions/a" }
+      )
     ).toThrow(/contributes.buildTargets/);
   });
 
@@ -37,9 +37,12 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         extensionUnitManifestDescriptor,
-        { extension: { activationEvents: ["*"] }, app: { target: "electron", renderer: "index.tsx" } },
-        { unitName: "@workspace-extensions/a" },
-      ),
+        {
+          extension: { activationEvents: ["*"] },
+          app: { target: "electron", renderer: "index.tsx" },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
     ).toThrow(UnitManifestError);
   });
 
@@ -54,8 +57,8 @@ describe("validateUnitManifest", () => {
             capabilities: ["native-menus", "notifications", "fs-write"],
           },
         },
-        { unitName: "@workspace-apps/shell" },
-      ),
+        { unitName: "@workspace-apps/shell" }
+      )
     ).not.toThrow();
   });
 
@@ -64,8 +67,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "electron", renderer: "index.tsx", preload: "preload.ts" } },
-        { unitName: "@workspace-apps/shell" },
-      ),
+        { unitName: "@workspace-apps/shell" }
+      )
     ).toThrow(/pure-thin/);
   });
 
@@ -74,12 +77,12 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "dist", renderer: "index.tsx", distDir: "dist" } },
-        { unitName: "@workspace-apps/prebuilt" },
-      ),
+        { unitName: "@workspace-apps/prebuilt" }
+      )
     ).toThrow(/target must be "electron", "react-native", or "terminal"/);
   });
 
-  it("validates terminal app manifests with connection management", () => {
+  it("validates terminal app manifests with terminal capabilities", () => {
     expect(() =>
       validateUnitManifest(
         appUnitManifestDescriptor,
@@ -87,11 +90,11 @@ describe("validateUnitManifest", () => {
           app: {
             target: "terminal",
             entry: "index.ts",
-            capabilities: ["connection-management"],
+            capabilities: ["clipboard"],
           },
         },
-        { unitName: "@workspace-apps/remote-cli" },
-      ),
+        { unitName: "@workspace-apps/remote-cli" }
+      )
     ).not.toThrow();
   });
 
@@ -100,8 +103,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibestudio" } },
-        { unitName: "@workspace-apps/mobile" },
-      ),
+        { unitName: "@workspace-apps/mobile" }
+      )
     ).toThrow(/requires rnComponentName and rnHostAbi/);
   });
 
@@ -110,8 +113,8 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         { app: { target: "react-native", renderer: "index.tsx", capabilities: ["native-menus"] } },
-        { unitName: "@workspace-apps/mobile" },
-      ),
+        { unitName: "@workspace-apps/mobile" }
+      )
     ).toThrow(/known react-native capabilities/);
   });
 });

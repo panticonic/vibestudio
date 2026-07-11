@@ -324,9 +324,7 @@ describe("WorkspaceVcs working edits (edit → commit → push)", () => {
     const baseStateHash = await seedMain(REPO, [
       { kind: "create", path: "doc.txt", content: textContent("L1\n") },
     ]);
-    const files = await callerFor(gad).call<
-      Array<{ path: string; content_hash: string; mode: number }>
-    >("listStateFiles", { stateHash: baseStateHash });
+    const files = await vcs.worktrees.listStateFiles(baseStateHash);
     // Stage a draft off base (mode tweak makes the manifest hash differ). The
     // WorktreeStore primitive accepts any logId fixture here.
     const staged = await callerFor(gad).call<{ stateHash: string }>("stageWorktreeState", {

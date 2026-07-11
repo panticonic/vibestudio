@@ -162,6 +162,7 @@ interface ApprovalQueueLike {
           kind: "capability";
           callerId: string;
           callerKind: "panel" | "app" | "worker" | "do" | "extension";
+          requestedByUserId?: string;
           repoPath: string;
           effectiveVersion: string;
           capability: string;
@@ -175,6 +176,7 @@ interface ApprovalQueueLike {
           kind: "unit-batch";
           callerId: string;
           callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
+          requestedByUserId?: string;
           repoPath: string;
           effectiveVersion: string;
           dedupKey?: string | null;
@@ -184,7 +186,7 @@ interface ApprovalQueueLike {
           units: PendingUnitBatchApproval["units"];
           configWrite?: PendingUnitBatchApproval["configWrite"];
         }
-  ): Promise<"once" | "session" | "version" | "repo" | "deny">;
+  ): Promise<"once" | "session" | "version" | "deny">;
 }
 
 interface NotificationServiceLike {
@@ -503,12 +505,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       case "invoke":
         return this.invoke(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
       case "invokeProvider":
-        return this.invokeProvider(
-          ctx,
-          args[0] as string,
-          args[1] as string,
-          args[2] as unknown[]
-        );
+        return this.invokeProvider(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
       case "invokeStream":
         return this.invokeStream(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
       case "streamingMethods":
@@ -1189,6 +1186,9 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
             kind: "unit-batch",
             callerId: sourceChange.caller.runtime.id,
             callerKind,
+            ...(sourceChange.caller.subject
+              ? { requestedByUserId: sourceChange.caller.subject.userId }
+              : {}),
             repoPath: identity.repoPath,
             effectiveVersion: identity.effectiveVersion,
             dedupKey: `unit-source-change:extension:${installed.entry.name}:${sourceChange.branch}`,
@@ -1607,6 +1607,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       kind: "unit-batch",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       dedupKey: `unit-management:extension:reload:${node.name}`,

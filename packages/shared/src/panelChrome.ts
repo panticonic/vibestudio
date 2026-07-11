@@ -1,6 +1,7 @@
 import type { Panel, PanelNavigationState, PanelSnapshot, WorkspaceNode } from "./types.js";
 import { getCurrentSnapshot, getPanelHistoryState, getPanelRef } from "./panel/accessors.js";
 import { isAboutSource } from "./workspace/aboutNamespace.js";
+import { tryParsePanelLocationLink, type PanelLocation } from "./panelLocation.js";
 
 export type PanelSourceKind = "panel" | "browser";
 
@@ -60,6 +61,7 @@ export interface BrowserAddressOptions {
 
 export type AddressAction =
   | { type: "navigate-url"; url: string; recordAsTyped?: boolean }
+  | { type: "panel-location"; location: PanelLocation; raw?: string }
   | { type: "search"; query: string; template: string; recordAsTyped: true }
   | {
       type: "keyword-search";
@@ -134,6 +136,7 @@ export interface SearchEngineAddressRow {
 
 export type AddressInputResult =
   | { type: "browser-url"; url: string }
+  | { type: "panel-location"; location: PanelLocation }
   | { type: "panel-source"; source: string }
   | { type: "search"; query: string };
 
@@ -184,6 +187,9 @@ export function getPanelEditableAddress(
 export function parseAddressInput(input: string): AddressInputResult | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
+
+  const location = tryParsePanelLocationLink(trimmed);
+  if (location) return { type: "panel-location", location };
 
   if (PANEL_SOURCE_RE.test(trimmed) && !/\s/.test(trimmed)) {
     return { type: "panel-source", source: trimmed.replace(/^\/+/, "").replace(/\/+$/, "") };
@@ -428,6 +434,18 @@ export function buildAddressAutocompleteItems(args: {
           iconKind: "globe",
           query: input,
           action: { type: "navigate-url", url: parsed.url, recordAsTyped: true },
+        })
+      );
+    } else if (parsed?.type === "panel-location") {
+      items.push(
+        browserItem({
+          kind: "url",
+          browser: { url: input, source: "session" },
+          label: `Open ${parsed.location.source}`,
+          meta: "Vibestudio panel location",
+          iconKind: "panel",
+          query: input,
+          action: { type: "panel-location", location: parsed.location, raw: input },
         })
       );
     } else {

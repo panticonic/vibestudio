@@ -197,6 +197,16 @@ export interface EntityRecord {
    * owning panel as its `parent`.
    */
   parentId?: string;
+  /**
+   * Owning-user id — the `subject.userId` of the verified caller that created
+   * this entity (WP0 §6). Server-authoritative, write-once (stamped onto
+   * `entities.owner_user_id` at `entityActivate`). Lets an agent/worker/DO/panel
+   * attribute to the human whose subject launched its lineage; because a child
+   * entity is created FROM a caller whose subject already carries the inherited
+   * userId, the stamp propagates lineage without recursion. Absent for
+   * bootstrap-created entities that have no subject (WP0 §5.4).
+   */
+  ownerUserId?: string;
   createdAt: number;
 
   // ── Lifecycle (mutable) ──

@@ -146,6 +146,83 @@ describe("PanelView plain panel links", () => {
     expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
   });
 
+  it("navigates prefixed workspace links across equivalent loopback hostnames", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
+      externalHost: "localhost",
+      gatewayServerUrl: "http://localhost:43873/_workspace/dev-123",
+    });
+    await panelView.createViewForPanel(
+      panelId,
+      "http://127.0.0.1:43873/_workspace/dev-123/about/new/",
+      "ctx-current"
+    );
+
+    const event = { preventDefault: vi.fn() };
+    webContents.emit(
+      "will-navigate",
+      event,
+      "http://127.0.0.1:43873/_workspace/dev-123/about/server-logs/"
+    );
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.navigatePanel).toHaveBeenCalledWith(
+        panelId,
+        "about/server-logs",
+        {}
+      );
+    });
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+    expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
+  });
+
+  it("navigates canonical panel links in place with ref, context, and state", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
+      gatewayServerUrl: "http://127.0.0.1:1234/_workspace/dev-123",
+    });
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    const event = { preventDefault: vi.fn() };
+    webContents.emit(
+      "will-navigate",
+      event,
+      "vibestudio://panel?v=1&source=panels%2Fchat&workspace=dev-123&ref=state%3Aabc&contextId=ctx-next&stateArgs=%7B%22prompt%22%3A%22hi%22%7D&disposition=current"
+    );
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.navigatePanel).toHaveBeenCalledWith(panelId, "panels/chat", {
+        ref: "state:abc",
+        contextId: "ctx-next",
+        stateArgs: { prompt: "hi" },
+      });
+    });
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit root placement from a panel", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness();
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    const event = { preventDefault: vi.fn() };
+    webContents.emit(
+      "will-navigate",
+      event,
+      "vibestudio://panel?v=1&source=about%2Fserver-logs&disposition=root"
+    );
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.createPanel).toHaveBeenCalledWith(
+        panelId,
+        "about/server-logs",
+        { isRoot: true },
+        undefined,
+        undefined
+      );
+    });
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
   it("does not warn for initial managed navigations served through a gateway URL alias", async () => {
     const { panelId, panelView, webContents, sendPanelEvent } = createHarness({
       externalHost: "localhost",
@@ -221,7 +298,7 @@ describe("PanelView plain panel links", () => {
       expect(panelOrchestrator.createPanel).toHaveBeenCalledWith(
         panelId,
         "about/help",
-        {},
+        { isRoot: true },
         undefined,
         { callerId: "@workspace-apps/shell", callerKind: "app" }
       );

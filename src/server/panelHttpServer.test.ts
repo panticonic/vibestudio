@@ -236,7 +236,6 @@ describe("PanelHttpServer build cache", () => {
 
   it("does not synthesize build refs from panel context ids", async () => {
     const server = new PanelHttpServer();
-    server.setPort(1234);
     const getBuild = vi.fn(async () => buildResult);
     server.setCallbacks({
       onBuildComplete: vi.fn(),
@@ -271,7 +270,6 @@ describe("PanelHttpServer build cache", () => {
 
   it("uses explicit panel build refs when present", async () => {
     const server = new PanelHttpServer();
-    server.setPort(1234);
     const getBuild = vi.fn(async () => buildResult);
     server.setCallbacks({
       onBuildComplete: vi.fn(),

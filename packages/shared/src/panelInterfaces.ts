@@ -59,7 +59,12 @@ export interface PanelRelationshipProvider {
  * generic server info surface.
  */
 export interface ServerInfoLike {
-  gatewayConfig: { serverUrl: string; token?: string; aliases?: readonly string[] };
+  gatewayConfig: {
+    serverUrl: string;
+    token?: string;
+    aliases?: readonly string[];
+    workspace?: string;
+  };
   workerdPort: number;
   /** Protocol for panel-facing URLs */
   protocol: "http" | "https";
@@ -118,6 +123,8 @@ export interface PanelHttpServerLike {
  * Options for creating a new panel.
  */
 export type PanelCreateOptions = {
+  /** Force root placement even when the initiating view is itself a panel. */
+  isRoot?: boolean;
   name?: string;
   env?: Record<string, string>;
   ref?: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import type { Panel } from "@vibestudio/shared/types";
+import type { Panel, PanelTreeSnapshot } from "@vibestudio/shared/types";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
@@ -19,6 +19,14 @@ function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel
     artifacts: {},
     ...overrides,
   };
+}
+
+// WP3 replaced PanelTreeSnapshot.rootPanels with an owner-grouped `forest`.
+// These tests exercise tree-diff/title/prune logic, so grouping the roots under
+// a single owner is the faithful shape; the flatMap(group => group.rootPanels)
+// the orchestrator applies recovers exactly this root list.
+function forestSnapshot(rootPanels: Panel[], revision = 1): PanelTreeSnapshot {
+  return { revision, forest: [{ owner: "user-1", rootPanels }] };
 }
 
 function createOrchestrator(
@@ -74,10 +82,7 @@ function createOrchestrator(
     getCurrentEntityId: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     refreshSlotEntity: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     syncEntityCachesFromRegistry: vi.fn(() => {}),
-    loadTree: vi.fn(async () => ({
-      rootPanels: registry.getRootPanels(),
-      collapsedIds: [],
-    })),
+    loadTree: vi.fn(async () => ({ collapsedIds: [] })),
   };
   let orchestratorRef: PanelOrchestrator | null = null;
   let createCounter = 0;
@@ -1060,15 +1065,14 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     const { orchestrator, serverClient } = createOrchestrator(registry);
     const repopulate = vi.spyOn(registry, "repopulate");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("panel:tree/root", [], {
           title: "Runtime title",
           artifacts: { buildState: "building", buildProgress: "Restoring..." },
         }),
-      ],
-    });
+      ])
+    );
 
     expect(repopulate).not.toHaveBeenCalled();
     expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
@@ -1082,16 +1086,38 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     const { orchestrator } = createOrchestrator(registry);
     const repopulate = vi.spyOn(registry, "repopulate");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("panel:tree/root", [makePanel("panel:tree/child")], { title: "New title" }),
-      ],
-    });
+      ])
+    );
 
     expect(repopulate).toHaveBeenCalledOnce();
     expect(registry.getPanel("panel:tree/root")?.title).toBe("New title");
     expect(registry.getPanel("panel:tree/child")).toBeDefined();
+  });
+
+  it("applies an owner-only server change and re-bands the local forest", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("panel:tree/root", [], { owner: "bob" }), null, {
+      addAsRoot: true,
+    });
+    const { orchestrator } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      forest: [
+        {
+          owner: "alice",
+          rootPanels: [makePanel("panel:tree/root", [], { owner: "alice" })],
+        },
+      ],
+    });
+
+    expect(repopulate).toHaveBeenCalledOnce();
+    expect(registry.getPanel("panel:tree/root")?.owner).toBe("alice");
+    expect(registry.getPanelTreeSnapshot().forest.map((group) => group.owner)).toEqual(["alice"]);
   });
 
   it("prunes the local view of a panel removed from the authoritative tree", async () => {
@@ -1101,10 +1127,9 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     // The child currently has a live view hosted on this desktop.
     panelView.hasView.mockImplementation((id: string) => id === "panel:tree/child");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [makePanel("panel:tree/root")], // child closed by another client
-    });
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([makePanel("panel:tree/root")]) // child closed by another client
+    );
 
     expect(registry.getPanel("panel:tree/child")).toBeUndefined();
     expect(panelView.destroyView).toHaveBeenCalledWith("panel:tree/child");
@@ -1117,16 +1142,15 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     // The desktop currently hosts a live view for this panel.
     panelView.hasView.mockImplementation((id: string) => id === "panel:tree/root");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("panel:tree/root", [], {
           // Server navigated the panel to a new source/context (it is the sole
           // writer); the desktop view-host must reload the view reactively.
           snapshot: { source: "panels/other", contextId: "ctx-other", options: {} },
         }),
-      ],
-    });
+      ])
+    );
 
     expect(panelView.createViewForPanel).toHaveBeenCalled();
     const lastCall = panelView.createViewForPanel.mock.calls.at(-1);
@@ -1144,14 +1168,13 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
       loadedPanels.add(panelId);
     });
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("panel:tree/root", [], {
           snapshot: { source: "panels/other", contextId: "ctx-other", options: {} },
         }),
-      ],
-    });
+      ])
+    );
 
     expect(panelView.createViewForPanel).toHaveBeenCalled();
     const lastCall = panelView.createViewForPanel.mock.calls.at(-1);
@@ -1174,9 +1197,8 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     const { orchestrator, panelView, sendPanelEvent } = createOrchestrator(registry);
     panelView.hasView.mockImplementation((id: string) => id === "root");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("root", [], {
           snapshot: {
             source: "panels/root",
@@ -1185,8 +1207,8 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
             stateArgs: { mode: "new" },
           },
         }),
-      ],
-    });
+      ])
+    );
 
     expect(sendPanelEvent).toHaveBeenCalledWith("root", "runtime:stateArgsChanged", {
       mode: "new",
@@ -1202,10 +1224,9 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     const { orchestrator, serverClient } = createOrchestrator(registry);
     const repopulate = vi.spyOn(registry, "repopulate");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [makePanel("panel:tree/root", [], { title: "New title" })],
-    });
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([makePanel("panel:tree/root", [], { title: "New title" })])
+    );
 
     expect(repopulate).not.toHaveBeenCalled();
     expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
@@ -1237,9 +1258,8 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     const { orchestrator, serverClient } = createOrchestrator(registry);
     const repopulate = vi.spyOn(registry, "repopulate");
 
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("panel:tree/root", [], {
           title: "Runtime title",
           snapshot: {
@@ -1248,8 +1268,8 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
             options: {},
           },
         }),
-      ],
-    });
+      ])
+    );
 
     expect(repopulate).not.toHaveBeenCalled();
     expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
@@ -1292,10 +1312,9 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
       title: "Explicit title",
       explicit: true,
     });
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [makePanel("panel:tree/root", [], { title: "Agentic Chat" })],
-    });
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([makePanel("panel:tree/root", [], { title: "Agentic Chat" })])
+    );
 
     expect(repopulate).not.toHaveBeenCalled();
     expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
@@ -1315,12 +1334,11 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
       title: "Explicit title",
       explicit: true,
     });
-    await orchestrator.applyServerPanelTreeSnapshot({
-      revision: 1,
-      rootPanels: [
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
         makePanel("panel:tree/root", [makePanel("panel:tree/child")], { title: "Agentic Chat" }),
-      ],
-    });
+      ])
+    );
 
     expect(repopulate).toHaveBeenCalledOnce();
     expect(registry.getPanel("panel:tree/root")?.title).toBe("Explicit title");

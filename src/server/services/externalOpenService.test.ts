@@ -41,7 +41,7 @@ describe("externalOpenService", () => {
       requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
       resolveExternalAgent: vi.fn(),
       settleExternalAgent: vi.fn(() => 0),
-      resolveExternalAgentByRequest: vi.fn(() => 0),
+      resolveExternalAgentByRequest: vi.fn(async () => 0),
       submitClientConfig: vi.fn(),
       submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),

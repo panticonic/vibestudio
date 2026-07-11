@@ -457,7 +457,7 @@ describe("approvalCopy", () => {
     expect(
       getStandardActionCopy(gitWrite as Extract<PendingApproval, { kind: "credential" }>).once.label
     ).toBe("Push once");
-    expect(getStandardActionCopy(repoBinding).repo!.description).toContain(
+    expect(getStandardActionCopy(repoBinding).version!.description).toContain(
       "GitHub repositories at github.com/acme/project"
     );
     expect(
@@ -472,12 +472,13 @@ describe("approvalCopy", () => {
     expect(getStandardActionCopy(networkEgress).session!.label).toBe("Allow this origin");
     expect(getStandardActionCopy(networkEgress).session!.description).toContain("localhost:42531");
     expect(getStandardActionCopy(networkEgress).version!.label).toBe("Trust version with network");
-    expect(getStandardActionCopy(networkEgress).repo!.label).toBe("Trust repo with network");
     expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
       "Trust identity with network"
     );
     expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust identity");
-    expect(getStandardActionCopy(evalCredential).version!.description).toContain("runtime identity");
+    expect(getStandardActionCopy(evalCredential).version!.description).toContain(
+      "runtime identity"
+    );
   });
 
   it("formats unit-batch action labels for mixed scheduled jobs and apps", () => {

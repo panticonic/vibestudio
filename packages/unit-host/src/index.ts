@@ -309,7 +309,7 @@ export interface UnitHostOptions<
 }
 
 export type UnitReconcileTrigger = "startup" | "meta-change";
-export type UnitApprovalDecision = "once" | "session" | "version" | "repo" | "deny";
+export type UnitApprovalDecision = "once" | "session" | "version" | "deny";
 
 export interface UnitReconcileOptions {
   trigger?: UnitReconcileTrigger;
@@ -445,7 +445,7 @@ export class UnitSourceChangeGrantStore {
   }
 }
 
-export type UnitSourceChangeDecision = "once" | "session" | "version" | "repo" | "deny";
+export type UnitSourceChangeDecision = "once" | "session" | "version" | "deny";
 export type UnitUserlandCallerKind = "panel" | "app" | "worker" | "do";
 
 export interface UnitSourceChangeCallerIdentity {
@@ -457,6 +457,8 @@ export interface UnitSourceChangeCallerIdentity {
 export interface UnitSourceChangeCaller {
   runtime: { id: string; kind: string };
   code?: UnitSourceChangeCallerIdentity | null;
+  /** Host-verified requesting account, when the source change has user lineage. */
+  subject?: { userId: string; handle: string } | null;
 }
 
 export interface UnitSourceChangeRequest {

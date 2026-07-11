@@ -28,6 +28,11 @@ export interface SlotCreateInput {
   slotId: PanelSlotId;
   parentSlotId: PanelSlotId | null;
   positionId: string;
+  /**
+   * Owning-user id (WP3) — the creating caller's `subject.userId`. Stamped onto
+   * `slots.owner_user_id` so the new tree groups under its owner in the forest.
+   */
+  ownerUserId?: string;
   initialEntry?: SlotHistoryEntryInput;
 }
 
@@ -38,6 +43,8 @@ export interface SlotRow {
   current_entity_title?: string | null;
   current_entry_key: string | null;
   position_id: string;
+  /** Owning-user id (WP3); null for pre-identity/system-seeded slots. */
+  owner_user_id?: string | null;
   created_at: number;
   closed_at: number | null;
 }
@@ -85,7 +92,9 @@ export interface WorkspaceStateClient {
   moveSlot(
     slotId: PanelSlotId,
     parentSlotId: PanelSlotId | null,
-    positionId: string
+    positionId: string,
+    /** Acting mover's `subject.userId` — WP3 §10.1 subtree re-own on move. */
+    ownerUserId?: string
   ): Promise<void>;
   closeSlot(slotId: PanelSlotId): Promise<void>;
 }

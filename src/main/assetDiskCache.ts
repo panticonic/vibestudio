@@ -249,8 +249,11 @@ export class AssetDiskCache {
     };
   }
 
-  private async persist(cacheKey: string, response: FetchedResponse): Promise<ServedAsset> {
-    const body = await streamToBuffer(response.body!, this.maxBytes);
+  private async persist(
+    cacheKey: string,
+    response: FetchedResponse & { body: ReadableStream<Uint8Array> }
+  ): Promise<ServedAsset> {
+    const body = await streamToBuffer(response.body, this.maxBytes);
     const digest = createHash("sha256").update(body).digest("hex");
     const metadataKey = createHash("sha256").update(cacheKey).digest("hex");
 

@@ -17,9 +17,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
   gatewayUrl: string;
-  adminToken: string;
-  workspaceName: string;
-  isEphemeral: boolean;
+  connectUrl: string;
+  rootInvites: { desktop: { code: string } } | null;
+  workspaces: Array<{ name: string }>;
 }
 
 interface ShellCredential {
@@ -47,7 +47,8 @@ interface CdpEndpoint {
   token: string;
 }
 
-const RUN_HEADLESS_PANEL_INTEGRATION = process.env["VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
+const RUN_HEADLESS_PANEL_INTEGRATION =
+  process.env["VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
 const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
 const headlessHostEntry = findHeadlessHostEntry();
 const maybeDescribe =
@@ -98,13 +99,14 @@ maybeDescribe("headless browser panel integration", () => {
 
     serverProc = spawn(
       process.execPath,
-      [serverPath, "--ephemeral", "--init", "--serve-panels", "--ready-file", readyFile],
+      [serverPath, "--ephemeral", "--serve-panels", "--ready-file", readyFile],
       {
         cwd: process.cwd(),
         env: {
           ...process.env,
           NODE_ENV: "development",
-          VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+          HOME: tempRoot,
+          XDG_CONFIG_HOME: path.join(tempRoot, ".config"),
           VIBESTUDIO_HEADLESS_HOST_AUTOSPAWN: "1",
           VIBESTUDIO_HEADLESS_HOST_ENTRY: headlessHostEntry!,
           VIBESTUDIO_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
@@ -287,21 +289,73 @@ async function waitForReadyFile(
 }
 
 async function issueShellToken(ready: ReadyPayload): Promise<ShellCredential> {
-  const response = await fetch(`${ready.gatewayUrl}/_r/s/auth/issue-device`, {
+  const code = ready.rootInvites?.desktop.code;
+  const workspace = ready.workspaces[0]?.name;
+  if (!code || !workspace) throw new Error("fresh hub did not advertise a root invite/workspace");
+  const pairedResponse = await fetch(`${ready.connectUrl}/_r/s/auth/complete-pairing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      handle: "headless-smoke",
+      displayName: "Headless Smoke",
+      label: "Vitest headless panel integration",
+      platform: "test",
+    }),
+  });
+  const paired = (await pairedResponse.json()) as {
+    deviceId?: unknown;
+    refreshToken?: unknown;
+    shellToken?: unknown;
+    error?: unknown;
+  };
+  if (
+    !pairedResponse.ok ||
+    typeof paired.deviceId !== "string" ||
+    typeof paired.refreshToken !== "string" ||
+    typeof paired.shellToken !== "string"
+  ) {
+    throw new Error(
+      `failed to pair root device (${pairedResponse.status}): ${JSON.stringify(paired)}`
+    );
+  }
+  const routeResponse = await fetch(`${ready.connectUrl}/rpc`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${ready.adminToken}`,
+      Authorization: `Bearer ${paired.shellToken}`,
     },
-    body: JSON.stringify({ label: "Vitest headless panel integration", platform: "test" }),
+    body: JSON.stringify({ method: "hubControl.routeWorkspace", args: [{ workspace }] }),
   });
-  const body = (await response.json()) as {
+  const routePayload = (await routeResponse.json()) as {
+    result?: { serverUrl?: unknown };
+    error?: unknown;
+  };
+  const route = routePayload.result;
+  if (!routeResponse.ok || typeof route?.serverUrl !== "string") {
+    throw new Error(
+      `failed to route workspace (${routeResponse.status}): ${JSON.stringify(routePayload)}`
+    );
+  }
+  ready.gatewayUrl = route.serverUrl;
+  const refreshResponse = await fetch(`${route.serverUrl}/_r/s/auth/refresh-shell`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId: paired.deviceId, refreshToken: paired.refreshToken }),
+  });
+  const body = (await refreshResponse.json()) as {
     shellToken?: unknown;
     callerId?: unknown;
     error?: unknown;
   };
-  if (!response.ok || typeof body.shellToken !== "string" || typeof body.callerId !== "string") {
-    throw new Error(`failed to issue shell token (${response.status}): ${JSON.stringify(body)}`);
+  if (
+    !refreshResponse.ok ||
+    typeof body.shellToken !== "string" ||
+    typeof body.callerId !== "string"
+  ) {
+    throw new Error(
+      `failed to refresh child shell (${refreshResponse.status}): ${JSON.stringify(body)}`
+    );
   }
   return { shellToken: body.shellToken, callerId: body.callerId };
 }
@@ -391,7 +445,7 @@ async function connectRpcWebSocket(options: {
   callerKind: "shell" | "worker";
   clientLabel: string;
 }): Promise<RpcWsConnection> {
-  const wsUrl = new URL("/rpc", options.gatewayUrl);
+  const wsUrl = new URL(`${options.gatewayUrl.replace(/\/$/, "")}/rpc`);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(wsUrl);
   const listeners = new Set<(envelope: RpcEnvelope) => void>();

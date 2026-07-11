@@ -58,6 +58,18 @@ describe("sessionStore", () => {
     expect(loadAgentSession("broken")).toBeNull();
   });
 
+  it("rejects unknown fields and a filename/name mismatch", () => {
+    fs.mkdirSync(path.dirname(sessionPath("alpha")), { recursive: true });
+    fs.writeFileSync(
+      sessionPath("alpha"),
+      JSON.stringify({ ...makeSession("alpha"), hubUrl: "retired" })
+    );
+    expect(loadAgentSession("alpha")).toBeNull();
+
+    fs.writeFileSync(sessionPath("alpha"), JSON.stringify(makeSession("beta")));
+    expect(loadAgentSession("alpha")).toBeNull();
+  });
+
   it("lists sessions sorted by name and deletes them", () => {
     saveAgentSession(makeSession("beta"));
     saveAgentSession(makeSession("alpha"));

@@ -153,7 +153,7 @@ const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 export function collectExposableMethods(
   instance: object,
   allowed: ReadonlySet<string>,
-  frameworkBaseProto: object,
+  frameworkBaseProto: object
 ): Record<string, (request: { args: unknown[] }) => unknown> {
   const methods: Record<string, (request: { args: unknown[] }) => unknown> = {};
   let proto: object | null = instance;
@@ -173,15 +173,12 @@ export function collectExposableMethods(
 }
 
 function unwrapEnvelope(raw: unknown): RpcEnvelope | undefined {
-  if (raw && typeof raw === "object" && "envelope" in raw) {
-    return (raw as { envelope?: RpcEnvelope }).envelope;
-  }
   if (raw && typeof raw === "object" && "message" in raw) return raw as RpcEnvelope;
   return undefined;
 }
 
 export function createConnectionlessRpcClient(
-  config: ConnectionlessRpcConfig,
+  config: ConnectionlessRpcConfig
 ): ConnectionlessRpcClient {
   const transport: ConnectionlessTransport = httpClientTransport(config);
   const selfCaller = { callerId: config.selfId, callerKind: config.callerKind ?? "unknown" };
@@ -195,7 +192,7 @@ export function createConnectionlessRpcClient(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { requestId?: string; idempotencyKey?: string },
+    options?: { requestId?: string; idempotencyKey?: string }
   ): Promise<DeferredCallAck> {
     // Caller-supplied requestId lets the DO persist its continuation BEFORE the
     // reply can arrive; otherwise generate one.

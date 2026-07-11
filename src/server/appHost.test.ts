@@ -27,7 +27,6 @@ const REACT_NATIVE_PROVIDER = {
 beforeEach(() => {
   setWorkspaceAppTrust({
     chromeApps: ["apps/shell", "apps/mobile"],
-    connectionManagementApps: ["apps/shell", "apps/remote-cli"],
   });
 });
 
@@ -48,7 +47,7 @@ function makeHarness(
   opts: {
     seeded?: boolean;
     invalidManifest?: boolean;
-    approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
+    approvalDecision?: "once" | "session" | "version" | "deny";
     useApprovalCoordinator?: boolean;
     readWorkspaceFileAtCommit?: (commit: string, filePath: string) => Promise<string | null>;
     reactNativeAppArtifactBaseUrl?: string;
@@ -1011,7 +1010,7 @@ describe("AppHost", () => {
     // Remove apps/shell from the chrome trust list: the app now self-declares
     // panel-hosting without authorization, so the server-vetted (effective)
     // capability set projected into apps:available must drop it.
-    setWorkspaceAppTrust({ chromeApps: [], connectionManagementApps: [] });
+    setWorkspaceAppTrust({ chromeApps: [] });
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
@@ -1336,22 +1335,16 @@ describe("AppHost", () => {
     const { host, graphNode } = makeHarness();
     installApp(host, graphNode);
     host.registry.patch(graphNode.name, {
-      capabilities: ["connection-management", "panel-hosting"],
+      capabilities: ["notifications", "panel-hosting"],
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
     });
     const authorizer = host.capabilityAuthorizer();
 
     expect(
-      authorizer.check(
-        createVerifiedCaller("@workspace-apps/shell", "app"),
-        "connection-management"
-      )
+      authorizer.check(createVerifiedCaller("@workspace-apps/shell", "app"), "notifications")
     ).toEqual({ allowed: true });
     expect(
-      authorizer.check(
-        createVerifiedCaller("app:apps/shell:device-1", "app"),
-        "connection-management"
-      )
+      authorizer.check(createVerifiedCaller("app:apps/shell:device-1", "app"), "notifications")
     ).toEqual({ allowed: true });
     expect(
       authorizer.check(createVerifiedCaller("@workspace-apps/shell", "app"), "panel-hosting")
@@ -1366,55 +1359,6 @@ describe("AppHost", () => {
         "panel-hosting"
       )
     ).toMatchObject({ allowed: false });
-    expect(
-      authorizer.check(
-        createVerifiedCaller("app:apps/field-mobile:device-1", "app"),
-        "connection-management"
-      )
-    ).toMatchObject({ allowed: false });
-  });
-
-  it("only authorizes connection-management for explicit app sources", () => {
-    const { host, graphNode } = makeHarness();
-    installApp(host, graphNode);
-    host.registry.patch(graphNode.name, {
-      capabilities: ["connection-management"],
-      source: { kind: "workspace-repo", repo: "apps/other", ref: "main" },
-    });
-    const authorizer = host.capabilityAuthorizer();
-
-    expect(
-      authorizer.check(
-        createVerifiedCaller("app:apps/other:device-1", "app"),
-        "connection-management"
-      )
-    ).toMatchObject({ allowed: false });
-
-    host.registry.upsert({
-      unitKind: "app",
-      name: "@workspace-apps/remote-cli",
-      version: "1.0.0",
-      target: "terminal",
-      capabilities: ["connection-management"],
-      source: { kind: "workspace-repo", repo: "apps/remote-cli", ref: "main" },
-      installedAt: Date.now(),
-      activeEv: "ev-remote-cli",
-      activeSourceHash: "abc123",
-      activeBundleKey: "remote-cli-key",
-      activeDependencyEvs: {},
-      activeExternalDeps: {},
-      activeRuntimeDepsKey: null,
-      status: "available",
-      lastError: null,
-      previousVersions: [],
-    });
-
-    expect(
-      authorizer.check(
-        createVerifiedCaller("@workspace-apps/remote-cli", "app"),
-        "connection-management"
-      )
-    ).toEqual({ allowed: true });
   });
 
   it("activates terminal apps as launchable terminal process builds", async () => {
@@ -1429,14 +1373,14 @@ describe("AppHost", () => {
           app: {
             target: "terminal",
             entry: "index.ts",
-            capabilities: ["connection-management"],
+            capabilities: ["clipboard"],
           },
         },
       })
     );
     graphNode.manifest = {
       displayName: "Remote CLI",
-      app: { target: "terminal", capabilities: ["connection-management"] },
+      app: { target: "terminal", capabilities: ["clipboard"] },
     } as never;
     const terminalBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
@@ -1491,7 +1435,7 @@ describe("AppHost", () => {
     expect(host.registry.get(graphNode.name)).toMatchObject({
       target: "terminal",
       activeBundleKey: "terminal-key",
-      capabilities: ["connection-management"],
+      capabilities: ["clipboard"],
       status: "available",
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -1513,9 +1457,9 @@ describe("AppHost", () => {
     );
   });
 
-  it("does not restart an already-running terminal build during launch refresh", async () => {
+  it("preserves an already-running terminal build during reconciliation and launch refresh", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
-    setAppManifestTarget(graphNode, "terminal", ["connection-management"]);
+    setAppManifestTarget(graphNode, "terminal", ["clipboard"]);
     const terminalBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
       metadata: {
@@ -1556,6 +1500,11 @@ describe("AppHost", () => {
     };
     (host as unknown as { terminalRunner: typeof terminalRunner }).terminalRunner = terminalRunner;
     host.registry.patch(graphNode.name, { status: "running" });
+
+    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
+    await host.whenSettled();
+    expect(terminalRunner.stop).not.toHaveBeenCalled();
+    expect(terminalRunner.start).not.toHaveBeenCalled();
 
     await expect(host.launchHostTarget("terminal")).resolves.toMatchObject({
       status: "ready",
@@ -1644,7 +1593,7 @@ describe("AppHost", () => {
       name: graphNode.name,
       version: "1.0.0",
       target: "terminal",
-      capabilities: ["connection-management"],
+      capabilities: ["clipboard"],
       source: { kind: "workspace-repo", repo: graphNode.relativePath, ref: "main" },
       installedAt: Date.now(),
       activeEv: "ev-terminal-2",
@@ -1659,7 +1608,7 @@ describe("AppHost", () => {
         {
           version: "1.0.0",
           target: "terminal",
-          capabilities: ["connection-management"],
+          capabilities: ["clipboard"],
           activeEv: "ev-terminal-1",
           activeSourceHash: "sha-1",
           activeBundleKey: "terminal-key-1",

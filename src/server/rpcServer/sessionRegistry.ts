@@ -68,9 +68,9 @@ export class SessionRegistry {
     if (!session) {
       session = new CallerSession(callerId, callerKind);
       this.sessions.set(callerId, session);
-      return session;
+    } else {
+      session.callerKind = callerKind;
     }
-    session.callerKind = callerKind;
     return session;
   }
 

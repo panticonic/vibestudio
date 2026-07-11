@@ -238,9 +238,15 @@ export interface PanelFocusResult {
   holderLabel?: string;
 }
 
+/**
+ * A per-user panel-tree forest (WP3). The single-tree `rootPanels` collapse is
+ * replaced by N owner-grouped trees: every client sees every owner's roots
+ * (mutual visibility is the feature, plan §0.0), grouped by `owner`. Roots with
+ * no owner (pre-identity/system-seeded) group under the empty-string owner.
+ */
 export interface PanelTreeSnapshot {
   revision: number;
-  rootPanels: Panel[];
+  forest: Array<{ owner: string; rootPanels: Panel[] }>;
 }
 
 export interface PanelRecoverySnapshot {
@@ -321,6 +327,14 @@ export interface Panel {
   title: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
+  /**
+   * Owning-user id (WP3): the user whose tree this panel's root belongs to.
+   * Attribution/provenance only — NOT an inter-user security token (plan §0.0).
+   * Stamped from the creating caller's `subject.userId`; a subtree moved into
+   * another user's tree re-owns to the destination root's owner (WP3 §10.1).
+   * Absent for pre-identity/system-seeded panels.
+   */
+  owner?: string;
 
   // Tree structure
   children: Panel[];
@@ -340,20 +354,15 @@ export interface Panel {
 // =============================================================================
 
 export interface WorkspaceEntry {
+  /**
+   * Opaque stable workspace id ("ws_<rand>") minted once when the workspace is
+   * first registered. Decoupled from the display name and on-disk path (both of
+   * which may change); membership rows and per-user scoping key on this id.
+   * Never reused: delete + recreate mints a fresh id.
+   */
+  workspaceId: string;
   name: string;
   lastOpened: number;
-  /**
-   * Detached local workspace server the desktop last attached to. Pruned with
-   * the entry; validated against /healthz (serverId + workspaceId) before reuse.
-   */
-  localServer?: {
-    gatewayPort: number;
-    pid: number;
-    serverId: string;
-    serverBootId: string;
-    startedAt: number;
-    version?: string;
-  };
 }
 
 /**

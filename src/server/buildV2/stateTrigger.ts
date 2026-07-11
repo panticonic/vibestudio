@@ -40,9 +40,8 @@ export interface StateAdvancedEvent {
    * `vcs.edit`/`readFile`/`revert` return. For a per-repo advance this is
    * the subtree-rooted repo state, whereas `stateHash` is re-rooted to the
    * composed workspace/context view for the build trigger; the two differ.
-   * Equals `stateHash` for whole-workspace advances. Clients correlating an RPC
-   * result with a head advance (e.g. a panel's self-echo / undo guards) MUST
-   * match on this field, not `stateHash`.
+   * Clients correlating an RPC result with a head advance (e.g. a panel's
+   * self-echo / undo guards) MUST match on this field, not `stateHash`.
    */
   repoStateHash: string;
   /** State this head advanced from; null when the prior state is unknown/new. */
@@ -58,14 +57,12 @@ export interface StateAdvancedEvent {
   /** File paths changed vs the previous state of this head (workspace-relative). */
   changedPaths: string[];
   /**
-   * Routing metadata only (per-repo VCS): which repo's log advanced. The build
-   * trigger stays workspace-rooted — a per-repo advance re-roots its changed
-   * paths to workspace-relative and builds against the composed workspace view,
-   * so `changedPaths`/`stateHash` remain workspace-rooted regardless. Used for
-   * per-repo memory indexing and dependent selection. Absent for legacy
-   * whole-workspace advances.
+   * Routing metadata: which repo's log advanced. The build trigger stays
+   * workspace-rooted — the per-repo advance re-roots its changed paths to
+   * workspace-relative and builds against the composed workspace view, so
+   * `changedPaths`/`stateHash` remain workspace-rooted regardless.
    */
-  repoPath?: string;
+  repoPath: string;
   /** File-level delta with content hashes/modes for exact reconciliation. */
   fileChanges: Array<{
     kind: "added" | "removed" | "changed";
@@ -96,7 +93,7 @@ export interface StateAdvancedEvent {
 export interface WorkingAdvancedEvent {
   head: string;
   /** Which repo's working content advanced (per-repo VCS). */
-  repoPath?: string;
+  repoPath: string;
   /** Verified server-side actor that authored the edit. */
   actor: { id: string; kind: string } | null;
   /** The working state hash (committed base + uncommitted ops) projected to disk. */
@@ -146,9 +143,8 @@ export interface WorkspaceStateSource {
   /**
    * Discover package manifests from a workspace-rooted state. Per the per-repo
    * VCS reshape this is the composed live workspace view (`workspaceView()` =
-   * `composeRepoStatesLocal` over each repo's `main`), which equals the legacy
-   * whole-workspace state for discovery purposes: discovery stays
-   * workspace-rooted so unit `relativePath`s, EVs, and the build graph are all
+   * `composeRepoStatesLocal` over each repo's `main`). Discovery stays
+   * workspace-rooted so unit `relativePath`s, EVs, and the build graph remain
    * in workspace coordinates regardless of which repo advanced.
    */
   discoverGraph(stateHash: string): Promise<PackageGraph>;
@@ -333,11 +329,9 @@ export class StateTransitionTrigger extends EventEmitter {
     // same composed workspace `stateHash` but DISTINCT per-repo `changedPaths`.
     // Deduping on `stateHash` alone would drop every repo after the first (the
     // first advances `this.stateHash` to the composed view), leaving the later
-    // repos' units' content hashes / EV / build notifications stale. So only
-    // short-circuit whole-workspace advances (no `repoPath`); a per-repo
-    // event is always processed for its own `changedPaths` — an empty delta is
-    // still cheaply handled by the `units.size === 0` branch below.
-    if (!event.repoPath && event.stateHash === this.stateHash) return; // already current
+    // repos' units' content hashes / EV / build notifications stale. Every
+    // per-repo event is therefore processed for its own `changedPaths`; an
+    // empty delta is cheaply handled by the `units.size === 0` branch below.
 
     const { units, unmatched, manifestTouched } = unitsForChangedPaths(
       this.graph,

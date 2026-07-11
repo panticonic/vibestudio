@@ -36,7 +36,7 @@ import {
   loadShellCredential,
   clearShellCredential,
   makeShellTokenProvider,
-  deviceIdFromCallerId,
+  completeFreshMobilePairing,
   activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
 } from "@vibestudio/mobile-webrtc";
 import {
@@ -74,6 +74,7 @@ function parseConnectDeepLink(rawUrl) {
     fp: parsed.fp,
     code: parsed.code,
     sig: parsed.sig,
+    v: parsed.v,
     ice: parsed.ice,
     srv: parsed.srv,
   };
@@ -106,11 +107,7 @@ async function consumeConnectLinkReplay(rawUrl) {
   } catch {
     return false;
   }
-  if (
-    !parsed ||
-    typeof parsed.url !== "string" ||
-    typeof parsed.consumedAt !== "number"
-  ) {
+  if (!parsed || typeof parsed.url !== "string" || typeof parsed.consumedAt !== "number") {
     return false;
   }
   const age = Date.now() - parsed.consumedAt;
@@ -124,8 +121,7 @@ async function consumeConnectLinkReplay(rawUrl) {
 function isConnectLink(rawUrl) {
   return (
     typeof rawUrl === "string" &&
-    (rawUrl.startsWith("vibestudio://connect") ||
-      rawUrl.startsWith("https://vibestudio.app/pair"))
+    (rawUrl.startsWith("vibestudio://connect") || rawUrl.startsWith("https://vibestudio.app/pair"))
   );
 }
 
@@ -143,7 +139,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 
 // The shell-credential store + the WebRTC connect helpers
 // (establishWebRtcConnection / reconnectViaWebRtc / persist+loadShellCredential /
-// makeShellTokenProvider / deviceIdFromCallerId) now live in
+// makeShellTokenProvider / fresh-pairing commit) now live in
 // @vibestudio/mobile-webrtc, shared with the post-reload workspace app. Only the
 // fresh-pairing flow below (which emits the smoke phases) stays here.
 
@@ -160,16 +156,11 @@ async function pairViaWebRtc(pairing) {
       tokenProvider.setCredential(credential);
     },
   });
-  if (pairedCredential) {
-    await persistShellCredential(pairedCredential, pairing);
-    connection.deviceId = pairedCredential.deviceId;
-  } else {
-    // The server authenticated us but issued no fresh credential — we are
-    // connected for this session but cannot persist a refresh secret. Surface
-    // it loudly rather than pretending a reconnect will work.
-    console.warn("[mobile-rtc] paired session returned no device credential to persist");
-    connection.deviceId = deviceIdFromCallerId(connection.callerId);
-  }
+  await completeFreshMobilePairing({
+    connection,
+    credential: pairedCredential,
+    persistCredential: persistShellCredential,
+  });
   smokePhase("embedded-pairing-complete");
   return connection;
 }
@@ -181,6 +172,20 @@ async function rpc(connection, method, args = []) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function closeBootstrapConnectionAfterFailure(connection, error) {
+  if (!connection) return error;
+  try {
+    await connection.close();
+    return error;
+  } catch (closeError) {
+    const failure = error instanceof Error ? error.message : String(error);
+    const cleanup = closeError instanceof Error ? closeError.message : String(closeError);
+    return new Error(
+      `Mobile bootstrap failed (${failure}) and connection cleanup failed (${cleanup})`
+    );
+  }
 }
 
 function isTransientLaunchRpcError(error) {
@@ -523,6 +528,7 @@ function VibestudioMobileHostBootstrap() {
     setApprovals([]);
     setLaunchSession(null);
     setStatus("Loading approved workspace app...");
+    let connection = null;
     try {
       const initialUrl = await Linking.getInitialURL();
       if (isConnectLink(initialUrl)) {
@@ -541,17 +547,29 @@ function VibestudioMobileHostBootstrap() {
         );
         return;
       }
-      setStatus(`Reconnecting to ${pairingLabel(stored.pairing)}...`);
-      const connection = await reconnectViaWebRtc(stored);
+      setStatus(`Reconnecting to ${pairingLabel(stored.workspacePairing)}...`);
+      connection = await reconnectViaWebRtc(stored);
       await runLaunchGate(connection);
     } catch (error) {
+      const failure = await closeBootstrapConnectionAfterFailure(connection, error);
+      setLaunchGrant(null);
+      setLaunchSession(null);
+      setApprovals([]);
       // A rejected refresh secret is terminal — drop it so the next launch asks
       // for a fresh QR instead of looping on a credential the server won't honor.
       if (error?.code === "SESSION_AUTH_FAILED") {
-        await clearShellCredential().catch(() => {});
-        setStatus("Your saved pairing was rejected. Scan a fresh Vibestudio QR code to re-pair.");
+        try {
+          await clearShellCredential();
+          setStatus("Your saved pairing was rejected. Scan a fresh Vibestudio QR code to re-pair.");
+        } catch (clearError) {
+          setStatus(
+            `Your saved pairing was rejected and could not be cleared securely: ${
+              clearError instanceof Error ? clearError.message : String(clearError)
+            }`
+          );
+        }
       } else {
-        setStatus(error instanceof Error ? error.message : String(error));
+        setStatus(failure instanceof Error ? failure.message : String(failure));
       }
     } finally {
       setBusy(false);
@@ -562,11 +580,12 @@ function VibestudioMobileHostBootstrap() {
     if (!pendingConnect) return;
     setBusy(true);
     setStatus("Pairing over a secure WebRTC pipe...");
+    let connection = null;
     try {
       // Pair + connect over WebRTC: pin the server's DTLS fingerprint, redeem the
       // one-time code, persist the issued device credential. The signaling room
       // targets one workspace server, so we proceed straight to the launch gate.
-      const connection = await pairViaWebRtc(pendingConnect);
+      connection = await pairViaWebRtc(pendingConnect);
       smokePhase("embedded-workspace-selected");
       if (pendingConnect.rawUrl) {
         await markConnectLinkConsumed(pendingConnect.rawUrl).catch(() => {});
@@ -574,7 +593,11 @@ function VibestudioMobileHostBootstrap() {
       setPendingConnect(null);
       await runLaunchGate(connection);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      const failure = await closeBootstrapConnectionAfterFailure(connection, error);
+      setLaunchGrant(null);
+      setLaunchSession(null);
+      setApprovals([]);
+      setStatus(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setBusy(false);
     }
@@ -645,12 +668,7 @@ function VibestudioMobileHostBootstrap() {
     return () => subscription.remove();
   }, [presentConnectLink]);
 
-  const activeStep =
-    approvals.length > 0
-      ? "approve"
-      : pendingConnect
-        ? "pair"
-        : "load";
+  const activeStep = approvals.length > 0 ? "approve" : pendingConnect ? "pair" : "load";
 
   return (
     <SafeAreaView style={styles.root}>
@@ -775,7 +793,8 @@ function VibestudioMobileHostBootstrap() {
               ) : (
                 <>
                   <Text style={styles.hint}>
-                    Open a Vibestudio pairing link or scan a QR code from a trusted desktop or terminal.
+                    Open a Vibestudio pairing link or scan a QR code from a trusted desktop or
+                    terminal.
                   </Text>
                   <ActionButton title="Scan QR" onPress={openScanner} />
                   <ActionButton title="Paste pairing link" onPress={pasteConnectLink} />

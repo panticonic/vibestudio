@@ -25,6 +25,12 @@ import {
   parsePanelUrl,
   type ParsedPanelUrl,
 } from "@vibestudio/shared/shell/urlParsing.js";
+import {
+  tryParsePanelLocationLink,
+  type PanelDisposition,
+  type PanelLocation,
+} from "@vibestudio/shared/panelLocation.js";
+import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect.js";
 import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { PanelNavigationState } from "@vibestudio/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";
@@ -54,6 +60,7 @@ interface PanelOrchestratorLike {
       contextId?: string;
       ref?: string;
       focus?: boolean;
+      isRoot?: boolean;
     },
     stateArgs?: Record<string, unknown>,
     scopedCaller?: PanelLinkCaller
@@ -96,6 +103,8 @@ export class PanelView implements PanelViewLike {
   private readonly cdpHost: CdpHostLike;
   private readonly panelOrchestrator: PanelOrchestratorLike;
   private readonly managedHosts: readonly string[];
+  private readonly managedBasePaths: readonly string[];
+  private readonly managedWorkspace?: string;
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
   private autofillManager?: AutofillManagerLike;
   private autofillPreloadPath?: string;
@@ -144,6 +153,10 @@ export class PanelView implements PanelViewLike {
     this.cdpHost = deps.cdpHost;
     this.panelOrchestrator = deps.panelOrchestrator;
     this.managedHosts = this.buildManagedHosts(deps.serverInfo);
+    this.managedBasePaths = this.buildManagedBasePaths(deps.serverInfo);
+    this.managedWorkspace = deps.serverInfo.gatewayConfig?.serverUrl
+      ? (selectedWorkspaceNameFromUrl(deps.serverInfo.gatewayConfig.serverUrl) ?? undefined)
+      : undefined;
     this.sendPanelEvent = deps.sendPanelEvent;
     this.autofillManager = deps.autofillManager;
     this.autofillPreloadPath = deps.autofillPreloadPath;
@@ -174,7 +187,35 @@ export class PanelView implements PanelViewLike {
     for (const alias of serverInfo.gatewayConfig?.aliases ?? []) {
       addUrlHost(alias);
     }
+    const loopbackHosts = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"];
+    if (loopbackHosts.some((host) => hosts.has(host))) {
+      for (const host of loopbackHosts) hosts.add(host);
+    }
     return [...hosts];
+  }
+
+  private buildManagedBasePaths(serverInfo: ServerInfoLike): string[] {
+    const paths = new Set<string>();
+    for (const value of [
+      serverInfo.gatewayConfig?.serverUrl,
+      ...(serverInfo.gatewayConfig?.aliases ?? []),
+    ]) {
+      if (!value) continue;
+      try {
+        const pathname = new URL(value).pathname.replace(/\/+$/, "");
+        if (pathname && pathname !== "/") paths.add(pathname);
+      } catch {
+        // Invalid gateway configuration fails elsewhere; it is not a managed
+        // panel route candidate here.
+      }
+    }
+    // Try the longest workspace prefix first so
+    // `/_workspace/<id>/about/new` is not parsed as `/_workspace/<id>`.
+    // An origin-root route is valid only when no configured endpoint prefix
+    // exists; otherwise a different workspace on the same hub must not be
+    // translated into this panel tree.
+    if (paths.size === 0) paths.add("");
+    return [...paths].sort((a, b) => b.length - a.length);
   }
 
   private isManagedUrl(url: string): boolean {
@@ -182,9 +223,23 @@ export class PanelView implements PanelViewLike {
   }
 
   private parseManagedPanelUrl(url: string): ParsedPanelUrl | null {
-    for (const host of this.managedHosts) {
-      const parsed = parsePanelUrl(url, host);
-      if (parsed) return parsed;
+    const canonical = tryParsePanelLocationLink(url);
+    if (canonical) {
+      return {
+        ...canonical,
+        options: {
+          name: canonical.name,
+          contextId: canonical.contextId,
+          focus: canonical.focus,
+          ref: canonical.ref,
+        },
+      };
+    }
+    for (const basePath of this.managedBasePaths) {
+      for (const host of this.managedHosts) {
+        const parsed = parsePanelUrl(url, host, basePath);
+        if (parsed) return parsed;
+      }
     }
     return null;
   }
@@ -589,7 +644,7 @@ export class PanelView implements PanelViewLike {
       const url = details.url;
       const parsed = this.parseManagedPanelUrl(url);
       if (parsed) {
-        void this.openManagedLink(panelId, parsed, url).catch((err: unknown) =>
+        void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
           this.handlePanelLinkError(panelId, err, url)
         );
         return { action: "deny" as const };
@@ -604,6 +659,18 @@ export class PanelView implements PanelViewLike {
     });
 
     const willNavigateHandler = (event: Electron.Event, url: string) => {
+      const canonical = tryParsePanelLocationLink(url);
+      if (canonical) {
+        event.preventDefault();
+        const parsed = this.parseManagedPanelUrl(url);
+        if (parsed) {
+          const fallback = this.getHostedViewInfo(panelId)?.type === "app" ? "root" : "current";
+          void this.handleManagedLink(panelId, parsed, url, fallback).catch((err: unknown) =>
+            this.handlePanelLinkError(panelId, err, url)
+          );
+        }
+        return;
+      }
       if (!this.isManagedUrl(url)) {
         if (/^https?:\/\//i.test(url)) {
           event.preventDefault();
@@ -620,7 +687,7 @@ export class PanelView implements PanelViewLike {
       const viewInfo = this.getHostedViewInfo(panelId);
       if (viewInfo?.type === "app") {
         event.preventDefault();
-        void this.openManagedLink(panelId, parsed, url).catch((err: unknown) =>
+        void this.handleManagedLink(panelId, parsed, url, "root").catch((err: unknown) =>
           this.handlePanelLinkError(panelId, err, url)
         );
         return;
@@ -635,10 +702,19 @@ export class PanelView implements PanelViewLike {
       const contextChanged = targetContextId !== currentContextId;
       const refChanged = parsed.ref !== getPanelRef(panel);
       const stateArgsChanged = parsed.stateArgs !== undefined;
-      if (!sourceChanged && !contextChanged && !refChanged && !stateArgsChanged) return;
+      const placementChanged = parsed.disposition !== undefined && parsed.disposition !== "current";
+      if (
+        !sourceChanged &&
+        !contextChanged &&
+        !refChanged &&
+        !stateArgsChanged &&
+        !placementChanged
+      ) {
+        return;
+      }
 
       event.preventDefault();
-      void this.navigateManagedLink(panelId, parsed, url).catch((err: unknown) =>
+      void this.handleManagedLink(panelId, parsed, url, "current").catch((err: unknown) =>
         this.handlePanelLinkError(panelId, err, url)
       );
     };
@@ -681,6 +757,7 @@ export class PanelView implements PanelViewLike {
     contextId?: string;
     ref?: string;
     focus?: boolean;
+    isRoot?: boolean;
   } {
     return {
       ...(parsed.options.name !== undefined ? { name: parsed.options.name } : {}),
@@ -705,17 +782,54 @@ export class PanelView implements PanelViewLike {
   private async openManagedLink(
     sourceViewId: string,
     parsed: ParsedPanelUrl,
-    url: string
+    url: string,
+    disposition: Exclude<PanelDisposition, "current">
   ): Promise<void> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
     const result = await this.panelOrchestrator.createPanel(
       sourceViewId,
       parsed.source,
-      this.createOptionsForParsedLink(parsed),
+      {
+        ...this.createOptionsForParsedLink(parsed),
+        ...(disposition === "root" ? { isRoot: true } : {}),
+      },
       parsed.stateArgs,
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+  }
+
+  private assertLinkWorkspace(location: PanelLocation): void {
+    if (
+      location.workspace &&
+      this.managedWorkspace &&
+      location.workspace !== this.managedWorkspace
+    ) {
+      throw new Error(
+        `Panel link targets workspace ${location.workspace}; current workspace is ${this.managedWorkspace}`
+      );
+    }
+  }
+
+  private async handleManagedLink(
+    sourceViewId: string,
+    parsed: ParsedPanelUrl,
+    url: string,
+    fallbackDisposition: PanelDisposition
+  ): Promise<void> {
+    this.assertLinkWorkspace(parsed);
+    const disposition = parsed.disposition ?? fallbackDisposition;
+    const sourcePanel = this.panelRegistry.getPanel(sourceViewId);
+    if (disposition === "current" && sourcePanel) {
+      await this.navigateManagedLink(sourceViewId, parsed, url);
+      return;
+    }
+    await this.openManagedLink(
+      sourceViewId,
+      parsed,
+      url,
+      disposition === "child" && sourcePanel ? "child" : "root"
+    );
   }
 
   private async openBrowserLink(sourceViewId: string, url: string): Promise<void> {

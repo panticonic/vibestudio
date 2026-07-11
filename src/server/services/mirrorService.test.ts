@@ -33,6 +33,7 @@ const AGENT_CALLER = {
     contextId: "ctx-agent",
     channelId: "chan-1",
     agentId: "agent:session-1",
+    userId: "usr_test",
   }),
 };
 

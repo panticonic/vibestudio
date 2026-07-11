@@ -2,7 +2,13 @@ import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
+import {
+  collectTreeReachableDigests,
+  ensureLayout,
+  mirrorWorktreeTree,
+  putBytes,
+} from "../services/blobstoreService.js";
+import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { createRefService } from "../services/refService.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
@@ -81,5 +87,34 @@ describe("WorkspaceVcs startup source authority", () => {
       kind: "text",
       text: "initPanels:\n  - source: panels/disk\n",
     });
+  });
+
+  it("materializes the canonical empty tree before marking it as a GC root", async () => {
+    await fsp.rm(path.join(workspaceRoot, "meta"), { recursive: true });
+    const { vcs } = makeVcs();
+    await vcs.attachGad({
+      async call<T>(method: string): Promise<T> {
+        if (method === "vcsHealPublishDrift") return undefined as T;
+        if (method === "runGadGcMark") {
+          return {
+            keptStates: 1,
+            sweptStates: 0,
+            sweptManifests: 0,
+            sweptFileVersions: 0,
+            blobCandidates: 0,
+            liveStateHashes: [EMPTY_STATE_HASH],
+            liveBlobDigests: [],
+          } as T;
+        }
+        if (method === "runGadGcSweep") return { digests: [] } as T;
+        throw new Error(`Unexpected GAD call: ${method}`);
+      },
+    });
+
+    await expect(vcs.runGc({ minAgeMs: 0 })).resolves.toMatchObject({
+      keptStates: 1,
+      sweptTreeObjects: 0,
+    });
+    await expect(collectTreeReachableDigests(blobsDir, EMPTY_STATE_HASH)).resolves.not.toBeNull();
   });
 });

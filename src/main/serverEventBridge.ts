@@ -5,6 +5,10 @@ import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/pan
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { credentialsMethods } from "@vibestudio/shared/serviceSchemas/credentials";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  HubWorkspaceRouteSchema,
+  type HubWorkspaceRoute,
+} from "@vibestudio/shared/serviceSchemas/hubControl";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";
@@ -24,7 +28,7 @@ export interface ServerEventBridgeDeps {
   /** Resolve server app artifact route references for this Electron connection. */
   resolveAppAvailableEvent?(payload: unknown): unknown | null;
   /** The server asked the shell to relaunch into a different workspace. */
-  onWorkspaceRelaunchRequested?(name: string): void;
+  onWorkspaceRelaunchRequested?(name: string, route: HubWorkspaceRoute): void;
   /**
    * The server asked the shell to run an interactive session credential
    * capture. The handler answers with `credentials.completeCapture`.
@@ -97,19 +101,28 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
     }
 
     if (bareEvent === "workspace:relaunch-requested") {
-      const { name } = payload as { name?: unknown };
-      if (typeof name === "string") deps.onWorkspaceRelaunchRequested?.(name);
+      const parsed = HubWorkspaceRouteSchema.safeParse(
+        payload && typeof payload === "object" ? (payload as { route?: unknown }).route : undefined
+      );
+      const name =
+        payload && typeof payload === "object" ? (payload as { name?: unknown }).name : undefined;
+      if (typeof name === "string" && parsed.success && parsed.data.workspace === name) {
+        deps.onWorkspaceRelaunchRequested?.(name, parsed.data);
+      } else {
+        deps.warn("[workspace] ignored malformed relaunch route");
+      }
       return;
     }
 
     if (bareEvent === "credential:capture-request") {
       const request = payload as Record<string, unknown>;
       const captureId = request["captureId"];
-      if (typeof captureId !== "string" || !deps.onCredentialCaptureRequest) return;
+      const onCredentialCaptureRequest = deps.onCredentialCaptureRequest;
+      if (typeof captureId !== "string" || !onCredentialCaptureRequest) return;
       void (async () => {
         let result: Record<string, unknown>;
         try {
-          result = await deps.onCredentialCaptureRequest!(request);
+          result = await onCredentialCaptureRequest(request);
         } catch (err) {
           result = { error: err instanceof Error ? err.message : String(err) };
         }

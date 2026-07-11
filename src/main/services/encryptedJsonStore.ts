@@ -13,6 +13,8 @@
  */
 
 /** Cipher seam — Electron `safeStorage` in production, identity in tests. */
+import { writeFileAtomicSync, type AtomicWriteFs } from "../../atomicFile.js";
+
 export interface StoreCipher {
   encrypt(plaintext: string): Buffer;
   decrypt(ciphertext: Buffer): string;
@@ -33,21 +35,17 @@ export interface EncryptedJsonStore<T> {
 export function createEncryptedJsonStore<T>(deps: {
   filePath: string;
   cipher: StoreCipher;
-  fs: Pick<
-    typeof import("node:fs"),
-    "readFileSync" | "writeFileSync" | "mkdirSync" | "rmSync" | "existsSync"
-  >;
-  dirname: (p: string) => string;
+  fs: Pick<typeof import("node:fs"), "readFileSync" | "rmSync" | "existsSync"> & AtomicWriteFs;
   validate: (value: unknown) => value is T;
   secretDescription: string;
 }): EncryptedJsonStore<T> {
-  const { filePath, cipher, fs, dirname, validate, secretDescription } = deps;
+  const { filePath, cipher, fs, validate, secretDescription } = deps;
   return {
     load(): T | null {
       if (!fs.existsSync(filePath)) return null;
       // We never write plaintext (see save), so without the cipher we cannot read a
-      // legitimately-stored secret — treat as absent rather than attempt a plaintext
-      // parse (which would only succeed on an insecure legacy file).
+      // legitimately-stored secret — treat it as absent. Plaintext is not a
+      // supported storage format.
       if (!cipher.isAvailable()) return null;
       try {
         const raw = fs.readFileSync(filePath);
@@ -74,8 +72,7 @@ export function createEncryptedJsonStore<T>(deps: {
       }
       const json = JSON.stringify(value);
       const bytes = cipher.encrypt(json);
-      fs.mkdirSync(dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, bytes, { mode: 0o600 });
+      writeFileAtomicSync(filePath, bytes, { mode: 0o600, fs });
     },
     clear(): void {
       if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });

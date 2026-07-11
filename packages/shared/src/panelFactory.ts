@@ -37,7 +37,12 @@ export interface BuildBootstrapConfigOpts {
   parentId: PanelSlotId | null;
   parentEntityId?: PanelEntityId | null;
   theme: "light" | "dark";
-  gatewayConfig: { serverUrl: string; token: string; aliases?: readonly string[] };
+  gatewayConfig: {
+    serverUrl: string;
+    token: string;
+    aliases?: readonly string[];
+    workspace?: string;
+  };
   env?: Record<string, string>;
   stateArgs?: Record<string, unknown>;
 }

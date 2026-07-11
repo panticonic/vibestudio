@@ -17,63 +17,30 @@
 import "./polyfills.js";
 import { AppState, type AppStateStatus } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Keychain from "react-native-keychain";
 import { createRpcClient } from "@vibestudio/rpc";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { WebRtcTransport, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
 import { DEFAULT_CHUNK_SIZE } from "@vibestudio/rpc/transports/webrtcPeer";
+import {
+  createStoredShellCredential,
+  parseStoredShellCredential,
+  type ShellCredential,
+  type ShellPairing,
+  type StoredShellCredential,
+} from "./storedCredential.js";
 import { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 
-/** Legacy AsyncStorage key (plaintext) — kept only to migrate off it on load. */
-export const SHELL_CREDENTIAL_KEY = "vibestudio:webrtc:shell-credential";
+export type {
+  ShellCredential,
+  ShellPairing,
+  StoredShellCredential,
+  StoredShellPairing,
+} from "./storedCredential.js";
+
 /** OS Keychain/Keystore service the durable shell credential is stored under. */
 const KEYCHAIN_SERVICE = "vibestudio:webrtc:shell-credential";
-
-function parseStoredCredential(raw: string | null | undefined): StoredShellCredential | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as StoredShellCredential;
-    if (
-      parsed?.deviceId &&
-      parsed?.refreshToken &&
-      parsed?.pairing?.room &&
-      parsed?.pairing?.fp &&
-      parsed?.pairing?.sig
-    ) {
-      return parsed;
-    }
-  } catch {
-    // fall through
-  }
-  return null;
-}
-
-export interface ShellPairing {
-  /** Signaling room UUID. */
-  room: string;
-  /** Server DTLS SHA-256 fingerprint (uppercase colon-hex) — pinned, fail-closed. */
-  fp: string;
-  /** Signaling endpoint URL (ws/wss). */
-  sig: string;
-  /** ICE transport policy ("all" | "relay"). */
-  ice?: string;
-  /** Optional server label/origin. */
-  srv?: string | null;
-  /** One-time pairing code (fresh pairing only). */
-  code?: string;
-}
-
-export interface ShellCredential {
-  deviceId: string;
-  refreshToken: string;
-}
-
-export interface StoredShellCredential extends ShellCredential {
-  pairing: ShellPairing;
-  pairedAt: number;
-}
 
 export interface ShellTokenProvider {
   getToken(): string;
@@ -115,6 +82,20 @@ export function randomRequestId(prefix = "mobile-shell"): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+async function closeAfterFailure(
+  close: () => Promise<void>,
+  failure: unknown,
+  context: string
+): Promise<void> {
+  try {
+    await close();
+  } catch (closeError) {
+    const failureMessage = failure instanceof Error ? failure.message : String(failure);
+    const closeMessage = closeError instanceof Error ? closeError.message : String(closeError);
+    throw new Error(`${context} (${failureMessage}) and cleanup failed (${closeMessage})`);
+  }
+}
+
 /**
  * Stateful shell-token provider. A fresh device redeems the one-time pairing
  * `code`; once the server hands back a durable device credential (`onPaired`),
@@ -139,59 +120,49 @@ export function makeShellTokenProvider(
 
 export async function persistShellCredential(
   credential: ShellCredential,
-  pairing: ShellPairing
+  controlPairing: ShellPairing,
+  workspacePairing: ShellPairing,
+  pairedAt = Date.now()
 ): Promise<void> {
-  const payload = JSON.stringify({
-    deviceId: credential.deviceId,
-    refreshToken: credential.refreshToken,
-    // The signaling room persists for reconnects, so re-store the pairing.
-    pairing: {
-      room: pairing.room,
-      fp: pairing.fp,
-      sig: pairing.sig,
-      ice: pairing.ice ?? "all",
-      srv: pairing.srv ?? null,
-    },
-    pairedAt: Date.now(),
-  });
+  await persistStoredShellCredential(
+    createStoredShellCredential(credential, controlPairing, workspacePairing, pairedAt)
+  );
+}
+
+/**
+ * Atomically replace the one current mobile credential in the OS secure store.
+ * Keychain/Keystore updates a generic-password item as one transaction; there is
+ * deliberately no second plaintext marker or previous-schema fallback to drift
+ * out of sync with it.
+ */
+export async function persistStoredShellCredential(stored: StoredShellCredential): Promise<void> {
+  const payload = JSON.stringify(stored);
+  if (parseStoredShellCredential(payload) === null) {
+    throw new Error("Cannot persist an invalid current WebRTC shell credential");
+  }
   // The refresh secret is the device's durable secret — store it in the OS
   // Keychain/Keystore, NEVER plaintext AsyncStorage (the desktop store fails loud
   // rather than persist this unencrypted; mobile must match). setGenericPassword
   // rejects when the secure store is unavailable, so this fails loud too.
-  await Keychain.setGenericPassword("shell", payload, { service: KEYCHAIN_SERVICE });
+  const result = await Keychain.setGenericPassword("shell", payload, {
+    service: KEYCHAIN_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+  if (result === false) {
+    throw new Error("The OS secure store refused the WebRTC shell credential update");
+  }
 }
 
 export async function loadShellCredential(): Promise<StoredShellCredential | null> {
   const result = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
-  if (result) {
-    const parsed = parseStoredCredential(result.password);
-    if (parsed) return parsed;
-  }
-  // One-time migration off the legacy plaintext AsyncStorage store: move it into
-  // the Keychain and ERASE the cleartext copy, so the refresh secret never lingers
-  // recoverable (adb / Android backup / rooted device) after the first launch.
-  const legacy = await AsyncStorage.getItem(SHELL_CREDENTIAL_KEY);
-  if (legacy) {
-    const parsed = parseStoredCredential(legacy);
-    await AsyncStorage.removeItem(SHELL_CREDENTIAL_KEY);
-    if (parsed) {
-      await Keychain.setGenericPassword("shell", legacy, { service: KEYCHAIN_SERVICE });
-      return parsed;
-    }
-  }
-  return null;
+  return result ? parseStoredShellCredential(result.password) : null;
 }
 
 export async function clearShellCredential(): Promise<void> {
-  await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
-  // Also drop any legacy plaintext copy (pre-Keychain installs).
-  await AsyncStorage.removeItem(SHELL_CREDENTIAL_KEY);
-}
-
-export function deviceIdFromCallerId(callerId: string | undefined): string | null {
-  return typeof callerId === "string" && callerId.startsWith("shell:")
-    ? callerId.slice("shell:".length)
-    : null;
+  const cleared = await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
+  if (!cleared) {
+    throw new Error("The OS secure store refused to clear the WebRTC shell credential");
+  }
 }
 
 /**
@@ -313,17 +284,16 @@ export async function establishWebRtcConnection(
       callerId,
       async close() {
         removeTriggers();
-        try {
-          await paired.close();
-        } catch {
-          // already closed
-        }
+        // PairedConnection.close is idempotent. A real transport-close failure
+        // must remain observable to callers; treating every rejection as
+        // "already closed" hid leaked keepalive/session cleanup failures.
+        await paired.close();
       },
     };
   } catch (error) {
     // Any post-connect setup failure closes the (connected) pipe too — no leaked
     // keepalive/reconnect loop (createPairedConnection already guards connect/auth).
-    await paired.close().catch(() => undefined);
+    await closeAfterFailure(() => paired.close(), error, "Mobile WebRTC setup failed");
     throw error;
   }
 }
@@ -333,25 +303,37 @@ export async function reconnectViaWebRtc(
   stored: StoredShellCredential,
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
 ): Promise<WebRtcConnection> {
-  const pairing = stored.pairing;
+  const pairing = stored.workspacePairing;
   const tokenProvider = makeShellTokenProvider(pairing, {
     deviceId: stored.deviceId,
     refreshToken: stored.refreshToken,
   });
+  const persistFailure: { current: Error | null } = { current: null };
   const connection = await establishWebRtcConnection(pairing, tokenProvider, {
     onPaired: async (credential) => {
       // The server may rotate the refresh secret on reconnect; persist the latest.
       // RETURNED (not void'd) so the shared bootstrap AWAITS it with retry — a
       // dropped rotation would otherwise leave the device unable to reconnect.
       tokenProvider.setCredential(credential);
-      await persistShellCredential(credential, pairing);
+      await persistShellCredential(
+        credential,
+        stored.controlPairing,
+        stored.workspacePairing,
+        stored.pairedAt
+      );
     },
     onPersistError: (error) => {
-      // Surfaced, never swallowed: the rotated secret did not reach the Keychain.
-      console.warn("[mobile-rtc] failed to persist rotated shell credential", error);
+      persistFailure.current = error;
     },
     onRecovery,
   });
+  if (persistFailure.current) {
+    const error = new Error(
+      `Failed to persist the rotated mobile device credential: ${persistFailure.current.message}`
+    );
+    await closeAfterFailure(() => connection.close(), error, "Mobile reconnect failed");
+    throw error;
+  }
   connection.deviceId = stored.deviceId;
   return connection;
 }

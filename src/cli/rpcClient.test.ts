@@ -29,6 +29,18 @@ const CREDS = {
   refreshToken: "refresh_cli",
 };
 
+function refreshShellResult(shellToken: string, callerId = "c"): string {
+  return JSON.stringify({
+    shellToken,
+    callerId,
+    deviceId: CREDS.deviceId,
+    label: "CLI test device",
+    serverId: "srv_1",
+    serverBootId: "boot_1",
+    workspaceId: "ws_1",
+  });
+}
+
 function rpcResult(result: unknown): string {
   return JSON.stringify({
     from: "main",
@@ -69,6 +81,7 @@ describe("rpcClient", () => {
               shellToken: "tok",
               callerId: "shell:dev_cli",
               deviceId: "dev_cli",
+              label: "CLI test device",
               serverId: "srv_1",
               serverBootId: "boot_1",
               workspaceId: "ws_1",
@@ -81,7 +94,7 @@ describe("rpcClient", () => {
       shellToken: "tok",
       callerId: "shell:dev_cli",
       deviceId: "dev_cli",
-      label: undefined,
+      label: "CLI test device",
       serverId: "srv_1",
       serverBootId: "boot_1",
       workspaceId: "ws_1",
@@ -96,6 +109,16 @@ describe("rpcClient", () => {
     await expect(refreshShell(CREDS)).rejects.toThrow(AuthError);
   });
 
+  it("rejects a truncated successful shell refresh response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ shellToken: "tok" })))
+    );
+    await expect(refreshShell(CREDS)).rejects.toThrow(
+      "shell refresh returned a malformed response"
+    );
+  });
+
   it("calls /rpc with a bearer token and caches it across calls", async () => {
     const requests: Array<{ url: string; auth?: string; body: unknown }> = [];
     vi.stubGlobal(
@@ -108,9 +131,7 @@ describe("rpcClient", () => {
           body: JSON.parse(String(init?.body ?? "{}")),
         });
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         return new Response(rpcResult({ ok: true }));
       })
@@ -150,9 +171,7 @@ describe("rpcClient", () => {
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/refresh-shell")) {
           refreshes += 1;
-          return new Response(
-            JSON.stringify({ shellToken: `tok_${refreshes}`, callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult(`tok_${refreshes}`));
         }
         rpcCalls += 1;
         if (rpcCalls === 1) {
@@ -173,9 +192,7 @@ describe("rpcClient", () => {
       "fetch",
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         return new Response(JSON.stringify({ error: "Invalid token" }), { status: 401 });
       })
@@ -189,9 +206,7 @@ describe("rpcClient", () => {
       "fetch",
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         return new Response(rpcError("boom", "ENOENT"));
       })
@@ -210,9 +225,7 @@ describe("rpcClient", () => {
       "fetch",
       vi.fn(async (url: URL, init?: RequestInit) => {
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         bodies.push(JSON.parse(String(init?.body ?? "{}")));
         return new Response(rpcResult("pong"));
@@ -239,9 +252,7 @@ describe("rpcClient", () => {
       "fetch",
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         return new Response(JSON.stringify({ ok: true }));
       })
@@ -258,9 +269,7 @@ describe("rpcClient", () => {
       "fetch",
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         return new Response("<html>proxy says hi</html>");
       })
@@ -272,14 +281,28 @@ describe("rpcClient", () => {
     });
   });
 
+  it("rejects the retired wrapped RPC response shape", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        if (String(url).endsWith("/refresh-shell")) {
+          return new Response(refreshShellResult("tok"));
+        }
+        return new Response(JSON.stringify({ envelope: JSON.parse(rpcResult({ ok: true })) }));
+      })
+    );
+    const client = new RpcClient(CREDS);
+    await expect(client.call("meta.listServices", [])).rejects.toThrow(
+      "malformed rpc response (non-envelope or proxy response?)"
+    );
+  });
+
   it("still returns null results without treating them as malformed", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/refresh-shell")) {
-          return new Response(
-            JSON.stringify({ shellToken: "tok", callerId: "c", deviceId: "dev_cli" })
-          );
+          return new Response(refreshShellResult("tok"));
         }
         return new Response(rpcResult(null));
       })
@@ -357,6 +380,9 @@ describe("rpcClient", () => {
                 contextId: "ctx-abc",
                 channelId: "chan-1",
                 agentId: "agt_cli",
+                serverId: "srv_1",
+                serverBootId: "boot_1",
+                workspaceId: "ws_1",
               })
             );
           }
@@ -389,6 +415,16 @@ describe("rpcClient", () => {
         vi.fn(async () => new Response(JSON.stringify({ error: "bad" }), { status: 401 }))
       );
       await expect(refreshAgent(AGENT_CREDS)).rejects.toThrow(AuthError);
+    });
+
+    it("rejects a truncated successful agent refresh response", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ token: "bearer_agent" })))
+      );
+      await expect(refreshAgent(AGENT_CREDS)).rejects.toThrow(
+        "agent token exchange returned a malformed response"
+      );
     });
   });
 });

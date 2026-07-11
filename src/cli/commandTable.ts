@@ -36,7 +36,6 @@ export interface ParsedInvocation {
 export interface CliCommand {
   group: string;
   name: string;
-  aliases?: string[];
   summary: string;
   usage?: string;
   flags?: FlagSpec[];
@@ -66,9 +65,7 @@ export function findCommand(
   group: string,
   name: string
 ): CliCommand | undefined {
-  return commands.find(
-    (cmd) => cmd.group === group && (cmd.name === name || cmd.aliases?.includes(name))
-  );
+  return commands.find((cmd) => cmd.group === group && cmd.name === name);
 }
 
 export function groupCommands(commands: CliCommand[], group: string): CliCommand[] {

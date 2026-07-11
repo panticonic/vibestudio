@@ -1,12 +1,13 @@
 import { AuthError } from "./output.js";
 import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
-import {
-  isWebRtcCredential,
-  type CliHubCredential,
-  type CliStoredPairing,
-} from "./credentialStore.js";
+import { isWebRtcCredential, type CliStoredPairing } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcStreamOptions } from "@vibestudio/rpc";
+import {
+  RefreshAgentResponseSchema,
+  RefreshShellResponseSchema,
+} from "@vibestudio/shared/serviceSchemas/auth";
+import type { z } from "zod";
 
 /**
  * HTTP RPC client for a paired Vibestudio server.
@@ -19,28 +20,19 @@ import type { RpcStreamOptions } from "@vibestudio/rpc";
  */
 
 export interface DeviceCredential {
-  schemaVersion: 1;
+  schemaVersion: 3;
   kind: "device";
   url: string;
-  hubUrl?: string;
-  workspaceName?: string;
+  workspaceName: string;
+  serverId: string;
   deviceId: string;
   refreshToken: string;
-  pairing?: CliStoredPairing;
-  pairedAt?: number;
-  hubCredential?: CliHubCredential;
+  controlPairing: CliStoredPairing;
+  workspacePairing: CliStoredPairing;
+  pairedAt: number;
 }
 
-/** Response of POST /_r/s/auth/refresh-shell (see authService.ts). */
-export interface RefreshShellResponse {
-  shellToken: string;
-  callerId: string;
-  deviceId: string;
-  label?: string;
-  serverId?: string;
-  serverBootId?: string;
-  workspaceId?: string | null;
-}
+export type RefreshShellResponse = z.infer<typeof RefreshShellResponseSchema>;
 
 /**
  * A raw-token credential: an entity-scoped agent credential
@@ -52,23 +44,14 @@ export interface RefreshShellResponse {
 export interface RawTokenCredential {
   url: string;
   token: string;
-  pairing?: CliStoredPairing;
+  workspacePairing?: CliStoredPairing;
 }
 
-/** Response of POST /_r/s/auth/refresh-agent (see authService.ts). */
-export interface RefreshAgentResponse {
-  token: string;
-  callerId: string;
-  callerKind: "agent";
-  entityId: string;
-  contextId: string;
-  channelId: string;
-  agentId: string;
-}
+export type RefreshAgentResponse = z.infer<typeof RefreshAgentResponseSchema>;
 
 export type RpcClientCredential =
   | (Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-      Partial<Pick<DeviceCredential, "pairing">>)
+      Partial<Pick<DeviceCredential, "workspacePairing">>)
   | RawTokenCredential;
 
 function isRawTokenCredential(creds: RpcClientCredential): creds is RawTokenCredential {
@@ -103,6 +86,12 @@ function remoteErrorMessage(body: Record<string, unknown>, fallback: string): st
   return code ? `${message} [${code}]` : message;
 }
 
+function responseRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 async function fetchOrAuthError(url: URL, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
@@ -121,25 +110,18 @@ export async function refreshShell(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ deviceId: creds.deviceId, refreshToken: creds.refreshToken }),
   });
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok || typeof body["shellToken"] !== "string") {
+  const raw = (await response.json().catch(() => ({}))) as unknown;
+  const body = responseRecord(raw);
+  if (!response.ok) {
     throw new AuthError(
       remoteErrorMessage(body, `shell refresh failed (${response.status} ${response.statusText})`)
     );
   }
-  return {
-    shellToken: body["shellToken"],
-    callerId:
-      typeof body["callerId"] === "string" ? body["callerId"] : shellCallerId(creds.deviceId),
-    deviceId: typeof body["deviceId"] === "string" ? body["deviceId"] : creds.deviceId,
-    label: typeof body["label"] === "string" ? body["label"] : undefined,
-    serverId: typeof body["serverId"] === "string" ? body["serverId"] : undefined,
-    serverBootId: typeof body["serverBootId"] === "string" ? body["serverBootId"] : undefined,
-    workspaceId:
-      typeof body["workspaceId"] === "string" || body["workspaceId"] === null
-        ? body["workspaceId"]
-        : undefined,
-  };
+  const parsed = RefreshShellResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AuthError("shell refresh returned a malformed response");
+  }
+  return parsed.data;
 }
 
 /**
@@ -156,8 +138,9 @@ export async function refreshAgent(creds: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agentToken: creds.token }),
   });
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok || typeof body["token"] !== "string") {
+  const raw = (await response.json().catch(() => ({}))) as unknown;
+  const body = responseRecord(raw);
+  if (!response.ok) {
     throw new AuthError(
       remoteErrorMessage(
         body,
@@ -165,15 +148,11 @@ export async function refreshAgent(creds: {
       )
     );
   }
-  return {
-    token: body["token"],
-    callerId: typeof body["callerId"] === "string" ? body["callerId"] : "",
-    callerKind: "agent",
-    entityId: typeof body["entityId"] === "string" ? body["entityId"] : "",
-    contextId: typeof body["contextId"] === "string" ? body["contextId"] : "",
-    channelId: typeof body["channelId"] === "string" ? body["channelId"] : "",
-    agentId: typeof body["agentId"] === "string" ? body["agentId"] : "",
-  };
+  const parsed = RefreshAgentResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AuthError("agent token exchange returned a malformed response");
+  }
+  return parsed.data;
 }
 
 // In-process bearer-token cache, keyed per (url, principal) so multiple
@@ -207,7 +186,7 @@ export class RpcClient {
 
   constructor(creds: RpcClientCredential) {
     this.url = creds.url;
-    this.pairing = creds.pairing;
+    this.pairing = creds.workspacePairing;
     if (isRawTokenCredential(creds)) {
       this.rawToken = creds.token;
       this.deviceId = null;
@@ -228,17 +207,26 @@ export class RpcClient {
 
   /** Whether this credential rides WebRTC (a pairing blob is present). */
   private get isWebRtc(): boolean {
-    return isWebRtcCredential({ pairing: this.pairing });
+    return isWebRtcCredential({ workspacePairing: this.pairing });
   }
 
   /** The redeemable WS/WebRTC auth token (`agent:…` or `refresh:…`). */
   private authToken(): string {
-    return this.rawToken ?? `refresh:${this.deviceId}:${this.refreshToken}`;
+    if (this.rawToken) return this.rawToken;
+    const device = this.deviceCredential();
+    return `refresh:${device.deviceId}:${device.refreshToken}`;
   }
 
   /** Cache principal id for bearer tokens (agentId or deviceId). */
   private principalCacheId(): string {
-    return this.rawToken ? agentIdFromToken(this.rawToken) : this.deviceId!;
+    return this.rawToken ? agentIdFromToken(this.rawToken) : this.deviceCredential().deviceId;
+  }
+
+  private deviceCredential(): { deviceId: string; refreshToken: string } {
+    if (!this.deviceId || !this.refreshToken) {
+      throw new Error("Device credential is unavailable for an agent-token client");
+    }
+    return { deviceId: this.deviceId, refreshToken: this.refreshToken };
   }
 
   /**
@@ -265,10 +253,11 @@ export class RpcClient {
       shellTokenCache.set(cacheKey(this.url, this.principalCacheId()), refresh.token);
       return refresh.token;
     }
+    const device = this.deviceCredential();
     const refresh = await refreshShell({
       url: this.url,
-      deviceId: this.deviceId!,
-      refreshToken: this.refreshToken!,
+      deviceId: device.deviceId,
+      refreshToken: device.refreshToken,
     });
     this.lastRefresh = refresh;
     this.callerId = refresh.callerId;
@@ -402,7 +391,7 @@ export class RpcClient {
         throw new AuthError(remoteErrorMessage(errorBody, "unauthorized after token refresh"));
       }
     }
-    const raw = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const raw = responseRecord(await response.json().catch(() => ({})));
     if (!response.ok) {
       throw new RpcError(
         typeof raw["error"] === "string"
@@ -410,12 +399,11 @@ export class RpcClient {
           : `rpc failed (${response.status} ${response.statusText})`
       );
     }
-    // The server replies with a response envelope { …, message: { result | error } }.
-    const responseEnvelope = ("envelope" in raw ? raw["envelope"] : raw) as
-      | { message?: { result?: unknown; error?: unknown; errorCode?: unknown } }
+    // The current HTTP RPC contract is one raw response envelope.
+    const message = raw["message"] as
+      | { type?: unknown; result?: unknown; error?: unknown; errorCode?: unknown }
       | undefined;
-    const message = responseEnvelope?.message;
-    if (!message) {
+    if (!message || message.type !== "response") {
       throw new RpcError("malformed rpc response (non-envelope or proxy response?)");
     }
     if (typeof message.error === "string") {

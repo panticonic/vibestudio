@@ -5,6 +5,11 @@ import * as path from "node:path";
 import { createConnectDeepLink } from "@vibestudio/shared/connect";
 import { clearShellTokenCache } from "./rpcClient.js";
 
+const TEST_SERVER_ID = `srv_${"S".repeat(24)}`;
+const TEST_SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
+const TEST_DEVICE_ID = `dev_${"D".repeat(24)}`;
+const TEST_REFRESH_TOKEN = "R".repeat(43);
+
 const panelFacadeMock = vi.hoisted(() => ({
   starts: [] as Array<{
     serverClient: { stream: (...args: unknown[]) => Promise<Response> };
@@ -32,7 +37,9 @@ const webrtcMock = vi.hoisted(() => ({
   recoveryHandlers: [] as Array<{
     handler: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   }>,
+  handlers: new Map<string, (args: unknown[], room: string) => unknown>(),
   activeWorkspace: "dev" as string | undefined,
+  readyError: null as Error | null,
 }));
 
 vi.mock("../main/panelAssetFacade.js", () => ({
@@ -61,56 +68,65 @@ vi.mock("./webrtcClient.js", () => ({
     }
 
     async ready(): Promise<void> {
-      const suffix = this.config.pairing.room === "child-room" ? "child" : "cli";
+      if (webrtcMock.readyError) throw webrtcMock.readyError;
       await this.config.onPaired?.({
-        deviceId: `dev_${suffix}`,
-        refreshToken: `refresh_${suffix}`,
+        deviceId: TEST_DEVICE_ID,
+        refreshToken: TEST_REFRESH_TOKEN,
       });
     }
 
     async call(method: string, args: unknown[] = []): Promise<unknown> {
-      webrtcMock.calls.push({
-        room: this.config.pairing.room,
-        method,
-        args,
-        token: this.config.getToken(),
-      });
+      const room = this.config.pairing.room;
+      webrtcMock.calls.push({ room, method, args, token: this.config.getToken() });
+      const handler = webrtcMock.handlers.get(method);
+      if (handler) return handler(args, room);
       if (method === "workspace.getActive") return webrtcMock.activeWorkspace;
-      if (method === "workspace.list") return [{ name: "dev", lastOpened: 1, running: true }];
-      if (method === "workspace.select") {
-        return {
-          workspaceName: String(args[0] ?? "dev"),
-          pairing: {
-            deepLink:
-              `vibestudio://connect?room=child-room&fp=${"BB".repeat(32)}` +
-              `&code=${"C".repeat(24)}&sig=${encodeURIComponent("wss://signal.example/")}` +
-              "&v=2&ice=all",
-          },
-        };
-      }
       if (method === "auth.getConnectionInfo") {
-        return { serverId: "srv_webrtc", workspaceId: webrtcMock.activeWorkspace ?? null };
+        return { serverId: TEST_SERVER_ID, workspaceId: webrtcMock.activeWorkspace ?? null };
+      }
+      if (method === "hubControl.listWorkspaces") {
+        return [
+          { workspaceId: "ws_dev", name: "dev", lastOpened: 1, running: true },
+          { workspaceId: "ws_docs", name: "docs", lastOpened: 0, running: false },
+        ];
+      }
+      if (method === "hubControl.routeWorkspace") {
+        const workspace = String(
+          (args[0] as { workspace?: string } | undefined)?.workspace ?? "dev"
+        );
+        return {
+          workspace,
+          workspaceId: `ws_${workspace}`,
+          running: true,
+          serverUrl: `webrtc://child-${workspace}/_workspace/${workspace}`,
+          controlReach: {
+            room: `control-${workspace}`,
+            fp: "CC".repeat(32),
+            sig: "wss://signal.example/",
+            v: 2,
+            ice: "all",
+          },
+          workspaceReach: {
+            room: `child-${workspace}`,
+            fp: "BB".repeat(32),
+            sig: "wss://signal.example/",
+            v: 2,
+            ice: "all",
+          },
+          serverId: TEST_SERVER_ID,
+          serverBootId: TEST_SERVER_BOOT_ID,
+        };
       }
       return undefined;
     }
 
     async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
-      webrtcMock.targetCalls.push({
-        room: this.config.pairing.room,
-        targetId,
-        method,
-        args,
-      });
-      return undefined;
+      webrtcMock.targetCalls.push({ room: this.config.pairing.room, targetId, method, args });
+      return webrtcMock.handlers.get(method)?.(args, this.config.pairing.room);
     }
 
     async stream(targetId: string, method: string, args: unknown[] = []): Promise<Response> {
-      webrtcMock.streams.push({
-        room: this.config.pairing.room,
-        targetId,
-        method,
-        args,
-      });
+      webrtcMock.streams.push({ room: this.config.pairing.room, targetId, method, args });
       return new Response("stream-ok");
     }
 
@@ -154,40 +170,79 @@ vi.mock("./webrtcClient.js", () => ({
 }));
 
 const FP = "AA".repeat(32);
+const ISSUER_FP = Array.from({ length: 32 }, () => "AA").join(":");
 function pairing(code: string) {
-  return { room: "room-1111-2222", fp: FP, code, sig: "wss://signal.example/" };
+  return {
+    room: "room-1111-2222",
+    fp: ISSUER_FP,
+    code,
+    sig: "wss://signal.example/",
+    v: 2 as const,
+    ice: "all" as const,
+  };
 }
 
-function rpcResult(result: unknown): string {
-  return JSON.stringify({
-    from: "main",
-    target: "dev_cli",
-    delivery: { caller: { callerId: "server", callerKind: "server" } },
-    provenance: [{ callerId: "server", callerKind: "server" }],
-    message: { type: "response", requestId: "test-request", result },
-  });
-}
-
-function rpcError(error: string): string {
-  return JSON.stringify({
-    from: "main",
-    target: "dev_cli",
-    delivery: { caller: { callerId: "server", callerKind: "server" } },
-    provenance: [{ callerId: "server", callerKind: "server" }],
-    message: { type: "response", requestId: "test-request", error },
-  });
-}
-
-function rpcRequestMethod(body: unknown): string | undefined {
-  if (!body || typeof body !== "object") return undefined;
-  const message = (body as { message?: unknown }).message;
-  if (!message || typeof message !== "object") return undefined;
-  const method = (message as { method?: unknown }).method;
-  return typeof method === "string" ? method : undefined;
+function pairingInvite(code = "P".repeat(32)) {
+  return {
+    code,
+    deepLink: createConnectDeepLink(pairing(code)),
+    pairUrl: "https://vibestudio.app/pair#invite",
+    room: "invite-room",
+    fp: FP,
+    sig: "wss://signal.example/",
+    v: 2 as const,
+    ice: "all" as const,
+    serverUrl: "webrtc://invite-room/_workspace/dev",
+    expiresAt: Date.now() + 60_000,
+    expiresInMs: 60_000,
+    serverId: TEST_SERVER_ID,
+    serverBootId: TEST_SERVER_BOOT_ID,
+  };
 }
 
 describe("vibestudio CLI", () => {
   let tmpDir = "";
+
+  function credentialPath(): string {
+    return path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
+  }
+
+  function writeCredentials(overrides: Record<string, unknown> = {}): void {
+    fs.mkdirSync(path.dirname(credentialPath()), { recursive: true });
+    fs.writeFileSync(
+      credentialPath(),
+      JSON.stringify({
+        schemaVersion: 3,
+        kind: "device",
+        url: "webrtc://room-1111-2222/_workspace/dev",
+        workspaceName: "dev",
+        serverId: TEST_SERVER_ID,
+        deviceId: TEST_DEVICE_ID,
+        refreshToken: TEST_REFRESH_TOKEN,
+        controlPairing: {
+          room: "room-1111-2222",
+          fp: FP,
+          sig: "wss://signal.example/",
+          ice: "all",
+          v: 2,
+        },
+        workspacePairing: {
+          room: "room-1111-2222",
+          fp: FP,
+          sig: "wss://signal.example/",
+          ice: "all",
+          v: 2,
+        },
+        pairedAt: 1,
+        ...overrides,
+      })
+    );
+  }
+
+  function jsonOutput(): unknown {
+    const lines = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
+    return JSON.parse(lines[lines.length - 1]!);
+  }
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-"));
@@ -201,7 +256,9 @@ describe("vibestudio CLI", () => {
     webrtcMock.streams.length = 0;
     webrtcMock.eventListeners.length = 0;
     webrtcMock.recoveryHandlers.length = 0;
+    webrtcMock.handlers.clear();
     webrtcMock.activeWorkspace = "dev";
+    webrtcMock.readyError = null;
     delete (globalThis as unknown as { __vibestudioCliWebRtcEventListeners?: unknown })
       .__vibestudioCliWebRtcEventListeners;
     delete (globalThis as unknown as { __vibestudioCliWebRtcRecoveryHandlers?: unknown })
@@ -214,615 +271,351 @@ describe("vibestudio CLI", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("pairs from --url/--code and writes a 0600 device credential file", async () => {
-    const bodies: unknown[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: URL, init?: RequestInit) => {
-        bodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return new Response(JSON.stringify({ deviceId: "dev_cli", refreshToken: "refresh_cli" }));
-      })
-    );
-
+  it("pairs from a WebRTC link and writes the only supported credential schema at 0600", async () => {
     const { main } = await import("./client.js");
-    const code = await main([
-      "remote",
-      "pair",
-      "--url",
-      "https://host.tailnet.ts.net",
-      "--code",
-      "A".repeat(24),
-    ]);
+    const link = createConnectDeepLink(pairing("A".repeat(32)));
+    await expect(main(["remote", "pair", link, "--label", "CLI test", "--json"])).resolves.toBe(0);
 
-    expect(code).toBe(0);
-    expect(bodies).toEqual([
-      {
-        code: "A".repeat(24),
-        label: expect.stringContaining("@"),
-        platform: "desktop",
-      },
-    ]);
-    const filePath = path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
-    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
-      schemaVersion: 1,
+    expect(webrtcMock.instances[0]?.config.getToken()).toBe("A".repeat(32));
+    expect(JSON.parse(fs.readFileSync(credentialPath(), "utf8"))).toMatchObject({
+      schemaVersion: 3,
       kind: "device",
-      url: "https://host.tailnet.ts.net",
-      hubUrl: "https://host.tailnet.ts.net",
-      deviceId: "dev_cli",
-      refreshToken: "refresh_cli",
+      url: "webrtc://child-dev/_workspace/dev",
+      workspaceName: "dev",
+      serverId: TEST_SERVER_ID,
+      deviceId: TEST_DEVICE_ID,
+      refreshToken: TEST_REFRESH_TOKEN,
+      controlPairing: {
+        room: "control-dev",
+        fp: "CC".repeat(32),
+        sig: "wss://signal.example/",
+      },
+      workspacePairing: {
+        room: "child-dev",
+        fp: "BB".repeat(32),
+        sig: "wss://signal.example/",
+      },
+    });
+    expect(webrtcMock.calls).toContainEqual({
+      room: "room-1111-2222",
+      method: "hubControl.routeWorkspace",
+      args: [{ workspace: "dev" }],
+      token: "A".repeat(32),
     });
     if (process.platform !== "win32") {
-      expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(credentialPath()).mode & 0o777).toBe(0o600);
     }
   });
 
-  it("pairs from a vibestudio://connect link over WebRTC and stores the room credential", async () => {
+  it("rejects removed URL/code pairing flags", async () => {
     const { main } = await import("./client.js");
-    const link = createConnectDeepLink(pairing("A".repeat(24)));
-    await expect(main(["remote", "pair", link, "--label", "CLI test", "--json"])).resolves.toBe(0);
-    expect(webrtcMock.instances).toHaveLength(1);
-    expect(webrtcMock.instances[0]?.config.getToken()).toBe("A".repeat(24));
-
-    const filePath = path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
-    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
-      schemaVersion: 1,
-      kind: "device",
-      url: "webrtc://room-1111-2222/_workspace/dev",
-      hubUrl: "webrtc://room-1111-2222",
-      workspaceName: "dev",
-      deviceId: "dev_cli",
-      refreshToken: "refresh_cli",
-      pairing: {
-        room: "room-1111-2222",
-        fp: FP,
-        sig: "wss://signal.example/",
-        ice: "all",
-        v: 2,
-      },
-    });
+    await expect(
+      main(["remote", "pair", "--url", "https://host.example", "--code", "ABC"])
+    ).resolves.toBe(2);
   });
 
-  it("tightens an existing CLI credential file to 0600 when pairing", async () => {
+  it("tightens an existing credential file when replacing it", async () => {
     if (process.platform === "win32") return;
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    const filePath = path.join(credentialDir, "cli-credentials.json");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(filePath, "{}", { mode: 0o644 });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ deviceId: "dev_cli", refreshToken: "refresh_cli" }))
-      )
-    );
-
+    fs.mkdirSync(path.dirname(credentialPath()), { recursive: true });
+    fs.writeFileSync(credentialPath(), "{}", { mode: 0o644 });
     const { main } = await import("./client.js");
-    const code = await main([
-      "remote",
-      "pair",
-      "--url",
-      "https://host.tailnet.ts.net",
-      "--code",
-      "A".repeat(24),
-    ]);
-
-    expect(code).toBe(0);
-    expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    await expect(
+      main(["remote", "pair", createConnectDeepLink(pairing("A".repeat(32)))])
+    ).resolves.toBe(0);
+    expect(fs.statSync(credentialPath()).mode & 0o777).toBe(0o600);
   });
 
-  it("logs out by removing the CLI credential file", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    const filePath = path.join(credentialDir, "cli-credentials.json");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(filePath, "{}");
-
+  it("logs out by removing the device credential", async () => {
+    writeCredentials();
     const { main } = await import("./client.js");
     await expect(main(["remote", "logout"])).resolves.toBe(0);
-    expect(fs.existsSync(filePath)).toBe(false);
+    expect(fs.existsSync(credentialPath())).toBe(false);
   });
 
-  it("shows the unified CLI groups in top-level help", async () => {
+  it("shows the unified command groups and no removed top-level pairing command", async () => {
     const { main } = await import("./client.js");
     await expect(main(["--help"])).resolves.toBe(0);
-
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio remote pair"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio mobile install"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio mobile smoke"));
-    expect(console.log).not.toHaveBeenCalledWith(
-      expect.stringContaining(["vibestudio", "remote", "start"].join(" "))
-    );
-    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("vibestudio-client"));
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("vibestudio remote pair");
+    expect(output).toContain("vibestudio remote invite-user");
+    expect(output).toContain("vibestudio mobile install");
+    await expect(main(["pair"])).resolves.toBe(2);
   });
 
   it("prints the package version", async () => {
     const expected = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8")).version;
     const { main } = await import("./client.js");
-
     await expect(main(["--version"])).resolves.toBe(0);
-
     expect(console.log).toHaveBeenCalledWith(expected);
   });
 
-  it("keeps remote pairing available under the unified command", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ deviceId: "dev_cli", refreshToken: "refresh_cli" }))
-      )
-    );
-
+  it("reports rejected or expired WebRTC pairing as an auth error", async () => {
+    webrtcMock.readyError = new Error("pairing code expired");
     const { main } = await import("./client.js");
     await expect(
-      main([
-        "remote",
-        "pair",
-        "--url",
-        "https://host.tailnet.ts.net",
-        "--code",
-        "A".repeat(24),
-        "--json",
-      ])
-    ).resolves.toBe(0);
-
+      main(["remote", "pair", createConnectDeepLink(pairing("A".repeat(32))), "--json"])
+    ).resolves.toBe(3);
     const output = vi
-      .mocked(console.log)
+      .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(JSON.parse(output)).toMatchObject({ url: "https://host.tailnet.ts.net" });
+    expect(output).toContain("pairing code expired");
   });
 
-  it("reports a failed or expired pairing code as an auth error (exit 3)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () => new Response(JSON.stringify({ error: "pairing code expired" }), { status: 401 })
-      )
-    );
-
-    const { main } = await import("./client.js");
-    await expect(
-      main(["remote", "pair", "--url", "https://host.tailnet.ts.net", "--code", "A".repeat(24)])
-    ).resolves.toBe(3);
-  });
-
-  it("rejects old top-level remote commands", async () => {
-    const { main } = await import("./client.js");
-    await expect(main(["pair", "--url", "https://host.tailnet.ts.net"])).resolves.toBe(2);
-    expect(console.error).toHaveBeenCalledWith("Unknown command: pair");
-  });
-
-  it("checks the stored device refresh credential for status", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(credentialDir, "cli-credentials.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "device",
-        url: "https://host.tailnet.ts.net/_workspace/dev",
-        hubUrl: "https://host.tailnet.ts.net",
-        workspaceName: "dev",
-        deviceId: "dev_cli",
-        refreshToken: "refresh_cli",
-      })
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL) => {
-        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-          return new Response(
-            JSON.stringify({
-              shellToken: "shell_token",
-              callerId: "shell:dev_cli",
-              deviceId: "dev_cli",
-              workspaceId: "ws_1",
-              serverId: "srv_1",
-            })
-          );
-        }
-        return new Response(
-          JSON.stringify({ ok: true, product: "vibestudio", discoveryVersion: 1 })
-        );
-      })
-    );
-
+  it("checks status over the stored WebRTC device credential", async () => {
+    writeCredentials();
     const { main } = await import("./client.js");
     await expect(main(["remote", "status", "--json"])).resolves.toBe(0);
-    const output = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(JSON.parse(output)).toMatchObject({ workspaceId: "ws_1", serverId: "srv_1" });
+    expect(jsonOutput()).toMatchObject({ workspaceId: "dev", serverId: TEST_SERVER_ID });
+    expect(webrtcMock.calls).toContainEqual({
+      room: "room-1111-2222",
+      method: "auth.getConnectionInfo",
+      args: [],
+      token: `refresh:${TEST_DEVICE_ID}:${TEST_REFRESH_TOKEN}`,
+    });
   });
 
-  it("selects a workspace from a WebRTC hub credential and stores the child room", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(credentialDir, "cli-credentials.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "device",
-        url: "webrtc://hub-room",
-        hubUrl: "webrtc://hub-room",
-        deviceId: "dev_hub",
-        refreshToken: "refresh_hub",
-        pairing: {
-          room: "hub-room",
-          fp: FP,
-          sig: "wss://signal.example/",
-          ice: "all",
-          v: 2,
-        },
-      })
-    );
-
+  it("selects a workspace via hubControl while preserving the global device credential", async () => {
+    writeCredentials();
     const { main } = await import("./client.js");
-    await expect(main(["remote", "select", "dev", "--json"])).resolves.toBe(0);
-
-    expect(webrtcMock.calls).toContainEqual({
-      room: "hub-room",
-      method: "workspace.select",
-      args: ["dev"],
-      token: "refresh:dev_hub:refresh_hub",
-    });
-    const stored = JSON.parse(
-      fs.readFileSync(path.join(credentialDir, "cli-credentials.json"), "utf8")
-    );
+    await expect(main(["remote", "select", "docs", "--json"])).resolves.toBe(0);
+    const stored = JSON.parse(fs.readFileSync(credentialPath(), "utf8"));
     expect(stored).toMatchObject({
-      url: "webrtc://child-room/_workspace/dev",
-      hubUrl: "webrtc://hub-room",
-      workspaceName: "dev",
-      deviceId: "dev_child",
-      refreshToken: "refresh_child",
-      pairing: {
-        room: "child-room",
+      schemaVersion: 3,
+      url: "webrtc://child-docs/_workspace/docs",
+      workspaceName: "docs",
+      serverId: TEST_SERVER_ID,
+      deviceId: TEST_DEVICE_ID,
+      refreshToken: TEST_REFRESH_TOKEN,
+      controlPairing: {
+        room: "control-docs",
+        fp: "CC".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      workspacePairing: {
+        room: "child-docs",
         fp: "BB".repeat(32),
         sig: "wss://signal.example/",
-        ice: "all",
         v: 2,
+        ice: "all",
       },
-      hubCredential: {
-        url: "webrtc://hub-room",
-        deviceId: "dev_hub",
-        refreshToken: "refresh_hub",
-        pairing: {
-          room: "hub-room",
-          fp: FP,
-          sig: "wss://signal.example/",
-        },
-      },
+    });
+    expect(stored).not.toHaveProperty("hubUrl");
+    expect(stored).not.toHaveProperty("hubCredential");
+    await expect(main(["remote", "workspaces", "--json"])).resolves.toBe(0);
+    expect(webrtcMock.calls).toContainEqual({
+      room: "control-docs",
+      method: "hubControl.listWorkspaces",
+      args: [],
+      token: `refresh:${TEST_DEVICE_ID}:${TEST_REFRESH_TOKEN}`,
     });
   });
 
-  it("requires workspace selection before checking remote status", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(credentialDir, "cli-credentials.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "device",
-        url: "https://host.tailnet.ts.net",
-        hubUrl: "https://host.tailnet.ts.net",
-        deviceId: "dev_cli",
-        refreshToken: "refresh_cli",
-      })
+  it("rejects workspace selection when the route changes server identity", async () => {
+    writeCredentials();
+    webrtcMock.handlers.set("hubControl.routeWorkspace", (_args, _room) => ({
+      workspace: "docs",
+      workspaceId: "ws_docs",
+      running: true,
+      serverUrl: "webrtc://child-docs/_workspace/docs",
+      controlReach: {
+        room: "control-docs",
+        fp: "CC".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      workspaceReach: {
+        room: "child-docs",
+        fp: "BB".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      serverId: `srv_${"X".repeat(24)}`,
+      serverBootId: TEST_SERVER_BOOT_ID,
+    }));
+    const before = fs.readFileSync(credentialPath(), "utf8");
+    const { main } = await import("./client.js");
+
+    await expect(main(["remote", "select", "docs", "--json"])).resolves.not.toBe(0);
+    expect(fs.readFileSync(credentialPath(), "utf8")).toBe(before);
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain(
+      "changed the paired server identity"
     );
-
-    const { main } = await import("./client.js");
-    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
-    const output = vi
-      .mocked(console.error)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(output).toContain("vibestudio remote select <workspace>");
   });
 
-  it("reports missing credentials for status as an auth error (exit 3)", async () => {
+  it("rejects credentials that are unselected, corrupted, legacy, or structurally ambiguous", async () => {
+    writeCredentials({ workspaceName: "", url: "webrtc://room-1111-2222" });
     const { main } = await import("./client.js");
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
+
+    fs.writeFileSync(credentialPath(), "{not json");
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
+
+    fs.writeFileSync(
+      credentialPath(),
+      JSON.stringify({ schemaVersion: 1, kind: "device", deviceId: "old", refreshToken: "old" })
+    );
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
+
+    writeCredentials({ hubCredential: { deviceId: "legacy" } } as never);
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
+
+    writeCredentials({
+      pairing: { ...pairing("A".repeat(32)), code: "must-not-persist" },
+    } as never);
     await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
   });
 
-  it("rejects unknown flags as usage errors (exit 2)", async () => {
+  it("reports missing credentials and unknown flags with stable exit codes", async () => {
     const { main } = await import("./client.js");
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
     await expect(main(["remote", "status", "--bogus"])).resolves.toBe(2);
-    await expect(main(["agent", "call", "--bogus"])).resolves.toBe(2);
   });
 
-  it("creates a pairing invite using the stored device credential", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(credentialDir, "cli-credentials.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "device",
-        url: "https://host.tailnet.ts.net",
-        hubUrl: "https://host.tailnet.ts.net",
-        deviceId: "dev_cli",
-        refreshToken: "refresh_cli",
-      })
-    );
-    const bodies: unknown[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL, init?: RequestInit) => {
-        bodies.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
-        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-          return new Response(JSON.stringify({ shellToken: "shell_token" }));
-        }
-        return new Response(
-          rpcResult({
-            code: "A".repeat(24),
-            deepLink: createConnectDeepLink(pairing("A".repeat(24))),
-            serverUrl: "https://host.tailnet.ts.net",
-            expiresAt: 123,
-            expiresInMs: 60_000,
-            serverId: "srv",
-            serverBootId: "boot",
-            workspaceId: "ws",
-          })
-        );
-      })
-    );
-
+  it("creates a same-account device invite through hubControl", async () => {
+    writeCredentials();
+    const invite = pairingInvite();
+    webrtcMock.handlers.set("hubControl.pairDevice", (args) => ({
+      userId: "usr_alice",
+      handle: "alice",
+      workspace: (args[0] as { workspace?: string })?.workspace ?? "dev",
+      pairing: invite,
+    }));
     const { main } = await import("./client.js");
-    await expect(main(["remote", "invite", "--ttl-ms", "60000", "--json"])).resolves.toBe(0);
-
-    expect(bodies).toHaveLength(2);
-    expect(bodies[0]).toEqual({
-      url: "https://host.tailnet.ts.net/_r/s/auth/refresh-shell",
-      body: { deviceId: "dev_cli", refreshToken: "refresh_cli" },
-    });
-    expect(bodies[1]).toMatchObject({
-      url: "https://host.tailnet.ts.net/rpc",
-      body: {
-        target: "main",
-        message: {
-          type: "request",
-          method: "auth.createPairingInvite",
-          args: [{ ttlMs: 60_000 }],
-        },
-      },
-    });
-    const output = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(JSON.parse(output)).toMatchObject({
-      code: "A".repeat(24),
-      deepLink: createConnectDeepLink(pairing("A".repeat(24))),
-    });
-  });
-
-  it("requires a hub credential before creating pairing invites", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(credentialDir, "cli-credentials.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "device",
-        url: "https://host.tailnet.ts.net",
-        deviceId: "dev_cli",
-        refreshToken: "refresh_cli",
+    await expect(
+      main(["remote", "pair-device", "--workspace", "dev", "--ttl-ms=60000", "--json"])
+    ).resolves.toBe(0);
+    expect(jsonOutput()).toMatchObject({ userId: "usr_alice", pairing: { code: invite.code } });
+    expect(webrtcMock.calls).toContainEqual(
+      expect.objectContaining({
+        method: "hubControl.pairDevice",
+        args: [{ workspace: "dev", ttlMs: 60_000 }],
       })
     );
-
-    const { main } = await import("./client.js");
-    await expect(main(["remote", "invite", "--json"])).resolves.toBe(3);
-    const output = vi
-      .mocked(console.error)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(output).toContain("missing a hub URL");
   });
 
-  it("creates a pairing invite through the local admin route when no CLI credential exists", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(path.join(credentialDir, "admin-token"), "admin_local");
-    const requests: Array<{ url: string; auth: string | null; body: unknown }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL, init?: RequestInit) => {
-        requests.push({
-          url: String(url),
-          auth: new Headers(init?.headers).get("authorization"),
-          body: JSON.parse(String(init?.body ?? "{}")),
-        });
-        return new Response(
-          JSON.stringify({
-            code: "L".repeat(24),
-            deepLink: createConnectDeepLink(pairing("L".repeat(24))),
-            pairUrl: "https://vibestudio.app/pair#local",
-            room: "room-1111-2222",
-            fp: FP,
-            sig: "wss://signal.example/",
-          })
-        );
-      })
-    );
-
+  it("invites a new user with explicit workspace grants", async () => {
+    writeCredentials();
+    webrtcMock.handlers.set("hubControl.inviteUser", (args) => ({
+      user: { userId: "usr_bob", handle: "bob", displayName: "Bob", role: "member" },
+      workspaces: (args[0] as { workspaces: string[] }).workspaces,
+      pairing: pairingInvite("U".repeat(32)),
+    }));
     const { main } = await import("./client.js");
     await expect(
       main([
         "remote",
-        "invite",
-        "--port",
-        "3035",
+        "invite-user",
+        "--handle",
+        "bob",
+        "--display-name",
+        "Bob",
         "--workspace",
-        "default",
-        "--ttl-ms",
-        "60000",
+        "dev",
+        "--workspace",
+        "docs",
         "--json",
       ])
     ).resolves.toBe(0);
-
-    expect(requests).toEqual([
-      {
-        url: "http://127.0.0.1:3035/_r/s/auth/create-pairing-code",
-        auth: "Bearer admin_local",
-        body: { ttlMs: 60_000, workspace: "default" },
-      },
-    ]);
-    const output = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(JSON.parse(output)).toMatchObject({
-      code: "L".repeat(24),
-      pairUrl: "https://vibestudio.app/pair#local",
-    });
+    expect(jsonOutput()).toMatchObject({ workspaces: ["dev", "docs"] });
   });
 
-  it("pairs inline before starting the terminal app through the launch gate", async () => {
-    const rpcMethods: string[] = [];
-    const bodies: Array<{ url: string; body: unknown }> = [];
-    const approval = {
-      approvalId: "approval-1",
-      kind: "unit-batch",
-      callerId: "system:apps",
-      callerKind: "system",
-      repoPath: "apps/remote-cli",
-      effectiveVersion: "ev-1",
-      trigger: "startup",
-      title: "Approve terminal app",
-      description: "Approve before launch",
-      units: [
-        {
-          unitKind: "app",
-          unitName: "@workspace-apps/remote-cli",
-          displayName: "Remote CLI",
-          target: "terminal",
-          source: { kind: "workspace-repo", repo: "apps/remote-cli", ref: "main" },
-          ev: "terminal-ev",
-          capabilities: ["connection-management"],
-        },
-      ],
-      requestedAt: 1,
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        bodies.push({ url: String(url), body });
-        if (String(url).endsWith("/_r/s/auth/complete-pairing")) {
-          return new Response(
-            JSON.stringify({ deviceId: "dev_terminal", refreshToken: "refresh_terminal" })
-          );
-        }
-        if (String(url).endsWith("/_r/s/workspaces/select")) {
-          return new Response(
-            JSON.stringify({
-              workspaceName: "dev",
-              serverUrl: "https://host.tailnet.ts.net/_workspace/dev",
-              running: true,
-            })
-          );
-        }
-        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-          return new Response(JSON.stringify({ shellToken: "shell_token" }));
-        }
-        const method = rpcRequestMethod(body);
-        rpcMethods.push(method ?? "");
-        if (method === "workspace.hostTargets.beginLaunch") {
-          return new Response(
-            rpcResult({
-              sessionId: "launch_terminal",
-              target: "terminal",
-              status: "approval-required",
-              currentPhase: "review-trust",
-              message: "Terminal launch needs approval.",
-              timeline: [],
-              approvals: [approval],
-              approvalViews: [],
-              approvalsResolved: 0,
-              startedAt: 1,
-              updatedAt: 1,
-              settled: false,
-            })
-          );
-        }
-        if (method === "workspace.hostTargets.resolveLaunchSessionApproval") {
-          return new Response(
-            rpcResult({
-              sessionId: "launch_terminal",
-              target: "terminal",
-              status: "ready",
-              currentPhase: "connected",
-              message: "Terminal app is ready.",
-              timeline: [],
-              approvals: [],
-              approvalViews: [],
-              approvalsResolved: 1,
-              startedAt: 1,
-              updatedAt: 2,
-              settled: true,
-              launch: {
-                status: "ready",
-                target: "terminal",
-                appId: "@workspace-apps/remote-cli",
-                buildKey: "build-terminal",
-              },
-            })
-          );
-        }
-        return new Response(rpcError(`unexpected ${method ?? "<missing method>"}`), {
-          status: 500,
-        });
-      })
-    );
-
+  it("exposes discrete membership and device administration commands", async () => {
+    writeCredentials();
+    webrtcMock.handlers.set("hubControl.addWorkspaceMember", () => ({ added: true }));
+    webrtcMock.handlers.set("hubControl.listWorkspaceMembers", () => ({
+      workspace: "dev",
+      workspaceId: "ws_dev",
+      members: [{ userId: "usr_bob", handle: "bob", role: "member" }],
+    }));
+    webrtcMock.handlers.set("hubControl.listDevices", () => ({
+      serverId: TEST_SERVER_ID,
+      devices: [{ deviceId: TEST_DEVICE_ID, userId: "usr_alice", label: "CLI", createdAt: 1 }],
+    }));
     const { main } = await import("./client.js");
-    const code = await main([
-      "terminal",
-      "start",
-      "--url",
-      "https://host.tailnet.ts.net",
-      "--code",
-      "A".repeat(24),
-      "--workspace",
-      "dev",
-      "--yes",
-      "--json",
-    ]);
+    await expect(
+      main(["remote", "add-member", "--workspace", "dev", "--handle", "bob", "--json"])
+    ).resolves.toBe(0);
+    await expect(main(["remote", "list-users", "--workspace", "dev", "--json"])).resolves.toBe(0);
+    await expect(main(["remote", "list-devices", "--json"])).resolves.toBe(0);
+    expect(webrtcMock.calls.map((call) => call.method)).toEqual(
+      expect.arrayContaining([
+        "hubControl.addWorkspaceMember",
+        "hubControl.listWorkspaceMembers",
+        "hubControl.listDevices",
+      ])
+    );
+  });
 
-    expect(code).toBe(0);
-    expect(bodies[0]).toMatchObject({
-      url: "https://host.tailnet.ts.net/_r/s/auth/complete-pairing",
-      body: {
-        code: "A".repeat(24),
-        label: expect.stringContaining("Terminal on "),
-        platform: "terminal",
+  it("requires one member selector and reports a no-op removal as non-success", async () => {
+    writeCredentials();
+    const { main } = await import("./client.js");
+
+    await expect(
+      main([
+        "remote",
+        "remove-member",
+        "--workspace",
+        "dev",
+        "--user-id",
+        "usr_bob",
+        "--handle",
+        "bob",
+        "--json",
+      ])
+    ).resolves.toBe(2);
+
+    webrtcMock.handlers.set("hubControl.removeWorkspaceMember", () => ({
+      removed: false,
+      closedSessions: 0,
+    }));
+    await expect(
+      main(["remote", "remove-member", "--workspace", "dev", "--handle", "bob", "--json"])
+    ).resolves.toBe(1);
+    expect(jsonOutput()).toMatchObject({ removed: false, closedSessions: 0 });
+  });
+
+  it("pairs inline before starting the terminal app", async () => {
+    webrtcMock.handlers.set("workspace.hostTargets.beginLaunch", () => ({
+      sessionId: "launch_terminal",
+      target: "terminal",
+      status: "ready",
+      currentPhase: "connected",
+      message: "Terminal app is ready.",
+      timeline: [],
+      approvals: [],
+      approvalViews: [],
+      approvalsResolved: 0,
+      startedAt: 1,
+      updatedAt: 2,
+      settled: true,
+      launch: {
+        status: "ready",
+        target: "terminal",
+        appId: "@workspace-apps/remote-cli",
+        buildKey: "build-terminal",
       },
-    });
-    expect(rpcMethods).toEqual([
-      "workspace.hostTargets.beginLaunch",
-      "workspace.hostTargets.resolveLaunchSessionApproval",
-    ]);
-    const filePath = path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
-    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
-      schemaVersion: 1,
-      kind: "device",
-      url: "https://host.tailnet.ts.net/_workspace/dev",
-      hubUrl: "https://host.tailnet.ts.net",
+    }));
+    const { main } = await import("./client.js");
+    const link = createConnectDeepLink(pairing("A".repeat(32)));
+    await expect(main(["terminal", "start", "--pair", link, "--yes", "--json"])).resolves.toBe(0);
+    expect(JSON.parse(fs.readFileSync(credentialPath(), "utf8"))).toMatchObject({
+      schemaVersion: 3,
       workspaceName: "dev",
-      deviceId: "dev_terminal",
-      refreshToken: "refresh_terminal",
+      deviceId: TEST_DEVICE_ID,
     });
-    const output = vi
-      .mocked(console.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(JSON.parse(output)).toMatchObject({ status: "ready", approvalsResolved: 1 });
+    expect(jsonOutput()).toMatchObject({ status: "ready" });
   });
 
   it("points unpaired terminal users at the inline pairing command", async () => {
@@ -834,45 +627,6 @@ describe("vibestudio CLI", () => {
       .join("\n");
     expect(output).toContain("vibestudio terminal start --pair");
   });
-
-  function writeCredentials(content?: string): void {
-    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
-    fs.mkdirSync(credentialDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(credentialDir, "cli-credentials.json"),
-      content ??
-        JSON.stringify({
-          schemaVersion: 1,
-          kind: "device",
-          url: "https://host.tailnet.ts.net/_workspace/dev",
-          hubUrl: "https://host.tailnet.ts.net",
-          workspaceName: "dev",
-          deviceId: "dev_cli",
-          refreshToken: "refresh_cli",
-        })
-    );
-  }
-
-  function writeWebRtcCredentials(refreshToken = "refresh_cli"): void {
-    writeCredentials(
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "device",
-        url: "webrtc://room-1111-2222/_workspace/dev",
-        hubUrl: "webrtc://room-1111-2222",
-        workspaceName: "dev",
-        deviceId: "dev_cli",
-        refreshToken,
-        pairing: {
-          room: "room-1111-2222",
-          fp: FP,
-          sig: "wss://signal.example/",
-          ice: "all",
-          v: 2,
-        },
-      })
-    );
-  }
 
   function writeHeadlessHostMock(failStartMessage?: string): {
     path: string;
@@ -910,10 +664,7 @@ describe("vibestudio CLI", () => {
       `
 const state = globalThis.__vibestudioHeadlessHostMock;
 export class RemoteCdpHostBridgeSocket {
-  constructor(options) {
-    state.bridgeSockets.push(options);
-    this.readyState = 1;
-  }
+  constructor(options) { state.bridgeSockets.push(options); this.readyState = 1; }
   send() {}
   close() {}
   on() { return this; }
@@ -928,10 +679,7 @@ export function resolveConfig(overrides) {
   };
 }
 export class HeadlessHost {
-  constructor(config) {
-    this.config = config;
-    state.configs.push(config);
-  }
+  constructor(config) { this.config = config; state.configs.push(config); }
   async start() {
     state.starts += 1;
     const connection = await this.config.connectionFactory();
@@ -951,189 +699,119 @@ export class HeadlessHost {
     }
     if (state.failStartMessage) throw new Error(state.failStartMessage);
   }
-  async stop(reason) {
-    state.stops.push(reason);
-  }
-  get done() {
-    return Promise.resolve();
-  }
+  async stop(reason) { state.stops.push(reason); }
+  get done() { return Promise.resolve(); }
 }
 `
     );
     return { path: modulePath, state };
   }
 
-  it("runs remote host over WebRTC using the injected RPC connection and CDP bridge stream", async () => {
-    writeWebRtcCredentials("refresh_secret_for_host_123456");
+  it("runs the remote host through the canonical WebRTC connection", async () => {
+    const refreshToken = "H".repeat(43);
+    writeCredentials({ refreshToken });
     const headless = writeHeadlessHostMock();
     vi.stubEnv("VIBESTUDIO_HEADLESS_HOST_ENTRY", headless.path);
-
     const { main } = await import("./client.js");
     await expect(
       main(["remote", "host", "--label", "Headless CLI", "--idle-exit-min", "1", "--lean-browser"])
     ).resolves.toBe(0);
 
     expect(panelFacadeMock.starts).toHaveLength(1);
-    expect(panelFacadeMock.starts[0]?.options).toMatchObject({
-      stateDir: expect.stringContaining(
-        path.join("vibestudio", "headless-host", "panel-asset-facade")
-      ),
-    });
     expect(panelFacadeMock.closes).toBe(1);
-    expect(headless.state.starts).toBe(1);
     expect(headless.state.resolveConfig[0]).toMatchObject({
       serverUrl: "http://127.0.0.1:4242",
       label: "Headless CLI",
       idleExitMs: 60_000,
       leanBrowser: true,
     });
-    expect(headless.state.configs[0]).toMatchObject({
-      auth: { kind: "injected" },
-      serverUrl: "http://127.0.0.1:4242",
-      label: "Headless CLI",
-    });
-    expect(headless.state.token).toBe("refresh:dev_cli:refresh_secret_for_host_123456");
+    expect(headless.state.token).toBe(`refresh:${TEST_DEVICE_ID}:${refreshToken}`);
     expect(headless.state.bridgeSockets).toHaveLength(1);
-    expect(headless.state.serverEvents).toEqual([
-      { event: "panel:runtimeLeaseChanged", payload: { slotId: "panel-1" } },
-    ]);
     expect(headless.state.resubscribes).toBe(1);
-    expect(webrtcMock.calls).toEqual(
-      expect.arrayContaining([
-        {
-          room: "room-1111-2222",
-          method: "panelRuntime.registerClient",
-          args: [{ from: "mock" }],
-          token: "refresh:dev_cli:refresh_secret_for_host_123456",
-        },
-        {
-          room: "room-1111-2222",
-          method: "events.subscribe",
-          args: ["panel:runtimeLeaseChanged"],
-          token: "refresh:dev_cli:refresh_secret_for_host_123456",
-        },
-      ])
-    );
-    expect(webrtcMock.streams).toEqual(
-      expect.arrayContaining([
-        {
-          room: "room-1111-2222",
-          targetId: "main",
-          method: "panelCdp.hostProvider.open",
-          args: ["provider-session", expect.stringMatching(/^headless-/)],
-        },
-      ])
-    );
+    expect(webrtcMock.streams).toContainEqual({
+      room: "room-1111-2222",
+      targetId: "main",
+      method: "panelCdp.hostProvider.open",
+      args: ["provider-session", expect.stringMatching(/^headless-/)],
+    });
     expect(webrtcMock.instances[0]?.closed).toBe(true);
   });
 
-  it("redacts WebRTC refresh tokens from remote host startup failures", async () => {
-    const refreshToken = "refresh_secret_for_redaction_987654321";
-    writeWebRtcCredentials(refreshToken);
+  it("redacts device refresh secrets from remote-host failures", async () => {
+    const refreshToken = "Z".repeat(43);
+    writeCredentials({ refreshToken });
     const headless = writeHeadlessHostMock(
-      `failed with refresh:dev_cli:${refreshToken} and Bearer abcdef1234567890`
+      `failed with refresh:${TEST_DEVICE_ID}:${refreshToken} and Bearer abcdef1234567890`
     );
     vi.stubEnv("VIBESTUDIO_HEADLESS_HOST_ENTRY", headless.path);
-
     const { main } = await import("./client.js");
     await expect(main(["remote", "host"])).resolves.toBe(1);
-
     const output = vi
       .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
     expect(output).toContain("headless host failed to start");
     expect(output).not.toContain(refreshToken);
-    expect(output).not.toContain(`refresh:dev_cli:${refreshToken}`);
     expect(output).not.toContain("abcdef1234567890");
-    expect(output).toContain("refr…4321");
+    expect(output).toContain("refr…ZZZZ");
     expect(output).toContain("Bearer abcd…7890");
     expect(panelFacadeMock.closes).toBe(1);
-    expect(webrtcMock.instances[0]?.closed).toBe(true);
   });
 
-  it("prints per-command help for --help and -h (exit 0)", async () => {
+  it("rejects the removed raw URL/token remote-host path", async () => {
     const { main } = await import("./client.js");
-    await expect(main(["remote", "invite", "--help"])).resolves.toBe(0);
-    await expect(main(["fs", "ls", "-h"])).resolves.toBe(0);
+    await expect(
+      main([
+        "remote",
+        "host",
+        "--url",
+        "https://server.example/_workspace/dev",
+        "--token",
+        "secret",
+      ])
+    ).resolves.toBe(2);
+  });
 
+  it("renders help for the new explicit invite command without legacy admin flags", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["remote", "invite-user", "--help"])).resolves.toBe(0);
     const output = vi
       .mocked(console.log)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain(
-      "vibestudio remote invite [--workspace <name>] [--ttl-ms <milliseconds>] [--port 3030]"
-    );
+    expect(output).toContain("vibestudio remote invite-user");
+    expect(output).toContain("--handle <value>");
     expect(output).toContain("--workspace <value>");
-    expect(output).toContain("--ttl-ms <value>");
-    expect(output).toContain("--admin-token <value>");
-    expect(output).toContain("--json");
-    expect(output).toContain("Emit JSON");
-    expect(console.error).not.toHaveBeenCalled();
+    expect(output).not.toContain("--admin-token");
+    expect(output).not.toContain("--url <value>");
   });
 
-  it("accepts --flag=value syntax for value flags", async () => {
-    writeCredentials();
-    const bodies: Array<{ url: string; body: unknown }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL, init?: RequestInit) => {
-        bodies.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
-        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-          return new Response(JSON.stringify({ shellToken: "shell_token" }));
-        }
-        return new Response(
-          rpcResult({
-            code: "A".repeat(24),
-            deepLink: createConnectDeepLink(pairing("A".repeat(24))),
-          })
-        );
-      })
-    );
-
+  it("rejects retired command aliases", async () => {
     const { main } = await import("./client.js");
-    await expect(main(["remote", "invite", "--ttl-ms=60000", "--json"])).resolves.toBe(0);
-    expect(bodies[1]?.body).toMatchObject({
-      target: "main",
-      message: {
-        type: "request",
-        method: "auth.createPairingInvite",
-        args: [{ ttlMs: 60_000 }],
-      },
-    });
+    await expect(main(["remote", "server"])).resolves.toBe(2);
+    await expect(main(["remote", "headless-host"])).resolves.toBe(2);
+    await expect(main(["remote", "setup-signaling"])).resolves.toBe(2);
+    await expect(main(["terminal", "launch"])).resolves.toBe(2);
   });
 
-  it("accepts --flag=true|false for boolean flags and rejects other values", async () => {
+  it("supports equals syntax and strict boolean flag values", async () => {
     writeCredentials();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: URL) => {
-        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-          return new Response(JSON.stringify({ shellToken: "shell_token", workspaceId: "ws_1" }));
-        }
-        return new Response(JSON.stringify({ ok: true }));
-      })
-    );
-
+    webrtcMock.handlers.set("hubControl.pairDevice", () => ({
+      userId: "usr_alice",
+      handle: "alice",
+      workspace: "dev",
+      pairing: pairingInvite(),
+    }));
     const { main } = await import("./client.js");
-    await expect(main(["remote", "status", "--json=true"])).resolves.toBe(0);
+    await expect(main(["remote", "pair-device", "--ttl-ms=60000", "--json=true"])).resolves.toBe(0);
     await expect(main(["remote", "status", "--json=banana"])).resolves.toBe(2);
   });
 
-  it("rejects a non-numeric --ttl-ms as a usage error (exit 2)", async () => {
+  it("validates invite TTL bounds before transport", async () => {
     writeCredentials();
     const { main } = await import("./client.js");
-    await expect(main(["remote", "invite", "--ttl-ms", "soon", "--json"])).resolves.toBe(2);
-  });
-
-  it("treats corrupted credentials as not paired (exit 3, no crash)", async () => {
-    writeCredentials("{not json");
-    const { main } = await import("./client.js");
-    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
-    const output = vi
-      .mocked(console.error)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
-    expect(output).toContain("not paired");
+    await expect(main(["remote", "pair-device", "--ttl-ms", "soon", "--json"])).resolves.toBe(2);
+    await expect(main(["remote", "pair-device", "--ttl-ms", "1000", "--json"])).resolves.toBe(2);
+    expect(webrtcMock.calls).toHaveLength(0);
   });
 });

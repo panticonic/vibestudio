@@ -14,7 +14,6 @@ export const ELECTRON_APP_HOST_CAPABILITIES = [
   "window-management",
   "panel-hosting",
   "incoming-pair-links",
-  "connection-management",
   "fs-read",
   "fs-write",
 ] as const satisfies readonly AppCapability[];

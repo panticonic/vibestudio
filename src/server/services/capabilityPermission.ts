@@ -92,6 +92,7 @@ export async function requestCapabilityPermission(
     kind: "capability",
     callerId: request.caller.runtime.id,
     callerKind,
+    ...(request.caller.subject ? { requestedByUserId: request.caller.subject.userId } : {}),
     repoPath: identity.repoPath,
     effectiveVersion: identity.effectiveVersion,
     capability: request.capability,
@@ -221,7 +222,7 @@ function resourceGrantIntentForDecision(
   resourceScope: ApprovalResourceScope,
   decision: Exclude<GrantedDecision, "once" | "deny">
 ): { resourceKey: string; resourceScope: ApprovalResourceScope } {
-  if (isNetworkCapability(capability) && (decision === "version" || decision === "repo")) {
+  if (isNetworkCapability(capability) && decision === "version") {
     return {
       resourceKey: NETWORK_ALL_RESOURCE_KEY,
       resourceScope: { kind: "network", value: "*" },

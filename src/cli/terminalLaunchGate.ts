@@ -38,7 +38,7 @@ export interface TerminalLaunchGateResult {
 
 export async function runTerminalLaunchGate(
   creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "pairing">>,
+    Partial<Pick<DeviceCredential, "workspacePairing">>,
   options: TerminalLaunchGateOptions = {}
 ): Promise<TerminalLaunchGateResult> {
   const target = options.target ?? "terminal";
@@ -194,7 +194,7 @@ async function createEventServerClient(
 
 async function createTerminalLaunchEventClient(
   creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "pairing">>,
+    Partial<Pick<DeviceCredential, "workspacePairing">>,
   target: HostTarget
 ): Promise<TerminalLaunchEventClient> {
   if (isWebRtcCredential(creds)) {
@@ -257,7 +257,7 @@ async function createTerminalLaunchEventClient(
 
 async function createWebRtcTerminalLaunchEventClient(
   creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "pairing">>,
+    Partial<Pick<DeviceCredential, "workspacePairing">>,
   target: HostTarget
 ): Promise<TerminalLaunchEventClient> {
   const eventNames = HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS;

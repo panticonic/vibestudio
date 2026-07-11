@@ -46,6 +46,13 @@ export interface EntityActivateInput {
   agentBinding?: RuntimeAgentBinding;
   /** Launch parent (verified caller id) — see EntityRecord.parentId. */
   parentId?: string;
+  /**
+   * Owning-user id — the creating caller's `subject.userId` (WP0 §6). Passed
+   * straight through to `WorkspaceDO.entityActivate`, which stamps it write-once
+   * onto `entities.owner_user_id`. Absent for bootstrap-created entities that
+   * have no subject (WP0 §5.4).
+   */
+  ownerUserId?: string;
 }
 
 export interface WorkspaceEntityStoreDeps {

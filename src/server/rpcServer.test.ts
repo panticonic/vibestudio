@@ -4,7 +4,11 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer.js";
-import { createVerifiedCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  type CallerKind,
+  type ServiceDispatcher,
+} from "@vibestudio/shared/serviceDispatcher";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
@@ -53,8 +57,10 @@ type TestRpcServer = {
   dispatcher: MockDispatcher;
   connections: {
     addClient(client: WsClientState): void;
+    removeClient(client: WsClientState): boolean;
     getCallerConnections(callerId: string): WsClientState[];
   };
+  sessions: { hasSession(callerId: string): boolean };
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
     string,
@@ -62,6 +68,7 @@ type TestRpcServer = {
   >;
   handleAuth(ws: unknown, token: string | null, connectionId: string): void;
   handleConnection(ws: unknown): void;
+  handleMessage(client: WsClientState, data: Buffer): void;
   handleRoute(
     client: WsClientState,
     targetId: string,
@@ -136,6 +143,26 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
       entityCache,
       connectionGrants,
       runtimeCoordinator,
+      // WP4 §5.2: connection admission now resolves each caller's owning user via
+      // userSubjectSource (hub-backed in production, "fakeable in tests" per its
+      // contract). Panel lineage callers resolve to their owner; bootstrap
+      // principals (server/electron-main/headless-host) stay subject-less and are
+      // mapped to the synthetic system user by assertBootstrapSubject.
+      userSubjectSource: {
+        resolve: (_callerId: string, callerKind: CallerKind) =>
+          callerKind === "panel" || callerKind === "extension"
+            ? { userId: "user-1", handle: "user1" }
+            : null,
+      },
+      resolveExtensionCodeIdentity: (callerId: string) =>
+        callerId.startsWith("@workspace-extensions/")
+          ? {
+              callerId,
+              callerKind: "extension" as const,
+              repoPath: callerId.slice("@workspace-extensions/".length),
+              effectiveVersion: "ev-test",
+            }
+          : null,
       ...opts,
     }),
   };
@@ -147,6 +174,9 @@ function createClient(callerId = "panel:nav-a"): WsClientState {
     connectionId: "conn-1",
     authenticated: true,
     authenticatedAt: Date.now(),
+    // Mirror of caller.subject?.userId (WsClientState, WP4 §2.1), stamped at
+    // admission. These panel connections model one owning user in these tests.
+    userId: "user-1",
     ws: {
       readyState: WebSocket.OPEN,
       send: vi.fn(),
@@ -715,6 +745,36 @@ describe("RpcServer relay behavior", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:1111\//);
     expect(fetchMock.mock.calls[1]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:2222\//);
+  });
+
+  it("projects the host-verified account subject into DO caller attribution", async () => {
+    const { server, entityCache } = createServer();
+    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { ok: true } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:nav-a", "panel", targetId, "ping", []);
+
+    const envelope = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
+    expect(envelope.delivery.caller).toMatchObject({
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      userId: "user-1",
+    });
   });
 
   it("mints a vcsPush invocation token resolving to the ORIGINATING caller (§4)", async () => {
@@ -1683,6 +1743,47 @@ describe("RpcServer relay behavior", () => {
   });
 });
 
+describe("RpcServer live caller gate", () => {
+  it.each(["user revocation", "device revocation"])(
+    "denies the next RPC after failed %s socket teardown",
+    (reason) => {
+      let live = true;
+      const { server } = createServer({ liveCallerGate: () => live });
+      const dispatcher = testServer(server).dispatcher;
+      const client = createClient();
+      registerClient(server, client);
+
+      // Administrative cleanup attempted to close the socket, but the
+      // transport stayed open. The authoritative live store has already
+      // changed, so the next frame must still fail closed.
+      client.ws.close(4001, reason);
+      live = false;
+      const request = {
+        type: "request" as const,
+        requestId: `after-${reason}`,
+        fromId: client.caller.runtime.id,
+        method: "fs.stat",
+        args: ["ctx_1", "/x"],
+      };
+      testServer(server).handleMessage(
+        client,
+        Buffer.from(
+          JSON.stringify({
+            type: "ws:rpc",
+            envelope: clientEnvelope(client, "main", request),
+          })
+        )
+      );
+
+      expect(dispatcher.dispatch).not.toHaveBeenCalled();
+      expect(client.ws.close).toHaveBeenLastCalledWith(
+        4403,
+        "Caller identity or workspace membership is no longer active"
+      );
+    }
+  );
+});
+
 describe("RpcServer caller identity", () => {
   function rpcRequest(requestId: string, method: string) {
     return {
@@ -1700,6 +1801,31 @@ describe("RpcServer caller identity", () => {
     return JSON.parse(raw) as { envelope: { message: { result?: unknown; error?: string } } };
   }
 
+  it("indexes shared-app connections by their concrete authorized user", () => {
+    const { server } = createServer();
+    const alice = createClientWithConnection("app:shared", "alice-connection");
+    alice.caller = createVerifiedCaller("app:shared", "app", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    alice.userId = "usr_alice";
+    const bob = createClientWithConnection("app:shared", "bob-connection");
+    bob.caller = createVerifiedCaller("app:shared", "app", null, null, {
+      userId: "usr_bob",
+      handle: "bob",
+    });
+    bob.userId = "usr_bob";
+
+    registerClient(server, alice);
+    registerClient(server, bob);
+    expect(server.getUserConnections("usr_alice")).toEqual([alice]);
+    expect(server.getUserConnections("usr_bob")).toEqual([bob]);
+
+    expect(testServer(server).connections.removeClient(alice)).toBe(true);
+    expect(server.getUserConnections("usr_alice")).toEqual([]);
+    expect(server.getUserConnections("usr_bob")).toEqual([bob]);
+  });
+
   it("rejects WS authentication for the reserved in-process shell caller id", () => {
     const { server, tokenManager } = createServer();
     const shellToken = tokenManager.createToken("shell", "shell");
@@ -1711,8 +1837,75 @@ describe("RpcServer caller identity", () => {
     expect(testServer(server).connections.getCallerConnections("shell")).toHaveLength(0);
   });
 
+  it("does not admit a socket that closes while pairing redemption is in flight", async () => {
+    let resolvePairing!: (value: {
+      callerId: string;
+      callerKind: "shell";
+      subject: { userId: string; handle: string };
+    }) => void;
+    const pairing = new Promise<{
+      callerId: string;
+      callerKind: "shell";
+      subject: { userId: string; handle: string };
+    }>((resolve) => {
+      resolvePairing = resolve;
+    });
+    const onClientAuthenticate = vi.fn();
+    const { server } = createServer({
+      redeemPairingCredential: () => pairing,
+      onClientAuthenticate,
+    });
+    const ws = createTestWs();
+    testServer(server).handleConnection(ws);
+
+    ws.emitMessage({ type: "ws:auth", token: "pairing-code", connectionId: "pairing-conn" });
+    ws.emitClose();
+    resolvePairing({
+      callerId: "shell:dev_delayed",
+      callerKind: "shell",
+      subject: { userId: "usr_alice", handle: "alice" },
+    });
+    await flushAsync();
+
+    expect(server.getPrincipalConnections("shell:dev_delayed")).toHaveLength(0);
+    expect(testServer(server).sessions.hasSession("shell:dev_delayed")).toBe(false);
+    expect(onClientAuthenticate).not.toHaveBeenCalled();
+    const authResults = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)));
+    expect(authResults).not.toContainEqual(expect.objectContaining({ success: true }));
+  });
+
+  it("rolls back every admission registry when an asynchronous auth task fails", async () => {
+    const { server, tokenManager } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "usr_root", handle: "root" }),
+      },
+      onClientAuthenticate: () => {
+        throw new Error("host integration failed");
+      },
+      sessionTtlMs: { shell: 1 },
+    });
+    const token = tokenManager.createToken("electron-main", "shell");
+    const ws = createTestWs();
+    testServer(server).handleConnection(ws);
+
+    ws.emitMessage({ type: "ws:auth", token, connectionId: "failed-admission" });
+    await flushAsync();
+
+    expect(server.getPrincipalConnections("electron-main")).toHaveLength(0);
+    expect(ws.close).toHaveBeenCalledWith(1011, "Authentication failed");
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)))).toEqual([
+      expect.objectContaining({ type: "ws:auth-result", success: false }),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(testServer(server).sessions.hasSession("electron-main")).toBe(false);
+  });
+
   it("accepts WS authentication for concrete shell host callers", () => {
-    const { server, tokenManager } = createServer();
+    const { server, tokenManager } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "usr_root", handle: "root" }),
+      },
+    });
     const remoteToken = tokenManager.createToken("electron-main", "shell");
     const ws = createTestWs();
 
@@ -1725,7 +1918,11 @@ describe("RpcServer caller identity", () => {
   });
 
   it("accepts WS authentication when a connection grant resolves to a shell host principal", () => {
-    const { server, connectionGrants, entityCache } = createServer();
+    const { server, connectionGrants, entityCache } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "usr_root", handle: "root" }),
+      },
+    });
     entityCache._onActivate(makeRecord("electron-main", "shell"));
     const grant = connectionGrants.grant("electron-main", "shell:test").token;
     const ws = createTestWs();
@@ -1735,6 +1932,42 @@ describe("RpcServer caller identity", () => {
     const callers = testServer(server).connections.getCallerConnections("electron-main");
     expect(callers).toHaveLength(1);
     expect(callers[0]!.caller.runtime.kind).toBe("shell");
+  });
+
+  it("accepts reconnects with a redeemed connection grant until the principal is revoked", () => {
+    const { server, connectionGrants, entityCache } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "usr_root", handle: "root" }),
+      },
+    });
+    entityCache._onActivate(makeRecord("electron-main", "shell"));
+    const grant = connectionGrants.grant("electron-main", "shell:test").token;
+    const first = createTestWs();
+    const reconnected = createTestWs();
+
+    testServer(server).handleAuth(first, grant, "conn-grant-first");
+    testServer(server).handleAuth(reconnected, grant, "conn-grant-reconnected");
+
+    expect(first.close).not.toHaveBeenCalled();
+    expect(reconnected.close).not.toHaveBeenCalled();
+    expect(testServer(server).connections.getCallerConnections("electron-main")).toHaveLength(2);
+  });
+
+  it("attributes a server-spawned app grant to the canonical system subject", () => {
+    const membershipGate = vi.fn((subject) => subject?.userId === "system");
+    const { server, connectionGrants, entityCache } = createServer({ membershipGate });
+    entityCache._onActivate(makeRecord("@workspace-apps/remote-cli", "app"));
+    const grant = connectionGrants.grant("@workspace-apps/remote-cli", "server").token;
+    const ws = createTestWs();
+
+    testServer(server).handleAuth(ws, grant, "terminal-app");
+
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(membershipGate).toHaveBeenCalledWith({ userId: "system", handle: "system" });
+    expect(
+      testServer(server).connections.getCallerConnections("@workspace-apps/remote-cli")[0]?.caller
+        .subject
+    ).toEqual({ userId: "system", handle: "system" });
   });
 
   it("rejects WS authentication when a connection grant has no runtime entity kind", () => {

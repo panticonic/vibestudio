@@ -490,6 +490,7 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
       contextId: "ctx_bound",
       channelId: "chan_1",
       agentId: "ag_1",
+      userId: "usr_test",
     };
 
     await service.handler(
@@ -515,6 +516,7 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
       contextId: "ctx_bound",
       channelId: "chan_1",
       agentId: "ag_1",
+      userId: "usr_test",
     };
 
     await expect(

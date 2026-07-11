@@ -1,6 +1,10 @@
 import type { RuntimeSurface } from "./runtimeSurface.js";
 import { namespaceEntry, valueEntry } from "./runtimeSurface.js";
-import { coreRuntimeSurface, PANEL_TREE_MEMBERS, WORKSPACE_MEMBERS } from "./runtimeSurface.core.js";
+import {
+  coreRuntimeSurface,
+  PANEL_TREE_MEMBERS,
+  WORKSPACE_MEMBERS,
+} from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
   "Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. self/get are sync; async methods refresh metadata as needed.";
@@ -42,6 +46,8 @@ export const panelRuntimeSurface: RuntimeSurface = {
     z: valueEntry("Zod export."),
     defineContract: valueEntry(),
     buildPanelLink: valueEntry(),
+    buildPanelDeepLink: valueEntry(),
+    buildPanelShareLink: valueEntry(),
     parseContextId: valueEntry(),
     isValidContextId: valueEntry(),
     getInstanceId: valueEntry(),

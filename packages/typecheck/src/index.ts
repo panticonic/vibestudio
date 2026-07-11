@@ -27,7 +27,6 @@
 // Service
 export {
   TypeCheckService,
-  createTypeCheckService,
   type TypeCheckServiceConfig,
   type TypeCheckResult,
   type BaseDiagnostic,

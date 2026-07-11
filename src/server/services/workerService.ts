@@ -55,6 +55,7 @@ export function createWorkerService(deps: {
     objectKey: string;
     contextId?: string;
     buildRef?: string;
+    ownerUserId?: string;
   }) => Promise<void>;
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
@@ -134,6 +135,7 @@ export function createWorkerService(deps: {
               objectKey: service.objectKey,
               ...(contextId ? { contextId } : {}),
               ...(buildRef ? { buildRef } : {}),
+              ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
             });
           }
           return service;
@@ -156,6 +158,7 @@ export function createWorkerService(deps: {
             objectKey,
             ...(contextId ? { contextId } : {}),
             ...(buildRef ? { buildRef } : {}),
+            ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
           });
           return { kind: "durable-object", source, className, objectKey, targetId };
         }

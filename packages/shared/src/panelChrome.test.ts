@@ -50,17 +50,40 @@ describe("panelChrome", () => {
   });
 
   it("parses address input into panel sources, urls, or searches", () => {
-    expect(parseAddressInput("panels/chat")).toEqual({ type: "panel-source", source: "panels/chat" });
-    expect(parseAddressInput("example.com")).toEqual({ type: "browser-url", url: "https://example.com" });
-    expect(parseAddressInput("https://example.com/path")).toEqual({ type: "browser-url", url: "https://example.com/path" });
+    expect(parseAddressInput("panels/chat")).toEqual({
+      type: "panel-source",
+      source: "panels/chat",
+    });
+    expect(parseAddressInput("example.com")).toEqual({
+      type: "browser-url",
+      url: "https://example.com",
+    });
+    expect(parseAddressInput("https://example.com/path")).toEqual({
+      type: "browser-url",
+      url: "https://example.com/path",
+    });
     expect(parseAddressInput("hello world")).toEqual({ type: "search", query: "hello world" });
+    expect(
+      parseAddressInput(
+        "vibestudio://panel?v=1&source=panels%2Fchat&contextId=ctx-1&disposition=child"
+      )
+    ).toEqual({
+      type: "panel-location",
+      location: {
+        source: "panels/chat",
+        contextId: "ctx-1",
+        disposition: "child",
+      },
+    });
   });
 
   it("builds browser and panel chrome state", () => {
-    expect(buildPanelChromeState({
-      panel: makePanel("browser:https://example.com"),
-      navigation: { url: "https://example.com/docs", canGoBack: true, isLoading: true },
-    })).toMatchObject({
+    expect(
+      buildPanelChromeState({
+        panel: makePanel("browser:https://example.com"),
+        navigation: { url: "https://example.com/docs", canGoBack: true, isLoading: true },
+      })
+    ).toMatchObject({
       kind: "browser",
       displayAddress: "https://example.com/docs",
       editableAddress: "https://example.com/docs",
@@ -69,10 +92,12 @@ describe("panelChrome", () => {
       isLoading: true,
     });
 
-    expect(buildPanelChromeState({
-      panel: makePanel("panels/chat"),
-      repo: { unitPath: "panels/chat", head: "main", stateHash: "abcdef1234567890", dirty: true },
-    })).toMatchObject({
+    expect(
+      buildPanelChromeState({
+        panel: makePanel("panels/chat"),
+        repo: { unitPath: "panels/chat", head: "main", stateHash: "abcdef1234567890", dirty: true },
+      })
+    ).toMatchObject({
       kind: "panel",
       displayAddress: "panels/chat",
       repo: { head: "main", dirty: true },
@@ -80,44 +105,60 @@ describe("panelChrome", () => {
   });
 
   it("formats repo metadata compactly", () => {
-    expect(formatRepoChip({ unitPath: "panels/chat", head: "main", stateHash: "abcdef123", dirty: true }))
-      .toBe("panels/chat @ main @ abcdef123 @ dirty");
+    expect(
+      formatRepoChip({ unitPath: "panels/chat", head: "main", stateHash: "abcdef123", dirty: true })
+    ).toBe("panels/chat @ main @ abcdef123 @ dirty");
   });
 
   it("normalizes and ranks browser address suggestions", () => {
     const history = normalizeBrowserAddressSuggestions([
-      { url: "https://example.com/docs", title: "Docs", visit_count: 3, typed_count: 1, last_visit: 100 },
+      {
+        url: "https://example.com/docs",
+        title: "Docs",
+        visit_count: 3,
+        typed_count: 1,
+        last_visit: 100,
+      },
       { url: "https://example.com/docs", title: "Duplicate" },
     ]);
     const session = collectBrowserAddressSuggestionsFromPanels([
       { ...makePanel("browser:https://example.com/app"), title: "App" },
     ]);
 
-    expect(history).toEqual([expect.objectContaining({
-      url: "https://example.com/docs",
-      title: "Docs",
-      source: "history",
-    })]);
-    expect(mergeBrowserAddressSuggestions([history, session], "example", 5).map((item) => item.url))
-      .toEqual(["https://example.com/app", "https://example.com/docs"]);
+    expect(history).toEqual([
+      expect.objectContaining({
+        url: "https://example.com/docs",
+        title: "Docs",
+        source: "history",
+      }),
+    ]);
+    expect(
+      mergeBrowserAddressSuggestions([history, session], "example", 5).map((item) => item.url)
+    ).toEqual(["https://example.com/app", "https://example.com/docs"]);
   });
 
   it("builds platform-neutral autocomplete rows", () => {
-    expect(buildAddressAutocompleteItems({
-      kind: "panel",
-      input: "chat",
-      panelSuggestions: [{ source: "panels/chat", title: "Chat", kind: "launchable" }],
-    })).toEqual([expect.objectContaining({
-      kind: "panel-source",
-      value: "panels/chat",
-      meta: "launchable · Chat",
-    })]);
+    expect(
+      buildAddressAutocompleteItems({
+        kind: "panel",
+        input: "chat",
+        panelSuggestions: [{ source: "panels/chat", title: "Chat", kind: "launchable" }],
+      })
+    ).toEqual([
+      expect.objectContaining({
+        kind: "panel-source",
+        value: "panels/chat",
+        meta: "launchable · Chat",
+      }),
+    ]);
 
-    expect(buildAddressAutocompleteItems({
-      kind: "browser",
-      input: "docs",
-      browserSuggestions: [{ url: "https://example.com/docs", title: "Docs", source: "history" }],
-    })).toEqual([
+    expect(
+      buildAddressAutocompleteItems({
+        kind: "browser",
+        input: "docs",
+        browserSuggestions: [{ url: "https://example.com/docs", title: "Docs", source: "history" }],
+      })
+    ).toEqual([
       expect.objectContaining({
         kind: "search",
         action: expect.objectContaining({ type: "search" }),
@@ -131,8 +172,26 @@ describe("panelChrome", () => {
     ]);
   });
 
+  it("keeps canonical panel locations as panel actions in browser autocomplete", () => {
+    const items = buildAddressAutocompleteItems({
+      kind: "browser",
+      input: "vibestudio://panel?v=1&source=about%2Fserver-logs&disposition=root",
+      browserSuggestions: [],
+    });
+    expect(items[0]).toMatchObject({
+      label: "Open about/server-logs",
+      iconKind: "panel",
+      action: {
+        type: "panel-location",
+        location: { source: "about/server-logs", disposition: "root" },
+      },
+    });
+  });
+
   it("pins synthetic rows and canonicalizes URL dedupe", () => {
-    expect(canonicalizeUrlForAddress("HTTPS://Example.COM:443/path#top")).toBe("https://example.com/path");
+    expect(canonicalizeUrlForAddress("HTTPS://Example.COM:443/path#top")).toBe(
+      "https://example.com/path"
+    );
     const items = buildAddressAutocompleteItems({
       kind: "browser",
       input: "example.com",
@@ -141,21 +200,29 @@ describe("panelChrome", () => {
         { url: "https://EXAMPLE.com/#fragment", title: "Two", source: "bookmark" },
       ],
     });
-    expect(items[0]).toMatchObject({ kind: "url", action: { type: "navigate-url", recordAsTyped: true } });
-    expect(items.filter((item) => item.kind === "bookmark" || item.kind === "history")).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "url",
+      action: { type: "navigate-url", recordAsTyped: true },
+    });
+    expect(
+      items.filter((item) => item.kind === "bookmark" || item.kind === "history")
+    ).toHaveLength(1);
   });
 
   it("splits text for shared suggestion highlighting", () => {
-    expect(splitTextByMatchRanges("Example Docs", [{ start: 0, end: 7 }, { start: 8, end: 12 }]))
-      .toEqual([
-        { text: "Example", highlighted: true },
-        { text: " ", highlighted: false },
-        { text: "Docs", highlighted: true },
-      ]);
-    expect(splitTextByMatchRanges("Example", [{ start: 2, end: 99 }]))
-      .toEqual([
-        { text: "Ex", highlighted: false },
-        { text: "ample", highlighted: true },
-      ]);
+    expect(
+      splitTextByMatchRanges("Example Docs", [
+        { start: 0, end: 7 },
+        { start: 8, end: 12 },
+      ])
+    ).toEqual([
+      { text: "Example", highlighted: true },
+      { text: " ", highlighted: false },
+      { text: "Docs", highlighted: true },
+    ]);
+    expect(splitTextByMatchRanges("Example", [{ start: 2, end: 99 }])).toEqual([
+      { text: "Ex", highlighted: false },
+      { text: "ample", highlighted: true },
+    ]);
   });
 });

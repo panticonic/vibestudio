@@ -2,124 +2,75 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseConnectLink } from "@vibestudio/shared/connect";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { IdentityDb } from "@vibestudio/shared/users/identityDb";
+import { UserStore } from "@vibestudio/shared/users/userStore";
 import { DeviceAuthStore } from "../deviceAuthStore.js";
 import {
-  createPairingInviteResponse,
-  mintPairingInvite,
-  type ConnectPairingSeam,
-  type PairingRoomArmer,
+  agentCallerId,
+  connectionInfoResponse,
+  responseForCredential,
+  shellCallerId,
 } from "./model.js";
 
-const FP = "AA".repeat(32);
-const SEAM: ConnectPairingSeam = { fp: FP, sig: "wss://signal.example/", ice: "all" };
-
-function makeStore(): DeviceAuthStore {
-  return new DeviceAuthStore(
-    path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-model-")), "devices.json")
-  );
+function makeStore(): { store: DeviceAuthStore; userId: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-model-"));
+  const db = new IdentityDb({ path: ":memory:", readOnly: false });
+  const userId = new UserStore(db).createRoot({ handle: "root", displayName: "Root" }).id;
+  return {
+    store: new DeviceAuthStore({ db, serverIdPath: path.join(dir, "server-id.json") }),
+    userId,
+  };
 }
 
-function makeArmer(): { armer: PairingRoomArmer; armed: Array<{ room: string; meta: object }> } {
-  const armed: Array<{ room: string; meta: object }> = [];
-  return { armer: { armRoom: (room, meta) => armed.push({ room, meta }) }, armed };
-}
+describe("auth response model", () => {
+  it("reports the running child identity without pairing-invite state", () => {
+    const { store } = makeStore();
 
-describe("mintPairingInvite (room-per-invite, plan §2.1)", () => {
-  it("mints a UNIQUE room per invite, arms it, and embeds it in the v=2 deep link", () => {
-    const store = makeStore();
-    const { armer, armed } = makeArmer();
-
-    const first = mintPairingInvite({ deviceAuthStore: store, pairing: SEAM, ingress: armer });
-    const second = mintPairingInvite({ deviceAuthStore: store, pairing: SEAM, ingress: armer });
-
-    expect(first.room).toBeTruthy();
-    expect(second.room).toBeTruthy();
-    expect(first.room).not.toBe(second.room);
-    expect(first.code).not.toBe(second.code);
-
-    // Each invite armed its own room on the pool, tagged with its code.
-    expect(armed).toEqual([
-      { room: first.room, meta: { inviteCode: first.code } },
-      { room: second.room, meta: { inviteCode: second.code } },
-    ]);
-
-    // The deep link is v=2 and carries the invite's room + code.
-    for (const invite of [first, second]) {
-      const parsed = parseConnectLink(invite.deepLink!);
-      expect(parsed).toMatchObject({
-        kind: "ok",
-        room: invite.room,
-        code: invite.code,
-        fp: FP,
-        v: 2,
-      });
-    }
-  });
-
-  it("redemption of the minted code persists the invite's room onto the device", () => {
-    const store = makeStore();
-    const { armer } = makeArmer();
-    const invite = mintPairingInvite({ deviceAuthStore: store, pairing: SEAM, ingress: armer });
-    const credential = store.completePairing({ code: invite.code, label: "Phone" });
-    expect(store.listDevices().find((d) => d.deviceId === credential.deviceId)?.room).toBe(
-      invite.room
-    );
-  });
-
-  it("without WebRTC ingress the invite fails loud", () => {
-    const store = makeStore();
-    expect(() =>
-      mintPairingInvite({ deviceAuthStore: store, pairing: null, ingress: null })
-    ).toThrow(/WebRTC ingress is not ready/);
-
-    const { armer, armed } = makeArmer();
-    expect(() =>
-      mintPairingInvite({ deviceAuthStore: store, pairing: SEAM, ingress: null })
-    ).toThrow(/WebRTC ingress is not ready/);
-    expect(() =>
-      mintPairingInvite({ deviceAuthStore: store, pairing: null, ingress: armer })
-    ).toThrow(/WebRTC ingress is not ready/);
-    expect(armed).toEqual([]);
-  });
-});
-
-describe("createPairingInviteResponse", () => {
-  const baseDeps = (store: DeviceAuthStore) => ({
-    deviceAuthStore: store,
-    getServerBootId: () => "boot_test",
-    getWorkspaceId: () => "workspace_test",
-  });
-
-  it("carries the per-invite room + deep link when ingress is live", () => {
-    const store = makeStore();
-    const { armer, armed } = makeArmer();
-    const response = createPairingInviteResponse(
-      {
-        ...baseDeps(store),
-        getConnectionInfo: () => ({ serverUrl: "http://127.0.0.1:3030", pairing: SEAM }),
-        getWebRtcIngress: () => armer,
-      },
-      30_000
-    );
-
-    expect(response.room).toBeTruthy();
-    expect(response.deepLink).toContain(`room=${response.room}`);
-    expect(response.pairUrl).toContain("https://vibestudio.app/pair#");
-    expect(response.pairUrl).toContain(`room=${response.room}`);
-    expect(response.deepLink).toContain("v=2");
-    expect(response.expiresInMs).toBe(30_000);
-    expect(armed).toEqual([{ room: response.room, meta: { inviteCode: response.code } }]);
-    expect(store.hasPendingPairingCode(response.code)).toBe(true);
-  });
-
-  it("fails when WebRTC is off", () => {
-    const store = makeStore();
-    expect(() =>
-      createPairingInviteResponse({
-        ...baseDeps(store),
-        getConnectionInfo: () => ({ serverUrl: "http://127.0.0.1:3030" }),
+    expect(
+      connectionInfoResponse({
+        deviceAuthStore: store,
+        getServerBootId: () => "boot_test",
+        getWorkspaceId: () => "workspace_test",
+        getConnectionInfo: () => ({
+          serverUrl: "http://127.0.0.1:3030",
+          protocol: "http",
+          externalHost: "127.0.0.1",
+          gatewayPort: 3030,
+        }),
       })
-    ).toThrow(/WebRTC ingress is not ready/);
+    ).toEqual({
+      serverUrl: "http://127.0.0.1:3030",
+      protocol: "http",
+      externalHost: "127.0.0.1",
+      gatewayPort: 3030,
+      serverId: store.getServerId(),
+      serverBootId: "boot_test",
+      workspaceId: "workspace_test",
+    });
+  });
+
+  it("returns a shell credential only when explicitly requested", () => {
+    const { store, userId } = makeStore();
+    const tokenManager = new TokenManager();
+    const credential = store.issueDevice({ userId, label: "Laptop", platform: "desktop" });
+    const deps = {
+      tokenManager,
+      deviceAuthStore: store,
+      getServerBootId: () => "boot_test",
+      getWorkspaceId: () => "workspace_test",
+    };
+
+    expect(responseForCredential(deps, credential, { includeShellToken: false })).toEqual({
+      ...credential,
+      serverId: store.getServerId(),
+      serverBootId: "boot_test",
+      workspaceId: "workspace_test",
+    });
+
+    const response = responseForCredential(deps, credential, { includeShellToken: true });
+    expect(response.callerId).toBe(shellCallerId(credential.deviceId));
+    expect(response.shellToken).toBe(tokenManager.getToken(shellCallerId(credential.deviceId)));
+    expect(agentCallerId("entity_one")).toBe("agent:entity_one");
   });
 });

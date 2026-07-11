@@ -45,18 +45,34 @@ function inv(flags: Record<string, string | boolean> = {}) {
   return { positionals: [], flags, flagsMulti: () => [] };
 }
 const deviceCreds = {
-  schemaVersion: 1 as const,
+  schemaVersion: 3 as const,
   kind: "device" as const,
-  url: "http://srv",
+  url: "webrtc://room-1234/_workspace/ws",
   workspaceName: "ws",
-  deviceId: "dev-1",
-  refreshToken: "rt",
+  serverId: `srv_${"S".repeat(24)}`,
+  deviceId: `dev_${"D".repeat(24)}`,
+  refreshToken: "R".repeat(43),
+  controlPairing: {
+    room: "room-control",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example/",
+    v: 2 as const,
+    ice: "all" as const,
+  },
+  workspacePairing: {
+    room: "room-1234",
+    fp: "AA".repeat(32),
+    sig: "wss://signal.example/",
+    v: 2 as const,
+    ice: "all" as const,
+  },
+  pairedAt: 1,
 };
 
 beforeEach(() => {
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   savedCwd = process.cwd();
-  for (const k of ENV_KEYS) delete process.env[k];
+  for (const k of ENV_KEYS) Reflect.deleteProperty(process.env, k);
   state.creds = null;
   state.session = null;
   state.loadCredsCalls = 0;
@@ -67,7 +83,7 @@ beforeEach(() => {
 afterEach(() => {
   process.chdir(savedCwd);
   for (const [k, v] of Object.entries(savedEnv)) {
-    if (v === undefined) delete process.env[k];
+    if (v === undefined) Reflect.deleteProperty(process.env, k);
     else process.env[k] = v;
   }
   for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -79,7 +95,7 @@ describe("resolveSessionScope precedence", () => {
     state.session = {
       schemaVersion: 1,
       name: "mysess",
-      serverUrl: "http://srv",
+      serverUrl: deviceCreds.url,
       entityId: "ent-s",
       contextId: "ctx-sess",
       scopeKey: "sk",
@@ -87,13 +103,13 @@ describe("resolveSessionScope precedence", () => {
     };
     const scope = resolveSessionScope(inv({ session: "mysess" }));
     expect(scope.contextId).toBe("ctx-sess");
-    expect(scope.callerId).toBe("shell:dev-1");
+    expect(scope.callerId).toBe(`shell:dev_${"D".repeat(24)}`);
     expect(scope.session.entityId).toBe("ent-s");
   });
 
   it("tier 2: VIBESTUDIO_AGENT_TOKEN builds an agent-credential client from env alone", () => {
     process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:ag-1:secret";
-    process.env["VIBESTUDIO_SERVER_URL"] = "ws://srv/rpc";
+    process.env["VIBESTUDIO_SERVER_URL"] = "http://srv";
     process.env["VIBESTUDIO_CONTEXT_ID"] = "ctx-env";
     process.env["VIBESTUDIO_ENTITY_ID"] = "ent-env";
     const scope = resolveSessionScope(inv());
@@ -110,7 +126,7 @@ describe("resolveSessionScope precedence", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-marker", serverUrl: "http://srv" })
+      JSON.stringify({ contextId: "ctx-marker", serverUrl: deviceCreds.url })
     );
     const deep = path.join(root, "a", "b");
     fs.mkdirSync(deep, { recursive: true });
@@ -120,11 +136,11 @@ describe("resolveSessionScope precedence", () => {
     state.creds = deviceCreds;
     const scope = resolveSessionScope(inv());
     expect(scope.contextId).toBe("ctx-marker");
-    expect(scope.callerId).toBe("shell:dev-1");
+    expect(scope.callerId).toBe(`shell:dev_${"D".repeat(24)}`);
     expect(state.loadSessionCalls).toBe(0); // never reached the session-file tier
   });
 
-  it("tier 3: accepts legacy marker rpc websocket urls for the paired server", () => {
+  it("tier 3: refuses non-canonical websocket endpoint aliases", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
@@ -132,20 +148,18 @@ describe("resolveSessionScope precedence", () => {
     );
     process.chdir(root);
     state.creds = deviceCreds;
-    const scope = resolveSessionScope(inv());
-    expect(scope.contextId).toBe("ctx-marker");
-    expect(scope.session.serverUrl).toBe("http://srv");
+    expect(() => resolveSessionScope(inv())).toThrow(/names server/);
   });
 
   it("tier 2 wins over a present marker (env token beats cwd marker)", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-marker", serverUrl: "http://srv" })
+      JSON.stringify({ contextId: "ctx-marker", serverUrl: deviceCreds.url })
     );
     process.chdir(root);
     process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:ag-1:secret";
-    process.env["VIBESTUDIO_SERVER_URL"] = "ws://srv/rpc";
+    process.env["VIBESTUDIO_SERVER_URL"] = "http://srv";
     process.env["VIBESTUDIO_CONTEXT_ID"] = "ctx-env";
     const scope = resolveSessionScope(inv());
     expect(scope.contextId).toBe("ctx-env");
@@ -159,7 +173,7 @@ describe("resolveSessionScope precedence", () => {
       JSON.stringify({ contextId: "ctx-marker", serverUrl: "http://other" })
     );
     process.chdir(root);
-    state.creds = deviceCreds; // url http://srv ≠ marker http://other
+    state.creds = deviceCreds;
     expect(() => resolveSessionScope(inv())).toThrow(/names server/);
   });
 
@@ -167,6 +181,6 @@ describe("resolveSessionScope precedence", () => {
     state.creds = deviceCreds;
     const scope = resolveSessionScope(inv({ context: "ctx-flag" }));
     expect(scope.contextId).toBe("ctx-flag");
-    expect(scope.callerId).toBe("shell:dev-1");
+    expect(scope.callerId).toBe(`shell:dev_${"D".repeat(24)}`);
   });
 });

@@ -1397,9 +1397,9 @@ export class ViewManager {
    * raises, or creates a view routes through here instead of re-adding child
    * views directly — distributed remove/add calls are how the hosted shell
    * ended up stacked over slotted panels. Re-asserts, bottom to top:
-   * host chrome app views, the legacy visible panel (no native slot), slotted
+   * host chrome app views, the active unslotted panel, slotted
    * panels with the focused slot last, then the bootstrap launch gate while
-   * the hosted shell is not ready. The gate must stay above fallback panels
+   * the hosted shell is not ready. The gate must stay above unslotted panels
    * until a hosted shell explicitly reports ready.
    */
   private reconcileNativeLayerOrder(): void {

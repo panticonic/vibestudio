@@ -7,8 +7,8 @@
  * critical invariant of moving `WorkspaceVcs.unitHashes` off the gad DO onto
  * content-store tree resolution: for the SAME ingested state, the hashes
  * resolved from the content store are BYTE-IDENTICAL to the shared reference
- * implementation (`buildWorktreeManifest().subtreeHash` over the DO's durable
- * file listing — the canonical hashing both the server and the DO implement).
+ * implementation (`buildWorktreeManifest().subtreeHash` over the DO's internal
+ * durable manifest index — the canonical hashing both sides implement).
  * Identical hashes ⇒ identical EVs ⇒ identical build keys ⇒ the build cache
  * survives the source swap without a BUILD_CACHE_VERSION bump.
  *
@@ -46,13 +46,16 @@ function callerFor(gad: TestGad): GadCaller {
 }
 
 /**
- * Reference unit hashes: the DO's durable per-repo `main` listings (recorded
- * synchronously by the DO's publish path), re-rooted under
+ * Reference unit hashes: the DO's internal durable per-repo `main` manifests
+ * (recorded synchronously by the publish path), re-rooted under
  * their repo paths and re-hashed with the shared reference implementation
  * (`buildWorktreeManifest().subtreeHash`). Since P5a the composed workspace
  * view is SERVER-minted (the DO never holds a state row for it), so the
- * cross-implementation oracle asserts that the DO's durable listings
+ * cross-implementation oracle asserts that the DO's durable manifests
  * reproduce the exact composed state hash the server handed out.
+ *
+ * The manifest reader is deliberately test-local: production exposes no
+ * second state-listing RPC alongside the canonical content-store tree.
  */
 async function referenceUnitHashes(
   gad: TestGad,
@@ -64,13 +67,18 @@ async function referenceUnitHashes(
     head: "main",
   }) as Array<{ logId: string; stateHash: string }>;
   const files: Array<{ path: string; contentHash: string; mode: number }> = [];
+  const manifestFiles = (
+    gad.instance as unknown as {
+      filesForState(stateHash: string): Array<{
+        path: string;
+        content_hash: string;
+        mode: number;
+      }>;
+    }
+  ).filesForState.bind(gad.instance);
   for (const head of heads) {
     const repoPath = head.logId.slice("vcs:repo:".length);
-    const listing = gad.instance.listStateFiles({ stateHash: head.stateHash }) as Array<{
-      path: string;
-      content_hash: string;
-      mode: number;
-    }>;
+    const listing = manifestFiles(head.stateHash);
     for (const file of listing) {
       files.push({
         path: `${repoPath}/${file.path}`,

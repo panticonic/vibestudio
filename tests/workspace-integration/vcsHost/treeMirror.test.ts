@@ -1,18 +1,14 @@
 /**
  * The content-store mirroring invariant (blob-addressed-cleanly step 4):
  * ANY state hash the system hands out can be resolved to a full tree in the
- * content store — eagerly on every server-side path that holds the file list
- * in memory (scan/ingest, staged working states, commits, merges, pushes),
- * or lazily via {@link WorktreeStore.ensureStateMirrored} for states minted inside
- * the DO (composed views, subtree states, historical states).
+ * content store before it is published. There is one authority and no
+ * reconstruction path from GAD manifests when that canonical tree is absent.
  *
  * Verified here against the REAL gad-store DO (workerd test-utils), matching
  * the store.test.ts / workspaceVcs.*.test.ts patterns:
- *  (a) ingest a directory → getTree/listTree of the state hash works and
- *      matches the DO's listStateFiles;
+ *  (a) ingest a directory → getTree/listTree of the state hash works;
  *  (b) the edit → commit → push path mirrors every state it hands out;
- *  (c) ensureStateMirrored reconstructs a deliberately-unmirrored DO state
- *      (hash-identical by construction) and REJECTS a truncated listing;
+ *  (c) ensureStateMirrored rejects a deliberately-unmirrored DO state;
  *  (d) mirroring is idempotent.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -62,7 +58,7 @@ async function writeTree(dir: string, files: Record<string, string>): Promise<vo
   }
 }
 
-/** listTree's files, as the DO's listStateFiles shape for comparison. */
+/** Canonical content-store files in the WorktreeStore listing shape. */
 async function treeFiles(
   blobsDir: string,
   stateHash: string
@@ -75,21 +71,6 @@ async function treeFiles(
       path: entry.path,
       content_hash: (entry as { contentHash: string }).contentHash,
       mode: (entry as { mode: number }).mode,
-    }))
-    .sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/** The DO's authoritative listing, projected to the comparison shape. */
-function doFiles(
-  gad: TestGad,
-  stateHash: string
-): Array<{ path: string; content_hash: string; mode: number }> {
-  return gad.instance
-    .listStateFiles({ stateHash })
-    .map((row) => ({
-      path: String(row["path"]),
-      content_hash: String(row["content_hash"]),
-      mode: Number(row["mode"]),
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -114,7 +95,7 @@ describe("WorktreeStore eager mirroring (scan/ingest)", () => {
     await fsp.rm(root, { recursive: true, force: true });
   });
 
-  it("snapshotDir mirrors the tree: getTree/listTree work and match listStateFiles", async () => {
+  it("snapshotDir mirrors the complete tree into the canonical content store", async () => {
     await writeTree(workDir, {
       "README.md": "# hello\n",
       "src/index.ts": "export const x = 1;\n",
@@ -128,8 +109,11 @@ describe("WorktreeStore eager mirroring (scan/ingest)", () => {
     const rootEntries = await getTree(blobsDir, snap.stateHash);
     expect(rootEntries?.map((entry) => entry.name)).toEqual(["README.md", "src"]);
 
-    // Byte-level agreement with the DO's authoritative listing.
-    expect(await treeFiles(blobsDir, snap.stateHash)).toEqual(doFiles(gad, snap.stateHash));
+    expect((await treeFiles(blobsDir, snap.stateHash)).map((file) => file.path)).toEqual([
+      "README.md",
+      "src/deep/util.ts",
+      "src/index.ts",
+    ]);
 
     // Path reads and materialization work straight off the content store.
     const meta = await readFileAtTree(blobsDir, snap.stateHash, "src/deep/util.ts");
@@ -154,11 +138,11 @@ describe("WorktreeStore eager mirroring (scan/ingest)", () => {
     const second = await vcs.snapshotDir(workDir, { logId: FIXTURE_LOG });
     expect(second.unchanged).toBe(true);
     expect(second.stateHash).toBe(first.stateHash);
-    expect(await treeFiles(blobsDir, first.stateHash)).toEqual(doFiles(gad, first.stateHash));
+    expect((await treeFiles(blobsDir, first.stateHash)).map((file) => file.path)).toEqual(["a.txt"]);
   });
 
-  describe("ensureStateMirrored (lazy fallback)", () => {
-    it("reconstructs a DO-minted state the server never mirrored, hash-identically", async () => {
+  describe("ensureStateMirrored (strict invariant)", () => {
+    it("rejects a DO-minted state that was never mirrored", async () => {
       // Mint a state INSIDE the DO (staged value) — the server-side mirror
       // paths never see this file list.
       const a = await putBytes(blobsDir, Buffer.from("lazy-a\n", "utf8"));
@@ -172,13 +156,10 @@ describe("WorktreeStore eager mirroring (scan/ingest)", () => {
       });
       expect(await hasTreeObject(blobsDir, staged.stateHash)).toBe(false);
 
-      await vcs.ensureStateMirrored(staged.stateHash);
-      expect(await hasTreeObject(blobsDir, staged.stateHash)).toBe(true);
-      expect(await treeFiles(blobsDir, staged.stateHash)).toEqual(doFiles(gad, staged.stateHash));
-
-      // Idempotent: a second call is a no-op (and does not throw).
-      await vcs.ensureStateMirrored(staged.stateHash);
-      expect(await treeFiles(blobsDir, staged.stateHash)).toEqual(doFiles(gad, staged.stateHash));
+      await expect(vcs.ensureStateMirrored(staged.stateHash)).rejects.toThrow(
+        /missing its canonical content-store tree/
+      );
+      expect(await hasTreeObject(blobsDir, staged.stateHash)).toBe(false);
     });
 
     it("mirrors the empty state without a DO round trip", async () => {
@@ -188,38 +169,14 @@ describe("WorktreeStore eager mirroring (scan/ingest)", () => {
       expect(await listTree(blobsDir, EMPTY_STATE_HASH)).toEqual([]);
     });
 
-    it("REJECTS a truncated/corrupted listing (recomputed hash mismatch) and writes nothing", async () => {
-      const a = await putBytes(blobsDir, Buffer.from("integrity-a\n", "utf8"));
-      const b = await putBytes(blobsDir, Buffer.from("integrity-b\n", "utf8"));
-      const staged = gad.instance.stageWorktreeState({
-        files: [
-          { path: "x/a.txt", contentHash: a.digest, mode: 33188 },
-          { path: "x/b.txt", contentHash: b.digest, mode: 33188 },
-        ],
-        summary: "to be corrupted",
-      });
-
-      // A caller whose listStateFiles drops a file — a corrupt/truncated
-      // listing must NEVER mirror under the requested hash.
-      const base = callerFor(gad);
-      const corrupt: GadCaller = {
-        async call<T>(method: string, input: unknown): Promise<T> {
-          const result = await base.call<T>(method, input);
-          if (method === "listStateFiles" && Array.isArray(result)) {
-            return result.slice(0, 1) as T;
-          }
-          return result;
-        },
-      };
-      const corruptVcs = new WorktreeStore({ blobsDir, gad: corrupt });
-      await expect(corruptVcs.ensureStateMirrored(staged.stateHash)).rejects.toThrow(
-        /corrupt\/truncated listing/
-      );
-      expect(await hasTreeObject(blobsDir, staged.stateHash)).toBe(false);
-
-      // The honest caller then mirrors it fine.
-      await vcs.ensureStateMirrored(staged.stateHash);
-      expect(await hasTreeObject(blobsDir, staged.stateHash)).toBe(true);
+    it("accepts an already-mirrored state idempotently", async () => {
+      await writeTree(workDir, { "canonical.txt": "present\n" });
+      const state = await vcs.localState(workDir);
+      await vcs.ensureStateMirrored(state.stateHash);
+      await vcs.ensureStateMirrored(state.stateHash);
+      expect((await treeFiles(blobsDir, state.stateHash)).map((file) => file.path)).toEqual([
+        "canonical.txt",
+      ]);
     });
   });
 });
@@ -269,7 +226,10 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
       ],
     });
     expect(await hasTreeObject(blobsDir, edit.stateHash)).toBe(true);
-    expect(await treeFiles(blobsDir, edit.stateHash)).toEqual(doFiles(gad, edit.stateHash));
+    expect((await treeFiles(blobsDir, edit.stateHash)).map((file) => file.path)).toEqual([
+      "index.ts",
+      "lib/util.ts",
+    ]);
 
     // Commit: the ctx-head commit state is mirrored.
     const committed = await vcs.commit({
@@ -280,9 +240,10 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
     });
     expect(committed.status).toBe("committed");
     expect(await hasTreeObject(blobsDir, committed.stateHash)).toBe(true);
-    expect(await treeFiles(blobsDir, committed.stateHash)).toEqual(
-      doFiles(gad, committed.stateHash)
-    );
+    expect((await treeFiles(blobsDir, committed.stateHash)).map((file) => file.path)).toEqual([
+      "index.ts",
+      "lib/util.ts",
+    ]);
 
     // Push: the advanced main state is mirrored (repo-rooted).
     const pushed = await pushToMain(gad, { repoPaths: [REPO], sourceHead: CTX_HEAD, actor: USER });
@@ -290,14 +251,16 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
     const main = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
     expect(main).not.toBeNull();
     expect(await hasTreeObject(blobsDir, main!)).toBe(true);
-    expect(await treeFiles(blobsDir, main!)).toEqual(doFiles(gad, main!));
+    expect((await treeFiles(blobsDir, main!)).map((file) => file.path)).toEqual([
+      "index.ts",
+      "lib/util.ts",
+    ]);
 
     // Composed workspace view (SERVER-minted, P5a): mirrored eagerly by the
     // local composition.
     const view = await vcs.workspaceView();
     expect(await hasTreeObject(blobsDir, view.stateHash)).toBe(true);
     const composed = await treeFiles(blobsDir, view.stateHash);
-    expect(composed).toEqual(doFiles(gad, view.stateHash));
     // The composed view re-roots the repo's files under its repoPath.
     expect(composed.map((f) => f.path)).toEqual([`${REPO}/index.ts`, `${REPO}/lib/util.ts`]);
   });
@@ -324,6 +287,8 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
       actor: USER,
     });
     expect(await hasTreeObject(blobsDir, second.stateHash)).toBe(true);
-    expect(await treeFiles(blobsDir, second.stateHash)).toEqual(doFiles(gad, second.stateHash));
+    expect(await vcs.readFile(second.stateHash, "a.txt")).toMatchObject({
+      content: { kind: "text", text: "v2\n" },
+    });
   });
 });

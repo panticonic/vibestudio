@@ -87,3 +87,19 @@ contextBridge.exposeInMainWorld("__vibestudioIncomingPairLink", {
     return () => ipcRenderer.off("vibestudio:incoming-pair-link", listener);
   },
 });
+contextBridge.exposeInMainWorld("__vibestudioIncomingPanelLocation", {
+  getPending() {
+    return ipcRenderer.invoke("vibestudio:drain-panel-location") as Promise<unknown>;
+  },
+  onLocation(handler: (location: unknown) => void) {
+    const listener = (_event: IpcRendererEvent, location: unknown) => handler(location);
+    ipcRenderer.on("vibestudio:incoming-panel-location", listener);
+    return () => ipcRenderer.off("vibestudio:incoming-panel-location", listener);
+  },
+  prepareWorkspaceRelaunch(location: unknown) {
+    return ipcRenderer.invoke(
+      "vibestudio:prepare-panel-location-relaunch",
+      location
+    ) as Promise<void>;
+  },
+});

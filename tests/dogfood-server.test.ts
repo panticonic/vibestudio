@@ -53,9 +53,7 @@ describe("dogfood server supervisor", () => {
 
     expect(handled).toBe(true);
     expect(restart).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("unsupported under GAD VCS")
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unsupported under GAD VCS"));
     warnSpy.mockRestore();
   });
 
@@ -68,6 +66,18 @@ describe("dogfood server supervisor", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("DOGFOOD REBUILD FAILED"));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pnpm dev:self:server"));
     warnSpy.mockRestore();
+  });
+
+  it("registers the prepared dogfood workspace through the canonical hub bootstrap flag", () => {
+    const hooks = createDogfoodPairHooks({ workspaceName: "dogfood-test" });
+    const args = hooks.buildServerArgs({ port: 3456, appRoot: null }, "127.0.0.1");
+    expect(args).toContain("--bootstrap-workspace");
+    expect(args[args.indexOf("--bootstrap-workspace") + 1]).toBe("dogfood-test");
+    expect(args).not.toContain("--workspace");
+    expect(args).not.toContain("--print-credentials");
+
+    const env = hooks.buildEnv({}, { options: { port: 3456 }, serverArgs: args });
+    expect(env.VIBESTUDIO_GATEWAY_ALIASES).toBe(JSON.stringify(["http://127.0.0.1:3456"]));
   });
 
   it("bootstraps a dogfood project with the host checkout remote", () => {

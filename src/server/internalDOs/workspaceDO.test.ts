@@ -111,6 +111,18 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(b.createdAt).toBe(a.createdAt);
   });
 
+  it("backfills a missing owner exactly once and rejects a different owner", () => {
+    const initial = instance.entityActivate(doInput());
+    expect(initial.ownerUserId).toBeUndefined();
+
+    const owned = instance.entityActivate(doInput({ ownerUserId: "usr_alice" }));
+    expect(owned.ownerUserId).toBe("usr_alice");
+    expect(instance.entityActivate(doInput()).ownerUserId).toBe("usr_alice");
+    expect(() => instance.entityActivate(doInput({ ownerUserId: "usr_bob" }))).toThrow(
+      /ownerUserId/
+    );
+  });
+
   it("reactivates a retired row with identical identity", () => {
     const initial = instance.entityActivate(panelInput());
     instance.entityRetire(initial.id);
@@ -409,6 +421,84 @@ describe("WorkspaceDO slot operations", () => {
     expect(slot?.current_entity_id).toBe(rec.id);
     expect(instance.slotHistory("slot-state")[0]?.state_args).toBe(JSON.stringify({ a: 2 }));
     expect(instance.entityResolve(rec.id)?.stateArgs).toEqual({ a: 2 });
+  });
+
+  it("re-owns an entire subtree to the destination root owner", () => {
+    instance.slotCreate({
+      slotId: "alice-root",
+      parentSlotId: null,
+      positionId: "000001000000",
+      ownerUserId: "alice",
+    });
+    instance.slotCreate({
+      slotId: "bob-root",
+      parentSlotId: null,
+      positionId: "000002000000",
+      ownerUserId: "bob",
+    });
+    instance.slotCreate({
+      slotId: "bob-child",
+      parentSlotId: "bob-root",
+      positionId: "000001000000",
+      ownerUserId: "bob",
+    });
+    instance.slotCreate({
+      slotId: "bob-grandchild",
+      parentSlotId: "bob-child",
+      positionId: "000001000000",
+      ownerUserId: "bob",
+    });
+
+    instance.slotMove("bob-child", "alice-root", "000001000000", "bob");
+
+    expect(instance.slotGet("bob-child")).toMatchObject({
+      parent_slot_id: "alice-root",
+      owner_user_id: "alice",
+    });
+    expect(instance.slotGet("bob-grandchild")?.owner_user_id).toBe("alice");
+  });
+
+  it("attributes a promoted root to the acting mover", () => {
+    instance.slotCreate({
+      slotId: "bob-root",
+      parentSlotId: null,
+      positionId: "000001000000",
+      ownerUserId: "bob",
+    });
+    instance.slotCreate({
+      slotId: "bob-child",
+      parentSlotId: "bob-root",
+      positionId: "000001000000",
+      ownerUserId: "bob",
+    });
+
+    instance.slotMove("bob-child", null, "000002000000", "alice");
+
+    expect(instance.slotGet("bob-child")).toMatchObject({
+      parent_slot_id: null,
+      owner_user_id: "alice",
+    });
+  });
+
+  it("rejects a move below the slot's own descendant without corrupting the tree", () => {
+    instance.slotCreate({
+      slotId: "root",
+      parentSlotId: null,
+      positionId: "000001000000",
+      ownerUserId: "alice",
+    });
+    instance.slotCreate({
+      slotId: "child",
+      parentSlotId: "root",
+      positionId: "000001000000",
+      ownerUserId: "alice",
+    });
+
+    expect(() => instance.slotMove("root", "child", "000002000000", "alice")).toThrow(
+      "under its own subtree"
+    );
+    expect(instance.slotGet("root")?.parent_slot_id).toBeNull();
+    expect(instance.slotGet("child")?.parent_slot_id).toBe("root");
   });
 
   it("slotClose marks the slot closed and clears current pointers", () => {

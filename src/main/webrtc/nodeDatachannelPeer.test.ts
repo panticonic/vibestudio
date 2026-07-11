@@ -315,16 +315,12 @@ describe("state / candidate normalizers", () => {
     warn.mockRestore();
   });
 
-  it("normalizes both SDP-short and libdatachannel-long candidate types", () => {
+  it("accepts exactly node-datachannel 0.32 candidate types", () => {
     expect(normalizeCandidateType("host")).toBe("host");
     expect(normalizeCandidateType("srflx")).toBe("srflx");
-    expect(normalizeCandidateType("ServerReflexive")).toBe("srflx");
     expect(normalizeCandidateType("prflx")).toBe("prflx");
-    expect(normalizeCandidateType("PeerReflexive")).toBe("prflx");
     expect(normalizeCandidateType("relay")).toBe("relay");
-    expect(normalizeCandidateType("Relayed")).toBe("relay");
     expect(normalizeCandidateType("mystery")).toBeNull();
-    expect(normalizeCandidateType(null)).toBeNull();
   });
 });
 
@@ -340,49 +336,45 @@ describe("parseSdpFingerprint (remoteFingerprint SDP fallback)", () => {
   });
 });
 
-describe("candidateTypeFromPair — tolerant candidate-pair extraction", () => {
-  it("reads either field name (type | candidateType) and normalizes any case", () => {
-    expect(candidateTypeFromPair({ local: { type: "Host" } })).toBe("host");
-    expect(candidateTypeFromPair({ local: { candidateType: "ServerReflexive" } })).toBe("srflx");
-    expect(candidateTypeFromPair({ local: { type: "PeerReflexive" } })).toBe("prflx");
-    expect(candidateTypeFromPair({ local: { candidateType: "Relayed" } })).toBe("relay");
+describe("candidateTypeFromPair — pinned node-datachannel shape", () => {
+  it("reads the current local.type field", () => {
+    expect(candidateTypeFromPair({ local: { type: "host" } })).toBe("host");
+    expect(candidateTypeFromPair({ local: { type: "srflx" } })).toBe("srflx");
+    expect(candidateTypeFromPair({ local: { type: "prflx" } })).toBe("prflx");
     expect(candidateTypeFromPair({ local: { type: "relay" } })).toBe("relay");
   });
 
-  it("prefers `type` over `candidateType` when both are present", () => {
-    expect(candidateTypeFromPair({ local: { type: "host", candidateType: "relay" } })).toBe("host");
-  });
-
-  it("returns null for a missing/false/null pair or an unknown type (never throws)", () => {
-    expect(candidateTypeFromPair(false)).toBeNull();
+  it("returns null only when no pair is selected and rejects API drift", () => {
     expect(candidateTypeFromPair(null)).toBeNull();
-    expect(candidateTypeFromPair(undefined)).toBeNull();
-    expect(candidateTypeFromPair({})).toBeNull();
-    expect(candidateTypeFromPair({ local: null })).toBeNull();
-    expect(candidateTypeFromPair({ local: { type: "mystery" } })).toBeNull();
+    expect(() => candidateTypeFromPair({ local: { type: "mystery" } })).toThrow(
+      /unknown candidate type/
+    );
+    expect(() => candidateTypeFromPair({ local: { candidateType: "relay" } } as never)).toThrow(
+      /invalid selected-candidate-pair shape/
+    );
   });
 });
 
 describe("canonicalizeFingerprint — native fingerprint normalization", () => {
-  it("uppercases colon-hex and strips a leading hash-name token", () => {
-    expect(canonicalizeFingerprint("aa:bb:cc")).toBe("AA:BB:CC");
-    expect(canonicalizeFingerprint("sha-256 aa:bb:cc")).toBe("AA:BB:CC");
-    expect(canonicalizeFingerprint("  AA:BB  ")).toBe("AA:BB");
+  const lower = Array.from({ length: 32 }, (_, index) => index.toString(16).padStart(2, "0")).join(
+    ":"
+  );
+
+  it("uppercases the current 32-byte colon-hex value", () => {
+    expect(canonicalizeFingerprint(lower)).toBe(lower.toUpperCase());
   });
 
-  it("returns null when no colon-hex fingerprint is present (→ caller fails closed)", () => {
+  it("rejects non-current fingerprint shapes", () => {
     expect(canonicalizeFingerprint("")).toBeNull();
     expect(canonicalizeFingerprint("not-a-fingerprint")).toBeNull();
-    // Bare hex (no colons) is rejected so a stray algorithm token can't slip
-    // through; the caller falls back to the SDP parse for the real value.
-    expect(canonicalizeFingerprint("aabbcc")).toBeNull();
+    expect(canonicalizeFingerprint("aa:bb:cc")).toBeNull();
+    expect(canonicalizeFingerprint(`sha-256 ${lower}`)).toBeNull();
   });
 });
 
 // Build a WrappedPeerConnection over a structurally-complete fake native peer so
 // the adapter methods (remoteFingerprint / selectedCandidateType) are exercised
-// WITHOUT the native binary — only the optional accessors under test are
-// overridden per case.
+// WITHOUT the native binary.
 type FakePc = Partial<ConstructorParameters<typeof WrappedPeerConnection>[0]>;
 function wrap(overrides: FakePc = {}): WrappedPeerConnection {
   const noop = (): void => {};
@@ -398,6 +390,10 @@ function wrap(overrides: FakePc = {}): WrappedPeerConnection {
     onLocalCandidate: noop,
     onStateChange: noop,
     state: () => "new",
+    remoteFingerprint: () => {
+      throw new Error("fingerprint not ready");
+    },
+    getSelectedCandidatePair: () => null,
     ...overrides,
   };
   return new WrappedPeerConnection(
@@ -406,26 +402,33 @@ function wrap(overrides: FakePc = {}): WrappedPeerConnection {
 }
 
 describe("WrappedPeerConnection.remoteFingerprint — native + SDP fallback", () => {
-  it("parses the remote SDP cached at setRemoteDescription when no native accessor exists", () => {
-    const pc = wrap(); // neither remoteFingerprint() nor remoteDescription()
-    const sdp = ["v=0", "a=setup:active", "a=fingerprint:sha-256 ab:CD:ef:01"].join("\r\n");
+  const fp = (byte: string): string => Array(32).fill(byte).join(":");
+
+  it("parses the cached remote SDP when the native accessor is not ready", () => {
+    const pc = wrap();
+    const sdp = ["v=0", "a=setup:active", `a=fingerprint:sha-256 ${fp("ab")}`].join("\r\n");
     void pc.setRemoteDescription({ type: "answer", sdp });
-    expect(pc.remoteFingerprint()).toBe("AB:CD:EF:01");
+    expect(pc.remoteFingerprint()).toBe(fp("AB"));
   });
 
   it("is null before any remote description is set (fail-closed default)", () => {
     expect(wrap().remoteFingerprint()).toBeNull();
   });
 
-  it("prefers the native accessor and canonicalizes its value (strips `sha-256 `)", () => {
-    const pc = wrap({ remoteFingerprint: () => "sha-256 aa:bb:cc" });
-    expect(pc.remoteFingerprint()).toBe("AA:BB:CC");
+  it("prefers the current native fingerprint object", () => {
+    const pc = wrap({ remoteFingerprint: () => ({ value: fp("aa"), algorithm: "sha-256" }) });
+    expect(pc.remoteFingerprint()).toBe(fp("AA"));
   });
 
-  it("falls back to the SDP when the native accessor yields an unusable/empty value", () => {
-    const pc = wrap({ remoteFingerprint: () => "" });
-    void pc.setRemoteDescription({ type: "offer", sdp: "a=fingerprint:sha-256 11:22:33" });
-    expect(pc.remoteFingerprint()).toBe("11:22:33");
+  it("rejects old or malformed native fingerprint shapes", () => {
+    expect(() => wrap({ remoteFingerprint: () => fp("aa") as never }).remoteFingerprint()).toThrow(
+      /invalid remote-fingerprint shape/
+    );
+    expect(() =>
+      wrap({
+        remoteFingerprint: () => ({ value: fp("aa"), algorithm: "sha-1" }),
+      }).remoteFingerprint()
+    ).toThrow(/invalid remote-fingerprint shape/);
   });
 
   it("tolerates a throwing native remoteFingerprint() and uses the SDP", () => {
@@ -434,40 +437,28 @@ describe("WrappedPeerConnection.remoteFingerprint — native + SDP fallback", ()
         throw new Error("native blew up");
       },
     });
-    void pc.setRemoteDescription({ type: "answer", sdp: "a=fingerprint:sha-256 de:ad:be:ef" });
-    expect(pc.remoteFingerprint()).toBe("DE:AD:BE:EF");
-  });
-
-  it("reads a native remoteDescription() when nothing was cached", () => {
-    const pc = wrap({
-      remoteDescription: () => ({ sdp: "a=fingerprint:sha-256 0a:0b:0c", type: "answer" }),
+    void pc.setRemoteDescription({
+      type: "answer",
+      sdp: `a=fingerprint:sha-256 ${fp("de")}`,
     });
-    expect(pc.remoteFingerprint()).toBe("0A:0B:0C");
+    expect(pc.remoteFingerprint()).toBe(fp("DE"));
   });
 });
 
 describe("WrappedPeerConnection.selectedCandidateType — getSelectedCandidatePair", () => {
-  it("normalizes long/short, mixed-case types from either field name", () => {
+  it("reads the pinned local.type shape", () => {
     expect(
       wrap({
-        getSelectedCandidatePair: () => ({ local: { type: "Host" } }),
-      }).selectedCandidateType()
-    ).toBe("host");
-    expect(
-      wrap({
-        getSelectedCandidatePair: () => ({ local: { candidateType: "ServerReflexive" } }),
-      }).selectedCandidateType()
-    ).toBe("srflx");
-    expect(
-      wrap({
-        getSelectedCandidatePair: () => ({ local: { type: "Relayed" } }),
+        getSelectedCandidatePair: () => ({
+          local: { type: "relay" },
+          remote: { type: "host" },
+        }),
       }).selectedCandidateType()
     ).toBe("relay");
   });
 
-  it("is null when the pair is unavailable/false/null and never throws", () => {
-    expect(wrap().selectedCandidateType()).toBeNull(); // no getSelectedCandidatePair at all
-    expect(wrap({ getSelectedCandidatePair: () => false }).selectedCandidateType()).toBeNull();
+  it("is null when unavailable or transiently throwing", () => {
+    expect(wrap().selectedCandidateType()).toBeNull();
     expect(wrap({ getSelectedCandidatePair: () => null }).selectedCandidateType()).toBeNull();
     expect(
       wrap({
@@ -476,6 +467,15 @@ describe("WrappedPeerConnection.selectedCandidateType — getSelectedCandidatePa
         },
       }).selectedCandidateType()
     ).toBeNull();
+  });
+
+  it("rejects an old selected-candidate-pair shape", () => {
+    expect(() =>
+      wrap({
+        getSelectedCandidatePair: () =>
+          ({ local: { candidateType: "relay" }, remote: { candidateType: "host" } }) as never,
+      }).selectedCandidateType()
+    ).toThrow(/invalid selected-candidate-pair shape/);
   });
 });
 
@@ -537,30 +537,6 @@ describe("cert.ts — persistent ECDSA P-256 management", () => {
           m.includes("[webrtc-cert] reusing persistent identity") && m.includes(first.fingerprint)
       )
     ).toBe(true);
-  });
-
-  it("throws CertIdentityError when legacy cert/key remnants exist", () => {
-    const dir = tmp("legacy-remnants");
-    fs.mkdirSync(dir, { recursive: true });
-    const identityFile = path.join(dir, "identity.pem");
-    const certFile = path.join(dir, "server.pem");
-    const keyFile = path.join(dir, "server.key");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    ensurePersistentCert({ identityPemFile: identityFile });
-    fs.writeFileSync(certFile, "legacy");
-    fs.writeFileSync(keyFile, "legacy");
-    let err: unknown;
-    try {
-      ensurePersistentCert({ identityPemFile: identityFile });
-    } catch (e) {
-      err = e;
-    }
-    vi.restoreAllMocks();
-    expect(err).toBeInstanceOf(CertIdentityError);
-    expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
-    expect((err as Error).message).toContain(certFile);
-    expect((err as Error).message).toContain(keyFile);
-    expect((err as Error).message).toContain("deleted two-file identity layout");
   });
 
   it("throws CertIdentityError when the identity file exists but is empty/whitespace", () => {

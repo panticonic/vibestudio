@@ -61,7 +61,10 @@ describe("parsePanelUrl()", () => {
   });
 
   it("parses URL with contextId query param", () => {
-    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?contextId=ctx-123", host);
+    const result = parsePanelUrl(
+      "https://vibestudio.example.com/panels/chat?contextId=ctx-123",
+      host
+    );
 
     expect(result).not.toBeNull();
     expect(result!.source).toBe("panels/chat");
@@ -70,7 +73,10 @@ describe("parsePanelUrl()", () => {
   });
 
   it("parses URL with name query param", () => {
-    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?name=My%20Panel", host);
+    const result = parsePanelUrl(
+      "https://vibestudio.example.com/panels/chat?name=My%20Panel",
+      host
+    );
 
     expect(result).not.toBeNull();
     expect(result!.options.name).toBe("My Panel");
@@ -83,11 +89,12 @@ describe("parsePanelUrl()", () => {
     expect(result!.options.focus).toBe(true);
   });
 
-  it("does not set focus for focus=false", () => {
+  it("preserves focus=false", () => {
     const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?focus=false", host);
 
     expect(result).not.toBeNull();
-    expect(result!.options.focus).toBeUndefined();
+    expect(result!.focus).toBe(false);
+    expect(result!.options.focus).toBe(false);
   });
 
   it("parses URL with valid stateArgs JSON", () => {
@@ -101,11 +108,13 @@ describe("parsePanelUrl()", () => {
     expect(result!.stateArgs).toEqual({ key: "value", count: 42 });
   });
 
-  it("handles invalid stateArgs JSON gracefully", () => {
-    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?stateArgs=not-json", host);
+  it("rejects invalid stateArgs JSON instead of silently dropping it", () => {
+    const result = parsePanelUrl(
+      "https://vibestudio.example.com/panels/chat?stateArgs=not-json",
+      host
+    );
 
-    expect(result).not.toBeNull();
-    expect(result!.stateArgs).toBeUndefined();
+    expect(result).toBeNull();
   });
 
   it("returns null for non-managed host", () => {
@@ -181,5 +190,35 @@ describe("parsePanelUrl()", () => {
 
     expect(result).not.toBeNull();
     expect(result!.source).toBe("panels/chat");
+  });
+
+  it("parses a panel URL below a workspace route prefix", () => {
+    const result = parsePanelUrl(
+      "http://127.0.0.1:43873/_workspace/dev-123/about/server-logs/",
+      "127.0.0.1",
+      "/_workspace/dev-123"
+    );
+
+    expect(result).toMatchObject({ source: "about/server-logs", workspace: "dev-123" });
+  });
+
+  it("preserves an encoded workspace and explicit disposition", () => {
+    expect(
+      parsePanelUrl(
+        "http://127.0.0.1:43873/_workspace/dev%20one/about/server-logs/?disposition=current",
+        "127.0.0.1:43873",
+        "/_workspace/dev%20one"
+      )
+    ).toMatchObject({
+      source: "about/server-logs",
+      workspace: "dev one",
+      disposition: "current",
+    });
+  });
+
+  it("rejects a panel URL outside the selected workspace route prefix", () => {
+    expect(
+      parsePanelUrl("http://127.0.0.1:43873/about/server-logs/", "127.0.0.1", "/_workspace/dev-123")
+    ).toBeNull();
   });
 });

@@ -23,7 +23,7 @@ export const pendingApprovalSchema = z.custom<PendingApproval>(
 // a human's decision on a pending approval (resolving the queued request), so
 // the resolution paths are writes; `listPending` is a pure read used to
 // rehydrate the renderer's approval bar on mount. The service-level `policy`
-// (shell/app/server) stays the enforced caller gate; we omit `access.callers`.
+// (shell/app/server) is the enforced caller gate; `access` carries sensitivity.
 const RESOLVE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
@@ -34,7 +34,7 @@ const LIST_PENDING_ACCESS: MethodAccessDescriptor = {
 export const shellApprovalMethods = defineServiceMethods({
   resolve: {
     description:
-      "Record the user's decision (once/session/version/repo/deny/dismiss) on a pending approval, resolving its queued request.",
+      "Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request.",
     args: z.tuple([z.string(), z.enum(APPROVAL_DECISIONS)]),
     returns: z.void(),
     access: RESOLVE_ACCESS,

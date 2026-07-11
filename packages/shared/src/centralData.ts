@@ -1,277 +1,386 @@
 /**
- * Central data management for Vibestudio.
+ * Machine control data stored in the hub-owned SQLite database.
  *
- * Manages persistent data stored in ~/.config/vibestudio/data.json including:
- * - Workspace registry (authoritative source for workspace metadata)
+ * The workspace catalog, per-user resume cursor, and machine preferences live
+ * beside identity in `server-auth/identity.db`. SQLite row updates replace the
+ * retired machine-wide `data.json` snapshot and are safe across the desktop and
+ * hub processes.
  */
 
-import * as fs from "fs";
-import * as path from "path";
+import * as path from "node:path";
+import * as fs from "node:fs";
+import { randomBytes } from "node:crypto";
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import { getCentralConfigPaths } from "./workspace/loader.js";
-import { getWorkspaceDir } from "@vibestudio/env-paths";
-import type { CentralData, WorkspaceEntry } from "./workspace/types.js";
+import type { WorkspaceEntry } from "./types.js";
+import {
+  assertCanonicalSqliteSchema,
+  initializeCanonicalSqliteSchema,
+  isTrulyEmptySqliteDatabase,
+} from "./sqliteSchema.js";
+import { IDENTITY_DATABASE_SCHEMA } from "./users/identitySchema.js";
 
-export type LastWorkspaceTarget =
-  | { kind: "local"; name: string; lastOpened: number }
-  | { kind: "remote"; url: string; workspaceName?: string; lastOpened: number };
+export interface CentralDataManagerOptions {
+  databasePath?: string;
+  now?: () => number;
+}
 
-/**
- * Default empty central data structure
- */
-function getDefaultData(): CentralData {
+export interface HubRuntimeRecord {
+  gatewayPort: number;
+  pid: number;
+  serverId: string;
+  serverBootId: string;
+  startedAt: number;
+  version: string;
+}
+
+export interface EphemeralWorkspaceRecord extends WorkspaceEntry {
+  diskName?: string;
+}
+
+function mintWorkspaceId(): string {
+  return `ws_${randomBytes(18).toString("base64url")}`;
+}
+
+const EPHEMERAL_WORKSPACE_KEY = "ephemeral_workspace";
+
+function parseEphemeralWorkspaceMarker(value: SQLOutputValue): {
+  workspaceId: string;
+  name: string;
+  diskName?: string;
+} {
+  if (typeof value !== "string") throw new Error("Invalid ephemeral workspace marker type");
+  const parsed = JSON.parse(value) as unknown;
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    (Object.keys(parsed).length !== 2 && Object.keys(parsed).length !== 3) ||
+    typeof (parsed as { workspaceId?: unknown }).workspaceId !== "string" ||
+    typeof (parsed as { name?: unknown }).name !== "string" ||
+    ((parsed as { diskName?: unknown }).diskName !== undefined &&
+      (typeof (parsed as { diskName?: unknown }).diskName !== "string" ||
+        !/^dev-[0-9a-f]{8}$/.test((parsed as { diskName: string }).diskName))) ||
+    Object.keys(parsed).some((key) => !["workspaceId", "name", "diskName"].includes(key))
+  ) {
+    throw new Error("Invalid ephemeral workspace marker schema");
+  }
+  return parsed as { workspaceId: string; name: string; diskName?: string };
+}
+
+function rowToWorkspace(row: Record<string, SQLOutputValue>): WorkspaceEntry {
   return {
-    workspaces: [],
+    workspaceId: row["workspace_id"] as string,
+    name: row["name"] as string,
+    lastOpened: row["last_opened"] as number,
   };
 }
 
-/**
- * CentralDataManager handles persistence of workspace registry data.
- * data.json is the sole authoritative source for workspace metadata.
- */
+function rowToHubRuntime(row: Record<string, SQLOutputValue>): HubRuntimeRecord {
+  return {
+    gatewayPort: row["gateway_port"] as number,
+    pid: row["pid"] as number,
+    serverId: row["server_id"] as string,
+    serverBootId: row["server_boot_id"] as string,
+    startedAt: row["started_at"] as number,
+    version: row["version"] as string,
+  };
+}
+
+/** Thin row-oriented wrapper around the hub control tables. */
 export class CentralDataManager {
-  private dataPath: string;
-  private data: CentralData;
+  private readonly db: DatabaseSync;
+  private readonly statements = new Map<string, StatementSync>();
+  private readonly now: () => number;
 
-  constructor() {
-    const paths = getCentralConfigPaths();
-    this.dataPath = paths.dataPath;
-    this.data = this.load();
-  }
-
-  /** Load data from disk. */
-  private load(): CentralData {
+  constructor(options: CentralDataManagerOptions = {}) {
+    const databasePath =
+      options.databasePath ??
+      path.join(getCentralConfigPaths().configDir, "server-auth", "identity.db");
+    this.now = options.now ?? Date.now;
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+    this.db = new DatabaseSync(databasePath);
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.db.exec("PRAGMA foreign_keys = ON");
     try {
-      if (!fs.existsSync(this.dataPath)) {
-        return getDefaultData();
+      if (isTrulyEmptySqliteDatabase(this.db)) {
+        initializeCanonicalSqliteSchema(this.db, IDENTITY_DATABASE_SCHEMA);
+      } else {
+        assertCanonicalSqliteSchema(
+          this.db,
+          IDENTITY_DATABASE_SCHEMA,
+          `hub-control schema in ${databasePath}`
+        );
       }
-      const content = fs.readFileSync(this.dataPath, "utf-8");
-      const parsed = JSON.parse(content) as Record<string, unknown>;
-
-      const result = getDefaultData();
-      if (Array.isArray(parsed["workspaces"])) {
-        result.workspaces = parsed["workspaces"] as WorkspaceEntry[];
-      }
-
-      const lastWorkspaceTarget = parseLastWorkspaceTarget(parsed["lastWorkspaceTarget"]);
-      if (lastWorkspaceTarget) {
-        result.lastWorkspaceTarget = lastWorkspaceTarget;
-      }
-      if (typeof parsed["keepServerOnQuit"] === "boolean") {
-        result.keepServerOnQuit = parsed["keepServerOnQuit"];
-      }
-
-      return result;
+      // WAL changes the file, so enable it only after an existing DB has passed
+      // the exact read-only preflight (or after a new DB was initialized).
+      this.db.exec("PRAGMA journal_mode = WAL");
     } catch (error) {
-      console.warn("[CentralData] Failed to load:", error);
-      return getDefaultData();
+      this.db.close();
+      throw error;
     }
   }
 
-  /**
-   * Save data to disk
-   */
-  private save(): void {
-    try {
-      const paths = getCentralConfigPaths();
-      fs.mkdirSync(paths.configDir, { recursive: true });
-      fs.writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2), "utf-8");
-    } catch (error) {
-      console.error("[CentralData] Failed to save:", error);
-    }
+  close(): void {
+    this.db.close();
   }
 
-  /**
-   * List workspaces sorted by lastOpened descending (most recent first).
-   * Prunes entries whose directory no longer exists on disk.
-   */
   listWorkspaces(): WorkspaceEntry[] {
-    let pruned = false;
-    this.data.workspaces = this.data.workspaces.filter((w) => {
-      const configPath = path.join(getWorkspaceDir(w.name), "source", "meta/vibestudio.yml");
-      if (fs.existsSync(configPath)) return true;
-      pruned = true;
-      return false;
-    });
-    if (pruned) this.save();
-    return [...this.data.workspaces].sort((a, b) => b.lastOpened - a.lastOpened);
+    return this.stmt("SELECT * FROM workspaces ORDER BY last_opened DESC, name")
+      .all()
+      .map(rowToWorkspace);
   }
 
-  /**
-   * Check if a workspace exists in registry AND on disk.
-   * Prunes stale registry entries (dir gone).
-   */
   hasWorkspace(name: string): boolean {
-    const idx = this.data.workspaces.findIndex((w) => w.name === name);
-    if (idx === -1) return false;
+    return this.stmt("SELECT 1 AS one FROM workspaces WHERE name = ?").get(name) !== undefined;
+  }
 
-    const configPath = path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml");
-    if (fs.existsSync(configPath)) return true;
-
-    // Stale entry — prune it
-    this.data.workspaces.splice(idx, 1);
-    this.save();
-    return false;
+  /** Reserve/register a name exactly once; re-registering preserves its opaque id. */
+  addWorkspace(name: string): WorkspaceEntry {
+    const normalized = name.trim();
+    if (!normalized) throw new Error("Workspace name is required");
+    const row = this.stmt(
+      `INSERT INTO workspaces (workspace_id, name, last_opened)
+       VALUES (?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET last_opened = excluded.last_opened
+       RETURNING *`
+    ).get(mintWorkspaceId(), normalized, this.now());
+    if (!row) {
+      throw new Error(`Workspace registration did not return a row: ${normalized}`);
+    }
+    return rowToWorkspace(row);
   }
 
   /**
-   * Add a new workspace to the registry.
+   * Atomically register the one disposable development workspace and its
+   * crash-recovery marker. A persistent workspace can never be adopted or
+   * overwritten as ephemeral.
    */
-  addWorkspace(name: string): void {
-    // Remove existing entry if present
-    this.data.workspaces = this.data.workspaces.filter((w) => w.name !== name);
-    const now = Date.now();
-
-    this.data.workspaces.unshift({
-      name,
-      lastOpened: now,
+  addEphemeralWorkspace(name: string): EphemeralWorkspaceRecord {
+    const normalized = name.trim();
+    if (!normalized) throw new Error("Ephemeral workspace name is required");
+    return this.transaction(() => {
+      if (
+        this.stmt("SELECT 1 AS one FROM hub_preferences WHERE key = ?").get(EPHEMERAL_WORKSPACE_KEY)
+      ) {
+        throw new Error("An ephemeral workspace lifecycle is already registered");
+      }
+      if (this.stmt("SELECT 1 AS one FROM workspaces WHERE name = ?").get(normalized)) {
+        throw new Error(`Cannot shadow persistent workspace \"${normalized}\" with ephemeral dev`);
+      }
+      const workspaceId = mintWorkspaceId();
+      const row = this.stmt(
+        `INSERT INTO workspaces (workspace_id, name, last_opened)
+         VALUES (?, ?, ?) RETURNING *`
+      ).get(workspaceId, normalized, this.now());
+      if (!row) throw new Error("Ephemeral workspace registration returned no row");
+      this.stmt("INSERT INTO hub_preferences (key, value) VALUES (?, ?)").run(
+        EPHEMERAL_WORKSPACE_KEY,
+        JSON.stringify({ workspaceId, name: normalized })
+      );
+      return rowToWorkspace(row);
     });
+  }
 
-    this.data.lastWorkspaceTarget = { kind: "local", name, lastOpened: now };
-    this.save();
+  /** Record the random on-disk child name before spawn for crash cleanup. */
+  setEphemeralWorkspaceDiskName(workspaceId: string, diskName: string): void {
+    if (!/^dev-[0-9a-f]{8}$/.test(diskName)) {
+      throw new Error("Invalid ephemeral workspace disk name");
+    }
+    this.transaction(() => {
+      const row = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+        EPHEMERAL_WORKSPACE_KEY
+      );
+      if (!row) throw new Error("No ephemeral workspace lifecycle is registered");
+      const marker = parseEphemeralWorkspaceMarker(row["value"]!);
+      if (marker.workspaceId !== workspaceId) {
+        throw new Error("Ephemeral workspace marker does not match the running workspace");
+      }
+      this.stmt("UPDATE hub_preferences SET value = ? WHERE key = ?").run(
+        JSON.stringify({ ...marker, diskName }),
+        EPHEMERAL_WORKSPACE_KEY
+      );
+    });
+  }
+
+  getEphemeralWorkspace(): EphemeralWorkspaceRecord | null {
+    const markerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+      EPHEMERAL_WORKSPACE_KEY
+    );
+    if (!markerRow) return null;
+    const marker = parseEphemeralWorkspaceMarker(markerRow["value"]!);
+    const workspace = this.getWorkspaceEntry(marker.name);
+    return {
+      workspaceId: marker.workspaceId,
+      name: marker.name,
+      lastOpened: workspace?.lastOpened ?? 0,
+      ...(marker.diskName ? { diskName: marker.diskName } : {}),
+    };
   }
 
   /**
-   * Remove a workspace from the registry.
+   * Delete the marked ephemeral workspace and every owned row atomically.
+   * Called both during graceful shutdown and at the next startup after a crash.
    */
-  removeWorkspace(name: string): void {
-    this.data.workspaces = this.data.workspaces.filter((w) => w.name !== name);
-    this.save();
+  removeEphemeralWorkspace(): EphemeralWorkspaceRecord | null {
+    return this.transaction(() => {
+      const markerRow = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+        EPHEMERAL_WORKSPACE_KEY
+      );
+      if (!markerRow) return null;
+      const marker = parseEphemeralWorkspaceMarker(markerRow["value"]!);
+      const workspaceRow = this.stmt(
+        "SELECT * FROM workspaces WHERE workspace_id = ? AND name = ?"
+      ).get(marker.workspaceId, marker.name);
+      this.stmt("DELETE FROM membership WHERE workspace_id = ?").run(marker.workspaceId);
+      this.stmt("DELETE FROM user_revocation_cleanup WHERE workspace_id = ?").run(
+        marker.workspaceId
+      );
+      this.stmt("DELETE FROM workspaces WHERE workspace_id = ?").run(marker.workspaceId);
+      this.stmt("DELETE FROM hub_preferences WHERE key = ?").run(EPHEMERAL_WORKSPACE_KEY);
+      return workspaceRow
+        ? {
+            ...rowToWorkspace(workspaceRow),
+            ...(marker.diskName ? { diskName: marker.diskName } : {}),
+          }
+        : null;
+    });
   }
 
   /**
-   * Update the lastOpened timestamp for an existing workspace.
+   * Remove every SQLite row owned by a workspace in one transaction.
+   *
+   * `membership` and `user_revocation_cleanup` intentionally do not carry a
+   * foreign key to `workspaces`: identity rows can be read in workspace child
+   * processes and revocation cleanup may outlive a running child. The hub must
+   * therefore perform these cascades explicitly, in the same transaction as
+   * the catalog deletion. `user_workspace_targets` is removed by its declared
+   * `ON DELETE CASCADE` constraint.
    */
+  removeWorkspace(name: string): string | null {
+    return this.transaction(() => {
+      const row = this.stmt("SELECT workspace_id FROM workspaces WHERE name = ?").get(name);
+      if (!row) return null;
+      const workspaceId = row["workspace_id"] as string;
+      this.stmt("DELETE FROM membership WHERE workspace_id = ?").run(workspaceId);
+      this.stmt("DELETE FROM user_revocation_cleanup WHERE workspace_id = ?").run(workspaceId);
+      this.stmt("DELETE FROM workspaces WHERE name = ?").run(name);
+      return workspaceId;
+    });
+  }
+
+  getWorkspaceIdByName(name: string): string | null {
+    const row = this.stmt("SELECT workspace_id FROM workspaces WHERE name = ?").get(name);
+    return row ? (row["workspace_id"] as string) : null;
+  }
+
+  /** Touching is intentionally update-only: registration is always explicit. */
   touchWorkspace(name: string): void {
-    const workspace = this.data.workspaces.find((w) => w.name === name);
-    const now = Date.now();
-    if (workspace) {
-      workspace.lastOpened = now;
-      this.data.lastWorkspaceTarget = { kind: "local", name, lastOpened: now };
-      this.save();
-      return;
-    }
-
-    const configPath = path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml");
-    if (!fs.existsSync(configPath)) return;
-
-    this.data.workspaces.unshift({ name, lastOpened: now });
-    this.data.lastWorkspaceTarget = { kind: "local", name, lastOpened: now };
-    this.save();
+    this.stmt("UPDATE workspaces SET last_opened = ? WHERE name = ?").run(this.now(), name);
   }
 
-  /**
-   * Get the full entry for a workspace by name.
-   * Returns null if not found in registry.
-   */
   getWorkspaceEntry(name: string): WorkspaceEntry | null {
-    return this.data.workspaces.find((w) => w.name === name) ?? null;
+    const row = this.stmt("SELECT * FROM workspaces WHERE name = ?").get(name);
+    return row ? rowToWorkspace(row) : null;
   }
 
-  /**
-   * Get the last-opened workspace that still exists on disk.
-   * Returns null if no valid workspaces exist.
-   */
   getLastOpenedWorkspace(): WorkspaceEntry | null {
-    const sorted = [...this.data.workspaces].sort((a, b) => b.lastOpened - a.lastOpened);
-    let pruned = false;
-    for (const entry of sorted) {
-      const configPath = path.join(getWorkspaceDir(entry.name), "source", "meta/vibestudio.yml");
-      if (fs.existsSync(configPath)) return entry;
-      // Stale — prune
-      this.data.workspaces = this.data.workspaces.filter((w) => w.name !== entry.name);
-      pruned = true;
-    }
-    if (pruned) this.save();
-    return null;
+    const row = this.stmt("SELECT * FROM workspaces ORDER BY last_opened DESC, name LIMIT 1").get();
+    return row ? rowToWorkspace(row) : null;
   }
 
-  /**
-   * Record the detached local workspace server the desktop last attached to.
-   * Creates the entry (like touchWorkspace) if the workspace exists on disk but
-   * is not yet registered; no-ops if there is no entry and the dir is missing.
-   */
-  setWorkspaceLocalServer(
-    name: string,
-    record: NonNullable<WorkspaceEntry["localServer"]>
-  ): void {
-    let workspace = this.data.workspaces.find((w) => w.name === name);
-    if (!workspace) {
-      const configPath = path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml");
-      if (!fs.existsSync(configPath)) return;
-      workspace = { name, lastOpened: Date.now() };
-      this.data.workspaces.unshift(workspace);
-    }
-    workspace.localServer = record;
-    this.save();
+  setHubRuntime(record: HubRuntimeRecord): void {
+    this.stmt(
+      `INSERT INTO hub_runtime
+         (singleton, gateway_port, pid, server_id, server_boot_id, started_at, version)
+       VALUES (1, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(singleton) DO UPDATE SET
+         gateway_port = excluded.gateway_port,
+         pid = excluded.pid,
+         server_id = excluded.server_id,
+         server_boot_id = excluded.server_boot_id,
+         started_at = excluded.started_at,
+         version = excluded.version`
+    ).run(
+      record.gatewayPort,
+      record.pid,
+      record.serverId,
+      record.serverBootId,
+      record.startedAt,
+      record.version
+    );
   }
 
-  /** Forget the recorded local server attachment for a workspace. */
-  clearWorkspaceLocalServer(name: string): void {
-    const workspace = this.data.workspaces.find((w) => w.name === name);
-    if (!workspace?.localServer) return;
-    delete workspace.localServer;
-    this.save();
+  clearHubRuntime(): void {
+    this.stmt("DELETE FROM hub_runtime WHERE singleton = 1").run();
   }
 
-  /**
-   * Read the recorded local server attachment for a workspace. Reloads from disk
-   * first because the server process also writes data.json, so a record written
-   * by another process must be observable here.
-   */
-  getWorkspaceLocalServer(name: string): WorkspaceEntry["localServer"] | null {
-    this.data = this.load();
-    return this.data.workspaces.find((w) => w.name === name)?.localServer ?? null;
+  getHubRuntime(): HubRuntimeRecord | null {
+    const row = this.stmt("SELECT * FROM hub_runtime WHERE singleton = 1").get();
+    return row ? rowToHubRuntime(row) : null;
   }
 
-  /** Remembered quit-prompt choice (global). null = no remembered choice, ask. */
+  /** Store the authenticated user's own resume target. */
+  setLastWorkspaceForUser(userId: string, workspaceName: string): void {
+    const normalizedUserId = userId.trim();
+    if (!normalizedUserId) throw new Error("userId is required");
+    const workspaceId = this.getWorkspaceIdByName(workspaceName);
+    if (!workspaceId) throw new Error(`Unknown workspace: ${workspaceName}`);
+    this.stmt(
+      `INSERT INTO user_workspace_targets (user_id, workspace_id, last_opened)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         workspace_id = excluded.workspace_id,
+         last_opened = excluded.last_opened`
+    ).run(normalizedUserId, workspaceId, this.now());
+  }
+
+  getLastWorkspaceForUser(userId: string): WorkspaceEntry | null {
+    const row = this.stmt(
+      `SELECT w.* FROM user_workspace_targets t
+       JOIN workspaces w ON w.workspace_id = t.workspace_id
+       WHERE t.user_id = ?`
+    ).get(userId);
+    return row ? rowToWorkspace(row) : null;
+  }
+
   getKeepServerOnQuit(): boolean | null {
-    return this.data.keepServerOnQuit ?? null;
+    const row = this.stmt("SELECT value FROM hub_preferences WHERE key = ?").get(
+      "keep_server_on_quit"
+    );
+    if (!row) return null;
+    const value = row["value"];
+    if (value !== "true" && value !== "false") {
+      throw new Error(`Invalid keep_server_on_quit preference: ${String(value)}`);
+    }
+    return value === "true";
   }
 
   setKeepServerOnQuit(keep: boolean): void {
-    this.data.keepServerOnQuit = keep;
-    this.save();
+    this.stmt(
+      `INSERT INTO hub_preferences (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run("keep_server_on_quit", keep ? "true" : "false");
   }
 
-  markRemoteWorkspaceOpened(target: { url: string; workspaceName?: string }): void {
-    this.data.lastWorkspaceTarget = {
-      kind: "remote",
-      url: target.url,
-      ...(target.workspaceName ? { workspaceName: target.workspaceName } : {}),
-      lastOpened: Date.now(),
-    };
-    this.save();
-  }
-
-  getLastWorkspaceTarget(): LastWorkspaceTarget | null {
-    const target = this.data.lastWorkspaceTarget;
-    if (!target) return null;
-    if (target.kind === "remote") return target;
-    if (this.hasWorkspace(target.name)) return target;
-    if (this.data.lastWorkspaceTarget?.kind === "local") {
-      delete this.data.lastWorkspaceTarget;
-      this.save();
+  private stmt(sql: string): StatementSync {
+    let statement = this.statements.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.statements.set(sql, statement);
     }
-    return null;
+    return statement;
   }
-}
 
-function parseLastWorkspaceTarget(value: unknown): LastWorkspaceTarget | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const lastOpened = typeof record["lastOpened"] === "number" ? record["lastOpened"] : 0;
-  if (record["kind"] === "local" && typeof record["name"] === "string") {
-    return { kind: "local", name: record["name"], lastOpened };
+  private transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
-  if (record["kind"] === "remote" && typeof record["url"] === "string") {
-    const workspaceName =
-      typeof record["workspaceName"] === "string" ? record["workspaceName"] : undefined;
-    return {
-      kind: "remote",
-      url: record["url"],
-      ...(workspaceName ? { workspaceName } : {}),
-      lastOpened,
-    };
-  }
-  return null;
 }

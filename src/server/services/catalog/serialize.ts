@@ -5,7 +5,7 @@
  * The single place that turns a `MethodSchema` into agent-facing JSON, used by
  * the capability catalog and the `docs` service's listServices/describeService
  * (these absorbed the former `meta` service). Emits the literate doc fields
- * (`access`, `examples`, `errors`, `seeAlso`, `deprecated`) as conditional
+ * (`access`, `examples`, `errors`, `seeAlso`) as conditional
  * spreads, so output is byte-identical for methods that don't declare them.
  */
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
@@ -20,7 +20,6 @@ export function serializeMethod(method: MethodSchema) {
     ...(method.examples ? { examples: method.examples } : {}),
     ...(method.errors ? { errors: method.errors } : {}),
     ...(method.seeAlso ? { seeAlso: method.seeAlso } : {}),
-    ...(method.deprecated ? { deprecated: method.deprecated } : {}),
     argsSchema: convertZodToJsonSchema(method.args, { target: "openApi3" }) as Record<
       string,
       unknown

@@ -1,5 +1,6 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { UserSubject } from "@vibestudio/shared/users/types";
 import type { PanelAccessOperation } from "@vibestudio/shared/panelAccessPolicy";
 import { panelTreeMethods } from "@vibestudio/shared/serviceSchemas/panelTree";
 import type {
@@ -10,9 +11,15 @@ import { requirePanelAccessPermission } from "./panelAccessPermission.js";
 
 export interface PanelTreeBridgeRequest {
   callerId: string;
-  callerKind: string;
+  callerKind: CallerKind;
   method: string;
   args: unknown[];
+  /**
+   * Host-verified acting user. Threaded intact so entity creation preserves
+   * both the human owner and the original runtime lineage. Attribution only;
+   * authorization stays in this service. Undefined for subjectless system work.
+   */
+  subject?: UserSubject;
 }
 
 export interface PanelTreeSourceValidationRequest {
@@ -65,6 +72,8 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
       callerKind: ctx.caller.runtime.kind,
       method,
       args,
+      // Stamp the acting user as owner on create/move (WP3). Attribution only.
+      ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
     });
   }
 
@@ -214,6 +223,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
         case "reload":
         case "close":
         case "archive":
+        case "archiveOwnedRoots":
         case "unload":
         case "movePanel":
         case "navigate":

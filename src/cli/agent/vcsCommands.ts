@@ -938,7 +938,6 @@ const GIT_FORGET_REMOTE_FLAG: FlagSpec = {
 
 interface VcsGitCommand {
   name: string;
-  aliases?: string[];
   summary: string;
   usage: string;
   flags: FlagSpec[];
@@ -1384,7 +1383,6 @@ const vcsGitCommands: VcsGitCommand[] = [
   },
   {
     name: "remote:set",
-    aliases: ["remote:upsert"],
     summary: "Declare or update a Git remote for a repo",
     usage:
       "vibestudio vcs git remote set --repo REPOPATH --url URL [--name origin] [--branch main]",
@@ -1399,7 +1397,6 @@ const vcsGitCommands: VcsGitCommand[] = [
   },
   {
     name: "remote:rm",
-    aliases: ["remote:remove", "remote:delete"],
     summary: "Remove a declared Git remote from a repo",
     usage: "vibestudio vcs git remote rm --repo REPOPATH [--name origin]",
     flags: [
@@ -1412,7 +1409,7 @@ const vcsGitCommands: VcsGitCommand[] = [
 ];
 
 function findVcsGitCommand(name: string): VcsGitCommand | undefined {
-  return vcsGitCommands.find((cmd) => cmd.name === name || cmd.aliases?.includes(name));
+  return vcsGitCommands.find((cmd) => cmd.name === name);
 }
 
 function renderVcsGitHelp(): string {
@@ -1542,7 +1539,6 @@ export const vcsCommands: CliCommand[] = [
   {
     group: "vcs",
     name: "push-status",
-    aliases: ["pushstatus"],
     summary: "Show how many changes each repo has ahead of main (pre-push)",
     usage: "vibestudio vcs push-status --repo REPOPATH [--repo REPOPATH ...]",
     flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],

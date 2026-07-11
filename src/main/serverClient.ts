@@ -83,9 +83,8 @@ export interface ServerClient {
    * Open a dedicated session for a desktop panel principal, redeeming its
    * existing runtime lease (`connectionId`) with a one-shot grant for
    * `runtimeEntityId`. The host relays the panel's raw envelopes over it; see
-   * {@link PanelSession}. Since the panel no longer opens its own `/rpc` socket
-   * (the shell-bridge migration), the host-opened session redeems the lease with
-   * no conflict.
+   * {@link PanelSession}. The host-opened session is the panel's sole transport,
+   * so it redeems the lease with no conflict.
    */
   openPanelSession(runtimeEntityId: string, connectionId: string): Promise<PanelSession>;
   /**

@@ -35,6 +35,7 @@ interface DbEntityRow {
   state_args: string | null;
   agent_binding: string | null;
   parent_id: string | null;
+  owner_user_id: string | null;
   created_at: number;
   status: "active" | "retired";
   retired_at: number | null;
@@ -57,6 +58,13 @@ interface DbSlotRow {
   current_entity_title?: string | null;
   current_entry_key: string | null;
   position_id: string;
+  /**
+   * Owning-user id (WP3) — the user whose tree this slot belongs to. Stamped at
+   * slot creation from the creating caller's `subject.userId`; re-stamped for a
+   * whole subtree on a cross-owner move (WP3 §10.1). NULL for pre-identity /
+   * system-seeded slots. Attribution only — never an isolation boundary.
+   */
+  owner_user_id: string | null;
   created_at: number;
   closed_at: number | null;
 }
@@ -121,12 +129,25 @@ export interface EntityActivateInput {
   agentBinding?: RuntimeAgentBinding;
   /** Launch parent (verified caller id) — see EntityRecord.parentId. */
   parentId?: string;
+  /**
+   * Owning-user id — the creating caller's `subject.userId` (WP0 §6). Stamped
+   * write-once onto `entities.owner_user_id` so an agent/worker/DO attributes to
+   * the human whose subject launched its lineage. Absent for bootstrap-created
+   * entities that have no subject (WP0 §5.4).
+   */
+  ownerUserId?: string;
 }
 
 export interface SlotCreateInput {
   slotId: string;
   parentSlotId: string | null;
   positionId: string;
+  /**
+   * Owning-user id (WP3) — the creating caller's `subject.userId`, threaded from
+   * `panelTreeService`. Stamped write-at-create onto `slots.owner_user_id` so the
+   * tree groups under its owner in the forest. Absent for bootstrap/system seeds.
+   */
+  ownerUserId?: string;
   initialEntry?: {
     entryKey: string;
     entityId: string;
@@ -270,7 +291,7 @@ function rowToHeartbeatRegistry(row: Record<string, unknown>): HeartbeatRegistry
 }
 
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 18;
+  static override schemaVersion = 20;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -315,6 +336,7 @@ export class WorkspaceDO extends DurableObjectBase {
         state_args TEXT,
         agent_binding TEXT,
         parent_id TEXT,
+        owner_user_id TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
@@ -339,12 +361,19 @@ export class WorkspaceDO extends DurableObjectBase {
         current_entity_id TEXT REFERENCES entities(id),
         current_entry_key TEXT,
         position_id TEXT NOT NULL DEFAULT '000001000000',
+        owner_user_id TEXT,
         created_at INTEGER NOT NULL,
         closed_at INTEGER
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_slots_parent ON slots(parent_slot_id)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_slots_current ON slots(current_entity_id)`);
+    // Owner-scoped "just my tree" lookups (WP3). Partial: only open slots — a
+    // closed slot's owner is dead weight. The default forest read is still ALL
+    // open slots (mutual visibility); this index only backs the optional filter.
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`
+    );
 
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS slot_history (
@@ -524,6 +553,25 @@ export class WorkspaceDO extends DurableObjectBase {
           this.sql.exec(`UPDATE entities SET agent_binding = ? WHERE id = ?`, nextAgentBinding, id);
           existing.agent_binding = nextAgentBinding;
         }
+        const nextOwnerUserId = input.ownerUserId ?? null;
+        if (
+          existing.owner_user_id !== null &&
+          nextOwnerUserId !== null &&
+          existing.owner_user_id !== nextOwnerUserId
+        ) {
+          throw new IdentityCollisionError(id, {
+            field: "ownerUserId",
+            existing: existing.owner_user_id,
+            attempted: nextOwnerUserId,
+          });
+        }
+        // Clean-cut recovery for entities activated by the broken multi-user
+        // bootstrap/resolve path: ownership is write-once, but a legacy NULL
+        // can be filled by the first host-verified owner.
+        if (existing.owner_user_id === null && nextOwnerUserId !== null) {
+          this.sql.exec(`UPDATE entities SET owner_user_id = ? WHERE id = ?`, nextOwnerUserId, id);
+          existing.owner_user_id = nextOwnerUserId;
+        }
         if (existing.status === "active") {
           return this.rowToEntity(existing);
         }
@@ -546,9 +594,9 @@ export class WorkspaceDO extends DurableObjectBase {
       this.sql.exec(
         `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version,
-          context_id, class_name, key, state_args, agent_binding, parent_id, created_at,
+          context_id, class_name, key, state_args, agent_binding, parent_id, owner_user_id, created_at,
           status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -559,6 +607,7 @@ export class WorkspaceDO extends DurableObjectBase {
         input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
         input.agentBinding === undefined ? null : JSON.stringify(input.agentBinding),
         input.parentId ?? null,
+        input.ownerUserId ?? null,
         now
       );
       const row = this.readEntityRow(id);
@@ -1267,13 +1316,14 @@ export class WorkspaceDO extends DurableObjectBase {
       }
       const now = Date.now();
       this.sql.exec(
-        `INSERT INTO slots (slot_id, parent_slot_id, current_entity_id, current_entry_key, position_id, created_at, closed_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+        `INSERT INTO slots (slot_id, parent_slot_id, current_entity_id, current_entry_key, position_id, owner_user_id, created_at, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
         input.slotId,
         input.parentSlotId,
         input.initialEntry?.entityId ?? null,
         input.initialEntry?.entryKey ?? null,
         input.positionId,
+        input.ownerUserId ?? null,
         now
       );
       if (input.initialEntry) {
@@ -1390,17 +1440,99 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(`UPDATE slots SET position_id = ? WHERE slot_id = ?`, positionId, slotId);
   }
 
+  /**
+   * Move a slot under a new parent (or to root) and re-position it. Per WP3
+   * §10.1, the moved subtree **re-owns** to the destination root's owner — the
+   * tree it now lives in — so a panel dragged into another user's tree becomes
+   * part of that tree. Moving to root (parentSlotId === null) promotes the
+   * subtree to a new top-level tree owned by the acting mover (`ownerUserId`),
+   * or keeps its current owner when no mover subject is supplied. Authorization
+   * is permissive (any member may restructure any tree); only attribution moves.
+   */
   @rpc
-  slotMove(slotId: string, parentSlotId: string | null, positionId: string): void {
+  slotMove(
+    slotId: string,
+    parentSlotId: string | null,
+    positionId: string,
+    ownerUserId?: string
+  ): void {
     this.ctx.storage.transactionSync(() => {
-      this.requireSlot(slotId);
+      const slot = this.requireSlot(slotId);
+      if (slot.closed_at !== null) {
+        throw new Error(`Cannot move closed slot: ${slotId}`);
+      }
+
+      // Resolve and validate the destination before mutating parent links. In
+      // particular, persisting a move below one's own descendant would create
+      // a cycle before the in-memory registry gets a chance to reject it.
+      const subtreeIds = this.collectSubtreeSlotIds(slotId);
+      let destOwner: string | null;
+      if (parentSlotId !== null) {
+        const parent = this.requireSlot(parentSlotId);
+        if (parent.closed_at !== null) {
+          throw new Error(`Cannot move slot under closed parent: ${parentSlotId}`);
+        }
+        if (subtreeIds.includes(parentSlotId)) {
+          throw new Error(`Cannot move slot ${slotId} under its own subtree`);
+        }
+        destOwner = this.rootOwnerOf(parentSlotId);
+      } else {
+        destOwner = ownerUserId ?? slot.owner_user_id ?? null;
+      }
+
       this.sql.exec(
         `UPDATE slots SET parent_slot_id = ?, position_id = ? WHERE slot_id = ?`,
         parentSlotId,
         positionId,
         slotId
       );
+      // Re-stamp the whole moved subtree so a subtree stays owner-consistent.
+      for (const id of subtreeIds) {
+        this.sql.exec(`UPDATE slots SET owner_user_id = ? WHERE slot_id = ?`, destOwner, id);
+      }
     });
+  }
+
+  /**
+   * Walk up the parent chain from `slotId` to its root and return that root's
+   * `owner_user_id`. Cycle-guarded (the tree shouldn't contain cycles, but a
+   * bad move must not spin). Returns null if a chain link is missing.
+   */
+  private rootOwnerOf(slotId: string): string | null {
+    const seen = new Set<string>();
+    let cur: string | null = slotId;
+    let owner: string | null = null;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const row = this.sql
+        .exec(`SELECT parent_slot_id, owner_user_id FROM slots WHERE slot_id = ?`, cur)
+        .toArray()[0] as
+        | { parent_slot_id: string | null; owner_user_id: string | null }
+        | undefined;
+      if (!row) break;
+      owner = row.owner_user_id ?? null;
+      if (row.parent_slot_id === null) break;
+      cur = row.parent_slot_id;
+    }
+    return owner;
+  }
+
+  /** Collect `slotId` and every descendant (by parent_slot_id). Cycle-guarded. */
+  private collectSubtreeSlotIds(slotId: string): string[] {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const queue = [slotId];
+    while (queue.length > 0) {
+      const id = queue.shift() as string;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+      const children = this.sql
+        .exec(`SELECT slot_id FROM slots WHERE parent_slot_id = ?`, id)
+        .toArray() as Array<{ slot_id: string }>;
+      for (const child of children) queue.push(child.slot_id);
+    }
+    return ids;
   }
 
   @rpc
@@ -1430,8 +1562,27 @@ export class WorkspaceDO extends DurableObjectBase {
     return row ?? null;
   }
 
+  /**
+   * All open slots, each carrying `owner_user_id` (WP3). Returns every owner's
+   * slots by default — mutual visibility is the feature (plan §0.0); the forest
+   * grouping happens client-side by owner. `filter.owner` narrows to one user's
+   * tree for a "just my tree" view (backed by idx_slots_owner) but is NOT the
+   * default.
+   */
   @rpc
-  slotListOpen(): DbSlotRow[] {
+  slotListOpen(filter?: { owner?: string }): DbSlotRow[] {
+    if (filter?.owner !== undefined) {
+      return this.sql
+        .exec(
+          `SELECT s.*, e.display_title AS current_entity_title
+           FROM slots s
+           LEFT JOIN entities e ON s.current_entity_id = e.id
+           WHERE s.closed_at IS NULL AND s.owner_user_id = ?
+           ORDER BY s.position_id, s.created_at, s.slot_id`,
+          filter.owner
+        )
+        .toArray() as unknown as DbSlotRow[];
+    }
     return this.sql
       .exec(
         `SELECT s.*, e.display_title AS current_entity_title
@@ -1849,36 +2000,38 @@ export class WorkspaceDO extends DurableObjectBase {
         PRIMARY KEY (name, source, class_name, object_key)
       )
     `);
-    for (const ddl of [
-      `ALTER TABLE heartbeat_registry RENAME TO heartbeat_registry_legacy`,
-      `CREATE TABLE heartbeat_registry (
-        name TEXT NOT NULL,
-        source TEXT NOT NULL,
-        class_name TEXT NOT NULL,
-        object_key TEXT NOT NULL,
-        channel_id TEXT,
-        participant_handle TEXT,
-        kind TEXT NOT NULL,
-        status TEXT NOT NULL,
-        next_run_at INTEGER,
-        last_wake_at INTEGER,
-        last_action_summary TEXT,
-        last_error TEXT,
-        spec_hash TEXT,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (name, source, class_name, object_key)
-      )`,
-      `INSERT OR REPLACE INTO heartbeat_registry
-        SELECT name, source, class_name, object_key, channel_id, participant_handle, kind,
-               status, next_run_at, last_wake_at, last_action_summary, last_error, spec_hash, updated_at
-        FROM heartbeat_registry_legacy`,
-      `DROP TABLE heartbeat_registry_legacy`,
-    ]) {
-      try {
-        this.sql.exec(ddl);
-      } catch {
-        // Already migrated or table absent.
-      }
+    const heartbeatColumns = this.sql
+      .exec("PRAGMA table_info(heartbeat_registry)")
+      .toArray() as Array<{ name?: unknown; pk?: unknown }>;
+    const expectedHeartbeatColumns = [
+      "name",
+      "source",
+      "class_name",
+      "object_key",
+      "channel_id",
+      "participant_handle",
+      "kind",
+      "status",
+      "next_run_at",
+      "last_wake_at",
+      "last_action_summary",
+      "last_error",
+      "spec_hash",
+      "updated_at",
+    ];
+    const actualNames = heartbeatColumns.map((column) => column.name);
+    const actualPrimaryKey = heartbeatColumns
+      .filter((column) => typeof column.pk === "number" && column.pk > 0)
+      .sort((a, b) => Number(a.pk) - Number(b.pk))
+      .map((column) => column.name);
+    if (
+      actualNames.length !== expectedHeartbeatColumns.length ||
+      actualNames.some((name, index) => name !== expectedHeartbeatColumns[index]) ||
+      actualPrimaryKey.join(",") !== "name,source,class_name,object_key"
+    ) {
+      throw new Error(
+        "Unsupported heartbeat_registry schema; delete this pre-release WorkspaceDO state"
+      );
     }
   }
 
@@ -1969,6 +2122,9 @@ export class WorkspaceDO extends DurableObjectBase {
     if (row.state_args !== null) record.stateArgs = JSON.parse(row.state_args);
     if (row.agent_binding !== null) record.agentBinding = JSON.parse(row.agent_binding);
     if (row.parent_id !== null) record.parentId = row.parent_id;
+    // Mirror the owning-user stamp onto the cache record so lineage-inheriting
+    // callers resolve it synchronously (WP0 §6, principalIdentity.resolveUserSubject).
+    if (row.owner_user_id !== null) record.ownerUserId = row.owner_user_id;
     if (row.retired_at !== null) record.retiredAt = row.retired_at;
     if (row.error !== null) record.error = row.error;
     return record;

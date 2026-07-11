@@ -35,7 +35,7 @@ export interface DiagnosticPathContext {
 }
 
 /**
- * A build error that carries structured diagnostics alongside the legacy
+ * A build error that carries structured diagnostics alongside its summary
  * message. Thrown from build paths so the push gate / state trigger can recover
  * the per-line diagnostics instead of only `error.message`.
  */

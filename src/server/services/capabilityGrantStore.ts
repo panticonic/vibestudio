@@ -4,7 +4,7 @@ import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
-export type CapabilityGrantDecision = "session" | "version" | "repo";
+export type CapabilityGrantDecision = "session" | "version";
 
 export interface CapabilityGrantIdentity {
   callerId: string;
@@ -106,20 +106,88 @@ export class CapabilityGrantStore {
 
   private load(): void {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as CapabilityGrantFile;
-      this.persistent = {
-        grants: Array.isArray(parsed.grants) ? parsed.grants : [],
-      };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
+      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as unknown;
+      if (!isCapabilityGrantFile(parsed)) {
+        throw new Error("expected the current exact { grants } schema");
       }
+      this.persistent = parsed;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      console.warn(
+        `[CapabilityGrantStore] Resetting invalid grant store ${this.filePath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      this.persistent = { grants: [] };
+      this.save();
     }
   }
 
   private save(): void {
     writeJsonFileAtomic(this.filePath, this.persistent);
   }
+}
+
+function isCapabilityGrantFile(value: unknown): value is CapabilityGrantFile {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    Array.isArray((value as { grants?: unknown }).grants) &&
+    (value as { grants: unknown[] }).grants.every(isPersistentCapabilityGrant)
+  );
+}
+
+function isPersistentCapabilityGrant(value: unknown): value is CapabilityGrant {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const grant = value as Partial<CapabilityGrant>;
+  const allowedKeys = new Set([
+    "capability",
+    "resourceKey",
+    "resourceScope",
+    "scope",
+    "callerId",
+    "repoPath",
+    "effectiveVersion",
+    "grantedAt",
+  ]);
+  return (
+    Object.keys(grant).every((key) => allowedKeys.has(key)) &&
+    typeof grant.capability === "string" &&
+    typeof grant.resourceKey === "string" &&
+    isApprovalResourceScope(grant.resourceScope) &&
+    grant.scope === "version" &&
+    (grant.callerId === undefined || typeof grant.callerId === "string") &&
+    typeof grant.repoPath === "string" &&
+    typeof grant.effectiveVersion === "string" &&
+    Number.isFinite(grant.grantedAt) &&
+    (!versionGrantRequiresCaller({
+      callerId: grant.callerId ?? "",
+      repoPath: grant.repoPath,
+      effectiveVersion: grant.effectiveVersion,
+    }) ||
+      typeof grant.callerId === "string")
+  );
+}
+
+function isApprovalResourceScope(value: unknown): value is ApprovalResourceScope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  if (scope["kind"] === "exact") {
+    return (
+      Object.keys(scope).every((key) => key === "kind" || key === "key" || key === "label") &&
+      typeof scope["key"] === "string" &&
+      (scope["label"] === undefined || typeof scope["label"] === "string")
+    );
+  }
+  if (scope["kind"] === "origin") {
+    return Object.keys(scope).length === 2 && typeof scope["origin"] === "string";
+  }
+  if (scope["kind"] === "domain") {
+    return Object.keys(scope).length === 2 && typeof scope["domain"] === "string";
+  }
+  return scope["kind"] === "network" && Object.keys(scope).length === 2 && scope["value"] === "*";
 }
 
 export function capabilityGrantKey(
@@ -166,9 +234,6 @@ function grantMatches(
 function principalScopeMatches(grant: CapabilityGrant, identity: CapabilityGrantIdentity): boolean {
   if (grant.scope === "session") {
     return grant.callerId === identity.callerId;
-  }
-  if (grant.scope === "repo") {
-    return grant.repoPath === identity.repoPath;
   }
   if (
     grant.repoPath !== identity.repoPath ||

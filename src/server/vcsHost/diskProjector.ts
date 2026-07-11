@@ -102,7 +102,7 @@ export class DiskProjector {
    * (D1) — asking for its dir is a programming error (the write-only source
    * export goes through {@link exportMainToSource}, not this path).
    */
-  dirForRepoHead(repoPath: string | undefined, head: string): string {
+  dirForRepoHead(repoPath: string, head: string): string {
     const base = head.startsWith("ctx:")
       ? this.contextDir(contextIdFromVcsHead(head))
       : (() => {
@@ -110,7 +110,7 @@ export class DiskProjector {
             `No working tree for head: ${head} (main is a pure ref; only ctx:* heads have checkouts)`
           );
         })();
-    return repoPath ? path.join(base, ...normalizeRepoPathForLog(repoPath).split("/")) : base;
+    return path.join(base, ...normalizeRepoPathForLog(repoPath).split("/"));
   }
 
   /** The source-dir location for a repo's subtree — `workspaceRoot/{repoPath}`.
@@ -142,7 +142,7 @@ export class DiskProjector {
    * disposable projection — the state advance already happened).
    */
   async project(input: {
-    repoPath?: string | undefined;
+    repoPath: string;
     head: string;
     stateHash: string;
     clean?: boolean;
@@ -179,7 +179,7 @@ export class DiskProjector {
    * skip it); removed when the merge resolves or aborts (`pending: null`).
    */
   async writeConflictSummary(input: {
-    repoPath?: string | undefined;
+    repoPath: string;
     head: string;
     pending: ConflictSummaryInfo | null;
   }): Promise<void> {

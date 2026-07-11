@@ -14,9 +14,9 @@ import type { SchemaCoversType } from "../schemaTypeGuard.js";
 import type { MethodAccessDescriptor, ServicePolicy } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
-// Access descriptors shared across the read/write method groups. `callers` is
-// left unset so the legacy `policy` (shell/app/server) stays the gate; these
-// add doc/safety metadata.
+// Access descriptors shared across the read/write method groups add
+// documentation and safety metadata. Method/service policy is the enforced
+// caller-kind gate.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };

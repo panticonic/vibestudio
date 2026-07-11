@@ -50,7 +50,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- vibestudio://connect onboarding links only. OAuth callbacks use the verified App Link below. -->
+            <!-- vibestudio://connect onboarding and vibestudio://panel navigation links. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -58,6 +58,9 @@
                 <data
                     android:scheme="vibestudio"
                     android:host="connect" />
+                <data
+                    android:scheme="vibestudio"
+                    android:host="panel" />
             </intent-filter>
 
             <!--
@@ -86,6 +89,10 @@
                     android:scheme="https"
                     android:host="vibestudio.app"
                     android:path="/pair" />
+                <data
+                    android:scheme="https"
+                    android:host="vibestudio.app"
+                    android:path="/panel" />
             </intent-filter>
         </activity>
     </application>

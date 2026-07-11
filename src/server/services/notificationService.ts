@@ -17,8 +17,11 @@ import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notificat
  * and wait for user actions (e.g., OAuth consent approval).
  */
 export interface NotificationServiceInternal {
-  show(notification: Omit<NotificationPayload, "id"> & { id?: string }): string;
-  dismiss(id: string): void;
+  show(
+    notification: Omit<NotificationPayload, "id"> & { id?: string },
+    targetUserId?: string
+  ): string;
+  dismiss(id: string, targetUserId?: string): void;
   waitForAction(id: string, timeoutMs?: number): Promise<string>;
 }
 
@@ -27,6 +30,17 @@ export function createNotificationService(deps: { eventService: EventService }):
   internal: NotificationServiceInternal;
 } {
   const { eventService } = deps;
+  const emit = <E extends "notification:show" | "notification:dismiss" | "notification:action">(
+    event: E,
+    payload: Parameters<EventService["emit"]>[1],
+    targetUserId?: string
+  ): void => {
+    if (targetUserId && targetUserId !== "system") {
+      eventService.emitToUser(targetUserId, event, payload as never);
+    } else {
+      eventService.emit(event, payload as never);
+    }
+  };
 
   /** Pending action resolvers keyed by notification ID */
   const pendingActions = new Map<
@@ -39,15 +53,15 @@ export function createNotificationService(deps: { eventService: EventService }):
   >();
 
   const internal: NotificationServiceInternal = {
-    show(opts) {
+    show(opts, targetUserId) {
       const id = opts.id ?? `notif-${randomUUID()}`;
       const payload: NotificationPayload = { ...opts, id };
-      eventService.emit("notification:show", payload);
+      emit("notification:show", payload, targetUserId);
       return id;
     },
 
-    dismiss(id) {
-      eventService.emit("notification:dismiss", { id });
+    dismiss(id, targetUserId) {
+      emit("notification:dismiss", { id }, targetUserId);
       // Also reject any pending waitForAction
       const pending = pendingActions.get(id);
       if (pending) {
@@ -74,21 +88,22 @@ export function createNotificationService(deps: { eventService: EventService }):
     description: "Push notifications to the shell chrome area",
     policy: { allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"] },
     methods: notificationMethods,
-    handler: async (_ctx, method, args) => {
+    handler: async (ctx, method, args) => {
+      const targetUserId = ctx.caller.subject?.userId;
       switch (method) {
         case "show": {
           const [opts] = args as [Omit<NotificationPayload, "id"> & { id?: string }];
-          return internal.show(opts);
+          return internal.show(opts, targetUserId);
         }
         case "dismiss": {
           const [id] = args as [string];
-          internal.dismiss(id);
+          internal.dismiss(id, targetUserId);
           return;
         }
         case "reportAction": {
           const [id, actionId] = args as [string, string];
           // Emit action event for any listeners
-          eventService.emit("notification:action", { id, actionId });
+          emit("notification:action", { id, actionId }, targetUserId);
           // Resolve any pending waitForAction promise
           const pending = pendingActions.get(id);
           if (pending) {
@@ -97,6 +112,12 @@ export function createNotificationService(deps: { eventService: EventService }):
             pendingActions.delete(id);
           }
           return;
+        }
+        case "signalUserInbox": {
+          const [userId] = args as [string];
+          return eventService.emitToUser(userId, "user-notifications-changed", {
+            changedAt: Date.now(),
+          });
         }
         default:
           throw new Error(`Unknown notification method: ${method}`);

@@ -213,6 +213,16 @@ export interface AuthenticatedCaller {
    * per-navigation entity. Only the trusted server/bridge stamps this field.
    */
   callerPanelId?: string;
+  /**
+   * Owning user (WP4 §2.4), mirrored from the host-verified
+   * `VerifiedCaller.subject.userId` when this caller crosses into userland (DO
+   * dispatch, worker, bridge). ATTRIBUTION ONLY — the receiver treats it as
+   * provenance metadata for message authorship/presence, NEVER re-validating it
+   * as a capability (a userland actor cannot widen a grant by presenting a
+   * `userId`; authority still gates on code identity, WP0 §6). Absent for the
+   * enumerated pre-identity bootstrap principals and `"unknown"` delivery paths.
+   */
+  userId?: string;
 }
 
 export type CallerKind =

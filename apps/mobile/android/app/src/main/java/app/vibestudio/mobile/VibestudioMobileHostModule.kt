@@ -1,8 +1,6 @@
 package app.vibestudio.mobile
 
-import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -19,9 +17,6 @@ import java.security.MessageDigest
 class VibestudioMobileHostModule(
     reactContext: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(reactContext) {
-    private val prefs: SharedPreferences =
-        reactContext.getSharedPreferences("vibestudio-mobile-host", Context.MODE_PRIVATE)
-
     private var bundleStream: java.io.FileOutputStream? = null
     private var bundleTransferFile: File? = null
     private var bundleFinalFile: File? = null
@@ -33,18 +28,9 @@ class VibestudioMobileHostModule(
     )
 
     @ReactMethod
-    fun clearCredentials(promise: Promise) {
-        closeBundleStream()
-        clearStoredCredentials()
-        VibestudioBundleStore.clearActive(reactApplicationContext)
-        promise.resolve(null)
-    }
-
-    @ReactMethod
     fun resetToNativeBootstrap(promise: Promise) {
         try {
             closeBundleStream()
-            clearStoredCredentials()
             VibestudioBundleStore.clearActive(reactApplicationContext)
             promise.resolve(Arguments.createMap().apply {
                 putBoolean("reloading", true)
@@ -169,21 +155,6 @@ class VibestudioMobileHostModule(
         bundleStream = null
     }
 
-    private fun clearStoredCredentials() {
-        Log.w(
-            TAG,
-            "[VibestudioMobileSmoke] phase=native-clear-credentials pid=${android.os.Process.myPid()}",
-            Exception("clearStoredCredentials caller trace")
-        )
-        prefs.edit()
-            .remove(CREDENTIAL_KEY)
-            .remove(ACTIVE_APP_SOURCE_KEY)
-            .remove(PUBLIC_DEVICE_ID_KEY)
-            .remove(PUBLIC_SERVER_ID_KEY)
-            .remove(PUBLIC_SERVER_URL_KEY)
-            .commit()
-    }
-
     private fun reloadReactNative() {
         val app = reactApplicationContext.applicationContext as? ReactApplication
             ?: throw IllegalStateException("Application is not a ReactApplication")
@@ -208,11 +179,6 @@ class VibestudioMobileHostModule(
         value.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "bundle" }
 
     private companion object {
-        const val CREDENTIAL_KEY = "credential"
-        const val PUBLIC_DEVICE_ID_KEY = "public.deviceId"
-        const val PUBLIC_SERVER_ID_KEY = "public.serverId"
-        const val PUBLIC_SERVER_URL_KEY = "public.serverUrl"
-        const val ACTIVE_APP_SOURCE_KEY = "activeBundle.source"
         const val TAG = "VibestudioMobileHost"
     }
 }

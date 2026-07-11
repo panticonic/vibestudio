@@ -7,9 +7,8 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
-// Access descriptors shared across the read/write/admin method groups. We leave
-// `callers` unset here so the legacy `policy` on each method remains the gate;
-// `sensitivity` adds doc/safety metadata.
+// Access descriptors add documentation and safety metadata. Enforced
+// caller-kind gates live in the method/service policy.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
@@ -89,13 +88,11 @@ export const extensionsMethods = defineServiceMethods({
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
     access: INVOKE_ACCESS,
   },
-  // Nullable to match the historical client contract (older hosts may answer
-  // null for unknown extensions); the current host always returns an array.
   streamingMethods: {
     description:
       "List the method names an extension's manifest declares as streaming, so callers route them through invokeStream. Unknown extensions return an empty list.",
     args: z.tuple([z.string()]),
-    returns: z.array(z.string()).nullable(),
+    returns: z.array(z.string()),
     access: READ_ACCESS,
     examples: [{ args: ["shell"] }],
   },

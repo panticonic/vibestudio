@@ -16,6 +16,10 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 
+const USER_INBOX_SIGNAL_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "write",
+};
+
 export const NotificationActionSchema = z.object({
   id: z.string().describe("Stable action identifier reported back via reportAction."),
   label: z.string().describe("Button label shown to the user."),
@@ -119,5 +123,14 @@ export const notificationMethods = defineServiceMethods({
     returns: z.void(),
     access: WRITE_ACCESS,
     examples: [{ args: ["notif-123", "approve"] }],
+  },
+  signalUserInbox: {
+    description:
+      "Notify every live session for one host-verified account that its durable userland inbox changed.",
+    args: z.tuple([z.string().min(1)]),
+    returns: z.boolean(),
+    policy: { allowed: ["do", "server"] },
+    access: USER_INBOX_SIGNAL_ACCESS,
+    examples: [{ args: ["usr_alice"] }],
   },
 });

@@ -187,20 +187,15 @@ export function normalizeConnectionState(raw: string): RtcConnectionState {
  * Returns null for anything unrecognized so the relay alarm reads "unknown",
  * never a wrong "host".
  */
-export function normalizeCandidateType(raw: string | undefined | null): RtcCandidateType | null {
-  if (!raw) return null;
-  switch (raw.toLowerCase().replace(/[\s_-]/g, "")) {
+export function normalizeCandidateType(raw: string): RtcCandidateType | null {
+  switch (raw) {
     case "host":
-    case "local":
       return "host";
     case "srflx":
-    case "serverreflexive":
       return "srflx";
     case "prflx":
-    case "peerreflexive":
       return "prflx";
     case "relay":
-    case "relayed":
       return "relay";
     default:
       return null;
@@ -208,18 +203,23 @@ export function normalizeCandidateType(raw: string | undefined | null): RtcCandi
 }
 
 /**
- * Pull the local candidate's type out of a `getSelectedCandidatePair()` result,
- * tolerating node-datachannel's shape drift: the field may be `type` or
- * `candidateType`, the value may be SDP-short (`host`) or libdatachannel-long
- * (`ServerReflexive`), in any case. Returns null for a missing/`false`/`null`
- * pair or an unrecognized type — never throws — so the relay alarm reads
- * "unknown" rather than a wrong "host".
+ * Pull the local candidate's type out of node-datachannel 0.32's selected-pair
+ * shape. A null pair means ICE has not selected one yet. Any other shape/value
+ * is an API-contract violation and fails loudly instead of being interpreted as
+ * an unknown candidate.
  */
 export function candidateTypeFromPair(
-  pair: { local?: { type?: string; candidateType?: string } | null } | false | null | undefined
+  pair: { local: { type: string } } | null
 ): RtcCandidateType | null {
-  if (!pair || !pair.local) return null;
-  return normalizeCandidateType(pair.local.type ?? pair.local.candidateType);
+  if (pair === null) return null;
+  if (!pair.local || typeof pair.local.type !== "string") {
+    throw new Error("node-datachannel returned an invalid selected-candidate-pair shape");
+  }
+  const type = normalizeCandidateType(pair.local.type);
+  if (!type) {
+    throw new Error(`node-datachannel returned an unknown candidate type: ${pair.local.type}`);
+  }
+  return type;
 }
 
 // `parseSdpFingerprint` is the shared fail-closed pin parse (imported above from
@@ -228,17 +228,13 @@ export function candidateTypeFromPair(
 export { parseSdpFingerprint };
 
 /**
- * Canonicalize a raw DTLS fingerprint a native accessor might hand back —
- * possibly prefixed with the hash name (`sha-256 AA:BB:…`) and/or lowercased —
- * to the uppercase colon-hex form the QR pin uses. Extracts the trailing
- * colon-hex run, so a leading algorithm token cannot leak into the value and
- * survive the transport's colon-stripping compare. Returns null when no
- * colon-hex fingerprint is present, so the caller falls through to the SDP
- * parse (and ultimately fails closed) instead of trusting junk.
+ * Canonicalize node-datachannel 0.32's SHA-256 fingerprint value to the
+ * uppercase colon-hex form the QR pin uses. The binding must return exactly 32
+ * bytes; anything else is an API-contract violation.
  */
 export function canonicalizeFingerprint(raw: string): string | null {
-  const match = raw.trim().match(/([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2})+)\s*$/);
-  return match?.[1] ? match[1].toUpperCase() : null;
+  const value = raw.trim();
+  return /^(?:[0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$/.test(value) ? value.toUpperCase() : null;
 }
 
 /** node-datachannel ICE-server entry (object form carries TURN creds safely). */
@@ -320,27 +316,26 @@ interface NativeDataChannel {
 }
 
 interface NativeCandidateInfo {
-  type?: string;
-  candidateType?: string;
+  type: string;
+}
+
+interface NativeCertificateFingerprint {
+  value: string;
+  algorithm: "sha-1" | "sha-224" | "sha-256" | "sha-384" | "sha-512" | "md5" | "md2";
 }
 
 interface NativePeerConnection {
   close(): void;
   setLocalDescription(type?: NativeDescriptionType): void;
   setRemoteDescription(sdp: string, type: NativeDescriptionType): void;
-  remoteDescription?(): { sdp: string; type: string } | null;
   addRemoteCandidate(candidate: string, mid: string): void;
   createDataChannel(label: string, config?: NativeDataChannelInit): NativeDataChannel;
   onLocalDescription(cb: (sdp: string, type: string) => void): void;
   onLocalCandidate(cb: (candidate: string, mid: string) => void): void;
   onStateChange(cb: (state: string) => void): void;
   state(): string;
-  getSelectedCandidatePair?():
-    | { local?: NativeCandidateInfo; remote?: NativeCandidateInfo }
-    | false
-    | null;
-  // node-datachannel 0.32 returns { value, algorithm }; other bindings a string.
-  remoteFingerprint?(): unknown;
+  getSelectedCandidatePair(): { local: NativeCandidateInfo; remote: NativeCandidateInfo } | null;
+  remoteFingerprint(): NativeCertificateFingerprint;
 }
 
 interface NativePeerConnectionCtor {
@@ -397,9 +392,9 @@ class WrappedDataChannel implements RtcDataChannelLike {
 
   constructor(
     private readonly dc: NativeDataChannel,
-    knownLabel?: string
+    knownLabel: string
   ) {
-    this.label = knownLabel ?? safeCall(() => dc.getLabel(), "");
+    this.label = knownLabel;
     this.state = dc.isOpen() ? "open" : "connecting";
     // Register exactly one native handler per event; fan out to N listeners.
     dc.onOpen(() => {
@@ -434,7 +429,7 @@ class WrappedDataChannel implements RtcDataChannelLike {
 
   get maxMessageSize(): number {
     // libdatachannel reports 262144 (256 KB) — the chunk cap the bulk channel honors.
-    return safeCall(() => this.dc.maxMessageSize(), 0);
+    return this.dc.maxMessageSize();
   }
 
   send(data: Uint8Array): void {
@@ -471,9 +466,8 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   private readonly stateFanout = new Fanout<[RtcConnectionState]>();
   private readonly localDescFanout = new Fanout<[RtcSessionDescription]>();
   private readonly localCandFanout = new Fanout<[RtcIceCandidate]>();
-  // Last SDP passed to setRemoteDescription — cached so remoteFingerprint() can
-  // parse the a=fingerprint line even when this binding exposes neither a native
-  // remoteFingerprint() nor a remoteDescription() accessor (node-datachannel 0.32).
+  // Last SDP passed to setRemoteDescription. This is a fail-closed security
+  // fallback if the native accessor throws while negotiation is settling.
   private remoteSdp: string | null = null;
 
   constructor(private readonly pc: NativePeerConnection) {
@@ -528,46 +522,50 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   }
 
   remoteFingerprint(): string | null {
-    // 1) Native accessor, if this binding exposes one. A null/odd value falls
-    //    through to the SDP parse rather than being trusted blindly, and is
-    //    canonicalized so a `sha-256 ` prefix can't survive the transport's
-    //    colon-stripping compare against the QR pin.
-    if (typeof this.pc.remoteFingerprint === "function") {
-      const raw: unknown = safeCall(() => this.pc.remoteFingerprint?.() ?? null, null);
-      // node-datachannel 0.32 returns { value: "AA:BB:..", algorithm: "sha-256" };
-      // other bindings return the colon-hex string directly. Extract the string
-      // form before canonicalizing (canonicalizeFingerprint(object) would throw).
-      const fpStr =
-        typeof raw === "string"
-          ? raw
-          : raw && typeof raw === "object" && typeof (raw as { value?: unknown }).value === "string"
-            ? (raw as { value: string }).value
-            : null;
-      const canonical = fpStr ? canonicalizeFingerprint(fpStr) : null;
-      if (canonical) return canonical;
+    try {
+      const raw = this.pc.remoteFingerprint();
+      if (
+        !raw ||
+        typeof raw !== "object" ||
+        raw.algorithm !== "sha-256" ||
+        typeof raw.value !== "string"
+      ) {
+        throw new Error("node-datachannel returned an invalid remote-fingerprint shape");
+      }
+      const canonical = canonicalizeFingerprint(raw.value);
+      if (!canonical) {
+        throw new Error("node-datachannel returned an invalid SHA-256 remote fingerprint");
+      }
+      return canonical;
+    } catch (error) {
+      // A native accessor can throw before/while DTLS settles. The SDP cached
+      // through this same wrapper is still authenticated by libdatachannel once
+      // connected, so it is the safe runtime-error fallback. Contract-shape
+      // errors raised above must remain loud.
+      if (error instanceof Error && error.message.startsWith("node-datachannel returned")) {
+        throw error;
+      }
     }
-    // 2) Parse the a=fingerprint:sha-256 line from the remote SDP — the copy we
-    //    cached at setRemoteDescription, or a native remoteDescription() if this
-    //    binding has one. Sound because by the time DTLS is 'connected'
+    // Parse the a=fingerprint:sha-256 line from the remote SDP cached at
+    // setRemoteDescription. Sound because by the time DTLS is 'connected'
     //    libdatachannel has verified the live cert matches that line, so the
     //    value still detects a signaling-MITM cert swap against the pin (§6.1).
     //    Null (no SDP / no fingerprint line) makes the transport wait — it never
     //    completes an unpinned pipe — which is the correct fail-closed default.
-    const sdp = this.remoteSdp ?? this.nativeRemoteSdp();
-    return sdp ? parseSdpFingerprint(sdp) : null;
-  }
-
-  private nativeRemoteSdp(): string | null {
-    if (typeof this.pc.remoteDescription !== "function") return null;
-    return safeCall(() => this.pc.remoteDescription?.()?.sdp ?? null, null);
+    return this.remoteSdp ? parseSdpFingerprint(this.remoteSdp) : null;
   }
 
   selectedCandidateType(): RtcCandidateType | null {
-    if (typeof this.pc.getSelectedCandidatePair !== "function") return null;
-    // Tolerate a throwing/absent accessor — an unknown candidate type must never
-    // crash the 'connected' handler that surfaces the relay alarm.
-    const pair = safeCall(() => this.pc.getSelectedCandidatePair?.() ?? null, null);
-    return candidateTypeFromPair(pair);
+    try {
+      return candidateTypeFromPair(this.pc.getSelectedCandidatePair());
+    } catch (error) {
+      // The native accessor can throw transiently while ICE state changes. Do
+      // not crash the connected-state callback, but never mask API-shape drift.
+      if (error instanceof Error && error.message.startsWith("node-datachannel returned")) {
+        throw error;
+      }
+      return null;
+    }
   }
 
   get connectionState(): RtcConnectionState {
@@ -588,14 +586,5 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
 
   close(): void {
     this.pc.close();
-  }
-}
-
-/** Call a native accessor that may be missing on older bindings, with a fallback. */
-function safeCall<T>(fn: () => T, fallback: T): T {
-  try {
-    return fn();
-  } catch {
-    return fallback;
   }
 }

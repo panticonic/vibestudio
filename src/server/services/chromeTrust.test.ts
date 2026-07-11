@@ -25,11 +25,10 @@ describe("chromeTrust", () => {
     ).toBe(false);
   });
 
-  it("limits the headless host principal to panel hosting", () => {
+  it("grants the headless host panel hosting", () => {
     const headless = createVerifiedCaller("headless-host", "shell");
 
     expect(callerHasPlatformCapability(headless, "panel-hosting")).toBe(true);
-    expect(callerHasPlatformCapability(headless, "connection-management")).toBe(false);
   });
 
   it("still recognizes authorized chrome apps through the app capability hook", () => {

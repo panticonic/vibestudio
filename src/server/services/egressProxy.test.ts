@@ -69,9 +69,8 @@ class MemoryCredentialUseGrantStore {
       grant.resource,
       grant.action,
       grant.scope,
-      grant.callerId ?? "",
-      grant.repoPath ?? "",
-      grant.effectiveVersion ?? "",
+      grant.repoPath,
+      grant.effectiveVersion,
     ].join("\x00");
     const index = this.grants.findIndex(
       (entry) =>
@@ -82,9 +81,8 @@ class MemoryCredentialUseGrantStore {
           entry.resource,
           entry.action,
           entry.scope,
-          entry.callerId ?? "",
-          entry.repoPath ?? "",
-          entry.effectiveVersion ?? "",
+          entry.repoPath,
+          entry.effectiveVersion,
         ].join("\x00") === key
     );
     if (index >= 0) this.grants.splice(index, 1);
@@ -96,12 +94,15 @@ function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-egress-"));
 }
 
-function workerCaller(callerId: string) {
+function workerCaller(
+  callerId: string,
+  source: { repoPath?: string; effectiveVersion?: string } = {}
+) {
   return createVerifiedCaller(callerId, "worker", {
     callerId,
     callerKind: "worker",
-    repoPath: callerId.startsWith("do:") ? "/repo" : "/repo",
-    effectiveVersion: "hash-1",
+    repoPath: source.repoPath ?? "/repo",
+    effectiveVersion: source.effectiveVersion ?? "hash-1",
   });
 }
 
@@ -124,8 +125,9 @@ function createCredential(overrides: Partial<Credential> = {}): Credential {
         use: "fetch",
         resource: "https://api.example.test/v1",
         action: "use",
-        scope: "caller",
-        callerId: "worker:test",
+        scope: "version",
+        repoPath: "/repo",
+        effectiveVersion: "hash-1",
         grantedAt: 1,
         grantedBy: "self",
       },
@@ -173,7 +175,7 @@ function createApprovalQueueMock(
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(() => 0),
+    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
@@ -444,8 +446,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: `http://127.0.0.1:${upstreamPort}/v1`,
           action: "use",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -530,8 +533,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: `http://127.0.0.1:${upstreamPort}/v1`,
           action: "use",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -601,8 +605,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: `http://127.0.0.1:${upstreamPort}/v1`,
           action: "use",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -694,8 +699,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: `http://127.0.0.1:${upstreamPort}/v1`,
           action: "use",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -774,8 +780,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: `http://127.0.0.1:${upstreamPort}/v1`,
           action: "use",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -925,8 +932,9 @@ describe("EgressProxy", () => {
           use: "git-http",
           resource: "https://github.com/acme/project.git",
           action: "read",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -961,8 +969,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: "https://app.example.test/",
           action: "use",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1019,8 +1028,9 @@ describe("EgressProxy", () => {
           use: "git-http",
           resource: "https://github.com/acme/project.git",
           action: "read",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1531,8 +1541,9 @@ describe("EgressProxy", () => {
           use: "git-http",
           resource: "https://github.com/acme/project.git",
           action: "read",
-          scope: "caller",
-          callerId: "worker:test",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1647,7 +1658,7 @@ describe("EgressProxy", () => {
     expect(auditLog.entries[0]).toMatchObject({ retries: 1, breakerState: "closed" });
   });
 
-  it("rejects audience and caller mismatches before forwarding", async () => {
+  it("rejects audience and source-version mismatches before forwarding", async () => {
     const proxy = createProxy();
     vi.stubGlobal("fetch", vi.fn());
 
@@ -1662,7 +1673,7 @@ describe("EgressProxy", () => {
 
     await expect(
       proxy.forwardProxyFetch({
-        caller: workerCaller("worker:other"),
+        caller: workerCaller("worker:other", { effectiveVersion: "hash-2" }),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",
@@ -1672,7 +1683,7 @@ describe("EgressProxy", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("keeps caller grants scoped to a concrete DO object key", async () => {
+  it("shares version grants across DO object keys from the same source version", async () => {
     const credential = createCredential({
       grants: [
         {
@@ -1680,48 +1691,9 @@ describe("EgressProxy", () => {
           use: "fetch",
           resource: "https://api.example.test/v1",
           action: "use",
-          scope: "caller",
-          callerId: "do:workers/agent-worker:AiChatWorker:object-a",
-          grantedAt: 1,
-          grantedBy: "self",
-        },
-      ],
-    });
-    const proxy = createProxy(credential);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
-    );
-
-    await proxy.forwardProxyFetch({
-      caller: workerCaller("do:workers/agent-worker:AiChatWorker:object-a"),
-      credentialId: "cred-1",
-      url: "https://api.example.test/v1/items",
-      method: "GET",
-    });
-
-    await expect(
-      proxy.forwardProxyFetch({
-        caller: workerCaller("do:workers/agent-worker:AiChatWorker:object-b"),
-        credentialId: "cred-1",
-        url: "https://api.example.test/v1/items",
-        method: "GET",
-      })
-    ).rejects.toThrow(/credential-caller-not-granted/);
-
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows repo grants to span concrete DO object keys from the same source", async () => {
-    const credential = createCredential({
-      grants: [
-        {
-          bindingId: "api",
-          use: "fetch",
-          resource: "https://api.example.test/v1",
-          action: "use",
-          scope: "repo",
+          scope: "version",
           repoPath: "/repo",
+          effectiveVersion: "hash-1",
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1739,6 +1711,7 @@ describe("EgressProxy", () => {
       url: "https://api.example.test/v1/items",
       method: "GET",
     });
+
     await proxy.forwardProxyFetch({
       caller: workerCaller("do:workers/agent-worker:AiChatWorker:object-b"),
       credentialId: "cred-1",
@@ -1825,52 +1798,50 @@ describe("EgressProxy", () => {
     expect(store.loadUrlBound("cred-1")?.grants).toEqual([]);
   });
 
-  it.each(["version", "repo"] as const)(
-    "reuses persisted %s grants across callers",
-    async (decision) => {
-      const credential = createCredential({ grants: [] });
-      const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
-      const approvalQueue = {
-        request: vi.fn(async () => decision),
-        resolve: vi.fn(),
-        listPending: vi.fn(() => []),
-      };
-      const proxy = new EgressProxy({
-        credentialStore: store,
-        auditLog: new MemoryAuditLog() as never,
-        approvalQueue: approvalQueue as never,
-      });
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
-      );
+  it("reuses persisted version grants across callers", async () => {
+    const decision = "version" as const;
+    const credential = createCredential({ grants: [] });
+    const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
+    const approvalQueue = {
+      request: vi.fn(async () => decision),
+      resolve: vi.fn(),
+      listPending: vi.fn(() => []),
+    };
+    const proxy = new EgressProxy({
+      credentialStore: store,
+      auditLog: new MemoryAuditLog() as never,
+      approvalQueue: approvalQueue as never,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
+    );
 
-      await proxy.forwardProxyFetch({
-        caller: workerCaller("worker:first"),
-        credentialId: "cred-1",
-        url: "https://api.example.test/v1/items",
-        method: "GET",
-      });
-      await proxy.forwardProxyFetch({
-        caller: workerCaller("do:worker:first"),
-        credentialId: "cred-1",
-        url: "https://api.example.test/v1/items",
-        method: "GET",
-      });
+    await proxy.forwardProxyFetch({
+      caller: workerCaller("worker:first"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+    await proxy.forwardProxyFetch({
+      caller: workerCaller("do:worker:first"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
 
-      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
-      expect(store.loadUrlBound("cred-1")?.grants).toContainEqual(
-        expect.objectContaining({
-          bindingId: "api",
-          resource: "https://api.example.test/v1",
-          action: "use",
-          scope: decision,
-          repoPath: "/repo",
-          grantedBy: decision,
-        })
-      );
-    }
-  );
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(store.loadUrlBound("cred-1")?.grants).toContainEqual(
+      expect.objectContaining({
+        bindingId: "api",
+        resource: "https://api.example.test/v1",
+        action: "use",
+        scope: "version",
+        repoPath: "/repo",
+        grantedBy: decision,
+      })
+    );
+  });
 
   it("resolves queued credential proxy approvals covered by a trusted version grant", async () => {
     const credential = createCredential({ grants: [] });

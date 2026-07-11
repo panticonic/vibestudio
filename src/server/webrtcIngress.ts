@@ -1,10 +1,8 @@
 /**
- * Server-side WebRTC ingress pool (plan §2.1). Replaces the v1 single-pipe
- * bootstrap: instead of ONE persistent room per server, the
- * pool arms one answerer pipe per signaling room — one room per paired device
- * plus one per outstanding pairing invite. Rooms are minted per-invite
- * (`auth.createPairingInvite`), persisted onto the device record at
- * redemption, and torn down on invite expiry / device revocation.
+ * Server-side WebRTC ingress pool. A hub-managed workspace child arms an
+ * answerer pipe only when the hub routes a user, device, or invite to it.
+ * Routing rooms are deliberately ephemeral runtime state: identity rows never
+ * carry transport topology and a child restart requires a fresh hub route.
  *
  * Each armed room gets its own `createWebRtcAnswererPipe` attached to the live
  * `RpcServer` via `attachWebRtcPipe` (per-pipe closures — N pipes attach
@@ -35,7 +33,7 @@ export interface WebRtcAttachable {
   attachWebRtcPipe(pipe: WebRtcAnswererPipe): void;
 }
 
-/** Why a room is armed: an outstanding invite, or an already-paired device. */
+/** The routed principal or invite associated with an ephemeral room. */
 export interface WebRtcRoomMeta {
   deviceId?: string;
   inviteCode?: string;
@@ -61,11 +59,10 @@ export interface WebRtcIngressStats {
 export interface WebRtcIngress {
   /**
    * Arm an answerer pipe for `room` (idempotent). Re-arming an armed room only
-   * merges `meta` — redemption re-tags an invite room with its `deviceId`
-   * without touching the live pipe.
+   * merges `meta` without touching the live pipe.
    */
-  armRoom(room: string, meta: WebRtcRoomMeta): void;
-  /** Tear the room's pipe down (device revoked / invite expired). */
+  armRoom(room: string, meta: WebRtcRoomMeta): Promise<void>;
+  /** Tear the room's pipe down when its routed principal is revoked. */
   disarmRoom(room: string): Promise<void>;
   status(): WebRtcRoomStatus[];
   stats(): WebRtcIngressStats;
@@ -179,7 +176,7 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
   };
   const createPipe = options.createPipe ?? defaultCreatePipe;
 
-  const armRoom = (room: string, meta: WebRtcRoomMeta): void => {
+  const armRoom = async (room: string, meta: WebRtcRoomMeta): Promise<void> => {
     if (closed) {
       log(`armRoom(${room}) ignored: ingress is closed`);
       return;
@@ -188,6 +185,7 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
     if (existing) {
       // Idempotent re-arm: merge meta only (invite room → device room re-tag).
       existing.meta = { ...existing.meta, ...meta };
+      await existing.ready;
       return;
     }
     const entry: RoomEntry = {
@@ -230,7 +228,9 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
       // and drop the entry so status() doesn't advertise a ghost room.
       if (rooms.get(room) === entry) rooms.delete(room);
       log(`failed to arm room ${room}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     });
+    await entry.ready;
   };
 
   const disarmRoom = async (room: string): Promise<void> => {

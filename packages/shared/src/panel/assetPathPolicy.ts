@@ -9,8 +9,8 @@
  * which re-issues them against the server's OWN loopback gateway. That gateway
  * namespace also contains MANAGEMENT surfaces that a panel must never reach:
  *
- *  - `/_r/s/<service>/…`  — service HTTP routes (auth issue-device, workspaces,
- *    webhook ingress, credential OAuth callbacks, …)
+ *  - `/_r/s/<service>/…`  — service HTTP routes (device refresh, workspace
+ *    routing, webhook ingress, credential OAuth callbacks, …)
  *  - `/rpc`, `/rpc/stream` — the in-process RPC plane
  *  - `/_w/`, `/_u/`, `/_workercode/`, `/_workerversion/`, `/_docode/`,
  *    `/_doversion/` — workerd/DO loader + dispatch internals (secret-gated)

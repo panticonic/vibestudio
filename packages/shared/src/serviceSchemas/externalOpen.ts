@@ -20,7 +20,7 @@ const OPEN_EXTERNAL_ACCESS: MethodAccessDescriptor = {
       when: "caller is panel/app/worker/do",
       capability: "external-browser-open",
       operation: { kind: "browser", verb: "Open external browser" },
-      grantScopes: ["once", "session", "version", "repo"],
+      grantScopes: ["once", "session", "version"],
       reason: "Opening URLs in the system browser from code requires user consent.",
     },
   ],
@@ -38,7 +38,7 @@ export const openExternalOptionsSchema = z
   .strict() satisfies z.ZodType<OpenExternalOptions>;
 
 export const openExternalResultSchema = z.object({
-  approvalDecision: z.enum(["once", "session", "version", "repo"]).optional(),
+  approvalDecision: z.enum(["once", "session", "version"]).optional(),
 }) satisfies z.ZodType<OpenExternalResult>;
 
 export const externalOpenMethods = defineServiceMethods({

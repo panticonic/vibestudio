@@ -23,10 +23,17 @@ import {
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
 import {
+  createPanelDeepLink,
+  validatePanelLocation,
+  type PanelLocation,
+} from "@vibestudio/shared/panelLocation";
+import {
   enqueueFirstArgvLink,
   getPendingConnectLink,
+  getPendingPanelLocation,
   installEarlyOpenUrlBuffer,
   onConnectLink,
+  onPanelLocation,
   peekPendingConnectLink,
   registerProtocol,
 } from "./protocolHandler.js";
@@ -96,7 +103,11 @@ import {
   type ConnectedStartupMode,
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
-import { loadStoredRemotePairing, clearStoredRemotePairing } from "./services/remoteCredService.js";
+import {
+  loadStoredRemotePairing,
+  clearStoredRemotePairing,
+  persistStoredRemoteWorkspaceRoute,
+} from "./services/remoteCredService.js";
 import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
@@ -273,6 +284,7 @@ let shellCore: ReturnType<
 > | null = null;
 let serverSession: SessionConnection | null = null;
 let mainWindow: BaseWindow | null = null;
+let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
 let viewManager: ViewManager | null = null;
 let approvalAttention: ApprovalAttention | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
@@ -415,6 +427,35 @@ function sendIncomingPairLink(link: unknown): void {
     const contents = viewManager.getWebContents(viewId);
     if (contents && !contents.isDestroyed()) {
       contents.send("vibestudio:incoming-pair-link", link);
+    }
+  }
+}
+
+function canAccessIncomingPanelLocations(webContentsId: number): boolean {
+  if (!viewManager) return false;
+  const shellContents = viewManager.getShellWebContents();
+  if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
+    return true;
+  }
+  const viewId = viewManager.findViewIdByWebContentsId(webContentsId);
+  if (!viewId) return false;
+  const viewInfo = viewManager.getViewInfo(viewId);
+  return viewInfo?.type === "app" && viewInfo.hostChrome === true;
+}
+
+function sendIncomingPanelLocation(location: unknown): void {
+  if (!viewManager) return;
+  const shellContents = viewManager.getShellWebContents();
+  if (shellContents && !shellContents.isDestroyed()) {
+    shellContents.send("vibestudio:incoming-panel-location", location);
+  }
+  for (const viewId of viewManager.getViewIds()) {
+    if (viewId === "shell") continue;
+    const viewInfo = viewManager.getViewInfo(viewId);
+    if (viewInfo?.type !== "app" || !viewInfo.hostChrome) continue;
+    const contents = viewManager.getWebContents(viewId);
+    if (contents && !contents.isDestroyed()) {
+      contents.send("vibestudio:incoming-panel-location", location);
     }
   }
 }
@@ -1548,9 +1589,32 @@ app.on("ready", async () => {
     }
     return getPendingConnectLink();
   });
+  ipcMain.handle("vibestudio:drain-panel-location", (event) => {
+    if (!canAccessIncomingPanelLocations(event.sender.id)) {
+      throw new Error("Incoming panel locations require the trusted host-chrome surface");
+    }
+    return getPendingPanelLocation();
+  });
+  ipcMain.handle("vibestudio:prepare-panel-location-relaunch", (event, location: unknown) => {
+    if (!canAccessIncomingPanelLocations(event.sender.id)) {
+      throw new Error("Panel-location relaunch requires the trusted host-chrome surface");
+    }
+    if (location === null) {
+      panelLocationForWorkspaceRelaunch = null;
+      return;
+    }
+    validatePanelLocation(location as PanelLocation);
+    panelLocationForWorkspaceRelaunch = location as PanelLocation;
+  });
   onConnectLink((link) => {
     if (IS_HEADLESS_HOST) return;
     sendIncomingPairLink(link);
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
+  onPanelLocation((location) => {
+    if (IS_HEADLESS_HOST) return;
+    sendIncomingPanelLocation(location);
     mainWindow?.show();
     mainWindow?.focus();
   });
@@ -1843,9 +1907,29 @@ app.on("ready", async () => {
       approvalAttention?.handlePendingChanged(pending);
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
-    onWorkspaceRelaunchRequested: (name) => {
-      log.info(`[App] Relaunching into workspace "${name}"`);
-      relaunchApp({ args: workspaceRelaunchArgs(name) });
+    onWorkspaceRelaunchRequested: (name, route) => {
+      try {
+        persistStoredRemoteWorkspaceRoute(route);
+        log.info(`[App] Relaunching into workspace "${name}"`);
+        const args = workspaceRelaunchArgs(name);
+        const location = panelLocationForWorkspaceRelaunch;
+        panelLocationForWorkspaceRelaunch = null;
+        if (location?.workspace === name) {
+          args.push(createPanelDeepLink(location));
+        } else if (location) {
+          log.warn(
+            `[App] Dropping stale panel-location relaunch for "${location.workspace ?? "unknown"}" while switching to "${name}"`
+          );
+        }
+        relaunchApp({ args });
+      } catch (error) {
+        panelLocationForWorkspaceRelaunch = null;
+        log.error(
+          `[App] Refusing workspace relaunch before its route is durable: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     },
     onCredentialCaptureRequest: (payload) =>
       handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
@@ -1861,7 +1945,7 @@ app.on("ready", async () => {
     // once the WS lifecycle begins.
     const remoteHost =
       pendingRemotePairing?.srv ??
-      (!skipRemotePairingLaunch ? storedRemoteAtLaunch?.pairing.srv : undefined);
+      (!skipRemotePairingLaunch ? storedRemoteAtLaunch?.workspacePairing.srv : undefined);
     const isRemoteSession = pendingRemotePairing !== null || remotePairedAtLaunch;
 
     eventService.emit("server-connection-changed", {
@@ -2266,7 +2350,6 @@ app.on("ready", async () => {
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.registerRpc(
       createRemoteCredService({
-        startupMode,
         getServerClient: () => serverClientRef,
         getViewManager,
       })
@@ -2597,10 +2680,10 @@ app.on("ready", async () => {
           .catch((e) => console.error("[App] serverClient cleanup error:", e))
       );
     }
-    // Leave any spawned local server running: it is detached by design, the
+    // Leave the local hub running: it is detached by design, the
     // next launch reattaches to it, and the idle-exit monitor reaps it if no
     // client ever comes back.
-    serverSession?.localServerManager?.detach();
+    serverSession?.hubProcessManager?.detach();
     serverSession = null;
     if (cdpHostProvider) {
       cdpHostProvider.stop();
@@ -2617,8 +2700,8 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-// ── Quit policy for the desktop-owned local server ──
-// The local server is a detached process that can outlive the app. On quit we
+// ── Quit policy for the desktop-owned local hub ──
+// The local hub is a detached process that can outlive the app. On quit we
 // simply ASK whether to keep it running (so background work — e.g. an agent
 // mid-turn — finishes and the next launch reattaches instantly) or stop it.
 // No activity guessing: the user decides, and can persist that choice with
@@ -2629,7 +2712,7 @@ let serverQuitDecision: "stop" | "keep" | null = null;
 app.on("before-quit", (event) => {
   if (serverQuitDecision !== null || isCleaningUp) return;
   const conn = serverSession;
-  if (!conn || conn.serverOwnership !== "desktop-local" || !conn.localServerManager) {
+  if (!conn || conn.serverOwnership !== "desktop-local" || !conn.hubProcessManager) {
     // Remote/external server: nothing desktop-owned to stop.
     serverQuitDecision = "keep";
     return;
@@ -2650,9 +2733,9 @@ app.on("before-quit", (event) => {
       // stray keypress.
       cancelId: 0,
       title: "Quit Vibestudio",
-      message: "Keep the workspace server running in the background?",
+      message: "Keep the Vibestudio hub running in the background?",
       detail:
-        "The workspace server can keep running after you close the app so background " +
+        "The hub and its workspace children can keep running after you close the app so background " +
         "tasks (like agent runs) finish and the next launch reattaches instantly — " +
         "or stop it now. You can change this any time.",
       checkboxLabel: "Remember my choice",
@@ -2680,7 +2763,7 @@ app.on("will-quit", (event) => {
 
   const stopPromises: Promise<void>[] = [];
 
-  // Server client (device-paired WS connection) + the detached server process
+  // Server client (device-paired WS connection) + the detached hub process
   if (serverSession) {
     // Run panel cleanup via server (archive childless shell panels), then
     // stop-or-detach the local server and close the connection.
@@ -2688,7 +2771,7 @@ app.on("will-quit", (event) => {
     serverSession = null;
     const stopServer =
       session.serverOwnership === "desktop-local" &&
-      session.localServerManager !== null &&
+      session.hubProcessManager !== null &&
       serverQuitDecision !== "keep";
 
     const cleanupThenClose = (async () => {
@@ -2702,17 +2785,15 @@ app.on("will-quit", (event) => {
         ?.unregisterRuntimeClient()
         .catch((e: unknown) => console.error("[App] Failed to unregister runtime client:", e));
       if (stopServer) {
-        await assertPresent(session.localServerManager)
-          .stop(async () => {
-            await session.serverClient.call("hostLifecycle", "shutdown", []);
-          })
-          .then(() => console.log("[App] Server stopped"))
-          .catch((e) => console.error("[App] Server stop error:", e));
+        await assertPresent(session.hubProcessManager)
+          .stop()
+          .then(() => console.log("[App] Hub stopped"))
+          .catch((e) => console.error("[App] Hub stop error:", e));
       } else {
         // Keep: leave the detached process running; the attachment record stays
         // so the next launch reattaches instantly.
-        session.localServerManager?.detach();
-        if (session.localServerManager) console.log("[App] Server left running (detached)");
+        session.hubProcessManager?.detach();
+        if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
       }
       await session.serverClient
         .close()

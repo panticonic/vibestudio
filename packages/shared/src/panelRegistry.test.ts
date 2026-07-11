@@ -521,7 +521,11 @@ describe("PanelRegistry", () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(updates[updates.length - 1]).toMatchObject({
         revision: afterTitle,
-        rootPanels: [expect.objectContaining({ id: "panel:tree/root", title: "Root" })],
+        forest: [
+          expect.objectContaining({
+            rootPanels: [expect.objectContaining({ id: "panel:tree/root", title: "Root" })],
+          }),
+        ],
       });
     });
   });

@@ -75,71 +75,18 @@ describe("DODispatch", () => {
     dispatch = new DODispatch();
   });
 
-  describe("dispatch without dispatcher", () => {
-    it("throws when no dispatcher has been configured", async () => {
+  describe("dispatch without token-backed configuration", () => {
+    it("fails closed", async () => {
       const ref = makeRef();
       await expect(dispatch.dispatch(ref, "ping")).rejects.toThrow(
-        "DODispatch: no dispatcher configured"
+        "DODispatch requires token-backed workerd configuration"
       );
-    });
-  });
-
-  describe("dispatch with dispatcher", () => {
-    it("calls the dispatcher with the correct URL path and args", async () => {
-      const dispatcher = vi.fn().mockResolvedValue({ ok: true });
-      dispatch.setDispatcher(dispatcher);
-
-      const ref = makeRef();
-      await dispatch.dispatch(ref, "onChannelEvent", "arg1", 42);
-
-      expect(dispatcher).toHaveBeenCalledTimes(1);
-      expect(dispatcher).toHaveBeenCalledWith(userlandUrl(makeRef(), "onChannelEvent"), [
-        "arg1",
-        42,
-      ]);
-    });
-
-    it("returns whatever the dispatcher returns", async () => {
-      const expected = { result: "hello", count: 7 };
-      const dispatcher = vi.fn().mockResolvedValue(expected);
-      dispatch.setDispatcher(dispatcher);
-
-      const ref = makeRef();
-      const result = await dispatch.dispatch(ref, "getData");
-
-      expect(result).toBe(expected);
-    });
-
-    it("propagates errors from the dispatcher", async () => {
-      const dispatcher = vi.fn().mockRejectedValue(new Error("network failure"));
-      dispatch.setDispatcher(dispatcher);
-
-      const ref = makeRef();
-      await expect(dispatch.dispatch(ref, "fail")).rejects.toThrow("network failure");
-    });
-
-    it("passes empty args array when no extra args given", async () => {
-      const dispatcher = vi.fn().mockResolvedValue(undefined);
-      dispatch.setDispatcher(dispatcher);
-
-      const ref = makeRef();
-      await dispatch.dispatch(ref, "noArgs");
-
-      expect(dispatcher).toHaveBeenCalledWith(expect.any(String), []);
-    });
-
-    it("replaces the dispatcher when setDispatcher is called again", async () => {
-      const first = vi.fn().mockResolvedValue("first");
-      const second = vi.fn().mockResolvedValue("second");
-      dispatch.setDispatcher(first);
-      dispatch.setDispatcher(second);
-
-      const ref = makeRef();
-      const result = await dispatch.dispatch(ref, "test");
-
-      expect(first).not.toHaveBeenCalled();
-      expect(second).toHaveBeenCalledTimes(1);
-      expect(result).toBe("second");
+      await expect(dispatch.dispatchLifecycle(ref, "prepare", {})).rejects.toThrow(
+        "DODispatch requires token-backed workerd configuration"
+      );
+      await expect(dispatch.dispatchAlarm(ref)).rejects.toThrow(
+        "DODispatch requires token-backed workerd configuration"
+      );
     });
   });
 

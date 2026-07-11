@@ -140,9 +140,8 @@ class MemoryCredentialUseGrantStore {
       grant.resource,
       grant.action,
       grant.scope,
-      grant.callerId ?? "",
-      grant.repoPath ?? "",
-      grant.effectiveVersion ?? "",
+      grant.repoPath,
+      grant.effectiveVersion,
     ].join("\x00");
     const index = this.grants.findIndex(
       (entry) =>
@@ -153,9 +152,8 @@ class MemoryCredentialUseGrantStore {
           entry.resource,
           entry.action,
           entry.scope,
-          entry.callerId ?? "",
-          entry.repoPath ?? "",
-          entry.effectiveVersion ?? "",
+          entry.repoPath,
+          entry.effectiveVersion,
         ].join("\x00") === key
     );
     if (index >= 0) this.grants.splice(index, 1);
@@ -232,7 +230,7 @@ function jwtWithPayload(payload: Record<string, unknown>): string {
   );
 }
 
-function approvingQueue(decision: "once" | "session" | "version" | "repo" | "deny" = "version") {
+function approvingQueue(decision: "once" | "session" | "version" | "deny" = "version") {
   return {
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
@@ -1064,7 +1062,8 @@ describe("credentialService", () => {
     expect((await store.loadUrlBound(stored.id))?.grants).toEqual([]);
   });
 
-  it.each(["version", "repo"] as const)("reuses %s credential access grants", async (decision) => {
+  it("reuses version credential access grants", async () => {
+    const decision = "version" as const;
     const store = new MemoryCredentialStore();
     const approvalQueue = {
       request: vi.fn(async () => decision),

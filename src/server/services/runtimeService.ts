@@ -199,7 +199,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     targetContextId: string,
     action: ContextBoundaryAction
   ): Promise<void> {
-    if (isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) return;
+    // Panel-tree bridge calls retain the initiating entity id for durable
+    // lineage while using the server caller kind. They are already gated at
+    // the panel-tree boundary and must retain trusted-host authority here.
+    if (
+      caller.runtime.kind === "server" ||
+      isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })
+    ) {
+      return;
+    }
     const originContextId = await store.resolveContext(caller.runtime.id);
     if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return;
     const result = await requireContextBoundaryPermission(deps.contextBoundary, {
@@ -488,6 +496,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       // authoritative) so a runtime can later resolve its nearest panel ancestor
       // (e.g. eval launched by an agent inherits the agent's owning panel).
       parentId: caller.runtime.id,
+      // Attribute the entity to the human whose subject launched it (WP0 §6).
+      // For an agent/worker spawning a child, the caller's subject already
+      // carries the inherited userId, so lineage propagates. Undefined for a
+      // bootstrap caller with no subject.
+      ownerUserId: caller.subject?.userId,
     };
     const record = await store.activate(activateInput);
     if (spec.kind === "session" && spec.title) {

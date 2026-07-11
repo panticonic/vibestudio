@@ -17,7 +17,7 @@ const AUTHORIZE_ACCESS: MethodAccessDescriptor = {
     {
       capability: "cors-response-read",
       operation: { kind: "network", verb: "Read cross-origin response" },
-      grantScopes: ["once", "session", "version", "repo"],
+      grantScopes: ["once", "session", "version"],
       reason: "Reading CORS-protected responses from another origin requires user consent.",
     },
   ],
@@ -42,7 +42,7 @@ export type AuthorizeCorsRequest = z.infer<typeof authorizeCorsSchema>;
 // `decision` mirrors Exclude<GrantedDecision, "deny"> from the approval queue.
 export const corsApprovalResultSchema = z.object({
   allowed: z.boolean(),
-  decision: z.enum(["once", "session", "version", "repo"]).optional(),
+  decision: z.enum(["once", "session", "version"]).optional(),
   reason: z.string().optional(),
 });
 

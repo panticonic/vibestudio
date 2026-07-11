@@ -16,7 +16,7 @@ import * as fs from "fs";
 import { execFile } from "node:child_process";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -24,6 +24,9 @@ import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
 import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
+import { writeFileAtomicSync } from "../atomicFile.js";
+import { accountProfileSchema } from "@vibestudio/shared/serviceSchemas/account";
+import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -80,6 +83,7 @@ function resolveHeartbeatRegistryRow(
 // =============================================================================
 
 interface CliArgs {
+  bootstrapWorkspace?: string;
   workspaceName?: string;
   workspaceDir?: string;
   appRoot?: string;
@@ -88,11 +92,9 @@ interface CliArgs {
   ephemeral?: boolean;
   servePanels?: boolean;
   gatewayPort?: number;
-  panelPort?: number;
   init?: boolean;
   host?: string;
   bindHost?: string;
-  printCredentials?: boolean;
   requireMobileReady?: boolean;
   requireElectronReady?: boolean;
   headlessHostAutospawn?: boolean;
@@ -110,15 +112,15 @@ Usage:
 
 Options:
   --app-root <path>        Application root directory (default: cwd)
+  --bootstrap-workspace <name>
+                           Register and use an existing workspace for first-run pairing
   --ready-file <path>      Write structured readiness JSON to this file
   --ephemeral              Use a disposable dev workspace (deleted on shutdown)
   --host <hostname>        External hostname (also sets bind to 0.0.0.0)
   --bind-host <addr>       Explicit bind address (default: 127.0.0.1, or 0.0.0.0 with --host)
   --serve-panels           Enable panel HTTP serving
   --gateway-port <port>    Port for the gateway HTTP/WS ingress (default: auto-assigned)
-  --panel-port <port>      Port for panel HTTP (default: auto-assigned)
   --log-level <level>      Log verbosity
-  --print-credentials      Print VIBESTUDIO_ADMIN_TOKEN and VIBESTUDIO_PAIRING_CODE for scripting
   --require-mobile-ready   Fail startup unless the workspace React Native app can be
                            built and served to native mobile clients.
   --require-electron-ready Fail startup unless the workspace Electron shell app can be
@@ -165,6 +167,7 @@ function printReadinessActionBlock(title: string, lines: string[]): void {
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {};
   const known = new Set([
+    "bootstrap-workspace",
     "workspace",
     "workspace-dir",
     "app-root",
@@ -173,11 +176,9 @@ function parseArgs(argv: string[]): CliArgs {
     "log-level",
     "serve-panels",
     "gateway-port",
-    "panel-port",
     "init",
     "host",
     "bind-host",
-    "print-credentials",
     "require-mobile-ready",
     "require-electron-ready",
     "headless-host-autospawn",
@@ -188,7 +189,6 @@ function parseArgs(argv: string[]): CliArgs {
     "serve-panels",
     "ephemeral",
     "init",
-    "print-credentials",
     "require-mobile-ready",
     "require-electron-ready",
     "headless-host-autospawn",
@@ -231,6 +231,9 @@ function parseArgs(argv: string[]): CliArgs {
     }
 
     switch (key) {
+      case "bootstrap-workspace":
+        args.bootstrapWorkspace = value;
+        break;
       case "workspace":
         args.workspaceName = value;
         break;
@@ -258,17 +261,11 @@ function parseArgs(argv: string[]): CliArgs {
       case "gateway-port":
         args.gatewayPort = parsePort(value, "--gateway-port");
         break;
-      case "panel-port":
-        args.panelPort = parsePort(value, "--panel-port");
-        break;
       case "host":
         args.host = value;
         break;
       case "bind-host":
         args.bindHost = value;
-        break;
-      case "print-credentials":
-        args.printCredentials = true;
         break;
       case "require-mobile-ready":
         args.requireMobileReady = true;
@@ -308,19 +305,17 @@ if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
 
 async function main() {
   const { getUserDataPath, setUserDataPath } = await import("@vibestudio/env-paths");
-  const { loadCentralEnv, deleteWorkspaceDir } =
-    await import("@vibestudio/shared/workspace/loader");
+  const { loadCentralEnv } = await import("@vibestudio/shared/workspace/loader");
   const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
     await import("@vibestudio/shared/centralAuth");
   const { resolveLocalWorkspaceStartup } = await import("@vibestudio/shared/workspace/startup");
-  const { CentralDataManager } = await import("@vibestudio/shared/centralData");
   const { TokenManager } = await import("@vibestudio/shared/tokenManager");
   const { ServiceDispatcher } = await import("@vibestudio/shared/serviceDispatcher");
   const { EventService, createEventsServiceDefinition } =
     await import("@vibestudio/shared/eventsService");
   const { getExistingAppNodeModulesRoots } = await import("@vibestudio/shared/runtimePaths");
   const eventService = new EventService();
-  const { RpcServer } = await import("./rpcServer.js");
+  const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
   const { ServiceContainer } = await import("@vibestudio/shared/serviceContainer");
   const { initBuildSystemV2 } = await import("./buildV2/index.js");
 
@@ -334,11 +329,13 @@ async function main() {
   // Electron and hub-managed child runtimes after a workspace has been selected.
 
   const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
-  // The server always owns workspace metadata (~/.config/vibestudio/data.json).
-  // The desktop shell also writes it (chooser bookkeeping, attachment records);
-  // whole-file last-writer-wins is accepted for this single-user product.
-  const centralData = new CentralDataManager();
-  const isWorkspaceServer = process.env["VIBESTUDIO_FORCE_WORKSPACE_SERVER"] === "1";
+  const processRole = process.env["VIBESTUDIO_PROCESS_ROLE"] ?? "hub";
+  if (processRole !== "hub" && processRole !== "workspace-child") {
+    throw new Error(
+      `VIBESTUDIO_PROCESS_ROLE must be "hub" or "workspace-child" (got ${processRole})`
+    );
+  }
+  const isWorkspaceServer = processRole === "workspace-child";
 
   if (!isWorkspaceServer) {
     const forbiddenWorkspaceSelection =
@@ -357,8 +354,22 @@ async function main() {
     return;
   }
 
+  // Consume hub-only capabilities before resolving or loading any
+  // workspace-controlled code. Descendants must never inherit these values.
+  const {
+    identityDbPath,
+    hubUrl,
+    hubControlToken,
+    adminToken: childAdminToken,
+    relaySigningSecret,
+  } = consumeWorkspaceChildSecrets(process.env);
+
   const wsDir = args.workspaceDir ?? process.env["VIBESTUDIO_WORKSPACE_DIR"];
   const wsName = args.workspaceName ?? process.env["VIBESTUDIO_WORKSPACE"];
+  const childWorkspaceId = process.env["VIBESTUDIO_WORKSPACE_ID"];
+  if (!childWorkspaceId) {
+    throw new Error("Workspace runtime requires its authoritative workspace id from the hub");
+  }
 
   let workspace: import("@vibestudio/shared/workspace/types").Workspace;
   let workspaceName: string;
@@ -366,14 +377,19 @@ async function main() {
   try {
     const startup = resolveLocalWorkspaceStartup({
       appRoot,
-      centralData,
       wsDir,
       name: wsName,
       init: args.init,
       isDev: !!args.ephemeral,
       requireExplicitSelection: isWorkspaceServer,
     });
-    workspace = startup.resolved.workspace;
+    // Managed directory names are storage coordinates, not workspace
+    // identities. In particular, ephemeral children use a randomized disk
+    // name while retaining the hub catalog's opaque id.
+    workspace = {
+      ...startup.resolved.workspace,
+      config: { ...startup.resolved.workspace.config, id: childWorkspaceId },
+    };
     workspaceName = startup.resolved.name;
     workspaceIsEphemeral =
       startup.isEphemeral || process.env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] === "1";
@@ -403,7 +419,7 @@ async function main() {
   // declaration (services[] row + its singletonObjects row) that names the
   // durable VCS store. The host's attach/follower and workerd's bootstrap
   // main-binding resolve through it; there is no separate provider slot.
-  const { resolveVcsStoreBinding } = await import("./userlandServices.js");
+  const { resolveUserlandService, resolveVcsStoreBinding } = await import("./userlandServices.js");
   const {
     resolveWorkspaceTrustGrants,
     resolveHostTargetDecl,
@@ -452,7 +468,7 @@ async function main() {
     const nextVcs = resolveVcsStoreBinding(nextDecls);
     if (JSON.stringify(previousVcs ?? null) !== JSON.stringify(nextVcs ?? null)) {
       changes.push(
-        "vibestudio.vcs.v1 service binding changed; the running server keeps the existing VCS store attachment until restart or explicit migration"
+        "vibestudio.vcs.v1 service binding changed; restart the server to attach the new VCS store"
       );
     }
 
@@ -462,20 +478,24 @@ async function main() {
     nextConfig: typeof workspaceConfig,
     opts: { warnRestartBoundChanges?: boolean } = {}
   ): { routeSources: string[] } => {
+    // Parsed manifests derive an id from their managed directory. A child
+    // runtime's identity is hub-owned, so reloads must preserve the opaque
+    // catalog id just like initial load does.
+    const authoritativeNextConfig = { ...nextConfig, id: childWorkspaceId };
     const routeSources = new Set(workspaceDecls.routes.map((route) => route.source));
-    const nextDecls = buildWorkspaceDeclarations(nextConfig);
+    const nextDecls = buildWorkspaceDeclarations(authoritativeNextConfig);
     const restartBoundChanges = restartBoundManifestChanges(
       workspaceConfig,
-      nextConfig,
+      authoritativeNextConfig,
       workspaceDecls,
       nextDecls
     );
     for (const route of nextDecls.routes) routeSources.add(route.source);
-    replaceWorkspaceConfig(workspaceConfig, nextConfig);
+    replaceWorkspaceConfig(workspaceConfig, authoritativeNextConfig);
     workspaceDecls.singletons.replaceAll(nextDecls.singletons.all());
     workspaceDecls.services = nextDecls.services;
     workspaceDecls.routes = nextDecls.routes;
-    setWorkspaceAppTrust(resolveWorkspaceTrustGrants(nextConfig));
+    setWorkspaceAppTrust(resolveWorkspaceTrustGrants(authoritativeNextConfig));
     if (opts.warnRestartBoundChanges !== false) {
       for (const change of restartBoundChanges) {
         console.warn(`[WorkspaceConfig] ${change}`);
@@ -492,11 +512,6 @@ async function main() {
     if (trustGrants.chromeApps.length === 0) {
       console.warn(
         "[Trust] meta/vibestudio.yml declares no `trust.chromeApps` — no workspace app may render host chrome"
-      );
-    }
-    if (trustGrants.connectionManagementApps.length === 0) {
-      console.warn(
-        "[Trust] meta/vibestudio.yml declares no `trust.connectionManagementApps` — no workspace app may manage connections"
       );
     }
   };
@@ -574,14 +589,138 @@ async function main() {
   // Forward ref: the graceful shutdown fn is defined at the end of main();
   // hostLifecycle.shutdown and the idle-exit monitor call through this.
   let requestShutdown: () => void = () => process.exit(0);
-  const { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } =
-    await import("./services/deviceAuthStore.js");
-  const authStorePath =
-    process.env["VIBESTUDIO_AUTH_STORE_PATH"] ?? path.join(statePath, "auth", "devices.json");
-  const deviceAuthStore = new DeviceAuthStore(authStorePath);
-  // Startup pairing invites are minted AFTER the WebRTC ingress pool starts
-  // (post-startAll) so each invite gets a real per-invite room + deep link.
-
+  const { DeviceAuthStore } = await import("./services/deviceAuthStore.js");
+  const { IdentityDb } = await import("@vibestudio/shared/users/identityDb");
+  const { UserStore } = await import("@vibestudio/shared/users/userStore");
+  const { MembershipStore } = await import("@vibestudio/shared/users/membership");
+  // A workspace runtime is always hub-managed. Identity and membership live in
+  // the hub's single database; the child has a query-only handle and no private
+  // fallback store or standalone pairing mode.
+  const entryWorkspaceId = childWorkspaceId;
+  const identityDb = new IdentityDb({ path: identityDbPath, readOnly: true });
+  const userStore = new UserStore(identityDb);
+  const membershipStore = new MembershipStore(identityDb, userStore);
+  const deviceAuthStore = new DeviceAuthStore({
+    db: identityDb,
+    serverIdPath: path.join(path.dirname(identityDbPath), "server-id.json"),
+  });
+  const { createHubControlClient } = await import("./services/hubControlService.js");
+  const { HubWorkspaceRouteSchema } = await import("@vibestudio/shared/serviceSchemas/hubControl");
+  const { WorkspaceEntrySchema } = await import("@vibestudio/shared/serviceSchemas/workspace");
+  const hubControlClient = createHubControlClient({ hubUrl, controlToken: hubControlToken });
+  const listWorkspaceMemberUserIds = (): string[] => {
+    const explicit = membershipStore
+      .listMembers(entryWorkspaceId)
+      .map((membership) => membership.userId);
+    const root = userStore
+      .listUsers()
+      .find((user) => user.role === "root" && user.revokedAt === undefined)?.id;
+    return [...new Set(root ? [root, ...explicit] : explicit)];
+  };
+  const workspaceCatalog: import("./services/workspaceService.js").WorkspaceCatalogClient = {
+    list: async (actorUserId) => {
+      const result = await hubControlClient.call("hubControl.listWorkspaces", [], {
+        userId: actorUserId,
+        handle: actorUserId,
+      });
+      return WorkspaceEntrySchema.array().parse(result);
+    },
+    create: async (actorUserId, name, opts) => {
+      const result = await hubControlClient.call(
+        "hubControl.createWorkspace",
+        [{ workspace: name, ...(opts?.forkFrom ? { forkFrom: opts.forkFrom } : {}) }],
+        { userId: actorUserId, handle: actorUserId }
+      );
+      return WorkspaceEntrySchema.parse(result);
+    },
+    delete: async (actorUserId, name) => {
+      await hubControlClient.call("hubControl.deleteWorkspace", [{ workspace: name }], {
+        userId: actorUserId,
+        handle: actorUserId,
+      });
+    },
+    select: async (actorUserId, deviceId, name) => {
+      const result = await hubControlClient.call(
+        "hubControl.routeWorkspace",
+        [{ workspace: name }],
+        { userId: actorUserId, handle: actorUserId },
+        deviceId
+      );
+      return HubWorkspaceRouteSchema.parse(result);
+    },
+  };
+  const callHubInternal = async (
+    route: string,
+    body: Record<string, unknown>
+  ): Promise<Record<string, unknown>> => {
+    const response = await fetch(new URL(`/_r/s/internal/${route}`, hubUrl), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${hubControlToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!response.ok) {
+      throw new Error(
+        typeof payload["error"] === "string"
+          ? payload["error"]
+          : `Hub internal request failed with HTTP ${response.status}`
+      );
+    }
+    return payload;
+  };
+  // Resolves each authenticated caller to its account subject at auth time
+  // (WP0 §5.2/§5.5): device shells → owning user, agents → spawner, panel/DO/
+  // worker lineage → owner, and the local console → root. Passed to RpcServer.
+  const { createUserSubjectSource, isSystemOwnedRuntime } =
+    await import("./services/userSubjectSource.js");
+  const isSystemRuntime = (
+    callerId: string,
+    callerKind: import("@vibestudio/shared/serviceDispatcher").CallerKind
+  ): boolean => {
+    if (isSystemOwnedRuntime(entityCache, callerId, callerKind)) return true;
+    if (callerKind !== "do") return false;
+    const binding = resolveVcsStoreBinding(workspaceDecls);
+    return (
+      binding !== null &&
+      callerId ===
+        canonicalEntityId({
+          kind: "do",
+          source: binding.source,
+          className: binding.className,
+          key: binding.objectKey,
+        })
+    );
+  };
+  const userSubjectSource = createUserSubjectSource({
+    deviceAuthStore,
+    userStore,
+    entityCache,
+    isSystemRuntime,
+  });
+  let extensionHostForGateway: import("@vibestudio/extension-host").ExtensionHost | null = null;
+  // Fail closed: only the synthetic in-process server bypasses membership.
+  // Every shell/panel/app/agent must resolve to a live user and membership is
+  // re-evaluated on WebSocket admission and on every stateless HTTP request.
+  const membershipEntryGate = (
+    subject: import("@vibestudio/shared/users/types").UserSubject | undefined
+  ): boolean => {
+    if (subject?.userId === SYSTEM_SUBJECT.userId) return true;
+    return subject !== undefined && membershipStore.has(subject.userId, entryWorkspaceId);
+  };
+  const { createLiveCallerGate } = await import("./services/liveCallerGate.js");
+  const liveCallerGate = createLiveCallerGate({
+    workspaceId: entryWorkspaceId,
+    userStore,
+    membershipStore,
+    deviceAuthStore,
+    entityCache,
+    isLiveExtension: (callerId) =>
+      (extensionHostForGateway?.resolveCodeIdentity(callerId) ?? null) !== null,
+    isLiveSystemRuntime: isSystemRuntime,
+  });
   const workerdGatewayToken = randomBytes(32).toString("hex");
   serverLogStore.addSecret(workerdGatewayToken);
   const { CredentialStore } = await import("../../packages/shared/src/credentials/store.js");
@@ -627,6 +766,9 @@ async function main() {
   };
   const approvalQueue = createApprovalQueue({
     eventService,
+    recordProvenance: async (record) => {
+      await callHubInternal("governance/append-approval", { record });
+    },
     resolveTitle: (entityId) => resolveApprovalCallerTitle(approvalRequesterDeps, entityId),
     resolveRequester: (input) => resolveApprovalRequester(approvalRequesterDeps, input),
     autoApprove:
@@ -721,7 +863,6 @@ async function main() {
   }
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
   const configuredProtocol = "http" as const;
-  let extensionHostForGateway: import("@vibestudio/extension-host").ExtensionHost | null = null;
   let appHostForGateway: import("./appHost.js").AppHost | null = null;
   let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
   type TrustedUnitHostInstance =
@@ -1081,7 +1222,11 @@ async function main() {
         workspacePath,
         workspaceVcs,
         appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
-        { appRoot, dependencyWorkspaceRoot: buildDependencyWorkspaceRoot }
+        {
+          appRoot,
+          dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          deferInitialBuildPrewarm: true,
+        }
       );
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -1089,7 +1234,9 @@ async function main() {
     },
   });
 
-  // Pre-warm the manifest-declared eval engine + runtime bundles at boot so the
+  // Prepare the manifest-declared eval engine + runtime prewarm. The returned
+  // starter runs only after host readiness so optional compiles cannot starve
+  // the VCS store DO that is on the critical startup path.
   // first interactive `eval.run` doesn't pay the cold esbuild compiles (the bulk
   // of the EvalDO cold start). The units come from meta/vibestudio.yml
   // (`providers.evalEngine` / `providers.evalRuntime`) — no declaration means
@@ -1111,7 +1258,7 @@ async function main() {
         console.warn(
           "[eval] meta/vibestudio.yml declares no `providers.evalEngine`/`providers.evalRuntime` — eval is disabled (pre-warm skipped)"
         );
-        return;
+        return () => undefined;
       }
       const prewarm = (specifier: string): void => {
         void buildSystem
@@ -1129,18 +1276,22 @@ async function main() {
             )
           );
       };
-      prewarm(engineSource);
-      // The EvalDO loads these three runtime subpaths (see ensureRuntimeSupport).
-      prewarm(`${runtimeSource}/hosted`);
-      prewarm(`${runtimeSource}/panel-runtime`);
-      prewarm(`${runtimeSource}/portable`);
+      let started = false;
+      return () => {
+        if (started) return;
+        started = true;
+        prewarm(engineSource);
+        // The EvalDO loads these three runtime subpaths (see ensureRuntimeSupport).
+        prewarm(`${runtimeSource}/hosted`);
+        prewarm(`${runtimeSource}/panel-runtime`);
+        prewarm(`${runtimeSource}/portable`);
+      };
     },
   });
 
   // ── RPC-only services (replacing serverServiceRegistry.ts) ──
 
   const { createBuildService } = await import("./services/buildService.js");
-  const { createTokensService } = await import("./services/tokensService.js");
   const { createPresenceService, createPresenceTracker } =
     await import("./services/presenceService.js");
   const { createGitInteropService } = await import("./services/gitInteropService.js");
@@ -1165,23 +1316,37 @@ async function main() {
   container.registerRpc(createPresenceService({ presence }));
 
   {
-    let tokensDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
-      null;
-    container.registerManaged({
-      name: "tokens",
-      dependencies: ["tokenManager", "fsService"],
-      async start() {
-        tokensDefinition = createTokensService({
-          tokenManager,
-          persistAdminToken: (token: string) => savePersistedAdminToken(token),
-        });
-      },
-      getServiceDefinition() {
-        if (!tokensDefinition) throw new Error("tokens service not initialized");
-        return tokensDefinition;
-      },
-    });
+    // Account profiles (WP6 §6): reads resolve live through the child's shared
+    // query-only DB. Every mutation crosses the authenticated hub capability.
+    const { createAccountService } = await import("./services/accountService.js");
+    container.registerRpc(
+      createAccountService({
+        identityDb,
+        isWorkspaceMember: (userId) => membershipStore.has(userId, entryWorkspaceId),
+        listWorkspaceMemberUserIds,
+        writeProfile: async (actor, input) => {
+          const result = await hubControlClient.call("hubControl.updateProfile", [input], actor);
+          return accountProfileSchema.parse(result);
+        },
+      })
+    );
+    const { createHubControlService } = await import("./services/hubControlService.js");
+    container.registerRpc(createHubControlService(hubControlClient));
+    const { createGovernanceService } = await import("./services/governanceService.js");
+    container.registerRpc(
+      createGovernanceService({
+        query: async (query) => {
+          const payload = await callHubInternal("governance/query", { query });
+          return Array.isArray(payload["records"])
+            ? (payload[
+                "records"
+              ] as import("@vibestudio/shared/governance/types").GovernanceRecord[])
+            : [];
+        },
+      })
+    );
   }
+
   // Git interchange semantics live behind the manifest-declared
   // providers.gitInterop extension. The host keeps only this policy/dispatch
   // service (approvals, config writes, and provider invocation).
@@ -1236,7 +1401,8 @@ async function main() {
       .filter((change) => change.stateHash !== null)
       .map((change) => change.repoPath);
     if (repos.length === 0) return;
-    if (!extensionHostForGateway) return;
+    const extensionName = workspaceProviderExtensionPackageName(workspaceConfig, "gitInterop");
+    if (!extensionName || !extensionHostForGateway?.registry.get(extensionName)) return;
     void invokeGitInteropProvider(
       { caller: createVerifiedCaller("server", "server") },
       "onMainAdvanced",
@@ -1557,9 +1723,11 @@ async function main() {
   container.registerRpc(notificationResult.definition);
 
   // ── Push + shell presence services ──
+  let pushForRevocation: import("./services/pushService.js").PushServiceInternal | null = null;
   {
     const { createPushService } = await import("./services/pushService.js");
     const pushResult = createPushService();
+    pushForRevocation = pushResult.internal;
     container.registerManaged({
       name: "push",
       start: async () => pushResult,
@@ -1593,6 +1761,8 @@ async function main() {
           approvalQueue,
           push: push.internal,
           shellPresence: shellPresence.internal,
+          // Include root's implicit membership, which intentionally has no row.
+          workspaceMemberUserIds: listWorkspaceMemberUserIds,
         });
       },
       stop: async (bridge: import("./services/approvalPushBridge.js").ApprovalPushBridge) => {
@@ -1603,7 +1773,12 @@ async function main() {
 
   // ── Shell approval service (consent bar queue) ──
   const { createShellApprovalService } = await import("./services/shellApprovalService.js");
-  container.registerRpc(createShellApprovalService({ approvalQueue }));
+  container.registerRpc(
+    createShellApprovalService({
+      approvalQueue,
+      deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
+    })
+  );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
   container.registerRpc(
     createCorsApprovalService({
@@ -1763,7 +1938,7 @@ async function main() {
       createServerLogService({
         store: serverLogStore,
         eventService,
-        workspaceId: workspace.config.id,
+        workspaceId: entryWorkspaceId,
         serverBootId,
         startedAt: serverLogStartedAt,
       })
@@ -1942,8 +2117,8 @@ async function main() {
             entityTitleService.setTitle(entityId, title, options),
           // Agent credentials follow the entity (§3.2): on retire, revoke all
           // outstanding agent credentials and the live `agent:<entityId>` token.
-          revokeAgentCredentials: (entityId) => {
-            deviceAuthStore.revokeAgentCredentialsForEntity(entityId);
+          revokeAgentCredentials: async (entityId) => {
+            await callHubInternal("agent-credential/revoke-entity", { entityId });
             // Matches auth/model.ts agentCallerId(entityId).
             tokenManager.revokeToken(`agent:${entityId}`);
           },
@@ -1975,7 +2150,7 @@ async function main() {
           resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
         );
         webhookIngress = createWebhookIngressService({
-          relaySigningSecret: process.env["VIBESTUDIO_RELAY_SIGNING_SECRET"],
+          relaySigningSecret,
           relayPublicBaseUrl:
             process.env["VIBESTUDIO_WEBHOOK_PUBLIC_URL"] ?? "https://vibestudio.app",
           // No public ingress: direct-mode webhooks only resolve co-located (loopback).
@@ -2013,11 +2188,15 @@ async function main() {
   // Admin token resolution (first hit wins):
   //   1. VIBESTUDIO_ADMIN_TOKEN env var (always overrides)
   //   2. Persisted token at ~/.config/vibestudio/admin-token (survives restarts)
-  //   3. Generate a random one and persist it so remote clients can save it
+  //   3. Generate a random one and persist it
+  // The token is a LOCAL operator/machine break-glass for the diagnostic
+  // `admin-token` routes and hub→child loopback plumbing — never a human
+  // identity (WP9 §4 retired admin-token-as-root; root is a User). RPC auth
+  // rejects it outright (rpcServer handleAuth, close 4006).
   let adminToken: string;
   let tokenSource: "env" | "persisted" | "generated" = "generated";
-  if (process.env["VIBESTUDIO_ADMIN_TOKEN"]) {
-    adminToken = assertPresent(process.env["VIBESTUDIO_ADMIN_TOKEN"]);
+  if (childAdminToken) {
+    adminToken = childAdminToken;
     tokenSource = "env";
   } else {
     const persisted = loadPersistedAdminToken();
@@ -2034,10 +2213,109 @@ async function main() {
     }
   }
   tokenManager.setAdminToken(adminToken);
-  // Host logs echo the admin token (token file line, --print-credentials);
-  // keep it out of the userland-visible serverLog surface.
+  // Keep the management secret out of the userland-visible serverLog surface.
   serverLogStore.addSecret(adminToken);
   let gatewayPortResolved: number | null = null;
+  // Child ingress is armed exclusively by authenticated hub control requests.
+  // The exact route ownership set is persisted under this workspace's state so
+  // returning devices reconnect to the same room after a child/hub restart.
+  let webrtcPairing: Omit<
+    import("@vibestudio/shared/connect").ConnectPairing,
+    "code" | "room"
+  > | null = null;
+  let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
+  const { RoutedRoomStore, replaceRoutedRoom, routedRoomKey } =
+    await import("./services/routedRoomStore.js");
+  const { PairingActivationStore } = await import("./services/pairingActivationStore.js");
+  const routedRoomStore = new RoutedRoomStore(path.join(statePath, "webrtc", "routes.json"));
+  const pairingActivationStore = new PairingActivationStore(
+    path.join(statePath, "webrtc", "pairing-activations.json")
+  );
+  pairingActivationStore.removeExpired(Date.now());
+  const routedRooms = new Map<string, string>();
+  const routedRoomExpiryTimers = new Map<string, NodeJS.Timeout>();
+  const pairingActivationExpiryTimers = new Map<string, NodeJS.Timeout>();
+  for (const route of routedRoomStore.list()) {
+    const key = routedRoomKey(route);
+    const keep =
+      route.kind === "invite"
+        ? route.expiresAt > Date.now()
+        : route.kind === "device"
+          ? (() => {
+              const userId = deviceAuthStore.userFor(route.deviceId);
+              return !!userId && membershipStore.has(userId, entryWorkspaceId);
+            })()
+          : membershipStore.has(route.userId, entryWorkspaceId);
+    if (keep) routedRooms.set(key, route.room);
+    else routedRoomStore.remove(key);
+  }
+  const clearRoutedRoomExpiry = (key: string): void => {
+    const timer = routedRoomExpiryTimers.get(key);
+    if (timer) clearTimeout(timer);
+    routedRoomExpiryTimers.delete(key);
+  };
+  const disarmRoutedRoom = async (key: string): Promise<void> => {
+    clearRoutedRoomExpiry(key);
+    const persisted = routedRoomStore.remove(key);
+    const room = persisted?.room ?? routedRooms.get(key);
+    routedRooms.delete(key);
+    if (room && webrtcIngress) await webrtcIngress.disarmRoom(room);
+  };
+  const scheduleRoutedRoomExpiry = (key: string, expiresAt: number): void => {
+    clearRoutedRoomExpiry(key);
+    const remainingMs = expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      void disarmRoutedRoom(key);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void disarmRoutedRoom(key);
+    }, remainingMs);
+    timer.unref();
+    routedRoomExpiryTimers.set(key, timer);
+  };
+  const schedulePairingActivationExpiry = (codeHash: string, expiresAt: number): void => {
+    const prior = pairingActivationExpiryTimers.get(codeHash);
+    if (prior) clearTimeout(prior);
+    const remainingMs = expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      pairingActivationStore.remove(codeHash);
+      pairingActivationExpiryTimers.delete(codeHash);
+      return;
+    }
+    const timer = setTimeout(() => {
+      pairingActivationStore.remove(codeHash);
+      pairingActivationExpiryTimers.delete(codeHash);
+    }, remainingMs);
+    timer.unref();
+    pairingActivationExpiryTimers.set(codeHash, timer);
+  };
+  for (const activation of pairingActivationStore.list()) {
+    schedulePairingActivationExpiry(activation.codeHash, activation.expiresAt);
+  }
+  const promotePairingRoom = async (code: string, deviceId: string): Promise<void> => {
+    if (!webrtcIngress) throw new Error("Workspace WebRTC ingress is not ready");
+    const codeHash = createHash("sha256").update(code, "utf8").digest("hex");
+    const inviteKey = `invite:${codeHash}`;
+    const alreadyPromoted = routedRoomStore.get(`control:${deviceId}`);
+    if (!routedRoomStore.get(inviteKey)) {
+      if (!alreadyPromoted || alreadyPromoted.kind !== "device") {
+        throw new Error("The pairing route is neither pending nor durably promoted");
+      }
+      routedRooms.set(`control:${deviceId}`, alreadyPromoted.room);
+      await webrtcIngress.armRoom(alreadyPromoted.room, { deviceId });
+      return;
+    }
+    const { route, replacedDeviceRoute } = routedRoomStore.promoteInvite(codeHash, deviceId);
+    clearRoutedRoomExpiry(inviteKey);
+    routedRooms.delete(inviteKey);
+    const deviceKey = `control:${deviceId}`;
+    if (replacedDeviceRoute && replacedDeviceRoute.room !== route.room) {
+      await webrtcIngress.disarmRoom(replacedDeviceRoute.room);
+    }
+    routedRooms.set(deviceKey, route.room);
+    await webrtcIngress.armRoom(route.room, { deviceId });
+  };
   function getResolvedGatewayPort(context: string): number {
     if (!gatewayPortResolved) {
       throw new Error(`Gateway port not finalized before ${context}`);
@@ -2084,11 +2362,78 @@ async function main() {
         fsService,
         entityCache,
         connectionGrants,
+        // Resolves each authenticated caller's account subject (WP0 §5.2/§5.5).
+        userSubjectSource,
+        // Membership entry gate (WP2 §4): refuse a non-member of this child's
+        // workspace at auth time. Undefined (no-op) in local/dev/hub mode.
+        membershipGate: membershipEntryGate,
+        liveCallerGate,
         runtimeCoordinator: panelRuntimeCoordinator,
-        // Let a fresh/returning device authenticate its shell session over the
-        // WebRTC pipe by redeeming a QR pairing code / refresh credential (the
-        // loopback HTTP /complete-pairing + /refresh-shell are unreachable remotely).
-        redeemPairingCredential: createPairingRedeemer({ deviceAuthStore, tokenManager }),
+        // Pairing-code consumption is delegated to the hub. The child only
+        // validates returning device credentials against its read-only handle.
+        redeemPairingCredential: createPairingRedeemer({
+          deviceAuthStore,
+          tokenManager,
+          resolveUser: (userId) => userStore.getUser(userId),
+          redeemPairingCode: async (code, input) => {
+            const codeHash = createHash("sha256").update(code, "utf8").digest("hex");
+            const inviteRoute = routedRoomStore.get(`invite:${codeHash}`);
+            const existingActivation = pairingActivationStore.get(codeHash);
+            const expiresAt =
+              existingActivation?.expiresAt ??
+              (inviteRoute?.kind === "invite" ? inviteRoute.expiresAt : null);
+            if (!expiresAt || expiresAt <= Date.now()) {
+              throw new Error("Pairing route is invalid or expired");
+            }
+            const proposed = pairingActivationStore.prepare(codeHash, expiresAt);
+            schedulePairingActivationExpiry(codeHash, expiresAt);
+            const response = await fetch(new URL("/_r/s/auth/complete-pairing", hubUrl), {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${hubControlToken}`,
+              },
+              body: JSON.stringify({
+                code,
+                label: input.label,
+                platform: input.platform,
+                deviceId: proposed.deviceId,
+                refreshToken: proposed.refreshToken,
+              }),
+            });
+            const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+            if (
+              !response.ok ||
+              typeof body["deviceId"] !== "string" ||
+              typeof body["refreshToken"] !== "string" ||
+              typeof body["userId"] !== "string"
+            ) {
+              throw new Error(
+                typeof body["error"] === "string" ? body["error"] : "Pairing redemption failed"
+              );
+            }
+            if (
+              body["deviceId"] !== proposed.deviceId ||
+              body["refreshToken"] !== proposed.refreshToken
+            ) {
+              throw new Error("Hub pairing receipt did not match the durable proposed credential");
+            }
+            // Promotion is a durable, acknowledged part of pairing. Never tell
+            // the client it is paired while its returning-device route is only
+            // an in-memory best effort.
+            await promotePairingRoom(code, body["deviceId"]);
+            return {
+              deviceId: body["deviceId"],
+              refreshToken: body["refreshToken"],
+              userId: body["userId"],
+              label: typeof body["label"] === "string" ? body["label"] : "Vibestudio client",
+              ...(typeof body["platform"] === "string" ? { platform: body["platform"] } : {}),
+            };
+          },
+          touchDevice: async (deviceId) => {
+            await callHubInternal("device/touch", { deviceId });
+          },
+        }),
         resolveExtensionInvocation: (extensionName, invocationToken) =>
           extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
         resolveExtensionCodeIdentity: (extensionName) =>
@@ -2115,6 +2460,409 @@ async function main() {
       await instance?.server?.stop();
     },
   });
+
+  // Strict, idempotent child half of the durable hub revocation cascade.
+  const scheduleAfterControlAck = (work: () => Promise<void>): void => {
+    const timer = setTimeout(() => {
+      void work().catch((error) => console.error("[Sessions] Deferred teardown failed:", error));
+    }, 250);
+    timer.unref();
+  };
+  routeRegistry.registerHttpServiceRoutes([
+    {
+      serviceName: "revocation",
+      path: "/cleanup-user",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        const respond = (status: number, payload: unknown): void => {
+          res.writeHead(status, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(payload));
+        };
+        let input: import("@vibestudio/shared/users/revocationCleanup").RevokedUserCleanupRequest;
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const body = chunks.length
+            ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
+            : {};
+          const { RevokedUserCleanupRequestSchema } =
+            await import("@vibestudio/shared/users/revocationCleanup");
+          input = RevokedUserCleanupRequestSchema.parse(body);
+        } catch (error) {
+          respond(400, {
+            error: error instanceof Error ? error.message : String(error),
+            code: "BAD_REQUEST",
+          });
+          return;
+        }
+        if (!rpcServerForGateway) {
+          respond(503, { error: "RPC server not started", code: "NOT_READY" });
+          return;
+        }
+        const { userId } = input;
+        const connections = rpcServerForGateway.getUserConnections(userId);
+
+        const { retireRevokedUserDeputies } = await import("./services/authService.js");
+        const { retired } = await retireRevokedUserDeputies(
+          {
+            listActiveEntities: () => entityCache.listActive(),
+            retireEntity: async (id) => {
+              await dispatcher.dispatch(
+                { caller: createVerifiedCaller("server", "server") },
+                "runtime",
+                "retireEntity",
+                [{ id, removeContext: true }]
+              );
+            },
+          },
+          userId
+        );
+        const archived = (await dispatcher.dispatch(
+          { caller: createVerifiedCaller("server", "server") },
+          "panelTree",
+          "archiveOwnedRoots",
+          [userId]
+        )) as { archivedRootIds: string[]; closedIds: string[] };
+
+        const gad = resolveUserlandService(workspaceDecls, "vibestudio.gad.workspace.v1");
+        if (gad.kind !== "durable-object") {
+          throw new Error("Workspace GAD service is not a durable object");
+        }
+        const gadRef = {
+          source: gad.source,
+          className: gad.className,
+          objectKey: gad.objectKey,
+        };
+        const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+        const channelPlan = (await doDispatch.dispatch(gadRef, "listChannelMembershipsForUser", {
+          userId,
+        })) as import("@vibestudio/shared/channelInvites").ChannelMembershipCleanupPlan;
+        for (const channelId of channelPlan.channelIds) {
+          const channel = resolveUserlandService(
+            workspaceDecls,
+            "vibestudio.channel.v1",
+            channelId
+          );
+          if (channel.kind !== "durable-object") {
+            throw new Error(`Channel ${channelId} is not a durable object`);
+          }
+          await doDispatch.dispatch(
+            {
+              source: channel.source,
+              className: channel.className,
+              objectKey: channel.objectKey,
+            },
+            "removeMember",
+            { userId }
+          );
+        }
+        await doDispatch.dispatch(gadRef, "purgeRevokedUserChannelIndexes", { userId });
+        if (!pushForRevocation) throw new Error("Push service is not started");
+        const removedPushRegistrations = pushForRevocation.unregisterUser(userId);
+
+        const routeKeys = [...routedRooms.keys()].filter((key) => {
+          if (key === `user:${userId}`) return true;
+          if (!key.startsWith("control:") && !key.startsWith("workspace:")) return false;
+          return identityDb.getDevice(key.slice(key.indexOf(":") + 1))?.userId === userId;
+        });
+        const { RevokedUserCleanupResultSchema } =
+          await import("@vibestudio/shared/users/revocationCleanup");
+        respond(
+          200,
+          RevokedUserCleanupResultSchema.parse({
+            userId,
+            closedSessions: connections.length,
+            retiredDeputyIds: retired,
+            archivedRootIds: archived.archivedRootIds,
+            archivedPanelIds: archived.closedIds,
+            removedChannelIds: channelPlan.channelIds,
+            removedPushRegistrations,
+          })
+        );
+        scheduleAfterControlAck(async () => {
+          for (const connection of connections) {
+            connection.ws.close(4001, "User revoked");
+          }
+          await Promise.all(routeKeys.map((key) => disarmRoutedRoom(key)));
+        });
+      },
+    },
+  ]);
+
+  routeRegistry.registerHttpServiceRoutes([
+    {
+      serviceName: "internal",
+      path: "/route",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        const respond = (status: number, payload: unknown): void => {
+          res.writeHead(status, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(payload));
+        };
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const decoded = chunks.length
+            ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown)
+            : {};
+          if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+            respond(400, { error: "Route request must be a JSON object" });
+            return;
+          }
+          const body = decoded as Record<string, unknown>;
+          const deviceId = typeof body["deviceId"] === "string" ? body["deviceId"] : undefined;
+          const userId = typeof body["userId"] === "string" ? body["userId"] : undefined;
+          const inviteCodeHash =
+            typeof body["inviteCodeHash"] === "string" ? body["inviteCodeHash"] : undefined;
+          const expiresAt = inviteCodeHash ? body["expiresAt"] : undefined;
+          const devicePurpose = deviceId ? body["purpose"] : undefined;
+          const canonicalDevicePurpose =
+            devicePurpose === "control" || devicePurpose === "workspace"
+              ? devicePurpose
+              : undefined;
+          const reuseExisting = body["reuseExisting"] === true;
+          const principalCount = Number(!!deviceId) + Number(!!userId) + Number(!!inviteCodeHash);
+          if (principalCount !== 1) {
+            respond(400, {
+              error: "Exactly one of deviceId, userId, or inviteCodeHash is required",
+            });
+            return;
+          }
+          const actualKeys = Object.keys(body).sort().join(",");
+          const expectedKeys = deviceId
+            ? reuseExisting
+              ? "deviceId,purpose,reuseExisting"
+              : "deviceId,purpose"
+            : userId
+              ? "userId"
+              : "expiresAt,inviteCodeHash";
+          if (actualKeys !== expectedKeys) {
+            respond(400, { error: `Route request fields must be exactly: ${expectedKeys}` });
+            return;
+          }
+          if (
+            inviteCodeHash &&
+            (!/^[a-f0-9]{64}$/.test(inviteCodeHash) ||
+              typeof expiresAt !== "number" ||
+              !Number.isInteger(expiresAt) ||
+              expiresAt <= Date.now())
+          ) {
+            respond(400, { error: "A live absolute expiresAt is required for an invite route" });
+            return;
+          }
+          if (deviceId && !canonicalDevicePurpose) {
+            respond(400, { error: 'Device routes require purpose: "control" or "workspace"' });
+            return;
+          }
+          if (reuseExisting && canonicalDevicePurpose !== "control") {
+            respond(400, { error: 'Only purpose: "control" may reuse an existing route' });
+            return;
+          }
+          if (deviceId) {
+            const owner = deviceAuthStore.userFor(deviceId);
+            if (!owner || !membershipStore.has(owner, entryWorkspaceId)) {
+              respond(403, { error: "Device owner is not a workspace member", code: "EACCES" });
+              return;
+            }
+          }
+          if (userId && !membershipStore.has(userId, entryWorkspaceId)) {
+            respond(403, { error: "User is not a workspace member", code: "EACCES" });
+            return;
+          }
+          if (!webrtcIngress || !webrtcPairing) {
+            respond(503, { error: "Workspace WebRTC ingress is not ready", code: "NOT_READY" });
+            return;
+          }
+          const key = deviceId
+            ? `${canonicalDevicePurpose}:${deviceId}`
+            : userId
+              ? `user:${userId}`
+              : `invite:${inviteCodeHash}`;
+          if (reuseExisting) {
+            const existing = routedRoomStore.get(key);
+            if (existing) {
+              if (existing.kind !== "device" || existing.purpose !== "control") {
+                throw new Error(`Persisted route ${key} is not a control-device route`);
+              }
+              routedRooms.set(key, existing.room);
+              await webrtcIngress.armRoom(existing.room, { deviceId });
+              respond(200, { room: existing.room, ...webrtcPairing });
+              return;
+            }
+          }
+          const room = randomUUID();
+          let route: import("./services/routedRoomStore.js").RoutedRoomRecord;
+          if (deviceId) {
+            if (!canonicalDevicePurpose) throw new Error("Device route has no canonical purpose");
+            route = { kind: "device", purpose: canonicalDevicePurpose, deviceId, room };
+          } else if (userId) {
+            route = { kind: "user", userId, room };
+          } else {
+            if (!inviteCodeHash || typeof expiresAt !== "number") {
+              throw new Error("Invite route has no canonical expiry coordinates");
+            }
+            route = { kind: "invite", codeHash: inviteCodeHash, room, expiresAt };
+          }
+          await replaceRoutedRoom(routedRoomStore, routedRooms, route, webrtcIngress, {
+            ...(deviceId ? { deviceId } : {}),
+          });
+          if (inviteCodeHash) scheduleRoutedRoomExpiry(key, expiresAt as number);
+          respond(200, { room, ...webrtcPairing });
+        } catch (error) {
+          respond(400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      },
+    },
+    {
+      serviceName: "internal",
+      path: "/release-route",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        const body = chunks.length
+          ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
+          : {};
+        const inviteCodeHash =
+          typeof body["inviteCodeHash"] === "string" ? body["inviteCodeHash"] : "";
+        if (!/^[a-f0-9]{64}$/.test(inviteCodeHash)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "inviteCodeHash is required" }));
+          return;
+        }
+        const existed = routedRooms.has(`invite:${inviteCodeHash}`);
+        await disarmRoutedRoom(`invite:${inviteCodeHash}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ released: existed }));
+      },
+    },
+    {
+      serviceName: "sessions",
+      path: "/close-device",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        const body = chunks.length
+          ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
+          : {};
+        const deviceId = typeof body["deviceId"] === "string" ? body["deviceId"] : "";
+        if (!deviceId || !rpcServerForGateway) {
+          res.writeHead(deviceId ? 503 : 400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ error: deviceId ? "RPC server not started" : "deviceId is required" })
+          );
+          return;
+        }
+        const callerId = `shell:${deviceId}`;
+        const connections = rpcServerForGateway.getPrincipalConnections(callerId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ closed: connections.length }));
+        scheduleAfterControlAck(async () => {
+          for (const connection of connections) connection.ws.close(4001, "Device revoked");
+          tokenManager.revokeToken(callerId);
+          await Promise.all([
+            disarmRoutedRoom(`control:${deviceId}`),
+            disarmRoutedRoom(`workspace:${deviceId}`),
+          ]);
+        });
+      },
+    },
+    {
+      serviceName: "sessions",
+      path: "/close-user",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        const body = chunks.length
+          ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
+          : {};
+        const userId = typeof body["userId"] === "string" ? body["userId"] : "";
+        const validUserId = /^usr_[A-Za-z0-9_-]{24}$/.test(userId);
+        if (!validUserId || !rpcServerForGateway) {
+          res.writeHead(validUserId ? 503 : 400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: validUserId ? "RPC server not started" : "A canonical userId is required",
+            })
+          );
+          return;
+        }
+        const connections = rpcServerForGateway.getUserConnections(userId);
+        const routeKeys = routedRoomStore
+          .list()
+          .filter((route) => {
+            if (route.kind === "user") return route.userId === userId;
+            if (route.kind !== "device") return false;
+            return identityDb.getDevice(route.deviceId)?.userId === userId;
+          })
+          .map(routedRoomKey);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ closed: connections.length }));
+        scheduleAfterControlAck(async () => {
+          for (const connection of connections) {
+            connection.ws.close(4001, "Workspace membership removed");
+          }
+          await Promise.all(routeKeys.map((key) => disarmRoutedRoom(key)));
+        });
+      },
+    },
+  ]);
+
+  {
+    // Workspace USER presence (WP8 §4): a host surface built purely from the
+    // connection registry + each caller's verified subject.userId — zero channel
+    // coupling (INV-1). Keyed on the logical user (phone+laptop = one present
+    // user), human runtime kinds only, identity resolved live off the shared
+    // identity DB. Emits `workspace-presence-changed` on connect/drop.
+    const { createWorkspacePresenceService } =
+      await import("./services/workspacePresenceService.js");
+    let workspacePresence:
+      | import("./services/workspacePresenceService.js").WorkspacePresenceService
+      | null = null;
+    let presenceReportRevision = 0;
+    let presenceReportQueue: Promise<void> = Promise.resolve();
+    const reportOnlinePresence = (users: Array<{ userId: string; endpoints: number }>): void => {
+      const revision = ++presenceReportRevision;
+      // Serialize snapshots so a slow request cannot overwrite a newer one at
+      // the hub. The hub also rejects stale revisions defensively.
+      presenceReportQueue = presenceReportQueue
+        .then(async () => {
+          await callHubInternal("presence/report", { serverBootId, revision, users });
+        })
+        .catch((error) => {
+          console.warn(`[WorkspacePresence] Failed to report revision ${revision} to hub:`, error);
+        });
+    };
+    container.registerManaged({
+      name: "workspacePresence",
+      dependencies: ["rpcServer"],
+      async start(resolve) {
+        const rpc = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+        );
+        workspacePresence = createWorkspacePresenceService({
+          connectionRegistry: rpc.server,
+          identityDb,
+          eventService,
+          onOnlineChanged: reportOnlinePresence,
+        });
+      },
+      async stop() {
+        workspacePresence?.dispose();
+      },
+      getServiceDefinition() {
+        if (!workspacePresence) throw new Error("workspacePresence service not initialized");
+        return workspacePresence.definition;
+      },
+    });
+  }
   {
     const { createPanelRuntimeService } = await import("./services/panelRuntimeService.js");
     let panelRuntimeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
@@ -2259,12 +3007,13 @@ async function main() {
       objectKey: string;
       contextId?: string;
       buildRef?: string;
+      ownerUserId?: string;
     }
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
     const active = entityCache.resolveActive(targetId);
-    if (active) {
+    if (active && (active.ownerUserId !== undefined || ref.ownerUserId === undefined)) {
       if (ref.contextId && active.contextId !== ref.contextId) {
         throw new Error(
           `Durable Object ${targetId} is already active in context ${active.contextId}; cannot resolve it from context ${ref.contextId}`
@@ -2289,8 +3038,10 @@ async function main() {
           `Durable Object ${targetId} is already registered in context ${existing.contextId}; cannot resolve it from context ${ref.contextId}`
         );
       }
-      entityCache._onActivate(existing);
-      return;
+      if (existing.ownerUserId !== undefined || ref.ownerUserId === undefined) {
+        entityCache._onActivate(existing);
+        return;
+      }
     }
     const contextId =
       ref.contextId ??
@@ -2314,6 +3065,7 @@ async function main() {
       contextId,
       className,
       key: objectKey,
+      ...(ref.ownerUserId ? { ownerUserId: ref.ownerUserId } : {}),
     })) as EntityRecord;
     entityCache._onActivate(record);
   };
@@ -2346,13 +3098,21 @@ async function main() {
             );
             return buildWorkspaceDeclarations(config);
           },
-          activateDurableObject: ({ source, className, objectKey, contextId, buildRef }) => {
+          activateDurableObject: ({
+            source,
+            className,
+            objectKey,
+            contextId,
+            buildRef,
+            ownerUserId,
+          }) => {
             return activateDurableObjectEntity(doDispatch, workerdManagerInst, {
               source,
               className,
               objectKey,
               ...(contextId ? { contextId } : {}),
               ...(buildRef ? { buildRef } : {}),
+              ...(ownerUserId ? { ownerUserId } : {}),
             });
           },
         });
@@ -2536,7 +3296,7 @@ async function main() {
           const head = trigger?.head ?? "main";
           if (head !== "main") {
             workerdManagerInstance
-              ?.onSourceRebuilt(source, undefined, trigger, buildKey)
+              ?.onSourceRebuilt(source, null, trigger, buildKey)
               .catch((err) => {
                 console.error(
                   `[WorkerdManager] Failed to handle rebuilt source ${source}@${head}:`,
@@ -2689,7 +3449,10 @@ async function main() {
         };
         // Entity record first: the DO's callbacks into the server (setTitle,
         // console bridge) resolve their principal through the entity cache.
-        await activateDurableObjectEntity(doDispatch, workerdManagerInst, gadRef);
+        await activateDurableObjectEntity(doDispatch, workerdManagerInst, {
+          ...gadRef,
+          ownerUserId: SYSTEM_SUBJECT.userId,
+        });
         // attachGad bootstraps per-repo logs from disk (snapshot each on-disk
         // repo subtree into `vcs:repo:<path>` at `main` if missing) AND seeds
         // every repo main into the protected-ref store (idempotent set-if-
@@ -2848,13 +3611,17 @@ async function main() {
     workspaceConfig,
     treeScanner,
     adminToken,
-    centralData,
+    workspaceCatalog,
     args,
     hostConfig,
     tokenManager,
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId: string, capability: AppCapability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    // Live role lookup from the shared identity DB — gates host-administrative
+    // workspace.* methods to root/admin (WP4 §4). Read at call time, never
+    // frozen onto the connection.
+    roleOf: (userId: string) => userStore.getUser(userId)?.role ?? null,
     contextExists: contextBoundaryDeps.contextExists,
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
     panelRuntimeCoordinator,
@@ -3371,13 +4138,9 @@ async function main() {
     );
   }
 
-  // WebRTC pairing seam (fp/sig/ice/srv — NO room: rooms are minted per invite,
-  // plan §2.1) — populated when the ingress pool starts (post-startAll below);
-  // captured by auth.getConnectionInfo/createPairingInvite (which mint per-invite
-  // rooms + deep links against the pool) and written to the ready file. Stays
-  // null when WebRTC is off (loopback co-located mode) ⇒ no deep link.
-  let webrtcPairing: import("./services/auth/model.js").ConnectPairingSeam | null = null;
-  let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
+  // Static WebRTC reach material (fp/sig/ice/srv — no room) is populated after
+  // the ingress starts. The hub combines it with each ephemeral routed room;
+  // identity rows and the child auth service never own transport coordinates.
 
   // ── Per-workspace content-addressable blobstore ──
   {
@@ -3389,6 +4152,23 @@ async function main() {
         createAuthService({
           tokenManager,
           deviceAuthStore,
+          roleOf: (userId) => userStore.getUser(userId)?.role ?? null,
+          agentCredentialWriter: {
+            mint: async (input) => {
+              const payload = await callHubInternal("agent-credential/mint", input);
+              if (
+                typeof payload["agentId"] !== "string" ||
+                typeof payload["agentToken"] !== "string"
+              ) {
+                throw new Error("Hub returned an invalid agent credential");
+              }
+              return { agentId: payload["agentId"], agentToken: payload["agentToken"] };
+            },
+            revoke: async (agentId) => {
+              const payload = await callHubInternal("agent-credential/revoke", { agentId });
+              return payload["revoked"] === true;
+            },
+          },
           getServerBootId: () => serverBootId,
           getWorkspaceId: () => workspace.config.id,
           getConnectionInfo: () => {
@@ -3400,14 +4180,8 @@ async function main() {
               protocol,
               externalHost: hostConfig.externalHost,
               gatewayPort,
-              // Lets createPairingInvite mint complete pair artifacts
-              // (per-invite room + fp/sig + scheme deep link + HTTPS pair URL).
-              pairing: webrtcPairing ?? undefined,
             };
           },
-          // The ingress pool arms one signaling room per invite (plan §2.1);
-          // resolved lazily because the pool starts after container.startAll().
-          getWebRtcIngress: () => webrtcIngress,
           connectionGrants,
           auditLog,
           hasAppCapability: (callerId, capability) =>
@@ -3609,11 +4383,8 @@ async function main() {
   await container.startAll();
 
   // ── WebRTC ingress pool (now that rpcServerForGateway is live) ──
-  // Activated by default. The server presents a persistent DTLS cert
-  // (stable QR `fp`) and arms ONE answerer pipe per signaling room: one room per
-  // already-paired device (persisted on the device record) plus one per
-  // outstanding pairing invite (plan §2.1 — the per-server singleton room and
-  // its room file are gone). See docs/webrtc-local-e2e.md.
+  // The child presents a persistent DTLS certificate (stable `fp`) and starts
+  // with no rooms. Authenticated hub routing arms ephemeral answerer pipes.
   const { resolveSignalingUrl } = await import("@vibestudio/shared/connect");
   const webrtcSignalUrl = resolveSignalingUrl({ env: process.env }).url;
   if (rpcServerForGateway) {
@@ -3640,28 +4411,23 @@ async function main() {
         iceTransportPolicy,
       });
       webrtcIngress = ingress;
-      // Expose the pairing seam (fp/sig/ice/srv — rooms are per-invite) to
-      // auth.getConnectionInfo/createPairingInvite and the ready-file writer.
+      for (const route of routedRoomStore.list()) {
+        await ingress.armRoom(route.room, {
+          ...(route.kind === "device" ? { deviceId: route.deviceId } : {}),
+        });
+        if (route.kind === "invite") {
+          scheduleRoutedRoomExpiry(routedRoomKey(route), route.expiresAt);
+        }
+      }
+      // Expose static reach material to the hub through the ready file and the
+      // authenticated internal routing endpoint. Rooms are always ephemeral.
       webrtcPairing = {
         fp: cert.fingerprint,
         sig: webrtcSignalUrl,
+        v: (await import("@vibestudio/shared/connect")).PAIRING_PROTOCOL_VERSION,
         ice: iceTransportPolicy,
         srv: process.env["VIBESTUDIO_WORKSPACE"] ?? undefined,
       };
-      // Invite lifecycle → pool: redemption re-tags the invite's room with the
-      // device id (and the room persists on the device record); invite expiry
-      // and device revocation tear the room's pipe down.
-      deviceAuthStore.onPairingRoomRedeemed((room, deviceId) =>
-        ingress.armRoom(room, { deviceId })
-      );
-      deviceAuthStore.onPairingRoomReleased((room) => void ingress.disarmRoom(room));
-      // Re-arm one answerer room per already-paired device so returning
-      // devices reconnect into their own room after a server restart.
-      for (const device of deviceAuthStore.listDevices()) {
-        if (!device.revokedAt && device.room) {
-          ingress.armRoom(device.room, { deviceId: device.deviceId });
-        }
-      }
     } catch (error) {
       throw new Error(
         `[webrtc-ingress] failed to start; refusing loopback-only startup: ${
@@ -3670,29 +4436,6 @@ async function main() {
       );
     }
   }
-
-  // ── Startup pairing invites (banner + ready file) ──
-  // Minted through the SAME per-invite path as auth.createPairingInvite: when
-  // the ingress pool is live each invite gets a fresh room armed on the pool
-  // and complete pair artifacts. Without WebRTC, minting fails loud.
-  const { mintPairingInvite } = await import("./services/auth/model.js");
-  const startupInvites =
-    process.env["VIBESTUDIO_DISABLE_STARTUP_PAIRING"] !== "1"
-      ? [
-          mintPairingInvite({ deviceAuthStore, pairing: webrtcPairing, ingress: webrtcIngress }),
-          mintPairingInvite({ deviceAuthStore, pairing: webrtcPairing, ingress: webrtcIngress }),
-        ]
-      : [];
-  // A pairing code grants a shell principal — redact codes (and thereby the
-  // deep links embedding them) from the userland-visible serverLog surface.
-  for (const invite of startupInvites) {
-    serverLogStore.addSecret(invite.code);
-  }
-  const startupInvite = startupInvites[0] ?? null;
-  const startupQrInvite = startupInvites[1] ?? null;
-  const startupPairingCodes = startupInvites.map((invite) => invite.code);
-  const startupPairingCode = startupInvite?.code ?? null;
-  const startupQrPairingCode = startupQrInvite?.code ?? null;
 
   const workerdManager =
     container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
@@ -3795,6 +4538,7 @@ async function main() {
           contextId,
           className: decl.className,
           key: decl.key,
+          ownerUserId: SYSTEM_SUBJECT.userId,
         });
         entityCache._onActivate(record);
       } catch (err) {
@@ -3931,26 +4675,6 @@ async function main() {
     if (tokenSource !== "env") {
       console.log(`  Persisted:   ${getAdminTokenPath()}`);
     }
-    // Remote pairing is the WebRTC QR link (per-invite signaling room + DTLS
-    // fingerprint) minted through the ingress pool above; there is no public
-    // OAuth/QR URL to print. The device pairing code below still authorizes
-    // the principal after the DTLS pin verifies.
-    if (startupPairingCode) {
-      console.log(`  Pairing code: ${startupPairingCode}`);
-      if (startupQrPairingCode) {
-        console.log(`  QR pairing code: ${startupQrPairingCode}`);
-      }
-      if (startupInvite?.pairUrl) {
-        console.log(`  Pair URL:     ${startupInvite.pairUrl}`);
-      }
-      if (startupQrInvite?.pairUrl) {
-        console.log(`  QR Pair URL:  ${startupQrInvite.pairUrl}`);
-      }
-      console.log(
-        `  Pairing TTL:  ${Math.round(DEFAULT_PAIRING_CODE_TTL_MS / 60_000)} minutes (server exits if unused)`
-      );
-    }
-
     if (args.readyFile) {
       const readyPayload = {
         workspaceName,
@@ -3961,24 +4685,8 @@ async function main() {
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
         adminToken,
-        // The WebRTC pairing material and complete startup invite artifacts.
-        pairing: webrtcPairing
-          ? {
-              ...webrtcPairing,
-              room: startupInvite?.room,
-              deepLink: startupInvite?.deepLink,
-              pairUrl: startupInvite?.pairUrl,
-              qrDeepLink: startupQrInvite?.deepLink,
-              qrPairUrl: startupQrInvite?.pairUrl,
-            }
-          : null,
-        pairingCode: startupPairingCode,
-        qrPairingCode: startupQrPairingCode,
-        pairingCodes: {
-          desktop: startupPairingCode,
-          mobile: startupQrPairingCode,
-          qr: startupQrPairingCode,
-        },
+        // Static child ingress seam. Rooms are armed on demand by the hub.
+        pairing: webrtcPairing,
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
         tokenFilePath,
@@ -3987,19 +4695,20 @@ async function main() {
         pid: process.pid,
         version: serverVersion,
       };
-      try {
-        fs.mkdirSync(path.dirname(args.readyFile), { recursive: true });
-        fs.writeFileSync(args.readyFile, `${JSON.stringify(readyPayload, null, 2)}\n`, "utf8");
-      } catch (error) {
-        console.warn("[Server] Failed to write ready file:", error);
-      }
+      writeFileAtomicSync(args.readyFile, `${JSON.stringify(readyPayload, null, 2)}\n`, {
+        mode: 0o600,
+      });
     }
+  }
 
-    if (args.printCredentials) {
-      console.log(`\nVIBESTUDIO_ADMIN_TOKEN=${adminToken}`);
-      if (startupPairingCode) console.log(`VIBESTUDIO_PAIRING_CODE=${startupPairingCode}`);
-      if (startupQrPairingCode) console.log(`VIBESTUDIO_QR_PAIRING_CODE=${startupQrPairingCode}`);
-    }
+  // Ephemeral workspaces are discarded at shutdown, so eagerly warming their
+  // entire unit graph only delays useful work and produces a cache nobody can
+  // reuse. Persistent hosts warm opportunistically after readiness.
+  if (!workspaceIsEphemeral) {
+    container
+      .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      .startInitialBuildPrewarm();
+    container.get<() => void>("evalEnginePrewarm")();
   }
 
   // ===========================================================================
@@ -4007,7 +4716,6 @@ async function main() {
   // ===========================================================================
 
   let isShuttingDown = false;
-  let startupPairingExpiryTimer: NodeJS.Timeout | null = null;
 
   async function shutdown() {
     if (isShuttingDown) return;
@@ -4023,10 +4731,6 @@ async function main() {
     }, 8000);
 
     cleanupReaper.stop();
-    if (startupPairingExpiryTimer) {
-      clearTimeout(startupPairingExpiryTimer);
-      startupPairingExpiryTimer = null;
-    }
 
     const prepareBudgetMs = Math.max(0, Math.min(2000, 8000 - (Date.now() - shutdownStartedAt)));
     if (prepareBudgetMs > 0) {
@@ -4038,42 +4742,24 @@ async function main() {
     await container
       .stopAll()
       .then(() => console.log("[Server] All services stopped"))
-      .catch((e) => console.error("[Server] Service shutdown error:", e))
-      .finally(() => {
-        if (workspaceIsEphemeral) {
-          try {
-            deleteWorkspaceDir(workspaceName);
-            centralData.removeWorkspace(workspaceName);
-            console.log(`[Server] Deleted ephemeral workspace "${workspaceName}"`);
-          } catch (error) {
-            console.error("[Server] Failed to delete ephemeral workspace:", error);
-          }
-        }
-        clearTimeout(forceExit);
-        console.log("[Server] Shutdown complete");
-        process.exit(0);
-      });
+      .catch((e) => console.error("[Server] Service shutdown error:", e));
+    for (const timer of routedRoomExpiryTimers.values()) clearTimeout(timer);
+    routedRoomExpiryTimers.clear();
+    await webrtcIngress?.close().catch((error) => {
+      console.error("[Server] WebRTC ingress shutdown error:", error);
+    });
+    try {
+      identityDb.close();
+    } catch (error) {
+      console.error("[Server] Identity DB shutdown error:", error);
+    }
+    clearTimeout(forceExit);
+    console.log("[Server] Shutdown complete");
+    process.exit(0);
   }
 
   requestShutdown = () => void shutdown();
 
-  // Pairing-TTL exit: a fresh spawn that no client ever redeemed cleans itself
-  // up (the natural GC for a spawn the desktop never managed to attach).
-  if (startupPairingCodes.length > 0) {
-    startupPairingExpiryTimer = setTimeout(() => {
-      const allStartupCodesStillPending = startupPairingCodes.every((code) =>
-        deviceAuthStore.hasPendingPairingCode(code)
-      );
-      if (!allStartupCodesStillPending) return;
-      console.warn(
-        `[Server] Startup pairing code expired after ${Math.round(
-          DEFAULT_PAIRING_CODE_TTL_MS / 60_000
-        )} minutes without being used; shutting down. Restart the pair command to print a fresh code.`
-      );
-      void shutdown();
-    }, DEFAULT_PAIRING_CODE_TTL_MS);
-    startupPairingExpiryTimer.unref?.();
-  }
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
 

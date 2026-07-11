@@ -9,14 +9,16 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
+import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
+import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import {
-  createServerInvocation,
-  serverEntryArg,
-} from "./lib/server-entry.mjs";
-import { createConnectDeepLink, parseConnectLink } from "./lib/connect-utils.mjs";
+  requiresLocalTurn,
+  relayOnlyServerEnv,
+  signalingTurnVars,
+  startLocalTurnRelay,
+} from "./lib/local-turn.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -27,7 +29,6 @@ const defaultPackage = "app.vibestudio.mobile.internal";
 const defaultActivity = "app.vibestudio.mobile.MainActivity";
 const smokePrefix = "[VibestudioMobileSmoke]";
 const screenshotDir = path.join(repoRoot, "test-results", "mobile-smoke");
-const defaultVisualFallbackAgentProbeMs = 45_000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,8 +112,10 @@ Usage:
   vibestudio mobile smoke [options]
 
 Runner options:
-  --platform <name>   android or ios. Defaults to android.
-  --avd <name>        Start this AVD if no adb device is connected.
+  --platform <name>   android or ios. iOS currently fails explicitly because
+                       Simulator UI automation cannot validate the full flow.
+  --avd <name>        Start this AVD if no adb device is connected; requires
+                       coturn (\`turnserver\`) for relay-only WebRTC.
   --device <serial>   Target a specific adb device serial.
   --package <id>      App package. Defaults to ${defaultPackage}.
   --activity <class>  Main activity class. Defaults to ${defaultActivity}.
@@ -356,37 +359,23 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs = 180_000) {
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
-      return JSON.parse(content);
-    } catch {
+      let value;
+      try {
+        value = JSON.parse(content);
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          await sleep(250);
+          continue;
+        }
+        throw error;
+      }
+      return parseHubReadyPayload(value);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
       await sleep(250);
     }
   }
   throw new Error(`Timed out waiting for server ready file: ${readyFile}`);
-}
-
-// Parse the WebRTC pairing link the server answerer logs and rebuild it with the
-// canonical builder. The phone joins the signaling room over loopback (the
-// adb-reversed `sig` port), pins the server's DTLS `fp`, and proves possession
-// with `code` — no server URL.
-function buildConnectLinkFromLog(loggedLink) {
-  const parsed = parseConnectLink(loggedLink);
-  if (parsed.kind !== "ok") {
-    throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
-  }
-  return createConnectDeepLink({
-    room: parsed.room,
-    fp: parsed.fp,
-    code: parsed.code,
-    sig: parsed.sig,
-    ice: parsed.ice,
-    srv: parsed.srv,
-  });
-}
-
-function extractPairingLink(text) {
-  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
-    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
-    ?? null;
 }
 
 function createServerArgs(readyFilePath) {
@@ -400,7 +389,6 @@ function createServerArgs(readyFilePath) {
     readyFilePath,
     "--ephemeral",
     "--serve-panels",
-    "--print-credentials",
     "--host",
     "127.0.0.1",
     "--bind-host",
@@ -419,83 +407,14 @@ function findFreePort() {
   });
 }
 
-// The first non-internal 192.168.x IPv4 — the host LAN address both the emulator
-// (via QEMU's NAT) and the server can reach for the TURN relay.
-function hostLanIp() {
-  for (const addrs of Object.values(os.networkInterfaces())) {
-    for (const a of addrs ?? []) {
-      if (a.family === "IPv4" && !a.internal && a.address.startsWith("192.168.")) return a.address;
-    }
-  }
-  return null;
-}
-
-// Local coturn relay for testing against an Android EMULATOR: QEMU's user-mode NAT
-// cannot hold a direct WebRTC pipe (ICE consent-freshness goes stale ~30-60s in),
-// so we relay through coturn and force `VIBESTUDIO_WEBRTC_ICE=relay`. Physical
-// devices on the LAN and desktop loopback don't need this. coturn must be on PATH
-// (`turnserver`). Returns the iceServer creds the signaling worker advertises to
-// BOTH peers, plus the managed child (caller pushes it to `children` for cleanup).
-async function startLocalTurn() {
-  const lanIp = hostLanIp();
-  if (!lanIp) throw new Error("No 192.168.x LAN IP found for the local TURN relay");
-  const port = 47000;
-  const user = "vibestudio";
-  const pass = "vibestudiopass";
-  const confPath = path.join(os.tmpdir(), `vibestudio-coturn-${process.pid}.conf`);
-  // relay-ip MUST be the LAN IP, not 127.0.0.1 — coturn returns 403 Forbidden on
-  // CREATE_PERMISSION for a loopback relay address.
-  await fsp.writeFile(
-    confPath,
-    [
-      `listening-port=${port}`,
-      `listening-ip=127.0.0.1`,
-      `listening-ip=${lanIp}`,
-      `relay-ip=${lanIp}`,
-      `realm=vibestudio.local`,
-      `lt-cred-mech`,
-      `user=${user}:${pass}`,
-      `no-tls`,
-      `no-dtls`,
-      `allowed-peer-ip=${lanIp}`,
-      `min-port=48000`,
-      `max-port=48100`,
-      // Default pidfile is /var/run/turnserver.pid (needs root) — point it at a
-      // writable temp path so coturn doesn't log a permission warning.
-      `pidfile=${path.join(os.tmpdir(), `vibestudio-coturn-${process.pid}.pid`)}`,
-      "",
-    ].join("\n")
-  );
-  // NOTE: no `-n` flag — `-n` means "ignore the config file", which would make
-  // coturn fall back to its defaults (TLS on :3478, clashing with any system
-  // coturn). `-c` loads our config; coturn stays in the foreground by default
-  // (no `-o`/daemon) so spawnManaged can track + reap it.
-  const child = spawnManaged("turnserver", ["-c", confPath], { label: "coturn" });
-  await sleep(1_500); // coturn has no health endpoint; let it bind.
-  if (child.exitCode != null) {
-    throw new Error(`coturn (turnserver) exited before ready (code ${child.exitCode}) — is it installed?`);
-  }
-  return { child, host: lanIp, port: String(port), user, pass };
-}
-
 // Cloudflare's local runtime (Miniflare) hosting the real SignalingRoom DO, the
 // WebRTC rendezvous — exactly as tests/webrtc-system.e2e.test.ts drives it.
 async function startSignaling(port, turn = null) {
-  const vars = ["--var", "ENVIRONMENT:test"];
-  if (turn) {
-    // The signaling worker's mintIceServers returns this relay to both peers.
-    vars.push(
-      "--var", `VIBESTUDIO_LOCAL_TURN_HOST:${turn.host}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_PORT:${turn.port}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_PASS:${turn.pass}`
-    );
-  }
-  const child = spawnManaged(
-    wranglerBin,
-    ["dev", "--port", String(port), "--local", ...vars],
-    { cwd: signalingDir, label: "signaling" }
-  );
+  const vars = ["--var", "ENVIRONMENT:test", ...signalingTurnVars(turn)];
+  const child = spawnManaged(wranglerBin, ["dev", "--port", String(port), "--local", ...vars], {
+    cwd: signalingDir,
+    label: "signaling",
+  });
   for (let i = 0; i < 90; i++) {
     if (child.exitCode != null) {
       throw new Error(`wrangler dev (signaling) exited before healthy (code ${child.exitCode})`);
@@ -509,37 +428,6 @@ async function startSignaling(port, turn = null) {
     await sleep(1_000);
   }
   throw new Error("wrangler dev (signaling) did not become healthy");
-}
-
-// Watch the answerer's stdout for either pairing carrier. Human-facing server
-// banners print https pair URLs; adb injection uses the canonical scheme carrier
-// rebuilt from the same payload.
-function waitForPairingLink(serverChild, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const link = extractPairingLink(buffer);
-      if (link) {
-        cleanup();
-        resolve(link);
-      }
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          "Timed out waiting for the server's pairing link. " +
-            "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
-        )
-      );
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
-  });
 }
 
 // Pre-warm: wait until the server reports the react-native workspace app BUILT
@@ -792,171 +680,10 @@ function unescapeXmlAttribute(value) {
     .replace(/&amp;/g, "&");
 }
 
-function createAgentTurnProbe(ready) {
-  const workspaceDir = typeof ready?.workspaceDir === "string" ? ready.workspaceDir : "";
-  const stateDirCandidates = [
-    workspaceDir ? path.join(path.dirname(workspaceDir), "state") : "",
-    workspaceDir ? path.join(workspaceDir, "state") : "",
-    workspaceDir.endsWith(`${path.sep}state`) ? workspaceDir : "",
-  ].filter(Boolean);
-  return {
-    stateDirCandidates: [...new Set(stateDirCandidates)],
-    sqliteFiles: null,
-    tableDbs: new Map(),
-    warned: false,
-  };
-}
-
-async function probeInitialAgentTurn(probe) {
-  if (!probe?.stateDirCandidates?.length) {
-    return { kind: "unavailable", summary: "ready file did not include workspaceDir" };
-  }
-
-  const agentRunDbs = await getDatabasesWithTable(probe, "agent_turn_runs");
-  if (!agentRunDbs.length) {
-    return { kind: "pending", summary: "agent_turn_runs table not found yet" };
-  }
-
-  let latest = null;
-  for (const dbPath of agentRunDbs) {
-    const rows = await sqliteJson(
-      dbPath,
-      `SELECT turn_id, channel_id, status, failure_code, failure_message, opened_at, updated_at, closed_at
-       FROM agent_turn_runs
-       ORDER BY opened_at DESC
-       LIMIT 1`
-    ).catch(() => []);
-    for (const row of rows) {
-      if (!latest || Number(row.opened_at ?? 0) > Number(latest.opened_at ?? 0)) {
-        latest = row;
-      }
-    }
-  }
-
-  if (!latest?.turn_id) {
-    return { kind: "pending", summary: "no agent turn run has started yet" };
-  }
-
-  if (
-    latest.failure_code ||
-    latest.failure_message ||
-    /\b(?:failed|failure|error|aborted)\b/i.test(String(latest.status ?? ""))
-  ) {
-    return {
-      kind: "failed",
-      summary:
-        `${latest.turn_id} status=${latest.status}` +
-        (latest.failure_code ? ` code=${latest.failure_code}` : "") +
-        (latest.failure_message ? ` message=${latest.failure_message}` : ""),
-    };
-  }
-
-  const messageSummary = await countCompletedAssistantMessages(probe, latest.turn_id);
-  const status = String(latest.status ?? "");
-  const closed = status === "closed" || latest.closed_at != null;
-  if (closed && messageSummary.completedAssistant > 0) {
-    return {
-      kind: "completed",
-      summary: `${latest.turn_id} status=${status} completedAssistant=${messageSummary.completedAssistant}`,
-    };
-  }
-
-  return {
-    kind: "pending",
-    summary:
-      `${latest.turn_id} status=${status || "(unknown)"} ` +
-      `completedAssistant=${messageSummary.completedAssistant}`,
-  };
-}
-
-async function countCompletedAssistantMessages(probe, turnId) {
-  const messageDbs = await getDatabasesWithTable(probe, "trajectory_messages");
-  let completedAssistant = 0;
-  let failedAssistant = 0;
-  for (const dbPath of messageDbs) {
-    const rows = await sqliteJson(
-      dbPath,
-      `SELECT
-         SUM(CASE WHEN role = 'assistant' AND status = 'completed' THEN 1 ELSE 0 END) AS completed_assistant,
-         SUM(CASE WHEN role = 'assistant' AND status = 'failed' THEN 1 ELSE 0 END) AS failed_assistant
-       FROM trajectory_messages
-       WHERE turn_id = ${sqlString(turnId)}`
-    ).catch(() => []);
-    for (const row of rows) {
-      completedAssistant += Number(row.completed_assistant ?? 0);
-      failedAssistant += Number(row.failed_assistant ?? 0);
-    }
-  }
-  return { completedAssistant, failedAssistant };
-}
-
-async function getDatabasesWithTable(probe, table) {
-  const cached = probe.tableDbs.get(table);
-  if (cached?.length) return cached;
-  const files = await getSqliteFiles(probe);
-  const matches = [];
-  for (const dbPath of files) {
-    const rows = await sqliteJson(
-      dbPath,
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${sqlString(table)} LIMIT 1`
-    ).catch(() => []);
-    if (rows.length > 0) matches.push(dbPath);
-  }
-  if (matches.length) probe.tableDbs.set(table, matches);
-  return matches;
-}
-
-async function getSqliteFiles(probe) {
-  if (probe.sqliteFiles?.length) return probe.sqliteFiles;
-  const files = [];
-  for (const stateDir of probe.stateDirCandidates) {
-    files.push(...(await listSqliteFiles(path.join(stateDir, ".databases")).catch(() => [])));
-    if (files.length) break;
-    files.push(...(await listSqliteFiles(stateDir).catch(() => [])));
-    if (files.length) break;
-  }
-  probe.sqliteFiles = [...new Set(files)];
-  return probe.sqliteFiles;
-}
-
-async function listSqliteFiles(root) {
-  const files = [];
-  const pending = [root];
-  while (pending.length) {
-    const dir = pending.pop();
-    const entries = await fsp.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".sqlite")) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files;
-}
-
-async function sqliteJson(dbPath, sql) {
-  const { stdout } = await runCommand("sqlite3", ["-json", dbPath, sql]);
-  const text = stdout.trim();
-  return text ? JSON.parse(text) : [];
-}
-
-function sqlString(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options = {}) {
-  const startedAt = Date.now();
-  const visualFallbackAfterMs =
-    typeof options.visualFallbackAfterMs === "number" ? options.visualFallbackAfterMs : null;
+async function waitForInitialAgentTurn(device, deadlineMs, options = {}) {
   let lastLabels = [];
-  let lastAgentState = "not checked";
-  let nextProbeAt = 0;
   let stableVisualAgentFingerprint = "";
   let stableVisualAgentPolls = 0;
-  let durableProbeUnavailable = false;
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
     const labels = collectWindowLabels(xml);
@@ -1014,10 +741,10 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         stableVisualAgentPolls = 1;
       }
       if (stableVisualAgentPolls >= 3) {
-        const suffix = options.requireNoUnresolvedApproval
-          ? " with no pending approvals"
-          : "";
-        console.log(`[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`);
+        const suffix = options.requireNoUnresolvedApproval ? " with no pending approvals" : "";
+        console.log(
+          `[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`
+        );
         return;
       }
     } else {
@@ -1025,49 +752,12 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       stableVisualAgentPolls = 0;
     }
 
-    if (Date.now() >= nextProbeAt) {
-      nextProbeAt = Date.now() + 2_000;
-      const agentState = await probeInitialAgentTurn(agentProbe).catch((error) => ({
-        kind: "unavailable",
-        summary: error instanceof Error ? error.message : String(error),
-      }));
-      lastAgentState = `${agentState.kind}: ${agentState.summary}`;
-      if (agentState.kind === "failed") {
-        throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
-      }
-      if (agentState.kind === "completed") {
-        if (!options.requireVisibleAgentOutput) {
-          console.log(`[mobile-smoke] Initial agent turn completed: ${agentState.summary}`);
-          return;
-        }
-        lastAgentState = `completed but waiting for visible output: ${agentState.summary}`;
-      }
-      if (
-        (agentState.kind === "unavailable" ||
-          /agent_turn_runs table not found yet/i.test(agentState.summary)) &&
-        !agentProbe.warned
-      ) {
-        durableProbeUnavailable = true;
-        agentProbe.warned = true;
-        console.warn(`[mobile-smoke] Durable agent-state probe unavailable: ${agentState.summary}`);
-      }
-    }
-
-    if (
-      durableProbeUnavailable &&
-      visualFallbackAfterMs != null &&
-      Date.now() - startedAt >= visualFallbackAfterMs
-    ) {
-      break;
-    }
-
     await sleep(1_000);
   }
 
   throw new Error(
     `Timed out waiting for the initial onboarding agent turn to finish. ` +
-      `Last visible labels: ${summarizeLabels(lastLabels)}. ` +
-      `Last durable state: ${lastAgentState}`
+      `Last visible labels: ${summarizeLabels(lastLabels)}.`
   );
 }
 
@@ -1087,8 +777,7 @@ function visibleAgentTurnState(labels) {
     /No provider details available/i.test(agentText);
   const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
   const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
-  const hasAgentOutput =
-    hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
+  const hasAgentOutput = hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
   return {
     hasAgentOutput,
     hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
@@ -1139,8 +828,7 @@ function summarizeLabels(labels) {
   return compact || "(none)";
 }
 
-async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, options = {}) {
-  const agentProbe = createAgentTurnProbe(readyInfo);
+async function captureAndAssertPanelVisible(device, agentTimeoutMs, options = {}) {
   await ensureDeviceInteractive(device);
   await sleep(2_000);
   if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
@@ -1149,30 +837,14 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   if (await tapOptionalButtonByLabelPrefix(device, "Use once", 2_000)) {
     await sleep(3_000);
   }
-  let agentTurnCompleted = true;
-  try {
-    const waitOptions = options.realModel
-        ? {
-          requireVisibleAgentOutput: true,
-          rejectTestModelResponse: true,
-          failOnCredentialSetup: true,
-          requireNoUnresolvedApproval: true,
-        }
-      : {
-          visualFallbackAfterMs: defaultVisualFallbackAgentProbeMs,
-        };
-    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
-  } catch (error) {
-    if (!isInitialAgentProbeTimeout(error)) throw error;
-    if (options.realModel) throw error;
-    agentTurnCompleted = false;
-    console.warn(
-      `[mobile-smoke] Initial agent turn probe did not produce an observable completion within ` +
-        `${defaultVisualFallbackAgentProbeMs}ms of an unavailable durable probe; ` +
-        `continuing with visual panel assertion. ` +
-        `${error instanceof Error ? error.message : String(error)}`
-    );
-  }
+  const waitOptions = options.realModel
+    ? {
+        rejectTestModelResponse: true,
+        failOnCredentialSetup: true,
+        requireNoUnresolvedApproval: true,
+      }
+    : {};
+  await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, waitOptions);
   await ensureDeviceInteractive(device);
   assertNoBlockingPermissionDialog(await dumpWindowXml(device));
   await fsp.mkdir(screenshotDir, { recursive: true });
@@ -1207,7 +879,7 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
       `Panel WebView screenshot looks blank. Saved ${screenshotPath}; stats=${JSON.stringify(stats)}`
     );
   }
-  return { agentTurnCompleted };
+  return { agentTurnCompleted: true };
 }
 
 function assertNoBlockingPermissionDialog(xml) {
@@ -1227,13 +899,6 @@ function assertNoBlockingPermissionDialog(xml) {
       "Panel rendered an error banner instead of healthy content; expected the panel content to be usable"
     );
   }
-}
-
-function isInitialAgentProbeTimeout(error) {
-  return (
-    error instanceof Error &&
-    /Timed out waiting for the initial onboarding agent turn to finish/i.test(error.message)
-  );
 }
 
 function decodePng(buffer) {
@@ -1394,134 +1059,6 @@ function routeUrl(baseUrl, pathName) {
   return url.toString();
 }
 
-async function postJson(baseUrl, pathName, body, token, timeoutMs = 15_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(routeUrl(baseUrl, pathName), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body ?? {}),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    const json = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      throw new Error(`${pathName} failed ${res.status}: ${JSON.stringify(json)}`);
-    }
-    return json;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function rpcHttp(baseUrl, shellToken, callerId, method, args = [], timeoutMs = 60_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const caller = { callerId, callerKind: "shell" };
-  try {
-    const res = await fetch(routeUrl(baseUrl, "/rpc"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${shellToken}`,
-      },
-      body: JSON.stringify({
-        from: caller.callerId,
-        target: "main",
-        delivery: { caller },
-        provenance: [caller],
-        message: {
-          type: "request",
-          requestId: randomUUID(),
-          fromId: caller.callerId,
-          method,
-          args,
-        },
-      }),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    const message = (body?.envelope ?? body)?.message;
-    if (!res.ok || message?.error) {
-      throw new Error(message?.error ?? body?.error ?? `/rpc failed ${res.status}`);
-    }
-    return message?.result;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function describeHostTargetLaunch(result) {
-  if (!result || typeof result !== "object") return "unknown launch result";
-  const bits = [`status=${result.status ?? "unknown"}`];
-  if (result.reason) bits.push(`reason=${result.reason}`);
-  if (result.appId) bits.push(`app=${result.appId}`);
-  if (result.buildKey) bits.push(`build=${result.buildKey}`);
-  return bits.join(" ");
-}
-
-async function prewarmReactNativeAppLaunch(ready, timeoutMs) {
-  if (!ready?.gatewayUrl || !ready?.adminToken) return false;
-  const deadline = Date.now() + timeoutMs;
-  let issued = null;
-  try {
-    issued = await postJson(
-      ready.gatewayUrl,
-      "/_r/s/auth/issue-device",
-      { label: "Mobile smoke pre-warm", platform: "desktop" },
-      ready.adminToken,
-      Math.min(15_000, Math.max(1_000, deadline - Date.now()))
-    );
-    const shellToken = issued?.shellToken;
-    const callerId = issued?.callerId ?? (issued?.deviceId ? `shell:${issued.deviceId}` : null);
-    if (typeof shellToken !== "string" || typeof callerId !== "string") {
-      throw new Error("admin-issued pre-warm credential did not include a shell token");
-    }
-    let last = null;
-    while (Date.now() < deadline) {
-      const remaining = Math.max(1_000, deadline - Date.now());
-      last = await rpcHttp(
-        ready.gatewayUrl,
-        shellToken,
-        callerId,
-        "workspace.hostTargets.launch",
-        ["react-native"],
-        remaining
-      );
-      if (last?.status === "ready") return true;
-      if (last?.status === "approval-required" || last?.status === "unavailable") {
-        console.warn(`[mobile-smoke] pre-warm: ${describeHostTargetLaunch(last)}`);
-        return false;
-      }
-      await sleep(Math.min(2_000, Math.max(1, deadline - Date.now())));
-    }
-    if (last) console.warn(`[mobile-smoke] pre-warm: ${describeHostTargetLaunch(last)}`);
-    return false;
-  } catch (error) {
-    console.warn(
-      `[mobile-smoke] pre-warm: active launch failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    return false;
-  } finally {
-    if (issued?.deviceId && ready?.gatewayUrl && ready?.adminToken) {
-      await postJson(
-        ready.gatewayUrl,
-        "/_r/s/auth/revoke-device",
-        { deviceId: issued.deviceId },
-        ready.adminToken,
-        10_000
-      ).catch(() => {});
-    }
-  }
-}
-
 async function startConnectIntent(device, packageName, activityName, link) {
   const packageResult = await adbCapture(
     device,
@@ -1564,19 +1101,13 @@ async function main() {
     return;
   }
   if (options.platform === "ios") {
-    if (process.platform !== "darwin") {
-      throw new Error("iOS smoke requires macOS with Xcode and a booted simulator.");
-    }
-    await runCommand(process.execPath, [
-      path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
-      "--platform",
-      "ios",
-      "--simulator",
-      "--configuration",
-      "Debug",
-      "--launch",
-    ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
-    console.log("[mobile-smoke] iOS shell installed and launched; pair it with `vibestudio mobile pair`.");
+    console.error(
+      "[mobile-smoke] iOS end-to-end smoke is unsupported: Simulator UI automation does not " +
+        "yet validate " +
+        "pairing, OTA activation, workspace connection, panel rendering, and the agent turn. " +
+        "Refusing to report a partial install/launch as success."
+    );
+    process.exitCode = 1;
     return;
   }
 
@@ -1584,8 +1115,9 @@ async function main() {
   let cleanedUp = false;
   let emulatorChild = null;
   let launchedEmulator = false;
-  let readyInfo = null;
-  const readyFilePath = path.join(os.tmpdir(), `vibestudio-mobile-smoke-ready-${process.pid}.json`);
+  let tempRoot = "";
+  let readyFilePath = "";
+  let cleanupTurnArtifacts = null;
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = async () => {
@@ -1599,17 +1131,13 @@ async function main() {
     }
     await Promise.all(children.map((child) => waitForChildExit(child)));
     if (emulatorChild) await waitForChildExit(emulatorChild);
-    try {
-      await fsp.unlink(readyFilePath);
-    } catch {}
-    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
-      try {
-        await fsp.access(readyInfo.workspaceDir);
-        console.warn(
-          `[mobile-smoke] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
-        );
-      } catch {}
+    for (const child of children) {
+      if (child.exitCode == null) child.kill("SIGKILL");
     }
+    await Promise.all(children.map((child) => waitForChildExit(child, 2_000)));
+    if (cleanupTurnArtifacts) await cleanupTurnArtifacts().catch(() => undefined);
+    if (readyFilePath) await fsp.rm(readyFilePath, { force: true }).catch(() => undefined);
+    if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   };
 
   process.on("SIGINT", () => {
@@ -1620,6 +1148,15 @@ async function main() {
   });
 
   try {
+    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-smoke-"));
+    readyFilePath = path.join(tempRoot, "hub-ready.json");
+    const serverHome = path.join(tempRoot, "server-home");
+    const serverConfig = path.join(tempRoot, "server-xdg-config");
+    await Promise.all([
+      fsp.mkdir(serverHome, { recursive: true }),
+      fsp.mkdir(serverConfig, { recursive: true }),
+    ]);
+
     if (!(await hasAdbDevice(options.device))) {
       if (!options.avd) {
         throw new Error(
@@ -1632,7 +1169,6 @@ async function main() {
         { label: "emulator" }
       );
       await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
-      children.push(emulatorChild);
       launchedEmulator = true;
     }
 
@@ -1662,29 +1198,35 @@ async function main() {
     const signalPort = await findFreePort();
     // An emulator is NAT'd behind QEMU and can't hold a direct WebRTC pipe, so
     // relay it through a local coturn. Physical devices on the LAN don't need it.
-    const useTurn = launchedEmulator || (options.device ?? "").startsWith("emulator-");
+    const useTurn = requiresLocalTurn({ launchedEmulator, device: options.device });
     let turn = null;
     if (useTurn) {
-      turn = await startLocalTurn();
+      turn = await startLocalTurnRelay({ spawnManaged, waitForSpawn, sleep });
       children.push(turn.child);
+      cleanupTurnArtifacts = turn.cleanupArtifacts;
       console.log(`[mobile-smoke] Local TURN relay (emulator NAT): turn:${turn.host}:${turn.port}`);
+      turn.child.on("exit", (code) => {
+        if (!cleanedUp) {
+          console.error(`[mobile-smoke] Required local TURN relay exited with code ${code ?? 1}`);
+          void cleanup().then(() => process.exit(code && code !== 0 ? code : 1));
+        }
+      });
     }
     const signalingChild = await startSignaling(signalPort, turn);
     children.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs the vibestudio://connect
-    //    link whose `fp` pins its persistent DTLS cert.
+    // 2. A disposable hub. It publishes the child's complete mobile root
+    //    pairing invite through the strict ready-file handoff.
     const serverArgs = createServerArgs(readyFilePath);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverEnv = {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "development",
       VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
-      // Force the single-workspace server path: `--serve-panels` with no workspace
-      // otherwise boots the hub (no WebRTC answerer), so pairing never connects.
-      VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+      HOME: serverHome,
+      XDG_CONFIG_HOME: serverConfig,
+      APPDATA: path.join(tempRoot, "server-appdata"),
       // Auto-approve startup units so the declared react-native app BUILDS at
       // server startup instead of waiting for the post-pairing host-target
       // approval. That makes the launch fast, so the bundle starts streaming
@@ -1694,7 +1236,7 @@ async function main() {
       // Emulator: force relay-only through the local coturn (a direct NAT'd pipe
       // can't hold ICE consent freshness). The answerer threads this into the
       // pairing link's `ice=relay`, which the client honors.
-      ...(turn ? { VIBESTUDIO_WEBRTC_ICE: "relay" } : {}),
+      ...relayOnlyServerEnv(turn),
     };
     if (options.realModel) {
       delete serverEnv.VIBESTUDIO_TEST_MODE;
@@ -1708,18 +1250,11 @@ async function main() {
     });
     await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
     children.push(serverChild);
-    // Capture the answerer's pairing link from stdout now (before readiness).
-    const pairingLinkPromise = waitForPairingLink(
-      serverChild,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
-
     const ready = await waitForServerReady(
       readyFilePath,
       serverChild,
       Math.max(1_000, deadlineMs - Date.now())
     );
-    readyInfo = ready;
 
     // The phone reaches the host's loopback services over adb reverse: the
     // signaling room (WebRTC rendezvous) and the gateway (native-bundle bootstrap
@@ -1728,21 +1263,20 @@ async function main() {
     await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);
     await adb(options.device, "logcat", "-c");
 
-    // Pre-warm: give the server time to BUILD the react-native app before pairing,
-    // so the emulator's ~2-min relay window (the clock starts at the pairing tap)
-    // is not consumed by the cold Metro extension + app build. Best-effort and
-    // emulator/TURN-only — physical devices hold the pipe long enough regardless.
+    // Pre-warm: startup auto-approval builds the declared React Native app
+    // before pairing, so the emulator's ~2-min relay window (the clock starts
+    // at the pairing tap) is not consumed by the cold build. Observe the real
+    // child lifecycle instead of minting a synthetic operator device.
     if (useTurn) {
       console.log("[mobile-smoke] pre-warm: waiting for the react-native app build…");
       const prewarmBudgetMs = Math.min(150_000, Math.max(1_000, deadlineMs - Date.now()));
-      let warm = await prewarmReactNativeAppLaunch(ready, prewarmBudgetMs);
-      if (!warm) {
-        warm = await waitForReactNativeAppReady(
-          serverChild,
-          Math.min(prewarmBudgetMs, Math.max(1_000, deadlineMs - Date.now()))
-        );
-      }
-      console.log(`[mobile-smoke] pre-warm: ${warm ? "react-native app built" : "timed out, proceeding"}`);
+      const warm = await waitForReactNativeAppReady(
+        serverChild,
+        Math.min(prewarmBudgetMs, Math.max(1_000, deadlineMs - Date.now()))
+      );
+      console.log(
+        `[mobile-smoke] pre-warm: ${warm ? "react-native app built" : "timed out, proceeding"}`
+      );
     }
 
     // Embedded WebRTC flow (the host pairs + connects over the DTLS pipe in JS;
@@ -1765,7 +1299,11 @@ async function main() {
     children.push(logcat.child);
     await waitForLogcatReady(options.device, logcat);
 
-    const link = buildConnectLinkFromLog(await pairingLinkPromise);
+    const invite = ready.rootInvites?.mobile;
+    if (!invite) {
+      throw new Error("Fresh isolated hub did not publish a mobile root invite");
+    }
+    const link = invite.deepLink;
     console.log(`[mobile-smoke] Signaling: ${signalUrl} (adb-reversed)`);
     console.log(`[mobile-smoke] Gateway:   ${ready.gatewayUrl} (adb-reversed)`);
     console.log(`[mobile-smoke] Connect:   ${link}`);
@@ -1812,17 +1350,13 @@ async function main() {
     ]) {
       await waitForPhaseTappingApprovals(options.device, logcat, phase, pairingDeadlineMs);
     }
-    const panelResult = await captureAndAssertPanelVisible(
-      options.device,
-      options.agentTimeoutMs,
-      readyInfo,
-      { realModel: options.realModel }
-    );
+    const panelResult = await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, {
+      realModel: options.realModel,
+    });
 
+    if (!panelResult.agentTurnCompleted) throw new Error("Initial agent turn was not observed");
     console.log(
-      panelResult.agentTurnCompleted
-        ? "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and completed the initial agent turn"
-        : "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and rendered a nonblank panel"
+      "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and completed the initial agent turn"
     );
     await cleanup();
   } catch (error) {

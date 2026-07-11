@@ -28,7 +28,7 @@ export interface WorkerTerminalConfig {
 
 /** Read the `vibestudio.terminal` block from a worker manifest, if present. */
 export function workerTerminalConfig(
-  vibestudio: Record<string, unknown> | undefined | null,
+  vibestudio: Record<string, unknown> | undefined | null
 ): WorkerTerminalConfig | null {
   const terminal = vibestudio?.["terminal"];
   if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) return null;
@@ -38,9 +38,7 @@ export function workerTerminalConfig(
 }
 
 /** A worker whose `vibestudio.terminal.renderer` is "ink" renders inside workerd via Ink. */
-export function isTerminalWorker(
-  vibestudio: Record<string, unknown> | undefined | null,
-): boolean {
+export function isTerminalWorker(vibestudio: Record<string, unknown> | undefined | null): boolean {
   return workerTerminalConfig(vibestudio) !== null;
 }
 
@@ -51,7 +49,7 @@ export function isTerminalWorker(
  * rebuilt on every hibernation.
  */
 export function isPersistentWorker(
-  vibestudio: Record<string, unknown> | undefined | null,
+  vibestudio: Record<string, unknown> | undefined | null
 ): boolean {
   return vibestudio?.["persistent"] === true;
 }
@@ -70,7 +68,6 @@ export const APP_CAPABILITIES_BY_TARGET = {
     "window-management",
     "panel-hosting",
     "incoming-pair-links",
-    "connection-management",
   ],
   "react-native": [
     "notifications",
@@ -81,17 +78,12 @@ export const APP_CAPABILITIES_BY_TARGET = {
     "clipboard",
     "open-external",
     "panel-hosting",
-    "connection-management",
   ],
-  terminal: [
-    "clipboard",
-    "open-external",
-    "connection-management",
-  ],
+  terminal: ["clipboard", "open-external"],
 } as const satisfies Record<WorkspaceAppTarget, readonly string[]>;
 
 export type AppCapability =
-  typeof APP_CAPABILITIES_BY_TARGET[keyof typeof APP_CAPABILITIES_BY_TARGET][number];
+  (typeof APP_CAPABILITIES_BY_TARGET)[keyof typeof APP_CAPABILITIES_BY_TARGET][number];
 
 export class UnitManifestError extends Error {
   readonly code: string;
@@ -124,21 +116,21 @@ export const appUnitManifestDescriptor: UnitManifestDescriptor = {
 
 const KIND_BLOCKS = ["extension", "worker", "panel", "app"] as const;
 
-function assertRecord(value: unknown, label: string, options: UnitManifestValidationOptions): Record<string, unknown> {
+function assertRecord(
+  value: unknown,
+  label: string,
+  options: UnitManifestValidationOptions
+): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new UnitManifestError(
       `${label} ${options.unitName} is missing the vibestudio manifest block`,
-      "MANIFEST_MISSING",
+      "MANIFEST_MISSING"
     );
   }
   return value as Record<string, unknown>;
 }
 
-function assertOptionalString(
-  value: unknown,
-  message: string,
-  code: string,
-): string | undefined {
+function assertOptionalString(value: unknown, message: string, code: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new UnitManifestError(message, code);
@@ -149,7 +141,7 @@ function assertOptionalString(
 function assertNoForeignKindBlocks(
   record: Record<string, unknown>,
   descriptor: UnitManifestDescriptor,
-  options: UnitManifestValidationOptions,
+  options: UnitManifestValidationOptions
 ): void {
   const kindBlocks = KIND_BLOCKS.filter((key) => record[key] !== undefined && record[key] !== null);
   if (kindBlocks.length !== 1 || kindBlocks[0] !== descriptor.kind) {
@@ -157,7 +149,7 @@ function assertNoForeignKindBlocks(
       `${descriptor.label} ${options.unitName} must declare exactly one kind block: vibestudio.${descriptor.kind} (found: ${
         kindBlocks.length === 0 ? "none" : kindBlocks.join(", ")
       })`,
-      "MANIFEST_KIND",
+      "MANIFEST_KIND"
     );
   }
 }
@@ -165,58 +157,61 @@ function assertNoForeignKindBlocks(
 function validateInlineSourcemap(
   record: Record<string, unknown>,
   descriptor: UnitManifestDescriptor,
-  options: UnitManifestValidationOptions,
+  options: UnitManifestValidationOptions
 ): void {
   if (record["sourcemap"] === false) {
     throw new UnitManifestError(
       `${descriptor.label} ${options.unitName} must use inline sourcemaps`,
-      "MANIFEST_SOURCEMAP",
+      "MANIFEST_SOURCEMAP"
     );
   }
 }
 
 function validateExtensionBlock(
   record: Record<string, unknown>,
-  options: UnitManifestValidationOptions,
+  options: UnitManifestValidationOptions
 ): void {
-  const extension = record["extension"] as {
-    activationEvents?: unknown;
-    dependencyMode?: unknown;
-    streamingMethods?: unknown;
-    contributes?: unknown;
-  } | undefined;
+  const extension = record["extension"] as
+    | {
+        activationEvents?: unknown;
+        dependencyMode?: unknown;
+        streamingMethods?: unknown;
+        contributes?: unknown;
+      }
+    | undefined;
 
   const events = extension?.activationEvents;
   if (events !== undefined) {
     if (!Array.isArray(events) || events.some((event) => event !== "*")) {
       throw new UnitManifestError(
         `Extension ${options.unitName} only supports activationEvents: ["*"]`,
-        "MANIFEST_ACTIVATION",
+        "MANIFEST_ACTIVATION"
       );
     }
   }
 
   const dependencyMode = extension?.dependencyMode;
   if (
-    dependencyMode !== undefined
-    && dependencyMode !== "auto"
-    && dependencyMode !== "bundle"
-    && dependencyMode !== "external"
+    dependencyMode !== undefined &&
+    dependencyMode !== "auto" &&
+    dependencyMode !== "bundle" &&
+    dependencyMode !== "external"
   ) {
     throw new UnitManifestError(
       `Extension ${options.unitName} dependencyMode must be "auto", "bundle", or "external"`,
-      "MANIFEST_DEPENDENCY_MODE",
+      "MANIFEST_DEPENDENCY_MODE"
     );
   }
 
   const streamingMethods = extension?.streamingMethods;
   if (
-    streamingMethods !== undefined
-    && (!Array.isArray(streamingMethods) || streamingMethods.some((method) => typeof method !== "string"))
+    streamingMethods !== undefined &&
+    (!Array.isArray(streamingMethods) ||
+      streamingMethods.some((method) => typeof method !== "string"))
   ) {
     throw new UnitManifestError(
       `Extension ${options.unitName} streamingMethods must be an array of method names`,
-      "MANIFEST_STREAMING_METHODS",
+      "MANIFEST_STREAMING_METHODS"
     );
   }
 
@@ -225,17 +220,17 @@ function validateExtensionBlock(
     if (!contributes || typeof contributes !== "object" || Array.isArray(contributes)) {
       throw new UnitManifestError(
         `Extension ${options.unitName} contributes must be an object`,
-        "MANIFEST_CONTRIBUTES",
+        "MANIFEST_CONTRIBUTES"
       );
     }
     const buildTargets = (contributes as Record<string, unknown>)["buildTargets"];
     if (
-      buildTargets !== undefined
-      && (!Array.isArray(buildTargets) || buildTargets.some((target) => target !== "react-native"))
+      buildTargets !== undefined &&
+      (!Array.isArray(buildTargets) || buildTargets.some((target) => target !== "react-native"))
     ) {
       throw new UnitManifestError(
         `Extension ${options.unitName} contributes.buildTargets may only include "react-native"`,
-        "MANIFEST_BUILD_TARGETS",
+        "MANIFEST_BUILD_TARGETS"
       );
     }
   }
@@ -243,13 +238,13 @@ function validateExtensionBlock(
 
 function validateAppBlock(
   record: Record<string, unknown>,
-  options: UnitManifestValidationOptions,
+  options: UnitManifestValidationOptions
 ): void {
   const app = record["app"];
   if (!app || typeof app !== "object" || Array.isArray(app)) {
     throw new UnitManifestError(
       `App ${options.unitName} vibestudio.app must be an object`,
-      "MANIFEST_APP_BLOCK",
+      "MANIFEST_APP_BLOCK"
     );
   }
   const appRecord = app as Record<string, unknown>;
@@ -258,32 +253,32 @@ function validateAppBlock(
   if (target !== "electron" && target !== "react-native" && target !== "terminal") {
     throw new UnitManifestError(
       `App ${options.unitName} target must be "electron", "react-native", or "terminal"`,
-      "MANIFEST_APP_TARGET",
+      "MANIFEST_APP_TARGET"
     );
   }
 
   assertOptionalString(
     appRecord["displayName"],
     `App ${options.unitName} displayName must be a non-empty string when provided`,
-    "MANIFEST_APP_DISPLAY_NAME",
+    "MANIFEST_APP_DISPLAY_NAME"
   );
   const entryField = target === "terminal" ? "entry" : "renderer";
   if (typeof appRecord[entryField] !== "string" || appRecord[entryField].trim().length === 0) {
     throw new UnitManifestError(
       `App ${options.unitName} ${entryField} must be a non-empty string`,
-      "MANIFEST_APP_RENDERER",
+      "MANIFEST_APP_RENDERER"
     );
   }
   if (target === "terminal" && appRecord["renderer"] !== undefined) {
     throw new UnitManifestError(
       `Terminal app ${options.unitName} must use vibestudio.app.entry instead of renderer`,
-      "MANIFEST_APP_TERMINAL_RENDERER",
+      "MANIFEST_APP_TERMINAL_RENDERER"
     );
   }
   if (target !== "terminal" && appRecord["entry"] !== undefined) {
     throw new UnitManifestError(
       `App ${options.unitName} vibestudio.app.entry is only supported for terminal apps`,
-      "MANIFEST_APP_TERMINAL_ENTRY",
+      "MANIFEST_APP_TERMINAL_ENTRY"
     );
   }
 
@@ -292,13 +287,13 @@ function validateAppBlock(
     if (typeof appRecord["interactive"] !== "boolean") {
       throw new UnitManifestError(
         `App ${options.unitName} vibestudio.app.interactive must be a boolean`,
-        "MANIFEST_APP_INTERACTIVE",
+        "MANIFEST_APP_INTERACTIVE"
       );
     }
     if (target !== "terminal" && appRecord["interactive"] === true) {
       throw new UnitManifestError(
         `App ${options.unitName} vibestudio.app.interactive is only supported for terminal apps`,
-        "MANIFEST_APP_INTERACTIVE_TARGET",
+        "MANIFEST_APP_INTERACTIVE_TARGET"
       );
     }
   }
@@ -307,7 +302,7 @@ function validateAppBlock(
     if (appRecord[forbidden] !== undefined) {
       throw new UnitManifestError(
         `App ${options.unitName} is pure-thin and must not declare vibestudio.app.${forbidden}`,
-        "MANIFEST_APP_NATIVE_FIELD",
+        "MANIFEST_APP_NATIVE_FIELD"
       );
     }
   }
@@ -316,12 +311,12 @@ function validateAppBlock(
   if (capabilities !== undefined) {
     const allowed = new Set<string>(APP_CAPABILITIES_BY_TARGET[target]);
     if (
-      !Array.isArray(capabilities)
-      || capabilities.some((capability) => typeof capability !== "string" || !allowed.has(capability))
+      !Array.isArray(capabilities) ||
+      capabilities.some((capability) => typeof capability !== "string" || !allowed.has(capability))
     ) {
       throw new UnitManifestError(
         `App ${options.unitName} capabilities must be known ${target} capabilities`,
-        "MANIFEST_APP_CAPABILITIES",
+        "MANIFEST_APP_CAPABILITIES"
       );
     }
   }
@@ -330,23 +325,26 @@ function validateAppBlock(
     assertOptionalString(
       appRecord["rnComponentName"],
       `React Native app ${options.unitName} rnComponentName must be a non-empty string`,
-      "MANIFEST_APP_RN_COMPONENT",
+      "MANIFEST_APP_RN_COMPONENT"
     );
     assertOptionalString(
       appRecord["rnHostAbi"],
       `React Native app ${options.unitName} rnHostAbi must be a non-empty string`,
-      "MANIFEST_APP_RN_ABI",
+      "MANIFEST_APP_RN_ABI"
     );
-    if (typeof appRecord["rnComponentName"] !== "string" || typeof appRecord["rnHostAbi"] !== "string") {
+    if (
+      typeof appRecord["rnComponentName"] !== "string" ||
+      typeof appRecord["rnHostAbi"] !== "string"
+    ) {
       throw new UnitManifestError(
         `React Native app ${options.unitName} requires rnComponentName and rnHostAbi`,
-        "MANIFEST_APP_RN_REQUIRED",
+        "MANIFEST_APP_RN_REQUIRED"
       );
     }
   } else if (appRecord["rnComponentName"] !== undefined || appRecord["rnHostAbi"] !== undefined) {
     throw new UnitManifestError(
       `${target === "terminal" ? "Terminal" : "Electron"} app ${options.unitName} must not declare React Native-only fields`,
-      "MANIFEST_APP_RN_FIELD",
+      "MANIFEST_APP_RN_FIELD"
     );
   }
 }
@@ -357,7 +355,7 @@ function validateAppBlock(
 export function validateUnitManifest(
   descriptor: UnitManifestDescriptor,
   manifest: unknown,
-  options: UnitManifestValidationOptions,
+  options: UnitManifestValidationOptions
 ): void {
   const record = assertRecord(manifest, descriptor.label, options);
   assertNoForeignKindBlocks(record, descriptor, options);
@@ -377,7 +375,7 @@ export function readAndValidateUnitManifest(
   descriptor: UnitManifestDescriptor,
   packageJsonPath: string,
   options: UnitManifestValidationOptions,
-  readFileSync: (p: string, encoding: "utf-8") => string,
+  readFileSync: (p: string, encoding: "utf-8") => string
 ): Record<string, unknown> {
   let raw: string;
   try {
@@ -387,7 +385,7 @@ export function readAndValidateUnitManifest(
       `${descriptor.label} ${options.unitName} package.json not readable at ${packageJsonPath}: ${
         err instanceof Error ? err.message : String(err)
       }`,
-      "MANIFEST_READ",
+      "MANIFEST_READ"
     );
   }
 
@@ -399,13 +397,13 @@ export function readAndValidateUnitManifest(
       `${descriptor.label} ${options.unitName} package.json is not valid JSON: ${
         err instanceof Error ? err.message : String(err)
       }`,
-      "MANIFEST_PARSE",
+      "MANIFEST_PARSE"
     );
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new UnitManifestError(
       `${descriptor.label} ${options.unitName} package.json must be a JSON object`,
-      "MANIFEST_PARSE",
+      "MANIFEST_PARSE"
     );
   }
 

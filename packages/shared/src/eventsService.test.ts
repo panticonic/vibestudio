@@ -3,15 +3,26 @@ import { createEventsServiceDefinition, DoPushSubscriber, EventService } from ".
 import { createVerifiedCaller, type CallerKind, type ServiceContext } from "./serviceDispatcher.js";
 import type { PanelTreeSnapshot } from "./types.js";
 
-const emptyPanelTreeSnapshot: PanelTreeSnapshot = { revision: 1, rootPanels: [] };
+const emptyPanelTreeSnapshot: PanelTreeSnapshot = { revision: 1, forest: [] };
 
-function makeWsClient(callerId: string, callerKind: CallerKind, connectionId: string) {
+function makeWsClient(
+  callerId: string,
+  callerKind: CallerKind,
+  connectionId: string,
+  userId?: string
+) {
   const ws = {
     readyState: 1,
     send: vi.fn(),
     on: vi.fn(),
   };
-  const caller = createVerifiedCaller(callerId, callerKind);
+  const caller = createVerifiedCaller(
+    callerId,
+    callerKind,
+    null,
+    null,
+    userId ? { userId, handle: userId } : null
+  );
   return {
     ws,
     ctx: {
@@ -97,6 +108,30 @@ describe("EventService", () => {
         event: "event:focus-address-bar",
       })
     );
+  });
+
+  it("direct-addresses every live runtime for one verified account without leaking cross-user", async () => {
+    const eventService = new EventService();
+    const service = createEventsServiceDefinition(eventService);
+    const aliceDesktop = makeWsClient("shell:alice-desktop", "shell", "conn-a1", "usr_alice");
+    const alicePanel = makeWsClient("panel:alice-chat", "panel", "conn-a2", "usr_alice");
+    const bobDesktop = makeWsClient("shell:bob-desktop", "shell", "conn-b1", "usr_bob");
+
+    await service.handler(aliceDesktop.ctx, "subscribe", ["user-notifications-changed"]);
+    await service.handler(alicePanel.ctx, "subscribe", ["user-notifications-changed"]);
+    await service.handler(bobDesktop.ctx, "subscribe", ["user-notifications-changed"]);
+    aliceDesktop.ws.send.mockClear();
+    alicePanel.ws.send.mockClear();
+    bobDesktop.ws.send.mockClear();
+
+    const delivered = eventService.emitToUser("usr_alice", "user-notifications-changed", {
+      changedAt: 42,
+    });
+
+    expect(delivered).toBe(true);
+    expect(aliceDesktop.ws.send).toHaveBeenCalledTimes(1);
+    expect(alicePanel.ws.send).toHaveBeenCalledTimes(1);
+    expect(bobDesktop.ws.send).not.toHaveBeenCalled();
   });
 
   it("still delivers to a live sibling when an earlier subscriber is dead (no mid-iteration skip)", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CredentialUseGrantStore } from "./credentialUseGrantStore.js";
 
 function tempDir(): string {
@@ -17,7 +17,6 @@ describe("CredentialUseGrantStore", () => {
       resource: "https://api.example.test/",
       action: "use" as const,
       scope: "version" as const,
-      callerId: "worker:agent",
       repoPath: "workers/agent.ts",
       effectiveVersion: "ev-1",
       grantedAt: 123,
@@ -36,5 +35,57 @@ describe("CredentialUseGrantStore", () => {
     const reloaded = new CredentialUseGrantStore({ statePath });
     expect(reloaded.list("cred_1")).toEqual([grant]);
     expect(reloaded.list("cred_2")).toEqual([]);
+  });
+
+  it.each([
+    ["retired top-level array", []],
+    [
+      "retired caller grant",
+      {
+        grants: [
+          {
+            credentialId: "cred_1",
+            bindingId: "binding_fetch",
+            use: "fetch",
+            resource: "https://api.example.test/",
+            action: "use",
+            scope: "caller",
+            callerId: "worker:agent",
+            grantedAt: 123,
+            grantedBy: "self",
+          },
+        ],
+      },
+    ],
+    [
+      "retired repository grant",
+      {
+        grants: [
+          {
+            credentialId: "cred_1",
+            bindingId: "binding_fetch",
+            use: "fetch",
+            resource: "https://api.example.test/",
+            action: "use",
+            scope: "repo",
+            repoPath: "workers/agent",
+            grantedAt: 123,
+            grantedBy: "repo",
+          },
+        ],
+      },
+    ],
+  ])("destructively resets the %s schema", (_label, persisted) => {
+    const statePath = tempDir();
+    const filePath = path.join(statePath, "credential-use-grants.json");
+    fs.writeFileSync(filePath, JSON.stringify(persisted));
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = new CredentialUseGrantStore({ statePath });
+
+    expect(store.list("cred_1")).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({ grants: [] });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Resetting invalid grant store"));
+    warn.mockRestore();
   });
 });

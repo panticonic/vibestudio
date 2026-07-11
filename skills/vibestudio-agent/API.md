@@ -21,6 +21,20 @@ Some internal services (e.g. workerd) are not shell-callable and do not appear
 here. Create workers and DOs via `runtime.createEntity` (`kind: "worker"` /
 `"do"`), then dispatch to them with `--target` relay calls.
 
+## `account`
+
+Account profiles: live identity projection + personalization
+
+Allowed callers: `server`, `shell`, `app`, `panel`
+
+| Method | Description |
+|--------|-------------|
+| `account.getProfile` | Resolve one account's live profile (defaults to the caller's own subject). Returns null for an unknown userId. |
+| `account.resolveProfiles` | Batch-resolve userIds to live profiles for rendering user participants. Unknown ids are absent from the result. |
+| `account.isMember` | Return whether a user belongs to this child server's bound workspace. The workspace is host-bound, never caller-selected. |
+| `account.listWorkspaceMembers` | List live account profiles for this child server's bound workspace, including implicit root membership. |
+| `account.updateProfile` | Update personalization (displayName/avatar/color/handle). Self, or root for others. The hub is the sole identity writer. |
+
 ## `audit`
 
 Audit log query access
@@ -41,9 +55,6 @@ Allowed callers: `server`, `shell`
 |--------|-------------|
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
-| `auth.createPairingInvite` | Create a one-time device-pairing invite (code + deep link) for this server; requires the connection-management capability and is audit-logged. |
-| `auth.listDevices` | List paired devices for this server (refresh-token secrets stripped). |
-| `auth.revokeDevice` | Revoke a paired device by id, invalidating its shell token and retiring any mobile-app principal; audit-logged. Returns whether a device was revoked. |
 
 ## `blobstore`
 
@@ -226,6 +237,16 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
 | `gitInterop.completeWorkspaceDependencies` | Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results. |
 
+## `governance`
+
+Host governance log — approval provenance + membership events (read-only)
+
+Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+
+| Method | Description |
+|--------|-------------|
+| `governance.list` | List host governance records (approval resolutions + membership events) newest-first, optionally filtered by record kind, acting user, approval kind, membership op, workspace, or grant outcome. |
+
 ## `hostLifecycle`
 
 Host-process graceful shutdown for attached shells
@@ -235,6 +256,31 @@ Allowed callers: `shell`, `server`
 | Method | Description |
 |--------|-------------|
 | `hostLifecycle.shutdown` | Gracefully shut down the workspace server process (same path as SIGTERM). Shell-only. |
+
+## `hubControl`
+
+Authenticated workspace-child to server-hub control plane
+
+Allowed callers: `shell`, `panel`, `app`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `hubControl.listWorkspaces` | List workspaces visible to the authenticated account. |
+| `hubControl.routeWorkspace` | Route the authenticated device directly into a workspace child. |
+| `hubControl.createWorkspace` | Create and register a workspace through the hub control plane. |
+| `hubControl.deleteWorkspace` | Delete a workspace and cascade every membership row. |
+| `hubControl.addWorkspaceMember` | Add an existing account to a workspace. |
+| `hubControl.removeWorkspaceMember` | Remove an account from a workspace and close its child sessions. |
+| `hubControl.listWorkspaceMembers` | List the account membership projection for one workspace. |
+| `hubControl.listUserPresence` | List the visible workspaces where a user currently has a live human endpoint. |
+| `hubControl.inviteUser` | Create an account, grant workspaces, and mint its first-device invite. |
+| `hubControl.pairDevice` | Mint another device invite for the authenticated account. |
+| `hubControl.listDevices` | List the caller's paired devices; administrators see every account's devices. |
+| `hubControl.revokeDevice` | Revoke a device and close all of its child sessions. |
+| `hubControl.revokeUser` | Revoke an account, credentials, memberships, and live deputies. |
+| `hubControl.setRole` | Set an account role; root-only at the hub. |
+| `hubControl.updateProfile` | Update the authenticated account profile, or another account as root. |
+| `hubControl.getProfile` | Read the authenticated account profile, or a specified account. |
 
 ## `mirror`
 
@@ -353,17 +399,6 @@ Allowed callers: `server`, `shell`
 | `presence.markPanelsOwned` |  |
 | `presence.getPanelActiveOwner` |  |
 
-## `push`
-
-Push notification device registration and delivery
-
-Allowed callers: `shell`, `app`, `server`
-
-| Method | Description |
-|--------|-------------|
-| `push.register` | Register a device's push token for a client id, persisting it so it survives server restarts. |
-| `push.unregister` | Remove the persisted push registration for a client id; returns whether one existed. |
-
 ## `refs`
 
 Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.
@@ -415,7 +450,7 @@ Allowed callers: `shell`, `app`, `server`
 
 | Method | Description |
 |--------|-------------|
-| `shellApproval.resolve` | Record the user's decision (once/session/version/repo/deny/dismiss) on a pending approval, resolving its queued request. |
+| `shellApproval.resolve` | Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request. |
 | `shellApproval.resolveBootstrap` | Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval. |
 | `shellApproval.resolveUserland` | Resolve a pending userland approval by selecting one of the presented option values (or 'dismiss'); rejects if the choice was not offered to the user. |
 | `shellApproval.resolveExternalAgent` | Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request. |
@@ -434,20 +469,6 @@ Allowed callers: `shell`, `app`, `server`
 | Method | Description |
 |--------|-------------|
 | `shellPresence.heartbeat` |  |
-
-## `tokens`
-
-Token management for non-panel bearers and admin token rotation
-
-Allowed callers: `server`, `shell`
-
-| Method | Description |
-|--------|-------------|
-| `tokens.create` | Mint a fresh bearer token for a non-panel caller id with the given caller kind, replacing any existing token for that id. |
-| `tokens.ensure` | Return the existing bearer token for a caller id, minting one with the given caller kind only if none exists yet (idempotent). |
-| `tokens.revoke` | Revoke the bearer token for a caller id; a no-op if no token is registered for it. |
-| `tokens.get` | Look up the current bearer token for a caller id, or null if none is registered. |
-| `tokens.rotateAdmin` | Generate a new random admin token, persist it (when persistence is configured) before swapping it in, and return the new value. |
 
 ## `vcs`
 
@@ -545,7 +566,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
 | `workspace.listSkills` | List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. |
-| `workspace.readSkill` | Return raw SKILL.md contents by legacy bare skill name (`code-review` -> skills/code-review/SKILL.md) or workspace repo path (`packages/foo`, `workers/bar`, `meta`). Path traversal is rejected. |
+| `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
@@ -601,6 +622,16 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
 | `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
 | `workspace-state.panel.rebuildIndex` | Rebuild the panel-search index from active panel entities. |
+
+## `workspacePresence`
+
+Who is connected to this workspace (WP8 §4 host presence — session-derived, zero channel coupling)
+
+Allowed callers: `server`, `shell`, `app`, `panel`
+
+| Method | Description |
+|--------|-------------|
+| `workspacePresence.list` | List the users with ≥1 live human connection to this workspace, plus recently-departed users with a last-seen time (WP8 §4 host presence). Fed only by the session registry — carries no channel/conversation data. |
 
 ## `worktree`
 

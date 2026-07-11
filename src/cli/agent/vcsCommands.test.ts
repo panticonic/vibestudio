@@ -7,6 +7,8 @@ import { clearShellTokenCache } from "../rpcClient.js";
 interface RpcRequest {
   method: string;
   args: unknown[];
+  type?: "call";
+  targetId?: string;
 }
 
 /** The resolved DO target for the userland `vcs` manifest service (P3 push
@@ -22,57 +24,42 @@ const VCS_SERVICE_RESOLUTION = {
   targetId: VCS_DO_TARGET,
 };
 
+const transportMock = vi.hoisted(() => ({
+  handle: null as ((body: RpcRequest) => unknown) | null,
+  rpcBodies: [] as RpcRequest[],
+}));
+
+vi.mock("../webrtcClient.js", () => ({
+  WebRtcRpcClient: class {
+    async ready(): Promise<void> {}
+
+    async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
+      return await this.dispatch<T>({ method, args });
+    }
+
+    async callTarget<T = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[] = []
+    ): Promise<T> {
+      return await this.dispatch<T>({ type: "call", targetId, method, args });
+    }
+
+    async close(): Promise<void> {}
+
+    private async dispatch<T>(body: RpcRequest): Promise<T> {
+      transportMock.rpcBodies.push(body);
+      if (!transportMock.handle) throw new Error("WebRTC test server is not configured");
+      return (await transportMock.handle(body)) as T;
+    }
+  },
+}));
+
+/** Configure the deterministic WebRTC RPC boundary used by paired CLI credentials. */
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
-  const rpcBodies: RpcRequest[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: URL, init?: RequestInit) => {
-      if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-        return new Response(
-          JSON.stringify({ shellToken: "tok", callerId: "shell:dev_cli", deviceId: "dev_cli" })
-        );
-      }
-      // Envelope-native /rpc: unwrap the request envelope into the legacy
-      // {type,targetId,method,args} shape tests assert on, and reply with a
-      // response envelope the CLI client unwraps.
-      const envelope = JSON.parse(String(init?.body ?? "{}")) as {
-        from?: string;
-        target?: string;
-        message?: {
-          type?: string;
-          requestId?: string;
-          method?: string;
-          args?: unknown[];
-          event?: string;
-          payload?: unknown;
-        };
-      };
-      const msg = envelope.message ?? {};
-      const target = envelope.target;
-      const body = (msg.type === "event"
-        ? { type: "emit", targetId: target, event: msg.event, payload: msg.payload }
-        : target && target !== "main"
-          ? { type: "call", targetId: target, method: msg.method, args: msg.args ?? [] }
-          : { method: msg.method, args: msg.args ?? [] }) as unknown as RpcRequest;
-      rpcBodies.push(body);
-      const respond = (payload: { result?: unknown; error?: string }): Response =>
-        new Response(
-          JSON.stringify({
-            from: envelope.target,
-            target: envelope.from,
-            delivery: { caller: { callerId: "main", callerKind: "server" } },
-            provenance: [],
-            message: { type: "response", requestId: msg.requestId, ...payload },
-          })
-        );
-      try {
-        return respond({ result: handle(body) });
-      } catch (error) {
-        return respond({ error: error instanceof Error ? error.message : String(error) });
-      }
-    })
-  );
-  return { rpcBodies };
+  transportMock.rpcBodies = [];
+  transportMock.handle = handle;
+  return { rpcBodies: transportMock.rpcBodies };
 }
 
 function writeCredentials(tmpDir: string): void {
@@ -81,12 +68,28 @@ function writeCredentials(tmpDir: string): void {
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 3,
       kind: "device",
-      url: "https://host.tailnet.ts.net",
+      url: "webrtc://room-cli/_workspace/dev",
       workspaceName: "dev",
-      deviceId: "dev_cli",
-      refreshToken: "refresh_cli",
+      serverId: `srv_${"S".repeat(24)}`,
+      deviceId: `dev_${"D".repeat(24)}`,
+      refreshToken: "R".repeat(43),
+      controlPairing: {
+        room: "room-control",
+        fp: "AA".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      workspacePairing: {
+        room: "room-cli",
+        fp: "AA".repeat(32),
+        sig: "wss://signal.example/",
+        v: 2,
+        ice: "all",
+      },
+      pairedAt: 1,
     })
   );
 }
@@ -99,7 +102,7 @@ function writeSession(tmpDir: string, name = "default"): void {
     JSON.stringify({
       schemaVersion: 1,
       name,
-      serverUrl: "https://host.tailnet.ts.net",
+      serverUrl: "webrtc://room-cli/_workspace/dev",
       entityId: `session:${name}`,
       contextId: "ctx_1",
       scopeKey: name,
@@ -131,7 +134,15 @@ describe("vibestudio vcs commands", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-vcs-cli-"));
     vi.stubEnv("HOME", tmpDir);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("Unexpected network request from WebRTC CLI test");
+      })
+    );
     clearShellTokenCache();
+    transportMock.handle = null;
+    transportMock.rpcBodies = [];
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });

@@ -141,7 +141,6 @@ interface BrowserHandoffDeliveryResult {
  * api-key, etc.) complete inline. */
 const INTERACTIVE_CONNECT_FLOWS = new Set<string>([
   "oauth2-auth-code-pkce",
-  "oauth2-auth-code",
   "oauth2-device-code",
   "oauth1a",
   "browser-cookie-session",
@@ -180,7 +179,6 @@ type AuthCodeConnectRequest = {
   credential: ConnectCredentialRequest["credential"];
   redirect?: ConnectCredentialRequest["redirect"];
   browser?: ConnectCredentialRequest["browser"];
-  pkce: boolean;
   tokenAuth?: "none" | "client_secret_post" | "client_secret_basic" | "private_key_jwt";
 };
 type InternalOAuthConnectionRequest = {
@@ -201,7 +199,6 @@ type InternalOAuthConnectionRequest = {
   };
   credential: ConnectCredentialRequest["credential"];
   redirectUri: string;
-  pkce: boolean;
   tokenAuth: "none" | "client_secret_post" | "client_secret_basic" | "private_key_jwt";
 };
 
@@ -909,19 +906,15 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   function createOAuthAuthorizeRequest(
     request: InternalOAuthConnectionRequest,
     state: string
-  ): { state: string; authorizeUrl: string; codeVerifier?: string } {
-    const codeVerifier = request.pkce ? randomBytes(32).toString("base64url") : undefined;
-    const codeChallenge = codeVerifier
-      ? createHash("sha256").update(codeVerifier).digest("base64url")
-      : undefined;
+  ): { state: string; authorizeUrl: string; codeVerifier: string } {
+    const codeVerifier = randomBytes(32).toString("base64url");
+    const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
     const authorizeUrl = new URL(request.flow.authorizeUrl);
     authorizeUrl.searchParams.set("response_type", "code");
     authorizeUrl.searchParams.set("client_id", request.flow.clientId);
     authorizeUrl.searchParams.set("redirect_uri", request.redirectUri);
-    if (codeChallenge) {
-      authorizeUrl.searchParams.set("code_challenge", codeChallenge);
-      authorizeUrl.searchParams.set("code_challenge_method", "S256");
-    }
+    authorizeUrl.searchParams.set("code_challenge", codeChallenge);
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
     authorizeUrl.searchParams.set("state", state);
     if (request.flow.scopes?.length) {
       authorizeUrl.searchParams.set("scope", request.flow.scopes.join(" "));
@@ -955,6 +948,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       kind: "client-config",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       configId: request.configId,
@@ -1085,6 +1079,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         dedupKey: `delete-client-config:${request.configId}`,
         callerId: ctx.caller.runtime.id,
         callerKind: ctx.caller.runtime.kind,
+        ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         capability: "client-config-delete",
@@ -1207,6 +1202,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       kind: "credential-input",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.title,
@@ -1264,13 +1260,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           return connectOAuth2AuthCode(
             ctx,
             normalizePkceConnectRequest(request),
-            handoffTarget,
-            signal
-          );
-        case "oauth2-auth-code":
-          return connectOAuth2AuthCode(
-            ctx,
-            normalizeAuthCodeConnectRequest(request),
             handoffTarget,
             signal
           );
@@ -1349,7 +1338,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         credential: request.credential,
         redirect: request.redirect,
         browser: request.browser,
-        pkce: true,
         tokenAuth: flow.tokenAuth,
       };
     }
@@ -1377,60 +1365,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credential: request.credential,
       redirect: request.redirect,
       browser: request.browser,
-      pkce: true,
       tokenAuth: flow.tokenAuth ?? "none",
-    };
-  }
-
-  function normalizeAuthCodeConnectRequest(
-    request: ConnectCredentialRequest
-  ): AuthCodeConnectRequest {
-    const flow = request.flow;
-    if (flow.type !== "oauth2-auth-code") {
-      throw new OAuthConnectionError("unsupported_flow");
-    }
-    if (flow.pkce !== false || !flow.compatibilityReason) {
-      throw new OAuthConnectionError("invalid_connection_spec");
-    }
-    if (!flow.clientConfigId && flow.tokenAuth !== "none") {
-      throw new OAuthConnectionError("client_config_unavailable");
-    }
-    if (flow.clientConfigId) {
-      return {
-        flow: {
-          clientConfigId: flow.clientConfigId,
-          scopes: flow.scopes,
-          extraAuthorizeParams: flow.extraAuthorizeParams,
-          persistRefreshToken: flow.persistRefreshToken,
-          accountValidation: flow.accountValidation,
-          revocationUrl: flow.revocationUrl,
-        },
-        credential: request.credential,
-        redirect: request.redirect,
-        browser: request.browser,
-        pkce: false,
-        tokenAuth: flow.tokenAuth,
-      };
-    }
-    if (flow.tokenAuth !== "none" || !flow.authorizeUrl || !flow.tokenUrl || !flow.clientId) {
-      throw new OAuthConnectionError("invalid_connection_spec");
-    }
-    return {
-      flow: {
-        authorizeUrl: flow.authorizeUrl,
-        tokenUrl: flow.tokenUrl,
-        clientId: flow.clientId,
-        scopes: flow.scopes,
-        extraAuthorizeParams: flow.extraAuthorizeParams,
-        persistRefreshToken: flow.persistRefreshToken,
-        accountValidation: flow.accountValidation,
-        revocationUrl: flow.revocationUrl,
-      },
-      credential: request.credential,
-      redirect: request.redirect,
-      browser: request.browser,
-      pkce: false,
-      tokenAuth: "none",
     };
   }
 
@@ -1467,6 +1402,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       kind: "credential-input",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.flow.title ?? request.credential.label,
@@ -1553,6 +1489,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       kind: "credential-input",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.flow.title ?? request.credential.label,
@@ -1664,6 +1601,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         kind: "credential-input",
         callerId: ctx.caller.runtime.id,
         callerKind: ctx.caller.runtime.kind,
+        ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         title: request.flow.title ?? request.credential.label,
@@ -2738,15 +2676,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (request.flow.clientConfigId) {
       const config = await loadClientConfigForFlow(
         request.flow.clientConfigId,
-        request.pkce ? "oauth2-auth-code-pkce" : "oauth2-auth-code"
+        "oauth2-auth-code-pkce"
       );
       const clientId = config.fields["clientId"]?.value;
       const clientSecret = config.fields["clientSecret"]?.value;
       const privateKeyPem = config.fields["privateKeyPem"]?.value;
       const keyId = config.fields["keyId"]?.value;
       const keyAlgorithm = config.fields["algorithm"]?.value;
-      const tokenAuth =
-        request.tokenAuth ?? (request.pkce && !clientSecret ? "none" : "client_secret_post");
+      const tokenAuth = request.tokenAuth ?? (clientSecret ? "client_secret_post" : "none");
       if (!clientId) {
         throw new OAuthConnectionError("client_config_unavailable");
       }
@@ -2776,7 +2713,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
               },
             },
             redirectUri,
-            pkce: request.pkce,
             tokenAuth,
           };
         }
@@ -2804,7 +2740,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           },
         },
         redirectUri,
-        pkce: request.pkce,
         tokenAuth,
       };
     }
@@ -2825,7 +2760,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       },
       credential: request.credential,
       redirectUri,
-      pkce: request.pkce,
       tokenAuth: request.tokenAuth,
     };
   }
@@ -3364,9 +3298,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       resource: grant.resource,
       action: grant.action,
       scope: grant.scope,
-      ...(grant.callerId ? { callerId: grant.callerId } : {}),
-      ...(grant.repoPath ? { repoPath: grant.repoPath } : {}),
-      ...(grant.effectiveVersion ? { effectiveVersion: grant.effectiveVersion } : {}),
+      repoPath: grant.repoPath,
+      effectiveVersion: grant.effectiveVersion,
       grantedAt: grant.grantedAt,
       grantedBy: grant.grantedBy,
       subjects,
@@ -3377,21 +3310,11 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     grant: CredentialUseGrant,
     runtimeIndex: CredentialRuntimeIndex
   ): Promise<CredentialAccessSubjectSummary[]> {
-    if (grant.scope === "caller") {
-      if (!grant.callerId) return [];
-      return [
-        await summarizeCredentialSubject(
-          grant.callerId,
-          runtimeIndex.entitiesById.get(grant.callerId) ?? null,
-          runtimeIndex
-        ),
-      ];
-    }
     const subjects = runtimeIndex.activeEntities.filter(
       (entity) =>
         isCredentialAccessSubjectKind(entity.kind) &&
         entity.source.repoPath === grant.repoPath &&
-        (grant.scope !== "version" || entity.source.effectiveVersion === grant.effectiveVersion)
+        entity.source.effectiveVersion === grant.effectiveVersion
     );
     return Promise.all(
       subjects.map((entity) => summarizeCredentialSubject(entity.id, entity, runtimeIndex))
@@ -3551,6 +3474,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       dedupKey: `revoke-credential:${targetId}`,
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       capability: "credential-revoke",
@@ -3943,6 +3867,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ...(params.signal ? { signal: params.signal } : {}),
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: params.identity.repoPath,
       effectiveVersion: params.identity.effectiveVersion,
       credentialId: params.credentialId,
@@ -4133,6 +4058,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ...(signal ? { signal } : {}),
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
+      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       credentialId: credential.id,
@@ -4176,7 +4102,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
     await persistCredentialUseGrant(
       credential as Credential & { id: string },
-      grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage),
+      grantForDecision(identity, decision, now, usage),
       now
     );
     resolvePendingCredentialUseGrants(credentialId, identity, decision, usage);
@@ -4227,7 +4153,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         return false;
       }
       if (decision === "session") return approval.callerId === identity.callerId;
-      if (decision === "repo") return approval.repoPath === identity.repoPath;
       return (
         approval.repoPath === identity.repoPath &&
         approval.effectiveVersion === identity.effectiveVersion
@@ -4253,7 +4178,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     for (const usage of usageContexts) {
       await persistCredentialUseGrant(
         credential,
-        grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage),
+        grantForDecision(identity, decision, now, usage),
         now
       );
     }
@@ -5009,7 +4934,6 @@ function gitRemoteFromUrl(targetUrl: URL): string {
 }
 
 function grantForDecision(
-  callerId: string,
   identity: { repoPath: string; effectiveVersion: string },
   decision: Exclude<GrantedDecision, "deny" | "once" | "session">,
   grantedAt: number,
@@ -5023,18 +4947,12 @@ function grantForDecision(
     grantedAt,
     grantedBy: decision,
   };
-  if (decision === "repo") {
-    return { ...base, scope: "repo", repoPath: identity.repoPath };
-  }
-  if (decision === "version") {
-    return {
-      ...base,
-      scope: "version",
-      repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
-    };
-  }
-  return { ...base, scope: "caller", callerId };
+  return {
+    ...base,
+    scope: "version",
+    repoPath: identity.repoPath,
+    effectiveVersion: identity.effectiveVersion,
+  };
 }
 
 function upsertCredentialUseGrant(
@@ -5054,22 +4972,15 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
     grant.resource,
     grant.action,
     grant.scope,
-    grant.callerId ?? "",
-    grant.repoPath ?? "",
-    grant.effectiveVersion ?? "",
+    grant.repoPath,
+    grant.effectiveVersion,
   ].join("\x00");
 }
 
 function grantAppliesToIdentity(
   grant: CredentialUseGrant,
-  identity: { callerId?: string; repoPath: string; effectiveVersion: string }
+  identity: { repoPath: string; effectiveVersion: string }
 ): boolean {
-  if (grant.scope === "caller") {
-    return !!identity.callerId && grant.callerId === identity.callerId;
-  }
-  if (grant.scope === "repo") {
-    return grant.repoPath === identity.repoPath;
-  }
   return (
     grant.repoPath === identity.repoPath && grant.effectiveVersion === identity.effectiveVersion
   );

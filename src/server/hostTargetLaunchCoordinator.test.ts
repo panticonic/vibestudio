@@ -73,7 +73,9 @@ function makeCoordinator(opts: {
             ? opts.rnAppSource !== undefined
               ? opts.rnAppSource
               : "apps/mobile"
-            : null,
+            : target === "terminal"
+              ? "apps/terminal"
+              : null,
       }) as unknown as AppHost,
     getTrustedUnitHosts: () => [
       {
@@ -217,6 +219,34 @@ describe("HostTargetLaunchCoordinator", () => {
 
     expect(result.status).toBe("ready");
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("shows extension build progress while a terminal app waits for startup units", async () => {
+    const { coordinator } = makeCoordinator({
+      launch: {
+        status: "preparing",
+        launched: false,
+        target: "terminal",
+        reason: "Selected Terminal app does not have an active build",
+        details: ["apps/terminal: pending-approval"],
+      },
+      trustedUnits: [
+        {
+          kind: "extension",
+          name: "@workspace-extensions/claude-code",
+          source: "extensions/claude-code",
+          status: "building",
+        },
+      ],
+    });
+
+    await expect(coordinator.launch("terminal")).resolves.toMatchObject({
+      status: "preparing",
+      details: [
+        "apps/terminal: pending-approval",
+        "@workspace-extensions/claude-code (extensions/claude-code) status: building",
+      ],
+    });
   });
 
   it("returns a starting session promptly while launch resolution continues", async () => {

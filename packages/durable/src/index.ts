@@ -194,6 +194,7 @@ export abstract class DurableObjectBase {
               ...(typeof record["callerPanelId"] === "string"
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
+              ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
             },
           };
         }
@@ -481,8 +482,10 @@ export abstract class DurableObjectBase {
       // dispatch as `__rpc`, so `(this)[method]` is gone and `exposeAll` is the
       // single dispatch. Returns the raw method result (the relay/DODispatch
       // contract), not the response envelope.
-      const caller: AuthenticatedCaller =
-        verifiedCallerFromBody ?? { callerId: "", callerKind: "unknown" };
+      const caller: AuthenticatedCaller = verifiedCallerFromBody ?? {
+        callerId: "",
+        callerKind: "unknown",
+      };
       const envelope = envelopeFromMessage({
         selfId: this.rpcSelfId,
         from: caller.callerId || "unknown",
@@ -494,7 +497,9 @@ export abstract class DurableObjectBase {
           fromId: caller.callerId || "unknown",
           method,
           args,
-          ...(invocationTokenFromBody !== undefined ? { invocationToken: invocationTokenFromBody } : {}),
+          ...(invocationTokenFromBody !== undefined
+            ? { invocationToken: invocationTokenFromBody }
+            : {}),
         },
       });
       const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
@@ -645,7 +650,6 @@ export abstract class DurableObjectBase {
       this.currentVerifiedCaller = previous;
     }
   }
-
 }
 
 function jsonResponse(value: unknown, status = 200): Response {

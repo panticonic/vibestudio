@@ -1,5 +1,11 @@
-import { randomBytes } from "crypto";
-import { resolveOrCreateWorkspace, type ResolvedWorkspace } from "./loader.js";
+import { randomBytes } from "node:crypto";
+import {
+  createAndRegisterWorkspace,
+  recoverStagedWorkspaceDeletions,
+  resolveOrCreateWorkspace,
+  resolveWorkspaceTemplateDir,
+  type ResolvedWorkspace,
+} from "./loader.js";
 import type { CentralDataManager } from "../centralData.js";
 
 export interface ResolveLocalWorkspaceStartupOpts {
@@ -31,17 +37,24 @@ export interface LocalWorkspaceStartup {
  * selection when they do not own central workspace state.
  */
 export function resolveLocalWorkspaceStartup(
-  opts: ResolveLocalWorkspaceStartupOpts,
+  opts: ResolveLocalWorkspaceStartupOpts
 ): LocalWorkspaceStartup {
   const centralData = opts.centralData ?? null;
+  if (centralData) {
+    recoverStagedWorkspaceDeletions(centralData);
+  }
 
   if (opts.wsDir) {
+    if (centralData) {
+      throw new Error(
+        "Explicit workspace directories are reserved for hub-managed child runtimes; select a registered workspace by name"
+      );
+    }
     const resolved = resolveOrCreateWorkspace({
       wsDir: opts.wsDir,
       appRoot: opts.appRoot,
       init: opts.init,
     });
-    centralData?.addWorkspace(resolved.name);
     return {
       resolved,
       isEphemeral: false,
@@ -49,43 +62,36 @@ export function resolveLocalWorkspaceStartup(
   }
 
   if (opts.name) {
-    const resolved = resolveOrCreateWorkspace({
-      name: opts.name,
-      appRoot: opts.appRoot,
-      init: opts.init,
-    });
-    centralData?.addWorkspace(resolved.name);
+    const resolved = centralData
+      ? resolveRegisteredWorkspace(opts.name, Boolean(opts.init), opts.appRoot, centralData)
+      : resolveOrCreateWorkspace({
+          name: opts.name,
+          appRoot: opts.appRoot,
+          init: opts.init,
+        });
     return { resolved, isEphemeral: false };
   }
 
   if (opts.isDev) {
     const devName = `dev-${randomBytes(4).toString("hex")}`;
-    const resolved = resolveOrCreateWorkspace({
-      name: devName,
-      appRoot: opts.appRoot,
-      init: true,
-    });
-    centralData?.addWorkspace(resolved.name);
+    const resolved = centralData
+      ? resolveRegisteredWorkspace(devName, true, opts.appRoot, centralData)
+      : resolveOrCreateWorkspace({
+          name: devName,
+          appRoot: opts.appRoot,
+          init: true,
+        });
     return { resolved, isEphemeral: true };
   }
 
   if (centralData) {
     const last = centralData.getLastOpenedWorkspace();
     if (last) {
-      const resolved = resolveOrCreateWorkspace({
-        name: last.name,
-        appRoot: opts.appRoot,
-      });
-      centralData.touchWorkspace(last.name);
+      const resolved = resolveRegisteredWorkspace(last.name, false, opts.appRoot, centralData);
       return { resolved, isEphemeral: false };
     }
 
-    const resolved = resolveOrCreateWorkspace({
-      name: "default",
-      appRoot: opts.appRoot,
-      init: true,
-    });
-    centralData.addWorkspace("default");
+    const resolved = resolveRegisteredWorkspace("default", true, opts.appRoot, centralData);
     return { resolved, isEphemeral: false };
   }
 
@@ -101,4 +107,26 @@ export function resolveLocalWorkspaceStartup(
     }),
     isEphemeral: false,
   };
+}
+
+function resolveRegisteredWorkspace(
+  name: string,
+  createIfMissing: boolean,
+  appRoot: string,
+  centralData: CentralDataManager
+): ResolvedWorkspace {
+  const registered = centralData.getWorkspaceEntry(name);
+  if (registered) {
+    const resolved = resolveOrCreateWorkspace({ name, appRoot, init: false });
+    centralData.touchWorkspace(name);
+    return resolved;
+  }
+  if (!createIfMissing) {
+    throw new Error(`Workspace "${name}" is not registered`);
+  }
+
+  const templateDir = resolveWorkspaceTemplateDir(appRoot);
+  createAndRegisterWorkspace(name, centralData, templateDir ? { templateDir } : undefined);
+  const resolved = resolveOrCreateWorkspace({ name, appRoot, init: false });
+  return { ...resolved, created: true };
 }

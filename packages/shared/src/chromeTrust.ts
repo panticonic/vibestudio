@@ -2,11 +2,11 @@ import { WORKSPACE_APP_PACKAGE_SCOPE } from "./workspace/types.js";
 
 /**
  * Workspace app trust — which workspace apps may render host chrome
- * (panel-hosting) and which may manage connections (pairing invites).
+ * (`panel-hosting`).
  *
  * The grants are NOT hardcoded here. They come from the workspace manifest
- * (`workspace/meta/vibestudio.yml` → `trust.chromeApps` /
- * `trust.connectionManagementApps`), which is an approval-gated meta write —
+ * (`workspace/meta/vibestudio.yml` → `trust.chromeApps`), which is an
+ * approval-gated meta write —
  * so trust changes ride the existing main-advance approval flow.
  *
  * Seeding: `loadWorkspaceConfig` (workspace/loader.ts) seeds this process-wide
@@ -28,13 +28,10 @@ import { WORKSPACE_APP_PACKAGE_SCOPE } from "./workspace/types.js";
 export interface WorkspaceAppTrustGrants {
   /** Canonical `apps/<name>` repo paths allowed to render host chrome. */
   chromeApps: readonly string[];
-  /** Canonical `apps/<name>` repo paths allowed to manage connections. */
-  connectionManagementApps: readonly string[];
 }
 
 interface TrustState {
   chrome: Set<string>;
-  connectionManagement: Set<string>;
 }
 
 let processTrust: TrustState | null = null;
@@ -53,9 +50,6 @@ export function setWorkspaceAppTrust(grants: WorkspaceAppTrustGrants | null): vo
   }
   processTrust = {
     chrome: new Set(grants.chromeApps.map(normalizeAppSourcePath)),
-    connectionManagement: new Set(
-      grants.connectionManagementApps.map(normalizeAppSourcePath)
-    ),
   };
 }
 
@@ -102,14 +96,6 @@ export function isAuthorizedChromeAppSource(source: string | null | undefined): 
   if (!source) return false;
   if (!processTrust) return deferToHostGrant("chrome app trust");
   return processTrust.chrome.has(normalizeAppSourcePath(source));
-}
-
-export function isAuthorizedConnectionManagementAppSource(
-  source: string | null | undefined
-): boolean {
-  if (!source) return false;
-  if (!processTrust) return deferToHostGrant("connection-management app trust");
-  return processTrust.connectionManagement.has(normalizeAppSourcePath(source));
 }
 
 export function isAuthorizedChromeAppCaller(callerId: string, source?: string | null): boolean {
