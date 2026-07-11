@@ -848,7 +848,7 @@ Listed here so future readers don't waste time considering them:
 
 - **Dispatcher, route registry, transport, `ServiceContainer`** — the substrate extensions plug into.
 - **Approvals system** (`approvalQueue`, `shellApprovalService`, `userlandApprovalService`, `capabilityPermission`, `capabilityGrantStore`) — the single source of truth for user consent.
-- **Auth and identity** (`authService`, `tokensService`, `deviceAuthStore`, `codeIdentityResolver`) — every RPC's caller identity flows through these.
+- **Auth and identity** (`authService`, `deviceAuthStore`, `codeIdentityResolver`) — every RPC's caller identity flows through these.
 - **Build pipeline** (`buildService`, buildV2) — builds the extensions.
 - **Worker lifecycle** (`workerdService`, `workerService`, `workerLogService`) — co-equal infrastructure.
 - **Panel orchestration** (`workspace-sync`, `PanelStoreDO`).

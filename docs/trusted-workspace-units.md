@@ -60,9 +60,6 @@ credential. Mobile native hosts may also refresh a principal grant with
 ## Capability Checks
 
 Capabilities are declared in the app manifest and checked at the service
-boundary. `connection-management` is required for app callers that mint pairing
-invites through `auth.createPairingInvite`.
-
-Shell and server callers are trusted host principals for this
-operation. App callers must be active and running with the requested capability.
-Capability denial is returned with code `EACCES`.
+boundary. User/device pairing is not an app capability: authenticated clients
+use the typed `hubControl` service, which binds `pairDevice` to the acting user
+and role-gates `inviteUser` at the hub.

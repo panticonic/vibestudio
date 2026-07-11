@@ -23,9 +23,8 @@ GAD is one Durable Object class, `GadWorkspaceDO`
 Underneath the sprawl is one genuinely good idea, the **ledger kernel**:
 
 - A unified, hash-chained, append-only event log (`log_events` / `log_heads`)
-  with a single `log_kind` discriminator and one write path, `appendLogEvent`
-  (`index.ts:1301-1303`). `appendTrajectoryBatch` and `appendChannelEnvelope`
-  are thin wrappers over it (`index.ts:4503-4512`, `4685-4690`).
+  with a single `log_kind` discriminator and one write path, `appendLogEvent`.
+  Typed channel projections are read views over that canonical ledger.
 - Content-addressed storage: `gad_blobs`, `gad_file_versions`,
   `gad_manifest_nodes/_entries`, `gad_worktree_states`, with state identity by
   hash.

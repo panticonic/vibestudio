@@ -6,7 +6,7 @@ server itself stays on loopback and needs **no public endpoint**.
 
 ```
    desktop / mobile / CLI client                      home server / VPS
-            │  vibestudio://connect?room&fp&code&sig          │
+            │  vibestudio://connect?room&fp&code&sig&v&ice    │
             ▼                                                ▼
    ┌─────────────────────┐   offer/answer   ┌──────────────────────────┐
    │  signaling Worker    │◀────────────────▶│  server (WebRTC answerer) │
@@ -22,6 +22,16 @@ Neither Worker sees your data: **signaling** only brokers the WebRTC
 offer/answer, and the **relay** only forwards OAuth callbacks / webhooks over an
 authenticated backhaul socket the server opens.
 
+**Who owns what (multi-user):** the **hub** owns identity, pairing, and
+routing/signaling coordination — it holds the one identity DB
+(`server-auth/identity.db`: users, devices, memberships), mints pairing codes,
+and answers `hubControl.listWorkspaces`/`routeWorkspace` so a device is directed to the
+right workspace. But the hub is **not a media relay**: **each workspace child
+keeps its own WebRTC ingress and its own persistent DTLS identity**, and a
+client's WebRTC pipe terminates directly at the child it is a member of. The
+hub only hands the client the child's reach coordinates (signaling room,
+fingerprint, ICE).
+
 ## 1. Deploy the signaling Worker
 
 ```bash
@@ -35,8 +45,8 @@ wrangler secret put TURN_KEY_API_TOKEN     # …and its signing key
 
 `SIGNALING_ROOM` is a Durable Object (one instance per UUID room, WebSocket
 Hibernation so a room survives ICE-restart). The hosted default is
-`wss://signal.vibestudio.app`; self-hosted deployments can persist their URL with
-`vibestudio remote setup-signaling --url wss://...`.
+`wss://signal.vibestudio.app`; pass a self-hosted endpoint with `--signal-url`
+or `VIBESTUDIO_WEBRTC_SIGNAL_URL`.
 
 ## 2. Deploy the callback relay (only if you use OAuth / webhooks remotely)
 
@@ -54,27 +64,24 @@ is no per-server base URL — routing is multi-tenant.
 
 ## 3. Run the server as a WebRTC answerer
 
-Run the server as a WebRTC answerer. Signaling resolves as flag > env > config >
-hosted default:
+Run the server as a WebRTC answerer. Signaling resolves as `--signal-url` >
+`VIBESTUDIO_WEBRTC_SIGNAL_URL` > hosted default:
 
 ```bash
 vibestudio remote serve --port 3030
-# logs:  Pair URL: https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2
+# logs:  Pair URL: https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2&ice=all
 ```
 
 The server mints the per-invite signaling room and pairing code itself (one
 fresh room per invite; paired devices keep their own rooms).
 
-- The server presents a **persistent DTLS identity**. `remote deploy` pins the
-  hub identity at `$HOME/.config/vibestudio/webrtc/identity.pem`; workspace
-  child answerers use
+- Each workspace child presents a **persistent DTLS identity** at the hub-managed
   `$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
-  Override with `VIBESTUDIO_WEBRTC_IDENTITY` only for explicit local setups. The
-  certificate SHA-256 is the `fp` in the link; the client pins it and
-  fail-closes on mismatch.
+  Each workspace has its own identity; the certificate SHA-256 is the `fp` in
+  the link, and the client pins it and fail-closes on mismatch.
 - `VIBESTUDIO_WEBRTC_ICE=relay` forces TURN (needs the signaling TURN secrets above).
 - `vibestudio remote doctor` validates node-datachannel, signaling reachability,
-  `identity.pem`, and removed legacy env vars before deployment.
+  and the selected workspace's `identity.pem` after deployment.
 - OAuth redirect URIs are minted from `VIBESTUDIO_RELAY_OAUTH_BASE_URL` (the relay
   origin); register that `…/oauth/callback` with your providers.
 
@@ -84,14 +91,13 @@ once with `pnpm rebuild node-datachannel`.
 For a managed SSH/systemd host, use:
 
 ```bash
-vibestudio remote deploy user@host --port 3030 --workspace default
+vibestudio remote deploy user@host --port 3030
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 ```
 
-Deploy starts the loopback server, mints a workspace-scoped invite via the
-remote host's local admin token, and doctors the selected workspace child
-identity.
+Deploy starts the loopback hub and doctors its WebRTC identity. Pair a device,
+then choose or create a workspace through the authenticated hub control plane.
 
 ## 4. Pair a client
 

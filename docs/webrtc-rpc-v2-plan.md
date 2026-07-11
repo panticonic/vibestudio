@@ -163,13 +163,12 @@ request bodies at all (today asset-origin POST bodies are silently dropped).
 
 New `src/server/webrtcIngress.ts`, one instance per server process:
 
-- **One room per pairing invite.** `auth.createPairingInvite` mints a fresh room
-  UUID; the invite stores `{code, room}`; the deep link carries them. On
-  redemption the room is persisted onto the device record
-  (`deviceAuthStore`: `deviceId → room`). The per-server singleton room file
-  (`<appRoot>/.vibestudio/webrtc/room`, `ensurePersistentRoom`) is **deleted**.
-- The pool arms **one answerer pipe per device room + per outstanding invite**,
-  and tears pipes down on device revocation / invite expiry.
+- **Ephemeral routed rooms.** The hub's `hubControl.pairDevice` flow asks the
+  selected workspace child to arm a fresh room and combines it with a hub-owned
+  one-time code. Redemption promotes that runtime room to the issued device;
+  transport coordinates are never persisted in identity rows.
+- The pool arms answerer pipes only for current hub routes and outstanding
+  invites, and tears them down on revocation, expiry, or child shutdown.
 - **Lazy peers:** the answerer arms signaling only on `connect()`; the
   `RTCPeerConnection` is created on the first inbound offer (descriptions are
   already queued pre-peer). N idle devices cost N WebSockets, zero native peers.

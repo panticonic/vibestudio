@@ -22,12 +22,11 @@ standalone server from `src/server/index.ts`.
 pnpm server:live --help
 ```
 
-Electron local mode spawns the bundled `dist/server-electron.cjs` as a **detached
-workspace server** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
-`src/main/localServerManager.ts`); rebuild it after Electron or local-server
-changes. The desktop shell is a paired device of that server — it attaches to a
-healthy recorded server on launch and spawns a fresh one otherwise, so there is no
-separate Electron⇄server IPC mode.
+Electron local mode owns one detached **hub** through
+`src/main/hubProcessManager.ts`. The desktop pairs once as a machine-global
+device, asks the hub to route its selected workspace, and then connects to that
+workspace child through the hub gateway. Workspace selection never creates a
+second desktop-owned server or a workspace-scoped device credential.
 
 ## Install
 
@@ -60,26 +59,27 @@ vibestudio remote serve --port 3030
 pnpm cli remote serve --port 3030
 ```
 
-Pair this terminal, choose a workspace, start the terminal app, and mint new invites:
+Pair this terminal, choose a workspace, start the terminal app, and manage
+accounts and devices:
 
 ```sh
-vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"
+vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all"
 vibestudio remote workspaces
 vibestudio remote select dev
-vibestudio terminal start --pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"
+vibestudio terminal start --pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all"
 vibestudio terminal start
-vibestudio remote invite
+vibestudio remote pair-device
+vibestudio remote invite-user --handle mara --workspace dev
+vibestudio remote list-devices
 vibestudio remote status
 vibestudio remote logout
 ```
 
-`remote invite` has two modes:
-
-- With a stored CLI credential, it asks the paired server to mint a workspace
-  invite.
-- On the server host, with no stored CLI credential, it uses the local admin
-  token against `http://127.0.0.1:<port>`; use `--port`, `--workspace`,
-  `--url`, or `--admin-token` when the defaults do not match the running server.
+Every human-facing management command requires a paired device credential and
+uses the typed `hubControl` service. There is no URL/code pairing mode, local
+admin-token invite mode, generic admin RPC command, or child-scoped credential.
+Use `invite-user` for a new account and `pair-device` for another device owned
+by the current account.
 
 Pairing saves a durable device credential. After pairing, desktop, mobile, and
 terminal hosts all choose a workspace, ask the server to launch their selected
@@ -91,33 +91,78 @@ Desktop pairing and workspace selection happen in the desktop bootstrap UI.
 should approve each startup request once.
 
 CLI credentials are stored in `~/.config/vibestudio/cli-credentials.json` with
-file mode `0600`. The server's local admin token is stored separately in
-`~/.config/vibestudio/admin-token`.
+file mode `0600`. Only schema version 3 is accepted. It contains one global
+device credential, a stable control reach, and the selected workspace reach;
+both reaches use exact `room`/`fp`/`sig`/`v`/`ice` coordinates and never persist
+the one-time pairing code.
+
+## Users & membership (multi-user)
+
+The server is multi-user: identity (users, devices, memberships, roles) lives
+in the hub-owned `server-auth/identity.db`, and the hub exposes the management
+surface as hub RPC methods. On a fresh server the **startup pairing code is the
+root invite** — the first device to redeem it bootstraps the `root` user.
+
+The management verbs, and the hub RPC each dispatches to:
+
+| Command                                                                                             | Hub RPC                                                   | Gate                       |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------- |
+| `invite-user` — create a user (handle, optional role/workspaces) and mint a user-bound pairing link | `hubControl.inviteUser`                                   | root/admin                 |
+| `pair-device` — mint a pairing link bound to **your own** account                                   | `hubControl.pairDevice`                                   | any member                 |
+| `add-member` / `remove-member`                                                                      | `hubControl.addWorkspaceMember` / `removeWorkspaceMember` | root/admin                 |
+| `list-users`                                                                                        | `hubControl.listWorkspaceMembers`                         | workspace member           |
+| `list-devices` / `revoke-device`                                                                    | `hubControl.listDevices` / `revokeDevice`                 | authenticated role gate    |
+| `workspaces`                                                                                        | `hubControl.listWorkspaces`                               | any member (root sees all) |
+| `select`                                                                                            | `hubControl.routeWorkspace`                               | member of that workspace   |
+
+Examples (a paired admin device; `vibestudio remote workspaces` / `select`
+are the workspace list/route surface):
+
+```sh
+vibestudio remote invite-user --handle mara --workspace dev   # mints mara's pairing code
+vibestudio remote pair-device                                  # pair another of YOUR devices
+vibestudio remote add-member --handle mara --workspace notes
+vibestudio remote list-users --workspace dev
+vibestudio remote workspaces      # only workspaces you are a member of
+vibestudio remote select dev      # membership-gated entry
+```
+
+Notes:
+
+- Roles are `root` (exactly one, cannot be demoted or deleted), `admin`, and
+  `member`. Roles gate only these host-admin operations; routine approvals and
+  everything inside a workspace stay open to every member.
+- The role is resolved **live** from the identity DB at each gated call — a
+  demotion takes effect immediately, without reconnecting.
+- Non-members are refused at the workspace boundary (`EACCES`); the hub also
+  omits non-member workspaces from listings and never spawns a child for them.
+- Internal hub-to-child control tokens are never accepted as a human identity
+  or exposed by the CLI.
 
 ## Remote Deploy
 
 Deploy or manage a remote server over SSH/systemd:
 
 ```sh
-vibestudio remote deploy user@host --port 3030 --workspace default --signal-url wss://signaling.example.workers.dev
+vibestudio remote deploy user@host --port 3030 --signal-url wss://signaling.example.workers.dev
 vibestudio remote deploy status user@host
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 vibestudio remote deploy remove user@host
 vibestudio remote doctor
-vibestudio remote repair-identity --yes
+vibestudio remote repair-identity --workspace default --yes
 ```
 
-Deploy installs a `systemd --user` unit, enables linger, starts
-`vibestudio remote serve` bound to loopback, then runs `remote invite` and
-`remote doctor` over SSH. The post-start doctor checks the selected workspace
-child identity at
-`$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
+Deploy installs a `systemd --user` unit, enables linger, and starts
+`vibestudio remote serve` bound to loopback. The service journal contains the
+fresh root pairing link; after pairing, all later invites come from a paired
+root/admin device. `remote doctor` checks the signaling endpoint and a selected
+workspace child's managed WebRTC identity (the `default` workspace unless
+`--workspace` or `--identity` is supplied).
 
 `remote serve`, `mobile pair`, and server startup resolve signaling as:
-flag > environment > config > hosted default (`wss://signal.vibestudio.app`).
-Use `remote setup-signaling` only when you want to self-host the Cloudflare
-signaling worker.
+flag > `VIBESTUDIO_WEBRTC_SIGNAL_URL` > hosted default
+(`wss://signal.vibestudio.app`).
 
 ## Agent
 
@@ -132,16 +177,6 @@ vibestudio agent services [NAME]
 vibestudio agent logs UNIT
 vibestudio agent diag UNIT
 ```
-
-The planned headless turn command is present as a stub:
-
-```sh
-vibestudio agent turn --model <ref> --message "hello" [--json]
-```
-
-It currently prints `not yet wired`. This command should only be fully
-implemented once the CLI has existing channel create/join and agent-vessel turn
-plumbing to call.
 
 ## Mobile
 

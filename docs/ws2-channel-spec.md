@@ -22,7 +22,7 @@ our own callers).
 | File | Lines | Role today |
 |---|---|---|
 | `channel-do.ts` | 2,265 | `PubSubChannel extends DurableObjectBase`, schemaVersion 104. Everything: roster, publish, method calls, registry cache, conversation state, alarms, fork, admin inspection. |
-| `channel-log-store.ts` | 296 | `ChannelLogStore` interface + `GadChannelLogStore` — delegates durable envelopes to gad-store via the legacy channel adapters (`appendChannelEnvelope`, `getChannelReplayWindow`, `forkChannelLog`, …), blob-spills payloads via `blobstore.putText`/`getText`. |
+| `channel-log-store.ts` | 296 | Historical channel-log bridge, replaced by direct unified-log access; payload blobs use `blobstore.putText`/`getText`. |
 | `broadcast.ts` | 210 | Per-subscriber FIFO emit chains (`queueEmit`), ordered DO delivery (`queueDoEnvelope`), `broadcast()`, `buildChannelEvent`, wire encoders `channelEventToRpcLog`/`channelEventToRpcSignal`. |
 | `invocation-calls.ts` | 159 | Raw SQL helpers over `pending_calls`: `storeCall`, `consumeCall`, `peekCall`, `cancelCall`, `cancelCallsForTarget`. |
 | `types.ts` | 60 | `SubscribeResult`, `ChannelConfig`, `PresencePayload`, `BroadcastEnvelope`, `StoredAttachment`. |
@@ -831,10 +831,7 @@ private helpers; `consumeCall`/`cancelCall`/`cancelCallsForTarget` disappear
    `README.md` (workspace/workers/README.md:309) drops the row.
 5. **`channel-log-store.ts`** (replaced by `log-store.ts`) and
    **`invocation-calls.ts`** (absorbed into `calls.ts`).
-6. The channel's use of legacy gad adapters: `appendChannelEnvelope`,
-   `appendChannelEnvelopeWithRegistryMutation`, `getChannelReplayWindow`,
-   `getChannelEnvelope`, `forkChannelLog`, `listMessageTypes` *as append/read
-   path* — log-store targets `appendLogEvent`/`readLog`/`getLogEvent`/
+6. The channel targets `appendLogEvent`/`readLog`/`getLogEvent`/
    `getLogHead`/`forkLog` (registry reads keep `listMessageTypes`/
    `getMessageType`, which survive as projection reads).
 

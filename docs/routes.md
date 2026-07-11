@@ -183,8 +183,14 @@ on the mode.
   This is the common case — most callbacks come from third-party IdPs or
   webhook senders, neither of which knows any of our tokens.
 - `"admin-token"`: the gateway compares the presented token against the
-  process admin token in constant time. Useful for privileged diagnostic
-  routes. **Default-deny** when no admin token is configured.
+  process admin token in constant time. This is a **local operator break-glass
+  for diagnostic routes only** — the admin token is not an identity: it is
+  never "root", cannot act as a human user, cannot invite users, and is
+  rejected for RPC auth. Human authority is a **role** (`root`/`admin`/
+  `member`) on the user account in the identity DB, resolved live when a
+  host-admin operation (invite/revoke, membership, workspace create/delete)
+  is invoked — roles and route auth modes are orthogonal layers.
+  **Default-deny** when no admin token is configured.
 - `"caller-token"`: the gateway looks up the presented token in the central
   `TokenManager` (the same registry that issues panel, worker, shell, and
   server caller tokens). Any non-null hit is accepted. **Does not accept

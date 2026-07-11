@@ -15,7 +15,7 @@ PR — no phases, no feature flags, no deferred halves, no optional variants. Ev
 open point below has a committed resolution; §12 lists the risks and how each is
 handled *inside* this change. Companion reading: `EXTENSIONS.md`, `PANEL_SYSTEM.md`,
 `docs/ws1-agent-loop-spec.md`, `docs/credential-system.md`,
-`docs/plans/attachable-local-server.md`.
+`docs/multi-user-wp1-hub-control-plane.md`.
 
 ---
 
@@ -305,7 +305,8 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
   mutations (downloads, config changes, restarts) to the owner's loopback admin
   endpoint (guarded by the same api-key as inference). Owner exit releases the lock;
   the next activation — or any attached instance that detects a dead owner — takes
-  over. Same attach-or-spawn shape as `docs/plans/attachable-local-server.md`.
+  over. Same hub-managed attach-or-spawn lifecycle as
+  `docs/multi-user-wp1-hub-control-plane.md`.
 - Downloads: HF `resolve` URLs with HTTP Range resumption, progress events streamed
   to the panel over the `downloadModel` streaming method, checksum verification
   (curated models: hash pinned in the extension's catalog; ad-hoc HF pulls: the
@@ -610,10 +611,11 @@ header (`workspace/packages/model-catalog/src/catalog.ts:1-7`) promises a snapsh
 with "no credentials, no connection state," and the chat panel computes connection
 status locally "so it stays scoped to this panel's own credentials"
 (`panels/chat/index.tsx:449-451`). What moves into the shared snapshot is
-availability *states*, not credential material or audiences — acceptable for a
-single-user workspace and required for any non-panel consumer (fallback logic,
-agent config, CLI) to reason about usability. Both comments are rewritten as part
-of this change; per the Design stance, the old boundary has no tenure.
+availability *states*, not credential material or audiences. Availability is
+non-secret workspace state; credential authorization remains bound to the acting
+user and caller. Sharing that state is required for non-panel consumers (fallback
+logic, agent config, CLI) to reason about usability. Both comments are rewritten as
+part of this change; per the Design stance, the old boundary has no tenure.
 
 ### 7.2 Picker UX (`ModelPicker.tsx` is rewritten, not patched)
 

@@ -26,7 +26,7 @@ approvalQueue
     v
 approvalPushBridge --------------------.
     |                                   |
-    | sendBatch / cancel                | listPending / resolve
+    | exact member-device targets       | listPending / resolve
     v                                   |
 pushService                            shellApprovalService
     |
@@ -45,8 +45,10 @@ mobile shell transport
     '---- shellApproval.resolve / submit / resolveUserland
 ```
 
-The bridge sends push notifications for newly pending approvals and sends a
-silent `approval-cancel` message when the queue entry resolves elsewhere.
+The bridge snapshots `{userId, clientId}` registrations for current workspace
+members, records successful deliveries, retries only outstanding targets, and
+sends a silent `approval-cancel` to that exact delivered snapshot when the queue
+entry resolves elsewhere.
 Desktop heartbeat suppresses mobile pushes for a short window while an active
 Electron approval bar is present.
 
@@ -74,19 +76,18 @@ log-only mode. The in-app approval sheet still works.
 
 ## Decision Matrix
 
-| Decision | Notification action | Meaning |
-| --- | --- | --- |
-| `once` | Once | Approve this pending operation only. No reusable grant is stored. |
-| `session` | Session | Approve matching requests for the current process session from this concrete caller. |
-| `version` | Trust Version | Approve matching requests from the same effective code version. |
-| `repo` | Not offered in current clients | Legacy repository-scope decision accepted for compatibility. |
-| `deny` | Deny | Reject the request. |
-| `dismiss` | Sheet close only | Treat as deny without presenting it as an affirmative denial action. |
-| `open` | Open | Open the mobile app to the approval sheet. It does not resolve by itself. |
+| Decision  | Notification action | Meaning                                                                              |
+| --------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `once`    | Once                | Approve this pending operation only. No reusable grant is stored.                    |
+| `session` | Session             | Approve matching requests for the current process session from this concrete caller. |
+| `version` | Trust Version       | Approve matching requests from the same effective code version.                      |
+| `deny`    | Deny                | Reject the request.                                                                  |
+| `dismiss` | Sheet close only    | Treat as deny without presenting it as an affirmative denial action.                 |
+| `open`    | Open                | Open the mobile app to the approval sheet. It does not resolve by itself.            |
 
 Standard `credential` and `capability` approval notifications expose `once`,
 `version`, `deny`, `open`, and `session` in that order. In-app surfaces show
-`Trust Version` as the highlighted default and do not offer repository-scope trust. `client-config`,
+`Trust Version` as the highlighted default. `client-config`,
 `credential-input`, and `userland` approvals expose only `open` from the
 notification because they require in-app UI.
 
@@ -176,8 +177,7 @@ Run the server and pair a mobile device, then verify:
 
 1. Each approval kind renders in-app: `credential`, `capability`,
    `client-config`, `credential-input`, and `userland`.
-2. Standard approvals resolve with `once`, `session`, `version`, `repo`, and
-   `deny`.
+2. Standard approvals resolve with `once`, `session`, `version`, and `deny`.
 3. `credential-input`, `client-config`, and `userland` notifications open the
    app instead of resolving inline.
 4. Background action presses queue locally, update the notification to syncing,

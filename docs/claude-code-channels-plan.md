@@ -11,7 +11,7 @@ milestone sequencing, no deferred follow-ons, no optional tiers of ambition. The
 mirrors) are in scope and land in the same cut.
 Companion docs: `docs/ws2-channel-spec.md` (channel substrate), `docs/fork-and-subagents-plan.md`
 (contexts/subagents), `docs/agentic-architecture.md`, `docs/cli.md`,
-`docs/plans/attachable-local-server.md`.
+`docs/multi-user-wp1-hub-control-plane.md`.
 
 ## 0. Goal
 

@@ -52,18 +52,18 @@ They also run nightly in CI (`.github/workflows/webrtc-e2e-nightly.yml`).
         └──────────────── real RPC round-trip ─────────────────┘
 ```
 
-| Piece | Where |
-| --- | --- |
-| Signaling DO + `wrangler dev` | `apps/signaling/` (Miniflare-local) |
-| Signaling client | `@vibestudio/rpc/transports/webrtcSignalingClient` (`ws` in Node; `role` required) |
-| Native peer adapter | `src/main/webrtc/nodeDatachannelPeer.ts` (lazy-loads `node-datachannel`) |
-| Persistent DTLS cert | `src/main/webrtc/cert.ts` (`ensurePersistentCert` → stable QR `fp`) |
-| Client transport | `@vibestudio/rpc/transports/webrtcClient` |
-| Shared client bootstrap | `@vibestudio/rpc/transports/pairedConnection` (`createPairedConnection` — desktop/mobile) |
-| Server answerer pipe | `@vibestudio/rpc/transports/webrtcAnswerer` |
-| Server attach | `RpcServer.attachWebRtcPipe` + `src/server/webrtcSessionShim.ts` |
-| Server ingress pool | `src/server/webrtcIngress.ts` (`startWebRtcIngress`, wired env-gated in `index.ts`) |
-| Per-invite rooms | `src/server/services/auth/model.ts` (`mintPairingInvite` → room + deep link) |
+| Piece                         | Where                                                                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------- |
+| Signaling DO + `wrangler dev` | `apps/signaling/` (Miniflare-local)                                                       |
+| Signaling client              | `@vibestudio/rpc/transports/webrtcSignalingClient` (`ws` in Node; `role` required)        |
+| Native peer adapter           | `src/main/webrtc/nodeDatachannelPeer.ts` (lazy-loads `node-datachannel`)                  |
+| Persistent DTLS cert          | `src/main/webrtc/cert.ts` (`ensurePersistentCert` → stable QR `fp`)                       |
+| Client transport              | `@vibestudio/rpc/transports/webrtcClient`                                                 |
+| Shared client bootstrap       | `@vibestudio/rpc/transports/pairedConnection` (`createPairedConnection` — desktop/mobile) |
+| Server answerer pipe          | `@vibestudio/rpc/transports/webrtcAnswerer`                                               |
+| Server attach                 | `RpcServer.attachWebRtcPipe` + `src/server/webrtcSessionShim.ts`                          |
+| Server ingress pool           | `src/server/webrtcIngress.ts` (`startWebRtcIngress`, wired env-gated in `index.ts`)       |
+| Per-invite rooms              | `src/server/services/auth/model.ts` (`mintPairingInvite` → room + deep link)              |
 
 ## Running the REAL server as a WebRTC answerer
 
@@ -83,15 +83,16 @@ VIBESTUDIO_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
 #   and the pool logs:  [webrtc-ingress] armed room <uuid> (invite)
 ```
 
-The server mints two startup invites (banner + ready file; disable with
-`VIBESTUDIO_DISABLE_STARTUP_PAIRING=1`); further invites come from
-`auth.createPairingInvite`. Each invite arms a fresh signaling room on the
-pool; redemption persists the room onto the device record, so returning
-devices reconnect into their own room after a restart.
+On first bootstrap the hub publishes desktop and mobile root invites in
+`rootInvites`; later device invites come from `hubControl.pairDevice`. Each
+invite arms a fresh signaling room in the selected workspace child. Redemption
+promotes that ephemeral room to the issued device. After a restart, returning
+devices obtain fresh reach coordinates from the hub instead of restoring rooms
+from identity storage.
 
-Optional env: `VIBESTUDIO_WEBRTC_IDENTITY` (combined identity path, default
-`<appRoot>/.vibestudio/webrtc/identity.pem`), `VIBESTUDIO_WEBRTC_ICE=relay` (force
-TURN). The server presents the persistent identity cert; its SHA-256 is the published `fp`.
+Optional env: `VIBESTUDIO_WEBRTC_ICE=relay` (force TURN). The isolated hub
+manages a persistent identity for each disposable workspace child; the child's
+certificate SHA-256 is the published `fp`.
 
 Observability (§9.8 relay alarm): every pipe connect logs
 `[webrtc-ingress] room=… device=… path=<host|srflx|relay>` and WARNS when the
@@ -109,18 +110,21 @@ pnpm rebuild node-datachannel   # one-time, if needed
 pnpm dev:webrtc
 ```
 
-The wrapper builds like `pnpm dev`, starts `wrangler dev apps/signaling`, starts a
-local workspace server as the WebRTC answerer, then launches Electron with the
-fresh `vibestudio://connect` link. It passes `--skip-remote-pairing` so saved remote
+The wrapper builds like `pnpm dev`, starts `wrangler dev apps/signaling`, and
+starts a clean hub under a disposable config home. The hub routes its default
+workspace child as the WebRTC answerer and publishes a complete desktop root
+invite in its ready file; the wrapper launches Electron with that
+`vibestudio://connect` link. It passes `--skip-remote-pairing` so saved remote
 credentials cannot steal the launch, and disables persistence for the fresh dev
 pairing so the next normal `pnpm dev` remains local.
 
 ## Notes
 
 - **The CLI uses the same paired bootstrap.** `vibestudio remote pair
-  "vibestudio://connect?…"` dials the room with `createPairedConnection`, stores the
-  device refresh credential plus `room`/`fp`/`sig`, and later RPC calls present
-  `refresh:<deviceId>:<refreshToken>` over the pipe.
+"vibestudio://connect?…"` dials the room with `createPairedConnection`, stores the
+  global device refresh credential plus the selected child's `room`/`fp`/`sig`
+  reach, and later RPC calls present `refresh:<deviceId>:<refreshToken>` over the
+  pipe. Workspace switches replace reach information, not identity.
 
 - **TURN** is optional for local/loopback (host candidates suffice). For symmetric
   NAT, set `TURN_KEY_ID` + `TURN_KEY_API_TOKEN` secrets on the signaling worker.
@@ -130,5 +134,5 @@ pairing so the next normal `pnpm dev` remains local.
   `refresh:<deviceId>:<refreshToken>`. The system e2e exercises exactly this.
 - **Two real adapter bugs were caught only by real-native testing** (not the fake
   fabric): `node-datachannel`'s `remoteFingerprint()` returns `{value, algorithm}`
-  (not a string), and the data channels open just *after* ICE `connected` — so
+  (not a string), and the data channels open just _after_ ICE `connected` — so
   `connect()` now gates on the channels being `open`, not just ICE state.

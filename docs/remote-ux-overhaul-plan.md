@@ -7,8 +7,8 @@ the owning artifacts, and the verification gates for future maintainers.
 ## Invariants
 
 - WebRTC is the only remote reach path for desktop and mobile clients.
-- Signaling resolves to the hosted default unless an operator configures a
-  first-class override.
+- Signaling resolves to the hosted default unless an operator supplies the
+  canonical flag or environment variable.
 - WebRTC ingress is available by default for servers that can accept remote
   clients.
 - Pairing invites are complete objects: scheme link, HTTPS pair URL, QR payload,
@@ -17,8 +17,8 @@ the owning artifacts, and the verification gates for future maintainers.
 - Desktop paired-device state lives in the single encrypted
   `device-credentials.json` store. Old split stores are not read, migrated, or
   recreated.
-- The server identity is one combined `identity.pem`. Split cert/key remnants
-  fail preflight and are repaired only through an explicit operator command.
+- The server identity is one combined `identity.pem`; no split-file layout is
+  recognized. Replacement is an explicit operator action.
 - Desktop remote sessions and local loopback sessions share the same connection
   establishment and shell/app serving path after pairing.
 - Repo-local and workspace-wide skills document the paths shipped here.
@@ -27,8 +27,8 @@ the owning artifacts, and the verification gates for future maintainers.
 
 | WP | Outcome | Primary artifacts |
 | --- | --- | --- |
-| WP1 zero-config signaling | Default signaling is centralized and used by server spawn, CLI pairing, mobile dev, and smoke scripts. Self-host setup remains a first-class override. | `packages/shared/src/connect.ts`, `scripts/cli/lib/pair-server.mjs`, `src/main/localServerManager.ts`, `scripts/cli/remote-setup-signaling.mjs`, `docs/webrtc-deployment.md` |
-| WP2 identity/preflight | `identity.pem` is the only accepted DTLS identity. Doctor and repair commands report missing, corrupt, and split-file states loudly. | `src/main/webrtc/cert.ts`, `src/main/webrtc/nodeDatachannelPeer.ts`, `scripts/cli/remote-doctor.mjs`, `scripts/cli/remote-repair-identity.mjs` |
+| WP1 zero-config signaling | Default signaling is centralized and used by server spawn, CLI pairing, mobile dev, and smoke scripts. Self-hosted endpoints use the canonical flag or environment variable. | `packages/shared/src/connect.ts`, `scripts/cli/lib/pair-server.mjs`, `docs/webrtc-deployment.md` |
+| WP2 identity/preflight | `identity.pem` is the only accepted DTLS identity. Doctor reports missing/corrupt current identities; repair replaces that one file deliberately. | `src/main/webrtc/cert.ts`, `src/main/webrtc/nodeDatachannelPeer.ts`, `scripts/cli/remote-doctor.mjs`, `scripts/cli/remote-repair-identity.mjs` |
 | WP3 remote deploy | SSH deploy/status/log/update/remove automation is implemented with a user systemd unit and version-pinned artifacts. | `scripts/cli/remote-deploy.mjs`, `src/cli/client.ts`, `docs/cli.md`, `workspace/skills/remote-access/SKILL.md` |
 | WP4 invites | Invite creation returns the complete link shape and supports local loopback admin minting for colocated server CLI use. | `packages/shared/src/serviceSchemas/auth.ts`, `src/server/services/authService.test.ts`, `src/server/hubServer.ts`, `src/cli/remoteClient.ts`, `scripts/cli/lib/connect-utils.mjs` |
 | WP5 desktop Connect a device | The desktop shell exposes paired-device management, invite creation, QR/pair URL display, countdown, copy, and revoke. | `workspace/apps/shell/components/PairedDevicesSection.tsx`, `workspace/apps/shell/components/ConnectionSettingsDialog.tsx`, `workspace/apps/shell/shell/client.ts`, `workspace/apps/shell/SKILL.md` |
@@ -41,12 +41,16 @@ the owning artifacts, and the verification gates for future maintainers.
 ## CLI Surface
 
 ```bash
-vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030] [--workspace default]
+vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030]
 vibestudio remote deploy status|logs|update|remove <user@host>
-vibestudio remote invite [--workspace <name>] [--ttl-ms <milliseconds>] [--port 3030] [--url <url>] [--admin-token <token>]
-vibestudio remote doctor [--signal-url <url>] [--identity <identity.pem>]
-vibestudio remote repair-identity --yes [--identity <identity.pem>]
-vibestudio remote setup-signaling [--url <wss-url>]
+vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]
+vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]
+vibestudio remote pair "https://vibestudio.app/pair#..."
+vibestudio remote invite-user --handle <handle> --workspace <name>
+vibestudio remote pair-device [--workspace <name>]
+vibestudio remote add-member|remove-member --workspace <name> --handle <handle>
+vibestudio remote list-users --workspace <name>
+vibestudio remote list-devices
 
 vibestudio mobile install [--platform android|ios] [--from-source] [--launch]
 vibestudio mobile dev --platform android|ios

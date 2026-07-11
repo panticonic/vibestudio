@@ -4,7 +4,7 @@
 
   - Shared canonical tree hashing: `packages/shared/src/contentTree/` (`buildWorktreeManifest`, tree objects, golden-vector cross-implementation tests against the DO's SQL hashing).
   - Content store tree APIs: `src/server/services/blobstoreService.ts` — tree objects, `resolveTreePath`, `listTree`, `diffTrees`, `materializeTree`. The content store is the tree authority.
-  - State mirroring invariant: every state hash the system hands out resolves to a full mirrored tree in the content store (eager on scan/snapshot via `mirrorWorktreeTree`, lazy via `GadVcs.ensureStateMirrored`).
+  - State mirroring invariant: every producer mirrors a full content-store tree before handing out its state hash. A missing tree is an invariant violation and fails closed; there is no second-authority reconstruction path.
   - Protected refs + gating: `src/server/services/refService.ts` is the sole `main`-ref authority (durable group CAS/delete via `refs.updateMains`, approval-gated, wired in `index.ts`); the gad-store DO is the only public writer and publishes through it.
   - Host/workspace boundary enforcement: `scripts/check-host-workspace-imports.mjs` (`pnpm check:host-boundary`) statically forbids host code (`src/`, `packages/`, `apps/`, `scripts/`, `tests/`, `build.mjs`) from importing `@workspace*` scopes or paths that resolve into `workspace/` — static/dynamic/`require`/type-only imports plus string-literal references, with generated bundle dirs (`dist`/`dist-publish`) excluded. As of 2026-07-03 it is GATING: wired into CI (`.github/workflows/ci.yml`) and the `.husky/pre-commit` hook. Allowlist: `scripts/host-boundary-allowlist.json` (currently zero import-violations; only host-owned scope-name contracts and smoke tooling references).
   - Build-from-content-store: buildV2 reads trees, unit hashes, and build sources exclusively from the content store (tree-hash keyed; no GAD manifest reads).
@@ -17,7 +17,7 @@
     per-repo ingest. A DO failure delays history, never builds; attach/on-demand sync replays the durable scan
     record before invoking DO publish-intent heal.
     Composed workspace/candidate views are minted server-side (`composeRepoStatesLocal`), and state
-    listings/reads (`listStateFiles`/`readFile`/`listFiles`/diffs) resolve content-store-first. Drift healing is
+    listings/reads (`listStateFiles`/`readFile`/`listFiles`/diffs) resolve from the content store exclusively. Drift healing is
     driven by refs and gad publish intents, which closes the "ref advanced but provenance unrecorded"
     crash window. The DO's
     `expectedRefStateHash` on `vcs:repo:* @ main` ingests is now a KNOWN-PREDECESSOR guard, not a head CAS
@@ -70,8 +70,8 @@
     * GIT INTERCHANGE moved to the trusted `git-bridge` workspace extension
       (workspace/extensions/git-bridge — a Node child process with disk access), built on
       platform primitives only: `@vibestudio/git` for git ops, the userland `vcs` service
-      (gad-store DO, `vcsLog`/`ingestWorktreeState`/`listStateFiles`, now extension-admitted)
-      for VCS reads + import provenance, `blobstore.*` for gad-side content (import mirrors the
+      (gad-store DO, `vcsLog`/`ingestWorktreeState`/`vcsImportPublish`, now extension-admitted)
+      for history + import provenance/publish, `blobstore.*` for canonical content (import mirrors the
       scanned tree bottom-up via `putTree`; export materializes checkouts from `listTree` +
       `getBase64` with the extension's own disk writes — no `GadVcs.materializeState`), and
       `refs.readMain` for the import no-op check against the protected main. Export markers +

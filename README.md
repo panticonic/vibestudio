@@ -6,6 +6,14 @@ Vibestudio is a browser and light-weight sandbox for agents and personalized AI-
 It's an environment in which you can combine agentic workflows similar to OpenClaw or Hermes Agent with an app build system for creating and modifying personal software, where the AI is always available to refine your personal software to meet your needs.
 Unlike many other agentic systems, vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
 
+Vibestudio is **multi-user and multi-workspace**: one server (the hub) hosts
+several workspaces and a small, mutually-trusting team — a family, a household,
+a close team. A root/admin invites users; each user pairs their own devices;
+workspace members share the workspace fully (one panel forest, one approval
+queue, mutual inspectability), with every action attributed to the acting user.
+Roles gate only host administration (inviting/revoking users, membership,
+workspace create/delete) — inside a workspace, members are peers.
+
 The vibestudio sandbox:
 
 - has a browser-style out-of-band approval system (similar to camera, microphone or storage access in normal browsers) and credential store for external providers.
@@ -18,7 +26,7 @@ The vibestudio sandbox:
 
 ## Installation
 
-Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
+Requires **Node.js 22.13.0+**. Both packages update via npm (re-run with `@latest`).
 
 ### Desktop app (macOS, Linux; Windows soon)
 
@@ -33,15 +41,16 @@ vibestudio --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, 
 On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
 DMG/AppImage/deb installers are published to GitHub Releases as they become available.
 
-Locally the desktop shell is a **paired device of a workspace server**, not an
-embedded child process. The bundled server runs as a detached OS process (spawned
-with `ELECTRON_RUN_AS_NODE`) that outlives the app; on launch the app attaches to a
-healthy recorded server (validated over the unauthenticated `GET /healthz`) or
-spawns a fresh one. Local and remote use the same auth model (device pairing +
-refresh credentials); only the transport differs — loopback WebSocket locally,
-WebRTC remotely. Quitting the app leaves the server running when background work is
-active (you are prompted, and the choice can be remembered); an idle detached server
-stops on its own. See [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
+Locally the desktop shell is one globally paired **device of the server hub**,
+not a workspace-owned process. The bundled hub runs as a detached OS process
+(spawned with `ELECTRON_RUN_AS_NODE`) that outlives the app; on launch the app
+attaches to the healthy recorded hub or starts a fresh one, then the hub routes
+the device into a membership-authorized workspace child. Local and remote use
+the same device/refresh-credential model; only the transport differs — loopback
+locally, WebRTC remotely. Quitting the app leaves the hub and active workspace
+children running when background work is active (you are prompted, and the
+choice can be remembered); idle children stop on their own. See
+[STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
 
 ### Headless server (remote/home server; clients connect to it)
 
@@ -58,12 +67,31 @@ builds panels/workers on demand. Remote clients pair over WebRTC; the signaling
 endpoint is only used to rendezvous, not to carry workspace data. See
 [docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
 
+#### Inviting a user
+
+Identity lives in one hub-owned database (`server-auth/identity.db`); the flow is:
+
+1. **Root bootstrap** — on a fresh server the startup pairing code is the root
+   invite: the first device to redeem it becomes the `root` user.
+2. **Invite a user** (root/admin only) — mint a user-bound pairing code with a
+   handle and optional workspace memberships; the invitee's first device
+   redeems it and is issued as that user.
+3. **Pair your own devices** (any member) — additional pairing codes are bound
+   to your own account; phones, laptops, and terminals all become devices of
+   the same user.
+4. **Membership** (root/admin only) — users see and enter only workspaces they
+   are members of; inside a workspace, all members are mutually trusted.
+
+See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
+[workspace/skills/remote-access/SKILL.md](workspace/skills/remote-access/SKILL.md)
+for the operational runbook.
+
 ### Develop (contributors)
 
 ```bash
 pnpm bootstrap        # install root deps and the split userland workspace deps
 pnpm dev             # build + start Electron with DevTools
-pnpm dev:webrtc      # build + start local server, then connect to it over WebRTC
+pnpm dev:webrtc      # build + start a local hub, then connect to a routed child over WebRTC
 pnpm cli --help      # run the CLI live from TypeScript
 pnpm server:live --help
 ```
@@ -76,7 +104,7 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 - `pnpm dev` - Build and start in development mode with DevTools
 - `pnpm bootstrap` - Install both root dependencies and `workspace/` userland dependencies
 - `pnpm install:userland` - Refresh only the split `workspace/` dependency install
-- `pnpm dev:webrtc` - Build, start a local workspace server as a WebRTC answerer, and launch Electron through the remote transport
+- `pnpm dev:webrtc` - Build, start an isolated local hub, and launch Electron through its routed child over WebRTC
 - `pnpm dev -- --auto-approve` - Start dev mode and automatically approve decision-style approval prompts
 - `pnpm build` - Production build
 - `pnpm stage:npm` - Build and stage the public npm packages under `dist-packages/`
@@ -152,10 +180,11 @@ pnpm rebuild node-datachannel   # one-time, if the native module is not built
 pnpm dev:webrtc
 ```
 
-`pnpm dev:webrtc` starts local signaling, starts a local workspace server as a
-WebRTC answerer, and launches Electron with a fresh `vibestudio://connect` link.
-Use `pnpm dev:webrtc -- --ephemeral` for a disposable workspace, or
-`pnpm dev:webrtc -- --workspace <name>` to force a specific workspace.
+`pnpm dev:webrtc` starts local signaling and a clean, isolated hub, routes its
+default workspace child as the WebRTC answerer, and launches Electron with the
+fresh root-bootstrap `vibestudio://connect` link from the hub ready file. Use
+`pnpm dev:webrtc -- --ephemeral` for an explicitly ephemeral child; named
+workspace selection happens through the paired client, as it does in production.
 
 ### Memory Diagnostics (optional)
 
@@ -220,7 +249,7 @@ directory. On startup the pairing server prints a QR/deep-link:
 Pair a Vibestudio device
   Room:        ...
   Fingerprint: ...
-  Pair URL:    vibestudio://connect?room=...&fp=...&code=...&sig=...
+  Pair URL:    vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2&ice=all
 ```
 
 ### CLI Flags
@@ -252,7 +281,7 @@ pnpm build
 vibestudio mobile pair --port 3030
 ```
 
-Scan the printed `vibestudio://connect?room=…&fp=…&code=…&sig=…` QR. See
+Scan the printed `vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all` QR. See
 [docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the WebRTC pairing +
 local setup. Use the desktop app's bootstrap screen to pair a laptop without
 copying an admin token. After one desktop client is connected, use **Remote

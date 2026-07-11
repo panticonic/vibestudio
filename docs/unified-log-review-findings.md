@@ -1114,8 +1114,8 @@ loss, IN=integration/refs, SEC=security, PF=performance, CL=cleanup.
   still needed.
 - Trust layer still pins app/extension identity to per-repo git commits;
   re-key to GAD subtree hashes (deliberate follow-up).
-- Legacy gad adapters (appendTrajectoryBatch, channel envelope APIs, fork*)
-  slated for deletion.
+- The redundant GAD write/fork adapter layer was removed; callers use the
+  unified log directly.
 - Git bridge: tree-level import only; per-commit history import deferred.
 - Memory embeddings deferred; explicit `memory.recalled` promotion events
   reserved.
