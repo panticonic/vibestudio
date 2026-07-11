@@ -5550,6 +5550,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { added, removed, changed };
   }
 
+  /** Full recursive file listing of a worktree state for VCS materialization. */
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  listStateFiles(input: { stateHash: string }): JsonRecord[] {
+    this.ensureReady();
+    return this.filesForState(input.stateHash);
+  }
+
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   getGadStateProducer(input: { stateHash: string }): JsonRecord | null {
     this.ensureReady();

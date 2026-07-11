@@ -24,6 +24,7 @@ export function parseArgs(argv) {
       artifact: null,
       signalUrl: null,
       port: "3030",
+      purge: false,
       help: true,
     };
   }
@@ -34,6 +35,7 @@ export function parseArgs(argv) {
     artifact: null,
     signalUrl: null,
     port: "3030",
+    purge: false,
     help: false,
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -57,7 +59,8 @@ export function parseArgs(argv) {
         throw new Error("--port must be an integer from 1 to 65535");
       }
       options.port = String(port);
-    } else if (arg === "--help") options.help = true;
+    } else if (arg === "--purge") options.purge = true;
+    else if (arg === "--help") options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -71,21 +74,24 @@ Usage:
   vibestudio remote deploy status <user@host>
   vibestudio remote deploy logs <user@host>
   vibestudio remote deploy update <user@host> [--artifact <tgz>] [--signal-url <wss-url>] [--port 3030]
-  vibestudio remote deploy remove <user@host>
+  vibestudio remote deploy remove <user@host> [--purge]
 
 Deploys a systemd user unit named vibestudio-server. With --artifact, the
 tarball is copied to the host and installed with npm install -g. Without
 --artifact, the remote host installs the invoking CLI package/version with npm.
 The remote host must run Node.js ${pkg.engines.node}.
+Remove leaves workspace source intact. --purge also removes the installed npm
+package and WebRTC identity material, so every paired device must re-pair.
 `);
 }
 
 export function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const hasInput = typeof options.input === "string";
     const child = spawn(command, args, {
       cwd: options.cwd ?? repoRoot,
       env: process.env,
-      stdio: options.stdio ?? "inherit",
+      stdio: hasInput ? ["pipe", "inherit", "inherit"] : (options.stdio ?? "inherit"),
     });
     child.on("error", reject);
     child.on("exit", (code) =>
@@ -93,6 +99,10 @@ export function run(command, args, options = {}) {
         ? resolve()
         : reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`))
     );
+    if (hasInput) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(options.input);
+    }
   });
 }
 
@@ -100,8 +110,17 @@ export function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+export function assertSafeTarget(target) {
+  if (typeof target !== "string" || target.length === 0) throw new Error("missing <user@host>");
+  if (target.startsWith("-")) {
+    throw new Error(`refusing SSH target that looks like an option flag: ${target}`);
+  }
+  if (/\s/u.test(target)) throw new Error(`SSH target must not contain whitespace: ${target}`);
+}
+
 export async function ssh(target, script, hooks = {}) {
-  await (hooks.run ?? run)("ssh", [target, `bash -lc ${shellQuote(script)}`]);
+  assertSafeTarget(target);
+  await (hooks.run ?? run)("ssh", [target, "bash", "-l", "-s"], { input: script });
 }
 
 function systemdQuote(value) {
@@ -143,7 +162,7 @@ case "$vibestudio_entry" in
 esac`;
 
 export async function deploy(options, hooks = {}) {
-  if (!options.target) throw new Error("missing <user@host>");
+  assertSafeTarget(options.target);
   if (options.artifact && !fs.existsSync(options.artifact))
     throw new Error(`artifact not found: ${options.artifact}`);
   const unitDir = "$HOME/.config/systemd/user";
@@ -176,6 +195,7 @@ fi
     hooks
   );
   console.log("✓ Node.js                   remote runtime OK");
+
   if (options.artifact) {
     const remoteArtifact = `/tmp/vibestudio-${Date.now()}.tgz`;
     await (hooks.run ?? run)("scp", [options.artifact, `${options.target}:${remoteArtifact}`]);
@@ -221,7 +241,9 @@ ${unit}
 UNIT
 sed -i "s|__NODE_BIN__|$node_bin|g; s|__VIBESTUDIO_ENTRY__|$vibestudio_entry|g" ${unitDir}/vibestudio-server.service
 systemctl --user daemon-reload
-systemctl --user enable --now vibestudio-server.service
+systemctl --user enable vibestudio-server.service
+# restart (not just enable --now) so an UPDATE replaces the running old binary.
+systemctl --user restart vibestudio-server.service
 systemctl --user is-active --quiet vibestudio-server.service
 identity_path="$HOME/.config/vibestudio/workspaces/default/state/webrtc/identity.pem"
 deadline=$((SECONDS + 120))
@@ -249,6 +271,17 @@ journalctl --user -u vibestudio-server.service -n 100 --no-pager
   );
 }
 
+function removeScript(purge) {
+  const base = `systemctl --user disable --now vibestudio-server.service || true
+rm -f $HOME/.config/systemd/user/vibestudio-server.service
+systemctl --user daemon-reload`;
+  if (!purge) return base;
+  return `${base}
+npm uninstall -g ${SERVER_PACKAGE_NAME} >/dev/null 2>&1 || true
+find $HOME/.config/vibestudio/workspaces -maxdepth 4 -type d -path '*/state/webrtc' -exec rm -rf {} + 2>/dev/null || true
+echo "Purged WebRTC identity material; every paired device must re-pair." >&2`;
+}
+
 export async function main(argv = process.argv.slice(2), hooks = {}) {
   const options = parseArgs([...argv]);
   if (options.help || !options.target) {
@@ -265,11 +298,7 @@ export async function main(argv = process.argv.slice(2), hooks = {}) {
   if (options.verb === "logs")
     return ssh(options.target, "journalctl --user -u vibestudio-server.service -f", hooks);
   if (options.verb === "remove") {
-    return ssh(
-      options.target,
-      "systemctl --user disable --now vibestudio-server.service || true; rm -f $HOME/.config/systemd/user/vibestudio-server.service; systemctl --user daemon-reload",
-      hooks
-    );
+    return ssh(options.target, removeScript(options.purge), hooks);
   }
   throw new Error(`unknown verb: ${options.verb}`);
 }

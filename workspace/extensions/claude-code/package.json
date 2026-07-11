@@ -10,7 +10,17 @@
     "extension": {
       "activationEvents": [
         "*"
-      ]
+      ],
+      "providerContracts": {
+        "claudeCode": {
+          "methods": [
+            "prepare",
+            "launchSubagent",
+            "release",
+            "resolvePrimaryChannel"
+          ]
+        }
+      }
     }
   },
   "dependencies": {

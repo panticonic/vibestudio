@@ -1,6 +1,6 @@
 ---
 name: system-testing
-description: Automated system testing via headless agentic sessions. Spawns test agents to exercise Vibestudio services, skills, and runtime, then validates results programmatically. Includes a self-improvement workflow for fixing discovered bugs.
+description: Orchestrate automated Vibestudio test suites via headless agentic sessions, validate results, and run the self-improvement workflow. Use when asked to run, author, stage, analyze, or repair a system-test suite. Do not use it recursively as a spawned test subject that was asked to exercise one capability; use that capability's own skill/API directly.
 ---
 
 # System Testing Skill
@@ -17,6 +17,19 @@ Spin up headless agentic sessions to systematically test every Vibestudio capabi
 | tests/                                     | 97 pre-built test cases across 19 categories                       |
 | deterministic.ts                           | Bridge to `@workspace/testkit` deterministic suites (see below)    |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and committing fixes               |
+
+## Orchestrator vs. Test Subject
+
+Use `HeadlessRunner`/`TestRunner` only when orchestrating a suite or stage. If
+the current request is one capability exercise with a result marker (for
+example, `WORKER_DESTROY_OK`), you are the spawned test subject: exercise the
+documented capability directly and report its evidence. Do not spawn another
+system-test agent or import/re-run the canonical test that prompted you.
+
+Suite orchestrators should import suite collections from the public
+`@workspace-skills/system-testing/stages` entry point (for example,
+`workerTests`). Do not infer an internal source-file subpath from the Files
+table.
 
 ## Deterministic tests (testkit)
 
@@ -318,12 +331,12 @@ eval({
         const reason = entry.execution.error || entry.result.reason || "No reason captured";
         return entry.test.name + ": " + reason.slice(0, 240);
       });
-    const toolFailureNames = partial.results
-      .filter((entry) => (entry.execution.toolFailures?.length ?? 0) > 0)
-      .map((entry) => {
-        const tools = entry.execution.toolFailures.map((failure) => failure.name).join(", ");
-        return entry.test.name + ": " + entry.execution.toolFailures.length + " tool failure(s): " + tools;
-      });
+    const toolFailureNames = partial.results.flatMap((entry) => {
+      const failures = (entry.execution.toolFailures ?? []).filter((failure) => failure.expected !== true);
+      if (failures.length === 0) return [];
+      const tools = failures.map((failure) => failure.name).join(", ");
+      return [entry.test.name + ": " + failures.length + " unexpected tool failure(s): " + tools];
+    });
     const remainingStages = selectedStages.filter((item) => !completed.has(item.index)).length;
     const stageSummary = {
       index: stage.index,
@@ -428,8 +441,10 @@ return summarizeFailures(scope.results, {
 Each summary includes the prompt, validation reason, session error, final agent
 message, bounded conversation transcript, invocation statuses and errors, debug
 events, cleanup errors, participant state, non-fatal tool failures, and a coarse
-likely issue. `summarizeFailures()` includes failed tests and passed tests with
-tool failures. Use that packet to explain the mismatch or recovered tool error.
+likely issue. Deliberately induced failures are retained with `expected: true`
+as resilience evidence but are not counted as defects. `summarizeFailures()`
+includes failed tests and passed tests with unexpected tool failures. Use that
+packet to explain the mismatch or recovered tool error.
 If the packet is insufficient, query the specific session further; do not
 substitute a list of files.
 

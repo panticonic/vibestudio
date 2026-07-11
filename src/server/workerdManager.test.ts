@@ -204,6 +204,16 @@ describe("WorkerdManager", () => {
       expect(code?.env["PARENT_KIND"]).toBe("panel");
     });
 
+    it("serves create-time user env to the dynamically loaded worker", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
+
+      const code = await mgr.getWorkerCode("hello");
+      expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
+    });
+
     it("is idempotent for a live duplicate of the same identity (no-op re-attach)", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);

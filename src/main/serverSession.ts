@@ -131,6 +131,8 @@ export function connectRemoteViaWebRtc(
 export async function establishServerSession(args: {
   mode: ConnectedStartupMode | null;
   pendingPairing?: ConnectPairing;
+  /** Human-readable label for a freshly-paired device (from the pairing dialog). */
+  pendingPairLabel?: string;
   /**
    * Suppress returning-device auto-dial for this launch. Used by the chooser
    * fallback after a failed remote launch so a local workspace choice stays local.
@@ -145,7 +147,7 @@ export async function establishServerSession(args: {
 
   // (a) FRESH pair: the bootstrap chooser handed us a pairing link this launch.
   if (pendingPairing) {
-    return establishFreshPairSession(pendingPairing, args);
+    return establishFreshPairSession(pendingPairing, args, args.pendingPairLabel);
   }
   // (b) Returning device: a paired WebRTC remote persisted on a prior launch.
   const storedRemote = skipStoredRemote ? null : loadStoredRemotePairing();
@@ -326,7 +328,8 @@ async function establishRemoteSession(
  */
 async function establishFreshPairSession(
   pairing: ConnectPairing,
-  args: RemoteConnectArgs
+  args: RemoteConnectArgs,
+  label?: string
 ): Promise<SessionConnection> {
   if (pairing.v !== PAIRING_PROTOCOL_VERSION || !pairing.ice) {
     throw new Error("Fresh WebRTC pairing requires the current version and explicit ICE policy");
@@ -360,7 +363,9 @@ async function establishFreshPairSession(
   });
   try {
     if (!issuedCredential.current) {
-      throw new Error("Fresh WebRTC pairing completed without an issued device credential");
+      throw new Error(
+        "Fresh WebRTC pairing completed without an issued device credential — mint a new invite and try again."
+      );
     }
     const authClient = createTypedServiceClient("auth", authMethods, (svc, m, a) =>
       serverClient.call(svc, m, a)
@@ -386,6 +391,7 @@ async function establishFreshPairSession(
       workspaceName: route.workspace,
       deviceId: issuedCredential.current.deviceId,
       refreshToken: issuedCredential.current.refreshToken,
+      ...(label ? { label } : {}),
       pairedAt: Date.now(),
     });
     const connection = await buildRemoteSessionConnection(serverClient);

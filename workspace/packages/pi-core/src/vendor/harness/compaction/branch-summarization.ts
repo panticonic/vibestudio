@@ -1,6 +1,6 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
-import type { Model } from "@earendil-works/pi-ai";
-import { completeSimple } from "@earendil-works/pi-ai";
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
+import type { Model, Models } from "@earendil-works/pi-ai";
+
 import type { AgentMessage } from "../../types.js";
 import {
   convertToLlm,
@@ -50,20 +50,18 @@ export interface CollectEntriesResult {
 
 /** Options for generating a branch summary. */
 export interface GenerateBranchSummaryOptions {
-  /** Model used for summarization. */
-  model: Model<any>;
-  /** API key forwarded to the provider. */
-  apiKey: string;
-  /** Optional request headers forwarded to the provider. */
-  headers?: Record<string, string>;
-  /** Abort signal for the summarization request. */
-  signal: AbortSignal;
-  /** Optional instructions appended to or replacing the default prompt. */
-  customInstructions?: string;
-  /** Replace the default prompt with custom instructions instead of appending them. */
-  replaceInstructions?: boolean;
-  /** Tokens reserved for prompt and model output. Defaults to 16384. */
-  reserveTokens?: number;
+	/** Provider collection the summarization request goes through; owns auth resolution. */
+	models: Models;
+	/** Model used for summarization. */
+	model: Model<any>;
+	/** Abort signal for the summarization request. */
+	signal: AbortSignal;
+	/** Optional instructions appended to or replacing the default prompt. */
+	customInstructions?: string;
+	/** Replace the default prompt with custom instructions instead of appending them. */
+	replaceInstructions?: boolean;
+	/** Tokens reserved for prompt and model output. Defaults to 16384. */
+	reserveTokens?: number;
 }
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
@@ -212,72 +210,62 @@ export async function generateBranchSummary(
   entries: SessionTreeEntry[],
   options: GenerateBranchSummaryOptions
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
-  const {
-    model,
-    apiKey,
-    headers,
-    signal,
-    customInstructions,
-    replaceInstructions,
-    reserveTokens = 16384,
-  } = options;
-  const contextWindow = model.contextWindow || 128000;
-  const tokenBudget = contextWindow - reserveTokens;
+	const { models, model, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const contextWindow = model.contextWindow || 128000;
+	const tokenBudget = contextWindow - reserveTokens;
 
-  const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
+	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 
-  if (messages.length === 0) {
-    return ok({ summary: "No content to summarize", readFiles: [], modifiedFiles: [] });
-  }
-  const llmMessages = convertToLlm(messages);
-  const conversationText = serializeConversation(llmMessages);
-  let instructions: string;
-  if (replaceInstructions && customInstructions) {
-    instructions = customInstructions;
-  } else if (customInstructions) {
-    instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
-  } else {
-    instructions = BRANCH_SUMMARY_PROMPT;
-  }
-  const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
+	if (messages.length === 0) {
+		return ok({ summary: "No content to summarize", readFiles: [], modifiedFiles: [] });
+	}
+	const llmMessages = convertToLlm(messages);
+	const conversationText = serializeConversation(llmMessages);
+	let instructions: string;
+	if (replaceInstructions && customInstructions) {
+		instructions = customInstructions;
+	} else if (customInstructions) {
+		instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
+	} else {
+		instructions = BRANCH_SUMMARY_PROMPT;
+	}
+	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
 
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-  const response = await completeSimple(
-    model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    { apiKey, headers, signal, maxTokens: 2048 }
-  );
-  if (response.stopReason === "aborted") {
-    return err(
-      new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted")
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new BranchSummaryError(
-        "summarization_failed",
-        `Branch summary failed: ${response.errorMessage || "Unknown error"}`
-      )
-    );
-  }
+	const summarizationMessages = [
+		{
+			role: "user" as const,
+			content: [{ type: "text" as const, text: promptText }],
+			timestamp: Date.now(),
+		},
+	];
+	const response = await models.completeSimple(
+		model,
+		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+		{ signal, maxTokens: 2048 },
+	);
+	if (response.stopReason === "aborted") {
+		return err(new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"));
+	}
+	if (response.stopReason === "error") {
+		return err(
+			new BranchSummaryError(
+				"summarization_failed",
+				`Branch summary failed: ${response.errorMessage || "Unknown error"}`,
+			),
+		);
+	}
 
-  let summary = response.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-  summary = BRANCH_SUMMARY_PREAMBLE + summary;
-  const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-  summary += formatFileOperations(readFiles, modifiedFiles);
+	let summary = response.content
+		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.map((c) => c.text)
+		.join("\n");
+	summary = BRANCH_SUMMARY_PREAMBLE + summary;
+	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
+	summary += formatFileOperations(readFiles, modifiedFiles);
 
-  return ok({
-    summary: summary || "No summary generated",
-    readFiles,
-    modifiedFiles,
-  });
+	return ok({
+		summary: summary || "No summary generated",
+		readFiles,
+		modifiedFiles,
+	});
 }

@@ -21,6 +21,7 @@ export type {
   DurableObjectServiceClient,
   ResolvedUserlandService,
   UserlandServiceInfo,
+  WorkerSourceInfo,
 } from "../shared/workerd.js";
 export type * from "../shared/gad.js";
 export type {
@@ -164,13 +165,7 @@ export type {
   RequestCredentialInputRequest,
   GitHttpClient,
 } from "../shared/credentials.js";
-export type {
-  GitRemoteSpec,
-  ImportProjectRequest,
-  ImportedWorkspaceRepo,
-  CompleteWorkspaceDependenciesResult,
-  RuntimeGitApi,
-} from "../shared/gitApi.js";
+export type * from "../shared/git.js";
 export type { VcsClient, VcsStatusResult } from "../shared/vcsClient.js";
 export type {
   CreateWebhookIngressSubscriptionRequest,

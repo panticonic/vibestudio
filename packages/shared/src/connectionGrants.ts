@@ -22,6 +22,17 @@ export class ConnectionGrantService {
   private readonly grants = new Map<string, ConnectionGrant>();
   private readonly gcTimer: ReturnType<typeof setInterval>;
 
+  /**
+   * A redeemed grant stays valid until its principal is revoked (the redemption
+   * TTL is only the deadline to PRESENT it) — but a long-lived, frequently
+   * reconnecting principal mints + redeems a fresh grant on every reconnect, so
+   * without a bound the redeemed grants for one principal accumulate without
+   * limit. Keep at most this many redeemed grants per principal (newest wins);
+   * a reconnect supersedes the prior connection, so evicting the oldest is safe.
+   * Generous enough that a legitimate multi-connection principal never hits it.
+   */
+  private static readonly MAX_REDEEMED_GRANTS_PER_PRINCIPAL = 16;
+
   constructor(deps: { entityCache: EntityCache }) {
     this.entityCache = deps.entityCache;
     this.gcTimer = setInterval(() => this.gcExpired(), 30_000);
@@ -62,7 +73,25 @@ export class ConnectionGrantService {
       return null;
     }
     grant.redeemed = true;
+    this.pruneRedeemedForPrincipal(grant.principalId);
     return { principalId: grant.principalId, issuedBy: grant.issuedBy };
+  }
+
+  /**
+   * Bound the redeemed grants held for one principal. Map iteration is insertion
+   * order, so the leading entries are the oldest; evict them until the principal
+   * is within the cap. The just-redeemed grant is always the newest, so it is
+   * never the one evicted here. Does not touch other principals or unredeemed
+   * grants (those expire via gcExpired), and leaves revokeForPrincipal intact.
+   */
+  private pruneRedeemedForPrincipal(principalId: string): void {
+    const redeemedTokens: string[] = [];
+    for (const [token, grant] of this.grants) {
+      if (grant.redeemed && grant.principalId === principalId) redeemedTokens.push(token);
+    }
+    const excess =
+      redeemedTokens.length - ConnectionGrantService.MAX_REDEEMED_GRANTS_PER_PRINCIPAL;
+    for (let i = 0; i < excess; i++) this.grants.delete(redeemedTokens[i]!);
   }
 
   validate(token: string): ConnectionGrantValidation | null {

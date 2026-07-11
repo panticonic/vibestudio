@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reproducible vendoring of @earendil-works/pi-agent-core TS sources.
 #
-# Usage: ./vendor.sh [tag]   (default: v0.78.0)
+# Usage: ./vendor.sh [tag]   (default: v0.80.6)
 #
 # Transformations applied to pristine upstream sources, in order:
 #   1. Copy the kept subset (see FILES below; PROVENANCE.md explains what is
@@ -19,7 +19,7 @@
 #      Exported type declarations are unaffected by @ts-nocheck.
 set -euo pipefail
 
-TAG="${1:-v0.78.0}"
+TAG="${1:-v0.80.6}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VENDOR="$HERE/src/vendor"
 CLONE="$(mktemp -d)/pi"

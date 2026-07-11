@@ -6,8 +6,8 @@ These rules give generated code the best chance of running without manual fixes.
 ## Checklist
 
 - Export `activate(ctx)` and return plain async functions.
-- Use `ctx.storage`, `ctx.fs`, `ctx.git`, `ctx.workspace`, and other context APIs
-  instead of assuming direct host access.
+- Use `ctx.storage`, `ctx.fs`, typed `ctx.git` (`gitInterop.*`), `ctx.workspace`,
+  and other context APIs instead of assuming direct host access.
 - Keep top-level code side-effect-light. Do heavyweight setup inside
   `activate()`.
 - Use ESM imports for generated code.

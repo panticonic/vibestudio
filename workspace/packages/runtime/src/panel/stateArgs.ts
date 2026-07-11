@@ -41,21 +41,24 @@ export function getStateArgs<T = Record<string, unknown>>(): T {
  * mutations made elsewhere, but the mutating panel must not depend on receiving
  * its own broadcast echo.
  */
-export async function setStateArgs(updates: Record<string, unknown>): Promise<void> {
+export async function setStateArgs<T = Record<string, unknown>>(
+  updates: Record<string, unknown>
+): Promise<T> {
   if (!selfSlotId) {
     throw new Error("setStateArgs called before runtime initialization");
   }
-  await setStateArgsForPanel(selfSlotId, updates);
+  return setStateArgsForPanel<T>(selfSlotId, updates);
 }
 
-export async function setStateArgsForPanel(
+export async function setStateArgsForPanel<T = Record<string, unknown>>(
   panelId: string,
   updates: Record<string, unknown>
-): Promise<void> {
+): Promise<T> {
   const nextStateArgs = await setStateArgsForPanelRaw(panelId, updates);
   if (panelId === selfSlotId) {
     applyStateArgsSnapshot(nextStateArgs);
   }
+  return nextStateArgs as T;
 }
 
 async function setStateArgsForPanelRaw(

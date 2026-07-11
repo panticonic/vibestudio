@@ -11,17 +11,20 @@
  *  - raw Node disk access for the git checkouts under `workspace/<repoPath>`
  *  - extension storage for bridge-private markers/checkout maps
  *
- * Host consumers reach it through the manifest-declared `providers.gitInterop`
- * slot and the `gitInterop.*` service; userland consumers can still call the
- * installed extension API directly when they intentionally depend on it.
+ * The host reaches it exclusively through the manifest-declared
+ * `providers.gitInterop` slot. Userland calls the typed `gitInterop.*` service
+ * through the runtime `git` client and never names this extension.
  */
 
+import type {
+  GitInteropProvider,
+  GitPublishRepoInput,
+  GitPullUpstreamOptions,
+  GitPushUpstreamOptions,
+  GitUpstreamStatusOptions,
+} from "@vibestudio/shared/serviceSchemas/gitInterop";
 import { GitBridge, type BridgeHost } from "./bridge.js";
-import {
-  UpstreamEngine,
-  type PublishRepoInput,
-  type UpstreamStatusOptions,
-} from "./upstream.js";
+import { UpstreamEngine } from "./upstream.js";
 import type { ExtensionContextLike } from "./context.js";
 
 interface ResolvedServiceLike {
@@ -97,7 +100,14 @@ function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
   };
 }
 
-/** Public API surface of this extension — the awaited return of {@link activate}. */
+type GitBridgeApi = {
+  providerContracts: { gitInterop: GitInteropProvider };
+  retryUpstreamPush(repoPath: string): Promise<unknown>;
+  pauseAutoPush(repoPath: string): Promise<unknown>;
+  openGitTab(repoPath?: string): ReturnType<UpstreamEngine["openGitTab"]>;
+};
+
+/** Internal provider surface exposed to the extension host. */
 export type Api = Awaited<ReturnType<typeof activate>>;
 // Intentionally NOT registered in the WorkspaceExtensions type registry:
 // git-bridge is host/agent infrastructure, not a panel-facing client library.
@@ -107,83 +117,38 @@ export async function activate(ctx: ExtensionContextLike) {
   const bridge = new GitBridge(createBridgeHost(ctx));
   const upstream = new UpstreamEngine(ctx, bridge);
   await upstream.activate();
-  return {
-    /**
-     * Import a repo's current git checkout tree (`workspace/<repoPath>`) as a
-     * snapshot transition on a non-main staging head, then publish it onto the
-     * protected `main` through the gated single-writer import path. No-ops when
-     * the tree already matches `main`.
-     */
-    importRepoTree(repoPath: string, opts?: { summary?: string }) {
-      return bridge.importRepoTree(repoPath, opts);
+  const gitInterop = {
+    upstreamStatus(repoPaths: string[], options: GitUpstreamStatusOptions = {}) {
+      return upstream.upstreamStatus(repoPaths, options);
     },
-    /**
-     * Export a repo's `main` transition history into its git checkout
-     * (`workspace/<repoPath>`) as commits carrying GAD-Repo/GAD-State/
-     * GAD-Event trailers. Incremental and idempotent.
-     */
-    exportRepoHead(repoPath: string, opts?: { authorName?: string; authorEmail?: string }) {
-      return bridge.exportRepoHead(repoPath, opts);
+    pushUpstream(repoPath: string, options?: GitPushUpstreamOptions) {
+      return upstream.pushUpstream(repoPath, options);
     },
-    onMainAdvanced(repoPaths: string[]) {
-      upstream.onMainAdvanced(repoPaths);
-      return { queued: repoPaths.length };
+    pullUpstream(repoPath: string, options?: GitPullUpstreamOptions) {
+      return upstream.pullUpstream(repoPath, options);
     },
-    upstreamStatus(repoPaths?: string | string[], opts: UpstreamStatusOptions = {}) {
-      return upstream.upstreamStatus(
-        typeof repoPaths === "string" ? [repoPaths] : repoPaths,
-        opts
-      );
-    },
-    pushUpstream(repoPath: string, opts?: { force?: boolean }) {
-      return upstream.pushUpstream(repoPath, opts);
-    },
-    pullUpstream(repoPath: string, opts?: { dryRun?: boolean }) {
-      return upstream.pullUpstream(repoPath, opts);
-    },
-    publishRepo(
-      input:
-        | string
-        | PublishRepoInput,
-      opts: Omit<PublishRepoInput, "repoPath"> = {}
-    ) {
-      return typeof input === "string"
-        ? upstream.publishRepo({ repoPath: input, ...opts })
-        : upstream.publishRepo({ ...input, ...opts });
+    publishRepo(input: GitPublishRepoInput) {
+      return upstream.publishRepo(input);
     },
     cloneRepo(input: { repoPath: string }) {
       return upstream.cloneRepo(input);
     },
-    importRepo(input: { url: string; path: string; branch?: string; credentialId?: string }) {
-      return upstream.importRepo(input);
+    async onMainAdvanced(repoPaths: string[]) {
+      upstream.onMainAdvanced(repoPaths);
+      return { queued: repoPaths.length };
     },
-    setUpstream(
-      repoPath: string,
-      config: {
-        remote: string;
-        branch?: string;
-        autoPush?: boolean;
-        credentialId?: string;
-        authorEmail?: string;
-        authorName?: string;
-      }
-    ) {
-      return upstream.setUpstream(repoPath, config);
+  } satisfies GitInteropProvider;
+  const api = {
+    providerContracts: { gitInterop },
+    retryUpstreamPush(repoPath: string) {
+      return ctx.rpc.call("main", "gitInterop.pushUpstream", repoPath);
     },
-    removeUpstream(repoPath: string) {
-      return upstream.removeUpstream(repoPath);
-    },
-    setAutoPush(repoPath: string, on?: boolean) {
-      return upstream.setAutoPush(repoPath, on);
-    },
-    setRemote(repoPath: string, remote: { name: string; url: string; branch?: string }) {
-      return upstream.setRemote(repoPath, remote);
-    },
-    removeRemote(repoPath: string, remoteName?: string) {
-      return upstream.removeRemote(repoPath, remoteName);
+    pauseAutoPush(repoPath: string) {
+      return ctx.rpc.call("main", "gitInterop.setAutoPush", repoPath, false);
     },
     openGitTab(repoPath?: string) {
       return upstream.openGitTab(repoPath);
     },
-  };
+  } satisfies GitBridgeApi;
+  return api;
 }

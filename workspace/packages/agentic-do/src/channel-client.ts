@@ -12,6 +12,16 @@ import {
   type AgenticEvent,
   type MessageTier,
 } from "@workspace/agentic-protocol";
+/** Binary payload riding on a message — base64 for the DO wire, stored by the
+ *  channel DO alongside the envelope and rendered by the chat panel. */
+export interface ChannelAttachment {
+  id?: string;
+  /** base64-encoded bytes */
+  data: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+}
 interface ChannelSendOptions {
   senderMetadata?: Record<string, unknown>;
   replyTo?: string;
@@ -19,13 +29,7 @@ interface ChannelSendOptions {
   /** Explicit direction: only the selected participants should respond. */
   to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
   idempotencyKey?: string;
-  attachments?: Array<{
-    id?: string;
-    data: string;
-    mimeType: string;
-    name?: string;
-    size?: number;
-  }>;
+  attachments?: ChannelAttachment[];
   /**
    * Salience tier. A `ChannelClient.send` is an explicit, deliberate message
    * — the agent (or headless participant) choosing to surface text to the
@@ -41,6 +45,11 @@ interface ChannelSendOptions {
    * traffic.
    */
   saliency?: "say";
+}
+/** Decoded byte count of a base64 string (padding-aware). */
+function base64ByteLength(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
 }
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 interface ResolvedService {
@@ -79,6 +88,13 @@ export class ChannelClient {
       typeof senderMetadata["type"] === "string" ? senderMetadata["type"] : undefined;
     const displayName =
       typeof senderMetadata["name"] === "string" ? senderMetadata["name"] : participantId;
+    const attachments = opts?.attachments?.map((attachment, index) => ({
+      id: attachment.id ?? `att_${index}`,
+      data: attachment.data,
+      mimeType: attachment.mimeType,
+      name: attachment.name,
+      size: attachment.size ?? base64ByteLength(attachment.data),
+    }));
     const event: AgenticEvent = {
       kind: "message.completed",
       actor: {
@@ -92,7 +108,14 @@ export class ChannelClient {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: participantType === "agent" ? "assistant" : "user",
-        blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content }],
+        blocks: [
+          { blockId: `${messageId}:block:0` as never, type: "text", content },
+          ...(attachments?.map((attachment, index) => ({
+            blockId: `${messageId}:block:${index + 1}` as never,
+            type: "attachment" as const,
+            metadata: { mimeType: attachment.mimeType, filename: attachment.name },
+          })) ?? []),
+        ],
         outcome: "completed",
         tier: opts?.tier ?? "primary",
         ...(opts?.saliency ? { saliency: opts.saliency } : {}),
@@ -105,6 +128,7 @@ export class ChannelClient {
     await this.publishAgenticEvent(participantId, event, {
       idempotencyKey: opts?.idempotencyKey,
       senderMetadata,
+      attachments,
     });
   }
   async publishAgenticEvent(
@@ -113,6 +137,10 @@ export class ChannelClient {
     opts?: {
       idempotencyKey?: string;
       senderMetadata?: Record<string, unknown>;
+      attachments?: Array<
+        Required<Pick<ChannelAttachment, "id" | "data" | "mimeType" | "size">> &
+          Pick<ChannelAttachment, "name">
+      >;
     }
   ): Promise<{ id?: number }> {
     return this.call("publish", participantId, AGENTIC_EVENT_PAYLOAD_KIND, event, opts);

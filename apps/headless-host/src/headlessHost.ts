@@ -275,6 +275,11 @@ export class HeadlessHost implements PanelHost {
           slotId,
           (args[0] ?? {}) as Parameters<ConsoleHistoryStore["query"]>[1]
         );
+      case "captureScreenshot":
+        return this.pages!.captureScreenshot(
+          slotId,
+          (args[0] ?? {}) as Parameters<PageHost["captureScreenshot"]>[1]
+        );
       case "rebuildPanel":
       case "rebuildAndReload": {
         const lease = this.tracker.heldLease(panelSlotId);

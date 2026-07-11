@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  browserDataBrokerPackageName,
   parseWorkspaceConfigContentWithId,
   resolveHostTargetDecl,
   resolveWorkspaceTrustGrants,
@@ -81,11 +80,13 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     expect(resolveHostTargetDecl(parse("initPanels: []\n"), "electron")).toBeNull();
   });
 
-  it("resolves the browser-data broker package name (null when undeclared)", () => {
-    expect(browserDataBrokerPackageName(parse(FULL_MANIFEST))).toBe(
+  it("resolves the browser-data provider package name (null when undeclared)", () => {
+    expect(workspaceProviderExtensionPackageName(parse(FULL_MANIFEST), "browserData")).toBe(
       "@workspace-extensions/browser-data"
     );
-    expect(browserDataBrokerPackageName(parse("initPanels: []\n"))).toBeNull();
+    expect(
+      workspaceProviderExtensionPackageName(parse("initPanels: []\n"), "browserData")
+    ).toBeNull();
   });
 
   it("resolves extension provider package names from provider slots", () => {
@@ -130,6 +131,46 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     expect(() =>
       parse("providers:\n  gitInterop:\n    extension: extensions/git-bridge\n")
     ).toThrow(/must also be declared under `extensions`/);
+  });
+});
+
+describe("manifest declarations: canonical Git config", () => {
+  it("accepts object-only remote and upstream declarations", () => {
+    const config = parse(`
+git:
+  remotes:
+    projects:
+      demo:
+        origin:
+          url: https://github.com/acme/demo.git
+          branch: main
+  upstreams:
+    projects:
+      demo:
+        remote: origin
+        branch: main
+        autoPush: false
+`);
+
+    expect(config.git?.remotes?.["projects"]?.["demo"]?.["origin"]).toEqual({
+      url: "https://github.com/acme/demo.git",
+      branch: "main",
+    });
+  });
+
+  it.each([
+    [
+      "string remote shorthand",
+      `git:\n  remotes:\n    projects:\n      demo:\n        origin: https://github.com/acme/demo.git\n`,
+    ],
+    [
+      "nullable remote branch",
+      `git:\n  remotes:\n    projects:\n      demo:\n        origin:\n          url: https://github.com/acme/demo.git\n          branch: null\n`,
+    ],
+    ["remote tombstone", `git:\n  remotes:\n    projects:\n      demo:\n        origin: null\n`],
+    ["upstream tombstone", `git:\n  upstreams:\n    projects:\n      demo: null\n`],
+  ])("rejects %s", (_label, yaml) => {
+    expect(() => parse(yaml)).toThrow(/meta\/vibestudio\.yml/);
   });
 });
 

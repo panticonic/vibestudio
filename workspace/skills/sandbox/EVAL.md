@@ -38,6 +38,21 @@ you are inspecting.
 eval({ code: `console.log("hello")` })
 ```
 
+Console capture belongs to eval itself; no panel, CDP session, or testkit helper
+is needed. A single successful eval may emit several lines and return a compact
+summary:
+
+```ts
+console.log("line 1");
+console.log("line 2");
+console.log("line 3");
+return { lines: 3 };
+```
+
+The tool result contains the captured console text plus the return value. Use
+panel `cdp.consoleHistory()` only when the task specifically asks for console
+messages produced inside a rendered panel.
+
 For multi-file code, put the entry point in a context-relative file and use `path`:
 
 ```
@@ -460,7 +475,10 @@ for the full app database pattern. The eval `db` is private to your EvalDO.
 
 ## Filesystem Access
 
-`fs` is injected and scoped to your current context — no contextId argument:
+`fs` is injected and scoped to your current context — no contextId argument.
+Relative paths and leading-slash paths are both context-root-relative: `"note.txt"`
+and `"/note.txt"` stay inside the context; the leading slash never names a host
+filesystem path.
 
 ```
 eval({ code: `
@@ -472,10 +490,36 @@ eval({ code: `
 Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
 `fs.readFile` returns bytes, so string methods like `.replace()` will fail.
 
-Available methods: `readFile`, `writeFile`, `readdir`, `stat`, `mkdir`, `rm`,
-`exists`, `rename`. (Note: source edits that must take effect for builds go
-through the `edit`/`write` tools or `vcs.edit`, not `fs.writeFile` — see
-the VCS note below.)
+Use `await help("fs")` for the live surface. Common methods include `readFile`,
+`writeFile`, `appendFile`, `readdir`, `stat`, `mkdir`, `rm`, `exists`,
+`copyFile`, `rename`, `grep`, `glob`, and `mktemp`.
+
+For disposable files, let `mktemp` choose an untracked path. This is the
+canonical write → rename → content-match flow:
+
+```ts
+const source = await fs.mktemp("copy-rename");
+const renamed = `${source}.renamed`;
+const expected = "sandbox rename check\n";
+
+try {
+  await fs.writeFile(source, expected);
+  await fs.rename(source, renamed);
+  const actual = await fs.readFile(renamed, "utf-8");
+  if (actual !== expected) throw new Error("content mismatch after rename");
+} finally {
+  await fs.rm(source, { force: true });
+  await fs.rm(renamed, { force: true });
+}
+```
+
+Use `fs.copyFile(source, destination)` instead when both files should remain.
+Paths inside a workspace repo (`packages/<name>/…`, `panels/<name>/…`, etc.)
+are routed into that context's VCS working edits. Platform-ignored paths and
+paths outside workspace source repos stay as direct, context-local scratch
+files. Prefer `mktemp` for scratch to avoid collisions; for intentional source
+authoring, prefer the `edit`/`write` tools or `vcs.edit` so the edit and its
+provenance are explicit.
 
 ## Calling Services
 
@@ -483,7 +527,8 @@ Use `rpc.call("main", "<svc>.<method>", [...])` to reach raw server/main service
 catalog methods from eval. `services.<svc>.<method>(...)` is available for
 service names that do not collide with runtime bindings, but rich runtime
 bindings win on collision: `services.workers` is the ergonomic `workers` client,
-so raw `workers.listSources` is `rpc.call("main", "workers.listSources", [])`.
+which includes `workers.listSources()`. The equivalent raw catalog call is
+`rpc.call("main", "workers.listSources", [])`.
 
 ```
 eval({ code: `
@@ -502,12 +547,14 @@ name as a string; do not call `help(workers)`.
 
 Launch, list, and retire workers through the **runtime entity API**
 (`runtime.createEntity` / `runtime.listEntities` / `runtime.retireEntity`). List
-launchable sources with `workers.listSources`.
+launchable sources with the typed `workers.listSources()` runtime method. Each
+row includes `source`, the manifest's real `entry` (do not guess `index.ts`), and
+`classes` (empty for regular workers).
 
 ```
 eval({ code: `
   // Launchable worker sources (the workers/* repos that can be started)
-  const sources = await rpc.call("main", "workers.listSources", []);
+  const sources = await workers.listSources();
   console.log("Available worker sources:", sources);
 
   // Currently-running worker instances
@@ -518,19 +565,59 @@ eval({ code: `
 
 ```
 eval({ code: `
-  // Launch a worker — \`key\` names the instance; pass \`ref\` for code edited on
-  // the current context head, omit it for the main build.
-  const handle = await rpc.call("main", "runtime.createEntity", [{
-    kind: "worker",
-    source: "workers/my-worker",
-    key: "my-worker",
-    contextId: ctx.contextId,
-    ref: \`ctx:${ctx.contextId}\`,
-  }]);
-  console.log("Launched", handle.id, "→", handle.targetId);
-  // Stop it later with the handle's id:
-  // await rpc.call("main", "runtime.retireEntity", [{ id: handle.id }]);
+  const key = \`worker-probe-${crypto.randomUUID()}\`;
+  let handle;
+  try {
+    // \`key\` names the instance; pass \`ref\` for code edited on the current
+    // context head, or omit it for the main build.
+    handle = await rpc.call("main", "runtime.createEntity", [{
+      kind: "worker",
+      source: "workers/my-worker",
+      key,
+      contextId: ctx.contextId,
+      ref: \`ctx:${ctx.contextId}\`,
+      env: { NON_SECRET_PROBE: "configured" },
+    }]);
+    const during = await rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
+    if (!during.some((entity) => entity.id === handle.id)) throw new Error("Worker was not listed");
+  } finally {
+    if (handle) await rpc.call("main", "runtime.retireEntity", [{ id: handle.id }]);
+  }
+  const after = await rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
+  if (handle && after.some((entity) => entity.id === handle.id)) {
+    throw new Error("Worker remained active after retireEntity");
+  }
 ` })
+```
+
+`env` accepts extra string bindings and delivers them to the worker's `env`
+parameter (`WorkerEnv`), not Node's `process.env`. A successful
+`runtime.createEntity` proves that the host accepted the configuration and
+started the worker; it does **not** prove that worker code read a particular
+value. To claim runtime observation, call a worker HTTP endpoint or exposed RPC
+method designed to return one named, non-secret probe value. Never add generic
+entity introspection that returns the full env object or arbitrary secret keys.
+See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#worker-lifecycle-and-environment-bindings)
+for the worker-side probe pattern.
+
+For a no-edit end-to-end check, the shipped `workers/hello` sample exposes the
+fixed RPC method `readNonSecretProbe` and returns only `NON_SECRET_PROBE`:
+
+```ts
+let probe;
+try {
+  probe = await rpc.call("main", "runtime.createEntity", [{
+    kind: "worker",
+    source: "workers/hello",
+    key: `env-probe-${crypto.randomUUID()}`,
+    contextId: ctx.contextId,
+    env: { NON_SECRET_PROBE: "configured" },
+  }]);
+  const observed = await rpc.call(probe.targetId, "readNonSecretProbe", []);
+  if (observed.value !== "configured") throw new Error("Worker env mismatch");
+} finally {
+  if (probe) await rpc.call("main", "runtime.retireEntity", [{ id: probe.id }]);
+}
 ```
 
 ## Workspace VCS
@@ -712,17 +799,29 @@ return its digest, byte count, and a small head sample. Keep full objects in
 `scope` only for short-lived interactive follow-up.
 
 The blobstore is a curated runtime binding — reach it as `services.blobstore`
-(equivalently `import { blobstore } from "@workspace/runtime"`, or the raw
-`rpc.call("blobstore.<method>", [...])`). Read/write methods
+(equivalently `import { blobstore } from "@workspace/runtime"`, or a raw
+`rpc.call("main", "blobstore.<method>", [...])`). Read/write methods
 (`putText`/`putBase64`/`getText`/`getRange`/`grep`/…) work from agent eval; the
 admin methods (`delete`/`list`) are server-only. Raw calls
 use `rpc.call("main", "blobstore.<method>", [...])`. A binary
-artifact (e.g. a screenshot you captured) goes in as base64:
+artifact such as a `Uint8Array` screenshot can be stored directly:
+
+```ts
+const png = await page.screenshot();
+const { digest, size } = await services.blobstore.putBytes(png);
+return { digest, size, mimeType: "image/png" };
+```
+
+At the raw service boundary, use exactly one base64 string:
 
 ```ts
 const { digest, size } = await services.blobstore.putBase64(pngBase64);
-return { digest, size, kind: "image/png" };
+return { digest, size, mimeType: "image/png" };
 ```
+
+The content-addressed store records bytes only. Keep MIME type, filename, and
+other artifact metadata alongside the returned digest rather than passing them
+as extra `putBase64` arguments.
 
 Preferred return shape for large artifacts:
 

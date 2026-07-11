@@ -98,7 +98,8 @@ type TestRpcServer = {
   checkRelayAuth(
     callerId: string,
     callerKind: string,
-    targetId: string
+    targetId: string,
+    method?: string
   ): { ok: boolean; reason?: string };
   sendToWs(ws: unknown, msg: unknown): void;
 };
@@ -500,6 +501,87 @@ describe("RpcServer attachWebRtcPipe (v2 pipe contract)", () => {
   });
 });
 
+describe("RpcServer attachWebRtcPipe — negative handshake fails closed (un-authed open)", () => {
+  // A redeemer that (like the real createPairingRedeemer) ASSUMES a string token
+  // — its presence proves the missing/non-string-token guard runs BEFORE any
+  // downstream string operation (`token.startsWith(...)`) that would otherwise
+  // throw uncaught / into a swallowing catch that strands the session.
+  const stringAssumingRedeemer = ((token: string) => {
+    if (token.startsWith("refresh:") || token.startsWith("agent:")) return null;
+    return null;
+  }) as unknown as ConstructorParameters<typeof RpcServer>[0]["redeemPairingCredential"];
+
+  it("an open with a MISSING token yields open-result success:false terminal:true and never throws", () => {
+    const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    // decodeControlFrame requires only `sid`, not `token` — a missing token must
+    // fail closed at the handshake, never throw into the pipe.
+    expect(() =>
+      p.sendControl({ t: "open", sid: "s1" } as unknown as SessionControlFrame)
+    ).not.toThrow();
+
+    const openResult = p.controlOfType("open-result");
+    expect(openResult).toHaveLength(1);
+    expect(openResult[0]!.frame).toMatchObject({
+      t: "open-result",
+      sid: "s1",
+      success: false,
+      terminal: true,
+    });
+  });
+
+  it("an open with a non-string token yields open-result success:false terminal:true and never throws", () => {
+    const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    expect(() =>
+      p.sendControl({ t: "open", sid: "s1", token: 42 } as unknown as SessionControlFrame)
+    ).not.toThrow();
+    expect(p.controlOfType("open-result")[0]!.frame).toMatchObject({
+      success: false,
+      terminal: true,
+    });
+  });
+
+  it("an open with an INVALID (unknown) token yields open-result success:false terminal:true", () => {
+    const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({ t: "open", sid: "s1", token: "not-a-real-grant" });
+    expect(p.controlOfType("open-result")[0]!.frame).toMatchObject({
+      success: false,
+      terminal: true,
+    });
+  });
+
+  it("caps concurrent logical sessions per pipe (pre-auth flood backstop)", () => {
+    const { server } = createServer();
+    // Stub handleConnection so opens accumulate shims without real auth work.
+    const stub = vi.fn(() => {});
+    testServer(server).handleConnection = stub;
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    const CAP = 512; // matches RpcServer.MAX_SESSIONS_PER_PIPE
+    for (let i = 0; i < CAP; i++) {
+      p.sendControl({ t: "open", sid: `s${i}`, token: "grant" });
+    }
+    // Up to the cap, opens are accepted (handleConnection stubbed → no result).
+    expect(p.controlOfType("open-result")).toHaveLength(0);
+    // The (cap+1)th DISTINCT sid is refused with a terminal open-result…
+    p.sendControl({ t: "open", sid: "over", token: "grant" });
+    const rejected = p.controlOfType("open-result");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.frame).toMatchObject({ sid: "over", success: false, terminal: true });
+    // …and handleConnection was NOT driven for the refused open.
+    expect(stub).toHaveBeenCalledTimes(CAP);
+  });
+});
+
 describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancellation)", () => {
   function streamRequest(requestId: string, method = "files.stream"): RpcMessage {
     return { type: "stream-request", requestId, fromId: "panel:nav-a", method, args: [] };
@@ -681,6 +763,209 @@ describe("RpcServer relay behavior", () => {
     expect(
       testServer(server).checkRelayAuth("panel:nav-a", "panel", "worker:workers/example")
     ).toEqual({ ok: true });
+
+    expect(
+      testServer(server).checkRelayAuth(
+        "main",
+        "server",
+        "@workspace-extensions/git-bridge",
+        "extension.invoke"
+      )
+    ).toEqual({ ok: true });
+  });
+
+  it("replaces forged WS route identity with the authenticated panel principal", () => {
+    const { server, grantPanel } = createServer();
+    const sourceWs = createTestWs();
+    const target = createClientWithConnection("panel:nav-b", "target-conn");
+    registerClient(server, target);
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: "main",
+        target: "panel:nav-b",
+        delivery: {
+          caller: { callerId: "main", callerKind: "server" },
+          idempotencyKey: "idem-forged-route",
+          readOnly: true,
+        },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "request",
+          requestId: "req-forged-route",
+          fromId: "main",
+          method: "tools.invoke",
+          args: ["publishRepo", []],
+        },
+      },
+    });
+
+    expect(target.ws.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toEqual({
+      type: "ws:routed",
+      envelope: {
+        from: "panel:nav-a",
+        target: "panel:nav-b",
+        delivery: {
+          caller: { callerId: "panel:nav-a", callerKind: "panel" },
+          idempotencyKey: "idem-forged-route",
+          readOnly: true,
+        },
+        provenance: [{ callerId: "panel:nav-a", callerKind: "panel" }],
+        message: {
+          type: "request",
+          requestId: "req-forged-route",
+          fromId: "panel:nav-a",
+          method: "tools.invoke",
+          args: ["publishRepo", []],
+        },
+      },
+    });
+  });
+
+  it("replaces forged WS RPC identity before service dispatch and response attribution", async () => {
+    const { server, grantPanel } = createServer();
+    const sourceWs = createTestWs();
+    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
+    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    testServer(server).dispatcher.dispatch.mockResolvedValue({ ok: true });
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:rpc",
+      envelope: {
+        from: "main",
+        target: "main",
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "request",
+          requestId: "req-forged-rpc",
+          fromId: "main",
+          method: "workspace.getInfo",
+          args: [],
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(testServer(server).dispatcher.dispatch).toHaveBeenCalled());
+    expect(testServer(server).dispatcher.dispatch.mock.calls[0]![0]).toMatchObject({
+      caller: { runtime: { id: "panel:nav-a", kind: "panel" } },
+    });
+    const response = sourceWs.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .find(
+        (message) => message.type === "ws:rpc" && message.envelope?.message?.type === "response"
+      );
+    expect(response).toMatchObject({
+      type: "ws:rpc",
+      envelope: {
+        from: "main",
+        target: "panel:nav-a",
+        provenance: [{ callerId: "panel:nav-a", callerKind: "panel" }],
+        message: { requestId: "req-forged-rpc", result: { ok: true } },
+      },
+    });
+  });
+
+  it("rejects a forged WS relay to an extension host-control method before delivery", () => {
+    const { server, grantPanel } = createServer();
+    const extensionId = "@workspace-extensions/git-bridge";
+    const sourceWs = createTestWs();
+    const target = createClientWithConnection(extensionId, "extension-conn");
+    target.caller = createVerifiedCaller(extensionId, "extension");
+    registerClient(server, target);
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: "main",
+        target: extensionId,
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "request",
+          requestId: "req-host-control",
+          fromId: "main",
+          method: "extension.invoke",
+          args: ["publishRepo", [{ repoPath: "projects/demo" }]],
+        },
+      },
+    });
+
+    expect(target.ws.send).not.toHaveBeenCalled();
+    const rejection = sourceWs.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .find(
+        (message) =>
+          message.type === "ws:routed" &&
+          message.envelope?.message?.requestId === "req-host-control"
+      );
+    expect(rejection).toMatchObject({
+      type: "ws:routed",
+      envelope: {
+        message: {
+          type: "response",
+          requestId: "req-host-control",
+          errorCode: "EACCES",
+          error: expect.stringContaining("cannot directly relay host-control method"),
+        },
+      },
+    });
+  });
+
+  it("rejects a forged WS stream relay to an extension host-control method before delivery", () => {
+    const { server, grantPanel } = createServer();
+    const extensionId = "@workspace-extensions/git-bridge";
+    const sourceWs = createTestWs();
+    const target = createClientWithConnection(extensionId, "extension-conn");
+    target.caller = createVerifiedCaller(extensionId, "extension");
+    registerClient(server, target);
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: "main",
+        target: extensionId,
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "stream-request",
+          requestId: "stream-host-control",
+          fromId: "main",
+          method: "extension.invokeStream",
+          args: ["publishRepo", [{ repoPath: "projects/demo" }]],
+        },
+      },
+    });
+
+    expect(target.ws.send).not.toHaveBeenCalled();
+    const rejection = sourceWs.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .find(
+        (message) =>
+          message.type === "ws:routed" &&
+          message.envelope?.message?.requestId === "stream-host-control"
+      );
+    expect(rejection).toMatchObject({
+      type: "ws:routed",
+      envelope: {
+        message: {
+          type: "stream-frame",
+          requestId: "stream-host-control",
+          frameType: FRAME_ERROR,
+        },
+      },
+    });
+    expect(JSON.parse(rejection.envelope.message.payload)).toMatchObject({
+      status: 403,
+      code: "EACCES",
+      message: expect.stringContaining("cannot directly relay host-control method"),
+    });
   });
 
   it("throws DO_NOT_CREATED when relaying to a DO with no registered entity record", async () => {

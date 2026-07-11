@@ -1,5 +1,5 @@
 defaultAgentConfig:
-  model: openai-codex:gpt-5.5
+  model: openai-codex:gpt-5.6-sol
 initPanels:
   - source: panels/chat
     stateArgs:
@@ -298,7 +298,7 @@ services:
         - server
         - worker
         - do
-        # git-bridge extension: vcsLog / ingestWorktreeState / vcsImportPublish
+        # git-bridge extension: vcsLog / ingestWorktreeState
         - extension
         # agent CLI (plan §3.1 grant set): vcsLog, listChannelLogs, mirror reads
         - agent

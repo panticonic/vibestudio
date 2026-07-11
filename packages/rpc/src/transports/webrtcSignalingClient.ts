@@ -7,8 +7,11 @@
  * Two surfaces, one job each (no redundancy):
  *   - **WebSocket** (`WebSocketImpl`) — blind-relays our SDP/ICE to the peer and
  *     delivers the peer's back, plus room lifecycle
- *     (`peer-joined`/`peer-left`). The room PERSISTS, so the same socket carries
- *     ICE-restart. A join declares its slot via a required `role=offerer|answerer`
+ *     (`peer-joined`/`peer-left`). The room PERSISTS, so a reconnect re-joins the
+ *     same room to re-signal a fresh pipe (a full re-establish, no re-pair — an
+ *     in-place ICE-restart isn't supported by the answerer stack; see
+ *     docs/webrtc-ice-restart-findings.md). A join declares its slot via a
+ *     required `role=offerer|answerer`
  *     query param; a same-role reconnect evicts our own ghost (§4). Keepalive is
  *     out-of-band: we ping every 20s (the DO auto-responds with a pong without
  *     waking) and reap a socket that goes 40s without a pong. ping/pong never
@@ -101,6 +104,17 @@ const READY_STATE_OPEN = 1;
 /** Out-of-band keepalive: ping cadence and the pong-silence deadline. */
 const PING_INTERVAL_MS = 20_000;
 const PONG_TIMEOUT_MS = 40_000;
+/**
+ * Deadline on the one-shot TURN/STUN credential fetch. GENEROUS on purpose: a
+ * cold Cloudflare Realtime TURN mint plus a slow relay round-trip can take a
+ * few seconds, so this is a fail-LOUD backstop, not an SLA — it exists only so
+ * a hung `fetch` (a wedged worker that accepts the TCP connection but never
+ * responds) can no longer PARK the answerer's single establish pipeline
+ * (`establishInFlight`) and leave the room permanently deaf. On expiry the
+ * fetch aborts and rejects; the caller retries (offerer → backoff reestablish;
+ * answerer → establish fails → back to lazy-armed, next offer re-drives it).
+ */
+const ICE_SERVERS_FETCH_TIMEOUT_MS = 20_000;
 
 /** Apply the `/room/:roomId{suffix}` path to the `sig` base — shared by both builders. */
 function roomUrl(sig: string, room: string, suffix: string): URL {
@@ -146,7 +160,8 @@ function decodeMessageData(data: unknown): string | null {
 export function createSignalingClient(options: SignalingClientOptions): SignalingClient {
   const { room, sig, role } = options;
   const log = options.logPrefix ?? "[signaling-client]";
-  const WebSocketImpl = options.WebSocketImpl ?? (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
+  const WebSocketImpl =
+    options.WebSocketImpl ?? (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
   if (!WebSocketImpl) {
     throw new Error("No WebSocket implementation available (pass WebSocketImpl)");
   }
@@ -158,6 +173,8 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
   const descriptionHandlers = new Set<(desc: RtcSessionDescription) => void>();
   const candidateHandlers = new Set<(candidate: RtcIceCandidate) => void>();
   const closedHandlers = new Set<(reason?: string) => void>();
+  const openHandlers = new Set<() => void>();
+  const peerJoinedHandlers = new Set<() => void>();
   // Frames that land before the transport has registered a handler are buffered
   // and flushed on first subscription (the offerer's answer can arrive while the
   // transport is still awaiting `provider.create()`). This is an ordering buffer,
@@ -227,6 +244,16 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
     opened = true;
     startKeepalive();
     resolveOpen();
+    // Proven-live: the room is reachable. Supervisors reset their rejoin
+    // backoff here (never on construction — the WS is created eagerly and this
+    // constructor never throws for an unreachable host).
+    for (const handler of [...openHandlers]) {
+      try {
+        handler();
+      } catch (error) {
+        console.warn(`${log} open handler threw`, error);
+      }
+    }
   });
 
   ws.addEventListener("error", (ev) => {
@@ -266,8 +293,18 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
         lastPongAt = Date.now();
         return;
       case "peer-joined":
+        // The peer just slotted into the room. The offerer re-sends its current
+        // offer on this (a late-arriving server never saw the first one).
+        for (const handler of [...peerJoinedHandlers]) {
+          try {
+            handler();
+          } catch (error) {
+            console.warn(`${log} peer-joined handler threw`, error);
+          }
+        }
+        return;
       case "peer-left":
-        // Lifecycle hints — the transport drives offer/answer itself; nothing to do.
+        // Lifecycle hint — the transport drives offer/answer itself; nothing to do.
         return;
       default:
         console.warn(`${log} unknown frame`, message);
@@ -354,16 +391,54 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
       if (!fetchImpl) {
         throw new Error("No fetch implementation available (pass fetchImpl)");
       }
-      const res = await fetchImpl(iceUrl, { method: "GET", headers: { accept: "application/json" } });
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new Error(`Signaling ice-servers ${res.status}: ${detail}`.trim());
+      // GENEROUS abort deadline (see ICE_SERVERS_FETCH_TIMEOUT_MS): a hung fetch
+      // must never park the establish pipeline. AbortController.abort() rejects
+      // the fetch so the caller's retry path runs instead of wedging forever.
+      const controller = new AbortController();
+      const timer: ReturnType<typeof setTimeout> = setTimeout(
+        () => controller.abort(),
+        ICE_SERVERS_FETCH_TIMEOUT_MS
+      );
+      (timer as unknown as { unref?: () => void }).unref?.();
+      try {
+        const res = await fetchImpl(iceUrl, {
+          method: "GET",
+          headers: { accept: "application/json" },
+          // React Native's fetch ambient uses its own structurally incompatible
+          // AbortSignal declaration. Both runtimes accept the standards-based
+          // signal at runtime; isolate the ambient-type seam here.
+          signal: controller.signal as unknown as RequestInit["signal"],
+        });
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          throw new Error(`Signaling ice-servers ${res.status}: ${detail}`.trim());
+        }
+        const body = (await res.json()) as IceServersResponse;
+        if (!body || !Array.isArray(body.iceServers)) {
+          throw new Error("Signaling ice-servers response missing iceServers[]");
+        }
+        return body.iceServers;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new Error(
+            `Signaling ice-servers fetch timed out after ${ICE_SERVERS_FETCH_TIMEOUT_MS}ms`
+          );
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
       }
-      const body = (await res.json()) as IceServersResponse;
-      if (!body || !Array.isArray(body.iceServers)) {
-        throw new Error("Signaling ice-servers response missing iceServers[]");
-      }
-      return body.iceServers;
+    },
+
+    onOpen(handler: () => void): () => void {
+      openHandlers.add(handler);
+      if (opened && !closed) queueMicrotask(() => openHandlers.has(handler) && handler());
+      return () => openHandlers.delete(handler);
+    },
+
+    onPeerJoined(handler: () => void): () => void {
+      peerJoinedHandlers.add(handler);
+      return () => peerJoinedHandlers.delete(handler);
     },
 
     onClosed(handler: (reason?: string) => void): () => void {

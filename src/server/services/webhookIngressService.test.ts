@@ -8,6 +8,7 @@ import {
   createWebhookIngressService,
   type WebhookIngressServiceDeps,
 } from "./webhookIngressService.js";
+import type { RelayWebhookFrame } from "./relayBackhaulClient.js";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   CreateWebhookIngressSubscriptionRequest,
@@ -108,41 +109,69 @@ function createMockReqRes(
   return { req, res: resStub as ServerResponse, captured };
 }
 
-function signRelayEnvelope(
-  method: string,
-  path: string,
-  query: string,
-  body: Buffer,
-  secret: string,
-  ts = Date.now()
-) {
-  const bodySha = crypto.createHash("sha256").update(body).digest("hex");
-  const canonical = [method.toUpperCase(), path, query, String(ts), bodySha].join("\n");
-  const sig = `v1=${crypto.createHmac("sha256", secret).update(canonical).digest("hex")}`;
+/**
+ * Build a backhaul webhook frame exactly as the relay's RelayRegistry would —
+ * with a valid relay envelope (HMAC over canonical(method,path,query,ts,sha)).
+ * This is the on-the-wire contract the server must accept.
+ */
+function buildRelayFrame(opts: {
+  subscriptionId: string;
+  body: Buffer;
+  providerHeaders?: Record<string, string>;
+  query?: string;
+  deliveryId?: string;
+  ts?: number;
+  secret?: string;
+  signBodySha?: string;
+}): RelayWebhookFrame {
+  const method = "POST";
+  const path = `/i/${opts.subscriptionId}`;
+  const query = opts.query ?? "";
+  const ts = opts.ts ?? Date.now();
+  const secret = opts.secret ?? RELAY_SECRET;
+  const bodySha = crypto.createHash("sha256").update(opts.body).digest("hex");
+  const signedSha = opts.signBodySha ?? bodySha;
+  const canonical = [method, path, query, String(ts), signedSha].join("\n");
+  const signature = `v1=${crypto.createHmac("sha256", secret).update(canonical).digest("hex")}`;
   return {
-    "x-vibestudio-relay-method": method,
-    "x-vibestudio-relay-path": path,
-    "x-vibestudio-relay-query": query,
-    "x-vibestudio-relay-timestamp": String(ts),
-    "x-vibestudio-relay-body-sha256": bodySha,
-    "x-vibestudio-relay-signature": sig,
+    t: "webhook",
+    deliveryId: opts.deliveryId ?? crypto.randomUUID(),
+    subscriptionId: opts.subscriptionId,
+    method,
+    path,
+    query,
+    headers: opts.providerHeaders ?? {},
+    bodyBase64: opts.body.toString("base64"),
+    relay: { timestamp: String(ts), bodySha256: signedSha, signature },
   };
 }
 
 function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
   const store = new InMemoryWebhookIngressStore();
   const dispatched: Array<{ target: WebhookTarget; event: WebhookDeliveryEvent }> = [];
+  const registered: string[] = [];
+  const unregistered: string[] = [];
   const svc = createWebhookIngressService({
     relaySigningSecret: RELAY_SECRET,
-    relayPublicBaseUrl: RELAY_BASE_URL,
+    relayOrigin: RELAY_BASE_URL,
     directPublicBaseUrl: DIRECT_BASE_URL,
     store,
+    relayRegistrar: {
+      registerWebhook: (id) => registered.push(id),
+      unregisterWebhook: (id) => unregistered.push(id),
+    },
     dispatchToTarget: async (target, event) => {
       dispatched.push({ target, event });
     },
     ...extra,
   });
-  return { store, dispatched, svc };
+  return { store, dispatched, svc, registered, unregistered };
+}
+
+/** Decode a WebhookAck's relayed response body back to JSON. */
+function ackBody(ack: { response?: { bodyBase64?: string } }): unknown {
+  const b64 = ack.response?.bodyBase64;
+  return b64 ? JSON.parse(Buffer.from(b64, "base64").toString("utf8")) : undefined;
 }
 
 describe("webhookIngressService — RPC surface", () => {
@@ -290,121 +319,143 @@ describe("webhookIngressService — public ingress route", () => {
     return route.handler;
   }
 
-  it("rejects deliveries without a valid relay envelope", async () => {
-    const { svc } = setup();
+  it("registers a relay subscription with the backhaul on create and unregisters on revoke", async () => {
+    const { svc, registered, unregistered } = setup();
     const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
-    const handler = findRoute(svc);
-    const body = Buffer.from(`{"hello":"world"}`);
-    const { req, res, captured } = createMockReqRes("POST", `/i/${sub.subscriptionId}`, body, {
-      "x-sig": "anything",
-      "content-type": "application/json",
-    });
-    await handler(req, res, { subscriptionId: sub.subscriptionId });
-    expect(captured.status).toBe(401);
-    expect(captured.body).toEqual({ error: "invalid relay envelope" });
+    expect(registered).toEqual([sub.subscriptionId]);
+    await svc.definition.handler(shellCtx(), "revokeSubscription", [
+      { subscriptionId: sub.subscriptionId },
+    ]);
+    expect(unregistered).toEqual([sub.subscriptionId]);
   });
 
-  it("accepts a valid HMAC delivery, dispatches once, and rejects replays", async () => {
+  it("rejects a backhaul frame whose relay envelope signature is forged (permanent nack)", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
+    const body = Buffer.from(`{"hello":"world"}`);
+    const frame = buildRelayFrame({
+      subscriptionId: sub.subscriptionId,
+      body,
+      secret: "wrong-secret",
+    });
+    const ack = await svc.internal.deliverRelayWebhook(frame);
+    expect(ack).toMatchObject({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it("rejects a backhaul frame whose body hash does not match the signed envelope", async () => {
+    const { svc } = setup();
+    const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
+    const body = Buffer.from(`{"hello":"world"}`);
+    // Sign over a DIFFERENT body sha than the actual body — integrity failure.
+    const frame = buildRelayFrame({
+      subscriptionId: sub.subscriptionId,
+      body,
+      signBodySha: crypto.createHash("sha256").update("tampered").digest("hex"),
+    });
+    const ack = await svc.internal.deliverRelayWebhook(frame);
+    expect(ack).toMatchObject({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
+  });
+
+  it("accepts a valid HMAC delivery over the backhaul, dispatches once, echoes the response, and dedupes provider replays", async () => {
     const { svc, dispatched } = setup();
     const sub = await provision(
       svc,
       { type: "hmac-sha256", headerName: "X-Sig", secret: "shh", prefix: "sha256=" },
       { key: { type: "header", name: "X-Delivery-Id" }, ttlMs: 60_000 }
     );
-    const handler = findRoute(svc);
     const body = Buffer.from(`{"event":"push"}`);
     const sig = `sha256=${crypto.createHmac("sha256", "shh").update(body).digest("hex")}`;
-    const path = `/i/${sub.subscriptionId}`;
 
-    const headersA = {
-      ...signRelayEnvelope("POST", path, "", body, RELAY_SECRET),
-      "x-sig": sig,
-      "x-delivery-id": "delivery-1",
-      "content-type": "application/json",
-    };
-
-    const first = createMockReqRes("POST", path, body, headersA);
-    await handler(first.req, first.res, { subscriptionId: sub.subscriptionId });
-    expect(first.captured.status).toBe(202);
-    expect(first.captured.body).toEqual({ accepted: true, subscriptionId: sub.subscriptionId });
+    const frame = buildRelayFrame({
+      subscriptionId: sub.subscriptionId,
+      body,
+      providerHeaders: {
+        "x-sig": sig,
+        "x-delivery-id": "delivery-1",
+        "content-type": "application/json",
+      },
+    });
+    const ack = await svc.internal.deliverRelayWebhook(frame);
+    expect(ack.ok).toBe(true);
+    expect(ack.response?.status).toBe(202);
+    expect(ackBody(ack)).toEqual({ accepted: true, subscriptionId: sub.subscriptionId });
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]!.target).toEqual(TARGET);
     expect(dispatched[0]!.event.payload).toEqual({ type: "json", json: { event: "push" } });
 
-    // Replay with the same delivery id must be rejected
-    const second = createMockReqRes("POST", path, body, {
-      ...signRelayEnvelope("POST", path, "", body, RELAY_SECRET),
-      "x-sig": sig,
-      "x-delivery-id": "delivery-1",
+    // A relay RETRY of the SAME deliveryId re-acks the cached response without re-dispatching.
+    const retry = await svc.internal.deliverRelayWebhook(frame);
+    expect(retry.ok).toBe(true);
+    expect(dispatched).toHaveLength(1);
+
+    // A provider DUPLICATE (new deliveryId, same replay key) is acked but not re-dispatched.
+    const dupe = buildRelayFrame({
+      subscriptionId: sub.subscriptionId,
+      body,
+      providerHeaders: { "x-sig": sig, "x-delivery-id": "delivery-1" },
     });
-    await handler(second.req, second.res, { subscriptionId: sub.subscriptionId });
-    expect(second.captured.status).toBe(409);
-    expect(second.captured.body).toEqual({ error: "webhook replay rejected" });
+    const dupeAck = await svc.internal.deliverRelayWebhook(dupe);
+    expect(dupeAck.ok).toBe(true);
     expect(dispatched).toHaveLength(1);
   });
 
-  it("rejects payloads with a wrong HMAC signature", async () => {
+  it("permanently rejects a backhaul frame with a wrong provider HMAC signature", async () => {
     const { svc, dispatched } = setup();
     const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
-    const handler = findRoute(svc);
     const body = Buffer.from(`{"event":"push"}`);
-    const path = `/i/${sub.subscriptionId}`;
-    const { req, res, captured } = createMockReqRes("POST", path, body, {
-      ...signRelayEnvelope("POST", path, "", body, RELAY_SECRET),
-      "x-sig": "deadbeef",
+    const frame = buildRelayFrame({
+      subscriptionId: sub.subscriptionId,
+      body,
+      providerHeaders: { "x-sig": "deadbeef" },
     });
-    await handler(req, res, { subscriptionId: sub.subscriptionId });
-    expect(captured.status).toBe(401);
-    expect(captured.body).toEqual({ error: "invalid webhook signature" });
+    const ack = await svc.internal.deliverRelayWebhook(frame);
+    expect(ack).toMatchObject({ ok: false, permanent: true, reason: "invalid-webhook-signature" });
     expect(dispatched).toHaveLength(0);
   });
 
-  it("rejects deliveries to revoked or unknown subscriptions", async () => {
+  it("permanently rejects backhaul deliveries to revoked or unknown subscriptions", async () => {
     const { svc } = setup();
     const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
     await svc.definition.handler(shellCtx(), "revokeSubscription", [
       { subscriptionId: sub.subscriptionId },
     ]);
+    const body = Buffer.from(`{}`);
+    const revoked = await svc.internal.deliverRelayWebhook(
+      buildRelayFrame({ subscriptionId: sub.subscriptionId, body })
+    );
+    expect(revoked).toMatchObject({ ok: false, permanent: true, reason: "subscription-not-found" });
+
+    const unknown = await svc.internal.deliverRelayWebhook(
+      buildRelayFrame({ subscriptionId: "00000000-0000-0000-0000-000000000000", body })
+    );
+    expect(unknown).toMatchObject({ ok: false, permanent: true });
+  });
+
+  it("re-announces every live relay subscription (backhaul reconnect / boot)", async () => {
+    const { svc, registered } = setup();
+    const a = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
+    const b = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh2" });
+    await svc.definition.handler(shellCtx(), "revokeSubscription", [
+      { subscriptionId: b.subscriptionId },
+    ]);
+    registered.length = 0;
+    await svc.internal.reannounceRelaySubscriptions();
+    // Only the non-revoked relay subscription is re-announced.
+    expect(registered).toEqual([a.subscriptionId]);
+  });
+
+  it("does NOT serve relay-mode subscriptions over the co-located HTTP route (no unauthenticated inbound)", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
     const handler = findRoute(svc);
     const body = Buffer.from(`{}`);
-    const path = `/i/${sub.subscriptionId}`;
-    const { req, res, captured } = createMockReqRes("POST", path, body, {
-      ...signRelayEnvelope("POST", path, "", body, RELAY_SECRET),
-      "x-sig": "x",
+    const { req, res, captured } = createMockReqRes("POST", `/i/${sub.subscriptionId}`, body, {
+      "content-type": "application/json",
     });
     await handler(req, res, { subscriptionId: sub.subscriptionId });
     expect(captured.status).toBe(404);
-    expect(captured.body).toEqual({ error: "webhook subscription not found" });
-
-    const unknownPath = "/i/00000000-0000-0000-0000-000000000000";
-    const unknown = createMockReqRes("POST", unknownPath, body, {
-      ...signRelayEnvelope("POST", unknownPath, "", body, RELAY_SECRET),
-      "x-sig": "x",
-    });
-    await handler(unknown.req, unknown.res, {
-      subscriptionId: "00000000-0000-0000-0000-000000000000",
-    });
-    expect(unknown.captured.status).toBe(404);
-  });
-
-  it("accepts a valid bearer token delivery", async () => {
-    const { svc, dispatched } = setup();
-    const sub = await provision(svc, {
-      type: "bearer",
-      headerName: "Authorization",
-      token: "tok",
-      scheme: "Bearer",
-    });
-    const handler = findRoute(svc);
-    const body = Buffer.from(`{}`);
-    const path = `/i/${sub.subscriptionId}`;
-    const { req, res, captured } = createMockReqRes("POST", path, body, {
-      ...signRelayEnvelope("POST", path, "", body, RELAY_SECRET),
-      authorization: "Bearer tok",
-    });
-    await handler(req, res, { subscriptionId: sub.subscriptionId });
-    expect(captured.status).toBe(202);
-    expect(dispatched).toHaveLength(1);
+    expect(dispatched).toHaveLength(0);
   });
 
   it("accepts direct query-token deliveries without the relay envelope", async () => {

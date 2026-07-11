@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -145,9 +145,26 @@ afterEach(() => {
 });
 
 describe("@workspace-extensions/claude-code prepare", () => {
+  it("keeps only adaptLaunch flat and matches the declared provider contract", async () => {
+    const { ctx } = makeCtx(tmpRoot);
+    const activated = await activate(ctx as never);
+    const manifest = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
+      vibestudio: {
+        extension: { providerContracts: { claudeCode: { methods: string[] } } };
+      };
+    };
+
+    expect(Object.keys(activated)).toEqual(["providerContracts", "adaptLaunch"]);
+    expect(Object.keys(activated.providerContracts.claudeCode)).toEqual(
+      manifest.vibestudio.extension.providerContracts.claudeCode.methods
+    );
+  });
+
   it("prepares a launch: resolves context, mints a credential, returns argv/env", async () => {
     const { ctx, approvalsRequest, rpcCall } = makeCtx(tmpRoot);
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const result = await api.prepare({ channelId: CHANNEL });
 
@@ -174,7 +191,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
   it("is idempotent on re-prepare: no second approval, rotates the credential", async () => {
     const { ctx, approvalsRequest, revoked } = makeCtx(tmpRoot);
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const first = await api.prepare({ channelId: CHANNEL });
     const second = await api.prepare({ channelId: CHANNEL });
@@ -190,7 +207,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
   it("records the context→channel binding for resolvePrimaryChannel", async () => {
     const { ctx } = makeCtx(tmpRoot);
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     expect(await api.resolvePrimaryChannel({ contextId: CONTEXT })).toBeNull();
     await api.prepare({ channelId: CHANNEL });
@@ -199,7 +216,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
   it("subagent launch: skips the approval, threads subagent duty into vessel state, returns vessel identity", async () => {
     const { ctx, approvalsRequest, rpcCall } = makeCtx(tmpRoot);
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const subagent = {
       runId: "run-1",
@@ -231,10 +248,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     ctx.invocation.current.mockReturnValue({
       requestId: "req-1",
       extensionName: "@workspace-extensions/claude-code",
-      method: "launchSubagent",
+      method: "providers.claudeCode.launchSubagent",
       caller: { callerId: "do:parent", callerKind: "do" },
     });
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const subagent = {
       runId: "run-1",
@@ -306,10 +323,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     ctx.invocation.current.mockReturnValue({
       requestId: "req-1",
       extensionName: "@workspace-extensions/claude-code",
-      method: "launchSubagent",
+      method: "providers.claudeCode.launchSubagent",
       caller: { callerId: "do:parent", callerKind: "do" },
     });
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     await api.launchSubagent({
       channelId: CHANNEL,
@@ -356,10 +373,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     ctx.invocation.current.mockReturnValue({
       requestId: "req-1",
       extensionName: "@workspace-extensions/claude-code",
-      method: "launchSubagent",
+      method: "providers.claudeCode.launchSubagent",
       caller: { callerId: "do:parent", callerKind: "do" },
     });
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
     const subagent = {
       runId: "run-1",
       parentRef: "do:parent",
@@ -400,10 +417,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     ctx.invocation.current.mockReturnValue({
       requestId: "req-1",
       extensionName: "@workspace-extensions/claude-code",
-      method: "launchSubagent",
+      method: "providers.claudeCode.launchSubagent",
       caller: { callerId: "panel-1", callerKind: "panel" },
     });
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     await expect(
       api.launchSubagent({
@@ -423,7 +440,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
   it("release revokes the credential and reports released", async () => {
     const { ctx, revoked } = makeCtx(tmpRoot);
-    const api = await activate(ctx as never);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const prepared = await api.prepare({ channelId: CHANNEL });
     const out = await api.release({ entityId: prepared.entityId });

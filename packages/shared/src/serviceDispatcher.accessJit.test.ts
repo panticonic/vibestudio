@@ -7,6 +7,7 @@ import {
   type ServiceContext,
 } from "./serviceDispatcher.js";
 import type { ServiceDefinition } from "./serviceDefinition.js";
+import { blobstoreMethods } from "./serviceSchemas/blobstore.js";
 
 function makeDispatcher(): ServiceDispatcher {
   const d = new ServiceDispatcher();
@@ -67,6 +68,26 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     await expect(d.dispatch(ctx("panel"), "demo", "put", [123])).rejects.toThrow(
       /Example: demo\.put\("hello"\)/
     );
+  });
+
+  it("teaches the byte-only one-argument putBase64 call on an arity error", async () => {
+    const d = new ServiceDispatcher();
+    d.registerService({
+      name: "blobstore",
+      policy: { allowed: ["panel"] },
+      methods: { putBase64: blobstoreMethods.putBase64 },
+      handler: async () => null,
+    });
+    d.markInitialized();
+
+    const call = () =>
+      d.dispatch(ctx("panel"), "blobstore", "putBase64", [
+        "iVBORw0KGgo=",
+        { contentType: "image/png" },
+      ]);
+    await expect(call()).rejects.toThrow(/exactly one base64 string/);
+    await expect(call()).rejects.toThrow(/do not pass MIME\/options metadata/);
+    await expect(call()).rejects.toThrow(/Example: blobstore\.putBase64\("iVBORw0KGgo="\)/);
   });
 
   it("enriches access-denied errors with declared restrictions/approval", async () => {

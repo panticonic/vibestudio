@@ -759,6 +759,55 @@ describe("vibestudio vcs commands", () => {
     expect(jsonOutput()).toEqual(result);
   });
 
+  it("git import sends the branch only inside the canonical remote object", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const result = {
+      path: "projects/demo",
+      remote: {
+        name: "origin",
+        url: "https://github.com/werg/demo.git",
+        branch: "feature/import",
+      },
+    };
+    const { rpcBodies } = stubServer(() => result);
+
+    const { main } = await import("../client.js");
+    await expect(
+      main([
+        "vcs",
+        "git",
+        "import",
+        "https://github.com/werg/demo.git",
+        "--path",
+        "projects/demo",
+        "--branch",
+        "feature/import",
+        "--credential",
+        "cred-github",
+        "--json",
+      ])
+    ).resolves.toBe(0);
+
+    expect(rpcBodies).toEqual([
+      {
+        method: "gitInterop.importProject",
+        args: [
+          {
+            path: "projects/demo",
+            remote: {
+              name: "origin",
+              url: "https://github.com/werg/demo.git",
+              branch: "feature/import",
+            },
+            credentialId: "cred-github",
+          },
+        ],
+      },
+    ]);
+    expect(jsonOutput()).toEqual(result);
+  });
+
   it("git remote set dispatches to gitInterop.setSharedRemote with the declared remote", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);

@@ -56,6 +56,9 @@ export function PairedDevicesSection({
     if (!connectOpen || !invite || pairedDevice || Date.now() >= invite.expiresAt) return;
     let cancelled = false;
     const poll = async () => {
+      // Stop polling once the invite has expired — the QR is no longer scannable,
+      // so continuing to hammer listDevices is pointless (the UI shows "Expired").
+      if (!invite || Date.now() >= invite.expiresAt) return;
       try {
         const next = await remoteCred.listDevices();
         if (cancelled) return;

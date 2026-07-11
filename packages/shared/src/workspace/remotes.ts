@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { normalizeWorkspaceRepoPath as normalizeWorkspaceRepoPathByTaxonomy } from "../runtime/entitySpec.js";
 import type {
+  GitConfig,
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
   WorkspaceGitRemoteDeclaration,
@@ -13,6 +14,19 @@ import type {
 const execFileAsync = promisify(execFile);
 
 const SAFE_REMOTE_NAME = /^[A-Za-z0-9._-]+$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function requireMapping(value: unknown, field: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${field} must be a mapping`);
+  return value;
+}
 
 export interface ResolvedWorkspaceGitRemote {
   repoPath: string;
@@ -64,7 +78,6 @@ export function getDeclaredRemotesForRepo(
   const repoKey = repoParts.join("/");
   const remotes = config.git?.remotes?.[section!]?.[repoKey] ?? {};
   return Object.entries(remotes)
-    .filter((entry): entry is [string, WorkspaceGitRemoteDeclaration] => entry[1] != null)
     .map(([name, declaration]) =>
       validateWorkspaceGitRemoteEntry(repoPath, section!, repoKey, name, declaration)
     )
@@ -84,8 +97,16 @@ export function getDeclaredRemoteForRepo(
 export function validateWorkspaceGitRemote(
   remote: WorkspaceGitRemoteConfig
 ): WorkspaceGitRemoteConfig {
-  if (!remote || typeof remote !== "object") {
+  if (!isRecord(remote)) {
     throw new Error("Remote declaration is required");
+  }
+  if (!hasOnlyKeys(remote, ["name", "url", "branch"])) {
+    throw new Error("Remote declaration may contain only name, url, and branch");
+  }
+  if (typeof remote.name !== "string") throw new Error("Remote name must be a string");
+  if (typeof remote.url !== "string") throw new Error("Remote URL must be a string");
+  if (remote.branch !== undefined && typeof remote.branch !== "string") {
+    throw new Error("Remote branch must be a string when present");
   }
   const name = validateWorkspaceGitRemoteName(remote.name);
   const url = normalizeRemoteUrl(remote.url);
@@ -121,13 +142,34 @@ export function validateWorkspaceGitRemoteBranch(branchInput: string): string {
 export function validateWorkspaceGitUpstream(
   upstream: WorkspaceGitUpstreamConfig
 ): WorkspaceGitUpstreamConfig {
-  if (!upstream || typeof upstream !== "object") {
+  if (!isRecord(upstream)) {
     throw new Error("Upstream declaration is required");
+  }
+  if (
+    !hasOnlyKeys(upstream, [
+      "remote",
+      "branch",
+      "autoPush",
+      "credentialId",
+      "authorEmail",
+      "authorName",
+    ])
+  ) {
+    throw new Error(
+      "Upstream declaration may contain only remote, branch, autoPush, credentialId, authorEmail, and authorName"
+    );
+  }
+  if (typeof upstream.remote !== "string") throw new Error("Upstream remote must be a string");
+  if (upstream.branch !== undefined && typeof upstream.branch !== "string") {
+    throw new Error("Upstream branch must be a string when present");
+  }
+  if (upstream.autoPush !== undefined && typeof upstream.autoPush !== "boolean") {
+    throw new Error("Upstream autoPush must be a boolean when present");
   }
   const remote = validateWorkspaceGitRemoteName(upstream.remote);
   const branch =
     upstream.branch === undefined ? undefined : validateWorkspaceGitRemoteBranch(upstream.branch);
-  const autoPush = upstream.autoPush === undefined ? undefined : Boolean(upstream.autoPush);
+  const autoPush = upstream.autoPush;
   const credentialId = normalizeOptionalNonEmpty("credentialId", upstream.credentialId);
   const authorEmail = normalizeOptionalNonEmpty("authorEmail", upstream.authorEmail);
   const authorName = normalizeOptionalNonEmpty("authorName", upstream.authorName);
@@ -143,6 +185,7 @@ export function validateWorkspaceGitUpstream(
 
 function normalizeOptionalNonEmpty(label: string, value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`Invalid ${label}: expected a string`);
   const normalized = value.trim();
   if (!normalized) throw new Error(`Invalid ${label}: empty value`);
   return normalized;
@@ -156,7 +199,7 @@ export function getDeclaredUpstreamForRepo(
   const [section, ...repoParts] = repoPath.split("/");
   const repoKey = repoParts.join("/");
   const declaration = config.git?.upstreams?.[section!]?.[repoKey];
-  if (!declaration) return null;
+  if (declaration === undefined) return null;
   const upstream = validateWorkspaceGitUpstream(declaration);
   const remote = getDeclaredRemoteForRepo(config, repoPath, upstream.remote);
   if (!remote) {
@@ -178,7 +221,7 @@ export function getDeclaredUpstreamForRepo(
 export function getDeclaredUpstreams(config: WorkspaceConfig): ResolvedWorkspaceGitUpstream[] {
   const entries: ResolvedWorkspaceGitUpstream[] = [];
   for (const [section, repos] of Object.entries(config.git?.upstreams ?? {})) {
-    for (const repoKey of Object.keys(repos ?? {})) {
+    for (const repoKey of Object.keys(repos)) {
       const repoPath = normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
       const upstream = getDeclaredUpstreamForRepo(config, repoPath);
       if (upstream) entries.push(upstream);
@@ -202,7 +245,7 @@ export interface DeclaredUpstreamListing {
 export function listDeclaredUpstreams(config: WorkspaceConfig): DeclaredUpstreamListing[] {
   const entries: DeclaredUpstreamListing[] = [];
   for (const [section, repos] of Object.entries(config.git?.upstreams ?? {})) {
-    for (const repoKey of Object.keys(repos ?? {})) {
+    for (const repoKey of Object.keys(repos)) {
       const repoPath = normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
       try {
         entries.push({ repoPath, upstream: getDeclaredUpstreamForRepo(config, repoPath) });
@@ -240,16 +283,62 @@ function normalizeRemoteDeclaration(declaration: WorkspaceGitRemoteDeclaration):
   url: string;
   branch?: string;
 } {
-  if (typeof declaration === "string") {
-    return { url: normalizeRemoteUrl(declaration) };
+  if (!isRecord(declaration)) {
+    throw new Error("Remote declaration must be an object with url");
   }
-  if (!declaration || typeof declaration !== "object") {
-    throw new Error("Remote declaration must be a URL string or an object with url");
+  if (!hasOnlyKeys(declaration, ["url", "branch"])) {
+    throw new Error("Remote declaration may contain only url and branch");
+  }
+  if (typeof declaration.url !== "string") throw new Error("Remote URL must be a string");
+  if (declaration.branch !== undefined && typeof declaration.branch !== "string") {
+    throw new Error("Remote branch must be a string when present");
   }
   const url = normalizeRemoteUrl(declaration.url);
   const branch =
-    declaration.branch == null ? undefined : validateWorkspaceGitRemoteBranch(declaration.branch);
+    declaration.branch === undefined
+      ? undefined
+      : validateWorkspaceGitRemoteBranch(declaration.branch);
   return branch === undefined ? { url } : { url, branch };
+}
+
+/** Validate the canonical Git declaration tree read from meta/vibestudio.yml. */
+export function validateWorkspaceGitConfig(gitValue: unknown): void {
+  if (gitValue === undefined) return;
+  const git = requireMapping(gitValue, "git");
+  if (!hasOnlyKeys(git, ["remotes", "upstreams"])) {
+    throw new Error("git may contain only remotes and upstreams");
+  }
+
+  if (git["remotes"] !== undefined) {
+    const sections = requireMapping(git["remotes"], "git.remotes");
+    for (const [section, repoValue] of Object.entries(sections)) {
+      const repos = requireMapping(repoValue, `git.remotes.${section}`);
+      for (const [repoKey, remoteValue] of Object.entries(repos)) {
+        const repoPath = normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
+        const remotes = requireMapping(remoteValue, `git.remotes.${section}.${repoKey}`);
+        for (const [name, declaration] of Object.entries(remotes)) {
+          validateWorkspaceGitRemoteEntry(
+            repoPath,
+            section,
+            repoKey,
+            name,
+            declaration as WorkspaceGitRemoteDeclaration
+          );
+        }
+      }
+    }
+  }
+
+  if (git["upstreams"] !== undefined) {
+    const sections = requireMapping(git["upstreams"], "git.upstreams");
+    for (const [section, repoValue] of Object.entries(sections)) {
+      const repos = requireMapping(repoValue, `git.upstreams.${section}`);
+      for (const [repoKey, declaration] of Object.entries(repos)) {
+        normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
+        validateWorkspaceGitUpstream(declaration as WorkspaceGitUpstreamConfig);
+      }
+    }
+  }
 }
 
 export function normalizeRemoteUrl(value: string): string {
@@ -281,10 +370,10 @@ export function setDeclaredRemoteInConfig(
   const [section, ...repoParts] = repoPath.split("/");
   const repoKey = repoParts.join("/");
   const normalized = validateWorkspaceGitRemote(remote);
-  const declaration: WorkspaceGitRemoteDeclaration =
-    normalized.branch === undefined
-      ? normalized.url
-      : { url: normalized.url, branch: normalized.branch };
+  const declaration: WorkspaceGitRemoteDeclaration = {
+    url: normalized.url,
+    ...(normalized.branch === undefined ? {} : { branch: normalized.branch }),
+  };
   const git = config.git ?? {};
   const remotes = git.remotes ?? {};
   const sectionRemotes = remotes[section!] ?? {};
@@ -317,6 +406,7 @@ export function removeDeclaredRemoteFromConfig(
   const normalizedRemoteName = validateWorkspaceGitRemoteName(remoteName);
   const git = config.git ?? {};
   const remotes = git.remotes ?? {};
+  const nextRemotes = { ...remotes };
   const sectionRemotes = { ...(remotes[section!] ?? {}) };
   const repoRemotes = { ...(sectionRemotes[repoKey] ?? {}) };
   delete repoRemotes[normalizedRemoteName];
@@ -325,16 +415,16 @@ export function removeDeclaredRemoteFromConfig(
   } else {
     delete sectionRemotes[repoKey];
   }
-  return {
-    ...config,
-    git: {
-      ...git,
-      remotes: {
-        ...remotes,
-        [section!]: sectionRemotes,
-      },
-    },
-  };
+  if (Object.keys(sectionRemotes).length > 0) nextRemotes[section!] = sectionRemotes;
+  else delete nextRemotes[section!];
+
+  const nextGit: GitConfig = { ...git };
+  if (Object.keys(nextRemotes).length > 0) nextGit.remotes = nextRemotes;
+  else delete nextGit.remotes;
+  const nextConfig = { ...config };
+  if (Object.keys(nextGit).length > 0) nextConfig.git = nextGit;
+  else delete nextConfig.git;
+  return nextConfig;
 }
 
 export function setDeclaredUpstreamInConfig(
@@ -376,18 +466,19 @@ export function removeDeclaredUpstreamFromConfig(
   const repoKey = repoParts.join("/");
   const git = config.git ?? {};
   const upstreams = git.upstreams ?? {};
+  const nextUpstreams = { ...upstreams };
   const sectionUpstreams = { ...(upstreams[section!] ?? {}) };
   delete sectionUpstreams[repoKey];
-  return {
-    ...config,
-    git: {
-      ...git,
-      upstreams: {
-        ...upstreams,
-        [section!]: sectionUpstreams,
-      },
-    },
-  };
+  if (Object.keys(sectionUpstreams).length > 0) nextUpstreams[section!] = sectionUpstreams;
+  else delete nextUpstreams[section!];
+
+  const nextGit: GitConfig = { ...git };
+  if (Object.keys(nextUpstreams).length > 0) nextGit.upstreams = nextUpstreams;
+  else delete nextGit.upstreams;
+  const nextConfig = { ...config };
+  if (Object.keys(nextGit).length > 0) nextConfig.git = nextGit;
+  else delete nextConfig.git;
+  return nextConfig;
 }
 
 export async function syncDeclaredRemoteForRepo(options: {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { WorkspaceConfig } from "@workspace/runtime/worker";
-import type { ModelCatalog } from "@workspace/model-catalog/catalog";
+import { DEFAULT_AGENT_MODEL_REF, type ModelCatalog } from "@workspace/model-catalog/catalog";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
 import type { UrlAudience } from "@vibestudio/shared/credentials/urlAudience";
-import { ModelSettingsDO, type LocalModelEntry } from "./index.js";
+import { getModelCatalog, ModelSettingsDO, type LocalModelEntry } from "./index.js";
 
 const CATALOG: ModelCatalog = {
   providers: [
@@ -114,6 +114,22 @@ class OfflineModelSettingsDO extends TestModelSettingsDO {
 }
 
 describe("ModelSettingsDO", () => {
+  it("projects the Codex 5.6 Sol registry entry and all enabled effort levels", async () => {
+    const catalog = await getModelCatalog();
+    const sol = catalog.models.find((model) => model.ref === DEFAULT_AGENT_MODEL_REF);
+
+    expect(DEFAULT_AGENT_MODEL_REF).toBe("openai-codex:gpt-5.6-sol");
+    expect(sol).toMatchObject({
+      id: "gpt-5.6-sol",
+      provider: "openai-codex",
+      contextWindow: 372_000,
+      thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      modelSpec: {
+        thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+      },
+    });
+  });
+
   it("reads the configured workspace default agent config (model + behavior)", async () => {
     TestModelSettingsDO.config = {
       id: "test",
@@ -199,6 +215,25 @@ describe("ModelSettingsDO", () => {
       {
         key: "defaultAgentConfig",
         value: { model: "anthropic:claude-opus-4-1", thinkingLevel: "high", approvalLevel: 2 },
+      },
+    ]);
+  });
+
+  it("persists extended effort levels", async () => {
+    TestModelSettingsDO.config = { id: "test" };
+    TestModelSettingsDO.writes = [];
+    const { call } = await createTestDO(TestModelSettingsDO);
+
+    await call("setDefaultAgentConfig", {
+      model: "openai:gpt-5",
+      thinkingLevel: "max",
+      approvalLevel: 2,
+    });
+
+    expect(TestModelSettingsDO.writes).toEqual([
+      {
+        key: "defaultAgentConfig",
+        value: { model: "openai:gpt-5", thinkingLevel: "max", approvalLevel: 2 },
       },
     ]);
   });

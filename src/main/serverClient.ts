@@ -104,6 +104,22 @@ export interface ServerClient {
   isConnected(): boolean;
   /** Current connection status */
   getConnectionStatus(): ConnectionStatus;
+  /**
+   * Last selected ICE candidate-pair type of the pipe (`'relay'` = TURN
+   * engaged, `null` while unsettled/down). Additive observability the WebRTC
+   * client (webrtcServerClient.ts) implements so the shell can seed a "relayed"
+   * hint on a fresh badge mount; the loopback WS client omits it (optional).
+   */
+  candidateType?(): "host" | "srflx" | "prflx" | "relay" | null;
+  /**
+   * Liveness nudge (transport-level): probe a possibly-dead pipe so a stale
+   * "connected" is torn down promptly instead of lingering (~45s) after a
+   * sleep/wake or network change. Present only on transports that can probe
+   * (the WebRTC pipe); the loopback WS client omits it (loopback never sleeps
+   * out from under us the same way). Never forces a teardown on its own — a
+   * healthy pipe answers the probe and stays up.
+   */
+  nudge?(): void;
   /** Close connection, reject all pending calls, stop reconnection */
   close(): Promise<void>;
 }

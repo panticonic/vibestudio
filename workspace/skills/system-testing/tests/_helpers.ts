@@ -1,9 +1,14 @@
 import type { TestExecutionResult } from "../types.js";
 
-interface InvocationCardPayloadLike {
+export interface InvocationCardPayloadLike {
   id: string;
   name: string;
   arguments?: Record<string, unknown>;
+  status?: string;
+  terminalOutcome?: string;
+  result?: unknown;
+  error?: unknown;
+  isError?: boolean;
   execution?: {
     status?: string;
     terminalOutcome?: string;
@@ -187,17 +192,39 @@ export function getToolCalls(result: TestExecutionResult): InvocationCardPayload
   for (const msg of result.messages) {
     if (msg.contentType !== "invocation") continue;
     if (msg.invocation) {
-      calls.push(msg.invocation as InvocationCardPayloadLike);
+      calls.push(normalizeInvocationCard(msg.invocation as InvocationCardPayloadLike));
       continue;
     }
     try {
       const parsed = JSON.parse(msg.content ?? "") as InvocationCardPayloadLike;
-      if (parsed && typeof parsed.name === "string") calls.push(parsed);
+      if (parsed && typeof parsed.name === "string") calls.push(normalizeInvocationCard(parsed));
     } catch {
       // Ignore malformed invocation content; validation can fail on missing calls.
     }
   }
   return calls;
+}
+
+/** Normalize historical nested cards and current flattened invocation projections. */
+function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCardPayloadLike {
+  const nested = call.execution;
+  const hasExecution =
+    nested !== undefined ||
+    call.status !== undefined ||
+    call.terminalOutcome !== undefined ||
+    call.result !== undefined ||
+    call.error !== undefined ||
+    call.isError !== undefined;
+  if (!hasExecution) return call;
+  return {
+    ...call,
+    execution: {
+      status: nested?.status ?? call.status,
+      terminalOutcome: nested?.terminalOutcome ?? call.terminalOutcome,
+      result: nested?.result ?? call.result ?? call.error,
+      isError: nested?.isError ?? call.isError,
+    },
+  };
 }
 
 export function completedToolNames(result: TestExecutionResult): Set<string> {

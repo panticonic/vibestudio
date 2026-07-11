@@ -67,8 +67,12 @@ describe("HeadlessSession", () => {
         },
       },
     };
-    (session as any)._chatMessages = new Map([[invocationMessage.id, invocationMessage]]);
-    (session as any)._chatMessageOrder = [invocationMessage.id];
+    const internals = session as unknown as {
+      _chatMessages: Map<string, ChatMessage>;
+      _chatMessageOrder: string[];
+    };
+    internals._chatMessages = new Map([[invocationMessage.id, invocationMessage]]);
+    internals._chatMessageOrder = [invocationMessage.id];
     (session as any)._participants = {
       "agent-1": {
         id: "agent-1",
@@ -112,6 +116,40 @@ describe("HeadlessSession", () => {
         ts: 1,
       },
     ]);
+  });
+
+  it("preserves a useful message from structured invocation errors", () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const invocationMessage: ChatMessage = {
+      id: "invocation:call-error",
+      senderId: "agent-1",
+      content: "",
+      kind: "message",
+      contentType: "invocation",
+      complete: true,
+      invocation: {
+        id: "call-error",
+        name: "eval",
+        arguments: { code: "throw new Error('boom')" },
+        execution: {
+          status: "error",
+          description: "tool failed",
+          result: {
+            protocolContent: [{ type: "text", text: "[eval] Error: boom" }],
+            details: { success: false, error: "boom" },
+          },
+          isError: true,
+        },
+      },
+    };
+    const internals = session as unknown as {
+      _chatMessages: Map<string, ChatMessage>;
+      _chatMessageOrder: string[];
+    };
+    internals._chatMessages = new Map([[invocationMessage.id, invocationMessage]]);
+    internals._chatMessageOrder = [invocationMessage.id];
+
+    expect(session.snapshot().invocations[0]?.error).toBe("boom");
   });
 
   it("set_title records the report title without touching the channel config", async () => {

@@ -157,7 +157,8 @@ function findOkFalse(value: unknown, path: string, seen = new Set<unknown>()): s
 
   if (
     !Array.isArray(value) &&
-    isExpectedControlledRejectionRecord(value as Record<string, unknown>, path)
+    (isExpectedControlledRejectionRecord(value as Record<string, unknown>, path) ||
+      isExpectedInFlightHealthRecord(value as Record<string, unknown>))
   ) {
     return undefined;
   }
@@ -177,6 +178,27 @@ function findOkFalse(value: unknown, path: string, seen = new Set<unknown>()): s
     if (found) return found;
   }
   return undefined;
+}
+
+function isExpectedInFlightHealthRecord(record: Record<string, unknown>): boolean {
+  if (record["ok"] !== false) return false;
+  const openTurns = Number(record["openTurns"] ?? 0);
+  const openInvocations = Number(
+    record["nonterminalInvocations"] ?? record["openProjectedInvocations"] ?? 0
+  );
+  if (openTurns <= 0 && openInvocations <= 0) return false;
+
+  const issueFields = [
+    "publicationIssues",
+    "storageIssues",
+    "missingMappings",
+    "orphanMappings",
+    "sequenceMismatches",
+    "hashIssues",
+    "integrityIssues",
+  ];
+  const present = issueFields.filter((field) => record[field] !== undefined);
+  return present.length > 0 && present.every((field) => Number(record[field]) === 0);
 }
 
 function parseJsonish(value: string): unknown {

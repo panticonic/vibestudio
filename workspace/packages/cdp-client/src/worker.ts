@@ -837,7 +837,11 @@ class WorkerCdpPage {
 
   // ---- Screenshot -------------------------------------------------------
   async screenshot(options: { type?: "png" | "jpeg"; quality?: number } = {}): Promise<Uint8Array> {
-    const result = (await this.connection.send("Page.captureScreenshot", options)) as {
+    // Keep the public page API Playwright-shaped (`type`) while speaking the
+    // Chrome DevTools Protocol shape (`format`) on the wire.
+    const { type, ...rest } = options;
+    const params = type ? { ...rest, format: type } : rest;
+    const result = (await this.connection.send("Page.captureScreenshot", params)) as {
       data?: string;
     };
     if (!result.data) throw new Error("CDP screenshot did not return image data");

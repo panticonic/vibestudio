@@ -7,6 +7,7 @@ import {
   type WorkspaceRuntime,
 } from "./hostedRuntime.js";
 import { createWorkerdClient } from "./workerd.js";
+import { BLOBSTORE_MEMBERS } from "./blobstore.js";
 import { portableExports, PORTABLE_KEYS } from "@vibestudio/shared/runtimeSurface.portable";
 
 /**
@@ -108,12 +109,6 @@ describe("createHostedRuntime", () => {
     expect(core.gatewayFetch).toBe(host.gatewayFetch);
   });
 
-  it("wires git.http to the credential client's gitHttp", () => {
-    const { host } = recordingHost();
-    const core = createHostedRuntime(host);
-    expect(core.git.http).toBe(core.credentials.gitHttp);
-  });
-
   it("derives a real credential client with forAudience", () => {
     const { host } = recordingHost();
     const core = createHostedRuntime(host);
@@ -136,6 +131,47 @@ describe("createHostedRuntime", () => {
       method: "blobstore.putBase64",
       args: ["aGVsbG8="],
     });
+  });
+
+  it("putBytes forwards only the visible Uint8Array bytes and accepts ArrayBuffer", async () => {
+    const { host, calls } = recordingHost();
+    const core = createHostedRuntime(host);
+
+    expect(new Set(Object.keys(core.blobstore))).toEqual(new Set(BLOBSTORE_MEMBERS));
+    expect(new Set(Object.keys(core.blobstore))).toEqual(
+      new Set(portableExports["blobstore"]?.members ?? [])
+    );
+
+    const backing = new Uint8Array([9, 0, 255, 8]);
+    await core.blobstore.putBytes(backing.subarray(1, 3));
+
+    const arrayBuffer = new ArrayBuffer(3);
+    new Uint8Array(arrayBuffer).set([1, 2, 3]);
+    await core.blobstore.putBytes(arrayBuffer);
+
+    expect(calls).toContainEqual({
+      target: "main",
+      method: "blobstore.putBase64",
+      args: ["AP8="],
+    });
+    expect(calls).toContainEqual({
+      target: "main",
+      method: "blobstore.putBase64",
+      args: ["AQID"],
+    });
+  });
+
+  it("putBytes rejects extra metadata instead of silently dropping it", async () => {
+    const { host, calls } = recordingHost();
+    const core = createHostedRuntime(host);
+    const untypedPutBytes = core.blobstore.putBytes as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+
+    await expect(
+      untypedPutBytes(new Uint8Array([1]), { contentType: "image/png" })
+    ).rejects.toThrow(/accepts exactly one.*MIME metadata is not stored/);
+    expect(calls).not.toContainEqual(expect.objectContaining({ method: "blobstore.putBase64" }));
   });
 
   it("vcs.subscribeHead wires through host.rpc (rpc.on + events.subscribe)", () => {

@@ -185,7 +185,6 @@ describe("MobileRpcClient WebRTC transport", () => {
     expect(transport.openSession).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionId: "panel-conn-1",
-        callerKind: "panel",
         clientPlatform: "mobile",
       })
     );
@@ -195,6 +194,29 @@ describe("MobileRpcClient WebRTC transport", () => {
       ["panel:runtime-1"]
     );
     expect(tokenSeenByReady).toBe("panel-grant-123");
+  });
+
+  it("closes the pipe (no leak) when disconnect() races an in-flight connect", async () => {
+    // Handshake that only resolves when we let it — models a disconnect landing
+    // mid-connect (background / dispose-during-connect).
+    let resolveConnect!: (connection: WebRtcConnection) => void;
+    const connection = makeConnection();
+    mockReconnectViaWebRtc.mockImplementation(
+      () => new Promise<WebRtcConnection>((resolve) => (resolveConnect = resolve))
+    );
+    const client = new MobileRpcClient({});
+
+    client.connect(); // fire-and-forget; handshake now pending
+    // Let establishConnection() await loadShellCredential and reach the
+    // (still-pending) reconnectViaWebRtc handshake.
+    await new Promise((r) => setTimeout(r, 0));
+    client.disconnect(); // teardown lands before the handshake resolves
+    resolveConnect(connection);
+    await new Promise((r) => setTimeout(r, 0)); // let the pending handshake settle
+
+    // The produced pipe is closed (keepalive gone), not adopted as "connected".
+    expect(connection.close).toHaveBeenCalledTimes(1);
+    expect(client.status).not.toBe("connected");
   });
 
   it("forwards WebRTC recovery notifications to registered listeners", async () => {

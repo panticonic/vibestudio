@@ -168,11 +168,11 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     setAgentId(availableAgents[0]?.id);
   }, [agentId, availableAgents]);
 
-  // Seed the initial draft from the selected agent's manifest defaults once the
-  // catalog is available — but never clobber a draft the user has edited.
+  // Keep inherited defaults synchronized as the gallery/settings arrive in
+  // either order. User edits remain authoritative; if the user touched another
+  // field but not the model, a late effective model may still fill that field.
   useEffect(() => {
-    if (draftTouchedRef.current || draft.model) return;
-    if (availableAgents.length === 0 && !modelCatalog) return;
+    if (availableAgents.length === 0 && !modelCatalog && !defaultAgentConfig) return;
     const agent = availableAgents.find((a) => a.id === agentId) ?? availableAgents[0];
     const seeded = seedDraftForAgent(agent, {
       modelCatalog,
@@ -180,8 +180,15 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       defaultAgentConfig,
       showReactiveness: false,
     });
-    if (seeded.model || seeded.handle) setDraft(seeded);
-  }, [agentId, availableAgents, modelCatalog, defaultModelRef, defaultAgentConfig, draft.model]);
+    if (!seeded.model && !seeded.handle) return;
+    setDraft((current) => {
+      if (!draftTouchedRef.current) return seeded;
+      if (!modelTouchedRef.current && seeded.model && current.model !== seeded.model) {
+        return { ...current, model: seeded.model };
+      }
+      return current;
+    });
+  }, [agentId, availableAgents, modelCatalog, defaultModelRef, defaultAgentConfig]);
 
   const handleSetDraft = useCallback((next: AgentConfigDraft) => {
     draftTouchedRef.current = true;
@@ -282,11 +289,28 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     // Spawn with the intent captured when the message armed the spawn — NOT the
     // live draft/agentId (which auto-seed or a future editable card could move).
     // A null id lets the host resolve its default (honoring a pinned agentSource).
+    const current = stateRef.current;
+    const selectedAgent =
+      availableAgents.find((agent) => agent.id === current.agentId) ?? availableAgents[0];
+    // Injected initial prompts do not pass through sendMessage(), so they have
+    // no captured intent yet. Resolve their untouched draft from the latest
+    // inputs here to avoid a same-render settings/gallery race, then snapshot it
+    // so retries issue exactly the same launch.
+    const launchDraft = draftTouchedRef.current
+      ? current.draft
+      : seedDraftForAgent(selectedAgent, {
+          modelCatalog,
+          defaultModelRef,
+          defaultAgentConfig,
+          showReactiveness: false,
+        });
     const intent = spawnIntentRef.current ?? {
-      agentId: agentTypeTouchedRef.current ? stateRef.current.agentId : undefined,
-      config: spawnConfigFromDraft(stateRef.current.draft),
+      agentId: agentTypeTouchedRef.current ? current.agentId : undefined,
+      config: spawnConfigFromDraft(launchDraft),
     };
-    void Promise.resolve(onAddAgent(intent.agentId, intent.config))
+    spawnIntentRef.current = intent;
+    void Promise.resolve()
+      .then(() => onAddAgent(intent.agentId, intent.config))
       .then(() => {
         spawnInFlightRef.current = false;
       })
@@ -296,7 +320,19 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
         issuedRef.current = false;
         setLaunchFailed(true);
       });
-  }, [agentPresent, armed, queued.length, pendingAgents, canSpawn, onAddAgent, launchFailed]);
+  }, [
+    agentPresent,
+    armed,
+    queued.length,
+    pendingAgents,
+    canSpawn,
+    onAddAgent,
+    launchFailed,
+    availableAgents,
+    modelCatalog,
+    defaultModelRef,
+    defaultAgentConfig,
+  ]);
 
   // Abandon: the user cancelled every held message before the agent was even
   // issued → un-arm so the inline setup card returns and nothing spawns.

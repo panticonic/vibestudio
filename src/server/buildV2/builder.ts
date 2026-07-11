@@ -2692,6 +2692,21 @@ function validateExtensionManifest(node: GraphNode, manifest: Record<string, unk
   validateUnitManifest(extensionUnitManifestDescriptor, manifest, { unitName: node.name });
 }
 
+function extensionProviderContracts(
+  extensionManifest: Record<string, unknown> | undefined
+): Record<string, { methods: string[] }> {
+  const declared =
+    (extensionManifest?.["providerContracts"] as
+      | Record<string, { methods: string[] }>
+      | undefined) ?? {};
+  return Object.fromEntries(
+    Object.entries(declared).map(([provider, contract]) => [
+      provider,
+      { methods: [...contract.methods] },
+    ])
+  );
+}
+
 async function buildExtension(
   node: GraphNode,
   ev: string,
@@ -2719,6 +2734,7 @@ async function buildExtension(
   const extractedManifest = extractedPkg.vibestudio ?? {};
   validateExtensionManifest(node, extractedManifest);
   const extensionManifest = extractedManifest["extension"] as Record<string, unknown> | undefined;
+  const providerContracts = extensionProviderContracts(extensionManifest);
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
   const dependencyDiagnostics = analyzeExtensionDependencies(
     env.externalDeps,
@@ -2797,6 +2813,7 @@ async function buildExtension(
           kind: "extension",
           runtimeDepsKey: runtimeDeps.key,
           runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+          providerContracts,
           dependencyMode,
           externalDeps: runtimeExternalDeps,
           dependencyOverrides: env.dependencyOverrides,
@@ -2823,6 +2840,7 @@ async function buildExtension(
         kind: "extension",
         runtimeDepsKey: runtimeDeps.key,
         runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+        providerContracts,
         dependencyMode,
         externalDeps: runtimeExternalDeps,
         dependencyOverrides: env.dependencyOverrides,

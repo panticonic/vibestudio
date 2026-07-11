@@ -711,38 +711,42 @@ class SubagentSpawnProbe extends TestVessel {
           const input = args[0] as { atSeq?: number };
           return { forkSeq: input.atSeq ?? 0, forkHash: "fork-hash", inherited: 0 };
         }
-        if (target === "main" && method === "extensions.invoke") {
-          const [ext, extMethod] = args as [string, string, unknown[]];
-          if (
-            (ext === "@workspace-extensions/claude-code" ||
-              ext === "@workspace-extensions/codex") &&
-            extMethod === "launchSubagent"
-          ) {
+        if (target === "main" && method === "extensions.invokeProvider") {
+          const [provider, providerMethod] = args as [string, string, unknown[]];
+          if (provider === "claudeCode" && providerMethod === "launchSubagent") {
             if (this.failClaudeLaunch) throw new Error("launchSubagent boom");
-            const isCodex = ext === "@workspace-extensions/codex";
             return {
-              entityId: isCodex ? "session:codex-1" : "session:cc-1",
+              entityId: "session:cc-1",
               contextId: "ctx-child",
-              channelId: isCodex ? "task-inv-codex" : "task-inv-cc",
-              vesselRef: `do:workers/linked-agent:LinkedAgentWorker:linked:${
-                isCodex ? "session-codex-1" : "session-cc-1"
-              }`,
-              vesselEntityId: `do:workers/linked-agent:LinkedAgentWorker:linked:${
-                isCodex ? "session-codex-1" : "session-cc-1"
-              }`,
+              channelId: "task-inv-cc",
+              vesselRef: "do:workers/linked-agent:LinkedAgentWorker:linked:session-cc-1",
+              vesselEntityId: "do:workers/linked-agent:LinkedAgentWorker:linked:session-cc-1",
               vesselParticipantId: "participant-linked",
-              launchId: isCodex ? "codex:inv-codex" : "claude-code:inv-cc",
+              launchId: "claude-code:inv-cc",
               pid: 4242,
-              logPath: `/state/agent-launch/${
-                isCodex ? "session:codex-1" : "session:cc-1"
-              }/headless.log`,
+              logPath: "/state/agent-launch/session:cc-1/headless.log",
             };
           }
-          if (
-            (ext === "@workspace-extensions/claude-code" ||
-              ext === "@workspace-extensions/codex") &&
-            extMethod === "release"
-          ) {
+          if (provider === "claudeCode" && providerMethod === "release") {
+            return { released: true };
+          }
+        }
+        if (target === "main" && method === "extensions.invoke") {
+          const [ext, extMethod] = args as [string, string, unknown[]];
+          if (ext === "@workspace-extensions/codex" && extMethod === "launchSubagent") {
+            return {
+              entityId: "session:codex-1",
+              contextId: "ctx-child",
+              channelId: "task-inv-codex",
+              vesselRef: "do:workers/linked-agent:LinkedAgentWorker:linked:session-codex-1",
+              vesselEntityId: "do:workers/linked-agent:LinkedAgentWorker:linked:session-codex-1",
+              vesselParticipantId: "participant-linked",
+              launchId: "codex:inv-codex",
+              pid: 4242,
+              logPath: "/state/agent-launch/session:codex-1/headless.log",
+            };
+          }
+          if (ext === "@workspace-extensions/codex" && extMethod === "release") {
             return { released: true };
           }
         }
@@ -1408,10 +1412,10 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     // The extension's subagent launch was invoked on the task channel WITH
     // subagent duty and the task; argv/cwd/env stay private to the extension.
     const launchCall = probe.rpcCalls.find(
-      (c) => c.method === "extensions.invoke" && (c.args[1] as string) === "launchSubagent"
+      (c) => c.method === "extensions.invokeProvider" && (c.args[1] as string) === "launchSubagent"
     );
     expect(launchCall).toBeDefined();
-    expect(launchCall!.args[0]).toBe("@workspace-extensions/claude-code");
+    expect(launchCall!.args[0]).toBe("claudeCode");
     const launchArg = (launchCall!.args[2] as unknown[])[0] as {
       channelId: string;
       task: string;
@@ -1492,9 +1496,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(probe.subagentRunForTest("inv-cc")).toBeNull();
     expect(
       probe.rpcCalls.some(
-        (c) =>
-          c.method === "runtime.destroyContext" &&
-          JSON.stringify(c.args).includes("ctx-child")
+        (c) => c.method === "runtime.destroyContext" && JSON.stringify(c.args).includes("ctx-child")
       )
     ).toBe(true);
   });
@@ -1510,17 +1512,15 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     await probe.closeSubagentForTest("inv-cc");
 
     const releaseCall = probe.rpcCalls.find(
-      (c) => c.method === "extensions.invoke" && (c.args[1] as string) === "release"
+      (c) => c.method === "extensions.invokeProvider" && (c.args[1] as string) === "release"
     );
     expect(releaseCall).toBeDefined();
-    expect(releaseCall!.args[0]).toBe("@workspace-extensions/claude-code");
+    expect(releaseCall!.args[0]).toBe("claudeCode");
     expect((releaseCall!.args[2] as unknown[])[0]).toMatchObject({ entityId: "session:cc-1" });
     // Context teardown still runs.
     expect(
       probe.rpcCalls.some(
-        (c) =>
-          c.method === "runtime.destroyContext" &&
-          JSON.stringify(c.args).includes("ctx-child")
+        (c) => c.method === "runtime.destroyContext" && JSON.stringify(c.args).includes("ctx-child")
       )
     ).toBe(true);
     expect(probe.subagentRunForTest("inv-cc")).toBeNull();

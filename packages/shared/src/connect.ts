@@ -180,15 +180,24 @@ export function parseConnectLink(raw: string): ConnectLink {
 
   const prefix = `${CONNECT_DEEP_LINK_SCHEME}//${CONNECT_DEEP_LINK_HOST}`;
   const httpsPrefix = `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}`;
+  // The prefix must be followed by a real delimiter — otherwise
+  // `vibestudio://connect-anything?…` would parse as a connect link (the host is
+  // exactly `connect`, no more).
+  const afterScheme = raw.slice(prefix.length);
+  const isSchemeLink =
+    raw.startsWith(prefix) &&
+    (afterScheme === "" || afterScheme[0] === "?" || afterScheme[0] === "/" || afterScheme[0] === "#");
   let rawParams: string;
-  if (raw.startsWith(`${prefix}?`)) {
+  if (isSchemeLink) {
     const queryStart = raw.indexOf("?");
     if (queryStart < 0) {
       return { kind: "error", reason: "Deep link is missing pairing parameters" };
     }
     // Manual (non-`new URL()`) query parse — the vibestudio: custom scheme is not
-    // URL-parseable on RN/Hermes (asserted by connect.test.ts).
-    rawParams = raw.slice(queryStart + 1);
+    // URL-parseable on RN/Hermes (asserted by connect.test.ts). Strip any
+    // `#fragment` so it can't fold into the last query value.
+    const fragmentStart = raw.indexOf("#", queryStart);
+    rawParams = fragmentStart >= 0 ? raw.slice(queryStart + 1, fragmentStart) : raw.slice(queryStart + 1);
   } else if (raw.startsWith(httpsPrefix)) {
     let url: URL;
     try {

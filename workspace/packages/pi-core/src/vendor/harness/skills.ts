@@ -1,4 +1,4 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
 import ignore from "ignore";
 import { parse } from "yaml";
 import { type ExecutionEnv, type FileInfo, type Result, type Skill, toError } from "./types.js";

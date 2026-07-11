@@ -41,7 +41,7 @@ function isUsableEntry(model: ModelCatalogEntry): boolean {
   return state === "ready" || state === "startable";
 }
 
-const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 const RESPOND_POLICIES = new Set([
   "all",
   "mentioned",

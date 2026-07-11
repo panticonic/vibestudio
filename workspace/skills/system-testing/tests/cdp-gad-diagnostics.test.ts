@@ -219,6 +219,33 @@ describe("cdp-gad diagnostics validators", () => {
     expect(result).toEqual({ passed: true });
   });
 
+  it("accepts unrelated in-flight agent health during a branch probe", () => {
+    const result = branchTest.validate(
+      executionWithInvocation("GAD_BRANCH_OK branch-files state-probe controlled-errors", {
+        id: "call-1",
+        name: "eval",
+        execution: {
+          status: "complete",
+          result: {
+            priorHealth: {
+              summary: {
+                ok: false,
+                publicationIssues: 0,
+                storageIssues: 0,
+                openTurns: 1,
+                nonterminalInvocations: 1,
+              },
+            },
+            branchFiles: [],
+            stateProbe: null,
+          },
+        },
+      })
+    );
+
+    expect(result).toEqual({ passed: true });
+  });
+
   it("accepts stringified controlled branch probe rejections returned as data", () => {
     const result = branchTest.validate(
       executionWithInvocation("GAD_BRANCH_OK branch-files state-probe controlled-errors", {

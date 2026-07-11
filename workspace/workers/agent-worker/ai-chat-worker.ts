@@ -24,7 +24,7 @@ function asChatAgentConfig(config: unknown): ChatAgentConfig {
  *
  * The model, thinking level, and approval level can be customized via the
  * `getModel`/`getThinkingLevel`/`getApprovalLevel` overridable hooks. The
- * default is `openai-codex:gpt-5.5` at "medium" thinking with full-auto
+ * default is `openai-codex:gpt-5.6-sol` at "medium" thinking with full-auto
  * approval. Model credentials are URL-bound and injected by the host egress
  * path after user approval.
  */

@@ -37,12 +37,25 @@ import {
   type UrlAudience,
 } from "@vibestudio/shared/credentials/urlAudience";
 
-const AGENT_THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high"]);
+const AGENT_THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
-type PiAiModule = typeof import("@earendil-works/pi-ai");
+type PiAiModule = {
+  getModels: typeof import("@earendil-works/pi-ai/providers/all").getBuiltinModels;
+  getProviders: typeof import("@earendil-works/pi-ai/providers/all").getBuiltinProviders;
+  getSupportedThinkingLevels: typeof import("@earendil-works/pi-ai").getSupportedThinkingLevels;
+};
 
 async function loadPiAi(): Promise<PiAiModule> {
-  return import("@earendil-works/pi-ai");
+  const [{ getSupportedThinkingLevels }, { getBuiltinModels, getBuiltinProviders }] =
+    await Promise.all([
+      import("@earendil-works/pi-ai"),
+      import("@earendil-works/pi-ai/providers/all"),
+    ]);
+  return {
+    getModels: getBuiltinModels,
+    getProviders: getBuiltinProviders,
+    getSupportedThinkingLevels,
+  };
 }
 
 /** llama-server quirks (design §6.4); mirrors agentic-do's model-spec.ts. */

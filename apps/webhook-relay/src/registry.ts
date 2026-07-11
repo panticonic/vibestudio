@@ -60,6 +60,21 @@ const WEBHOOK_RETRY_INTERVAL_MS = 30_000;
 const OAUTH_TX_TTL_MS = 10 * 60 * 1000;
 
 const WS_OPEN = 1;
+/** RFC 6455 private-use close code: a same-serverId backhaul reclaimed the slot. */
+const BACKHAUL_SUPERSEDED = 4001;
+/**
+ * Hard ceiling on a single webhook body. SQLite-backed DO values cap at ~2MB;
+ * stay comfortably under so a large-but-legal payload buffers and only genuine
+ * over-cap bodies are rejected (413) instead of throwing an opaque 500.
+ */
+const MAX_WEBHOOK_BODY_BYTES = 1_500_000;
+/**
+ * Per-subscription cap on durably-buffered (undelivered) webhooks. A server that
+ * stays offline while a provider floods it must not grow DO storage without
+ * bound; past this we reject the newest delivery loudly (507) rather than
+ * silently accumulate. The 24h TTL still reclaims older entries.
+ */
+const MAX_BUFFER_PER_SUB = 256;
 
 const WEBHOOK_REG_PREFIX = "webhook-reg:";
 const BUFFER_PREFIX = "buf:";
@@ -127,6 +142,20 @@ function decodeBase64(b64: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+/**
+ * Throw-safe send. A CLOSING/gone socket throws on `send`; swallow it and report
+ * `false` so callers can fail loud (503) instead of surfacing an opaque 500.
+ * Mirrors the signaling room's `sendRaw`.
+ */
+function safeSend(ws: WebSocket, data: string): boolean {
+  try {
+    ws.send(data);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Constant-time hex/ASCII string compare. */
@@ -217,8 +246,24 @@ export class RelayRegistry {
    * (which the runtime, not the standard `Response`, can build).
    */
   acceptBackhaul(serverId: string, ws: WebSocket): void {
+    // Same-serverId reconnect = the same home server re-arming its backhaul (an
+    // unclean drop left a zombie socket, or the process restarted). Evict any
+    // incumbent bound to this serverId BEFORE accepting the new one, so delivery
+    // never picks a dead duplicate and silently loses a webhook/OAuth handoff
+    // while the landing already said "Sign-in complete." Mirrors the signaling
+    // room's same-role eviction.
+    let evicted = 0;
+    for (const incumbent of this.state.getWebSockets(serverId)) {
+      try {
+        incumbent.close(BACKHAUL_SUPERSEDED, `superseded by new backhaul for ${serverId}`);
+        evicted += 1;
+      } catch {
+        // Already closing; acceptWebSocket below reconciles the roster.
+      }
+    }
     this.state.acceptWebSocket(ws, [serverId]);
     ws.serializeAttachment({ serverId });
+    console.log(`[relay] backhaul connected serverId=${serverId}${evicted ? ` (evicted ${evicted} incumbent)` : ""}`);
   }
 
   // ---- Backhaul frames ----------------------------------------------------
@@ -265,13 +310,14 @@ export class RelayRegistry {
     const key = WEBHOOK_REG_PREFIX + subscriptionId;
     const existing = await this.state.storage.get<WebhookRegistration>(key);
     if (existing && existing.serverId !== serverId) {
-      ws.send(JSON.stringify({ t: "register-rejected", kind: "webhook", id: subscriptionId, reason: "already-registered" }));
+      console.warn(`[relay] webhook register rejected subscriptionId=${subscriptionId} serverId=${serverId} owner=${existing.serverId}`);
+      safeSend(ws, JSON.stringify({ t: "register-rejected", kind: "webhook", id: subscriptionId, reason: "already-registered" }));
       return;
     }
     if (!existing) {
       await this.state.storage.put<WebhookRegistration>(key, { serverId, registeredAt: this.now() });
     }
-    ws.send(JSON.stringify({ t: "registered", kind: "webhook", id: subscriptionId }));
+    safeSend(ws, JSON.stringify({ t: "registered", kind: "webhook", id: subscriptionId }));
     // Reconnect / first-registration: drain anything buffered while offline.
     await this.flushSubscription(subscriptionId, serverId);
   }
@@ -295,7 +341,7 @@ export class RelayRegistry {
     await this.pruneExpiredOAuth();
     const entry: OAuthRegistration = { platform, serverId, expiresAt: this.now() + OAUTH_TX_TTL_MS };
     await this.state.storage.put<OAuthRegistration>(this.oauthKey(transactionId), entry);
-    ws.send(JSON.stringify({ t: "registered", kind: "oauth", id: transactionId }));
+    safeSend(ws, JSON.stringify({ t: "registered", kind: "oauth", id: transactionId }));
   }
 
   /**
@@ -365,6 +411,21 @@ export class RelayRegistry {
     }
 
     const rawBody = await request.arrayBuffer();
+    if (rawBody.byteLength > MAX_WEBHOOK_BODY_BYTES) {
+      // Explicit fail-loud: over the DO value cap. Without this the storage.put
+      // throws an opaque 500 and the delivery is lost.
+      console.warn(`[relay] webhook body too large subscriptionId=${subscriptionId} bytes=${rawBody.byteLength} cap=${MAX_WEBHOOK_BODY_BYTES}`);
+      return json({ error: "webhook body too large", maxBytes: MAX_WEBHOOK_BODY_BYTES, bytes: rawBody.byteLength }, { status: 413 });
+    }
+
+    // Bound per-subscription buffer growth: a server offline while a provider
+    // floods it must not grow storage without limit.
+    const bufferedForSub = (await this.listBuffer()).filter((b) => b.subscriptionId === subscriptionId).length;
+    if (bufferedForSub >= MAX_BUFFER_PER_SUB) {
+      console.warn(`[relay] webhook buffer full subscriptionId=${subscriptionId} serverId=${registration.serverId} cap=${MAX_BUFFER_PER_SUB}`);
+      return json({ error: "webhook buffer full for subscription", subscriptionId, cap: MAX_BUFFER_PER_SUB }, { status: 507 });
+    }
+
     const bodySha256 = await sha256Hex(rawBody);
     const headers: Record<string, string> = {};
     request.headers.forEach((value, name) => {
@@ -432,9 +493,12 @@ export class RelayRegistry {
     buffered.lastAttemptAt = this.now();
     await this.state.storage.put<BufferedWebhook>(this.bufKey(buffered.deliveryId), buffered);
 
+    console.log(`[relay] delivering webhook subscriptionId=${buffered.subscriptionId} serverId=${buffered.serverId} deliveryId=${buffered.deliveryId} attempt=${buffered.attempts} wait=${waitForAck}`);
     if (!waitForAck) {
-      // Background re-send (alarm/flush): the ack arrives later and cleans up.
-      ws.send(JSON.stringify(frame));
+      // Background re-send (alarm/flush): the ack arrives later and cleans up. A
+      // throw here means the socket died between the open check and the send; the
+      // durable buffer survives and the next alarm/reconnect retries.
+      safeSend(ws, JSON.stringify(frame));
       return { ok: false, background: true };
     }
 
@@ -444,12 +508,19 @@ export class RelayRegistry {
         resolve({ ok: false, timeout: true });
       }, WEBHOOK_DELIVERY_TIMEOUT_MS);
       this.pending.set(buffered.deliveryId, { resolve, timer });
-      ws.send(JSON.stringify(frame));
+      if (!safeSend(ws, JSON.stringify(frame))) {
+        // Socket died between the open check and the send — treat as offline so
+        // the ingress buffers (202) and the alarm retries, not a 500.
+        clearTimeout(timer);
+        this.pending.delete(buffered.deliveryId);
+        return resolve({ ok: false, offline: true });
+      }
     });
   }
 
   /** Resolve an awaited delivery and evict the buffer entry on terminal acks. */
   private async settleDelivery(deliveryId: string, result: AckResult): Promise<void> {
+    console.log(`[relay] webhook settle deliveryId=${deliveryId} ok=${result.ok === true} permanent=${result.permanent === true}`);
     if (result.ok || result.permanent) {
       await this.state.storage.delete(this.bufKey(deliveryId));
     }
@@ -472,8 +543,9 @@ export class RelayRegistry {
   private deliverToBackhaul(serverId: string, frame: unknown): boolean {
     const ws = this.openBackhaul(serverId);
     if (!ws) return false;
-    ws.send(JSON.stringify(frame));
-    return true;
+    // A throw (CLOSING socket the open-check raced) yields false so the OAuth
+    // landing fails loud with 503 rather than a 500.
+    return safeSend(ws, JSON.stringify(frame));
   }
 
   private openBackhaul(serverId: string): WebSocket | undefined {
@@ -487,6 +559,7 @@ export class RelayRegistry {
     let remaining = 0;
     for (const buffered of await this.listBuffer()) {
       if (now > buffered.expiresAt) {
+        console.warn(`[relay] webhook expired (TTL) subscriptionId=${buffered.subscriptionId} serverId=${buffered.serverId} deliveryId=${buffered.deliveryId} attempts=${buffered.attempts}`);
         await this.state.storage.delete(this.bufKey(buffered.deliveryId));
         continue;
       }

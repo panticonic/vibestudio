@@ -293,6 +293,73 @@ describe("createSignalingClient", () => {
     client.close();
   });
 
+  it("aborts a HUNG ice-servers fetch after the deadline so the pipeline can't wedge (bug #5)", async () => {
+    vi.useFakeTimers();
+    const hub = new FakeSignalingHub();
+    // A fetch that hangs until its AbortSignal fires (a wedged worker that
+    // accepts the connection but never responds).
+    const fetchImpl = vi.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    ) as unknown as typeof fetch;
+    const client = createSignalingClient({
+      room: "r1",
+      role: "answerer",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl,
+    });
+    const pending = client.fetchIceServers!();
+    const expectation = expect(pending).rejects.toThrow(/timed out/i);
+    await vi.advanceTimersByTimeAsync(20_001);
+    await expectation;
+    client.close();
+    vi.useRealTimers();
+  });
+
+  it("fires onOpen when the room socket opens, and immediately for a late subscriber (proven-live seam)", async () => {
+    const hub = new FakeSignalingHub();
+    const client = createSignalingClient({
+      room: "r1",
+      role: "answerer",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl: okIceFetch([]),
+    });
+    let opens = 0;
+    client.onOpen!(() => opens++);
+    await flush();
+    expect(opens).toBe(1);
+    // A subscriber added AFTER the open still fires (unswallowable proof of life).
+    let lateOpens = 0;
+    client.onOpen!(() => lateOpens++);
+    await flush();
+    expect(lateOpens).toBe(1);
+    client.close();
+  });
+
+  it("fires onPeerJoined when the peer slots into the room (offerer re-offer seam)", async () => {
+    const hub = new FakeSignalingHub();
+    const base = {
+      room: "r1",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl: okIceFetch([]),
+    };
+    const offerer = createSignalingClient({ ...base, role: "offerer" });
+    let joined = 0;
+    offerer.onPeerJoined!(() => joined++);
+    await flush();
+    expect(joined).toBe(0); // alone in the room
+    const answerer = createSignalingClient({ ...base, role: "answerer" });
+    await flush();
+    expect(joined).toBe(1); // the answerer joined → offerer notified
+    offerer.close();
+    answerer.close();
+  });
+
   it("evicts the incumbent when a same-role peer rejoins the room", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);

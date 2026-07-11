@@ -8,9 +8,9 @@
  *   https://vibestudio.app/oauth/callback/<provider>?code=…&state=…
  *
  * The OS will only deliver these to *this* app once the AASA /
- * assetlinks.json verification (served by apps/well-known/) has bound the
- * host to our team-id + signing cert. Another app claiming the same host
- * cannot intercept.
+ * assetlinks.json verification (served by the apex apps/webhook-relay Worker)
+ * has bound the host to our team-id + signing cert. Another app claiming the
+ * same host cannot intercept.
  *
  * State binding: every authorize URL the server builds carries an
  * unguessable PKCE-bound `state`. The server owns the OAuth transaction
@@ -32,8 +32,12 @@ const OAUTH_PATH_PREFIX = "/oauth/callback/";
 const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const DEDUPE_MAX_ENTRIES = 32;
 interface ParsedCallback {
-    /** Provider id, e.g. "openai-codex", "linear", "github". */
-    provider: string;
+    /**
+     * Pending OAuth transaction id — the trailing path segment of the relay
+     * callback URL (`/oauth/callback/<transactionId>`). The server mints it and
+     * routes the callback back to the exact pending transaction by this id.
+     */
+    transactionId: string;
     code: string;
     state: string;
     rawUrl: string;
@@ -62,8 +66,8 @@ function parsePathAndQuery(rawUrl: string, pathAndQuery: string): ParsedCallback
     const query = queryStart >= 0 ? pathAndQuery.slice(queryStart + 1) : "";
     if (!path.startsWith(OAUTH_PATH_PREFIX))
         return null;
-    const provider = path.slice(OAUTH_PATH_PREFIX.length).replace(/\/+$/, "");
-    if (!provider || provider.includes("/"))
+    const transactionId = path.slice(OAUTH_PATH_PREFIX.length).replace(/\/+$/, "");
+    if (!transactionId || transactionId.includes("/"))
         return null;
     const params = new Map<string, string>();
     for (const piece of query.split("&")) {
@@ -88,15 +92,16 @@ function parsePathAndQuery(rawUrl: string, pathAndQuery: string): ParsedCallback
         // Provider rejected the flow (user denied consent, etc.). We still
         // need to wake up the pending promise so the UI doesn't hang; we
         // synthesise a parsed callback with empty code so the dispatcher
-        // can reject the registry entry.
+        // can reject the registry entry. The transactionId + state are enough
+        // for the server to locate and fail the pending transaction.
         if (state) {
-            return { provider, code: "", state, rawUrl };
+            return { transactionId, code: "", state, rawUrl };
         }
         return null;
     }
     if (!code || !state)
         return null;
-    return { provider, code, state, rawUrl };
+    return { transactionId, code, state, rawUrl };
 }
 /**
  * Tiny LRU-ish dedupe set. Keyed by state since `code` is single-use and
@@ -147,16 +152,20 @@ function dispatch(shellClient: ShellClient, parsed: ParsedCallback): void {
         return;
     }
     dedupe.remember(parsed.state);
-    // Forward to the server, which owns the OAuth transaction and matches the
-    // callback to the pending flow by state. Error responses (empty code) are
-    // forwarded too so the server can fail the waiting flow instead of hanging;
-    // it parses the error out of the raw callback URL.
+    // Forward to the server, which owns the OAuth transaction. We carry the
+    // explicit transactionId (the relay callback path segment) so the server
+    // resolves the exact pending transaction deterministically rather than
+    // scanning by state, plus state + code (client-forwarded path). Error
+    // responses (empty code) are forwarded too so the server can fail the
+    // waiting flow instead of hanging; it parses the error from the raw URL.
     void shellClient.credentialService.forwardOAuthCallback({
+            transactionId: parsed.transactionId,
             url: parsed.rawUrl,
             state: parsed.state,
+            ...(parsed.code ? { code: parsed.code } : {}),
         }).catch((err: unknown) => {
         dedupe.forget(parsed.state);
-        console.warn(`[oauthHandler] Failed to forward OAuth callback for provider=${parsed.provider}:`, err);
+        console.warn(`[oauthHandler] Failed to forward OAuth callback for transaction=${parsed.transactionId}:`, err);
     });
 }
 function handleUrl(shellClient: ShellClient, rawUrl: string | null): void {

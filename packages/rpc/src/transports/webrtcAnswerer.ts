@@ -248,6 +248,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   });
   const downHandlers = new Set<(reason: string) => void>();
   const candidateTypeListeners = new Set<(type: RtcCandidateType | null) => void>();
+  /** Last value handed to the candidate-type feed — de-dupes re-emits so the
+   * relay alarm only sees genuine transitions (§9.8, bug #4). `undefined` =
+   * nothing emitted yet this pipe generation. */
+  let lastCandidateType: RtcCandidateType | null | undefined = undefined;
   let connectWaiter: ConnectWaiter | null = null;
 
   // One scheduler per channel for the pipe's LIFETIME: `getChannel` gates on
@@ -291,12 +295,20 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
         return;
       }
       if (client) {
-        attempt = 0;
         signaling = client;
+        // Reset backoff ONLY when the join proves LIVE — an `onOpen` (the WS
+        // actually upgraded) or the first inbound description/candidate (the
+        // peer reached us through the room). NEVER on mere construction:
+        // `createSignalingClient` builds the socket eagerly and never throws
+        // for an unreachable host (failures surface async via `onClosed`), so
+        // resetting on the returned object made an unreachable worker get
+        // hammered ~1 socket/sec/room forever with no backoff growth (bug #1).
         // Resolves when THIS client closes. onClosed fires immediately for a
         // close that already landed (during the join attempt) — re-checked
         // here, never swallowed.
-        const reason = await watchSignaling(client);
+        const reason = await watchSignaling(client, () => {
+          attempt = 0;
+        });
         if (signaling === client) signaling = null;
         if (closed) return;
         console.warn(`${log} signaling closed (${reason ?? "?"}); rejoining`);
@@ -310,11 +322,25 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     }
   }
 
-  /** Register the transport handlers on a joined client; resolve on its close. */
-  function watchSignaling(client: SignalingClient): Promise<string | undefined> {
+  /**
+   * Register the transport handlers on a joined client; resolve on its close.
+   * `onProvenLive` fires exactly once, the first time the join is proven live
+   * (WS open, or an inbound description/candidate), so the supervisor resets
+   * its rejoin backoff only for a genuinely-reachable room (bug #1).
+   */
+  function watchSignaling(
+    client: SignalingClient,
+    onProvenLive: () => void
+  ): Promise<string | undefined> {
     return new Promise((resolve) => {
       let done = false;
+      let liveMarked = false;
       const offs: Array<() => void> = [];
+      const markLive = (): void => {
+        if (liveMarked) return;
+        liveMarked = true;
+        onProvenLive();
+      };
       const finish = (reason?: string): void => {
         if (done) return;
         done = true;
@@ -328,10 +354,20 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
         resolve(reason);
       };
       offs.push(
-        client.onDescription((desc) => onSignalDescription(desc)),
-        client.onCandidate((cand) => onSignalCandidate(cand)),
+        client.onDescription((desc) => {
+          markLive();
+          onSignalDescription(desc);
+        }),
+        client.onCandidate((cand) => {
+          markLive();
+          onSignalCandidate(cand);
+        }),
         client.onClosed((reason) => finish(reason ?? "signaling closed"))
       );
+      // Prefer the explicit open seam when the client exposes it (the real
+      // `createSignalingClient` does); fakes/adapters without it fall back to
+      // the first inbound frame above.
+      if (client.onOpen) offs.push(client.onOpen(() => markLive()));
     });
   }
 
@@ -504,6 +540,18 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
         void current.sendCandidate(cand).catch((e) => console.warn(`${log} sendCandidate`, e));
       })
     );
+    // Re-emit the candidate type whenever the selected pair changes: the
+    // one-shot read at pipe-up (§9.8) misses a still-null nomination and every
+    // later switch to relay (a NAT rebind / TURN cred refresh). De-duped by
+    // emitCandidateType, and gated on the live peer + pipeUp (bug #4).
+    if (pc.onSelectedCandidateChange) {
+      peerUnsubs.push(
+        pc.onSelectedCandidateChange((type) => {
+          if (peer !== pc || closed || !pipeUp) return;
+          emitCandidateType(type);
+        })
+      );
+    }
     // Some adapters open negotiated channels synchronously.
     if (ctl.readyState === "open") onControlChannelOpen();
     if (blk.readyState === "open") {
@@ -590,8 +638,12 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     maybePipeUp();
   }
 
-  /** Relay-alarm feed (§9.8), mirroring the offerer's `emitCandidateType`. */
+  /** Relay-alarm feed (§9.8), mirroring the offerer's `emitCandidateType`.
+   * De-duped: a repeated value (e.g. a re-emit of the same pair after a state
+   * blip) is suppressed so listeners only observe genuine transitions. */
   function emitCandidateType(type: RtcCandidateType | null): void {
+    if (type === lastCandidateType) return;
+    lastCandidateType = type;
     for (const listener of [...candidateTypeListeners]) {
       try {
         listener(type);
@@ -704,6 +756,15 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       handleRemoteHello(full);
       return;
     }
+    // A duplicate hello must fail LOUD regardless of size (bug #11): the ≤512B
+    // ping/pong sniff below would let a padded (>512B) duplicate hello slip
+    // silently to the session demux. The tag peek is cheap and size-independent
+    // — our encoder always writes `t` first, so a conforming peer's hello is
+    // caught no matter how large.
+    if (peekControlTag(full) === SESSION_HELLO) {
+      pipeDown("protocol violation: duplicate hello");
+      return;
+    }
     if (full.byteLength <= PING_SNIFF_MAX_BYTES && consumePipeFrame(full)) return;
     if (!pipeUp) {
       prePipeUpControlBytes += full.byteLength;
@@ -727,7 +788,20 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     }
   }
 
-  /** Handle pipe-level ping/pong/hello inside the pipe; true = consumed. */
+  /** Cheaply read a control frame's `t` tag without a full JSON parse — our
+   * encoder (`JSON.stringify`) always writes `t` first, so this matches the
+   * leading `{"t":"<tag>"` regardless of the frame's total size. Used for the
+   * size-independent duplicate-hello guard (bug #11). Returns null if the
+   * prefix doesn't look like a tagged control frame. */
+  function peekControlTag(frameBytes: Uint8Array): string | null {
+    // A hello is tiny; decode only the prefix needed to see the tag.
+    const prefix = decoder.decode(frameBytes.subarray(0, Math.min(frameBytes.byteLength, 64)));
+    const match = prefix.match(/^\s*\{\s*"t"\s*:\s*"([^"]+)"/);
+    return match?.[1] ?? null;
+  }
+
+  /** Handle pipe-level ping/pong inside the pipe; true = consumed. (A duplicate
+   * hello is caught size-independently before this runs — see handleControlMessage.) */
   function consumePipeFrame(frameBytes: Uint8Array): boolean {
     let parsed: { t?: unknown; ts?: unknown };
     try {
@@ -743,10 +817,6 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       return true;
     }
     if (parsed?.t === SESSION_PONG) return true; // we never ping — ignore strays
-    if (parsed?.t === SESSION_HELLO) {
-      pipeDown("protocol violation: duplicate hello");
-      return true;
-    }
     return false;
   }
 

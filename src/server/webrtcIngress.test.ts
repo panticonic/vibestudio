@@ -128,6 +128,24 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
     ]);
   });
 
+  it("refuses to arm rooms past the armed-room cap (DoS backstop), keeping existing rooms", async () => {
+    const { ingress, warns } = makeHarness();
+    const CAP = 4096; // matches MAX_ARMED_ROOMS
+    for (let i = 0; i < CAP; i++) ingress.armRoom(`room-${i}`, { inviteCode: `c-${i}` });
+    expect(ingress.status()).toHaveLength(CAP);
+
+    ingress.armRoom("one-too-many", { inviteCode: "c-x" });
+    expect(ingress.status()).toHaveLength(CAP);
+    expect(ingress.status().some((s) => s.room === "one-too-many")).toBe(false);
+    expect(warns.some((w) => w.includes("armed-room cap"))).toBe(true);
+
+    // Re-arming an ALREADY-armed room at the cap is still allowed (meta merge).
+    ingress.armRoom("room-0", { deviceId: "dev_0" });
+    expect(ingress.status().find((s) => s.room === "room-0")?.deviceId).toBe("dev_0");
+
+    await ingress.close();
+  });
+
   it("disarmRoom closes the pipe and removes the room", async () => {
     const { ingress, attached, pipes } = makeHarness();
     await Promise.all([

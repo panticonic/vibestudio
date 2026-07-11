@@ -29,6 +29,9 @@ export const extensionRegistryEntrySchema = z
   .object({
     unitKind: z.literal("extension"),
     name: z.string(),
+    shortName: z
+      .string()
+      .describe("Unscoped workspace name (for example test-runner); name remains canonical."),
     version: z.string(),
     source: z
       .object({
@@ -63,10 +66,12 @@ export const streamChunkEnvelopeSchema = z
   })
   .strict();
 
+export const extensionProviderMethodsSchema = z.record(z.array(z.string()));
+
 export const extensionsMethods = defineServiceMethods({
   invoke: {
     description:
-      "Invoke a method on a running installed extension and await its result. Throws if the extension is not installed or not running.",
+      "Invoke a public method on a running installed extension and await its result. Provider-namespaced methods are rejected.",
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
     returns: z.unknown(),
     access: INVOKE_ACCESS,
@@ -74,7 +79,7 @@ export const extensionsMethods = defineServiceMethods({
   },
   invokeProvider: {
     description:
-      "Invoke a method on the extension declared for a manifest provider slot. Throws when the provider slot is not declared or the extension is not running.",
+      "Invoke a provider-namespaced method on the extension declared for a manifest provider slot. Host-owned provider contracts must be called through their owning host service.",
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
     returns: z.unknown(),
     access: INVOKE_ACCESS,
@@ -84,7 +89,7 @@ export const extensionsMethods = defineServiceMethods({
   // streaming Response, not a wire-serializable value.
   invokeStream: {
     description:
-      "Invoke a streaming method on a running extension; the host proxies the extension's byte stream back as the response. Throws if the extension is not installed/running or lacks a streaming transport.",
+      "Invoke a public streaming method on a running extension; the host proxies its byte stream back. Provider-namespaced methods are rejected.",
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
     access: INVOKE_ACCESS,
   },
@@ -97,7 +102,8 @@ export const extensionsMethods = defineServiceMethods({
     examples: [{ args: ["shell"] }],
   },
   list: {
-    description: "List all installed extensions with their registry/runtime status.",
+    description:
+      "List installed extensions with canonical package name, shortName, source repo, and runtime status. Invoke accepts the canonical name, shortName, or source repo.",
     args: z.tuple([]),
     returns: z.array(extensionRegistryEntrySchema),
     access: READ_ACCESS,
@@ -112,18 +118,23 @@ export const extensionsMethods = defineServiceMethods({
   },
   ready: {
     description:
-      "Extension-only: signal that the child process has finished startup and is ready to serve, declaring its callable methods and whether it handles fetch.",
+      "Extension-only: signal that the child process has finished startup and is ready to serve, declaring its public methods, provider-namespaced methods, and whether it handles fetch.",
     args: z.tuple([
-      z.object({
-        methods: z.array(z.string()).describe("Method names the extension exposes for invoke."),
-        hasFetch: z
-          .boolean()
-          .describe("Whether the extension handles HTTP fetch requests routed to it."),
-      }),
+      z
+        .object({
+          methods: z.array(z.string()).describe("Public method names exposed through invoke."),
+          providerMethods: extensionProviderMethodsSchema.describe(
+            "Method names exposed under each declared provider namespace."
+          ),
+          hasFetch: z
+            .boolean()
+            .describe("Whether the extension handles HTTP fetch requests routed to it."),
+        })
+        .strict(),
     ]),
     returns: z.null(),
     access: EXTENSION_REPORT_ACCESS,
-    examples: [{ args: [{ methods: ["exec"], hasFetch: false }] }],
+    examples: [{ args: [{ methods: ["exec"], providerMethods: {}, hasFetch: false }] }],
   },
   emit: {
     description:

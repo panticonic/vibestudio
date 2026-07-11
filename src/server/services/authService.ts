@@ -35,7 +35,7 @@ import {
 } from "./auth/model.js";
 import { refreshPrincipalGrantResponse } from "./auth/principalGrants.js";
 import { sendAuthError } from "./auth/httpErrors.js";
-import { authError } from "./auth/errors.js";
+import { authError, authErrorCode } from "./auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
 
 export const RefreshShellBodySchema = z
@@ -159,6 +159,12 @@ export function createPairingRedeemer(deps: {
       deps.tokenManager.ensureToken(shellCallerId(deviceId), "shell");
       return { callerId: shellCallerId(deviceId), callerKind: "shell" as const };
     }
+    // Neither an agent nor a refresh credential: treat the token as a QR pairing
+    // code and attempt redemption directly. A stale/unknown code throws
+    // PAIRING_CODE_INVALID_OR_EXPIRED — surface the specific auth error CLASS to
+    // the server log (never the code itself) so an expired invite is diagnosable
+    // instead of collapsing into a generic "Invalid token" with no trace. Returns
+    // null on failure so handleAuth still fails the connection closed.
     try {
       const credential = await deps.redeemPairingCode(token, {
         label: ctx.clientLabel,
@@ -176,7 +182,13 @@ export function createPairingRedeemer(deps: {
         },
         subject: { userId: user.id, handle: user.handle },
       };
-    } catch {
+    } catch (error) {
+      const authClass = authErrorCode(error) ?? "PAIRING_REDEEM_FAILED";
+      console.warn(
+        `[auth] device pairing redemption failed: ${authClass}` +
+          (ctx.clientLabel ? ` label=${ctx.clientLabel}` : "") +
+          (ctx.clientPlatform ? ` platform=${ctx.clientPlatform}` : "")
+      );
       return null;
     }
   };

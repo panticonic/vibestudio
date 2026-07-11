@@ -1,5 +1,6 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { GitAuthError, GitClient, SYSTEM_GIT_AUTHOR } from "@vibestudio/git";
 import {
   getDeclaredRemoteForRepo,
@@ -19,9 +20,12 @@ import {
 } from "@vibestudio/shared/workspace/pathPolicy";
 import type {
   GitOverwritePreview,
+  GitPublishRepoInput,
+  GitPublishRepoResult,
   GitUpstreamState,
+  GitUpstreamStatusOptions,
   GitUpstreamStatusRow,
-} from "@vibestudio/shared/gitUpstream";
+} from "@vibestudio/shared/serviceSchemas/gitInterop";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -33,55 +37,40 @@ import type { ExtensionContextLike } from "./context.js";
 import { withRepoLock } from "./repoLocks.js";
 
 const STATE_FILE = "state/upstream-state.json";
-const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
 const DEFAULT_BRANCH = "main";
 const TRANSIENT_BACKOFF_MIN_MS = 30_000;
 const TRANSIENT_BACKOFF_MAX_MS = 15 * 60_000;
 
-export type UpstreamStatusState = GitUpstreamState;
-
 interface StoredRepoState {
+  configFingerprint: string;
   lastPushedSha?: string;
   lastPushedAt?: number;
-  status?: UpstreamStatusState;
+  status?: StoredUpstreamState;
   lastError?: string;
 }
+type StoredUpstreamState = Exclude<GitUpstreamState, "exporting" | "pushing" | "local-only">;
+type StoredRepoStatePatch = Partial<Omit<StoredRepoState, "configFingerprint">>;
 
 interface StoredState {
-  version: 1;
+  version: 2;
   repos: Record<string, StoredRepoState>;
 }
 
 interface RuntimeRepoState {
-  running?: UpstreamStatusState;
+  configFingerprint?: string;
+  running?: "exporting" | "pushing";
   backoffMs?: number;
   retryAt?: number;
-  timer?: ReturnType<typeof setTimeout>;
+  debounceTimer?: ReturnType<typeof setTimeout>;
+  retryTimer?: ReturnType<typeof setTimeout>;
 }
 
-export type UpstreamStatusRow = GitUpstreamStatusRow;
-
-export interface UpstreamStatusOptions {
-  remote?: string;
-  branch?: string;
-  credentialId?: string;
-  fetch?: boolean;
-}
-
-export interface PublishRepoInput {
-  repoPath: string;
-  provider?: string;
-  name?: string;
-  private?: boolean;
-  description?: string;
-  remote?: string;
-  branch?: string;
-  credentialId?: string;
-  authorEmail?: string;
-  authorName?: string;
-  autoPush?: boolean;
-  force?: boolean;
-  dryRun?: boolean;
+interface RepoOperationScope {
+  upstream: ResolvedWorkspaceGitUpstream;
+  remote: WorkspaceGitRemoteConfig;
+  fingerprint: string;
+  stored: StoredRepoState;
+  transportRemote: string;
 }
 
 export class UpstreamEngine {
@@ -111,13 +100,18 @@ export class UpstreamEngine {
     repoPath: string,
     opts: { force?: boolean } = {}
   ): Promise<
-    ExportResult & { pushed: boolean; status: UpstreamStatusState; overwrites?: OverwritePreview }
+    ExportResult & {
+      pushed: boolean;
+      status: GitUpstreamState;
+      overwrites?: GitOverwritePreview;
+    }
   > {
     const repo = normalizeWorkspaceRepoPath(repoPath);
     return withRepoLock(repo, async () => {
+      let scope: RepoOperationScope | null = null;
       try {
-        const result = await this.syncLocked(repo, { push: true, force: opts.force });
-        await this.reportHealth();
+        scope = await this.resolveRepoScope(repo);
+        const result = await this.syncLocked(repo, scope, { push: true, force: opts.force });
         return {
           ...result.exported,
           pushed: result.pushed,
@@ -125,8 +119,12 @@ export class UpstreamEngine {
           ...(result.overwrites ? { overwrites: result.overwrites } : {}),
         };
       } catch (err) {
-        await this.handlePushFailure(repo, err, opts.force === true);
+        if (scope) {
+          await this.handlePushFailure(repo, scope.fingerprint, err, opts.force === true);
+        }
         throw err;
+      } finally {
+        await this.reportHealth();
       }
     });
   }
@@ -140,68 +138,61 @@ export class UpstreamEngine {
    */
   private async syncLocked(
     repo: string,
+    scope: RepoOperationScope,
     opts: { push: boolean; force?: boolean }
-  ): Promise<{ exported: ExportResult; pushed: boolean; overwrites?: OverwritePreview }> {
-    const config = await this.readConfig();
-    const upstream = this.requireUpstream(config, repo);
-    const remote = this.requireRemote(config, repo, upstream.remote);
+  ): Promise<{ exported: ExportResult; pushed: boolean; overwrites?: GitOverwritePreview }> {
+    const { upstream, remote, fingerprint, stored, transportRemote } = scope;
     const git = this.gitClient(upstream.credentialId);
     const dir = await this.bridge.repoGitDir(repo);
-    await this.ensureGitRemote(git, dir, remote);
     let exported: ExportResult;
-    this.setRunning(repo, "exporting");
+    this.setRunning(repo, fingerprint, "exporting");
     try {
       exported = await this.bridge.exportLockedInner(repo, {
         authorEmail: upstream.authorEmail,
         authorName: upstream.authorName,
       });
     } finally {
-      this.clearRunning(repo);
+      this.clearRunning(repo, fingerprint);
     }
     if (!opts.push || !exported.headCommit) {
       return { exported, pushed: false };
     }
-    const stored = (await this.readState()).repos[repo];
     if (!opts.force && exported.headCommit === stored?.lastPushedSha) {
-      await this.updateRepoState(repo, { status: "in-sync", lastError: undefined });
+      await this.updateRepoState(repo, fingerprint, {
+        status: "in-sync",
+        lastError: undefined,
+      });
       return { exported, pushed: false };
     }
-    let overwrites: OverwritePreview | undefined;
+    let overwrites: GitOverwritePreview | undefined;
     if (opts.force) {
-      overwrites = await this.previewOverwrites(git, dir, upstream, exported.headCommit);
+      overwrites = await this.previewOverwrites(git, dir, scope, exported.headCommit);
     }
     const localRef = (await git.getCurrentBranch(dir)) ?? DEFAULT_BRANCH;
-    this.setRunning(repo, "pushing");
+    this.setRunning(repo, fingerprint, "pushing");
     try {
       const pushGit = opts.force
         ? this.gitClient(upstream.credentialId, { force: true, overwrites })
         : git;
       await pushGit.push({
         dir,
-        remote: upstream.remote,
+        url: remote.url,
+        remote: transportRemote,
         ref: localRef,
         remoteRef: `refs/heads/${upstream.branch}`,
         force: opts.force ?? false,
       });
     } finally {
-      this.clearRunning(repo);
+      this.clearRunning(repo, fingerprint);
     }
-    await this.updateRepoState(repo, {
+    await this.updateRepoState(repo, fingerprint, {
       status: "in-sync",
       lastError: undefined,
       lastPushedSha: exported.headCommit,
       lastPushedAt: Date.now(),
     });
-    this.clearBackoff(repo);
+    this.clearBackoff(repo, fingerprint);
     return { exported, pushed: true, ...(overwrites ? { overwrites } : {}) };
-  }
-
-  private clearBackoff(repo: string): void {
-    const runtime = this.runtime.get(repo);
-    if (runtime) {
-      runtime.backoffMs = undefined;
-      runtime.retryAt = undefined;
-    }
   }
 
   async pullUpstream(
@@ -215,159 +206,213 @@ export class UpstreamEngine {
   }> {
     const repo = normalizeWorkspaceRepoPath(repoPath);
     return withRepoLock(repo, async () => {
-      const config = await this.readConfig();
-      const resolved = this.requireUpstream(config, repo);
-      const dir = await this.bridge.repoGitDir(repo);
-      const git = this.gitClient(resolved.credentialId);
-      const remote = this.requireRemote(config, repo, resolved.remote);
-      await this.ensureGitRemote(git, dir, remote);
-      await git.fetch({ dir, remote: resolved.remote, ref: resolved.branch });
-      const remoteRef = `refs/remotes/${resolved.remote}/${resolved.branch}`;
-      const remoteHead = await git.resolveRef(dir, remoteRef);
-      if (!remoteHead) {
-        // The upstream branch doesn't exist yet — nothing to pull.
-        return { behindBy: 0, aheadBy: 1, incoming: [] };
-      }
-      const tracking = (await git.compareRefs(dir, "HEAD", remoteRef)) ?? {
-        // Both refs exist with no merge base: unrelated histories.
-        ahead: 1,
-        behind: 1,
-        diverged: true,
-      };
-      const incoming = await this.commitSummaries(git, dir, remoteRef, tracking.behind);
-      if (opts.dryRun) {
-        return { behindBy: tracking.behind, aheadBy: tracking.ahead, incoming };
-      }
+      let scope: RepoOperationScope | null = null;
       try {
+        scope = await this.resolveRepoScope(repo);
+        const { upstream, remote, fingerprint, transportRemote } = scope;
+        const dir = await this.bridge.repoGitDir(repo);
+        const git = this.gitClient(upstream.credentialId);
+        await git.fetch({
+          dir,
+          url: remote.url,
+          remote: transportRemote,
+          ref: upstream.branch,
+        });
+        const remoteRef = `refs/remotes/${transportRemote}/${upstream.branch}`;
+        const remoteHead = await git.resolveRef(dir, remoteRef);
+        if (!remoteHead) {
+          if (!opts.dryRun) {
+            await this.updateRepoState(repo, fingerprint, {
+              status: "ahead",
+              lastError: undefined,
+            });
+            this.clearBackoff(repo, fingerprint);
+          }
+          return { behindBy: 0, aheadBy: 1, incoming: [] };
+        }
+        const tracking = (await git.compareRefs(dir, "HEAD", remoteRef)) ?? {
+          ahead: 1,
+          behind: 1,
+          diverged: true,
+        };
+        const incoming = await this.commitSummaries(git, dir, remoteRef, tracking.behind);
+        if (opts.dryRun) {
+          return { behindBy: tracking.behind, aheadBy: tracking.ahead, incoming };
+        }
+        const localRef = (await git.getCurrentBranch(dir)) ?? DEFAULT_BRANCH;
         if (tracking.diverged) {
           await git.pull({
             dir,
-            remote: resolved.remote,
-            ref: resolved.branch,
-            author: this.gitAuthor(resolved),
+            url: remote.url,
+            remote: transportRemote,
+            ref: localRef,
+            remoteRef: upstream.branch,
+            author: this.gitAuthor(upstream),
           });
         } else {
-          await git.fastForward({ dir, remote: resolved.remote, ref: resolved.branch });
+          await git.fastForward({
+            dir,
+            url: remote.url,
+            remote: transportRemote,
+            ref: localRef,
+            remoteRef: upstream.branch,
+          });
         }
+        const head = await git.getCurrentCommit(dir);
+        const imported = await this.bridge.importLockedInner(repo, {
+          summary: `Pull ${upstream.remote}/${upstream.branch}${head ? ` @ ${head.slice(0, 7)}` : ""}`,
+        });
+        const postPull = await this.aheadBehind(repo, scope, { fetch: false }).catch(() => null);
+        await this.updateRepoState(repo, fingerprint, {
+          status: postPull
+            ? statusFromCounts(postPull.aheadBy, postPull.behindBy, postPull.diverged)
+            : "in-sync",
+          lastError: undefined,
+        });
+        this.clearBackoff(repo, fingerprint);
+        return { behindBy: tracking.behind, aheadBy: tracking.ahead, incoming, imported };
       } catch (err) {
-        await this.handlePullFailure(repo, err);
+        if (scope) await this.handlePullFailure(repo, scope.fingerprint, err);
         throw err;
+      } finally {
+        await this.reportHealth();
       }
-      const head = await git.getCurrentCommit(dir);
-      const imported = await this.bridge.importLockedInner(repo, {
-        summary: `Pull ${resolved.remote}/${resolved.branch}${head ? ` @ ${head.slice(0, 7)}` : ""}`,
-      });
-      const postPull = await this.aheadBehind(config, repo, resolved, { fetch: false }).catch(
-        () => null
-      );
-      await this.updateRepoState(repo, {
-        status: postPull
-          ? statusFromCounts(postPull.aheadBy, postPull.behindBy, postPull.diverged)
-          : "in-sync",
-        lastError: undefined,
-      });
-      await this.reportHealth();
-      return { behindBy: tracking.behind, aheadBy: tracking.ahead, incoming, imported };
     });
   }
 
   async upstreamStatus(
-    repoPaths?: string[],
-    options: UpstreamStatusOptions = {}
-  ): Promise<UpstreamStatusRow[]> {
-    const config = await this.readConfig();
-    const repos = repoPaths?.length
+    repoPaths: string[],
+    options: GitUpstreamStatusOptions = {}
+  ): Promise<GitUpstreamStatusRow[]> {
+    const listedConfig = await this.readConfig();
+    const repos = repoPaths.length
       ? repoPaths.map((repo) => normalizeWorkspaceRepoPath(repo))
-      : listDeclaredUpstreams(config).map((entry) => entry.repoPath);
-    const state = await this.readState();
-    return Promise.all(
-      repos.map(async (repo) => {
-        const runtime = this.runtime.get(repo);
-        const stored = state.repos[repo] ?? {};
-        let resolved: ResolvedWorkspaceGitUpstream | null = null;
-        try {
-          resolved = getDeclaredUpstreamForRepo(config, repo);
-        } catch (err) {
+      : listDeclaredUpstreams(listedConfig).map((entry) => entry.repoPath);
+    const rows = await Promise.all(
+      repos.map((repo) =>
+        withRepoLock(repo, async () => {
+          const config = await this.readConfig();
+          let resolved: ResolvedWorkspaceGitUpstream | null = null;
+          let remote: WorkspaceGitRemoteConfig | null = null;
+          try {
+            resolved = getDeclaredUpstreamForRepo(config, repo);
+            if (resolved) remote = this.requireRemote(config, repo, resolved.remote);
+          } catch (err) {
+            await this.clearRepoState(repo);
+            return {
+              repoPath: repo,
+              autoPush: false,
+              state: "error" as const,
+              aheadBy: 0,
+              behindBy: 0,
+              lastError: errorMessage(err),
+            };
+          }
+          if (!resolved) {
+            await this.clearRepoState(repo);
+            return {
+              repoPath: repo,
+              autoPush: false,
+              state: "local-only" as const,
+              aheadBy: 0,
+              behindBy: 0,
+            };
+          }
+          let stored = await this.reconcileRepoState(repo, resolved, remote!);
+          const runtime = this.runtime.get(repo);
+          // Status-only remote/branch/credential overrides are observational.
+          // Persisted push/failure state remains scoped to the declared config.
+          const observesDeclaredTarget =
+            options.remote === undefined &&
+            options.branch === undefined &&
+            options.credentialId === undefined;
+          resolved = this.applyStatusOptions(config, repo, resolved, options);
+          const operationalRemote = this.requireRemote(config, repo, resolved.remote);
+          const operationalFingerprint = upstreamConfigFingerprint(
+            repo,
+            resolved,
+            operationalRemote
+          );
+          const transportRemote = transportRemoteForFingerprint(operationalFingerprint);
+          let counts: { aheadBy: number; behindBy: number; diverged: boolean };
+          let statusError: { state: "auth-failed" | "error"; message: string } | null = null;
+          try {
+            counts = await this.aheadBehind(
+              repo,
+              {
+                upstream: resolved,
+                remote: operationalRemote,
+                fingerprint: operationalFingerprint,
+                stored,
+                transportRemote,
+              },
+              options
+            );
+          } catch (err) {
+            counts = { aheadBy: 0, behindBy: 0, diverged: false };
+            statusError = {
+              state:
+                err instanceof GitAuthError || /credential|auth|401|403/i.test(errorMessage(err))
+                  ? "auth-failed"
+                  : "error",
+              message: errorMessage(err),
+            };
+          }
+          if (observesDeclaredTarget && options.fetch === true && !statusError) {
+            const recoveredStatus = statusFromCounts(
+              counts.aheadBy,
+              counts.behindBy,
+              counts.diverged
+            );
+            if (
+              await this.updateRepoState(repo, stored.configFingerprint, {
+                status: recoveredStatus,
+                lastError: undefined,
+              })
+            ) {
+              stored = { ...stored, status: recoveredStatus };
+              delete stored.lastError;
+              this.clearBackoff(repo, stored.configFingerprint);
+            }
+          }
+          // A persisted failure (the thing pausing auto-push) outranks live
+          // counts: showing "ahead" while pushes are paused would lie to the
+          // user. It clears on the next successful push/pull.
+          const storedFailure =
+            observesDeclaredTarget &&
+            (stored.status === "diverged" ||
+              stored.status === "auth-failed" ||
+              stored.status === "error")
+              ? stored.status
+              : undefined;
+          const computed =
+            (observesDeclaredTarget && runtime?.configFingerprint === stored.configFingerprint
+              ? runtime.running
+              : undefined) ??
+            statusError?.state ??
+            storedFailure ??
+            statusFromCounts(counts.aheadBy, counts.behindBy, counts.diverged);
           return {
             repoPath: repo,
-            autoPush: false,
-            state: "error" as const,
-            aheadBy: 0,
-            behindBy: 0,
-            lastError: err instanceof Error ? err.message : String(err),
+            remote: resolved.remote,
+            branch: resolved.branch,
+            autoPush: resolved.autoPush,
+            state: computed,
+            aheadBy: counts.aheadBy,
+            behindBy: counts.behindBy,
+            lastPushedSha: observesDeclaredTarget ? stored.lastPushedSha : undefined,
+            lastPushedAt: observesDeclaredTarget ? stored.lastPushedAt : undefined,
+            lastError:
+              statusError?.message ?? (observesDeclaredTarget ? stored.lastError : undefined),
           };
-        }
-        if (!resolved) {
-          return {
-            repoPath: repo,
-            autoPush: false,
-            state: "local-only" as const,
-            aheadBy: 0,
-            behindBy: 0,
-          };
-        }
-        resolved = this.applyStatusOptions(config, repo, resolved, options);
-        let counts: { aheadBy: number; behindBy: number; diverged: boolean };
-        let statusError: { state: "auth-failed" | "error"; message: string } | null = null;
-        try {
-          counts = await this.aheadBehind(config, repo, resolved, options);
-        } catch (err) {
-          counts = { aheadBy: 0, behindBy: 0, diverged: false };
-          statusError = {
-            state:
-              err instanceof GitAuthError || /credential|auth|401|403/i.test(errorMessage(err))
-                ? "auth-failed"
-                : "error",
-            message: errorMessage(err),
-          };
-        }
-        // A persisted failure (the thing pausing auto-push) outranks live
-        // counts: showing "ahead" while pushes are paused would lie to the
-        // user. It clears on the next successful push/pull.
-        const storedFailure =
-          stored.status === "diverged" ||
-          stored.status === "auth-failed" ||
-          stored.status === "error"
-            ? stored.status
-            : undefined;
-        const computed =
-          runtime?.running ??
-          statusError?.state ??
-          storedFailure ??
-          statusFromCounts(counts.aheadBy, counts.behindBy, counts.diverged);
-        return {
-          repoPath: repo,
-          remote: resolved.remote,
-          branch: resolved.branch,
-          autoPush: resolved.autoPush,
-          state: computed,
-          aheadBy: counts.aheadBy,
-          behindBy: counts.behindBy,
-          lastPushedSha: stored.lastPushedSha,
-          lastPushedAt: stored.lastPushedAt,
-          lastError: statusError?.message ?? stored.lastError,
-        };
-      })
+        })
+      )
     );
+    await this.reportHealth();
+    return rows;
   }
 
-  async publishRepo(input: PublishRepoInput): Promise<{
-    repoPath: string;
-    provider: string;
-    remote: string;
-    branch: string;
-    remoteUrl: string;
-    webUrl: string;
-    owner: string;
-    exported: number;
-    headCommit: string | null;
-    pushed: boolean;
-  }> {
-    if (input.dryRun) {
-      throw new Error(
-        "publishRepo dryRun is not supported because publishing creates a remote repo"
-      );
-    }
+  async publishRepo(input: GitPublishRepoInput): Promise<GitPublishRepoResult> {
     const repo = normalizeWorkspaceRepoPath(input.repoPath);
     const providerId = input.provider ?? "github";
     const provider = getRemoteProvider(providerId);
@@ -460,66 +505,23 @@ export class UpstreamEngine {
     });
   }
 
-  async importRepo(input: {
-    url: string;
-    path: string;
-    branch?: string;
-    credentialId?: string;
-  }): Promise<unknown> {
-    return this.ctx.rpc.call("main", "gitInterop.importProject", {
-      path: input.path,
-      remote: { name: "origin", url: input.url, ...(input.branch ? { branch: input.branch } : {}) },
-      ...(input.branch ? { branch: input.branch } : {}),
-      ...(input.credentialId ? { credentialId: input.credentialId } : {}),
-    });
-  }
-
-  async setUpstream(repoPath: string, config: WorkspaceGitUpstreamConfig): Promise<unknown> {
+  private async setUpstream(
+    repoPath: string,
+    config: WorkspaceGitUpstreamConfig
+  ): Promise<unknown> {
     const repo = normalizeWorkspaceRepoPath(repoPath);
     const result = await this.ctx.rpc.call("main", "gitInterop.setUpstream", repo, config);
-    await this.updateRepoState(repo, { status: undefined, lastError: undefined });
-    return result;
-  }
-
-  async removeUpstream(repoPath: string): Promise<unknown> {
-    const repo = normalizeWorkspaceRepoPath(repoPath);
-    const result = await this.ctx.rpc.call("main", "gitInterop.removeUpstream", repo);
-    await this.mutateState((state) => {
-      delete state.repos[repo];
-    });
+    await this.clearRepoState(repo);
     await this.reportHealth();
     return result;
   }
 
-  async setAutoPush(repoPath: string, on = true): Promise<unknown> {
-    const repo = normalizeWorkspaceRepoPath(repoPath);
-    const config = await this.readConfig();
-    const upstream = this.requireUpstream(config, repo);
-    return this.setUpstream(repo, {
-      remote: upstream.remote,
-      branch: upstream.branch,
-      autoPush: on,
-      ...(upstream.credentialId ? { credentialId: upstream.credentialId } : {}),
-      ...(upstream.authorEmail ? { authorEmail: upstream.authorEmail } : {}),
-      ...(upstream.authorName ? { authorName: upstream.authorName } : {}),
-    });
-  }
-
-  async setRemote(repoPath: string, remote: WorkspaceGitRemoteConfig): Promise<unknown> {
+  private async setRemote(repoPath: string, remote: WorkspaceGitRemoteConfig): Promise<unknown> {
     return this.ctx.rpc.call(
       "main",
       "gitInterop.setSharedRemote",
       normalizeWorkspaceRepoPath(repoPath),
       remote
-    );
-  }
-
-  async removeRemote(repoPath: string, remoteName = "origin"): Promise<unknown> {
-    return this.ctx.rpc.call(
-      "main",
-      "gitInterop.removeSharedRemote",
-      normalizeWorkspaceRepoPath(repoPath),
-      remoteName
     );
   }
 
@@ -543,10 +545,10 @@ export class UpstreamEngine {
   private enqueue(repoPath: string, delayMs = 2_000): void {
     const repo = normalizeWorkspaceRepoPath(repoPath);
     const runtime = this.runtime.get(repo) ?? {};
-    if (runtime.timer) clearTimeout(runtime.timer);
-    runtime.timer = setTimeout(() => {
+    if (runtime.debounceTimer) clearTimeout(runtime.debounceTimer);
+    runtime.debounceTimer = setTimeout(() => {
       const current = this.runtime.get(repo);
-      if (current) delete current.timer;
+      if (current) delete current.debounceTimer;
       void this.runAutoJob(repo).catch((err) => {
         this.ctx.log.warn?.("git upstream auto job failed", {
           repo,
@@ -557,43 +559,67 @@ export class UpstreamEngine {
     this.runtime.set(repo, runtime);
   }
 
-  private async runAutoJob(repo: string): Promise<void> {
+  private scheduleRetry(repo: string, fingerprint: string, delayMs: number): void {
     const runtime = this.runtime.get(repo);
-    if (runtime?.retryAt && Date.now() < runtime.retryAt) {
-      this.enqueue(repo, runtime.retryAt - Date.now());
-      return;
-    }
-    const config = await this.readConfig();
-    let upstream: ResolvedWorkspaceGitUpstream | null;
-    try {
-      upstream = getDeclaredUpstreamForRepo(config, repo);
-    } catch (err) {
-      // Broken declaration (e.g. remote removed): surface via status, keep
-      // serving every other repo.
-      await this.updateRepoState(repo, { status: "error", lastError: errorMessage(err) });
-      return;
-    }
-    if (!upstream) return;
-    // Tracking always exports (local-only, keeps the checkout current);
-    // divergence/auth failures pause only the WIRE push, never the export.
-    const stored = (await this.readState()).repos[repo];
-    const paused = stored?.status === "diverged" || stored?.status === "auth-failed";
-    const wantPush = upstream.autoPush && !paused;
-    await withRepoLock(repo, async () => {
-      try {
-        await this.syncLocked(repo, { push: wantPush });
-      } catch (err) {
-        await this.handleAutoFailure(repo, upstream, err);
-      } finally {
-        await this.reportHealth();
-      }
-    });
+    if (!runtime || runtime.configFingerprint !== fingerprint) return;
+    if (runtime.retryTimer) clearTimeout(runtime.retryTimer);
+    runtime.retryTimer = setTimeout(() => {
+      const current = this.runtime.get(repo);
+      if (current?.configFingerprint !== fingerprint) return;
+      delete current.retryTimer;
+      void this.runAutoJob(repo).catch((err) => {
+        this.ctx.log.warn?.("git upstream retry failed", {
+          repo,
+          error: errorMessage(err),
+        });
+      });
+    }, delayMs);
   }
 
-  private async handlePushFailure(repo: string, err: unknown, force: boolean): Promise<void> {
+  private async runAutoJob(repo: string): Promise<void> {
+    await withRepoLock(repo, async () => {
+      let scope: RepoOperationScope | null = null;
+      try {
+        scope = await this.resolveRepoScope(repo);
+        const runtime = this.runtime.get(repo);
+        if (
+          runtime?.configFingerprint === scope.fingerprint &&
+          runtime.retryAt &&
+          Date.now() < runtime.retryAt
+        ) {
+          this.scheduleRetry(repo, scope.fingerprint, runtime.retryAt - Date.now());
+          return;
+        }
+        // Tracking always exports (local-only, keeps the checkout current).
+        // Divergence/auth failures pause only the wire push, never the export.
+        const paused = scope.stored.status === "diverged" || scope.stored.status === "auth-failed";
+        await this.syncLocked(repo, scope, {
+          push: scope.upstream.autoPush && !paused,
+        });
+      } catch (err) {
+        if (scope) {
+          await this.handleAutoFailure(repo, scope.fingerprint, scope.upstream, err);
+          return;
+        }
+        // A missing/broken declaration has no operational state. Clearing it
+        // also detaches any timer/backoff from the previous configuration.
+        await this.clearRepoState(repo);
+      }
+    });
+    await this.reportHealth();
+  }
+
+  private async handlePushFailure(
+    repo: string,
+    fingerprint: string,
+    err: unknown,
+    force: boolean
+  ): Promise<void> {
     if (err instanceof GitAuthError || /credential|auth|401|403/i.test(errorMessage(err))) {
-      await this.updateRepoState(repo, { status: "auth-failed", lastError: errorMessage(err) });
-      await this.reportHealth();
+      await this.updateRepoState(repo, fingerprint, {
+        status: "auth-failed",
+        lastError: errorMessage(err),
+      });
       return;
     }
     if (
@@ -602,19 +628,25 @@ export class UpstreamEngine {
         errorMessage(err)
       )
     ) {
-      await this.updateRepoState(repo, { status: "diverged", lastError: errorMessage(err) });
-      await this.reportHealth();
+      await this.updateRepoState(repo, fingerprint, {
+        status: "diverged",
+        lastError: errorMessage(err),
+      });
       return;
     }
-    await this.updateRepoState(repo, { status: "error", lastError: errorMessage(err) });
-    await this.reportHealth();
+    await this.updateRepoState(repo, fingerprint, {
+      status: "error",
+      lastError: errorMessage(err),
+    });
   }
 
-  private async handlePullFailure(repo: string, err: unknown): Promise<void> {
+  private async handlePullFailure(repo: string, fingerprint: string, err: unknown): Promise<void> {
     const message = errorMessage(err);
     if (err instanceof GitAuthError || /credential|auth|401|403/i.test(message)) {
-      await this.updateRepoState(repo, { status: "auth-failed", lastError: message });
-      await this.reportHealth();
+      await this.updateRepoState(repo, fingerprint, {
+        status: "auth-failed",
+        lastError: message,
+      });
       return;
     }
     if (/merge|conflict|non-fast-forward|not fast-forward|diverg/i.test(message)) {
@@ -622,40 +654,55 @@ export class UpstreamEngine {
         `Pull could not merge upstream changes automatically: ${message}. ` +
         `Resolve the conflict in the workspace/<repo> checkout with git tooling and re-run pull, ` +
         `or push --force to overwrite upstream.`;
-      await this.updateRepoState(repo, { status: "diverged", lastError: guidance });
-      await this.reportHealth();
+      await this.updateRepoState(repo, fingerprint, {
+        status: "diverged",
+        lastError: guidance,
+      });
       return;
     }
-    await this.updateRepoState(repo, { status: "error", lastError: message });
-    await this.reportHealth();
+    await this.updateRepoState(repo, fingerprint, { status: "error", lastError: message });
   }
 
   private async handleAutoFailure(
     repo: string,
+    fingerprint: string,
     upstream: ResolvedWorkspaceGitUpstream,
     err: unknown
   ): Promise<void> {
     const message = errorMessage(err);
     if (err instanceof GitAuthError || /credential|auth|401|403/i.test(message)) {
-      await this.updateRepoState(repo, { status: "auth-failed", lastError: message });
-      await this.showFailureNotification(repo, upstream, message);
+      if (
+        await this.updateRepoState(repo, fingerprint, {
+          status: "auth-failed",
+          lastError: message,
+        })
+      ) {
+        await this.showFailureNotification(repo, upstream, message);
+      }
       return;
     }
     if (/non-fast-forward|failed to push|not fast-forward|PushRejected|rejected/i.test(message)) {
-      await this.updateRepoState(repo, { status: "diverged", lastError: message });
-      await this.showFailureNotification(repo, upstream, message);
+      if (
+        await this.updateRepoState(repo, fingerprint, {
+          status: "diverged",
+          lastError: message,
+        })
+      ) {
+        await this.showFailureNotification(repo, upstream, message);
+      }
       return;
     }
-    const runtime = this.runtime.get(repo) ?? {};
+    const runtime = this.runtime.get(repo);
+    if (!runtime || runtime.configFingerprint !== fingerprint) return;
     const nextBackoff = Math.min(
       runtime.backoffMs ? runtime.backoffMs * 2 : TRANSIENT_BACKOFF_MIN_MS,
       TRANSIENT_BACKOFF_MAX_MS
     );
-    runtime.backoffMs = nextBackoff;
-    runtime.retryAt = Date.now() + nextBackoff;
-    this.runtime.set(repo, runtime);
-    await this.updateRepoState(repo, { status: "error", lastError: message });
-    this.enqueue(repo, nextBackoff);
+    if (await this.updateRepoState(repo, fingerprint, { status: "error", lastError: message })) {
+      runtime.backoffMs = nextBackoff;
+      runtime.retryAt = Date.now() + nextBackoff;
+      this.scheduleRetry(repo, fingerprint, nextBackoff);
+    }
   }
 
   private async showFailureNotification(
@@ -675,9 +722,9 @@ export class UpstreamEngine {
           label: "Retry",
           invoke: {
             kind: "extension",
-            extension: GIT_BRIDGE_EXTENSION,
-            method: "pushUpstream",
-            args: [repo, {}],
+            extension: this.ctx.name,
+            method: "retryUpstreamPush",
+            args: [repo],
           },
         },
         {
@@ -685,7 +732,7 @@ export class UpstreamEngine {
           label: "Open Git tab",
           invoke: {
             kind: "extension",
-            extension: GIT_BRIDGE_EXTENSION,
+            extension: this.ctx.name,
             method: "openGitTab",
             args: [repo],
           },
@@ -695,9 +742,9 @@ export class UpstreamEngine {
           label: "Pause auto-push",
           invoke: {
             kind: "extension",
-            extension: GIT_BRIDGE_EXTENSION,
-            method: "setAutoPush",
-            args: [repo, false],
+            extension: this.ctx.name,
+            method: "pauseAutoPush",
+            args: [repo],
           },
         },
       ],
@@ -707,11 +754,16 @@ export class UpstreamEngine {
   private async previewOverwrites(
     git: GitClient,
     dir: string,
-    upstream: ResolvedWorkspaceGitUpstream,
+    scope: RepoOperationScope,
     localHead: string
-  ): Promise<OverwritePreview> {
-    await git.fetch({ dir, remote: upstream.remote, ref: upstream.branch });
-    const remoteRef = `refs/remotes/${upstream.remote}/${upstream.branch}`;
+  ): Promise<GitOverwritePreview> {
+    await git.fetch({
+      dir,
+      url: scope.remote.url,
+      remote: scope.transportRemote,
+      ref: scope.upstream.branch,
+    });
+    const remoteRef = `refs/remotes/${scope.transportRemote}/${scope.upstream.branch}`;
     const remoteHead = await git.resolveRef(dir, remoteRef);
     if (!remoteHead || remoteHead === localHead) return { count: 0, commits: [] };
     const counts = await git.compareRefs(dir, "HEAD", remoteRef);
@@ -742,19 +794,21 @@ export class UpstreamEngine {
    * turn into per-repo network traffic.
    */
   private async aheadBehind(
-    config: WorkspaceConfig,
     repo: string,
-    upstream: ResolvedWorkspaceGitUpstream,
+    scope: RepoOperationScope,
     options: { fetch?: boolean } = {}
   ): Promise<{ aheadBy: number; behindBy: number; diverged: boolean }> {
     const dir = await this.bridge.repoGitDir(repo);
-    const git = this.gitClient(upstream.credentialId);
-    const remote = this.requireRemote(config, repo, upstream.remote);
-    await this.ensureGitRemote(git, dir, remote);
+    const git = this.gitClient(scope.upstream.credentialId);
     if (options.fetch === true) {
-      await git.fetch({ dir, remote: upstream.remote, ref: upstream.branch });
+      await git.fetch({
+        dir,
+        url: scope.remote.url,
+        remote: scope.transportRemote,
+        ref: scope.upstream.branch,
+      });
     }
-    const remoteRef = `refs/remotes/${upstream.remote}/${upstream.branch}`;
+    const remoteRef = `refs/remotes/${scope.transportRemote}/${scope.upstream.branch}`;
     const remoteHead = await git.resolveRef(dir, remoteRef);
     if (!remoteHead) {
       // Nothing known upstream (never fetched, or the branch doesn't exist
@@ -767,15 +821,48 @@ export class UpstreamEngine {
     return { aheadBy: counts.ahead, behindBy: counts.behind, diverged: counts.diverged };
   }
 
-  private setRunning(repo: string, state: UpstreamStatusState): void {
-    const runtime = this.runtime.get(repo) ?? {};
+  private setRunning(repo: string, fingerprint: string, state: "exporting" | "pushing"): void {
+    const runtime = this.runtime.get(repo);
+    if (!runtime || runtime.configFingerprint !== fingerprint) return;
     runtime.running = state;
-    this.runtime.set(repo, runtime);
   }
 
-  private clearRunning(repo: string): void {
+  private clearRunning(repo: string, fingerprint: string): void {
     const runtime = this.runtime.get(repo);
-    if (runtime) delete runtime.running;
+    if (runtime?.configFingerprint === fingerprint) delete runtime.running;
+  }
+
+  private clearBackoff(repo: string, fingerprint: string): void {
+    const runtime = this.runtime.get(repo);
+    if (!runtime || runtime.configFingerprint !== fingerprint) return;
+    if (runtime.retryTimer) clearTimeout(runtime.retryTimer);
+    delete runtime.retryTimer;
+    delete runtime.backoffMs;
+    delete runtime.retryAt;
+  }
+
+  private resetRuntimeScope(repo: string, fingerprint: string): void {
+    const runtime = this.runtime.get(repo);
+    if (runtime?.configFingerprint === fingerprint) return;
+    if (runtime?.retryTimer) clearTimeout(runtime.retryTimer);
+    this.runtime.set(repo, {
+      configFingerprint: fingerprint,
+      ...(runtime?.debounceTimer ? { debounceTimer: runtime.debounceTimer } : {}),
+    });
+  }
+
+  private async resolveRepoScope(repo: string): Promise<RepoOperationScope> {
+    const config = await this.readConfig();
+    const upstream = this.requireUpstream(config, repo);
+    const remote = this.requireRemote(config, repo, upstream.remote);
+    const stored = await this.reconcileRepoState(repo, upstream, remote);
+    return {
+      upstream,
+      remote,
+      fingerprint: stored.configFingerprint,
+      stored,
+      transportRemote: transportRemoteForFingerprint(stored.configFingerprint),
+    };
   }
 
   private requireUpstream(config: WorkspaceConfig, repo: string): ResolvedWorkspaceGitUpstream {
@@ -798,7 +885,7 @@ export class UpstreamEngine {
     config: WorkspaceConfig,
     repo: string,
     upstream: ResolvedWorkspaceGitUpstream,
-    options: UpstreamStatusOptions
+    options: GitUpstreamStatusOptions
   ): ResolvedWorkspaceGitUpstream {
     const remoteName = options.remote
       ? validateWorkspaceGitRemoteName(options.remote)
@@ -817,14 +904,6 @@ export class UpstreamEngine {
     };
   }
 
-  private async ensureGitRemote(
-    git: GitClient,
-    dir: string,
-    remote: WorkspaceGitRemoteConfig
-  ): Promise<void> {
-    await git.setRemote(dir, remote.name, remote.url);
-  }
-
   private async readConfig(): Promise<WorkspaceConfig> {
     const config = await this.ctx.rpc.call<WorkspaceConfig | null>("main", "workspace.getConfig");
     if (!config) throw new Error("Workspace config is unavailable");
@@ -837,7 +916,7 @@ export class UpstreamEngine {
 
   private gitClient(
     credentialId?: string,
-    gitIntent?: { force: boolean; overwrites?: OverwritePreview }
+    gitIntent?: { force: boolean; overwrites?: GitOverwritePreview }
   ): GitClient {
     return new GitClient(fsp, {
       http: this.gitHttp(credentialId, gitIntent),
@@ -846,7 +925,7 @@ export class UpstreamEngine {
 
   private gitHttp(
     credentialId?: string,
-    gitIntent?: { force: boolean; overwrites?: OverwritePreview }
+    gitIntent?: { force: boolean; overwrites?: GitOverwritePreview }
   ) {
     return this.ctx.credentials.gitHttp({
       ...(credentialId ? { credentialId } : {}),
@@ -865,23 +944,26 @@ export class UpstreamEngine {
   private async readState(): Promise<StoredState> {
     try {
       const raw = await this.ctx.storage.readFile(STATE_FILE, "utf8");
-      const parsed = JSON.parse(
-        typeof raw === "string" ? raw : raw.toString("utf8")
-      ) as StoredState;
-      return parsed.version === 1 && parsed.repos ? parsed : { version: 1, repos: {} };
+      const parsed: unknown = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8"));
+      return parseStoredState(parsed) ?? emptyStoredState();
     } catch {
-      return { version: 1, repos: {} };
+      return emptyStoredState();
     }
   }
 
-  /** Serializes the WHOLE read-modify-write: concurrent per-repo jobs share
+  /** Serializes the WHOLE state transaction: concurrent per-repo jobs share
    *  one state file, so an unserialized read would clobber sibling repos. */
-  private mutateState(mutate: (state: StoredState) => void): Promise<void> {
+  private stateTransaction<T>(
+    transact: (state: StoredState) => { result: T; changed: boolean }
+  ): Promise<T> {
     const run = this.stateWrite.then(async () => {
       const state = await this.readState();
-      mutate(state);
-      await this.ctx.storage.mkdir("state", { recursive: true });
-      await this.ctx.storage.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+      const outcome = transact(state);
+      if (outcome.changed) {
+        await this.ctx.storage.mkdir("state", { recursive: true });
+        await this.ctx.storage.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+      }
+      return outcome.result;
     });
     this.stateWrite = run.then(
       () => undefined,
@@ -890,18 +972,60 @@ export class UpstreamEngine {
     return run;
   }
 
-  private updateRepoState(repo: string, patch: StoredRepoState): Promise<void> {
-    return this.mutateState((state) => {
-      const current = state.repos[repo] ?? {};
+  private async reconcileRepoState(
+    repo: string,
+    upstream: ResolvedWorkspaceGitUpstream,
+    remote: WorkspaceGitRemoteConfig
+  ): Promise<StoredRepoState> {
+    const configFingerprint = upstreamConfigFingerprint(repo, upstream, remote);
+    const stored = await this.stateTransaction((state) => {
+      const current = state.repos[repo];
+      if (current?.configFingerprint === configFingerprint) {
+        return { result: { ...current }, changed: false };
+      }
+      const next: StoredRepoState = { configFingerprint };
+      state.repos[repo] = next;
+      return { result: { ...next }, changed: true };
+    });
+    this.resetRuntimeScope(repo, configFingerprint);
+    return stored;
+  }
+
+  private async clearRepoState(repo: string): Promise<void> {
+    await this.stateTransaction((state) => {
+      if (!(repo in state.repos)) return { result: undefined, changed: false };
+      delete state.repos[repo];
+      return { result: undefined, changed: true };
+    });
+    const runtime = this.runtime.get(repo);
+    if (runtime?.debounceTimer) clearTimeout(runtime.debounceTimer);
+    if (runtime?.retryTimer) clearTimeout(runtime.retryTimer);
+    this.runtime.delete(repo);
+  }
+
+  private updateRepoState(
+    repo: string,
+    fingerprint: string,
+    patch: StoredRepoStatePatch
+  ): Promise<boolean> {
+    return this.stateTransaction((state) => {
+      const current = state.repos[repo];
+      // This is a configuration-token compare-and-set. A completion from an
+      // operation started under config A can never mutate config B's state.
+      if (current?.configFingerprint !== fingerprint) {
+        return { result: false, changed: false };
+      }
       const next = { ...current, ...patch };
       if (patch.status === undefined) delete next.status;
       if (patch.lastError === undefined) delete next.lastError;
       state.repos[repo] = next;
+      return { result: true, changed: true };
     });
   }
 
   private async reportHealth(): Promise<void> {
     if (!this.ctx.health) return;
+    await this.stateWrite;
     const state = await this.readState();
     const degraded = Object.entries(state.repos)
       .filter(([, repo]) => repo.status === "auth-failed" || repo.status === "diverged")
@@ -917,13 +1041,11 @@ export class UpstreamEngine {
   }
 }
 
-export type OverwritePreview = GitOverwritePreview;
-
 function statusFromCounts(
   aheadBy: number,
   behindBy: number,
   diverged = aheadBy > 0 && behindBy > 0
-): UpstreamStatusState {
+): StoredUpstreamState {
   if (diverged) return "diverged";
   if (aheadBy > 0) return "ahead";
   if (behindBy > 0) return "behind";
@@ -945,4 +1067,105 @@ function displayRemote(url: string): string {
   } catch {
     return url;
   }
+}
+
+function upstreamConfigFingerprint(
+  repo: string,
+  upstream: ResolvedWorkspaceGitUpstream,
+  remote: WorkspaceGitRemoteConfig
+): string {
+  const identity = {
+    repoPath: repo,
+    upstream: {
+      remote: upstream.remote,
+      branch: upstream.branch,
+      autoPush: upstream.autoPush,
+      credentialId: upstream.credentialId ?? null,
+      authorEmail: upstream.authorEmail ?? null,
+      authorName: upstream.authorName ?? null,
+    },
+    remote: {
+      name: remote.name,
+      url: remote.url,
+      branch: remote.branch ?? null,
+    },
+  };
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
+function transportRemoteForFingerprint(fingerprint: string): string {
+  return `vibestudio-${fingerprint.slice(0, 24)}`;
+}
+
+function emptyStoredState(): StoredState {
+  return { version: 2, repos: {} };
+}
+
+const STORED_UPSTREAM_STATES = new Set<StoredUpstreamState>([
+  "in-sync",
+  "ahead",
+  "behind",
+  "diverged",
+  "auth-failed",
+  "error",
+]);
+
+function parseStoredState(value: unknown): StoredState | null {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["version", "repos"])) return null;
+  const version = value["version"];
+  const repoValues = value["repos"];
+  if (version !== 2 || !isRecord(repoValues)) return null;
+  const repos: Record<string, StoredRepoState> = {};
+  for (const [repo, candidate] of Object.entries(repoValues)) {
+    try {
+      if (normalizeWorkspaceRepoPath(repo) !== repo) return null;
+    } catch {
+      return null;
+    }
+    if (!isRecord(candidate)) return null;
+    const configFingerprint = candidate["configFingerprint"];
+    const lastPushedSha = candidate["lastPushedSha"];
+    const lastPushedAt = candidate["lastPushedAt"];
+    const status = candidate["status"];
+    const lastError = candidate["lastError"];
+    if (
+      !hasOnlyKeys(candidate, [
+        "configFingerprint",
+        "lastPushedSha",
+        "lastPushedAt",
+        "status",
+        "lastError",
+      ]) ||
+      typeof configFingerprint !== "string" ||
+      !/^[a-f0-9]{64}$/.test(configFingerprint) ||
+      (lastPushedSha !== undefined &&
+        (typeof lastPushedSha !== "string" || lastPushedSha.length === 0)) ||
+      (lastPushedAt !== undefined &&
+        (typeof lastPushedAt !== "number" ||
+          !Number.isInteger(lastPushedAt) ||
+          lastPushedAt < 0)) ||
+      (status !== undefined &&
+        (typeof status !== "string" ||
+          !STORED_UPSTREAM_STATES.has(status as StoredUpstreamState))) ||
+      (lastError !== undefined && typeof lastError !== "string")
+    ) {
+      return null;
+    }
+    repos[repo] = {
+      configFingerprint,
+      ...(lastPushedSha !== undefined ? { lastPushedSha } : {}),
+      ...(lastPushedAt !== undefined ? { lastPushedAt } : {}),
+      ...(status !== undefined ? { status: status as StoredUpstreamState } : {}),
+      ...(lastError !== undefined ? { lastError } : {}),
+    };
+  }
+  return { version: 2, repos };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }

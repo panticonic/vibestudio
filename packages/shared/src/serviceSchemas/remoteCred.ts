@@ -17,6 +17,7 @@ export const RemotePairArgsSchema = z
       .describe(
         "A vibestudio://connect or https://vibestudio.app/pair link containing WebRTC pairing material."
       ),
+    label: z.string().trim().min(1).max(128).optional(),
   })
   .strict();
 export type RemotePairArgs = z.infer<typeof RemotePairArgsSchema>;
@@ -25,6 +26,10 @@ export const RemoteCredCurrentSchema = z.object({
   connected: z.boolean(),
   configured: z.boolean(),
   isActive: z.boolean(),
+  // A remote is reached over a paired WebRTC pipe ("device") or not configured
+  // ("none"). The old cleartext "admin-token"/"hybrid" URL remotes were deleted
+  // (§8c), along with the `url`/`tokenPreview`/`hubUrl` fields they carried.
+  bootstrap: z.enum(["device", "none"]),
   deviceId: z.string().optional(),
   workspaceName: z.string().optional(),
 });
@@ -40,7 +45,8 @@ const OkResultSchema = z.object({ ok: z.boolean() });
 
 export const remoteCredMethods = defineServiceMethods({
   getCurrent: {
-    description: "Report whether this desktop has a stored WebRTC device pairing and a live session.",
+    description:
+      "Report the locally stored remote-server credential: whether it's configured/active, the bootstrap kind (device|none), the paired device id, and the workspace name.",
     args: z.tuple([]),
     returns: RemoteCredCurrentSchema,
     access: readAccess,

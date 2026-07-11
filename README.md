@@ -111,6 +111,9 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 - `pnpm setup:npm-token` - Save the local npm publish token used by the release script
 - `pnpm publish:npm` - Build, stage, dry-run, publish, verify, and install-smoke the npm packages
 - `pnpm publish:npm:staged` - Reuse `dist/` and `dist-packages/` for an auth-only publish retry
+- `pnpm type-check:cloudflare` - Type-check the signaling and apex Cloudflare Workers
+- `pnpm deploy:cloudflare` - Deploy the signaling Worker and apex relay Worker
+- `pnpm smoke:cloudflare` - Smoke the deployed apex and signaling Workers
 - `pnpm start` - Start the app (requires prior build)
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
@@ -263,7 +266,7 @@ Pair a Vibestudio device
 The gateway binds loopback only; remote clients reach it over WebRTC (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
 decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
-through the callback relay (`VIBESTUDIO_RELAY_OAUTH_BASE_URL`).
+through the callback relay (`VIBESTUDIO_RELAY_URL`).
 
 The public server is always a hub. Clients pair with the hub, choose a
 workspace, and then connect to `/_workspace/<name>`. Workspace flags are

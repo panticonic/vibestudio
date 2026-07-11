@@ -1,4 +1,4 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
 import { type Session, SessionError, type SessionMetadata, type SessionRepo } from "../types.js";
 import { InMemorySessionStorage } from "./memory-storage.js";
 import { createSessionId, createTimestamp, getEntriesToFork, toSession } from "./repo-utils.js";

@@ -14,8 +14,12 @@ history and an external Git host such as GitHub. It is intentionally two-layered
    interop provider, then publish the imported state onto protected `main`.
 
 The host owns policy, approvals, credential injection, workspace config writes,
-and provider dispatch. Provider behavior and external Git transport stay in
-userland-owned helpers or extensions.
+and provider dispatch. Runtime callers use the typed `git.*` API, which calls the
+host `gitInterop.*` service; that service resolves `providers.gitInterop` and
+dispatches transport work to the configured extension. Callers never address a
+Git Bridge package directly. Config edits are narrow transactions applied to the
+current protected `meta/main`, so concurrent edits to different remotes or
+upstreams cannot replay stale workspace-config snapshots over one another.
 
 ## Configuration
 
@@ -49,6 +53,10 @@ mirrors GAD history locally with no network involved. `autoPush` additionally
 pushes after each export; it does not bypass credential or push policy, and it
 pauses (export continues) while the repo is `diverged` or `auth-failed`.
 `credentialId` is a stored URL-bound credential used by host-mediated Git HTTP.
+Each network operation captures the declared URL, branch, credential, and
+configuration fingerprint before checkout work begins. It uses that immutable
+URL plus a fingerprint-specific tracking ref, so a concurrent manifest or Git
+config update cannot redirect an in-flight fetch, pull, or push.
 
 From runtime code, configure the two pieces separately:
 
@@ -61,7 +69,7 @@ await git.setSharedRemote("projects/bgkit", {
   branch: "main",
 });
 
-await git.configureUpstream("projects/bgkit", {
+await git.setUpstream("projects/bgkit", {
   remote: "origin",
   branch: "main",
   credentialId: "cred_github_abc123",
@@ -133,8 +141,9 @@ services unless it is pure policy glue. The provider should:
   claiming setup is complete.
 - Configure `git.remotes` and `git.upstreams` through the runtime `git`
   namespace rather than editing `meta/vibestudio.yml` directly.
-- Call the host `gitInterop.*` service or typed runtime wrappers for publish,
-  pull, push, and status; the host resolves the configured provider.
+- Use the typed runtime `git.*` methods for publish, pull, push, status, and
+  import. They route through `gitInterop.*`, where the host resolves the
+  configured provider; do not invoke a provider extension by package name.
 - Keep provider-specific branch defaults, repository creation, fork selection,
   and permission advice in the provider package or extension.
 - Surface divergence in provider language, but hand repair back to the shared

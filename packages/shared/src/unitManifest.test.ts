@@ -15,12 +15,62 @@ describe("validateUnitManifest", () => {
           extension: {
             activationEvents: ["*"],
             dependencyMode: "external",
+            providerContracts: {
+              gitInterop: { methods: ["upstreamStatus", "pushUpstream"] },
+            },
             contributes: { buildTargets: ["react-native"] },
           },
         },
         { unitName: "@workspace-extensions/a" }
       )
     ).not.toThrow();
+  });
+
+  it("rejects malformed provider contract namespaces", () => {
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              gitInterop: { methods: ["pushUpstream", "pushUpstream"] },
+            },
+          },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/non-empty array of unique method names/);
+
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              "git-interop": { methods: ["pushUpstream"] },
+            },
+          },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/valid provider slot/);
+
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              gitInterop: { methods: ["pushUpstream"], public: true },
+            },
+          },
+        },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/exactly one methods field/);
   });
 
   it("rejects unknown extension build-provider targets", () => {

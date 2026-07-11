@@ -59,7 +59,7 @@ describe("ServerUnitApprovalCoordinator", () => {
     expect(applyApp).toHaveBeenCalledOnce();
   });
 
-  it("applies approved extensions before approved apps", async () => {
+  it("applies approved requests concurrently, starting extensions first", async () => {
     const approvalQueue = {
       request: vi.fn(async () => "once" as const),
     };
@@ -95,13 +95,15 @@ describe("ServerUnitApprovalCoordinator", () => {
 
     coordinator.publishPending("startup");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(order).toEqual(["extension:start"]);
-    expect(applyApp).not.toHaveBeenCalled();
+    // Extensions are kicked off first, but a slow extension must NOT block
+    // app applies — the app request runs concurrently.
+    expect(order).toEqual(["extension:start", "app:start"]);
+    expect(applyApp).toHaveBeenCalledOnce();
 
     releaseExtension();
     await pending;
 
-    expect(order).toEqual(["extension:start", "extension:done", "app:start"]);
+    expect(order).toEqual(["extension:start", "app:start", "extension:done"]);
   });
 
   it("fans out a deny decision to every enqueued host request", async () => {

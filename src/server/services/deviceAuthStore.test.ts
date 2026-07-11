@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { IdentityDb } from "@vibestudio/shared/users/identityDb";
 import { UserStore } from "@vibestudio/shared/users/userStore";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -86,6 +86,38 @@ describe("DeviceAuthStore", () => {
     expect(() => store.validateRefresh(credential.deviceId, credential.refreshToken)).toThrow(
       /not paired/i
     );
+  });
+
+  it("throttles lastUsedAt persistence for a churny reconnecting device", () => {
+    let now = 1000;
+    const { store, db, userId } = makeStore(() => now);
+    const credential = store.issueDevice({ userId, label: "Desktop" });
+    const touch = vi.spyOn(db, "touchDevice");
+
+    // First refresh persists (previous lastUsedAt was unset).
+    now = 100_000;
+    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    expect(touch).toHaveBeenCalledTimes(1);
+
+    // A reconnect within the persist interval updates memory but NOT disk.
+    now = 101_000;
+    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    expect(touch).toHaveBeenCalledTimes(1);
+
+    // Past the interval it persists again.
+    now = 200_000;
+    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    expect(touch).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails loud with the path and a recovery hint when server-id state is corrupt", () => {
+    const { db, serverIdPath } = makeStore();
+    fs.writeFileSync(serverIdPath, "{ this is not valid json ", "utf8");
+    expect(() => new DeviceAuthStore({ db, serverIdPath })).toThrow(/unsupported server id state/i);
+    expect(() => new DeviceAuthStore({ db, serverIdPath })).toThrow(
+      new RegExp(serverIdPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    );
+    expect(() => new DeviceAuthStore({ db, serverIdPath })).toThrow(/delete it to initialize/i);
   });
 
   it("defaults pairing codes to a one hour lifetime", () => {

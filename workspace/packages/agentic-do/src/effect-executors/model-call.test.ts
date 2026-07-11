@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@earendil-works/pi-ai", () => ({
   clampThinkingLevel: mocks.clampThinkingLevel,
   getModel: mocks.getModel,
+}));
+
+vi.mock("@earendil-works/pi-ai/compat", () => ({
   stream: mocks.stream,
 }));
 

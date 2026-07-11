@@ -39,7 +39,7 @@ class MainActivity : ReactActivity() {
         DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
 
     private fun clearActiveBundleForConnectIntent(intent: Intent?): Boolean {
-        if (!isVibestudioConnectIntent(intent)) return false
+        if (!isVibestudioPairingIntent(intent)) return false
         val cleared = VibestudioBundleStore.clearActive(this)
         if (cleared) {
             Log.i(TAG, "[VibestudioMobileSmoke] phase=native-connect-intent-reset")
@@ -58,11 +58,24 @@ class MainActivity : ReactActivity() {
         Runtime.getRuntime().exit(0)
     }
 
-    private fun isVibestudioConnectIntent(intent: Intent?): Boolean {
+    /**
+     * A Vibestudio pairing link, in either carrier form (mirrors iOS
+     * AppDelegate `VibestudioIsPairingURL`):
+     *   - the custom scheme `vibestudio://connect`
+     *   - the verified App Link `https://vibestudio.app/pair`
+     * Both must reset the app to the native pairing bootstrap so index.js can
+     * redeem the invite; only handling the scheme form left a tapped /pair App
+     * Link opening the (already-loaded) workspace bundle, which has no pairing
+     * listener, so nothing happened.
+     */
+    private fun isVibestudioPairingIntent(intent: Intent?): Boolean {
         val data = intent?.data ?: return false
-        return intent.action == Intent.ACTION_VIEW &&
-            data.scheme == "vibestudio" &&
-            data.host == "connect"
+        if (intent.action != Intent.ACTION_VIEW) return false
+        val scheme = data.scheme?.lowercase()
+        val host = data.host?.lowercase()
+        if (scheme == "vibestudio" && host == "connect") return true
+        if (scheme == "https" && host == "vibestudio.app" && data.path == "/pair") return true
+        return false
     }
 
     private companion object {

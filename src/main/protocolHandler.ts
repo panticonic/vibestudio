@@ -11,6 +11,15 @@ const listeners = new Set<(link: PendingConnectLink) => void>();
 let pendingPanel: PanelLocation | null = null;
 const panelListeners = new Set<(location: PanelLocation) => void>();
 
+/**
+ * A deep link that FAILED to parse (e.g. a stale v1 link whose actionable message
+ * is "re-pair with a current link"). Previously swallowed silently, so clicking a
+ * stale link opened the app and nothing happened. Buffered like `pending` so a
+ * launch-time failure survives until a surface exists to show it.
+ */
+let pendingError: string | null = null;
+const errorListeners = new Set<(reason: string) => void>();
+
 export function registerProtocol(): void {
   if (app.isPackaged) {
     app.setAsDefaultProtocolClient("vibestudio");
@@ -47,10 +56,34 @@ export function enqueueProtocolLink(raw: string): void {
 
 export function enqueueConnectLink(raw: string): void {
   const parsed = parseConnectLink(raw);
-  if (parsed.kind === "error") return;
-  const { kind: _kind, ...link } = parsed;
-  pending = link;
-  for (const listener of listeners) listener(link);
+  if (parsed.kind === "error") {
+    // Surface it instead of swallowing: a stale/old-format link carries an
+    // actionable message ("re-pair with a current link") the user must see.
+    pendingError = parsed.reason;
+    for (const listener of errorListeners) listener(parsed.reason);
+    return;
+  }
+  pendingError = null;
+  pending = stripKind(parsed);
+  for (const listener of listeners) listener(pending);
+}
+
+function stripKind(
+  parsed: Extract<ReturnType<typeof parseConnectLink>, { kind: "ok" }>
+): PendingConnectLink {
+  const { kind: _kind, ...rest } = parsed;
+  return rest;
+}
+
+export function getPendingConnectLinkError(): string | null {
+  const error = pendingError;
+  pendingError = null;
+  return error;
+}
+
+export function onConnectLinkError(listener: (reason: string) => void): () => void {
+  errorListeners.add(listener);
+  return () => errorListeners.delete(listener);
 }
 
 export function getPendingConnectLink(): PendingConnectLink | null {

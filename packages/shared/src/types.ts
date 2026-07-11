@@ -45,6 +45,12 @@ export interface PackageManifest {
      * the extension's internals — the client resolves them automatically.
      */
     streamingMethods?: string[];
+    /**
+     * Provider-namespaced contracts implemented by this extension, keyed by
+     * manifest provider slot. These methods are not part of the flat public
+     * extension API and are dispatched only through the matching namespace.
+     */
+    providerContracts?: Record<string, { methods: string[] }>;
   };
   /** Future shared manifest discriminator for worker units. */
   worker?: Record<string, unknown>;
@@ -131,6 +137,12 @@ export interface AppInfo {
   remoteHost?: string;
   /** Current connection status */
   connectionStatus: "connected" | "connecting" | "disconnected";
+  /**
+   * Selected ICE path of a remote (WebRTC) pipe: host/srflx/prflx = direct P2P,
+   * relay = TURN, null = unknown/local. Lets a fresh badge mount reflect a
+   * stable relay session without waiting for the next connection transition.
+   */
+  connectionCandidateType?: "host" | "srflx" | "prflx" | "relay" | null;
 }
 
 export interface PanelInfo {

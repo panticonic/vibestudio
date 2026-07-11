@@ -85,7 +85,7 @@ Key facts:
 - Existing panels: pass a `panelTree.list/roots/children/get` handle; do not
   call `handle.close`, `handle.navigate`, or `handle.reload` unless that is the
   test.
-- `panelText(h)` / `waitForText(h, text)` — approval-free agentApi snapshot path
+- `panelText(h)` / `waitForText(h, text)` — approval-free readable snapshot path (agent API with accessibility-tree fallback)
 - `evalInPanel(h, expression)` — Runtime.evaluate by value (CDP)
 - `setViewport(h, { width, height, mobile })` / `audit(h)` — overflow + console health
 - `rawCdpSession(h)` — any CDP method

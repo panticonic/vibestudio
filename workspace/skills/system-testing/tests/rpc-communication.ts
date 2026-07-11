@@ -1,5 +1,9 @@
 import type { TestCase } from "../types.js";
-import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  finalMessageHasAll,
+  finalMessageHasMarkerCount,
+  noIncompleteInvocations,
+} from "./_helpers.js";
 
 function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
   const msg = finalMessageHasAll(result, tokens);
@@ -20,6 +24,9 @@ export const rpcTests: TestCase[] = [
     description: "List worker sources via RPC",
     category: "rpc-communication",
     prompt: "Exercise worker-source inspection through RPC. Finish with RPC_WORKERS_OK and count.",
-    validate: (result) => checked(result, ["RPC_WORKERS_OK", "count"]),
+    validate: (result) => {
+      const marker = finalMessageHasMarkerCount(result, "RPC_WORKERS_OK");
+      return marker.passed ? noIncompleteInvocations(result) : marker;
+    },
   },
 ];

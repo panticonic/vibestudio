@@ -13,6 +13,7 @@ import {
   createRpcClient,
   envelopeFromMessage,
   responseEnvelopeFor,
+  stampEnvelopeCaller,
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
@@ -28,6 +29,7 @@ import {
   encodeControlFrame,
   SESSION_CLOSED,
   SESSION_NOT_OPEN_CLOSE_CODE,
+  SESSION_OPEN_RESULT,
   type SessionControlFrame,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import {
@@ -43,8 +45,8 @@ import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/pro
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
-  parseServiceMethod,
   authenticatedCallerOf,
+  parseServiceMethod,
   createVerifiedCaller,
   isDeferredResult,
   ServiceDispatcher,
@@ -271,6 +273,7 @@ type ReconnectOutcome =
   | { kind: "no-waiter" };
 
 type RelayErrorCode =
+  | "EACCES"
   | "RECONNECT_GRACE_EXPIRED"
   | "SERVER_SHUTTING_DOWN"
   | "DO_CONTEXT_MISMATCH"
@@ -1051,13 +1054,30 @@ export class RpcServer {
 
   private async handleAuth(
     ws: WebSocket,
-    token: string,
+    token: unknown,
     requestedConnectionId?: string,
     clientLabel?: string,
     clientSessionId?: string,
     clientPlatform?: ClientPlatform
   ): Promise<void> {
     if (ws.readyState !== WebSocket.OPEN) return;
+    // Both the WebSocket and WebRTC handshakes reach this method, and neither
+    // transport guarantees that a malformed open frame contains a string token.
+    // Reject before any credential parser calls string methods on the value.
+    if (typeof token !== "string" || token.length === 0) {
+      log.warn("rejecting ws:auth: missing or non-string token", {
+        clientLabel: clientLabel ?? null,
+        clientPlatform: clientPlatform ?? null,
+      });
+      const msg: WsServerMessage = {
+        type: "ws:auth-result",
+        success: false,
+        error: "Missing or invalid auth token",
+      };
+      ws.send(JSON.stringify(msg));
+      ws.close(4006, "Missing or invalid auth token");
+      return;
+    }
     // Admin tokens are management-only. RPC clients must use caller tokens.
     if (this.deps.tokenManager.validateAdminToken(token)) {
       const msg: WsServerMessage = {
@@ -1131,6 +1151,13 @@ export class RpcServer {
     // create session/lease/bridge state for a transport that is already gone.
     if (ws.readyState !== WebSocket.OPEN) return;
     if (!entry) {
+      // Fail-loud observability: a device/panel/agent presented a token that
+      // matched no grant, bearer, or pairing/refresh credential. Log the device
+      // label/platform for diagnosis — NEVER the token itself.
+      log.warn("rejecting ws:auth: no valid credential", {
+        clientLabel: clientLabel ?? null,
+        clientPlatform: clientPlatform ?? null,
+      });
       const msg: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
@@ -1157,6 +1184,27 @@ export class RpcServer {
     const callerId = entry.callerId;
     const connectionId = requestedConnectionId || randomUUID();
     const connectionKey = this.connectionKey(callerId, connectionId);
+
+    // Panel lease gate FIRST — before clearing this connection's grace timer or
+    // resolving its reconnect waiters. If the lease is denied (4090) the prior
+    // connection's grace path must stay intact: the grace timer is the ONLY place
+    // failRoutedRequestsForCallee runs, so cancelling it here would hang in-flight
+    // routed requests forever, and resolving the waiters would wake parked
+    // relayCalls into the "no client found" invariant throw. Gate, THEN (only on
+    // success) clear the timer / wake the waiters.
+    if (callerKind === "panel") {
+      const auth = this.deps.runtimeCoordinator?.authorizePanelConnection(callerId, connectionId);
+      if (!auth?.ok) {
+        const msg: WsServerMessage = {
+          type: "ws:auth-result",
+          success: false,
+          error: auth?.reason ?? "Panel runtime coordinator is unavailable",
+        };
+        ws.send(JSON.stringify(msg));
+        ws.close(4090, "Panel runtime lease denied");
+        return;
+      }
+    }
 
     const pendingTimer = this.disconnectTimers.get(connectionKey);
     if (pendingTimer) {
@@ -1211,9 +1259,18 @@ export class RpcServer {
 
     const existing = this.connections.getConnection(callerId, connectionId);
     if (existing) {
-      existing.ws.close(4002, "Replaced by new connection");
-      this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
+      // De-register the old connection BEFORE closing it. A real `ws` closes
+      // asynchronously (handleClose runs after we return, by which point the
+      // replacement is registered, so it sees wasReplaced). But
+      // SessionWebSocketShim.close() fires its close handlers SYNCHRONOUSLY — so
+      // unless `existing` is already de-registered, that inline handleClose runs
+      // the FULL real-disconnect path (spurious markDisconnected / panel churn +
+      // freshly-armed reconnect waiters and a grace timer that this very cleanup
+      // would then strand). De-registering first makes wasReplaced===true for the
+      // synchronous shim exactly as it already is for the async real WS.
       this.cleanupClient(existing);
+      this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
+      existing.ws.close(4002, "Replaced by new connection");
     }
     const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
     // Denormalize the host-verified owning user once, at admission (WP4 §2.1).
@@ -1258,6 +1315,15 @@ export class RpcServer {
         callerId,
         sinceLastDisconnectMs:
           previousDisconnectAt === undefined ? null : Date.now() - previousDisconnectAt,
+      });
+    } else if (callerKind === "shell") {
+      // Fail-loud observability: a paired device (or host shell) authenticated.
+      // Log the device label/platform so operators can see WHICH device attached
+      // (the pipe's first-connect log only knows the room, not the principal).
+      log.info("device connected", {
+        callerId,
+        clientLabel: clientLabel ?? null,
+        clientPlatform: clientPlatform ?? null,
       });
     }
 
@@ -1446,14 +1512,15 @@ export class RpcServer {
 
     switch (msg.type) {
       case "ws:rpc": {
-        const envelope = (msg as { envelope?: RpcEnvelope }).envelope;
-        if (!envelope?.message) {
+        const inboundEnvelope = (msg as { envelope?: RpcEnvelope }).envelope;
+        if (!inboundEnvelope?.message) {
           log.warn("malformed ws:rpc frame without envelope", {
             callerId: client.caller.runtime.id,
             callerKind: client.caller.runtime.kind,
           });
           return;
         }
+        const envelope = stampEnvelopeCaller(inboundEnvelope, authenticatedCallerOf(client.caller));
         const rpcMessage = envelope.message;
         // If the message belongs to a server-initiated call via the client's RPC bridge,
         // route it to the client transport. Streaming responses use `stream-frame`; without
@@ -1479,7 +1546,7 @@ export class RpcServer {
       case "ws:tool-result":
         this.handleToolResult(msg.callId, msg.result as ToolExecutionResult);
         break;
-      case "ws:route":
+      case "ws:route": {
         if (!msg.envelope?.message) {
           log.warn("malformed ws:route frame without envelope", {
             callerId: client.caller.runtime.id,
@@ -1487,14 +1554,19 @@ export class RpcServer {
           });
           return;
         }
+        const routeEnvelope = stampEnvelopeCaller(
+          msg.envelope,
+          authenticatedCallerOf(client.caller)
+        );
         this.handleRoute(
           client,
-          msg.envelope.target,
-          msg.envelope.message,
+          routeEnvelope.target,
+          routeEnvelope.message,
           msg.targetConnectionId,
-          msg.envelope
+          routeEnvelope
         );
         break;
+      }
       case "ws:auth":
         // Ignore duplicate auth messages
         break;
@@ -1621,13 +1693,16 @@ export class RpcServer {
     targetConnectionId: string | undefined,
     routeEnvelope: RpcEnvelope
   ): void {
+    const method =
+      message.type === "request" || message.type === "stream-request" ? message.method : undefined;
     const auth = this.checkRelayAuth(
       client.caller.runtime.id,
       client.caller.runtime.kind,
-      targetId
+      targetId,
+      method
     );
     if (!auth.ok) {
-      this.sendRouteError(client, targetId, message, new Error(auth.reason));
+      this.sendRouteError(client, targetId, message, createRelayError(auth.reason, "EACCES"));
       return;
     }
 
@@ -1769,8 +1844,9 @@ export class RpcServer {
    *
    * For request-typed messages, sends a `ws:routed` carrying a response with
    * `requestId` echoed back so the client's RPC bridge can reject the matching
-   * promise. For response and event messages, surface the drop explicitly back
-   * to the sender.
+   * promise. Streaming requests receive an ERROR frame so their head promise
+   * settles too. For response and event messages, surface the drop explicitly
+   * back to the sender.
    */
   private sendRouteError(
     client: WsClientState,
@@ -1788,6 +1864,20 @@ export class RpcServer {
           requestId: message.requestId,
           error: errorMessage,
           ...(errorCode ? { errorCode } : {}),
+        }),
+      });
+      return;
+    }
+
+    if (message.type === "stream-request") {
+      this.sendToWs(client.ws, {
+        type: "ws:routed",
+        envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
+          type: "stream-frame",
+          requestId: message.requestId,
+          fromId: targetId,
+          frameType: FRAME_ERROR,
+          payload: JSON.stringify({ status: 403, message: errorMessage, code: errorCode }),
         }),
       });
       return;
@@ -2370,8 +2460,8 @@ export class RpcServer {
     }
 
     // Relay to another target
-    const auth = this.checkRelayAuth(callerId, callerKind, targetId);
-    if (!auth.ok) throw new Error(auth.reason);
+    const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
+    if (!auth.ok) throw createRelayError(auth.reason, "EACCES");
     const authenticatedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
     return await this.relayCall(
       callerId,
@@ -2597,17 +2687,23 @@ export class RpcServer {
     const agentBinding = httpAgentBinding;
     const effectiveCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
 
+    if (!method) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing method" }));
+      return;
+    }
+
     if (targetId && targetId !== "main") {
+      const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
+      if (!auth.ok) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: auth.reason, errorCode: "EACCES" }));
+        return;
+      }
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({ error: "HTTP RPC streaming currently supports targetId 'main' only" })
       );
-      return;
-    }
-
-    if (!method) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Missing method" }));
       return;
     }
 
@@ -3111,15 +3207,26 @@ export class RpcServer {
   /**
    * Enforce authorization for relay calls/events.
    *
-   * RPC relay authorization is intentionally open between authenticated
-   * participants. Sensitive recipients must enforce their own method-level
-   * gates on receipt.
+   * RPC relay authorization is open between authenticated participants except
+   * for host-control RPC. Extension children expose their transport control
+   * plane under `extension.*`; userland must reach extension APIs through the
+   * host `extensions` service so provider exclusivity and service schemas are
+   * applied before the child runs.
    */
   private checkRelayAuth(
-    _callerId: string,
-    _callerKind: CallerKind,
-    _targetId: string
+    callerId: string,
+    callerKind: CallerKind,
+    targetId: string,
+    method?: string
   ): RelayAuthCheck {
+    if (callerKind !== "server" && typeof method === "string" && method.startsWith("extension.")) {
+      return {
+        ok: false,
+        reason:
+          `Caller ${callerId} (${callerKind}) cannot directly relay host-control method ` +
+          `${method} to ${targetId}; call the host extensions service instead`,
+      };
+    }
     return { ok: true };
   }
 
@@ -3634,6 +3741,25 @@ export class RpcServer {
   private static readonly SESSION_NOT_OPEN_CLOSED_INTERVAL_MS = 2000;
 
   /**
+   * Hard cap on the per-pipe `notOpenClosedAt` rate-limiter map. The interval
+   * sweep only evicts entries older than the window, so a peer flooding MANY
+   * unique fake sids WITHIN one window leaves every entry "recent" and the sweep
+   * frees nothing — the map would grow unbounded. Past this cap we additionally
+   * evict oldest-first (insertion order) so it can never exceed the ceiling.
+   * Generous: a legitimate multi-panel client tracks at most a handful of sids.
+   */
+  private static readonly SESSION_NOT_OPEN_MAX_TRACKED = 1024;
+
+  /**
+   * Generous ceiling on concurrent logical sessions (shims) per WebRTC pipe.
+   * Each `open` drives a full handleConnection (10s auth timer + auth work), so
+   * an unbounded flood of opens is a pre-auth DoS. A legitimate client multiplexes
+   * its panels + shell — dozens at most — so this is far above any real need; a
+   * re-open of an already-tracked sid is never blocked.
+   */
+  private static readonly MAX_SESSIONS_PER_PIPE = 512;
+
+  /**
    * Bound on one inbound upload's UNCONSUMED bytes (plan §1.6). SCTP delivers
    * reliably and cannot be paused mid-stream, so a consumer that falls more
    * than this far behind gets the body errored (and the request fails loudly)
@@ -3720,11 +3846,20 @@ export class RpcServer {
       const last = notOpenClosedAt.get(sid);
       if (last !== undefined && now - last < RpcServer.SESSION_NOT_OPEN_CLOSED_INTERVAL_MS) return;
       // Bound the map: a client inventing sids must not grow it without limit.
-      if (notOpenClosedAt.size >= 1024) {
+      if (notOpenClosedAt.size >= RpcServer.SESSION_NOT_OPEN_MAX_TRACKED) {
+        // First free anything past the rate-limit window…
         for (const [staleSid, at] of notOpenClosedAt) {
           if (now - at >= RpcServer.SESSION_NOT_OPEN_CLOSED_INTERVAL_MS) {
             notOpenClosedAt.delete(staleSid);
           }
+        }
+        // …then hard-cap: a peer flooding >cap unique sids WITHIN one window
+        // leaves every entry "recent" so the sweep frees nothing. Evict oldest
+        // (Map preserves insertion order) until we are back under the ceiling.
+        while (notOpenClosedAt.size >= RpcServer.SESSION_NOT_OPEN_MAX_TRACKED) {
+          const oldest = notOpenClosedAt.keys().next().value;
+          if (oldest === undefined) break;
+          notOpenClosedAt.delete(oldest);
         }
       }
       notOpenClosedAt.set(sid, now);
@@ -4088,6 +4223,24 @@ export class RpcServer {
       }
       switch (frame.t) {
         case "open": {
+          // Generous pre-auth DoS backstop: cap concurrent logical sessions per
+          // pipe. Each open drives a full handleConnection (10s auth timer + auth
+          // work), so an unbounded open flood would pin resources before any auth.
+          // A re-open of an already-tracked sid is never blocked (it replaces).
+          if (!shims.has(frame.sid) && shims.size >= RpcServer.MAX_SESSIONS_PER_PIPE) {
+            log.warn(
+              `WebRTC pipe: refusing open for ${frame.sid} — session cap ` +
+                `(${RpcServer.MAX_SESSIONS_PER_PIPE}) reached; possible pre-auth flood`
+            );
+            writeControlFrame({
+              t: SESSION_OPEN_RESULT,
+              sid: frame.sid,
+              success: false,
+              error: "Too many concurrent sessions on this connection",
+              terminal: true,
+            });
+            return;
+          }
           // A re-sent SESSION_OPEN on reconnect means the prior pipe generation's
           // shim is stale (its connection is gone, but the answerer pipe + this
           // closure survive the ICE re-establish). Tear it down — firing the old

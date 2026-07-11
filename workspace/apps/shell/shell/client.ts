@@ -425,6 +425,22 @@ export const contentOverlay = {
     return bridge.on(handler);
   },
 };
+type ShellNetworkBridge = {
+  notifyNetworkOnline?: () => void;
+};
+/**
+ * Forwards the renderer's `window` `online` event to main (fire-and-forget) so
+ * main can nudge a possibly-stale server pipe awake after a network flap. The
+ * bridge is injected by the app preload (`__vibestudioApp`); absent outside
+ * Electron, where it is a no-op.
+ */
+export const shellNetwork = {
+  notifyOnline: () => {
+    const bridge = (globalThis as unknown as { __vibestudioApp?: ShellNetworkBridge })
+      .__vibestudioApp;
+    bridge?.notifyNetworkOnline?.();
+  },
+};
 export const incomingPairLink = {
   getPending: () => g.__vibestudioIncomingPairLink?.getPending() ?? Promise.resolve(null),
   onLink: (handler: (link: ConnectPairing) => void) =>

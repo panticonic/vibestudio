@@ -2,10 +2,11 @@
  * useAppLifecycle -- Coordinates all app lifecycle events for Vibestudio mobile.
  *
  * Handles:
- * - AppState transitions (foreground/background): reconnect transport + toggle
- *   periodic sync, with a delayed disconnect when backgrounded.
- * - NetInfo changes: reconnect when network comes back, update connection atoms
- *   when network is lost.
+ * - AppState transitions (foreground/background): reconnect transport on resume,
+ *   pause periodic sync + trim the asset cache when backgrounded.
+ * - NetInfo changes: reconnect when the network link returns, reflect a genuine
+ *   loss of link (not merely "no internet") in the connection atoms.
+ * - Memory-warning: trim the panel-asset LRU.
  * - Cleanup on unmount: dispose shell client + disconnect transport.
  */
 
@@ -16,9 +17,6 @@ import { useSetAtom } from "jotai";
 import type { ShellClient } from "../services/shellClient";
 import { connectionStatusAtom, networkReachableAtom } from "../state/connectionAtoms";
 
-/** How long to wait (ms) before disconnecting after the app is backgrounded */
-const BACKGROUND_DISCONNECT_DELAY_MS = 30_000;
-
 /**
  * Coordinate app lifecycle events: AppState, NetInfo, and cleanup.
  *
@@ -28,9 +26,6 @@ const BACKGROUND_DISCONNECT_DELAY_MS = 30_000;
 export function useAppLifecycle(shellClient: ShellClient | null): void {
   const setConnectionStatus = useSetAtom(connectionStatusAtom);
   const setNetworkReachable = useSetAtom(networkReachableAtom);
-
-  // Track the delayed disconnect timer so we can cancel it on resume
-  const backgroundTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Track whether the app is currently in the foreground
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
@@ -49,15 +44,10 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
       const prevState = appStateRef.current;
       appStateRef.current = nextAppState;
 
-      // Transition to foreground (active)
+      // Transition to foreground (active).
       if (nextAppState === "active" && prevState !== "active") {
-        // Cancel any pending background disconnect
-        if (backgroundTimerRef.current !== null) {
-          clearTimeout(backgroundTimerRef.current);
-          backgroundTimerRef.current = null;
-        }
-
-        // Reconnect if the transport is not already connected
+        // Reconnect if the pipe dropped while suspended (the OS freezes the
+        // socket in the background; the transport keepalive marks it down).
         if (transport.status !== "connected") {
           transport.reconnect();
         }
@@ -65,32 +55,42 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
         shellClient.startPeriodicSync();
       }
 
-      // Transition to background or inactive
+      // Transition to background or inactive.
+      //
+      // We deliberately do NOT run a timed disconnect here: a JS setTimeout is
+      // suspended in the background on iOS (so it never fires), and on resume it
+      // raced the "active" handler and could tear down a perfectly healthy pipe
+      // just as the user returned. Instead we stop polling and free reclaimable
+      // memory, and let the OS suspend the socket; the transport's own idle /
+      // keepalive handling reports the drop and the "active" branch reconnects.
       if (nextAppState !== "active" && prevState === "active") {
-        // Stop periodic sync immediately -- no need to poll in background
         shellClient.stopPeriodicSync();
-
-        // Schedule a delayed disconnect to save resources.
-        // If the user returns within the delay, we cancel this timer.
-        backgroundTimerRef.current = setTimeout(() => {
-          backgroundTimerRef.current = null;
-          transport.disconnect();
-        }, BACKGROUND_DISCONNECT_DELAY_MS);
+        shellClient.trimMemory();
       }
     };
 
     const appStateSub = AppState.addEventListener("change", handleAppStateChange);
+    // iOS raises `memoryWarning` under pressure; drop the 256 MiB asset LRU.
+    const memoryWarningSub = AppState.addEventListener("memoryWarning", () => {
+      shellClient.trimMemory();
+    });
 
     // === NetInfo listener ===
 
     const handleNetInfoChange = (state: NetInfoState) => {
       const wasReachable = isNetworkReachableRef.current;
-      const isReachable = state.isConnected === true && state.isInternetReachable !== false;
+      // Reachability = a network LINK is present, NOT "the internet is reachable".
+      // A home server on Wi-Fi-without-internet (LAN ICE candidates) is exactly
+      // reachable over the WebRTC pipe, so `isInternetReachable === false` must
+      // NOT be treated as offline — that would paint a red "No network" over a
+      // live LAN-only connection. Only a genuine absence of link (airplane mode,
+      // no Wi-Fi/cell) counts as unreachable.
+      const isReachable = state.isConnected === true;
       isNetworkReachableRef.current = isReachable;
       setNetworkReachable(isReachable);
 
       if (isReachable && !wasReachable) {
-        // Network came back -- reconnect if we're in the foreground
+        // Link came back -- reconnect if we're in the foreground
         // and the transport is not already connected
         if (appStateRef.current === "active" && transport.status !== "connected") {
           transport.reconnect();
@@ -98,7 +98,7 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
       }
 
       if (!isReachable && wasReachable) {
-        // Network lost -- update connection status atom to reflect offline state
+        // Link genuinely lost -- reflect offline state
         setConnectionStatus("disconnected");
       }
     };
@@ -109,13 +109,8 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
 
     return () => {
       appStateSub.remove();
+      memoryWarningSub.remove();
       netInfoUnsub();
-
-      // Cancel any pending background disconnect timer
-      if (backgroundTimerRef.current !== null) {
-        clearTimeout(backgroundTimerRef.current);
-        backgroundTimerRef.current = null;
-      }
 
       // Full teardown
       shellClient.dispose();

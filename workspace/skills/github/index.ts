@@ -1,4 +1,4 @@
-import { credentials, extensions, git, openExternal, openPanel } from "@workspace/runtime";
+import { credentials, git, openExternal, openPanel } from "@workspace/runtime";
 import type { RequestCredentialInputRequest, StoredCredentialSummary } from "@workspace/runtime";
 import {
   GITHUB_FINE_GRAINED_BROAD_PERMISSIONS,
@@ -12,11 +12,13 @@ const GITHUB_PAT_NEW_URL = "https://github.com/settings/personal-access-tokens/n
 const GITHUB_PAT_LIST_URL = "https://github.com/settings/personal-access-tokens";
 const GITHUB_CLASSIC_PAT_NEW_URL = "https://github.com/settings/tokens/new";
 const GITHUB_CLASSIC_PAT_LIST_URL = "https://github.com/settings/tokens";
-const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
 
 type RuntimeCredentials = typeof credentials;
-type RuntimeExtensions = typeof extensions;
 type RuntimeGit = typeof git;
+type RuntimeGitStatusOptions = NonNullable<Parameters<RuntimeGit["upstreamStatus"]>[1]>;
+type RuntimeGitStatusResult = Awaited<ReturnType<RuntimeGit["upstreamStatus"]>>[number];
+type RuntimeGitPublishInput = Parameters<RuntimeGit["publishRepo"]>[0];
+type RuntimeGitPublishResult = Awaited<ReturnType<RuntimeGit["publishRepo"]>>;
 
 export type GitHubOnboardingStage = "needs-token" | "connected" | "verified" | "error";
 export type GitHubCredentialMode = "api" | "git" | "api-and-git";
@@ -91,59 +93,10 @@ export interface OpenGitHubTokenSettingsOptions {
   targetName?: string;
 }
 
-export interface GitHubUpstreamStatusOptions {
-  repoPath: string;
-  remoteName?: string;
-  branch?: string;
-  credentialId?: string;
-}
-
-export interface GitHubUpstreamStatusResult {
-  repoPath: string;
-  remote?: string;
-  branch?: string;
-  autoPush: boolean;
-  state:
-    | "in-sync"
-    | "ahead"
-    | "behind"
-    | "diverged"
-    | "auth-failed"
-    | "error"
-    | "exporting"
-    | "pushing"
-    | "local-only";
-  aheadBy: number;
-  behindBy: number;
-  lastPushedSha?: string;
-  lastPushedAt?: number;
-  lastError?: string;
-  [key: string]: unknown;
-}
-
-export interface PublishToGitHubOptions extends GitHubUpstreamStatusOptions {
-  remoteUrl?: string;
-  configure?: boolean;
-  autoPush?: boolean;
-  authorName?: string;
-  authorEmail?: string;
-  force?: boolean;
-  dryRun?: boolean;
-}
-
-export interface PublishToGitHubResult {
-  repoPath: string;
-  provider: string;
-  remote?: string;
-  branch?: string;
-  remoteUrl: string;
-  webUrl: string;
-  owner: string;
-  exported?: number;
-  headCommit?: string | null;
-  pushed: boolean;
-  [key: string]: unknown;
-}
+export type GitHubUpstreamStatusOptions = RuntimeGitStatusOptions;
+export type GitHubUpstreamStatusResult = RuntimeGitStatusResult;
+export type PublishToGitHubOptions = Omit<RuntimeGitPublishInput, "provider">;
+export type PublishToGitHubResult = RuntimeGitPublishResult;
 
 export const GITHUB_PERMISSION_PRESETS: Record<GitHubPermissionPreset, string[]> = {
   clone: ["metadata:read", "contents:read"],
@@ -331,23 +284,15 @@ function getCredentialRuntime(): RuntimeCredentials {
   return api as RuntimeCredentials;
 }
 
-function getExtensionRuntime(): RuntimeExtensions {
-  const api = extensions as Partial<RuntimeExtensions> | undefined;
-  if (!api || typeof api.invoke !== "function") {
-    throw new Error("Vibestudio extension runtime is unavailable: extensions.invoke is missing.");
-  }
-  return api as RuntimeExtensions;
-}
-
-function getGitRuntime(): Pick<RuntimeGit, "setSharedRemote" | "configureUpstream"> {
+function getGitRuntime(): Pick<RuntimeGit, "upstreamStatus" | "publishRepo"> {
   const api = git as Partial<RuntimeGit> | undefined;
-  if (!api || typeof api.setSharedRemote !== "function") {
-    throw new Error("Vibestudio git runtime is unavailable: git.setSharedRemote is missing.");
+  if (!api || typeof api.upstreamStatus !== "function") {
+    throw new Error("Vibestudio git runtime is unavailable: git.upstreamStatus is missing.");
   }
-  if (typeof api.configureUpstream !== "function") {
-    throw new Error("Vibestudio git runtime is unavailable: git.configureUpstream is missing.");
+  if (typeof api.publishRepo !== "function") {
+    throw new Error("Vibestudio git runtime is unavailable: git.publishRepo is missing.");
   }
-  return api as Pick<RuntimeGit, "setSharedRemote" | "configureUpstream">;
+  return api as Pick<RuntimeGit, "upstreamStatus" | "publishRepo">;
 }
 
 function normalizeCredentialRuntimeError(error: unknown): Error {
@@ -381,7 +326,7 @@ function normalizeRuntimeError(error: unknown): Error {
   }
   return new Error(
     "Vibestudio runtime is unavailable in this context. " +
-      "GitHub upstream helpers must run in a Vibestudio panel/eval/worker runtime with extensions initialized. " +
+      "GitHub upstream helpers must run in a Vibestudio panel/eval/worker runtime with git initialized. " +
       `Original error: ${message}`
   );
 }
@@ -394,24 +339,14 @@ async function withCredentialRuntime<T>(fn: (api: RuntimeCredentials) => Promise
   }
 }
 
-async function withExtensionRuntime<T>(fn: (api: RuntimeExtensions) => Promise<T>): Promise<T> {
+async function withGitRuntime<T>(
+  fn: (api: Pick<RuntimeGit, "upstreamStatus" | "publishRepo">) => Promise<T>
+): Promise<T> {
   try {
-    return await fn(getExtensionRuntime());
+    return await fn(getGitRuntime());
   } catch (error) {
     throw normalizeRuntimeError(error);
   }
-}
-
-async function invokeGitBridge<T>(method: string, args: unknown[]): Promise<T> {
-  return withExtensionRuntime(
-    (api) => api.invoke(GIT_BRIDGE_EXTENSION, method, args) as Promise<T>
-  );
-}
-
-function definedEntries<T extends Record<string, unknown>>(input: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(input).filter((entry) => entry[1] !== undefined)
-  ) as Partial<T>;
 }
 
 function isGitHubCredential(credential: StoredCredentialSummary): boolean {
@@ -727,71 +662,28 @@ export async function verifyGitHubGitRemoteAccess(
 }
 
 export async function upstreamStatus(
-  options: string | GitHubUpstreamStatusOptions
+  repoPath: string,
+  options?: GitHubUpstreamStatusOptions
 ): Promise<GitHubUpstreamStatusResult> {
-  const normalized = typeof options === "string" ? { repoPath: options } : options;
-  const rows = await invokeGitBridge<GitHubUpstreamStatusResult[]>("upstreamStatus", [
-    [normalized.repoPath],
-    definedEntries({
-      remote: normalized.remoteName,
-      branch: normalized.branch,
-      credentialId: normalized.credentialId,
-    }),
-  ]);
-  return (
-    rows[0] ?? {
-      repoPath: normalized.repoPath,
-      autoPush: false,
-      state: "local-only",
-      aheadBy: 0,
-      behindBy: 0,
-    }
+  const rows = await withGitRuntime((api) =>
+    options ? api.upstreamStatus([repoPath], options) : api.upstreamStatus([repoPath])
   );
+  const row = rows[0];
+  if (!row) {
+    throw new Error(`gitInterop.upstreamStatus returned no row for ${repoPath}`);
+  }
+  return row;
 }
 
 export async function publishToGitHub(
   options: PublishToGitHubOptions
 ): Promise<PublishToGitHubResult> {
-  const remote = options.remoteName ?? "origin";
-  if (options.remoteUrl) {
-    await getGitRuntime().setSharedRemote(options.repoPath, {
-      name: remote,
-      url: options.remoteUrl,
-      ...(options.branch ? { branch: options.branch } : {}),
-    });
-  }
-  if (options.configure ?? !!options.remoteUrl) {
-    await getGitRuntime().configureUpstream(
-      options.repoPath,
-      definedEntries({
-        remote,
-        branch: options.branch,
-        credentialId: options.credentialId,
-        autoPush: options.autoPush,
-        authorName: options.authorName,
-        authorEmail: options.authorEmail,
-      }) as {
-        remote: string;
-        branch?: string;
-        credentialId?: string;
-        autoPush?: boolean;
-        authorName?: string;
-        authorEmail?: string;
-      }
-    );
-  }
-  return invokeGitBridge<PublishToGitHubResult>("publishRepo", [
-    options.repoPath,
-    definedEntries({
-      remote,
-      branch: options.branch,
-      credentialId: options.credentialId,
-      authorName: options.authorName,
-      authorEmail: options.authorEmail,
-      force: options.force,
-      dryRun: options.dryRun,
-    }),
-  ]);
+  return withGitRuntime((api) =>
+    api.publishRepo({
+      ...options,
+      provider: GITHUB_PROVIDER_ID,
+    })
+  );
 }
 
 export async function getGitHubOnboardingStatus(

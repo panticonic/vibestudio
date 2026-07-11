@@ -130,7 +130,6 @@ export class WebRtcRpcClient {
       sig: this.config.pairing.sig,
       getShellToken: this.config.getToken,
       connectionId: this.config.connectionId ?? randomUUID(),
-      callerKind: this.config.callerKind ?? "shell",
       clientLabel: this.config.clientLabel ?? "Vibestudio CLI",
       clientPlatform: "headless",
       platform: "headless",

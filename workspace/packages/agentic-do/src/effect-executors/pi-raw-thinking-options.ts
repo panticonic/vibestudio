@@ -5,16 +5,20 @@ import {
   type Model,
   type ProviderStreamOptions,
   type ThinkingBudgets,
-  type ThinkingLevel as PiThinkingLevel,
 } from "@earendil-works/pi-ai";
 import type { ThinkingLevel as AgentThinkingLevel } from "@workspace/agent-loop";
 
-export type RawThinkingModel = Pick<
-  Model<Api>,
-  "api" | "compat" | "id" | "maxTokens" | "name" | "reasoning" | "thinkingLevelMap"
->;
+export type RawThinkingModel = Omit<
+  Pick<
+    Model<Api>,
+    "api" | "compat" | "id" | "maxTokens" | "name" | "reasoning" | "thinkingLevelMap"
+  >,
+  "thinkingLevelMap"
+> & {
+  thinkingLevelMap?: Partial<Record<AgentThinkingLevel, string | null>>;
+};
 
-type EnabledThinkingLevel = Exclude<ReturnType<typeof clampThinkingLevel>, "off">;
+type EnabledThinkingLevel = Exclude<ReturnType<typeof clampThinkingLevel>, "off"> | "max";
 
 const DEFAULT_THINKING_BUDGETS: Required<ThinkingBudgets> = {
   minimal: 1024,
@@ -35,9 +39,15 @@ export function buildRawThinkingOptions(
 ): ProviderStreamOptions {
   if (!model.reasoning) return {};
 
-  const clamped = clampThinkingLevel(model as Model<Api>, requestedLevel);
+  // pi-ai 0.80's generic clamp type has not yet learned the catalog's `max`
+  // level. Clamp it through xhigh for capability validation, then preserve max
+  // for providers/models whose explicit map advertises it.
+  const clamped = clampThinkingLevel(
+    model as Model<Api>,
+    requestedLevel === "max" ? "xhigh" : requestedLevel
+  );
   if (clamped === "off") return {};
-  const level = clamped as EnabledThinkingLevel;
+  const level: EnabledThinkingLevel = requestedLevel === "max" ? "max" : clamped;
 
   switch (model.api) {
     case "anthropic-messages":
@@ -91,7 +101,7 @@ function buildBedrockThinkingOptions(
   }
 
   const adjusted = adjustMaxTokensForThinking(undefined, model.maxTokens, level);
-  const budgetLevel = level === "xhigh" ? "high" : level;
+  const budgetLevel = level === "xhigh" || level === "max" ? "high" : level;
   return {
     maxTokens: adjusted.maxTokens,
     reasoning: level,
@@ -105,7 +115,7 @@ function buildGoogleThinkingOption(
   model: RawThinkingModel,
   level: EnabledThinkingLevel
 ): { enabled: true; budgetTokens?: number; level?: GoogleThinkingLevel } {
-  const googleLevel = level === "xhigh" ? "high" : level;
+  const googleLevel = level === "xhigh" || level === "max" ? "high" : level;
   if (
     isGemini3ProModel(model) ||
     isGemini3FlashModel(model) ||
@@ -138,7 +148,7 @@ function adjustMaxTokensForThinking(
   modelMaxTokens: number,
   level: EnabledThinkingLevel
 ): { maxTokens: number; thinkingBudget: number } {
-  const budgetLevel = level === "xhigh" ? "high" : level;
+  const budgetLevel = level === "xhigh" || level === "max" ? "high" : level;
   let thinkingBudget = DEFAULT_THINKING_BUDGETS[budgetLevel];
   const maxTokens =
     baseMaxTokens === undefined
@@ -167,6 +177,8 @@ function mapAnthropicThinkingLevelToEffort(
       return "high";
     case "xhigh":
       return "xhigh";
+    case "max":
+      return "max";
   }
 }
 
@@ -185,7 +197,9 @@ function supportsAdaptiveThinking(model: RawThinkingModel): boolean {
       candidate.includes("opus-4-6") ||
       candidate.includes("opus-4-7") ||
       candidate.includes("opus-4-8") ||
-      candidate.includes("sonnet-4-6")
+      candidate.includes("sonnet-4-6") ||
+      candidate.includes("sonnet-5") ||
+      candidate.includes("fable-5")
   );
 }
 
@@ -217,7 +231,7 @@ function isGemini3FlashModel(model: RawThinkingModel): boolean {
 
 function getGoogleThinkingLevel(
   model: RawThinkingModel,
-  level: PiThinkingLevel
+  level: EnabledThinkingLevel
 ): GoogleThinkingLevel {
   if (isGemini3ProModel(model)) {
     switch (level) {
@@ -227,6 +241,7 @@ function getGoogleThinkingLevel(
       case "medium":
       case "high":
       case "xhigh":
+      case "max":
         return "HIGH";
     }
   }
@@ -238,6 +253,7 @@ function getGoogleThinkingLevel(
       case "medium":
       case "high":
       case "xhigh":
+      case "max":
         return "HIGH";
     }
   }
@@ -250,11 +266,12 @@ function getGoogleThinkingLevel(
       return "MEDIUM";
     case "high":
     case "xhigh":
+    case "max":
       return "HIGH";
   }
 }
 
-function getGoogleBudget(model: RawThinkingModel, level: PiThinkingLevel): number {
+function getGoogleBudget(model: RawThinkingModel, level: EnabledThinkingLevel): number {
   if (model.id.includes("2.5-pro")) {
     const budgets = {
       minimal: 128,
@@ -262,6 +279,7 @@ function getGoogleBudget(model: RawThinkingModel, level: PiThinkingLevel): numbe
       medium: 8192,
       high: 32768,
       xhigh: 32768,
+      max: 32768,
     };
     return budgets[level];
   }
@@ -272,6 +290,7 @@ function getGoogleBudget(model: RawThinkingModel, level: PiThinkingLevel): numbe
       medium: 8192,
       high: 24576,
       xhigh: 24576,
+      max: 24576,
     };
     return budgets[level];
   }
@@ -282,6 +301,7 @@ function getGoogleBudget(model: RawThinkingModel, level: PiThinkingLevel): numbe
       medium: 8192,
       high: 24576,
       xhigh: 24576,
+      max: 24576,
     };
     return budgets[level];
   }

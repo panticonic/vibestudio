@@ -101,6 +101,19 @@ interface NativeRtcDataChannel {
   addEventListener(type: "message", listener: (event: NativeMessageEvent) => void): void;
 }
 
+/** One WebRTC stats record (only the candidate/pair fields this adapter reads). */
+interface NativeStatsReport {
+  type?: string;
+  id?: string;
+  /** candidate-pair: selected / nominated / connection state. */
+  selected?: boolean;
+  nominated?: boolean;
+  state?: string;
+  localCandidateId?: string;
+  /** local-candidate: host / srflx / prflx / relay. */
+  candidateType?: string;
+}
+
 interface NativeRtcPeerConnection {
   readonly connectionState: string;
   readonly iceConnectionState: string;
@@ -115,6 +128,8 @@ interface NativeRtcPeerConnection {
   setLocalDescription(desc?: NativeSessionDescription): Promise<void>;
   setRemoteDescription(desc: NativeSessionDescription): Promise<void>;
   addIceCandidate(candidate: unknown): Promise<void>;
+  /** WHATWG getStats — an `RTCStatsReport` (a `Map`) of the live transport stats. */
+  getStats(): Promise<Map<string, NativeStatsReport>>;
   close(): void;
   addEventListener(
     type: "connectionstatechange" | "iceconnectionstatechange",
@@ -183,6 +198,10 @@ export class Fanout<Args extends unknown[]> {
       }
     }
   }
+
+  get size(): number {
+    return this.handlers.size;
+  }
 }
 
 /** Map the contract's WHATWG-shaped ICE server to react-native-webrtc's form. */
@@ -218,6 +237,44 @@ export function normalizeConnectionState(raw: string): RtcConnectionState {
       console.warn(`[rn-webrtc] unknown connection state '${raw}' → treating as 'failed'`);
       return "failed";
   }
+}
+
+/** Map a WHATWG `RTCIceCandidateType` to the contract's `RtcCandidateType`;
+ * unknown/missing → null so the relay hint reads "unknown", never a wrong "host". */
+export function toCandidateType(raw: string | undefined | null): RtcCandidateType | null {
+  switch (raw) {
+    case "host":
+    case "srflx":
+    case "prflx":
+    case "relay":
+      return raw;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Pull the selected local candidate's type out of a `getStats()` report: find the
+ * nominated/selected `candidate-pair` in state `succeeded`, then resolve its
+ * `localCandidateId` to the `local-candidate` record's `candidateType`. Returns
+ * null when no pair is settled (or the type is unrecognized) — never throws — so
+ * the relay hint reads "unknown" rather than guessing. Best-effort observability
+ * only; react-native-webrtc has no synchronous selected-pair accessor.
+ */
+export function selectedCandidateTypeFromStats(
+  stats: Map<string, NativeStatsReport> | null | undefined
+): RtcCandidateType | null {
+  if (!stats) return null;
+  const reports = [...stats.values()];
+  const pair = reports.find(
+    (r) => r?.type === "candidate-pair" && (r.selected || r.nominated) && r.state === "succeeded"
+  );
+  const localId = pair?.localCandidateId;
+  if (!localId) return null;
+  const local = reports.find(
+    (r) => (r?.type === "local-candidate" || r?.type === "localcandidate") && r.id === localId
+  );
+  return toCandidateType(local?.candidateType);
 }
 
 // `parseSdpFingerprint` (the fail-closed pin parse) is imported from the shared
@@ -321,10 +378,15 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   private readonly stateFanout: Fanout<[RtcConnectionState]>;
   private readonly localDescFanout: Fanout<[RtcSessionDescription]>;
   private readonly localCandFanout: Fanout<[RtcIceCandidate]>;
+  private readonly candidateTypeFanout: Fanout<[RtcCandidateType | null]>;
   // The SDP last passed to setRemoteDescription — cached so remoteFingerprint()
   // can read the a=fingerprint line back the instant sRD resolves, without
   // depending on the timing of the native remoteDescription accessor.
   private remoteSdp: string | null = null;
+  // Last selected-candidate type resolved from getStats(): powers the sync
+  // `selectedCandidateType()` one-shot read and de-dupes the change feed.
+  // `undefined` = never polled (distinct from an emitted `null`).
+  private lastCandidateType: RtcCandidateType | null | undefined = undefined;
 
   constructor(
     private readonly pc: NativeRtcPeerConnection,
@@ -333,17 +395,24 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     this.stateFanout = new Fanout(log);
     this.localDescFanout = new Fanout(log);
     this.localCandFanout = new Fanout(log);
+    this.candidateTypeFanout = new Fanout(log);
 
     const emitState = (): void =>
       this.stateFanout.emit(normalizeConnectionState(this.pc.connectionState));
     // `connectionState` is the authoritative aggregate (ICE + DTLS); re-read it on
     // both the aggregate and the ICE event so a transition surfaces promptly.
-    this.pc.addEventListener("connectionstatechange", emitState);
+    this.pc.addEventListener("connectionstatechange", () => {
+      emitState();
+      void this.refreshSelectedCandidate();
+    });
     this.pc.addEventListener("iceconnectionstatechange", () => {
       // ICE 'failed' means the pipe is down even if the aggregate lags; surface it
       // explicitly so the transport's recovery fires (fail-loud).
       if (this.pc.iceConnectionState === "failed") this.stateFanout.emit("failed");
       else emitState();
+      // Poll the selected pair on ICE transitions — the closest signal RN gives
+      // for a late nomination or a mid-connection host→relay switch (§9.8).
+      void this.refreshSelectedCandidate();
     });
     this.pc.addEventListener("icecandidate", (event) => {
       const candidate = event.candidate;
@@ -418,10 +487,36 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   }
 
   selectedCandidateType(): RtcCandidateType | null {
-    // react-native-webrtc exposes only async getStats(); there is no synchronous
-    // selected-candidate-pair accessor. Honestly report 'unknown' (null) rather
-    // than guess — the transport uses this only for relay-vs-P2P observability.
-    return null;
+    // react-native-webrtc has no synchronous selected-pair accessor; report the
+    // last value the async getStats() poll resolved (null until the first poll
+    // lands, and null when no pair is settled). The live change feed is
+    // `onSelectedCandidateChange`; this is the best-effort one-shot read.
+    return this.lastCandidateType ?? null;
+  }
+
+  onSelectedCandidateChange(handler: (type: RtcCandidateType | null) => void): () => void {
+    return this.candidateTypeFanout.add(handler);
+  }
+
+  /**
+   * Best-effort: read getStats(), resolve the selected candidate type, and emit
+   * it iff it changed. Never throws into the ICE handler that calls it — a stats
+   * failure just leaves the last value in place. Skipped when nobody is
+   * listening, so it never spins up getStats() for no reason.
+   */
+  private async refreshSelectedCandidate(): Promise<void> {
+    if (this.candidateTypeFanout.size === 0) return;
+    let type: RtcCandidateType | null;
+    try {
+      type = selectedCandidateTypeFromStats(await this.pc.getStats());
+    } catch (error) {
+      // getStats can reject once the peer is closing — best-effort, so swallow it.
+      console.warn(`${this.log} getStats for selected candidate failed`, error);
+      return;
+    }
+    if (type === this.lastCandidateType) return;
+    this.lastCandidateType = type;
+    this.candidateTypeFanout.emit(type);
   }
 
   get connectionState(): RtcConnectionState {

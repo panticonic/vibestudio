@@ -41,6 +41,13 @@
     "check:build-artifacts": "node scripts/check-build-artifacts.mjs",
     "check:host-boundary": "node scripts/check-host-workspace-imports.mjs",
     "check:no-single-user": "node scripts/check-no-single-user.mjs",
+    "type-check:cloudflare": "pnpm --dir apps/signaling typecheck && pnpm --dir apps/webhook-relay typecheck",
+    "deploy:cloudflare:signaling": "pnpm --dir apps/signaling run deploy",
+    "deploy:cloudflare:apex": "pnpm --dir apps/webhook-relay run deploy",
+    "deploy:cloudflare": "pnpm deploy:cloudflare:signaling && pnpm deploy:cloudflare:apex",
+    "smoke:cloudflare:apex": "node scripts/smoke-cloudflare-apex.mjs",
+    "smoke:cloudflare:signaling": "node scripts/smoke-cloudflare-signaling.mjs",
+    "smoke:cloudflare": "pnpm smoke:cloudflare:apex && pnpm smoke:cloudflare:signaling",
     "dev:debug": "VIBESTUDIO_DEBUG_PATHS=1 pnpm dev",
     "dev:verbose": "VIBESTUDIO_LOG_LEVEL=verbose pnpm dev",
     "terminal:jig": "node scripts/run-terminal-input-jig.mjs",
@@ -80,7 +87,7 @@
   "license": "MIT",
   "packageManager": "pnpm@10.12.4",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.19.0"
   },
   "pnpm": {
     "allowedBuilds": [
@@ -99,11 +106,11 @@
     "overrides": {
       "react": "19.0.0",
       "react-dom": "19.0.0",
-      "@earendil-works/pi-ai": "0.78.0",
+      "@earendil-works/pi-ai": "0.80.6",
       "protobufjs": "^7.5.5"
     },
     "patchedDependencies": {
-      "@earendil-works/pi-ai@0.78.0": "workspace/packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch"
+      "@earendil-works/pi-ai@0.80.6": "workspace/packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch"
     }
   },
   "devDependencies": {
@@ -138,7 +145,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.80.6",
     "@ghostery/adblocker": "^2.13.4",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@vibestudio/browser-data": "workspace:*",

@@ -253,13 +253,15 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
 }
 
 /**
- * Extract the declared subpath keys from a package.json `exports` field, e.g.
- * `{ ".": ..., "./panel": ... }` → `[".", "./panel"]`. Conditional-only exports
- * (a flat condition map without subpath keys) collapse to `["."]`.
+ * Extract concrete declared subpath keys from a package.json `exports` field,
+ * e.g. `{ ".": ..., "./panel": ... }` → `[".", "./panel"]`.
+ * Wildcard keys are consumer-resolved families, not literal build entry points;
+ * validating `./tests/*` itself would resolve to a non-existent `*.ts` file.
+ * Conditional-only exports (a flat condition map) collapse to `["."]`.
  */
 function declaredExportSubpaths(exports: Record<string, unknown>): string[] {
   const keys = Object.keys(exports);
-  const subpaths = keys.filter((k) => k === "." || k.startsWith("./"));
+  const subpaths = keys.filter((k) => (k === "." || k.startsWith("./")) && !k.includes("*"));
   if (subpaths.length === 0) return ["."];
   return subpaths;
 }

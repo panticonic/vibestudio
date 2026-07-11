@@ -45,7 +45,7 @@ The QR `code` is the one-time pairing secret; the `fp` is the pinned DTLS finger
 
 ## 3. OAuth from a remote client
 
-When you trigger an OAuth flow from a remotely-connected client, the flow opens through `externalOpen.openExternal` and **the client that started it** opens the URL in its local browser (desktop `shell.openExternal`, mobile `Linking.openURL`). Provider redirect URIs that need a public HTTPS endpoint resolve through the **callback relay** (`VIBESTUDIO_RELAY_OAUTH_BASE_URL`, plan §7), which backhauls the callback to your loopback server over the pipe — no public server URL or tunnel required.
+When you trigger an OAuth flow from a remotely-connected client, the flow opens through `externalOpen.openExternal` and **the client that started it** opens the URL in its local browser (desktop `shell.openExternal`, mobile `Linking.openURL`). Provider redirect URIs that need a public HTTPS endpoint resolve through the **callback relay** (`VIBESTUDIO_RELAY_URL`, plan §7), which backhauls the callback to your loopback server over the pipe — no public server URL or tunnel required.
 
 ## 4. Verifying the connection
 

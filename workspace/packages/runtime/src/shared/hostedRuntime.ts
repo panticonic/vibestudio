@@ -27,7 +27,7 @@ import { createWebhookIngressClient, type WebhookIngressClient } from "./webhook
 import { createExtensionsClient, type ExtensionsClient } from "./extensions.js";
 import { createNotificationClient, type NotificationClient } from "./notifications.js";
 import { createApprovalsApi, type ApprovalsApi } from "./approvalsApi.js";
-import { createGitApi, type RuntimeGitApi } from "./gitApi.js";
+import { createGitClient, type GitClient } from "./git.js";
 import { createMainCaller, type MainCaller } from "./mainRpc.js";
 import { createParentHandleApi, type ParentHandleApi } from "./handles.js";
 import {
@@ -98,7 +98,7 @@ export interface WorkspaceRuntime {
   readonly blobstore: BlobstoreClient;
   readonly workspace: WorkspaceClient;
   readonly credentials: CredentialClient;
-  readonly git: RuntimeGitApi;
+  readonly git: GitClient;
   readonly vcs: VcsClient;
   readonly webhooks: WebhookIngressClient;
   readonly extensions: ExtensionsClient;
@@ -223,7 +223,7 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const extensions = helpfulNamespace("extensions", createExtensionsClient(rpc));
   const notifications = helpfulNamespace("notifications", createNotificationClient(rpc));
   const approvals = helpfulNamespace("approvals", createApprovalsApi(rpc));
-  const git = helpfulNamespace("git", createGitApi(rpc, credentials.gitHttp));
+  const git = helpfulNamespace("git", createGitClient(rpc));
   const callMain = createMainCaller(rpc);
   const parentApi = createParentHandleApi(host.resolveParent);
 

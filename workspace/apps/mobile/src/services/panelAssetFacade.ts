@@ -47,14 +47,6 @@ declare const require: (moduleName: string) => unknown;
 type TcpSocketConn = InstanceType<typeof TcpSocket.Socket>;
 
 const MAX_REQUEST_HEAD_BYTES = 64 * 1024;
-/**
- * Cap on a buffered request BODY (plan §1.6). The RN facade parses raw TCP, so
- * bodies are buffered to completion before being re-streamed over the pipe
- * (incremental raw-socket body streaming isn't worth the complexity for webview
- * form/JSON posts); the cap keeps a runaway upload from ballooning JS memory.
- * Mirrors the pipe's 8 MiB upload receive cap.
- */
-const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
 const CONTENT_DIGEST_HEADER = "x-vibestudio-content-digest";
 const PERSISTED_PORT_KEY = "vibestudio:panel-asset-facade:port";
 const MAX_CACHE_BYTES = 256 * 1024 * 1024; // 256 MiB in-memory LRU
@@ -68,6 +60,8 @@ class MobileCachePopulationTooLargeError extends Error {
 
 export interface PanelAssetFacade {
   port: number;
+  /** Drop the in-memory asset LRU (background / memory-warning). */
+  trimCache(): void;
   close(): Promise<void>;
 }
 
@@ -219,6 +213,18 @@ export class MobileAssetMemoryCache {
     }
   }
 
+  /**
+   * Drop all cached bytes (keeps in-flight single-flights). Called on
+   * background / memory-warning so a 256 MiB LRU doesn't sit resident on a phone
+   * that the OS is trying to reclaim. Immutable content-addressed assets simply
+   * re-fetch over the pipe on next use, so this only costs pipe bytes, never
+   * correctness.
+   */
+  clear(): void {
+    this.entries.clear();
+    this.bytes = 0;
+  }
+
   private store(urlPath: string, asset: MobileCachedAsset): void {
     const prev = this.entries.get(urlPath);
     if (prev) this.bytes -= prev.body.byteLength;
@@ -282,6 +288,10 @@ export async function startPanelAssetFacade(transport: MobileRpcClient): Promise
   );
   return {
     port,
+    trimCache: () => {
+      cache.clear();
+      console.log("[VibestudioMobileSmoke] phase=workspace-panel-facade-cache-trimmed");
+    },
     close: () =>
       new Promise<void>((resolveClose) => {
         try {
@@ -293,13 +303,6 @@ export async function startPanelAssetFacade(transport: MobileRpcClient): Promise
   };
 }
 
-/** Lossless latin1-mirror → bytes (each char code is exactly one raw byte). */
-function latin1ToBytes(text: string): Uint8Array {
-  const out = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
-  return out;
-}
-
 function handleConnection(
   transport: MobileRpcClient,
   cache: MobileAssetMemoryCache,
@@ -307,12 +310,6 @@ function handleConnection(
 ): void {
   let head = "";
   let dispatched = false;
-  // Body accumulation (plan §1.6): once the head terminator is seen, non-GET/HEAD
-  // requests keep reading `Content-Length` bytes before dispatch. Bodies are
-  // buffered (cap 8 MiB) then re-streamed over the pipe — see MAX_REQUEST_BODY_BYTES.
-  let expectedBodyBytes = 0;
-  const bodyChunks: Uint8Array[] = [];
-  let bodyBytes = 0;
 
   try {
     socket.setNoDelay(true);
@@ -336,39 +333,9 @@ function handleConnection(
     }
   };
 
-  const dispatch = (): void => {
-    dispatched = true;
-    // Trim to Content-Length: anything past it is not part of this request
-    // (one request per connection; the facade always answers Connection: close).
-    const body =
-      bodyBytes > 0
-        ? concatChunks(bodyChunks, bodyBytes).subarray(0, expectedBodyBytes)
-        : undefined;
-    void handleRequest(transport, cache, socket, head, body);
-  };
-
-  const acceptBodyBytes = (chunk: Uint8Array): void => {
-    if (chunk.byteLength === 0) return;
-    bodyBytes += chunk.byteLength;
-    if (bodyBytes > MAX_REQUEST_BODY_BYTES) {
-      console.warn(
-        `[panel-facade] request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes — rejecting (413)`
-      );
-      failRequest(413, "Payload Too Large");
-      return;
-    }
-    bodyChunks.push(chunk);
-    if (bodyBytes >= expectedBodyBytes) dispatch();
-  };
-
   socket.on("data", (data: string | Buffer) => {
     if (dispatched) return;
     const text = typeof data === "string" ? data : data.toString("latin1");
-    if (expectedBodyBytes > 0 && head !== "") {
-      // Already past the head — everything is body bytes.
-      acceptBodyBytes(latin1ToBytes(text));
-      return;
-    }
     head += text;
     const end = head.indexOf("\r\n\r\n");
     if (end === -1) {
@@ -381,26 +348,24 @@ function handleConnection(
       }
       return;
     }
-    const remainder = head.slice(end + 4);
     head = head.slice(0, end);
 
-    const lines = head.split("\r\n");
-    const [method = "GET"] = (lines[0] ?? "").split(" ");
-    const contentLength = parseContentLength(lines.slice(1));
-    if (contentLength === "chunked") {
-      // Fail loud: the webview always frames uploads with Content-Length; a
-      // chunked request body would be silently mis-parsed as an empty body.
-      console.warn("[panel-facade] chunked request bodies are not supported — rejecting (411)");
-      failRequest(411, "Length Required");
+    const [method = "GET"] = (head.split("\r\n")[0] ?? "").split(" ");
+    // Loopback CSRF hardening: the panel-asset façade is an UNAUTHENTICATED local
+    // TCP origin (stable port on 127.0.0.1) that any app or browser page on the
+    // device can reach. It therefore serves ONLY non-secret GET asset reads.
+    // State-changing methods are rejected here (405) before any body is read —
+    // real panel RPC, uploads (§1.6), and worker-route calls ride the
+    // authenticated WebRTC bridge (postMessage → session.streamReadable), never
+    // this socket. See panels' gatewayFetch (tunnels over the bridge, not the
+    // loopback origin).
+    if (method.toUpperCase() !== "GET") {
+      console.warn(`[panel-facade] rejecting non-GET ${method} request — GET-only asset façade`);
+      failRequest(405, "Method Not Allowed");
       return;
     }
-    const upper = method.toUpperCase();
-    if (upper === "GET" || upper === "HEAD" || contentLength === 0) {
-      dispatch();
-      return;
-    }
-    expectedBodyBytes = contentLength;
-    acceptBodyBytes(latin1ToBytes(remainder));
+    dispatched = true;
+    void handleRequest(transport, cache, socket, head);
   });
   socket.on("error", () => {
     try {
@@ -411,46 +376,25 @@ function handleConnection(
   });
 }
 
-/** `Content-Length` (0 when absent) or `"chunked"` for a chunked transfer coding. */
-function parseContentLength(headerLines: string[]): number | "chunked" {
-  for (const line of headerLines) {
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const name = line.slice(0, colon).trim().toLowerCase();
-    const value = line.slice(colon + 1).trim();
-    if (name === "transfer-encoding" && value.toLowerCase().includes("chunked")) return "chunked";
-    if (name === "content-length") {
-      const parsed = Number.parseInt(value, 10);
-      if (Number.isInteger(parsed) && parsed >= 0) return parsed;
-    }
-  }
-  return 0;
-}
-
-function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
 async function handleRequest(
   transport: MobileRpcClient,
   cache: MobileAssetMemoryCache,
   socket: TcpSocketConn,
-  rawHead: string,
-  requestBody?: Uint8Array
+  rawHead: string
 ): Promise<void> {
   const lines = rawHead.split("\r\n");
-  const [method = "GET", target = "/"] = (lines[0] ?? "").split(" ");
+  const [, target = "/"] = (lines[0] ?? "").split(" ");
   const forwardHeaders = collectForwardHeaders(lines.slice(1));
   let headSent = false;
   const decision = checkPanelGatewayPath(target);
-  if (!decision.allowed) {
-    const status = decision.denied === "policy" ? 403 : 400;
+  // Belt-and-braces CSRF narrowing: the shared path policy admits `/_r/w/` worker
+  // routes (they are panel-reachable over the authenticated bridge), but those
+  // are state-changing gateway surfaces that must NOT be proxied through this
+  // unauthenticated loopback origin. Reject them at the façade only — the shared
+  // policy stays intact so bridge-tunneled gatewayFetch worker calls still work.
+  const denyWorkerRoute = decision.allowed && decision.target.startsWith("/_r/w/");
+  if (!decision.allowed || denyWorkerRoute) {
+    const status = !decision.allowed && decision.denied === "malformed" ? 400 : 403;
     await writeToSocket(
       socket,
       buildHead(
@@ -472,35 +416,25 @@ async function handleRequest(
   const fetcher = async (): Promise<MobileFetchedResponse> => {
     // Target the server "main" with the fully-qualified method (the bootstrap's
     // proven bundle-stream call). NOT ("gateway","fetch") — that routes to the
-    // streaming endpoint's proxyFetch-only fast path and is rejected.
-    // A parsed request body (buffered off the raw socket, plan §1.6) is
-    // re-streamed as the upload body on the pipe's bulk channel.
-    const result = await transport.streamReadable(
-      "main",
-      "gateway.fetch",
-      [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
-      requestBody && requestBody.byteLength > 0 ? { body: bytesToStream(requestBody) } : undefined
-    );
+    // streaming endpoint's proxyFetch-only fast path and is rejected. GET-only:
+    // no request body ever crosses this façade (uploads ride the bridge).
+    const result = await transport.streamReadable("main", "gateway.fetch", [
+      { path: gatewayPath, method: "GET", headers: forwardHeaders, gzip: true },
+    ]);
     return normalizeResult(result);
   };
 
   try {
-    // Only GET assets are cacheable; everything else streams straight through.
-    if (method === "GET") {
-      const outcome = await cache.serve(panelAssetCacheKey(gatewayPath, forwardHeaders), fetcher);
-      if (outcome.kind === "asset") {
-        await writeBufferedAsset(socket, outcome.asset, () => {
-          headSent = true;
-        });
-        return;
-      }
-      await streamPassthrough(socket, outcome.response, () => {
+    // GET assets: content-addressed cache; non-cacheable GETs (e.g. the no-store
+    // HTML entry doc) stream straight through.
+    const outcome = await cache.serve(panelAssetCacheKey(gatewayPath, forwardHeaders), fetcher);
+    if (outcome.kind === "asset") {
+      await writeBufferedAsset(socket, outcome.asset, () => {
         headSent = true;
       });
       return;
     }
-
-    await streamPassthrough(socket, await fetcher(), () => {
+    await streamPassthrough(socket, outcome.response, () => {
       headSent = true;
     });
   } catch (error) {
@@ -651,16 +585,6 @@ export async function streamPassthrough(
     reader.releaseLock();
   }
   socket.end();
-}
-
-/** One-chunk ReadableStream over a buffered request body (upload path, §1.6). */
-function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
 }
 
 async function streamToUint8Array(

@@ -1,6 +1,8 @@
 /**
- * fs service definition — per-context filesystem operations, sandboxed to the
- * caller's context folder. The implementation lives in
+ * fs service definition — filesystem operations sandboxed to the caller's
+ * context folder for context-bound callers. An unchained extension granted the
+ * explicit `host-fs-access` capability is the deliberate unrestricted-host
+ * exception. The implementation lives in
  * `@vibestudio/shared/fsService` (FsService); this module declares the RPC
  * surface (method schemas + policy) for dispatcher registration.
  *
@@ -21,7 +23,8 @@ import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
 export function createFsServiceDefinition(getFsService: () => FsService): ServiceDefinition {
   return {
     name: "fs",
-    description: "Per-context filesystem operations (sandboxed to context folder)",
+    description:
+      "Filesystem operations. Context-bound callers are sandboxed to their context folder; supported workspace-repo file mutations route through GAD working edits, while platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.",
     policy: {
       allowed: ["panel", "app", "server", "worker", "do", "extension", "shell", "agent"],
     },

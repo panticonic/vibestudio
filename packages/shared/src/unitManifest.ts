@@ -78,8 +78,9 @@ export const APP_CAPABILITIES_BY_TARGET = {
     "clipboard",
     "open-external",
     "panel-hosting",
+    "connection-management",
   ],
-  terminal: ["clipboard", "open-external"],
+  terminal: ["clipboard", "open-external", "connection-management"],
 } as const satisfies Record<WorkspaceAppTarget, readonly string[]>;
 
 export type AppCapability =
@@ -176,6 +177,7 @@ function validateExtensionBlock(
         activationEvents?: unknown;
         dependencyMode?: unknown;
         streamingMethods?: unknown;
+        providerContracts?: unknown;
         contributes?: unknown;
       }
     | undefined;
@@ -213,6 +215,53 @@ function validateExtensionBlock(
       `Extension ${options.unitName} streamingMethods must be an array of method names`,
       "MANIFEST_STREAMING_METHODS"
     );
+  }
+
+  const providerContracts = extension?.providerContracts;
+  if (providerContracts !== undefined) {
+    if (
+      !providerContracts ||
+      typeof providerContracts !== "object" ||
+      Array.isArray(providerContracts)
+    ) {
+      throw new UnitManifestError(
+        `Extension ${options.unitName} providerContracts must be an object keyed by provider slot`,
+        "MANIFEST_PROVIDER_CONTRACTS"
+      );
+    }
+    for (const [provider, declaration] of Object.entries(providerContracts)) {
+      if (!/^[a-z][A-Za-z0-9]*$/.test(provider)) {
+        throw new UnitManifestError(
+          `Extension ${options.unitName} providerContracts key ${JSON.stringify(provider)} is not a valid provider slot`,
+          "MANIFEST_PROVIDER_CONTRACTS"
+        );
+      }
+      if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) {
+        throw new UnitManifestError(
+          `Extension ${options.unitName} providerContracts.${provider} must be an object with methods`,
+          "MANIFEST_PROVIDER_CONTRACTS"
+        );
+      }
+      const contract = declaration as Record<string, unknown>;
+      if (Object.keys(contract).length !== 1 || !("methods" in contract)) {
+        throw new UnitManifestError(
+          `Extension ${options.unitName} providerContracts.${provider} must contain exactly one methods field`,
+          "MANIFEST_PROVIDER_CONTRACTS"
+        );
+      }
+      const methods = contract["methods"];
+      if (
+        !Array.isArray(methods) ||
+        methods.length === 0 ||
+        methods.some((method) => typeof method !== "string" || method.trim().length === 0) ||
+        new Set(methods).size !== methods.length
+      ) {
+        throw new UnitManifestError(
+          `Extension ${options.unitName} providerContracts.${provider}.methods must be a non-empty array of unique method names`,
+          "MANIFEST_PROVIDER_CONTRACTS"
+        );
+      }
+    }
   }
 
   const contributes = extension?.contributes;

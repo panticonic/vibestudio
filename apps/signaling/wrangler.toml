@@ -12,14 +12,25 @@ compatibility_date = "2024-11-15"
 # a deployment that must traverse symmetric NAT MUST set both:
 #   wrangler secret put TURN_KEY_ID
 #   wrangler secret put TURN_KEY_API_TOKEN
-# Optional (defaults to 86400 = 24h):
-#   wrangler secret put TURN_TTL_SECONDS
 #
-# account_id and route/zone bindings are environment-specific. Set them under
-# your own [env.<name>] block or via CLOUDFLARE_ACCOUNT_ID.
+# TURN credential lifetime is config, not a secret — it lives in [vars] below
+# (TURN_TTL_SECONDS). Defaults to 3600 (1h connection-lifetime backstop) if the
+# [vars] entry is removed.
+#
+# account_id is environment-specific. Set CLOUDFLARE_ACCOUNT_ID in the deploy
+# shell or CI environment.
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
+# Minted TURN credential lifetime (seconds). A pairing + session is minutes; 1h
+# leaves slack for ICE-restart without a day-long billable credential.
+TURN_TTL_SECONDS = "3600"
+
+# Production signaling endpoint used by the app's hosted default:
+#   wss://signal.vibestudio.app/
+[[routes]]
+pattern = "signal.vibestudio.app"
+custom_domain = true
 
 # The signaling room — one Durable Object instance per UUID room, persistent for
 # the connection's lifetime (WebSocket Hibernation API) so it can carry

@@ -146,6 +146,41 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(result.bundle).not.toContain("Buffer.from");
   });
 
+  it("builds a requested package wildcard export subpath", async () => {
+    const pkgDir = path.join(workspaceRoot, "skills", "test-suite");
+    fs.mkdirSync(path.join(pkgDir, "tests"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-skills/test-suite",
+        version: "0.1.0",
+        type: "module",
+        exports: {
+          ".": "./index.ts",
+          "./tests/*": "./tests/*.ts",
+        },
+      })
+    );
+    fs.writeFileSync(path.join(pkgDir, "index.ts"), 'export const root = "root-entry";\n');
+    fs.writeFileSync(
+      path.join(pkgDir, "tests", "workers.ts"),
+      'export const marker = "wildcard-workers-entry";\n'
+    );
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      []
+    );
+
+    const result = await buildSystem.getBuild(
+      "@workspace-skills/test-suite/tests/workers",
+      undefined,
+      { library: true, libraryTarget: "worker" }
+    );
+    expect(result.bundle).toContain("wildcard-workers-entry");
+    expect(result.bundle).not.toContain("root-entry");
+  });
+
   it("selects package export conditions by libraryTarget (panel vs eval/worker)", async () => {
     // A package with target-forked entries — exactly the shape that broke eval
     // imports: a panel entry that must NOT be picked for a DO host.

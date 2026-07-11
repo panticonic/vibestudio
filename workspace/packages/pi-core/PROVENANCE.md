@@ -1,8 +1,8 @@
 # Provenance
 
-Vendored subset of `@earendil-works/pi-agent-core` **v0.78.0**, copied as
+Vendored subset of `@earendil-works/pi-agent-core` **v0.80.6**, copied as
 TypeScript **sources** from https://github.com/earendil-works/pi at tag
-`v0.78.0` (`packages/agent/src/`), per WS1.1 of the unified-log plan.
+`v0.80.6` (`packages/agent/src/`), per WS1.1 of the unified-log plan.
 
 Vendoring is fully reproducible: run `./vendor.sh [tag]`. The script clones
 the tag, copies the kept subset, and applies the only transformations we

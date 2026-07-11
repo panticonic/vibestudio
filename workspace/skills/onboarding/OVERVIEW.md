@@ -1,5 +1,9 @@
 # What is Vibestudio?
 
+> This is the user-level overview. For the system's underlying theory —
+> trust boundary, storage model, permission system — read the
+> [architecture skill](../architecture/SKILL.md).
+
 Vibestudio is a desktop application (Electron) that gives you a personal, AI-powered workspace organized as horizontally stacked panels. Each panel is its own TypeScript app running in an isolated webview, and an AI agent (the chat panel) can create, edit, and launch new panels on the fly.
 
 ## Key Concepts

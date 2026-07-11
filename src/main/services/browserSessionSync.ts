@@ -4,7 +4,7 @@ import type { BrowserDataClient, StoredCookie } from "@vibestudio/browser-data";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
-import { browserDataBrokerPackageName } from "@vibestudio/shared/workspace/configParser";
+import { workspaceProviderExtensionPackageName } from "@vibestudio/shared/workspace/configParser";
 import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import type { ServerClient } from "../serverClient.js";
 
@@ -61,7 +61,7 @@ export function createBrowserSessionSyncService(deps: {
           "getConfig",
           []
         )) as WorkspaceConfig | null;
-        const broker = config ? browserDataBrokerPackageName(config) : null;
+        const broker = config ? workspaceProviderExtensionPackageName(config, "browserData") : null;
         importEventName = broker ? `extensions:${broker}::import-complete` : null;
       } catch (err) {
         log.warn(

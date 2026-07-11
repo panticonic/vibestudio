@@ -9,6 +9,12 @@
  * schema (the wrappers that deliberately diverge from the wire methods). Keyed `binding.method`.
  */
 export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> = {
+  "blobstore.putBytes": {
+    description:
+      "putBytes(bytes: Uint8Array | ArrayBuffer) → { digest, size }. Runtime-only convenience " +
+      "that losslessly base64-encodes exactly one byte buffer and calls blobstore.putBase64. " +
+      "The content-addressed store keeps bytes only; return MIME metadata alongside the digest.",
+  },
   "fs.open": {
     description:
       "open(path, flags?, mode?) → FileHandle { fd, read(buf, off, len, pos), " +
@@ -28,13 +34,19 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       'rpc.call("main", `runtime.createEntity`, [{ kind: "worker", source, key, contextId, env, stateArgs }]). ' +
       "`key` names the instance (it maps to the worker entity key); pass " +
       "`ref: `ctx:${ctx.contextId}`` for worker code created or edited on the current context head, " +
-      "and omit ref only when intentionally launching the main build. Launchable worker sources are " +
-      'listed with rpc.call("main", `workers.listSources`, []).',
+      "and omit ref only when intentionally launching the main build. `env` accepts extra string " +
+      "bindings delivered to the worker fetch handler's WorkerEnv; successful creation proves the " +
+      "configuration was accepted, not that worker code observed a value. Verify a named non-secret " +
+      "probe through a worker endpoint/RPC; workers/hello provides readNonSecretProbe for the fixed " +
+      "NON_SECRET_PROBE binding. Launchable sources and their real manifest entry points " +
+      "are listed with workers.listSources() (raw: " +
+      'rpc.call("main", `workers.listSources`, [])).',
   },
   "runtime.retireEntity": {
     description:
       'Retire (stop) a worker via rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity ' +
-      "id returned by runtime.createEntity. This replaces the removed workers.destroy.",
+      "id returned by runtime.createEntity. Verify it disappeared with runtime.listEntities. This " +
+      "replaces the removed workers.destroy.",
   },
 };
 

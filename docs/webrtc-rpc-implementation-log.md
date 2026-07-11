@@ -181,7 +181,7 @@ not in the diff, import nothing changed, last commits predate the cutover.
 Cutover-caused test changes, all now green:
 
 - `credentialService.test.ts` 55/55 — OAuth redirect default moved loopback→relay
-  (§7); tests set `VIBESTUDIO_RELAY_OAUTH_BASE_URL` and opt into the server-local
+  (§7); tests set `VIBESTUDIO_RELAY_URL` and opt into the server-local
   `loopback` redirect for in-process callback round-trips.
 - `authService.test.ts` 8/8 — pairing responses dropped `deepLink` (the full WebRTC
   link needs the answerer's room/fp).
@@ -203,7 +203,7 @@ reconciled by the orchestrator.
 ### Remaining (deployment / runtime, not code-blocking)
 
 - Install `node-datachannel`; deploy `apps/signaling` + the rebuilt relay; set
-  `VIBESTUDIO_RELAY_OAUTH_BASE_URL`, TURN, and relay secrets.
+  `VIBESTUDIO_RELAY_URL`, TURN, and relay secrets.
 - Wire the answerer bootstrap with an injected native provider; mobile
   `MobileRpcClient`→WebRTC (the `MOBILE_SERVER_LOOPBACK_ORIGIN` seam).
 - Live end-to-end smoke (pair→connect→panel→proxyFetch→webhook) — needs the native

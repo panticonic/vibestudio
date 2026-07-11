@@ -632,6 +632,10 @@ export class UnitHost<
 > {
   private reconciling: Promise<void> | null = null;
   private backgroundFlow: Promise<void> | null = null;
+  private declarationsStaged: (() => void) | null = null;
+  private readonly declarationsStagedPromise = new Promise<void>((resolve) => {
+    this.declarationsStaged = resolve;
+  });
   private preapprovedTrust = new Set<string>();
   private pendingApprovalIdentityKeys = new Set<string>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
@@ -653,7 +657,9 @@ export class UnitHost<
         removeUndeclared: opts.removeUndeclared ?? true,
       })
     );
-    this.reconciling = run.catch(() => {});
+    // A pass that throws before reaching its staging point must still release
+    // whenDeclarationsStaged() waiters, or launch gates would hang forever.
+    this.reconciling = run.catch(() => {}).finally(() => this.declarationsStaged?.());
     await run;
   }
 
@@ -664,6 +670,19 @@ export class UnitHost<
 
   async whenReconciled(): Promise<void> {
     await this.reconciling;
+  }
+
+  /**
+   * Resolves once the first reconcile pass has classified every declared unit:
+   * pending registry entries exist and any approval requests have been staged
+   * with the coordinator. Unlike whenReconciled(), this does NOT wait for
+   * trusted units to finish building — launch paths use it so one slow unit
+   * cannot delay readiness reporting for the others. If no reconcile has been
+   * requested yet this resolves immediately, matching whenReconciled().
+   */
+  async whenDeclarationsStaged(): Promise<void> {
+    if (!this.reconciling) return;
+    await this.declarationsStagedPromise;
   }
 
   approvalForDeclarations(declared: Decl[]): { entries: ApprovalEntry[]; identityKeys: string[] } {
@@ -837,6 +856,7 @@ export class UnitHost<
 
     const declaredByName = new Map(resolved.map((item) => [item.node.name, item]));
     const needsApproval: Array<ResolvedUnitDeclaration<Decl, Node> & { identityKey: string }> = [];
+    const trusted: Array<ResolvedUnitDeclaration<Decl, Node>> = [];
 
     for (const { node, decl } of resolved) {
       const entry = this.opts.registry.get(node.name);
@@ -846,7 +866,11 @@ export class UnitHost<
         preapprovedIdentityKeys: preApproved,
       });
       if (trust.decision !== "needs-approval") {
-        await this.opts.applyTrusted(node, decl);
+        // Register a building entry up front so readiness probes see the unit
+        // as in-progress from the moment it is classified, not from whenever
+        // its build slot starts.
+        if (!entry) this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
+        trusted.push({ node, decl });
         continue;
       }
       try {
@@ -889,6 +913,14 @@ export class UnitHost<
         });
       this.backgroundFlow = tracked;
     }
+
+    // Every declared unit is now classified (pending entry upserted, approval
+    // staged) — release whenDeclarationsStaged() waiters before the builds run.
+    this.declarationsStaged?.();
+
+    // Apply trusted units concurrently, mirroring the post-approval path.
+    // Serializing them here turned startup reconcile into a chain of builds.
+    await Promise.all(trusted.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
   }
 
   private async promptAndApply(

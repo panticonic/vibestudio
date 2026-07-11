@@ -4,6 +4,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("extension child runtime", () => {
+  it("builds ctx.git from the canonical typed gitInterop contract", () => {
+    const source = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain('createTypedServiceClient("gitInterop", gitInteropMethods');
+    expect(source).not.toContain('serviceProxy("git")');
+  });
+
   it("exposes unified RPC for extension userland targets", () => {
     const source = fs.readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),

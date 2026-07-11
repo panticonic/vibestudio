@@ -1,4 +1,4 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.js";
 

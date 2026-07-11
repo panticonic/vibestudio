@@ -12,7 +12,7 @@ import {
 } from "../state/themeAtoms";
 import { useAtomValue } from "jotai";
 import { useShellEvent } from "../shell/useShellEvent";
-import { panel, workspace } from "../shell/client";
+import { panel, workspace, shellNetwork } from "../shell/client";
 import { ChunkErrorBoundary } from "./ChunkErrorBoundary";
 import { AppCommandPalette } from "./AppCommandPalette";
 
@@ -51,6 +51,15 @@ export function App() {
     loadThemePreference();
     loadThemeConfig();
   }, [loadThemePreference, loadThemeConfig]);
+
+  // When the OS reports the network came back, tell main to nudge the server
+  // pipe awake (a stale WebRTC "connected" can linger ~45s after a flap). Pure
+  // signal — main only probes, never tears down a healthy pipe.
+  useEffect(() => {
+    const handleOnline = () => shellNetwork.notifyOnline();
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, []);
 
   // Broadcast the theme identity to every panel whenever it changes, so a
   // user-picked accent/radius propagates live over the runtime bridge.

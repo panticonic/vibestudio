@@ -11,7 +11,10 @@ import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { toVcsPath, withInvocationId, type ToolVcs } from "./tool-vcs.js";
 
 const writeSchema = Type.Object({
-  path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+  path: Type.String({
+    description:
+      "Workspace source path to record as a VCS edit. Scratch/.tmp paths are not supported; use eval fs.writeFile/fs.mktemp for transient files.",
+  }),
   content: Type.String({ description: "Content to write to the file" }),
 });
 
@@ -30,7 +33,7 @@ export function createWriteTool(
     name: "write",
     label: "write",
     description:
-      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+      "Write a workspace source file as an uncommitted VCS edit. Creates or overwrites repo-shaped source paths; for transient .tmp/scratch files use eval fs.writeFile/fs.mktemp instead.",
     parameters: writeSchema,
     execute: async (toolCallId, input, signal) => {
       const { path, content } = input;

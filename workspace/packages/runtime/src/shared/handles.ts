@@ -47,7 +47,7 @@ export interface PanelHandleHostOps {
   focus?(id: string): Promise<unknown>;
   stateArgs?: {
     get<T = Record<string, unknown>>(id: string): Promise<T>;
-    set(id: string, updates: Record<string, unknown>): Promise<void>;
+    set(id: string, updates: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
   snapshot?(id: string): Promise<unknown>;
   callAgent?(id: string, method: string, args: unknown[]): Promise<unknown>;
@@ -63,8 +63,7 @@ export function createCallProxy<T extends Rpc.ExposedMethods>(
   return new Proxy({} as TypedCallProxy<T>, {
     get(_target, method: string) {
       return async (...args: unknown[]) => {
-        const resolvedTargetId =
-          typeof targetId === "function" ? await targetId() : targetId;
+        const resolvedTargetId = typeof targetId === "function" ? await targetId() : targetId;
         return rpc.call(resolvedTargetId, method, [...args]);
       };
     },
@@ -84,7 +83,8 @@ export function createPanelHandle<
   const { rpc, cdp, ops } = options;
   let metadata = normalizeMetadata(options.metadata);
   let rpcTargetResolvePromise: Promise<string> | null = null;
-  let rpcEventTargetId: string | null = metadata.rpcTargetId ?? (!ops?.refresh ? metadata.id : null);
+  let rpcEventTargetId: string | null =
+    metadata.rpcTargetId ?? (!ops?.refresh ? metadata.id : null);
   const refreshMetadata = async (): Promise<Required<PanelHandleMetadata>> => {
     if (ops?.refresh) {
       metadata = normalizeMetadata({ ...metadata, ...(await ops.refresh(metadata.id)) });
@@ -151,11 +151,11 @@ export function createPanelHandle<
         if (!ops?.stateArgs?.get) return {} as TState;
         return ops.stateArgs.get<TState>(metadata.id);
       },
-      set: async (updates: Record<string, unknown>) => {
+      set: async <TState = Record<string, unknown>>(updates: Record<string, unknown>) => {
         if (!ops?.stateArgs?.set) {
           throw new Error("stateArgs.set is not available for this handle");
         }
-        await ops.stateArgs.set(metadata.id, updates);
+        return ops.stateArgs.set(metadata.id, updates) as Promise<TState>;
       },
     },
     async emit(event: string, payload: unknown) {
@@ -183,8 +183,7 @@ export function createPanelHandle<
     children: () => ops?.children?.(metadata.id) ?? Promise.resolve([]),
     parent: () => ops?.parent?.(metadata.id, metadata.parentId) ?? null,
     ensureLoaded: async () => {
-      const result = await (ops?.ensureLoaded?.(metadata.id) ??
-        Promise.resolve({ loaded: false }));
+      const result = await (ops?.ensureLoaded?.(metadata.id) ?? Promise.resolve({ loaded: false }));
       if (ops?.refresh) await refreshMetadata();
       return result;
     },

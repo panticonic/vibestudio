@@ -55,6 +55,13 @@ export interface IssuedAgentCredential {
 
 export const DEFAULT_PAIRING_CODE_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * Minimum advance in a device's `lastUsedAt` before validateRefresh persists it
+ * again. Bounds store rewrites for a reconnecting device to ~once/minute while
+ * keeping last-seen resolution useful.
+ */
+const LAST_USED_PERSIST_INTERVAL_MS = 60 * 1000;
+
 export interface IssuedDeviceCredential {
   deviceId: string;
   refreshToken: string;
@@ -213,7 +220,13 @@ export class DeviceAuthStore {
     // Children validate against the shared identity DB read-only (WP0 §5.1);
     // only the hub — the sole writer — stamps last-used.
     const lastUsedAt = this.now();
-    if (!this.db.readOnly) this.db.touchDevice(deviceId, lastUsedAt);
+    if (
+      !this.db.readOnly &&
+      (record.lastUsedAt === undefined ||
+        lastUsedAt - record.lastUsedAt >= LAST_USED_PERSIST_INTERVAL_MS)
+    ) {
+      this.db.touchDevice(deviceId, lastUsedAt);
+    }
     return { ...record, lastUsedAt };
   }
 
@@ -228,6 +241,11 @@ export class DeviceAuthStore {
 
   listDevices(): DeviceRecord[] {
     return this.db.listDevices();
+  }
+
+  /** Whether durable pairing state has ever been created for this workspace hub. */
+  hasEverPaired(): boolean {
+    return this.db.listDevices().length > 0;
   }
 
   // ===========================================================================

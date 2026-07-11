@@ -7,10 +7,11 @@
  *
  * Structure mirrors `createServerClient` exactly so the two are interchangeable
  * behind `ServerClient`:
- *   - the main `shell` principal is one `openSession({ callerKind: "shell" })`;
+ *   - the main `shell` principal is one `openSession(...)` over the pipe;
  *   - each Electron-hosted `app` principal gets a one-time connection grant
- *     (`auth.grantConnection`) redeemed by its own `openSession({ callerKind:
- *     "app" })` over the same pipe — so one app dropping never tears down others.
+ *     (`auth.grantConnection`) redeemed by its own `openSession(...)` over the
+ *     same pipe — so one app dropping never tears down others. The server derives
+ *     the authoritative caller-kind from the redeemed grant, not the session.
  *
  * The shell token is supplied by the caller (`getShellToken`), exactly as the
  * local path receives `ports.shellToken` from its child server and the CLI client
@@ -107,7 +108,6 @@ export async function createWebRtcServerClient(
     ...(args.transport ? { transport: args.transport } : {}),
     getShellToken: args.getShellToken,
     connectionId: args.connectionId ?? randomUUID(),
-    callerKind: "shell",
     clientPlatform: "desktop",
     platform: "desktop",
     ...(args.onPaired ? { onPaired: args.onPaired } : {}),
@@ -128,6 +128,13 @@ export async function createWebRtcServerClient(
     if (type === "relay") {
       console.warn("[webrtc-client] TURN relay engaged — P2P failed or forced");
     }
+    // Re-drive the connection-status callback so the shell re-reads candidateType()
+    // and re-emits `server-connection-changed` with the fresh path. A mid-connection
+    // host→relay switch (or a late nomination) changes no status, so without this
+    // the subtle "Relayed" hint would only surface on the next status transition.
+    // Reuses the existing status channel — no new IPC surface — and is a no-op for
+    // the shell's replay guard (the status value is unchanged).
+    args.onConnectionStatusChanged?.(transport.status());
   });
   if (args.onServerEvent) {
     mainSession.onMessage((envelope) => {
@@ -165,7 +172,6 @@ export async function createWebRtcServerClient(
     }
     const session = transport.openSession({
       connectionId: randomUUID(),
-      callerKind: "app",
       clientPlatform: "desktop",
       // Re-grant on EVERY (re)open: connection grants are one-shot, so pinning the
       // first grant's token would fail the redeem on reconnect — the auto-reopened
@@ -230,7 +236,6 @@ export async function createWebRtcServerClient(
     // per open — grants are one-shot and the pipe auto-reopens sessions.
     const session = transport.openSession({
       connectionId,
-      callerKind: "panel",
       clientPlatform: "desktop",
       getToken: async () => (await authClient.grantConnection(runtimeEntityId)).token,
     });
@@ -290,6 +295,13 @@ export async function createWebRtcServerClient(
     },
     candidateType(): RtcCandidateType | null {
       return lastCandidateType;
+    },
+    nudge(): void {
+      // Liveness probe passthrough (§3.1): on sleep/wake or a network change the
+      // pipe can be dead while status() still reads "connected". A nudge pings
+      // out-of-band; a missing pong within the deadline tears the pipe down so
+      // reconnect kicks in — a healthy pipe answers and is untouched.
+      transport.nudge();
     },
     async close(): Promise<void> {
       closing = true;

@@ -121,7 +121,7 @@ function modelRefFromSettings(value: unknown): string | null {
   return null;
 }
 
-function agentConfigFromSettings(
+export function agentConfigFromSettings(
   value: unknown,
   fallbackModel: string | null | undefined
 ): AgentSubscriptionConfig {
@@ -135,16 +135,14 @@ function agentConfigFromSettings(
     thinkingLevel === "minimal" ||
     thinkingLevel === "low" ||
     thinkingLevel === "medium" ||
-    thinkingLevel === "high"
+    thinkingLevel === "high" ||
+    thinkingLevel === "xhigh" ||
+    thinkingLevel === "max"
   ) {
     config.thinkingLevel = thinkingLevel;
   }
   const approvalLevel = settingValue(record["approvalLevel"]);
-  if (
-    approvalLevel === 0 ||
-    approvalLevel === 1 ||
-    approvalLevel === 2
-  ) {
+  if (approvalLevel === 0 || approvalLevel === 1 || approvalLevel === 2) {
     config.approvalLevel = approvalLevel;
   }
   const respondPolicy = settingValue(record["respondPolicy"]);
@@ -159,9 +157,7 @@ function agentConfigFromSettings(
   }
   const respondFromValue = settingValue(record["respondFrom"]);
   if (Array.isArray(respondFromValue)) {
-    const respondFrom = respondFromValue.filter(
-      (item): item is string => typeof item === "string"
-    );
+    const respondFrom = respondFromValue.filter((item): item is string => typeof item === "string");
     if (respondFrom.length > 0) config.respondFrom = respondFrom;
   }
   const maxModelCallsPerTurn = settingValue(record["maxModelCallsPerTurn"]);

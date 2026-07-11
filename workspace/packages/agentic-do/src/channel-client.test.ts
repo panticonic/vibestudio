@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { ChannelClient } from "./channel-client.js";
 
 interface Captured {
-  event?: { payload?: { tier?: unknown; role?: unknown } };
+  event?: { payload?: { tier?: unknown; role?: unknown; blocks?: Array<Record<string, unknown>> } };
+  publishOpts?: { attachments?: Array<Record<string, unknown>> };
 }
 
 /** A ChannelClient backed by a stub RpcCaller that captures the published event. */
@@ -14,6 +15,7 @@ function makeClient(captured: Captured): ChannelClient {
       }
       if (method === "publish") {
         captured.event = args[2] as Captured["event"];
+        captured.publishOpts = args[3] as Captured["publishOpts"];
         return { id: 1 };
       }
       return undefined;
@@ -39,5 +41,34 @@ describe("ChannelClient.send tier", () => {
       tier: "secondary",
     });
     expect(captured.event?.payload?.tier).toBe("secondary");
+  });
+});
+
+describe("ChannelClient.send attachments", () => {
+  it("forwards attachments to publish and records an attachment block per file", async () => {
+    const captured: Captured = {};
+    // "aGVsbG8=" is base64("hello") — 5 bytes.
+    await makeClient(captured).send("agent:1", "m3", "screenshot attached", {
+      senderMetadata: { type: "agent" },
+      attachments: [{ data: "aGVsbG8=", mimeType: "image/png", name: "shot.png" }],
+    });
+    expect(captured.publishOpts?.attachments).toEqual([
+      { id: "att_0", data: "aGVsbG8=", mimeType: "image/png", name: "shot.png", size: 5 },
+    ]);
+    const blocks = captured.event?.payload?.blocks ?? [];
+    expect(blocks).toHaveLength(2);
+    expect(blocks[1]).toMatchObject({
+      type: "attachment",
+      metadata: { mimeType: "image/png", filename: "shot.png" },
+    });
+  });
+
+  it("omits attachments from publish opts when none are given", async () => {
+    const captured: Captured = {};
+    await makeClient(captured).send("agent:1", "m4", "plain text", {
+      senderMetadata: { type: "agent" },
+    });
+    expect(captured.publishOpts?.attachments).toBeUndefined();
+    expect(captured.event?.payload?.blocks).toHaveLength(1);
   });
 });

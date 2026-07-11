@@ -9,6 +9,14 @@ import type {
   VcsRepoDivergence,
   VcsStatusResult,
 } from "@vibestudio/shared/serviceSchemas/vcs";
+import type {
+  GitOverwritePreview,
+  GitPublishRepoResult,
+  GitPullUpstreamResult,
+  GitPushUpstreamResult,
+  GitUpstreamState,
+  GitUpstreamStatusRow,
+} from "@vibestudio/shared/serviceSchemas/gitInterop";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -28,14 +36,7 @@ import {
 } from "../output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
-import {
-  formatRelativeTime,
-  type GitOverwritePreview,
-  type GitPullUpstreamResult,
-  type GitPushUpstreamResult,
-  type GitUpstreamState,
-  type GitUpstreamStatusRow,
-} from "@vibestudio/shared/gitUpstream";
+import { formatRelativeTime } from "@vibestudio/shared/gitFormatting";
 import type { RpcClient } from "../rpcClient.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient as CliRpcClient } from "../rpcClient.js";
@@ -56,17 +57,6 @@ interface VcsRestoreRepoResult {
   fromArchiveHead: string | null;
   restoredPaths: string[];
   stateHash: string;
-}
-
-interface GitPublishResult {
-  repoPath: string;
-  provider: string;
-  remoteUrl: string;
-  webUrl: string;
-  owner: string;
-  exported: number;
-  headCommit: string | null;
-  pushed: boolean;
 }
 
 /** Adapt the CLI RpcClient to the target-capable {@link RpcCallerLike} the
@@ -1057,7 +1047,7 @@ async function gitStatus(inv: ParsedInvocation): Promise<number> {
     const repos = collectOptionalRepos(inv);
     // One-shot CLI invocation: fetch so ahead/behind reflects the remote now.
     const rows = await invokeGitInterop<GitUpstreamStatusRow[]>("upstreamStatus", [
-      repos.length ? repos : null,
+      repos,
       { fetch: true },
     ]);
     printResult(rows, { json, human: () => renderGitStatusHuman(rows) });
@@ -1211,7 +1201,7 @@ async function gitPublish(inv: ParsedInvocation): Promise<number> {
     if (inv.flags["private"] === true && inv.flags["public"] === true) {
       throw new UsageError("choose only one of --private or --public");
     }
-    const result = await invokeGitInterop<GitPublishResult>("publishRepo", [
+    const result = await invokeGitInterop<GitPublishRepoResult>("publishRepo", [
       {
         repoPath: repo,
         ...(optionalFlagString(inv, "provider")
@@ -1250,7 +1240,6 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
       {
         path: repoPath,
         remote: { name: "origin", url, ...(branch ? { branch } : {}) },
-        ...(branch ? { branch } : {}),
         ...(optionalFlagString(inv, "credential")
           ? { credentialId: optionalFlagString(inv, "credential") }
           : {}),

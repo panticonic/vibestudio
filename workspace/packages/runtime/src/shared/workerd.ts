@@ -9,6 +9,8 @@
  *
  * DO-storage primitives (cloneDO/destroyDO) are NOT here: they are server-internal
  * and reached only through `runtime.cloneContext`/`runtime.destroyContext`.
+ * Source discovery stays here as `workers.listSources()` so the rich runtime
+ * binding does not force callers down to raw `rpc.call` for the obvious read.
  *
  * Available to server, panel, and worker callers.
  */
@@ -36,6 +38,22 @@ export type {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+export interface WorkerSourceInfo {
+  name: string;
+  source: string;
+  title?: string;
+  /** Manifest entry point relative to `source`; do not guess `index.ts`. */
+  entry?: string;
+  /** Durable Object classes declared by this source; empty for a regular worker. */
+  classes: Array<{ className: string; [key: string]: unknown }>;
+  agent?: {
+    displayName?: string;
+    description?: string;
+    icon?: string;
+    defaultConfig?: unknown;
+  };
+}
+
 export type UserlandServiceInfo = {
   name: string;
   title?: string;
@@ -77,6 +95,8 @@ export type ResolvedUserlandService = {
 // ---------------------------------------------------------------------------
 
 export interface WorkerdClient {
+  /** List every launchable worker source and its real manifest entry point. */
+  listSources(): Promise<WorkerSourceInfo[]>;
   /** List manifest-declared userland services offered by worker packages. */
   listServices(): Promise<UserlandServiceInfo[]>;
   /** Resolve a manifest-declared userland service by name or protocol. */
@@ -95,6 +115,7 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
     rpc.call<T>("main", `workers.${method}`, args);
 
   return {
+    listSources: () => callWorkers<WorkerSourceInfo[]>("listSources"),
     listServices: () => callWorkers<UserlandServiceInfo[]>("listServices"),
     resolveService: (query, objectKey) =>
       callWorkers<ResolvedUserlandService>("resolveService", query, objectKey ?? null),

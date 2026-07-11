@@ -136,7 +136,8 @@ export { ChatConnectionErrorBanner } from "./components/ChatConnectionErrorBanne
 export { ContextUsageRing } from "./components/ContextUsageRing";
 export { JsonSchemaForm } from "./components/JsonSchemaForm";
 export { ErrorBoundary } from "./components/ErrorBoundary";
-export { markdownComponents, mdxComponents } from "./components/markdownComponents";
+export { markdownComponents, mdxComponents, streamingMarkdownComponents } from "./components/markdownComponents";
+export { MermaidDiagram, Diagram } from "./components/MermaidDiagram";
 
 // --- Utilities ---
 export {

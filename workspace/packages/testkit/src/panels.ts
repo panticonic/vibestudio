@@ -3,9 +3,9 @@
  * panelTree/PanelHandle APIs, designed for eval one-shots and ported E2E
  * suites.
  *
- * Reads prefer the approval-free agentApi snapshot path
- * (handle.snapshot() → _agent.snapshot inside the panel); CDP is the
- * escalation for input, viewport emulation and layout measurement.
+ * Reads prefer the approval-free snapshot path (handle.snapshot() uses the
+ * panel agent API when available and accessibility-tree fallback otherwise);
+ * direct CDP is for input, viewport emulation and layout measurement.
  */
 import { openPanel as runtimeOpenPanel, panelTree } from "@workspace/runtime";
 import type { PanelHandle } from "@workspace/runtime";
@@ -113,6 +113,9 @@ export async function openPanel(source: string, opts: OpenPanelOptions = {}): Pr
   });
   activeTestContext()?.supervisor.watchPanel(handle);
   if (opts.waitLoaded !== false) {
+    // Creation and renderer assignment are separate server operations. Ask for
+    // a lease explicitly instead of relying on focus side effects.
+    await handle.ensureLoaded();
     await waitFor(() => handle.isLoaded(), {
       timeoutMs: opts.timeoutMs ?? 30_000,
       label: `panel ${source} loaded`,

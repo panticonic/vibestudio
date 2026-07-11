@@ -1,4 +1,4 @@
-export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentApprovalLevel = 0 | 1 | 2;
 export type AgentRespondPolicy =
   | "all"

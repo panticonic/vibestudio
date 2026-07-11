@@ -13,7 +13,7 @@
 // `extensions.use("...")` against the full registry — the same set the
 // repo-wide `tsc` sees via `include`.
 
-export type { Api as Ext_workspace_extensions_browser_data } from "@workspace-extensions/browser-data";
+export type { Api as Ext_workspace_extensions_claude_code } from "@workspace-extensions/claude-code";
 export type { Api as Ext_workspace_extensions_file_tools } from "@workspace-extensions/file-tools";
 export type { Api as Ext_workspace_extensions_image_service } from "@workspace-extensions/image-service";
 export type { Api as Ext_workspace_extensions_local_models } from "@workspace-extensions/local-models";

@@ -14,14 +14,14 @@
 export const MODEL_SETTINGS_SERVICE_PROTOCOL = "vibestudio.models.v1";
 /** Workspace config field holding the full default agent config (model + behavior). */
 export const WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD = "defaultAgentConfig";
-export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.5";
+export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.6-sol";
 /** The local provider id and the always-available fallback floor (design §5/§8). */
 export const LOCAL_PROVIDER_ID = "local";
 export const LOCAL_FALLBACK_MODEL_REF = "local:lfm2.5-1.2b";
 export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
 
-/** Effort levels the agent harness accepts (subset of pi's ModelThinkingLevel). */
-export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high";
+/** Enabled effort levels the agent harness accepts (excludes pi's "off"). */
+export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Workspace-wide defaults applied to NEW agents — model plus behavior. Persisted
@@ -100,7 +100,7 @@ export interface ModelCatalogEntry {
   maxTokens: number;
   /** Local measured throughput on this hardware, when benchmarked. */
   tokensPerSec?: number | null;
-  /** Model-supported subset of the four agent thinking levels. */
+  /** Model-supported subset of the enabled agent thinking levels. */
   thinkingLevels: AgentThinkingLevel[];
   /** baseUrl contains "{...}" placeholders → not quick-connectable. */
   templatedBaseUrl: boolean;

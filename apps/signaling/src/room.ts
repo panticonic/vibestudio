@@ -48,7 +48,7 @@
  */
 
 import { RELAYED_TYPES, type SignalingRole, type SignalingServerMessage } from "./protocol";
-import { mintIceServers, type TurnEnv } from "./turn";
+import { mintIceServers, turnIsProvisioned, type TurnEnv } from "./turn";
 
 /** RFC 6455 private-use close code: the slot was reclaimed by a same-role join. */
 const CLOSE_SUPERSEDED = 4001;
@@ -73,6 +73,28 @@ interface PendingFrame {
  * bound.
  */
 const MAX_BUFFERED_FRAMES = 64;
+
+/**
+ * Durable "a real pairing has touched this room" marker, set on the first WS
+ * join. TURN credentials are only minted for an armed (or currently occupied)
+ * room, so a drive-by `GET /room/<invented-uuid>/ice-servers` cannot farm
+ * operator-billed creds without first joining. Cleared when the room empties so
+ * a recycled room id starts cold again.
+ */
+const PAIRING_ARMED_KEY = "pairing-armed";
+/**
+ * One-shot grace for the offerer's FIRST ice-servers fetch, which races its own
+ * WS join (the client dials the socket then immediately GETs ice-servers, and
+ * the two requests can reach this DO in either order). We cannot distinguish
+ * that legitimate pre-join fetch from an abuser without auth — the QR-only model
+ * has none — so we grant exactly one cold mint per room and lean on the per-IP
+ * rate limit + short TTL to bound farming. Cleared with the room.
+ */
+const ICE_COLD_GRANT_KEY = "ice-cold-grant-used";
+/** Fixed-window ice-servers rate limit (generous — trips only on obvious abuse). */
+const ICE_RATE_WINDOW_MS = 60_000;
+const ICE_RATE_MAX_PER_IP = 30;
+const ICE_RATE_MAX_PER_ROOM = 120;
 
 export interface SignalingRoomEnv extends TurnEnv {
   ENVIRONMENT?: string;
@@ -109,6 +131,17 @@ function send(ws: WebSocket, message: SignalingServerMessage): void {
 }
 
 export class SignalingRoom implements DurableObject {
+  /** Overridable clock for tests. */
+  now: () => number = () => Date.now();
+  /** Room id (the rendezvous secret), captured from the first request URL so
+   * every log line is attributable in `wrangler tail`. */
+  private roomId = "?";
+  /** Per-IP fixed-window ice-servers counters. In-memory: lost on hibernation
+   * (fail-open), which is fine — the durable arm marker + TTL are the real gate. */
+  private readonly iceRateByIp = new Map<string, { windowStart: number; count: number }>();
+  /** Room-wide ice-servers counter (all IPs) for the same fixed window. */
+  private iceRateRoom = { windowStart: 0, count: 0 };
+
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: SignalingRoomEnv
@@ -131,28 +164,11 @@ export class SignalingRoom implements DurableObject {
     if (segments[0] !== "room" || !segments[1]) {
       return jsonResponse({ error: "not found" }, 404);
     }
+    // Capture the room id for attributable logging (same DO == same room).
+    this.roomId = segments[1];
 
     if (segments[2] === "ice-servers") {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "method not allowed" }, 405);
-      }
-      try {
-        const { iceServers, turn } = await mintIceServers(this.env);
-        return new Response(JSON.stringify({ iceServers }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-            // Announce the STUN-only baseline so a missing TURN backstop is
-            // visible (plan: "every surviving fallback announces itself").
-            "x-signaling-turn": turn ? "minted" : "stun-only",
-          },
-        });
-      } catch (error) {
-        // Fail loud: TURN is provisioned but minting broke. The peer's
-        // `fetchIceServers()` sees a non-200 and rejects.
-        return jsonResponse({ error: `ice-servers: ${String(error)}` }, 502);
-      }
+      return this.handleIceServers(request);
     }
 
     const upgrade = request.headers.get("Upgrade");
@@ -170,6 +186,94 @@ export class SignalingRoom implements DurableObject {
     return this.handleJoin(role);
   }
 
+  /**
+   * Mint per-session ICE servers, gated so unauthenticated cred-farming can't
+   * bill the operator for TURN. The gate is a no-op when TURN is unprovisioned
+   * (STUN-only always works). When TURN IS provisioned we require the room to be
+   * occupied or previously armed by a real WS join — with a one-shot grace for
+   * the offerer's first fetch racing its own join — plus a per-IP + per-room
+   * rate limit. TTL is a connection-lifetime backstop (see turn.ts), not 24h.
+   */
+  private async handleIceServers(request: Request): Promise<Response> {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "method not allowed" }, 405);
+    }
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+    if (!this.allowIceRate(ip)) {
+      console.warn(`[signaling] room=${this.roomId} ice-servers rate-limited ip=${ip}`);
+      return jsonResponse({ error: "too many ice-servers requests" }, 429);
+    }
+
+    // STUN-only deploys mint nothing, so there is nothing to gate — always serve.
+    if (!turnIsProvisioned(this.env)) {
+      const { iceServers } = await mintIceServers(this.env);
+      console.log(`[signaling] room=${this.roomId} ice-servers stun-only`);
+      return this.iceResponse(iceServers, false);
+    }
+
+    // Gate: an occupied or armed room is a genuine pairing; otherwise grant a
+    // single cold mint (the offerer's pre-join race) and refuse the rest.
+    const occupied = this.state.getWebSockets().length > 0;
+    const armed = (await this.state.storage.get<number>(PAIRING_ARMED_KEY)) !== undefined;
+    if (!occupied && !armed) {
+      const coldUsed = (await this.state.storage.get<boolean>(ICE_COLD_GRANT_KEY)) === true;
+      if (coldUsed) {
+        console.warn(
+          `[signaling] room=${this.roomId} ice-servers denied (unpaired, cold grant spent) ip=${ip}`
+        );
+        return jsonResponse({ error: "room has no active pairing" }, 403);
+      }
+      await this.state.storage.put(ICE_COLD_GRANT_KEY, true);
+      console.warn(`[signaling] room=${this.roomId} ice-servers cold grant (pre-join) ip=${ip}`);
+    }
+
+    try {
+      const { iceServers } = await mintIceServers(this.env);
+      console.log(`[signaling] room=${this.roomId} ice-servers minted TURN ip=${ip}`);
+      return this.iceResponse(iceServers, true);
+    } catch (error) {
+      // Fail loud: TURN is provisioned but minting broke. The peer's
+      // `fetchIceServers()` sees a non-200 and rejects.
+      console.warn(`[signaling] room=${this.roomId} ice-servers mint failed: ${String(error)}`);
+      return jsonResponse({ error: `ice-servers: ${String(error)}` }, 502);
+    }
+  }
+
+  private iceResponse(iceServers: unknown, turn: boolean): Response {
+    return new Response(JSON.stringify({ iceServers }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        // Announce the STUN-only baseline so a missing TURN backstop is visible
+        // (plan: "every surviving fallback announces itself").
+        "x-signaling-turn": turn ? "minted" : "stun-only",
+      },
+    });
+  }
+
+  /** Fixed-window per-IP + per-room rate limit for ice-servers. */
+  private allowIceRate(ip: string): boolean {
+    const now = this.now();
+    const room = this.iceRateRoom;
+    if (now - room.windowStart >= ICE_RATE_WINDOW_MS) {
+      room.windowStart = now;
+      room.count = 0;
+    }
+    const perIp = this.iceRateByIp.get(ip);
+    let ipWindow = perIp;
+    if (!ipWindow || now - ipWindow.windowStart >= ICE_RATE_WINDOW_MS) {
+      ipWindow = { windowStart: now, count: 0 };
+      this.iceRateByIp.set(ip, ipWindow);
+    }
+    if (room.count >= ICE_RATE_MAX_PER_ROOM || ipWindow.count >= ICE_RATE_MAX_PER_IP) {
+      return false;
+    }
+    room.count += 1;
+    ipWindow.count += 1;
+    return true;
+  }
+
   private async handleJoin(role: SignalingRole): Promise<Response> {
     const roleTag = `role:${role}`;
     const otherTag = role === "offerer" ? "role:answerer" : "role:offerer";
@@ -180,6 +284,7 @@ export class SignalingRoom implements DurableObject {
     // reconnect wedging behind a dead socket. Closed sockets leave the roster,
     // so the slot is genuinely reclaimed.
     for (const incumbent of this.state.getWebSockets(roleTag)) {
+      console.warn(`[signaling] room=${this.roomId} evict incumbent role=${role} (superseded)`);
       try {
         incumbent.close(CLOSE_SUPERSEDED, `superseded by new ${role}`);
       } catch {
@@ -189,12 +294,16 @@ export class SignalingRoom implements DurableObject {
     await this.clearPendingFrames(role);
 
     this.state.acceptWebSocket(server, [roleTag]);
+    // A real peer has joined: arm the room so ice-servers minting is allowed for
+    // this genuine pairing (see PAIRING_ARMED_KEY / handleIceServers).
+    await this.state.storage.put(PAIRING_ARMED_KEY, this.now());
 
     // The genuine counterpart is the OTHER role's socket (evicted same-role
     // ghosts are excluded by construction). Tell it a peer arrived so the
     // answerer knows to expect an offer.
     const others = this.state.getWebSockets(otherTag);
     const peers = others.length + 1;
+    console.log(`[signaling] room=${this.roomId} join role=${role} peers=${peers}`);
     for (const other of others) {
       send(other, { t: "peer-joined", peers });
     }
@@ -252,6 +361,8 @@ export class SignalingRoom implements DurableObject {
     for (const other of others) if (sendRaw(other, text)) delivered++;
     if (delivered === 0) {
       await this.bufferFrame(roleTag === "role:offerer" ? "offerer" : "answerer", text);
+    } else {
+      console.log(`[signaling] room=${this.roomId} relay from=${roleTag} type=${type} -> ${delivered}`);
     }
   }
 
@@ -268,14 +379,17 @@ export class SignalingRoom implements DurableObject {
     }
     // The room is NOT destroyed — the slot is freed for a rejoin (ICE-restart).
     const others = this.state.getWebSockets().filter((w) => w !== ws);
+    console.log(`[signaling] room=${this.roomId} leave code=${code} peers=${others.length}`);
     for (const other of others) {
       send(other, { t: "peer-left", peers: others.length });
     }
     if (others.length === 0) {
       // The room is now empty. Drop any frames a solo peer left buffered (an
       // offerer that gave up before the answerer arrived) so they are never
-      // replayed into a later occupancy of this room id.
+      // replayed into a later occupancy of this room id. Disarm too, so a
+      // recycled room id must be re-armed by a real join before minting TURN.
       await this.clearPendingFrames();
+      await this.state.storage.delete([PAIRING_ARMED_KEY, ICE_COLD_GRANT_KEY]);
     }
   }
 
@@ -298,7 +412,7 @@ export class SignalingRoom implements DurableObject {
     const pending = await this.state.storage.list<PendingFrame>({ prefix: PENDING_FRAME_PREFIX });
     if (pending.size >= MAX_BUFFERED_FRAMES) {
       console.warn(
-        `[signaling] pre-join buffer full (cap ${MAX_BUFFERED_FRAMES}); dropping frame until the second peer joins`
+        `[signaling] room=${this.roomId} pre-join buffer full (cap ${MAX_BUFFERED_FRAMES}); dropping frame until the second peer joins`
       );
       return;
     }

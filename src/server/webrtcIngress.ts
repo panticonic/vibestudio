@@ -103,6 +103,16 @@ const RELAY_RATE_BASELINE = 0.5;
 /** …with at least this many connects (a lone relay connect is not a trend). */
 const RELAY_RATE_MIN_CONNECTS = 4;
 
+/**
+ * Generous ceiling on concurrently armed answerer rooms. Legitimately there is
+ * one room per paired device plus one per outstanding pairing invite — a
+ * personal server has at most dozens. This cap is a DoS backstop against a caller
+ * that mints invites without bound (each armed room joins a signaling room / owns
+ * a supervised rejoin loop); a real deployment never approaches it. Re-arming an
+ * already-armed room (redemption re-tag) is never blocked.
+ */
+const MAX_ARMED_ROOMS = 4096;
+
 export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress {
   const log = options.log ?? ((m: string) => console.log(`[webrtc-ingress] ${m}`));
   const warn = options.warn ?? ((m: string) => console.warn(`[webrtc-ingress] ${m}`));
@@ -186,6 +196,16 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
       // Idempotent re-arm: merge meta only (invite room → device room re-tag).
       existing.meta = { ...existing.meta, ...meta };
       await existing.ready;
+      return;
+    }
+    if (rooms.size >= MAX_ARMED_ROOMS) {
+      // Fail loud, refuse the new room: a legitimate server never approaches this
+      // ceiling, so hitting it signals runaway invite minting rather than real
+      // devices. Existing armed rooms keep working.
+      warn(
+        `armRoom(${room}) refused: armed-room cap (${MAX_ARMED_ROOMS}) reached — ` +
+          `possible runaway pairing-invite minting`
+      );
       return;
     }
     const entry: RoomEntry = {

@@ -7,6 +7,7 @@ import type { CredentialClient } from "@vibestudio/credential-client";
  * superset, and tests substitute in-memory fakes.
  */
 export interface ExtensionContextLike {
+  readonly name: string;
   workspace: {
     getInfo(): Promise<{ path: string; id?: string }>;
   };

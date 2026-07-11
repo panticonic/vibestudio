@@ -107,6 +107,7 @@ describe("buildAgentSubscriptionConfig", () => {
         approvalLevel: 1,
       },
       globalConfig: {
+        model: "openai:gpt-panel",
         approvalLevel: 2,
         systemPrompt: "global prompt",
       },
@@ -122,6 +123,22 @@ describe("buildAgentSubscriptionConfig", () => {
       systemPrompt: "global prompt",
       handle: "ai-chat-abcd",
     });
+  });
+
+  it("persists a panel model override instead of the workspace default", () => {
+    const result = buildAgentSubscriptionConfig({
+      handle: "system-testing-abcd",
+      workspaceDefaultAgentConfig: {
+        model: "openai-codex:gpt-5.6-sol",
+      },
+      globalConfig: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+      },
+      perAgentConfig: {},
+    });
+
+    expect(result.subscribeConfig["model"]).toBe("openai-codex:gpt-5.3-codex-spark");
+    expect(result.perAgent["model"]).toBe("openai-codex:gpt-5.3-codex-spark");
   });
 
   it("persists effective model and behavior defaults into the per-agent record", () => {

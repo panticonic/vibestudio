@@ -10,6 +10,7 @@ import type {
 } from "./types.js";
 import { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE } from "./types.js";
 import { WORKSPACE_SOURCE_DIRS } from "./sourceDirs.js";
+import { validateWorkspaceGitConfig } from "./remotes.js";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
@@ -136,6 +137,13 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
   validateTrust(config.trust);
   validateHostTargets(config.hostTargets);
   validateProviders(config);
+  try {
+    validateWorkspaceGitConfig(config.git);
+  } catch (error) {
+    throw new Error(
+      `meta/vibestudio.yml: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 const DECL_NAME_RE = /^[A-Za-z0-9._:-]+$/;
@@ -355,9 +363,14 @@ export function workspaceExtensionPackageName(source: string): string {
   return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${repoPath.slice("extensions/".length)}`;
 }
 
-export type WorkspaceExtensionProviderName = "browserData" | "gitInterop" | "claudeCode";
+export const WORKSPACE_EXTENSION_PROVIDER_NAMES = [
+  "browserData",
+  "gitInterop",
+  "claudeCode",
+] as const;
+export type WorkspaceExtensionProviderName = (typeof WORKSPACE_EXTENSION_PROVIDER_NAMES)[number];
 
-const WORKSPACE_EXTENSION_PROVIDERS = new Set<string>(["browserData", "gitInterop", "claudeCode"]);
+const WORKSPACE_EXTENSION_PROVIDERS = new Set<string>(WORKSPACE_EXTENSION_PROVIDER_NAMES);
 
 function validateUnitSourceList(values: unknown, kind: CanonicalUnitKind, field: string): string[] {
   if (values === undefined) return [];
@@ -388,6 +401,11 @@ function validateTrust(trust: WorkspaceTrustDecl | undefined): void {
     }
   }
   validateUnitSourceList(trust.chromeApps, APP_UNIT, "trust.chromeApps");
+  validateUnitSourceList(
+    trust.connectionManagementApps,
+    APP_UNIT,
+    "trust.connectionManagementApps"
+  );
 }
 
 function validateHostTargets(hostTargets: WorkspaceConfig["hostTargets"] | undefined): void {
@@ -487,9 +505,15 @@ function validateProviders(config: WorkspaceConfig): void {
  */
 export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): {
   chromeApps: string[];
+  connectionManagementApps: string[];
 } {
   return {
     chromeApps: validateUnitSourceList(config.trust?.chromeApps, APP_UNIT, "trust.chromeApps"),
+    connectionManagementApps: validateUnitSourceList(
+      config.trust?.connectionManagementApps,
+      APP_UNIT,
+      "trust.connectionManagementApps"
+    ),
   };
 }
 
@@ -512,14 +536,6 @@ export function resolveHostTargetDecl(
       `hostTargets.${target}.requiresExtensions`
     ),
   };
-}
-
-/**
- * The browser-data broker extension's package name
- * (`@workspace-extensions/name`), or null when no broker is declared.
- */
-export function browserDataBrokerPackageName(config: WorkspaceConfig): string | null {
-  return workspaceProviderExtensionPackageName(config, "browserData");
 }
 
 /**

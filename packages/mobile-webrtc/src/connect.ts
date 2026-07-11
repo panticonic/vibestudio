@@ -240,7 +240,6 @@ export async function establishWebRtcConnection(
     sig: pairing.sig,
     getShellToken: () => tokenProvider.getToken(),
     connectionId,
-    callerKind: "shell",
     clientLabel: "Mobile device",
     clientPlatform: "mobile",
     platform: "mobile",

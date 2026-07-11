@@ -47,7 +47,12 @@ describe("buildUnit extension builds", () => {
           displayName: "Hello Extension",
           entry: "index.ts",
           sourcemap: true,
-          extension: { activationEvents: ["*"] },
+          extension: {
+            activationEvents: ["*"],
+            providerContracts: {
+              gitInterop: { methods: ["ping"] },
+            },
+          },
         },
       })
     );
@@ -85,7 +90,10 @@ describe("buildUnit extension builds", () => {
       details: {
         kind: "extension",
         runtimeDepsKey: null,
-        runtimeAbi: "2",
+        runtimeAbi: "3",
+        providerContracts: {
+          gitInterop: { methods: ["ping"] },
+        },
       },
     });
     expect(fs.readFileSync(path.join(result.dir, "package.json"), "utf8")).toBe(

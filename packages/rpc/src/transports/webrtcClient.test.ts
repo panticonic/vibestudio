@@ -20,8 +20,10 @@ import {
 } from "../protocol/sessionNegotiation.js";
 import {
   FINGERPRINT_MISMATCH_CODE,
+  SESSION_CLOSED_CODE,
   STREAM_RECEIVE_OVERFLOW_CODE,
   createWebRtcTransport,
+  type ReconnectProgress,
   type WebRtcTransport,
 } from "./webrtcClient.js";
 import type {
@@ -114,6 +116,10 @@ class FakePeer implements RtcPeerConnectionLike {
   readonly candidatesAdded: Array<{ afterRemoteDesc: boolean }> = [];
   private stateH = new Set<(s: RtcConnectionState) => void>();
   private localDescH = new Set<(d: RtcSessionDescription) => void>();
+  private candH = new Set<(t: RtcCandidateType | null) => void>();
+  /** Mutable selected candidate type so tests can drive a null→value resolution
+   * or a mid-connection switch to relay (bug #4). */
+  candType: RtcCandidateType | null = "host";
   constructor(private readonly fabric: Fabric, readonly id: number) {}
   createDataChannel(label: string, init?: { id?: number }): RtcDataChannelLike {
     return this.fabric.createChannelPair(this, init?.id ?? 0, label);
@@ -138,11 +144,25 @@ class FakePeer implements RtcPeerConnectionLike {
   async addRemoteCandidate(_c: RtcIceCandidate): Promise<void> {
     this.candidatesAdded.push({ afterRemoteDesc: this.remoteSet });
   }
+  /** When set (including to null), overrides the observed fingerprint — lets a
+   * test hold the pin unverifiable ("DTLS not settled") past channel-open to
+   * exercise the pin-gate-before-dispatch window (bug #3). */
+  fingerprintOverride: string | null | undefined = undefined;
   remoteFingerprint(): string | null {
+    if (this.fingerprintOverride !== undefined) return this.fingerprintOverride;
     return this.connectionState === "connected" ? this.fabric.serverFp : null;
   }
   selectedCandidateType(): RtcCandidateType | null {
-    return "host";
+    return this.candType;
+  }
+  onSelectedCandidateChange(h: (t: RtcCandidateType | null) => void): () => void {
+    this.candH.add(h);
+    return () => this.candH.delete(h);
+  }
+  /** Simulate a selected-pair change (null→value nomination, or host→relay). */
+  fireCandidateChange(type: RtcCandidateType | null): void {
+    this.candType = type;
+    for (const h of [...this.candH]) h(type);
   }
   fireState(s: RtcConnectionState): void {
     this.connectionState = s;
@@ -167,13 +187,33 @@ class FakePeer implements RtcPeerConnectionLike {
 
 class FakeSignaling implements SignalingClient {
   closed = false;
+  offersSent = 0;
   private descH = new Set<(d: RtcSessionDescription) => void>();
   private candH = new Set<(c: RtcIceCandidate) => void>();
   private closedH = new Set<(r?: string) => void>();
+  private openH = new Set<() => void>();
+  private peerJoinedH = new Set<() => void>();
   constructor(private readonly onOffer: (sig: FakeSignaling) => void) {}
   async sendDescription(desc: RtcSessionDescription): Promise<void> {
     if (this.closed) throw new Error("signaling closed");
-    if (desc.type === "offer") queueMicrotask(() => !this.closed && this.onOffer(this));
+    if (desc.type === "offer") {
+      this.offersSent++;
+      queueMicrotask(() => !this.closed && this.onOffer(this));
+    }
+  }
+  onOpen(h: () => void): () => void {
+    this.openH.add(h);
+    return () => this.openH.delete(h);
+  }
+  emitOpen(): void {
+    for (const h of [...this.openH]) h();
+  }
+  onPeerJoined(h: () => void): () => void {
+    this.peerJoinedH.add(h);
+    return () => this.peerJoinedH.delete(h);
+  }
+  emitPeerJoined(): void {
+    for (const h of [...this.peerJoinedH]) h();
   }
   async sendCandidate(): Promise<void> {}
   onDescription(h: (d: RtcSessionDescription) => void): () => void {
@@ -244,6 +284,11 @@ class Fabric {
   serverBulk: FakeChannel | null = null;
   currentSignaling: FakeSignaling | null = null;
   createCalls = 0;
+  /** When true, new peers start with an unobservable fingerprint (bug #3). */
+  deferFingerprint = false;
+  /** When true, signaling no longer answers offers → the peer never connects
+   * (used to stall a RECONNECT so the establish deadline is exercised, bug #2). */
+  stalled = false;
   /** Optional gate awaited inside provider.create (serialized-establish test). */
   createGate: (() => Promise<void>) | null = null;
   private serverDefrag: ControlDefragmenter = createControlDefragmenter();
@@ -263,6 +308,7 @@ class Fabric {
         if (this.createGate) await this.createGate();
         this.events.push(`create:end:${n}`);
         const peer = new FakePeer(this, n);
+        if (this.deferFingerprint) peer.fingerprintOverride = null;
         this.peers.push(peer);
         return peer;
       },
@@ -271,6 +317,7 @@ class Fabric {
 
   createSignaling = (): SignalingClient => {
     const sig = new FakeSignaling((s) => {
+      if (this.stalled) return; // no answer → the peer never connects
       if (this.opts.candidateBeforeAnswer) s.emitCandidate({ candidate: "cand-early" });
       s.emitDescription({ type: "answer", sdp: "server-answer" });
     });
@@ -918,7 +965,6 @@ describe("WebRTC transport — session lifecycle", () => {
     let tokenCalls = 0;
     const session = transport.openSession({
       connectionId: "c1",
-      callerKind: "panel",
       getToken: () => {
         tokenCalls++;
         return "grant-1";
@@ -952,7 +998,6 @@ describe("WebRTC transport — session lifecycle", () => {
     const paired: Array<{ deviceId: string; refreshToken: string }> = [];
     const session = transport.openSession({
       connectionId: "c1",
-      callerKind: "shell",
       getToken: () => "pairing-code",
       onPaired: (cred) => {
         paired.push(cred);
@@ -1445,6 +1490,201 @@ describe("WebRTC transport — candidate type (relay alarm)", () => {
 
     fabric.currentPeer().fireState("failed"); // pipe-down → null (alarm reset)
     expect(viaSurface[viaSurface.length - 1]).toBeNull();
+    await transport.close();
+  });
+
+  it("re-emits the candidate type when it resolves from null at pipe-up, and on a later switch (bug #4)", async () => {
+    const fabric = new Fabric({ hello: "defer" });
+    const seen: Array<RtcCandidateType | null> = [];
+    const transport = makeTransport(fabric, { onCandidateType: (t) => seen.push(t) });
+    const connecting = transport.connect();
+    await flushMicrotasks();
+    // Nomination not settled yet at pipe-up (the discarded-null case).
+    fabric.currentPeer().candType = null;
+    fabric.sendHello();
+    await connecting;
+    expect(seen).toEqual([null]); // emitted the (unresolved) null once
+    expect(transport.candidateType()).toBeNull();
+
+    // The pair resolves to relay — must re-emit (this is what feeds the alarm).
+    fabric.currentPeer().fireCandidateChange("relay");
+    await flushMicrotasks();
+    expect(seen).toEqual([null, "relay"]);
+    expect(transport.candidateType()).toBe("relay");
+
+    // A repeat of the same value is de-duped (only genuine transitions surface).
+    fabric.currentPeer().fireCandidateChange("relay");
+    await flushMicrotasks();
+    expect(seen).toEqual([null, "relay"]);
+    await transport.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pin gate before dispatch (bug #3)
+// ---------------------------------------------------------------------------
+
+describe("WebRTC transport — pin gate before dispatch (§6.1, bug #3)", () => {
+  it("does not action a non-hello frame while the pin is unverified, then completes once it settles", async () => {
+    const fabric = new Fabric({ hello: "defer" });
+    fabric.deferFingerprint = true; // new peers start with an unobservable fingerprint
+    const transport = makeTransport(fabric);
+    const connecting = transport.connect();
+    await flushMicrotasks();
+    const peer = fabric.currentPeer();
+    // Channels open + ICE connected, but the DTLS fingerprint is unobservable,
+    // so the pin cannot verify — the pipe must stay "connecting".
+    fabric.sendHello(); // remoteHello set; hello is NOT pin-gated (handshake ordering)
+    await flushMicrotasks();
+    expect(transport.status()).toBe("connecting");
+
+    // A ping arriving over the still-UNPINNED pipe must be DROPPED, not answered:
+    // if the gate leaked, the client would emit a pong (visible server-side).
+    fabric.frames.length = 0;
+    fabric.sendControl({ t: "ping", ts: 1 });
+    await flushMicrotasks();
+    expect(fabric.frames.some((f) => f.t === "pong")).toBe(false);
+
+    // Once the fingerprint settles, the pin verifies and the pipe completes.
+    peer.fingerprintOverride = undefined;
+    peer.fireState("connected"); // re-trigger tryComplete
+    await connecting;
+    expect(transport.status()).toBe("connected");
+    // Now a ping IS answered (dispatch un-gated after pinVerified).
+    fabric.frames.length = 0;
+    fabric.sendControl({ t: "ping", ts: 2 });
+    await flushMicrotasks();
+    expect(fabric.frames.some((f) => f.t === "pong")).toBe(true);
+    await transport.close();
+  });
+
+  it("FAILS CLOSED on a fingerprint mismatch — no frame is ever dispatched", async () => {
+    const fabric = new Fabric({ fp: "DE:AD:BE:EF" }); // server presents a different fp
+    const transport = makeTransport(fabric);
+    await expect(transport.connect()).rejects.toMatchObject({ code: FINGERPRINT_MISMATCH_CODE });
+    await transport.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reconnect liveness (bug #2) + reconnect-progress UX
+// ---------------------------------------------------------------------------
+
+describe("WebRTC transport — reconnect liveness (bug #2)", () => {
+  it("re-sends the offer on peer-joined so a late-arriving server recovers", async () => {
+    const fabric = new Fabric();
+    let sig!: FakeSignaling;
+    let serverPresent = false;
+    const transport = makeTransport(fabric, {
+      createSignaling: () => {
+        sig = new FakeSignaling((s) => {
+          if (serverPresent) s.emitDescription({ type: "answer", sdp: "server-answer" });
+        });
+        fabric.currentSignaling = sig;
+        return sig;
+      },
+    });
+    const connecting = transport.connect();
+    await flushMicrotasks();
+    // First offer relayed into an empty room — no answer, still connecting.
+    expect(sig.offersSent).toBe(1);
+    expect(transport.status()).toBe("connecting");
+
+    // The server joins → peer-joined → the offer is RE-SENT and now answered.
+    serverPresent = true;
+    sig.emitPeerJoined();
+    await flushMicrotasks();
+    expect(sig.offersSent).toBe(2);
+    await connecting;
+    expect(transport.status()).toBe("connected");
+    await transport.close();
+  });
+
+  it("fails a stalled RECONNECT at the establish deadline and retries under backoff", async () => {
+    vi.useFakeTimers();
+    const fabric = new Fabric();
+    const progress: ReconnectProgress[] = [];
+    const transport = makeTransport(fabric, { onReconnectProgress: (p) => progress.push(p) });
+    await transport.connect();
+    expect(transport.status()).toBe("connected");
+
+    // Make every future establish stall (server never answers), then drop the pipe.
+    fabric.stalled = true;
+    fabric.currentPeer().fireState("failed");
+    expect(progress.at(-1)).toMatchObject({ phase: "scheduled", attempt: 1 });
+
+    // Backoff fires → a reconnect attempt starts and STALLS (no answer/hello).
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(progress.some((p) => p.phase === "connecting")).toBe(true);
+    expect(transport.status()).toBe("connecting");
+
+    // Without the establish deadline this would hang forever. Advance past it:
+    // the attempt is declared failed and a fresh backoff (attempt 2) is scheduled.
+    await vi.advanceTimersByTimeAsync(36_000);
+    expect(progress.some((p) => p.phase === "failed")).toBe(true);
+    expect(progress.some((p) => p.phase === "scheduled" && p.attempt >= 2)).toBe(true);
+
+    // Let it actually recover to prove the loop is still live.
+    fabric.stalled = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(transport.status()).toBe("connected");
+    await transport.close();
+  });
+
+  it("distinguishes a signaling-layer failure in the connect timeout message", async () => {
+    vi.useFakeTimers();
+    const fabric = new Fabric();
+    // Signaling that opens but whose room drops before any description exchange.
+    const transport = makeTransport(fabric, {
+      connectTimeoutMs: 5_000,
+      createSignaling: () => {
+        const sig = new FakeSignaling(() => undefined); // never answers
+        fabric.currentSignaling = sig;
+        queueMicrotask(() => sig.close()); // room drops immediately (signaling layer)
+        return sig;
+      },
+    });
+    const connecting = transport.connect();
+    const expectation = expect(connecting).rejects.toThrow(/signaling\/rendezvous unreachable/);
+    await vi.advanceTimersByTimeAsync(5_100);
+    await expectation;
+    await transport.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// session-id / close-code hardening (bugs #8, #9, #10)
+// ---------------------------------------------------------------------------
+
+describe("WebRTC transport — session hardening", () => {
+  it("gives two label-only sessions DISTINCT sids so neither silently closes the other (bug #9)", () => {
+    const fabric = new Fabric();
+    const transport = makeTransport(fabric);
+    const a = transport.openSession({ clientLabel: "dup", getToken: () => "t" });
+    const b = transport.openSession({ clientLabel: "dup", getToken: () => "t" });
+    expect(a.sid).not.toBe(b.sid);
+    expect(a.isClosed()).toBe(false); // the second did NOT evict the first
+    expect(b.isClosed()).toBe(false);
+    void transport.close();
+  });
+
+  it("throws CLOSED on openSession() after close() instead of leaking a dead session (bug #8)", async () => {
+    const fabric = new Fabric();
+    const transport = makeTransport(fabric);
+    await transport.close();
+    expect(() => transport.openSession({ getToken: () => "t" })).toThrow(/closed/i);
+  });
+
+  it("a send on a closed session rejects with a distinct SESSION_CLOSED code, not an auth failure (bug #10)", async () => {
+    const fabric = new Fabric();
+    const transport = makeTransport(fabric);
+    await transport.connect();
+    const session = transport.openSession({ connectionId: "c1", getToken: () => "tok" });
+    await session.ready!();
+    session.close();
+    await expect(session.send(requestEnvelope("m", "r"))).rejects.toMatchObject({
+      code: SESSION_CLOSED_CODE,
+    });
     await transport.close();
   });
 });

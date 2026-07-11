@@ -13,6 +13,7 @@ export const harnessResilienceTests: TestCase[] = [
     description: "A failed eval surfaces an error and the same turn can still produce a final response",
     category: "harness-resilience",
     prompt: "Exercise recovery after an eval failure. Finish with HARNESS_THROW_OK, HARNESS_RECOVER_OK, and final-visible.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "HARNESS_INTENTIONAL_EVAL_FAILURE" }],
     validate: (result) => {
       const completed = completedToolNames(result);
       if (!completed.has("eval")) {
@@ -33,6 +34,7 @@ export const harnessResilienceTests: TestCase[] = [
     description: "A deliberately timed eval timeout/error is visible and does not leave a pending tool",
     category: "harness-resilience",
     prompt: "Exercise visible timeout/error recovery. Finish with TIMEOUT_VISIBLE_OK, TIMEOUT_RECOVERY_OK, and no-pending-tool.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "timeout" }],
     validate: (result) => checked(result, ["TIMEOUT_VISIBLE_OK", "TIMEOUT_RECOVERY_OK", "no-pending-tool"]),
   },
   {
@@ -40,6 +42,7 @@ export const harnessResilienceTests: TestCase[] = [
     description: "Tool validation errors are visible and retry succeeds without poisoning the transcript",
     category: "harness-resilience",
     prompt: "Exercise invalid tool arguments and recovery. Finish with INVALID_ARGS_VISIBLE_OK and INVALID_ARGS_RECOVER_OK.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "invalid args" }],
     validate: (result) => checked(result, ["INVALID_ARGS_VISIBLE_OK", "INVALID_ARGS_RECOVER_OK"]),
   },
   {

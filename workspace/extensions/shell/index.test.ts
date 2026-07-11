@@ -25,6 +25,9 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
     async (_target: string, _method: string, ..._args: unknown[]) => [] as unknown
   );
   const invoke = vi.fn(async (_name: string, _method: string, _args: unknown[]) => null as unknown);
+  const invokeProvider = vi.fn(
+    async (_provider: string, _method: string, _args: unknown[]) => null as unknown
+  );
   const invocationCurrent = vi.fn(() => ({
     caller: { callerId: "panel:test", callerKind: "panel" },
   }));
@@ -40,7 +43,14 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
     },
     invocation: { current: invocationCurrent },
     approvals: { request, revoke: vi.fn(), list: vi.fn() },
-    extensions: { invoke, use: vi.fn(), on: vi.fn(), list: vi.fn(), reload: vi.fn() },
+    extensions: {
+      invoke,
+      invokeProvider,
+      use: vi.fn(),
+      on: vi.fn(),
+      list: vi.fn(),
+      reload: vi.fn(),
+    },
     rpc: { call: rpcCall, stream: vi.fn(), on: vi.fn() },
     health: { healthy: vi.fn(), degraded: vi.fn(), unhealthy: vi.fn(), report: vi.fn() },
     log,
@@ -53,6 +63,7 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
     ensureContextFolder,
     rpcCall,
     invoke,
+    invokeProvider,
     invocationCurrent,
   };
 }

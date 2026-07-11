@@ -26,6 +26,7 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
 import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
+import { parseConnectLink } from "@vibestudio/shared/connect";
 
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -397,9 +398,13 @@ let connectionHandoff: { title: string; detail: string } | null = null;
 let connectionError: string | null = null;
 let pairLinkValue = "";
 let localWorkspaceValue = "";
-// Guards the one-shot auto-pair when the app was opened with a vibestudio://connect
-// deep link — we pair automatically instead of waiting for a paste + click.
+// Guards the one-shot pair when the app was opened with a vibestudio://connect
+// deep link. A deep link is NOT implicit consent to trust a server (one crafted
+// link + one click would silently pin an attacker's cert), so instead of
+// auto-pairing we show a confirmation card; this flips true once the user taps
+// Trust. `pairConfirmDismissed` records a Cancel so the card doesn't re-appear.
 let autoPairTriggered = false;
+let pairConfirmDismissed = false;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -683,18 +688,90 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
   approvalsContainer.className = "connection-grid";
   approvalsContainer.replaceChildren();
   appendConnectionStatus(approvalsContainer);
-  appendPairRemote(approvalsContainer);
+  // Opened via a vibestudio://connect deep link ⇒ show a confirmation card (server
+  // label + fingerprint + Trust/Cancel) rather than silently pairing. Opening a
+  // link is not consent to trust the server it points at.
+  const awaitingConfirm = !!state.pendingPairLink && !autoPairTriggered && !pairConfirmDismissed;
+  if (awaitingConfirm && state.pendingPairLink) {
+    appendPairConfirmation(approvalsContainer, state.pendingPairLink);
+  } else {
+    appendPairRemote(approvalsContainer);
+  }
   appendLocalWorkspaces(approvalsContainer, state);
-  // Opened via a vibestudio://connect deep link ⇒ pair automatically (one-shot).
-  // The user already expressed intent by opening the link; on success the host
-  // connects in this process and the launch gate proceeds in this window.
-  if (state.pendingPairLink && !autoPairTriggered && !connectionBusyAction) {
-    autoPairTriggered = true;
-    const link = state.pendingPairLink;
-    pairLinkValue = link;
-    void runConnectionAction("pair", async () => {
+}
+
+/** Uppercase colon-separated hex — the canonical DTLS fingerprint form to compare. */
+function formatFingerprintGroups(fp: string): string {
+  const hex = fp.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  return (hex.match(/.{1,2}/g) ?? [hex]).join(":");
+}
+
+/**
+ * The DELIGHTFUL pairing confirmation (bug 1): a reassuring card, NOT a scary
+ * blocker. Shows the server label + the DTLS fingerprint to compare, with a
+ * one-tap Trust / Cancel. Trust pairs; Cancel drops back to the normal chooser.
+ */
+function appendPairConfirmation(parent: HTMLElement, link: string): void {
+  const card = document.createElement("article");
+  card.className = "connection-option connection-form";
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = "Trust this server?";
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+
+  const parsed = parseConnectLink(link);
+  if (parsed.kind === "error") {
+    // A stale/old-format link — surface the actionable reason instead of a
+    // silent no-op, and let the user fall back to the manual options below.
+    meta.textContent = parsed.reason;
+    const actions = document.createElement("div");
+    actions.className = "toolbar";
+    actions.append(dismissPairButton("Back"));
+    card.append(title, meta, actions);
+    parent.append(card);
+    return;
+  }
+
+  meta.textContent =
+    "You opened a pairing link. Confirm the fingerprint matches the one shown on the server before connecting.";
+
+  const details = document.createElement("div");
+  details.className = "field-grid";
+  details.style.gap = "6px";
+
+  const serverRow = document.createElement("div");
+  const serverLabel = document.createElement("div");
+  serverLabel.className = "meta";
+  serverLabel.textContent = "Server";
+  const serverValue = document.createElement("div");
+  serverValue.style.fontWeight = "600";
+  serverValue.textContent = parsed.srv || "Unnamed server";
+  serverRow.append(serverLabel, serverValue);
+
+  const fpRow = document.createElement("div");
+  const fpLabel = document.createElement("div");
+  fpLabel.className = "meta";
+  fpLabel.textContent = "Fingerprint";
+  const fpValue = document.createElement("code");
+  fpValue.textContent = formatFingerprintGroups(parsed.fp);
+  fpValue.style.wordBreak = "break-all";
+  fpValue.style.fontSize = "0.85em";
+  fpRow.append(fpLabel, fpValue);
+
+  details.append(serverRow, fpRow);
+
+  const actions = document.createElement("div");
+  actions.className = "toolbar";
+  actions.append(
+    connectionButton("Trust and connect", "pair", async () => {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
+      autoPairTriggered = true;
       const result = await bootstrapApi.pairRemote({ link });
+      // On success the host accepts the pairing and connects in this process;
+      // only a failed parse returns { ok: false } for us to surface.
       if (isRecord(result) && result["ok"] === false) {
         throw new Error(
           typeof result["message"] === "string"
@@ -704,8 +781,28 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
               : "Pairing failed"
         );
       }
-    });
-  }
+    })
+  );
+  actions.append(dismissPairButton("Cancel"));
+
+  card.append(title, meta, details, actions);
+  parent.append(card);
+}
+
+/**
+ * Plain (non-`runConnectionAction`) button that dismisses the pairing confirmation
+ * and returns to the normal chooser — Cancel must NOT enter the starting-workspace
+ * handoff that `runConnectionAction` triggers on success.
+ */
+function dismissPairButton(label: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.textContent = label;
+  button.disabled = connectionBusyAction !== null;
+  button.onclick = () => {
+    pairConfirmDismissed = true;
+    if (connectionState) renderConnectionChooser(connectionState);
+  };
+  return button;
 }
 
 function renderStartingWorkspace(): void {

@@ -214,6 +214,26 @@ describe("TestRunner", () => {
         error: "ReferenceError: missingVar is not defined",
       }),
     ]);
+
+    const expectedSuite = await tester.runSuite([
+      {
+        name: "intentional-tool-error-recovery",
+        category: "test",
+        description: "intentional tool error recovery",
+        prompt: "trigger recovery",
+        expectedToolFailures: [{ name: "eval", errorIncludes: "missingVar" }],
+        validate: () => ({ passed: true }),
+      },
+    ]);
+
+    expect(expectedSuite).toMatchObject({
+      passed: 1,
+      toolFailureCount: 0,
+      testsWithToolFailures: 0,
+    });
+    expect(expectedSuite.results[0]!.execution.toolFailures).toEqual([
+      expect.objectContaining({ name: "eval", expected: true }),
+    ]);
   });
 
   it("runs custom test orchestration through the normal validation path", async () => {

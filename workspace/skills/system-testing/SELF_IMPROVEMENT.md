@@ -321,9 +321,7 @@ from a push), inspect the build event buffer before retrying:
 return {
   recent: await rpc.call("main", "build.listRecentBuildEvents", []),
   forUnit: await rpc.call("main", "build.listRecentBuildEvents", ["panels/example"]),
-  unit: await rpc.call("main", "build.inspectBuildProvenance", [
-    "panels/example",
-  ]),
+  unit: await rpc.call("main", "build.inspectBuildProvenance", ["panels/example"]),
 };
 ```
 
@@ -457,11 +455,11 @@ restarting Vibestudio from that checkout or handing the branch to a developer.
 Prefer an existing `projects/vibestudio` workspace repo when it exists. If it
 does not exist yet and the workspace is not dogfood-managed, import it with
 `git.importProject()`. That uses one workspace config approval showing the
-destination path, remote URL, and branch; records the shared remote in
-`meta/vibestudio.yml`; clones into canonical workspace source; and propagates the
-repo into contexts. The same API can import panels, packages, skills, workers,
-templates, about pages, and plain projects by choosing the destination
-path.
+destination path, remote URL, and branch; records the shared remote and matching
+upstream with `autoPush: false` in `meta/vibestudio.yml`; clones into canonical
+workspace source; and propagates the repo into contexts. The same API can import
+panels, packages, skills, workers, templates, about pages, and plain projects by
+choosing the destination path.
 
 ```
 eval({
@@ -479,7 +477,6 @@ eval({
           url: "https://github.com/YOUR_ORG/vibestudio.git",
           branch: "main",
         },
-        branch: "main",
       });
     }
 
@@ -496,7 +493,7 @@ const branchName = `fix/system-test-${failedTestName}`;
 import { GitClient } from "@vibestudio/git";
 import { credentials, fs } from "@workspace/runtime";
 const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
-await externalGit.createBranch(scope.checkoutDir, branchName);
+await externalGit.createBranch({ dir: scope.checkoutDir, name: branchName });
 await externalGit.checkout(scope.checkoutDir, branchName);
 ```
 
@@ -538,8 +535,8 @@ not tracked and has no effect on the VCS.
 // For plain external project repos, use @vibestudio/git with credentials.gitHttp():
 // const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
 // await externalGit.addAll(scope.checkoutDir);
-// await externalGit.commit(scope.checkoutDir, `fix: describe the change`);
-// await externalGit.push(scope.checkoutDir, { remote: "origin", ref: branchName });
+// await externalGit.commit({ dir: scope.checkoutDir, message: `fix: describe the change` });
+// await externalGit.push({ dir: scope.checkoutDir, remote: "origin", ref: branchName });
 
 // Then rebuild if the fix touched workspace runtime units. Plain projects
 // such as projects/vibestudio are not Build V2 live inputs.
@@ -604,10 +601,10 @@ if (retest.result.passed) {
   and propagates remotes for a workspace repo that exists or will exist later;
   configured missing repos are imported automatically at startup.
 - **Use `git.importProject()` to create a workspace repo from a remote.** It
-  clones into canonical workspace source, records the shared remote, and makes
-  the repo available to future contexts. Use the destination path to choose the
-  category, such as `panels/name`, `skills/name`, `workers/name`, or
-  `projects/name`.
+  clones into canonical workspace source, records the shared remote and matching
+  upstream with auto-push off, and makes the repo available to future contexts.
+  Use the destination path to choose the category, such as `panels/name`,
+  `skills/name`, `workers/name`, or `projects/name`.
 - **Use `git.completeWorkspaceDependencies()` as a retry/backfill.** It imports
   each configured remote whose workspace repo is missing and reports imported,
   skipped, and failed paths. Pass `{ credentialId }` for private repo retries;

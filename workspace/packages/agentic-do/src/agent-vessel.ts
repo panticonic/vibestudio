@@ -123,7 +123,7 @@ const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 /** The subset of an external subagent launch result the spawn path consumes.
  *  Typed inline to avoid a vessel→extension source dependency; the call goes
- *  through the host `extensions.invoke` RPC. */
+ *  through a configured provider namespace when one exists. */
 interface ExternalSubagentLaunchResult {
   entityId: string;
   contextId: string;
@@ -147,6 +147,10 @@ function normalizeSubagentAgentKind(value: unknown): SubagentAgentKind | null {
 
 function externalSubagentExtensionId(agentKind: SubagentAgentKind): string {
   return `@workspace-extensions/${agentKind}`;
+}
+
+function externalSubagentProviderSlot(agentKind: SubagentAgentKind): string | null {
+  return agentKind === "claude-code" ? "claudeCode" : null;
 }
 
 export type ApprovalLevel = 0 | 1 | 2;
@@ -582,7 +586,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const modelId = modelRef.slice(modelRef.indexOf(":") + 1);
     if (modelProviderId !== providerId) return null;
     try {
-      const { getModel } = await import("@earendil-works/pi-ai");
+      const { getBuiltinModel: getModel } = await import("@earendil-works/pi-ai/providers/all");
       const registryModel = getModel(modelProviderId as never, modelId as never) as
         | { baseUrl?: string }
         | undefined;
@@ -1146,7 +1150,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const seed: StoredSettings = {};
     if (typeof c["model"] === "string" && c["model"]) seed.model = c["model"];
     const tl = c["thinkingLevel"];
-    if (tl === "minimal" || tl === "low" || tl === "medium" || tl === "high")
+    if (
+      tl === "minimal" ||
+      tl === "low" ||
+      tl === "medium" ||
+      tl === "high" ||
+      tl === "xhigh" ||
+      tl === "max"
+    )
       seed.thinkingLevel = tl;
     const al = c["approvalLevel"];
     if (al === 0 || al === 1 || al === 2) seed.approvalLevel = al;
@@ -2348,9 +2359,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       case "setThinkingLevel": {
         const level = (args as { level?: unknown } | null)?.level;
-        if (level !== "minimal" && level !== "low" && level !== "medium" && level !== "high") {
+        if (
+          level !== "minimal" &&
+          level !== "low" &&
+          level !== "medium" &&
+          level !== "high" &&
+          level !== "xhigh" &&
+          level !== "max"
+        ) {
           return {
-            result: { error: "setThinkingLevel requires level: minimal, low, medium, or high" },
+            result: {
+              error: "setThinkingLevel requires level: minimal, low, medium, high, xhigh, or max",
+            },
             isError: true,
           };
         }
@@ -3183,7 +3203,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const providerId = model.includes(":") ? model.slice(0, model.indexOf(":")) : "anthropic";
     const modelId = model.includes(":") ? model.slice(model.indexOf(":") + 1) : model;
     try {
-      const { getModel } = await import("@earendil-works/pi-ai");
+      const { getBuiltinModel: getModel } = await import("@earendil-works/pi-ai/providers/all");
       const registryModel = getModel(providerId as never, modelId as never) as
         | { baseUrl?: string }
         | undefined;
@@ -3849,11 +3869,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // 4) Launch the linked external subagent via its extension. The extension
     //    owns the Node-only work: prepare the linked vessel, write the profile,
     //    and spawn the headless process in the child context.
+    const providerSlot = externalSubagentProviderSlot(agentKind);
     const launched = await this.rpc.call<ExternalSubagentLaunchResult>(
       "main",
-      "extensions.invoke",
+      providerSlot ? "extensions.invokeProvider" : "extensions.invoke",
       [
-        externalSubagentExtensionId(agentKind),
+        providerSlot ?? externalSubagentExtensionId(agentKind),
         "launchSubagent",
         [
           {
@@ -4480,9 +4501,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (run.externalSessionEntityId) {
       const agentKind = normalizeSubagentAgentKind(run.agentKind);
       if (agentKind && agentKind !== "pi") {
+        const providerSlot = externalSubagentProviderSlot(agentKind);
         await this.rpc
-          .call("main", "extensions.invoke", [
-            externalSubagentExtensionId(agentKind),
+          .call("main", providerSlot ? "extensions.invokeProvider" : "extensions.invoke", [
+            providerSlot ?? externalSubagentExtensionId(agentKind),
             "release",
             [{ entityId: run.externalSessionEntityId }],
           ])
@@ -4821,8 +4843,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
     if ("thinkingLevel" in patch) {
       const l = patch["thinkingLevel"];
-      if (l !== "minimal" && l !== "low" && l !== "medium" && l !== "high") {
-        throw new Error("thinkingLevel must be minimal|low|medium|high");
+      if (
+        l !== "minimal" &&
+        l !== "low" &&
+        l !== "medium" &&
+        l !== "high" &&
+        l !== "xhigh" &&
+        l !== "max"
+      ) {
+        throw new Error("thinkingLevel must be minimal|low|medium|high|xhigh|max");
       }
       next.thinkingLevel = l;
     }

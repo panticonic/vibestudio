@@ -67,7 +67,7 @@
                 Verified Android App Link for OAuth callbacks. With
                 android:autoVerify="true" + a valid assetlinks.json served
                 from https://vibestudio.app/.well-known/assetlinks.json
-                (see apps/well-known/build.ts), Android binds this
+                (served by apps/webhook-relay), Android binds this
                 intent-filter to *only* this app's signing certificate.
                 Other apps registering the same host cannot intercept the
                 authorization code. See

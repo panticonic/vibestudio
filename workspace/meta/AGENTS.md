@@ -37,6 +37,7 @@ npm packages require the `imports` parameter: `imports: { "lodash": "npm:4" }`
 Before using eval, read the **sandbox** skill — it has the complete API reference.
 
 - **sandbox** — **read this first** — eval patterns, complete runtime API reference, inline_ui, feedback forms, browser automation
+- **architecture** — the theory of the whole system: trust boundary, unit kinds, log-first storage, VCS authority, permissions/credentials (`skills/architecture/SKILL.md`) — load before designing anything cross-cutting
 - **workspace-dev** — building panels, workers, Durable Objects; exports `createProject`, `forkProject`
 - **browser-import** — importing cookies, passwords, bookmarks, history from installed browsers
 - **api-integrations** — connecting to OAuth APIs (Gmail, GitHub, Slack, Notion, Linear)

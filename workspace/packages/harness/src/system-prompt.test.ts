@@ -58,6 +58,12 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("openExternal(url)");
   });
 
+  it("keeps diagram guidance in the base prompt", () => {
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("```mermaid");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("sequenceDiagram");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("<Diagram code=");
+  });
+
   it("asks agents to use proper grammar in intermediate messages", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
       "Use proper grammar in commentary/intermediate messages."

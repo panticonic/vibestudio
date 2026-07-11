@@ -14,11 +14,14 @@ import { useShellEvent } from "../shell/useShellEvent";
 
 type ConnectionStatus = "connected" | "connecting" | "disconnected";
 type ConnectionMode = "local" | "remote";
+/** Selected ICE path: host/srflx/prflx = direct P2P, relay = TURN, null = unknown. */
+type CandidateType = "host" | "srflx" | "prflx" | "relay" | null;
 
 interface ConnectionSnapshot {
   mode: ConnectionMode;
   status: ConnectionStatus;
   remoteHost?: string;
+  candidateType?: CandidateType;
 }
 
 interface HealthSample {
@@ -48,6 +51,7 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
           mode: info.connectionMode ?? "local",
           status: info.connectionStatus ?? "connected",
           remoteHost: info.remoteHost,
+          candidateType: info.connectionCandidateType ?? null,
         });
       })
       .catch(() => {});
@@ -55,13 +59,22 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
 
   useShellEvent(
     "server-connection-changed",
-    useCallback((payload: { status: ConnectionStatus; isRemote: boolean; remoteHost?: string }) => {
-      setSnap({
-        mode: payload.isRemote ? "remote" : "local",
-        status: payload.status,
-        remoteHost: payload.remoteHost,
-      });
-    }, [])
+    useCallback(
+      (payload: {
+        status: ConnectionStatus;
+        isRemote: boolean;
+        remoteHost?: string;
+        candidateType?: CandidateType;
+      }) => {
+        setSnap({
+          mode: payload.isRemote ? "remote" : "local",
+          status: payload.status,
+          remoteHost: payload.remoteHost,
+          candidateType: payload.candidateType ?? null,
+        });
+      },
+      []
+    )
   );
 
   useShellEvent(
@@ -84,6 +97,16 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
         : snap.mode === "remote"
           ? `Connected to ${snap.remoteHost ?? "remote server"}`
           : "Connected (local)";
+
+  // Surface the selected network path on a live remote pipe: a TURN relay works
+  // but is slower, so telling the user why is a kindness (not an alarm). Direct
+  // (P2P) is noted quietly in the tooltip only — no visible chrome for the happy path.
+  const isRelayed = snap.status === "connected" && snap.mode === "remote" && snap.candidateType === "relay";
+  if (snap.status === "connected" && snap.mode === "remote" && snap.candidateType) {
+    tooltip += isRelayed
+      ? "\nRelayed via TURN — direct peer-to-peer wasn't available, so traffic is slower."
+      : "\nDirect peer-to-peer connection.";
+  }
 
   // Append health poll details when we have a sample AND the connection is
   // live. `health.error` means the most recent poll failed — surface it so a
@@ -125,6 +148,20 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
           {icon}
           {snap.mode === "remote" && snap.remoteHost ? (
             <span style={{ marginLeft: 4 }}>{snap.remoteHost}</span>
+          ) : null}
+          {isRelayed ? (
+            <span
+              style={{
+                marginLeft: 5,
+                paddingLeft: 5,
+                borderLeft: "1px solid currentColor",
+                opacity: 0.7,
+                fontSize: "0.85em",
+                letterSpacing: "0.02em",
+              }}
+            >
+              Relayed
+            </span>
           ) : null}
         </Badge>
       </IconButton>

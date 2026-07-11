@@ -50,11 +50,14 @@ push, status, or egress logic back into host services.
 
 For command-line workflows, use `vibestudio vcs git ...` (`status`,
 `remote:set`, `enable`, `push`, `pull`, `publish`, `import`, `auto`,
-`disable`). These commands dispatch to Git Bridge through `extensions.invoke`.
-For runtime code, configure `git.remotes`/`git.upstreams` through runtime
-helpers or provider helpers.
+`disable`). These commands call the host `gitInterop.*` service. Operations that
+need Git transport are dispatched from that service to the extension declared in
+`providers.gitInterop`.
 
-From workspace runtime code, use the shared `git` namespace first:
+Workspace runtime code uses the shared `git` namespace. It is the typed public
+client for `gitInterop.*`, so it follows the same policy and configured-provider
+route as the CLI. Never call Git Bridge with `extensions.invoke` or hard-code its
+package name in userland code.
 
 ```ts
 import { git } from "@workspace/runtime";
@@ -65,58 +68,48 @@ await git.setSharedRemote("projects/bgkit", {
   branch: "main",
 });
 
-await git.configureUpstream("projects/bgkit", {
+await git.setUpstream("projects/bgkit", {
   remote: "origin",
   branch: "main",
   credentialId: "cred_github_...",
   autoPush: false,
 });
 
-const status = await git.upstreamStatus("projects/bgkit");
+const statuses = await git.upstreamStatus(["projects/bgkit"]);
 await git.pushUpstream("projects/bgkit");
 await git.pullUpstream("projects/bgkit", { dryRun: true });
 ```
 
-Use direct extension invocation only for extension-owned operations that do not
-have a runtime wrapper, panel actions, or maintenance code. The public API is
-the awaited return of `activate(...)`, reached through `extensions.invoke`;
-Git Bridge is intentionally not registered as a panel-facing typed extension
-client.
+Public runtime methods:
 
-```ts
-import { extensions } from "@workspace/runtime";
+| Method                                                                     | Use                                                                                                    |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `setSharedRemote(repoPath, remote)` / `removeSharedRemote(repoPath, name)` | Write `git.remotes` through host approval-gated config APIs.                                           |
+| `setUpstream(repoPath, config)` / `removeUpstream(repoPath)`               | Write `git.upstreams` through host approval-gated config APIs.                                         |
+| `setAutoPush(repoPath, enabled)`                                           | Set auto-push on a declared upstream.                                                                  |
+| `upstreamStatus(repoPaths, options?)`                                      | Report selected repos, or every configured upstream when `repoPaths` is `[]`.                          |
+| `pushUpstream(repoPath, opts?)`                                            | Export protected `main` and push to the declared upstream.                                             |
+| `pullUpstream(repoPath, opts?)`                                            | Fetch, optionally preview, fast-forward or merge diverged refs, import the tree, and publish to GAD.   |
+| `publishRepo(input)`                                                       | Create a provider repo, declare its remote/upstream, export, and push.                                 |
+| `importProject(input)`                                                     | Record its shared remote and upstream (`autoPush: false`), then clone through the configured provider. |
+| `completeWorkspaceDependencies(options?)`                                  | Import configured workspace dependencies that are not present locally.                                 |
 
-await extensions.invoke("@workspace-extensions/git-bridge", "cloneRepo", [
-  { repoPath: "projects/bgkit" },
-]);
-```
-
-Public extension methods:
-
-| Method | Use |
-| --- | --- |
-| `upstreamStatus(repoPaths?)` | Report configured repos, state, ahead/behind counts, and last push metadata. |
-| `pushUpstream(repoPath, opts?)` | Export protected `main` and push to the declared upstream. |
-| `pullUpstream(repoPath, opts?)` | Fetch, optionally preview, fast-forward or merge diverged refs, import the tree, and publish to GAD. |
-| `publishRepo(input, opts?)` | Create a provider repo, declare `origin`, configure upstream, export, and push. |
-| `cloneRepo({ repoPath })` | Clone only the declared remote/upstream for an approved repo path, then import. |
-| `importRepo({ url, path, branch?, credentialId? })` | Clone an external project through `gitInterop.importProject`. |
-| `setUpstream` / `removeUpstream` | Write `git.upstreams` through host approval-gated config APIs. |
-| `setRemote` / `removeRemote` | Write `git.remotes` through host approval-gated config APIs. |
-| `setAutoPush(repoPath, on?)` | Toggle upstream auto-push by rewriting the upstream declaration. |
-| `onMainAdvanced(repoPaths)` | Queue auto-push work after protected `main` advances. |
-| `openGitTab(repoPath?)` | Ask the shell to open the Git upstreams panel. |
-| `importRepoTree` / `exportRepoHead` | Low-level bridge import/export primitives for bridge maintenance and tests. |
+Git Bridge implements the internal provider operations used by the host:
+`upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `cloneRepo`, and
+`onMainAdvanced`. Only host-side provider dispatch invokes that contract:
+`gitInterop` delegates requested operations, while the host's ref-change hook
+delivers `onMainAdvanced`. Raw checkout import/export primitives are
+implementation and test internals, not a second runtime API.
 
 ## Required Boundaries
 
-- Route config writes through runtime `git.*` or bridge wrappers backed by
-  `gitInterop`; never edit `meta/vibestudio.yml` directly for remotes or
+- Route userland operations and config writes through runtime `git.*`; never
+  invoke Git Bridge directly or edit `meta/vibestudio.yml` for remotes or
   upstreams.
 - Use `ctx.credentials.gitHttp(...)` through the bridge/Git client path. Do not
   expose, log, return, or manually splice tokens into URLs.
-- Keep `cloneRepo` URL-free at the call site. It must use the declared remote
-  and upstream config for the repo path.
+- Keep the internal provider `cloneRepo` contract URL-free. The host passes only
+  the repo path, and the provider must use its declared remote and upstream.
 - Treat missing GAD trailers on remote commits as external history. Import by
   tree snapshot; do not synthesize GAD transitions from arbitrary Git commits.
 - Never make auto-push force. Force push is manual recovery only and must flow
@@ -137,9 +130,9 @@ Public extension methods:
 - Keep provider-specific creation, fork selection, branch defaults, and API
   checks in provider packages such as `workspace/packages/integrations`, not in
   host services.
-- Do not reintroduce legacy host adoption or direct extension ingestion to repo
-  `main`; imports must stage on `import:main` and publish through the protected
-  import path.
+- Host adoption and direct extension ingestion to repo `main` are not supported;
+  imports must stage on `import:main` and publish through the protected import
+  path.
 
 ## Workflows
 
@@ -147,19 +140,33 @@ Before publishing or pushing, inspect status. If a repo is behind or diverged,
 preview pull first:
 
 ```ts
-const status = await git.upstreamStatus("projects/bgkit");
+const statuses = await git.upstreamStatus(["projects/bgkit"]);
 await git.pullUpstream("projects/bgkit", { dryRun: true });
 ```
 
 For GitHub-specific onboarding and repository creation, prefer the GitHub skill
 helper (`publishToGitHub`, `upstreamStatus`) when it is available. It configures
-shared remotes/upstreams through runtime APIs and invokes Git Bridge without
+shared remotes/upstreams and publishes through the routed runtime Git API without
 receiving raw credentials.
 
-For a generic external import, use runtime `git.importProject(...)` or bridge
-`importRepo(...)` so clone plus remote recording remain approval-gated and
-auditable. After import, configure upstream tracking separately and leave
-`autoPush` off unless the user explicitly wants unattended pushes.
+For a generic external import, use runtime `git.importProject(...)` so the
+remote/upstream declarations and clone remain provider-routed, approval-gated,
+and auditable:
+
+```ts
+await git.importProject({
+  path: "projects/bgkit",
+  remote: {
+    name: "origin",
+    url: "https://github.com/acme/bgkit.git",
+    branch: "main",
+  },
+});
+```
+
+The import records both the shared remote and matching upstream in one approved
+config change, with `autoPush: false`. Call `git.setAutoPush(...)` afterward only
+when the user explicitly wants unattended pushes.
 
 For behind/diverged recovery:
 
@@ -176,13 +183,15 @@ For behind/diverged recovery:
 
 ## Development Checklist
 
-When changing Git Bridge behavior, update the bridge, runtime wrappers, panel
-calls, docs, and tests together. Check these files first:
+When changing Git Bridge behavior, update the provider, canonical service schema,
+runtime client, panel calls, docs, and tests together. Check these files first:
 
+- `packages/shared/src/serviceSchemas/gitInterop.ts`
+- `src/server/services/gitInteropService.ts`
 - `workspace/extensions/git-bridge/index.ts`
 - `workspace/extensions/git-bridge/upstream.ts`
 - `workspace/extensions/git-bridge/bridge.ts`
-- `workspace/packages/runtime/src/shared/gitApi.ts`
+- `workspace/packages/runtime/src/shared/git.ts`
 - `workspace/panels/gad-browser/index.tsx`
 - `docs/git-upstream.md`
 - `workspace/skills/github/SKILL.md`

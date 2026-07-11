@@ -124,6 +124,7 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
   let mem: ReturnType<typeof createMemoryBlobstore>;
   let refs: Map<string, string>;
   let published: string[];
+  let state: Map<string, string>;
   let bridge: GitBridge;
 
   beforeEach(async () => {
@@ -136,7 +137,7 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     mem = createMemoryBlobstore();
     refs = new Map();
     published = [];
-    const state = new Map<string, string>();
+    state = new Map<string, string>();
     const host: BridgeHost = {
       workspaceRoot: async () => workspaceRoot,
       store: {
@@ -318,7 +319,119 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     expect(await mem.store.listTree(result.stateHash)).toBeNull();
 
     await expect(bridge.exportRepoHead(REPO)).rejects.toThrow(
-      `state ${result.stateHash} is missing its canonical content-store tree`
+      `state ${result.stateHash} has no canonical content tree`
+    );
+  });
+
+  it("persists exact versioned marker and checkout-map envelopes", async () => {
+    const stateHash = await commitRepo({ "a.txt": "one\n" });
+    const result = await bridge.exportRepoHead(REPO);
+
+    expect(JSON.parse(state.get(`marker:${REPO}`)!)).toEqual({
+      version: 1,
+      kind: "export-marker",
+      stateHash,
+      commitSha: result.headCommit,
+    });
+    expect(JSON.parse(state.get(`checkout:${REPO}`)!)).toEqual({
+      version: 1,
+      kind: "checkout-map",
+      files: {
+        "a.txt": {
+          contentHash: sha256Hex(Buffer.from("one\n", "utf8")),
+          mode: 33188,
+        },
+      },
+    });
+  });
+
+  it("discards unversioned and malformed marker state without migration", async () => {
+    const stateHash = `state:${"a".repeat(64)}`;
+    const commitSha = "b".repeat(40);
+    const readMarker = () =>
+      (
+        bridge as unknown as {
+          getMarker(repoPath: string): Promise<{ stateHash: string; commitSha: string } | null>;
+        }
+      ).getMarker(REPO);
+    const malformed = [
+      { stateHash, commitSha },
+      { version: 2, kind: "export-marker", stateHash, commitSha },
+      { version: 1, kind: "checkout-map", stateHash, commitSha },
+      { version: 1, kind: "export-marker", stateHash: "state:bad", commitSha },
+      { version: 1, kind: "export-marker", stateHash, commitSha: "not-a-commit" },
+      { version: 1, kind: "export-marker", stateHash, commitSha, extra: true },
+    ];
+
+    for (const candidate of malformed) {
+      state.set(`marker:${REPO}`, JSON.stringify(candidate));
+      expect(await readMarker()).toBeNull();
+    }
+    state.set(`marker:${REPO}`, "not-json");
+    expect(await readMarker()).toBeNull();
+
+    state.set(
+      `marker:${REPO}`,
+      JSON.stringify({ version: 1, kind: "export-marker", stateHash, commitSha })
+    );
+    expect(await readMarker()).toEqual({ stateHash, commitSha });
+  });
+
+  it("discards unversioned and malformed checkout-map state without migration", async () => {
+    const contentHash = "c".repeat(64);
+    const files = { "a.txt": { contentHash, mode: 33188 } };
+    const readCheckoutMap = () =>
+      (
+        bridge as unknown as {
+          getCheckoutMap(
+            repoPath: string
+          ): Promise<Record<string, { contentHash: string; mode: number }>>;
+        }
+      ).getCheckoutMap(REPO);
+    const malformed = [
+      files,
+      { version: 2, kind: "checkout-map", files },
+      { version: 1, kind: "export-marker", files },
+      { version: 1, kind: "checkout-map", files, extra: true },
+      {
+        version: 1,
+        kind: "checkout-map",
+        files: { "../escape": { contentHash, mode: 33188 } },
+      },
+      {
+        version: 1,
+        kind: "checkout-map",
+        files: { "a.txt": { contentHash: "not-a-digest", mode: 33188 } },
+      },
+      {
+        version: 1,
+        kind: "checkout-map",
+        files: { "a.txt": { contentHash, mode: 0 } },
+      },
+      {
+        version: 1,
+        kind: "checkout-map",
+        files: { "a.txt": { contentHash, mode: 33188, extra: true } },
+      },
+    ];
+
+    for (const candidate of malformed) {
+      state.set(`checkout:${REPO}`, JSON.stringify(candidate));
+      expect(await readCheckoutMap()).toEqual({});
+    }
+    state.set(`checkout:${REPO}`, "not-json");
+    expect(await readCheckoutMap()).toEqual({});
+
+    state.set(`checkout:${REPO}`, JSON.stringify({ version: 1, kind: "checkout-map", files }));
+    expect(await readCheckoutMap()).toEqual(files);
+  });
+
+  it("requires every exported state to have a canonical content tree", async () => {
+    const stateHash = await commitRepo({ "a.txt": "one\n" });
+    mem.states.delete(stateHash);
+
+    await expect(bridge.exportRepoHead(REPO)).rejects.toThrow(
+      `git export: state ${stateHash} has no canonical content tree`
     );
   });
 
@@ -563,14 +676,8 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     const result = await bridge.exportRepoHead(REPO, { authorEmail: "person@example.com" });
     expect(result.exported).toBe(2);
 
-    const authors = git(repoDir, ["log", "--format=%an <%ae>"])
-      .trim()
-      .split("\n")
-      .filter(Boolean);
-    expect(authors).toEqual([
-      "user <person@example.com>",
-      "user <person@example.com>",
-    ]);
+    const authors = git(repoDir, ["log", "--format=%an <%ae>"]).trim().split("\n").filter(Boolean);
+    expect(authors).toEqual(["user <person@example.com>", "user <person@example.com>"]);
   });
 
   it("serializes concurrent operations on the SAME repo via withRepoLock (start order = completion order)", async () => {

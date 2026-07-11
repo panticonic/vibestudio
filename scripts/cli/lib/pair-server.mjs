@@ -145,6 +145,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   let bannerPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
+  // Our own SIGINT/SIGTERM forwarders, tracked so we can DEINSTALL them before
+  // re-raising a child's fatal signal (otherwise the forwarder catches the
+  // re-raised signal and the parent lingers / exits 0 instead of dying by signal).
+  const signalForwarders = new Map();
 
   const cleanupReadyState = () => {
     if (readyPoll !== null) {
@@ -328,18 +332,28 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       cleanupReadyState();
       if (stderrBuffer) stderrLines.push(stderrBuffer);
       if (hooks.onChildExit?.({ code, signal, stderrLines }, control)) return;
-      if (signal) process.kill(process.pid, signal);
-      else process.exit(code ?? 0);
+      if (signal) {
+        // Re-raise so our exit status reflects the child's fatal signal. Deinstall
+        // our forwarders first (documented default-action pattern) so the signal
+        // performs its default terminate action instead of being swallowed.
+        for (const [sig, handler] of signalForwarders) process.removeListener(sig, handler);
+        signalForwarders.clear();
+        process.kill(process.pid, signal);
+      } else {
+        process.exit(code ?? 0);
+      }
     });
   };
 
   spawnChild();
 
   for (const sig of ["SIGINT", "SIGTERM"]) {
-    process.on(sig, () => {
+    const handler = () => {
       cleanupReadyState();
       child?.kill(sig);
-    });
+    };
+    signalForwarders.set(sig, handler);
+    process.on(sig, handler);
   }
 }
 

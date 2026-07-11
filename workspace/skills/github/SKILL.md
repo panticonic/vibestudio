@@ -147,10 +147,10 @@ await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
 await client.push({ dir: "/repo" });
 ```
 
-For GAD-native repos, prefer the upstream bridge rather than pushing a checkout
-directly. `publishToGitHub()` can declare the shared remote, configure
-`git.upstreams`, export protected `main` through git-bridge, and ask git-bridge
-to publish to the remote:
+For GAD-native repos, use the runtime `git` provider path rather than pushing a
+checkout directly. `publishToGitHub()` is a thin GitHub-specific wrapper around
+`git.publishRepo()`: it creates a new GitHub repository, records the resulting
+remote and upstream, exports protected `main`, and performs the first push.
 
 ```ts
 import { publishToGitHub, upstreamStatus } from "@workspace-skills/github";
@@ -162,16 +162,19 @@ if (status.state === "diverged") {
 
 await publishToGitHub({
   repoPath: "projects/bgkit",
-  remoteUrl: "https://github.com/owner/bgkit.git",
+  name: "bgkit",
+  private: true,
+  remote: "origin",
   branch: "main",
   credentialId: "cred_github_...",
-  configure: true,
+  autoPush: false,
 });
 ```
 
-The helper invokes `@workspace-extensions/git-bridge` through the runtime
-`extensions` client. It does not receive the GitHub token; credential injection
-stays host-mediated.
+The runtime routes the call through the configured `gitInterop` provider, while
+the helper pins the remote-hosting provider to `provider: "github"`. It does not
+receive the GitHub token; credential injection stays host-mediated. Use this
+helper only when creating a new GitHub repository.
 
 Use `client.status(dir)` for structured status. Use `client.statusMatrix(dir)`
 only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are needed.
@@ -200,7 +203,8 @@ git:
         origin:
           url: https://github.com/owner/my-panel.git
           branch: main
-        ci: https://github.com/owner/my-panel-ci.git
+        ci:
+          url: https://github.com/owner/my-panel-ci.git
 ```
 
 Upstream tracking is separate from remote declaration:
@@ -208,12 +212,23 @@ Upstream tracking is separate from remote declaration:
 ```ts
 import { git } from "@workspace/runtime";
 
-await git.configureUpstream("panels/my-panel", {
+await git.setUpstream("panels/my-panel", {
   remote: "origin",
   branch: "main",
   credentialId: "cred_github_...",
   autoPush: false,
 });
+```
+
+For an existing GitHub remote, these are deliberately separate operations:
+declare it with `git.setSharedRemote()`, track it with `git.setUpstream()`, then
+inspect and push through the configured provider.
+
+```ts
+const [status] = await git.upstreamStatus(["panels/my-panel"], { fetch: true });
+if (status?.state === "in-sync" || status?.state === "ahead") {
+  await git.pushUpstream("panels/my-panel");
+}
 ```
 
 This records:
@@ -245,7 +260,6 @@ await git.importProject({
     url: "https://github.com/owner/my-panel.git",
     branch: "feature/workspace-integration",
   },
-  branch: "feature/workspace-integration",
   credentialId: "cred_github_...",
 });
 ```
@@ -253,9 +267,10 @@ await git.importProject({
 Supported parent directories are `panels`, `packages`, `workers`,
 `skills`, `about`, `templates`, and `projects`. `git.importProject()` uses one
 workspace config approval showing destination path, remote URL, and branch;
-then it records the shared remote in `meta/vibestudio.yml`, clones into canonical
-workspace source, and makes the repo available to future contexts. It may also
-prompt to use the selected GitHub credential for the clone.
+then it records the shared remote and matching upstream with `autoPush: false`
+in `meta/vibestudio.yml`, clones into canonical workspace source, and makes the
+repo available to future contexts. It may also prompt to use the selected
+GitHub credential for the clone.
 
 Repos declared in `meta/vibestudio.yml` are imported automatically at startup.
 Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a

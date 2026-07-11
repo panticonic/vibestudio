@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -6,7 +6,12 @@ import {
   FRAME_HEAD,
   createInboundStreamMux,
   decodeFramedResponseToStreaming,
+  decodeFramedStream,
 } from "./streamCodec.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const enc = new TextEncoder();
 
@@ -62,5 +67,38 @@ describe("inbound stream mux → framed Response decode", () => {
     const r = await resp;
     await expect(r.text()).rejects.toThrow(/pipe lost/);
     expect(mux.size).toBe(0);
+  });
+
+  it("fails LOUD when HEAD never arrives within the deadline instead of hanging (bug #7)", async () => {
+    vi.useFakeTimers();
+    const mux = createInboundStreamMux();
+    const body = mux.acquire(9);
+    // Server accepted the stream-open but never emits HEAD (wedged upstream).
+    const decoded = decodeFramedResponseToStreaming(body, "https://slow/");
+    const expectation = expect(decoded).rejects.toThrow(/HEAD not received/);
+    await vi.advanceTimersByTimeAsync(20_001);
+    await expectation;
+  });
+
+  it("respects a custom headTimeoutMs and still honors a caller AbortSignal", async () => {
+    vi.useFakeTimers();
+    const mux = createInboundStreamMux();
+    const body = mux.acquire(10);
+    const decoded = decodeFramedStream(body, "https://slow/", null, { headTimeoutMs: 500 });
+    const expectation = expect(decoded).rejects.toThrow(/HEAD not received within 500ms/);
+    await vi.advanceTimersByTimeAsync(600);
+    await expectation;
+  });
+
+  it("does NOT trip the HEAD deadline when HEAD arrives in time", async () => {
+    vi.useFakeTimers();
+    const mux = createInboundStreamMux();
+    const body = mux.acquire(11);
+    const decoded = decodeFramedResponseToStreaming(body, "https://ok/");
+    mux.push(11, FRAME_HEAD, headPayload(200, "OK", [], "https://ok/"));
+    mux.push(11, FRAME_END, enc.encode(JSON.stringify({ bytesIn: 0 })));
+    const r = await decoded;
+    expect(r.status).toBe(200);
+    await vi.advanceTimersByTimeAsync(30_000); // deadline already cleared — no throw
   });
 });

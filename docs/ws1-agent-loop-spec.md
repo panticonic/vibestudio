@@ -104,8 +104,8 @@ export interface AgentState {
 }
 
 export interface AgentLoopConfig {
-  model: string; // e.g. "openai-codex:gpt-5.5"
-  thinkingLevel: "minimal" | "low" | "medium" | "high";
+  model: string; // e.g. "openai-codex:gpt-5.6-sol"
+  thinkingLevel: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   approvalLevel: 0 | 1 | 2; // 0=ask-all, 1=safe-tools auto, 2=full-auto (today's semantics)
   respondPolicy: RespondPolicy;
   systemPromptHash: string; // blob digest of composed system prompt
@@ -940,7 +940,7 @@ Per consumer:
 
 1. **`workspace/workers/agent-worker` (AiChatWorker)** — direct re-base, no
    custom hooks. Migrate: `getExpectedChannelToolNames` (`["eval"]`),
-   `getParticipantInfo`. Verify default model `openai-codex:gpt-5.5`,
+   `getParticipantInfo`. Verify default model `openai-codex:gpt-5.6-sol`,
    approval level 2, system prompt from `meta/AGENTS.md`.
 2. **`workspace/workers/test-agent`** — re-base; `getDefaultModel`
    (`anthropic:claude-sonnet-4-6`), `getParticipantInfo`. Its
@@ -1105,7 +1105,7 @@ infra dependencies and can run in parallel with Stage-0 once the
 `LogEnvelope` contract is frozen.
 
 1. **Vendor pi-core.** `workspace/packages/pi-core/` from
-   `@earendil-works/pi-agent-core` v0.78.0: types (`AgentMessage`,
+   `@earendil-works/pi-agent-core` v0.80.6: types (`AgentMessage`,
    `AgentTool`, content blocks), compaction pure functions, session-tree
    types + `buildSessionContext` helpers, system-prompt/skills/prompt-template
    composition, builtin tool factories (read/edit/write/grep/find/ls). Drop:

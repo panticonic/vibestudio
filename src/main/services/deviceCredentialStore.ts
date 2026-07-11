@@ -67,7 +67,11 @@ export type PendingLoopbackPairing = {
 
 export type DeviceCredentialStoreEntry = DeviceCredentialEntry | PendingLoopbackPairing;
 export type DeviceCredentialEntries = Record<string, DeviceCredentialStoreEntry>;
-export type DeviceCredentialStore = EncryptedJsonStore<DeviceCredentialEntries>;
+export interface DeviceCredentialDocument {
+  currentRemoteServerId?: string;
+  entries: DeviceCredentialEntries;
+}
+export type DeviceCredentialStore = EncryptedJsonStore<DeviceCredentialDocument>;
 
 function isEntry(value: unknown): value is DeviceCredentialStoreEntry {
   const v = value as DeviceCredentialStoreEntry | null | undefined;
@@ -180,9 +184,61 @@ function isEntries(value: unknown): value is DeviceCredentialEntries {
   if (!entries.every(([serverId, entry]) => isEntry(entry) && entry.serverId === serverId)) {
     return false;
   }
+  return true;
+}
+
+export function parseDeviceCredentialDocument(value: unknown): DeviceCredentialDocument | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+
+  // Pre-document stores were a plain serverId -> credential map. Accept them as
+  // a migration input, but only after validating every entry.
+  if (!("entries" in record)) {
+    return isEntries(record) ? { entries: record } : null;
+  }
+  if (!record["entries"] || typeof record["entries"] !== "object") return null;
+
+  // A single stale entry must not discard every valid pairing. Sanitize on
+  // read; save remains strict so new malformed state can never be persisted.
+  const entries: DeviceCredentialEntries = {};
+  for (const [serverId, entry] of Object.entries(record["entries"] as Record<string, unknown>)) {
+    if (isEntry(entry) && entry.serverId === serverId) entries[serverId] = entry;
+  }
+  const requestedCurrent = record["currentRemoteServerId"];
+  const current =
+    typeof requestedCurrent === "string" && entries[requestedCurrent]?.transport === "webrtc"
+      ? requestedCurrent
+      : undefined;
+  return { ...(current ? { currentRemoteServerId: current } : {}), entries };
+}
+
+function isDocument(value: unknown): value is DeviceCredentialDocument {
+  const parsed = parseDeviceCredentialDocument(value);
+  if (!parsed || !value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== "entries" && key !== "currentRemoteServerId")) {
+    return false;
+  }
+  if (!isEntries(record["entries"])) return false;
   return (
-    entries.filter(([, entry]) => (entry as DeviceCredentialEntry).transport === "webrtc").length <=
-    1
+    record["currentRemoteServerId"] === undefined ||
+    (typeof record["currentRemoteServerId"] === "string" &&
+      parsed.currentRemoteServerId === record["currentRemoteServerId"])
+  );
+}
+
+export function selectCurrentRemote(
+  document: DeviceCredentialDocument | null
+): StoredRemote | null {
+  if (!document) return null;
+  const pinned = document.currentRemoteServerId
+    ? document.entries[document.currentRemoteServerId]
+    : undefined;
+  if (pinned?.transport === "webrtc") return pinned;
+  return (
+    Object.values(document.entries)
+      .filter((entry): entry is StoredRemote => entry.transport === "webrtc")
+      .sort((a, b) => entryTimestamp(b) - entryTimestamp(a))[0] ?? null
   );
 }
 
@@ -203,18 +259,20 @@ export function createDeviceCredentialStore(deps: {
     | "writeFileSync"
   >;
 }): DeviceCredentialStore {
-  const encryptedStore = createEncryptedJsonStore<DeviceCredentialEntries>({
+  const encryptedStore = createEncryptedJsonStore<DeviceCredentialDocument>({
     ...deps,
-    validate: isEntries,
+    dirname: path.dirname,
+    parse: parseDeviceCredentialDocument,
     secretDescription: "the paired device refresh credential",
   });
   return {
     load: () => encryptedStore.load(),
-    save: (entries) => {
-      if (!isEntries(entries)) {
+    exists: () => encryptedStore.exists(),
+    save: (document) => {
+      if (!isDocument(document)) {
         throw new Error("Refusing to persist a non-canonical device credential record");
       }
-      encryptedStore.save(entries);
+      encryptedStore.save(document);
     },
     clear: () => encryptedStore.clear(),
   };
@@ -310,69 +368,69 @@ function getStore(): DeviceCredentialStore {
       const migrated = mergeDeviceCredentialEntries(
         legacyCredentialPaths(centralPath).map((filePath) => {
           if (!fs.existsSync(filePath)) return null;
-          return createDeviceCredentialStore({ filePath, cipher, fs }).load();
+          return createDeviceCredentialStore({ filePath, cipher, fs }).load()?.entries ?? null;
         })
       );
-      if (Object.keys(migrated).length > 0) storeSingleton.save(migrated);
+      if (Object.keys(migrated).length > 0) storeSingleton.save({ entries: migrated });
     }
   }
   return storeSingleton;
 }
 
 export function loadDeviceCredentialByServerId(serverId: string): DeviceCredentialEntry | null {
-  const entry = getStore().load()?.[serverId];
+  const entry = getStore().load()?.entries[serverId];
   return entry && entry.transport !== "pending-loopback" ? entry : null;
 }
 
 export function loadPendingLoopbackPairing(serverId: string): PendingLoopbackPairing | null {
-  const entry = getStore().load()?.[serverId];
+  const entry = getStore().load()?.entries[serverId];
   return entry?.transport === "pending-loopback" ? entry : null;
 }
 
+/** The CURRENT remote pairing (the active WebRTC server), if any. */
 export function loadStoredRemotePairing(): StoredRemote | null {
-  const entries = getStore().load();
-  if (!entries) return null;
-  return (
-    Object.values(entries).find((entry): entry is StoredRemote => entry.transport === "webrtc") ??
-    null
-  );
+  return selectCurrentRemote(getStore().load());
 }
 
 export function saveDeviceCredential(entry: DeviceCredentialEntry): void {
-  const entries = getStore().load() ?? {};
-  if (entry.transport === "webrtc") {
-    for (const [serverId, existing] of Object.entries(entries)) {
-      if (existing.transport === "webrtc") Reflect.deleteProperty(entries, serverId);
-    }
-  }
-  entries[entry.serverId] = entry;
-  getStore().save(entries);
+  const document = getStore().load() ?? { entries: {} };
+  document.entries[entry.serverId] = entry;
+  if (entry.transport === "webrtc") document.currentRemoteServerId = entry.serverId;
+  getStore().save(document);
 }
 
 export function savePendingLoopbackPairing(entry: PendingLoopbackPairing): void {
-  const entries = getStore().load() ?? {};
-  entries[entry.serverId] = entry;
-  getStore().save(entries);
+  const document = getStore().load() ?? { entries: {} };
+  document.entries[entry.serverId] = entry;
+  getStore().save(document);
 }
 
 export function clearDeviceCredentialByServerId(serverId: string): void {
-  const entries = getStore().load();
-  if (!entries || !(serverId in entries)) return;
-  Reflect.deleteProperty(entries, serverId);
-  getStore().save(entries);
+  const document = getStore().load();
+  if (!document || !(serverId in document.entries)) return;
+  Reflect.deleteProperty(document.entries, serverId);
+  if (document.currentRemoteServerId === serverId) {
+    const replacement = selectCurrentRemote({ entries: document.entries });
+    if (replacement) document.currentRemoteServerId = replacement.serverId;
+    else Reflect.deleteProperty(document, "currentRemoteServerId");
+  }
+  getStore().save(document);
 }
 
+/**
+ * Disconnect: forget ONLY the current remote pairing (not every paired server).
+ * A second paired remote, if any, is promoted to current so the next launch
+ * reconnects to it rather than dropping to the chooser.
+ */
 export function clearStoredRemotePairing(): void {
-  const entries = getStore().load();
-  if (!entries) return;
-  let changed = false;
-  for (const [serverId, entry] of Object.entries(entries)) {
-    if (entry.transport === "webrtc") {
-      Reflect.deleteProperty(entries, serverId);
-      changed = true;
-    }
-  }
-  if (changed) getStore().save(entries);
+  const document = getStore().load();
+  const current = selectCurrentRemote(document);
+  if (!document || !current) return;
+  Reflect.deleteProperty(document.entries, current.serverId);
+  const replacement = selectCurrentRemote({ entries: document.entries });
+  if (replacement) document.currentRemoteServerId = replacement.serverId;
+  else Reflect.deleteProperty(document, "currentRemoteServerId");
+  getStore().save(document);
 }
 
 export function clearAllDeviceCredentials(): void {

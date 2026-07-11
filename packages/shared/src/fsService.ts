@@ -24,8 +24,13 @@ import {
   taxonomyRepoForPath,
   type RepoPath,
 } from "./runtime/entitySpec.js";
+import { WORKSPACE_SOURCE_DIRS } from "./workspace/sourceDirs.js";
 
 const log = createDevLogger("FsService");
+const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);
+const CANONICAL_SOURCE_ROOT_BY_LOWER = new Map(
+  WORKSPACE_SOURCE_DIRS.map((sourceRoot) => [sourceRoot.toLowerCase(), sourceRoot])
+);
 
 /** Idle timeout for open file handles (5 minutes). */
 const HANDLE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -47,6 +52,18 @@ interface FsCallScope {
 
 interface ResolvedFsPath {
   path: string;
+}
+
+type SandboxLeafMode = "follow" | "entry" | "allow-dangling";
+
+interface ResolveFsPathOptions {
+  /**
+   * `follow` validates the leaf target like every parent. `entry` validates
+   * only parents for operations that act on the directory entry itself.
+   * `allow-dangling` is the read-only `exists` variant: an unresolved leaf is
+   * allowed through so fs.access can return false naturally.
+   */
+  leafMode?: SandboxLeafMode;
 }
 
 function codedError(code: string, message: string): NodeJS.ErrnoException {
@@ -113,37 +130,61 @@ function readScopePath(method: string, args: unknown[]): string | null {
  * Resolve a user-provided path within a sandbox root, preventing traversal
  * and symlink-based escapes.
  */
-async function sandboxPath(root: string, userPath: string): Promise<ResolvedFsPath> {
+async function sandboxPath(
+  root: string,
+  userPath: string,
+  options: ResolveFsPathOptions = {}
+): Promise<ResolvedFsPath> {
+  const leafMode = options.leafMode ?? "follow";
   const relative = userPath.startsWith("/") ? userPath.slice(1) : userPath;
   const resolved = path.resolve(root, relative);
   if (!resolved.startsWith(root + path.sep) && resolved !== root) {
     throw new Error("Path traversal detected");
   }
+  const realRoot = await fs.realpath(root);
   // Walk path components and check for symlinks in parents.
   let current = root;
-  const segments = path.relative(root, resolved).split(path.sep);
-  for (const segment of segments) {
+  const relativePath = path.relative(root, resolved);
+  const segments = relativePath ? relativePath.split(path.sep) : [];
+  for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
+    let st: fsSync.Stats;
     try {
-      const st = await fs.lstat(current);
-      if (st.isSymbolicLink()) {
-        const target = await fs.realpath(current);
-        if (!target.startsWith(root + path.sep) && target !== root) {
-          throw new Error("Symlink escapes sandbox");
+      st = await fs.lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break; // remainder doesn't exist yet
+      throw error;
+    }
+    if (st.isSymbolicLink()) {
+      const isLeaf = index === segments.length - 1;
+      if (isLeaf && leafMode === "entry") continue;
+      let target: string;
+      try {
+        target = await fs.realpath(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          if (isLeaf && leafMode === "allow-dangling") continue;
+          // A dangling link can point outside the context and become writable
+          // later; without a real target there is no safe containment proof.
+          throw new Error("Dangling symlink is not allowed in sandbox paths");
         }
+        throw error;
       }
-    } catch (e: any) {
-      if (e.code === "ENOENT") break; // remainder doesn't exist yet
-      if (e.message === "Symlink escapes sandbox") throw e;
-      throw e;
+      if (!target.startsWith(realRoot + path.sep) && target !== realRoot) {
+        throw new Error("Symlink escapes sandbox");
+      }
     }
   }
   return { path: resolved };
 }
 
-async function resolveFsPathInfo(scope: FsCallScope, userPath: string): Promise<ResolvedFsPath> {
+async function resolveFsPathInfo(
+  scope: FsCallScope,
+  userPath: string,
+  options: ResolveFsPathOptions = {}
+): Promise<ResolvedFsPath> {
   if (!scope.unrestricted) {
-    return sandboxPath(scope.root, userPath);
+    return sandboxPath(scope.root, userPath, options);
   }
   if (typeof userPath !== "string" || userPath.length === 0) {
     throw new Error("Path must be a non-empty string");
@@ -151,8 +192,66 @@ async function resolveFsPathInfo(scope: FsCallScope, userPath: string): Promise<
   return { path: path.resolve(userPath) };
 }
 
-async function resolveFsPath(scope: FsCallScope, userPath: string): Promise<string> {
-  return (await resolveFsPathInfo(scope, userPath)).path;
+async function resolveFsPath(
+  scope: FsCallScope,
+  userPath: string,
+  options: ResolveFsPathOptions = {}
+): Promise<string> {
+  return (await resolveFsPathInfo(scope, userPath, options)).path;
+}
+
+/**
+ * Return the caller-visible path after resolving any existing in-sandbox
+ * symlink/case aliases. The target file may not exist yet, so resolve the
+ * nearest existing ancestor and append the missing suffix. Mutation routing
+ * must classify this canonical path; otherwise an alias such as `alias/lib/x`
+ * → `packages/lib/x` could be mistaken for scratch and written behind GAD.
+ */
+async function canonicalContextRelativePath(
+  scope: FsCallScope,
+  userPath: string,
+  options: { preserveLeaf?: boolean } = {}
+): Promise<string> {
+  const preserveLeaf = options.preserveLeaf ?? false;
+  const resolved = await resolveFsPath(scope, userPath, {
+    leafMode: preserveLeaf ? "entry" : "follow",
+  });
+  if (scope.unrestricted) return resolved;
+
+  const realRoot = await fs.realpath(scope.root);
+  let probe = preserveLeaf && resolved !== scope.root ? path.dirname(resolved) : resolved;
+  const missingSegments: string[] =
+    preserveLeaf && resolved !== scope.root ? [path.basename(resolved)] : [];
+
+  while (true) {
+    try {
+      const realAncestor = await fs.realpath(probe);
+      const canonical = path.resolve(realAncestor, ...missingSegments);
+      if (!canonical.startsWith(realRoot + path.sep) && canonical !== realRoot) {
+        throw new Error("Canonical path escapes sandbox");
+      }
+      return path.relative(realRoot, canonical).split(path.sep).join("/");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      if (probe === scope.root) throw error;
+      missingSegments.unshift(path.basename(probe));
+      probe = path.dirname(probe);
+    }
+  }
+}
+
+/** Test the caller-visible leaf without following it. Parents remain fully
+ * sandbox-validated, so this is safe for deciding whether an operation acts on
+ * a disk-only symlink directory entry. */
+async function isLeafSymlink(scope: FsCallScope, userPath: string): Promise<boolean> {
+  const resolved = await resolveFsPath(scope, userPath, { leafMode: "entry" });
+  try {
+    return (await fs.lstat(resolved)).isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function ensureDirectWriteParent(scope: FsCallScope, absolutePath: string): Promise<void> {
@@ -210,10 +309,13 @@ export type FsVcsEditOp =
  * Edits are routed per-repo. Each workspace-relative edit path maps to its
  * owning repo (by the section taxonomy, `taxonomyRepoForPath`); the bridge
  * applies the repo-relative ops on that repo's `ctx:{contextId}` head/log.
- * Paths that aren't inside any workspace repo are rejected up front (EACCES).
+ * Ordinary paths outside workspace source roots are context-local scratch and
+ * stay direct disk writes. Paths under a reserved workspace source root that do
+ * not identify a repo remain invalid and are rejected up front (EACCES).
  */
 export interface FsVcsBridge {
-  /** True iff `relPath` is a GAD-trackable workspace path (what edit accepts). */
+  /** True iff `relPath` passes the VCS content-path policy (safe and not
+   *  platform-ignored). FsService separately checks workspace repo taxonomy. */
   isTracked(relPath: string): Promise<boolean>;
   /**
    * Commit edit ops to a single repo's `ctx:{contextId}` head/log (edit-first:
@@ -250,6 +352,51 @@ export interface FsVcsBridge {
   /** True iff `repoPath`'s subtree is currently materialized on disk for the
    *  context. Backs the loud read-time assertion. */
   isMaterialized(contextId: string, repoPath: RepoPath): Promise<boolean>;
+}
+
+/**
+ * Decide whether a context mutation belongs on a repo's GAD working state or
+ * on the context-local scratch disk.
+ *
+ * VCS content-path admissibility and workspace repo membership are distinct:
+ * a harmless root file such as `.probe.txt` is safe but has no owning repo. It
+ * is therefore scratch, not a malformed VCS edit. Conversely, paths beneath a
+ * reserved workspace source root must not silently become scratch when their
+ * repo shape is invalid (`packages`, `agents/foo`, etc.), because such files can
+ * shadow or corrupt later sparse materialization.
+ *
+ * Repo roots return `true` even though they have no repo-relative filename so
+ * the existing operation-specific router can either handle subtree operations
+ * or emit its actionable repo-root error for file mutations.
+ */
+async function isGadMutationPath(bridge: FsVcsBridge, wsRel: string): Promise<boolean> {
+  const sourceRoot = wsRel.split("/", 1)[0] ?? "";
+  const canonicalSourceRoot = CANONICAL_SOURCE_ROOT_BY_LOWER.get(sourceRoot.toLowerCase());
+  if (canonicalSourceRoot && sourceRoot !== canonicalSourceRoot) {
+    throw codedError(
+      "EACCES",
+      `fs mutation rejected: workspace source root ${JSON.stringify(sourceRoot)} has ` +
+        `non-canonical casing; use ${JSON.stringify(canonicalSourceRoot)} instead.`
+    );
+  }
+
+  const split = splitRepoPath(wsRel);
+  if (split) {
+    if (!split.repoRelPath) return true;
+    return bridge.isTracked(wsRel);
+  }
+
+  if (WORKSPACE_SOURCE_ROOTS.has(sourceRoot)) {
+    throw codedError(
+      "EACCES",
+      `fs mutation rejected: ${JSON.stringify(wsRel)} is under reserved workspace source root ` +
+        `${JSON.stringify(sourceRoot)} but is not a writable workspace-repo file. ` +
+        `Use a repo-shaped source path (for example projects/<name>/<file>) or a ` +
+        `context-local scratch path (for example .tmp/<file>).`
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -863,11 +1010,9 @@ export class FsService {
 
     const router = this.buildRepoRouter();
 
-    const relOf = async (userPath: string): Promise<string> => {
-      const abs = await resolveFsPath(scope, userPath);
-      return path.relative(scope.root, abs).split(path.sep).join("/");
-    };
-    const tracked = (rel: string) => bridge.isTracked(rel);
+    const relOf = (userPath: string, options: { preserveLeaf?: boolean } = {}): Promise<string> =>
+      canonicalContextRelativePath(scope, userPath, options);
+    const tracked = (rel: string) => isGadMutationPath(bridge, rel);
     // Commit a batch of WORKSPACE-RELATIVE edit ops: group by owning repo,
     // enforce writability, strip the repo prefix, apply per-repo on its ctx head.
     const commit = (edits: FsVcsEditOp[]) =>
@@ -909,19 +1054,25 @@ export class FsService {
         return { handled: true };
       }
       case "unlink": {
-        const rel = await relOf(args[0] as string);
+        const userPath = args[0] as string;
+        if (await isLeafSymlink(scope, userPath)) return { handled: false };
+        const rel = await relOf(userPath, { preserveLeaf: true });
         if (!(await tracked(rel))) return { handled: false };
         await commit([{ kind: "delete", path: rel }]);
         return { handled: true };
       }
       case "rmdir": {
-        const rel = await relOf(args[0] as string);
+        const userPath = args[0] as string;
+        if (await isLeafSymlink(scope, userPath)) return { handled: false };
+        const rel = await relOf(userPath, { preserveLeaf: true });
         if (!(await tracked(rel))) return { handled: false };
         await commit(await this.subtreeDeleteEdits(bridge, contextId, rel));
         return { handled: true };
       }
       case "rm": {
-        const rel = await relOf(args[0] as string);
+        const userPath = args[0] as string;
+        if (await isLeafSymlink(scope, userPath)) return { handled: false };
+        const rel = await relOf(userPath, { preserveLeaf: true });
         if (!(await tracked(rel))) return { handled: false };
         const recursive = !!(args[1] as { recursive?: boolean } | undefined)?.recursive;
         const force = !!(args[1] as { force?: boolean } | undefined)?.force;
@@ -953,10 +1104,31 @@ export class FsService {
         return { handled: true };
       }
       case "rename": {
-        const srcRel = await relOf(args[0] as string);
-        const dstRel = await relOf(args[1] as string);
-        const srcTracked = await tracked(srcRel);
+        const srcPath = args[0] as string;
+        const dstPath = args[1] as string;
+        const [srcIsSymlink, dstIsSymlink, srcRel, dstRel] = await Promise.all([
+          isLeafSymlink(scope, srcPath),
+          isLeafSymlink(scope, dstPath),
+          relOf(srcPath, { preserveLeaf: true }),
+          relOf(dstPath, { preserveLeaf: true }),
+        ]);
         const dstTracked = await tracked(dstRel);
+        if (srcIsSymlink) {
+          if (!dstTracked) return { handled: false };
+          throw codedError(
+            "EACCES",
+            `fs.rename cannot move or replace a symbolic link at the GAD-tracked destination ` +
+              `${JSON.stringify(dstPath)}; GAD edits cannot faithfully represent symlink entries.`
+          );
+        }
+        const srcTracked = await tracked(srcRel);
+        if (dstTracked && dstIsSymlink) {
+          throw codedError(
+            "EACCES",
+            `fs.rename cannot move or replace a symbolic link at the GAD-tracked destination ` +
+              `${JSON.stringify(dstPath)}; GAD edits cannot faithfully represent symlink entries.`
+          );
+        }
         if (!srcTracked && !dstTracked) return { handled: false };
         if (srcTracked && dstTracked) {
           // A cross-repo rename fans out: a delete in the source repo + a write
@@ -1263,13 +1435,13 @@ export class FsService {
       }
 
       case "rmdir": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
         await fs.rmdir(p);
         return;
       }
 
       case "rm": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
         const opts = args[1] as { recursive?: boolean; force?: boolean } | undefined;
         await fs.rm(p, opts);
         return;
@@ -1282,12 +1454,14 @@ export class FsService {
       }
 
       case "lstat": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
         return serializeStat(await fs.lstat(p));
       }
 
       case "exists": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsPath(scope, args[0] as string, {
+          leafMode: "allow-dangling",
+        });
         try {
           await fs.access(p);
           return true;
@@ -1304,7 +1478,7 @@ export class FsService {
 
       // ----- File manipulation -----
       case "unlink": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
         await fs.unlink(p);
         return;
       }
@@ -1318,8 +1492,8 @@ export class FsService {
       }
 
       case "rename": {
-        const oldP = await resolveFsPath(scope, args[0] as string);
-        const newP = await resolveFsPath(scope, args[1] as string);
+        const oldP = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
+        const newP = await resolveFsPath(scope, args[1] as string, { leafMode: "entry" });
         await ensureDirectWriteParent(scope, newP);
         await fs.rename(oldP, newP);
         return;
@@ -1344,7 +1518,7 @@ export class FsService {
 
       // ----- Symlinks -----
       case "readlink": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
         const target = await fs.readlink(p);
         if (scope.unrestricted) return target;
         // If the target is absolute, relativize to prevent leaking host paths

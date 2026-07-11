@@ -60,6 +60,17 @@ const CATALOG: ModelCatalog = {
       thinkingLevels: ["low", "medium", "high"],
       recommended: true,
     }),
+    makeTestCatalogEntry({
+      ref: "prov:model-b",
+      id: "model-b",
+      name: "Model B",
+      provider: "prov",
+      baseUrl: "https://example.test",
+      reasoning: true,
+      contextWindow: 1000,
+      maxTokens: 100,
+      thinkingLevels: ["low", "medium", "high"],
+    }),
   ],
 };
 
@@ -96,7 +107,7 @@ describe("AgentDialog default config", () => {
           value={context({
             onAddAgent,
             defaultAgentConfig: {
-              model: "prov:model-a",
+              model: "prov:model-b",
               thinkingLevel: "high",
               approvalLevel: 1,
             },
@@ -113,7 +124,7 @@ describe("AgentDialog default config", () => {
       expect(onAddAgent).toHaveBeenCalledWith(
         "workers/agent-worker",
         expect.objectContaining({
-          model: "prov:model-a",
+          model: "prov:model-b",
           thinkingLevel: "high",
           approvalLevel: 1,
         })

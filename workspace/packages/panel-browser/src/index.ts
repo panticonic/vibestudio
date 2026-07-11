@@ -370,14 +370,6 @@ export interface BrowserDataApi {
   exportCookies(format: "json" | "netscape-txt"): Promise<string>;
   exportAll(): Promise<string>;
 }
-interface WorkspaceConfigLike {
-  providers?: {
-    browserData?: {
-      extension?: unknown;
-    };
-  };
-}
-const WORKSPACE_EXTENSION_PACKAGE_SCOPE = "@workspace-extensions/";
 const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
   "then",
   "constructor",
@@ -386,25 +378,6 @@ const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
   Symbol.toPrimitive,
   Symbol.toStringTag,
 ]);
-function browserDataBrokerPackageName(config: WorkspaceConfigLike | null): string | null {
-  const declared = config?.providers?.browserData?.extension;
-  if (typeof declared !== "string" || declared.trim().length === 0) return null;
-  const normalized = declared
-    .trim()
-    .replace(/(^\/+|\/+$)/g, "")
-    .replace(/^workspace\//, "");
-  const identity = normalized.startsWith("extensions/")
-    ? normalized.slice("extensions/".length)
-    : normalized.startsWith(WORKSPACE_EXTENSION_PACKAGE_SCOPE)
-      ? normalized.slice(WORKSPACE_EXTENSION_PACKAGE_SCOPE.length)
-      : null;
-  if (!identity || !/^[^/\s]+$/.test(identity) || identity.endsWith(".git")) {
-    throw new Error(
-      `browser-data: providers.browserData.extension must be extensions/name or ${WORKSPACE_EXTENSION_PACKAGE_SCOPE}name (got ${JSON.stringify(declared)})`
-    );
-  }
-  return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${identity}`;
-}
 
 export function createBrowserDataApi(rpc: Pick<RpcClient, "call" | "stream">): BrowserDataApi {
   if (!rpc) {
@@ -414,34 +387,13 @@ export function createBrowserDataApi(rpc: Pick<RpcClient, "call" | "stream">): B
         "In inline_ui components: use chat.rpc."
     );
   }
-  // Browser data lives in the manifest-declared broker extension
-  // (providers.browserData.extension). There is no hardcoded fallback: a
-  // workspace that does not declare the broker has no browser-data API.
-  let brokerNamePromise: Promise<string> | null = null;
-  const resolveBroker = (): Promise<string> => {
-    brokerNamePromise ??= rpc
-      .call<WorkspaceConfigLike | null>("main", "workspace.getConfig", [])
-      .then((config) => {
-        const name = browserDataBrokerPackageName(config);
-        if (!name) {
-          throw new Error(
-            "browser-data: no broker extension is declared in meta/vibestudio.yml (providers.browserData.extension) — browser data is unavailable"
-          );
-        }
-        return name;
-      })
-      .catch((err: unknown) => {
-        brokerNamePromise = null;
-        throw err;
-      });
-    return brokerNamePromise;
-  };
+  // The host resolves providers.browserData; callers never learn or cache the
+  // implementing extension identity.
   return new Proxy(Object.create(null), {
     get(_target, prop) {
       if (typeof prop !== "string" || IGNORED_PROXY_PROPS.has(prop)) return undefined;
       return async (...args: unknown[]) => {
-        const broker = await resolveBroker();
-        return rpc.call("main", "extensions.invoke", [broker, prop, args]);
+        return rpc.call("main", "extensions.invokeProvider", ["browserData", prop, args]);
       };
     },
   }) as BrowserDataApi;

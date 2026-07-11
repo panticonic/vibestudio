@@ -9,8 +9,8 @@ Import and manage browser data (cookies, passwords, bookmarks, history) from ins
 
 ## Files
 
-| Document                     | Content                                                                     |
-| ---------------------------- | --------------------------------------------------------------------------- |
+| Document                                | Content                                                                     |
+| --------------------------------------- | --------------------------------------------------------------------------- |
 | [DISCOVERY.md](references/DISCOVERY.md) | Detect browsers, enumerate profiles, preview available data                 |
 | [IMPORT.md](references/IMPORT.md)       | Run imports, handle edge cases, review results                              |
 | [COOKIES.md](references/COOKIES.md)     | Cookie management — browse, search, delete, sync to session                 |
@@ -26,11 +26,11 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../../skills/sandbox/INTERACTI
 ## Architecture
 
 All browser data operations go through `@workspace/panel-browser`. That client
-reads `workspace.getConfig()` and resolves the broker from
-`providers.browserData.extension`; there is no hardcoded fallback broker. The
-declared browser-data extension reads browser profile databases directly
-(SQLite for Chrome/Firefox, plist for Safari) and stores imported data in
-`BrowserDataDO`.
+calls the manifest-selected provider namespace with
+`extensions.invokeProvider("browserData", method, args)`; it neither resolves an
+extension package nor falls back to a hardcoded broker. The declared
+browser-data extension reads browser profile databases directly (SQLite for
+Chrome/Firefox, plist for Safari) and stores imported data in `BrowserDataDO`.
 
 History is unified: imported Chrome/Firefox/Safari visits and Vibestudio browser-panel navigations both write visit events into `BrowserDataDO`. The address bar autocomplete reads the materialized `history` summary alongside open panels, bookmarks, and search engines. See [HISTORY.md](references/HISTORY.md).
 
@@ -41,11 +41,10 @@ and only the import audit log appends every run.
 ```
 Sandbox code (eval / inline_ui / feedback_custom)
   → import { browserData } from "@workspace/panel-browser"
-    → workspace.getConfig()
+    → extensions.invokeProvider("browserData", method, args)
       → providers.browserData.extension
-        → extensions.invoke(declaredBroker, method, args)
-      → declared browser-data extension
-        → reads Chrome/Firefox/Safari profile databases
+        → declared browser-data extension
+          → reads Chrome/Firefox/Safari profile databases
 ```
 
 ## Quick Reference

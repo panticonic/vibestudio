@@ -3,8 +3,10 @@ import {
   dialog,
   BaseWindow,
   nativeTheme,
+  Notification,
   session,
   ipcMain,
+  powerMonitor,
   shell,
   type Session,
   type WebContents,
@@ -31,9 +33,11 @@ import {
   enqueueFirstArgvLink,
   getPendingConnectLink,
   getPendingPanelLocation,
+  getPendingConnectLinkError,
   installEarlyOpenUrlBuffer,
   onConnectLink,
   onPanelLocation,
+  onConnectLinkError,
   peekPendingConnectLink,
   registerProtocol,
 } from "./protocolHandler.js";
@@ -107,6 +111,7 @@ import {
   loadStoredRemotePairing,
   clearStoredRemotePairing,
   persistStoredRemoteWorkspaceRoute,
+  readPendingPairLabel,
 } from "./services/remoteCredService.js";
 import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
@@ -1618,6 +1623,40 @@ app.on("ready", async () => {
     mainWindow?.show();
     mainWindow?.focus();
   });
+  // A deep link that failed to parse (e.g. a stale old-format link) used to open
+  // the app and do nothing. Surface its actionable message instead so the user
+  // knows to re-pair with a current link.
+  const surfaceConnectLinkError = (reason: string) => {
+    if (IS_HEADLESS_HOST) return;
+    log.warn(`[pairing] Ignored an invalid pairing link: ${reason}`);
+    mainWindow?.show();
+    mainWindow?.focus();
+    if (Notification.isSupported()) {
+      new Notification({ title: "Couldn't open that pairing link", body: reason }).show();
+    }
+  };
+  onConnectLinkError(surfaceConnectLinkError);
+  // Drain any error buffered before this listener registered (launch-time click).
+  const bufferedLinkError = getPendingConnectLinkError();
+  if (bufferedLinkError) surfaceConnectLinkError(bufferedLinkError);
+  // Sleep/wake + screen-unlock recovery: a WebRTC pipe can be dead while the
+  // transport still reports "connected" for up to ~45s after the machine wakes.
+  // NUDGE ONLY (never a forced teardown): the transport probes the pipe and a
+  // healthy one answers untouched; a dead one is torn down promptly so reconnect
+  // kicks in. The loopback client has no nudge() (optional) and is skipped.
+  const nudgeServerLiveness = (reason: string) => {
+    const client = serverSession?.serverClient;
+    if (client?.nudge) {
+      log.info(`[recovery] nudging server pipe liveness after ${reason}`);
+      client.nudge();
+    }
+  };
+  powerMonitor.on("resume", () => nudgeServerLiveness("system resume"));
+  powerMonitor.on("unlock-screen", () => nudgeServerLiveness("screen unlock"));
+  // Same recovery, awake path: the shell renderer forwards its `window` `online`
+  // event so a network flap (e.g. Wi-Fi reassociate) probes the pipe promptly
+  // instead of lingering on a stale "connected". NUDGE ONLY, never a teardown.
+  ipcMain.on("vibestudio:shell.network-online", () => nudgeServerLiveness("network online"));
   installBootstrapConnectionHandlers();
   // npm-channel update notice — no-ops unless launched from a global npm install
   // (the launcher sets VIBESTUDIO_NPM_CHANNEL); notification-first, never self-updates.
@@ -1963,14 +2002,27 @@ app.on("ready", async () => {
       establishServerSession({
         mode,
         pendingPairing: pendingRemotePairing ?? undefined,
+        pendingPairLabel: readPendingPairLabel(),
         skipStoredRemote: skipRemotePairingLaunch,
         centralData,
         onServerEvent: handleServerEvent,
         onConnectionStatusChanged: (status) => {
+          // The selected ICE path (host/srflx/prflx = direct, relay = TURN) is
+          // additive observability the WebRTC ServerClient exposes; the loopback
+          // WS client has no `candidateType()`, so read it defensively. `null`
+          // (unknown / not settled / local) omits the hint from the badge.
+          const withCandidate = serverClientRef as {
+            candidateType?: () => "host" | "srflx" | "prflx" | "relay" | null;
+          } | null;
+          const candidateType =
+            typeof withCandidate?.candidateType === "function"
+              ? (withCandidate.candidateType() ?? undefined)
+              : undefined;
           eventService.emit("server-connection-changed", {
             status,
             isRemote: isRemoteSession,
             remoteHost,
+            ...(candidateType ? { candidateType } : {}),
           });
           // On every transition into "connected" (including the very first one
           // and any subsequent reconnect), replay shell subscriptions. The
@@ -2351,6 +2403,7 @@ app.on("ready", async () => {
     electronContainer.registerRpc(
       createRemoteCredService({
         getServerClient: () => serverClientRef,
+        getConnectionMode: () => conn.connectionMode,
         getViewManager,
       })
     );

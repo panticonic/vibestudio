@@ -1,5 +1,5 @@
 import { AgentWorkerBase, installMessageTypes, type RespondPolicy } from "@workspace/agentic-do";
-import { complete, getModel as getPiModel } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { rpc } from "@workspace/runtime/worker";
 import type { DurableObjectContext, WebhookDeliveryEvent } from "@workspace/runtime/worker";
 import {
@@ -61,12 +61,25 @@ const GMAIL_UI_IMPORTS = {
   "@radix-ui/react-icons": "npm:^1.3.2",
 } satisfies Record<string, string>;
 const GMAIL_UNIVERSAL_LOOP_TOOL_NAMES = new Set(["suspend_turn", "ask_user"]);
+const PI_MODELS = builtinModels();
 
 /** Preferred cheap triage tier per provider; falls back to the channel model. */
 const TRIAGE_MODEL_BY_PROVIDER: Record<string, string> = {
-  "openai-codex": "gpt-5.5-mini",
+  "openai-codex": "gpt-5.6-luna",
   anthropic: "claude-haiku-4-5",
 };
+
+export function triageModelCandidates(channelModelRef: string, override?: string): string[] {
+  const colonIdx = channelModelRef.indexOf(":");
+  const provider = colonIdx > 0 ? channelModelRef.slice(0, colonIdx) : channelModelRef;
+  return [
+    ...(override ? [override] : []),
+    ...(TRIAGE_MODEL_BY_PROVIDER[provider]
+      ? [`${provider}:${TRIAGE_MODEL_BY_PROVIDER[provider]}`]
+      : []),
+    channelModelRef,
+  ];
+}
 
 /** Renew users.watch when less than this remains (registrations last ~7d). */
 const WATCH_RENEW_MARGIN_MS = 24 * 60 * 60 * 1000;
@@ -306,7 +319,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
   // ── agent configuration ───────────────────────────────────────────────────
 
   protected override getDefaultModel(): string {
-    return "openai-codex:gpt-5.5";
+    return "openai-codex:gpt-5.6-sol";
   }
 
   protected override getRespondPolicy(): RespondPolicy {
@@ -337,25 +350,17 @@ export class GmailAgentWorker extends AgentWorkerBase {
   ): Promise<string> {
     const channelModelRef = this.getAgentSettings().model;
     const override = this.store.getPrefs(channelId).triageModel;
-    const colonIdx = channelModelRef.indexOf(":");
-    const provider = colonIdx > 0 ? channelModelRef.slice(0, colonIdx) : channelModelRef;
-    const candidates = [
-      ...(override ? [override] : []),
-      ...(TRIAGE_MODEL_BY_PROVIDER[provider]
-        ? [`${provider}:${TRIAGE_MODEL_BY_PROVIDER[provider]}`]
-        : []),
-      channelModelRef,
-    ];
-    let model: ReturnType<typeof getPiModel> | null = null;
+    const candidates = triageModelCandidates(channelModelRef, override);
+    let model: ReturnType<typeof PI_MODELS.getModel> | null = null;
     for (const candidate of candidates) {
       const idx = candidate.indexOf(":");
       if (idx <= 0) continue;
-      model = getPiModel(candidate.slice(0, idx) as never, candidate.slice(idx + 1) as never);
+      model = PI_MODELS.getModel(candidate.slice(0, idx), candidate.slice(idx + 1));
       if (model) break;
     }
     if (!model) throw new Error(`No triage model metadata for: ${candidates.join(", ")}`);
     const apiKey = await this.resolveModelApiKey(channelId);
-    const response = await complete(
+    const response = await PI_MODELS.complete(
       model,
       {
         systemPrompt,

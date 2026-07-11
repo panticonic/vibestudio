@@ -101,6 +101,39 @@ describe("protocolHandler", () => {
     expect(mod.getPendingPanelLocation()).toBeNull();
   });
 
+  it("surfaces a stale/invalid link's actionable error instead of swallowing it", async () => {
+    const mod = await import("./protocolHandler.js");
+    const errorListener = vi.fn();
+    mod.onConnectLinkError(errorListener);
+
+    // A v1-style link (no v=2) — the parser rejects it with the re-pair message.
+    mod.enqueueConnectLink(
+      "vibestudio://connect?room=room-1111-2222&fp=" +
+        FP +
+        "&code=" +
+        "A".repeat(24) +
+        "&sig=wss://signal.example/&v=1"
+    );
+
+    expect(errorListener).toHaveBeenCalledTimes(1);
+    expect(errorListener.mock.calls[0]?.[0]).toMatch(/old protocol version|re-pair/i);
+    // Buffered too, then drained once.
+    expect(mod.getPendingConnectLinkError()).toMatch(/re-pair/i);
+    expect(mod.getPendingConnectLinkError()).toBeNull();
+    // A failed parse must NOT leave a pending (dial-able) link.
+    expect(mod.getPendingConnectLink()).toBeNull();
+  });
+
+  it("a subsequent valid link clears a buffered parse error", async () => {
+    const mod = await import("./protocolHandler.js");
+    mod.enqueueConnectLink("vibestudio://connect?room=x&v=1");
+    expect(mod.getPendingConnectLinkError()).not.toBeNull();
+    mod.getPendingConnectLinkError(); // drain
+    mod.enqueueConnectLink(link);
+    expect(mod.getPendingConnectLinkError()).toBeNull();
+    expect(mod.getPendingConnectLink()?.room).toBe("room-1111-2222");
+  });
+
   it("registers packaged and development protocol handlers", async () => {
     const mod = await import("./protocolHandler.js");
     mocks.app.isPackaged = true;

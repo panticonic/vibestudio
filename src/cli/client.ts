@@ -369,7 +369,7 @@ function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
     link = positional;
   } else if (positional) {
     throw new UsageError(
-      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link with --pair.`
+      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link or an https://vibestudio.app/pair URL (also accepted via --pair).`
     );
   }
 

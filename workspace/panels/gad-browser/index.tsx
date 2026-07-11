@@ -27,12 +27,13 @@ import {
   TrashIcon,
   UploadIcon,
 } from "@radix-ui/react-icons";
-import { blobstore, extensions, gad, rpc, workspace } from "@workspace/runtime";
-import {
-  formatRelativeTime,
-  type GitUpstreamState,
-  type GitUpstreamStatusRow,
-} from "@vibestudio/shared/gitUpstream";
+import { blobstore, gad, git, rpc, workspace } from "@workspace/runtime";
+import type {
+  GitPullUpstreamResult,
+  GitUpstreamState,
+  GitUpstreamStatusRow,
+} from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { formatRelativeTime } from "@vibestudio/shared/gitFormatting";
 import { useIsMobile, usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import {
   DiffViewer,
@@ -62,14 +63,7 @@ interface StateArgs {
 
 type Row = Record<string, unknown>;
 type GitStatusRow = GitUpstreamStatusRow;
-
-interface GitPullPreview {
-  behindBy: number;
-  aheadBy: number;
-  incoming: Array<{ sha: string; summary: string }>;
-}
-
-const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
+type GitPullPreview = GitPullUpstreamResult;
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -995,10 +989,6 @@ function App() {
     }
   }
 
-  async function invokeGitBridge<T>(method: string, args: unknown[] = []): Promise<T> {
-    return (await extensions.invoke(GIT_BRIDGE_EXTENSION, method, args)) as T;
-  }
-
   // Governance timeline (WP5 §7): the GAD agent-approval projection plus the
   // host log half (approval-queue resolutions + membership) via the host RPC
   // seam. Loaded lazily when the tab is opened (see effect below) and on the
@@ -1049,10 +1039,9 @@ function App() {
   async function refreshGitStatus(showLoading = false, fetchRemote = false) {
     if (showLoading) setGitLoading(true);
     try {
-      const rows = await invokeGitBridge<GitStatusRow[]>("upstreamStatus", [
-        stateArgs.gitRepo ? [stateArgs.gitRepo] : null,
-        { fetch: fetchRemote },
-      ]);
+      const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : [], {
+        fetch: fetchRemote,
+      });
       setGitRows(rows);
     } catch (err) {
       setOperationStatus(`Git status failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1077,21 +1066,20 @@ function App() {
   }
 
   function pushGit(repoPath: string) {
-    void runGitAction(repoPath, `Pushed ${repoPath}`, () =>
-      invokeGitBridge("pushUpstream", [repoPath, {}])
-    );
+    void runGitAction(repoPath, `Pushed ${repoPath}`, () => git.pushUpstream(repoPath));
   }
 
   function forcePushGit(repoPath: string) {
     void runGitAction(repoPath, `Force pushed ${repoPath}`, () =>
-      invokeGitBridge("pushUpstream", [repoPath, { force: true }])
+      git.pushUpstream(repoPath, { force: true })
     );
   }
 
   function previewPullGit(repoPath: string) {
     setGitPendingRepo(repoPath);
     setGitLoading(true);
-    void invokeGitBridge<GitPullPreview>("pullUpstream", [repoPath, { dryRun: true }])
+    void git
+      .pullUpstream(repoPath, { dryRun: true })
       .then((preview) => {
         setGitPullPreview({ repoPath, preview });
         setOperationStatus("");
@@ -1112,7 +1100,7 @@ function App() {
     if (!target) return;
     setGitPullPreview(null);
     void runGitAction(target.repoPath, `Imported upstream changes for ${target.repoPath}`, () =>
-      invokeGitBridge("pullUpstream", [target.repoPath, {}])
+      git.pullUpstream(target.repoPath)
     );
   }
 
@@ -1120,13 +1108,13 @@ function App() {
     void runGitAction(
       repoPath,
       `Auto-push ${enabled ? "enabled" : "disabled"} for ${repoPath}`,
-      () => invokeGitBridge("setAutoPush", [repoPath, enabled])
+      () => git.setAutoPush(repoPath, enabled)
     );
   }
 
   function detachUpstream(repoPath: string) {
     void runGitAction(repoPath, `Detached upstream for ${repoPath}`, () =>
-      invokeGitBridge("removeUpstream", [repoPath])
+      git.removeUpstream(repoPath)
     );
   }
 
@@ -1217,10 +1205,9 @@ function App() {
     const load = async (showLoading = false, fetchRemote = false) => {
       if (showLoading) setGitLoading(true);
       try {
-        const rows = await invokeGitBridge<GitStatusRow[]>("upstreamStatus", [
-          stateArgs.gitRepo ? [stateArgs.gitRepo] : null,
-          { fetch: fetchRemote },
-        ]);
+        const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : [], {
+          fetch: fetchRemote,
+        });
         if (!cancelled) setGitRows(rows);
       } catch (err) {
         if (!cancelled) {

@@ -17,9 +17,11 @@
  */
 
 import { namespaceEntry, valueEntry, type RuntimeSurfaceEntry } from "./runtimeSurface.js";
+import { gitInteropMethods } from "./serviceSchemas/gitInterop.js";
 
 // --- shared namespace member arrays (single source of truth) ---
 export const WORKERS_MEMBERS = [
+  "listSources",
   "listServices",
   "resolveService",
   "resolveDurableObject",
@@ -58,18 +60,7 @@ export const CREDENTIALS_MEMBERS = [
   "forAudience",
 ];
 
-export const GIT_MEMBERS = [
-  "http",
-  "upstreamStatus",
-  "pushUpstream",
-  "pullUpstream",
-  "publishRepo",
-  "configureUpstream",
-  "importProject",
-  "completeWorkspaceDependencies",
-  "setSharedRemote",
-  "removeSharedRemote",
-];
+export const GIT_MEMBERS = Object.keys(gitInteropMethods);
 
 export const VCS_MEMBERS = [
   "edit",
@@ -151,6 +142,7 @@ export const BLOBSTORE_MEMBERS = [
   "getRangeBytes",
   "grep",
   "putBase64",
+  "putBytes",
   "getBase64",
   "delete",
   "list",
@@ -169,7 +161,7 @@ export const WEBHOOKS_MEMBERS = [
   "rotateSecret",
 ];
 
-export const EXTENSIONS_MEMBERS = ["use", "invoke", "on", "list", "reload"];
+export const EXTENSIONS_MEMBERS = ["use", "invoke", "invokeProvider", "on", "list", "reload"];
 export const APPROVALS_MEMBERS = ["request", "revoke", "list"];
 export const NOTIFICATIONS_MEMBERS = ["show", "dismiss"];
 export const PANEL_TREE_MEMBERS = [
@@ -192,7 +184,10 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   id: valueEntry(),
   contextId: valueEntry(),
   rpc: valueEntry("Portable RPC client (the full createRpcClient)."),
-  fs: valueEntry(),
+  fs: valueEntry(
+    "Per-context filesystem sandbox. Paths are context-root-relative. For valid workspace-repo paths, writeFile, appendFile, truncate, chmod, unlink/rmdir/rm, copyFile destinations, and supported renames into or within repos route through GAD working edits; tracked-to-scratch renames and open with write flags are rejected. mkdir and utimes remain direct filesystem operations. Platform-ignored paths and paths outside reserved workspace source roots are local scratch.",
+    "fs"
+  ),
   callMain: valueEntry('Call a `main` (server) service method: callMain("fs.readFile", path).'),
   parent: valueEntry("This runtime's parent panel handle (a no-panel handle when there is none)."),
   getParent: valueEntry("Get the parent panel handle, or null when there is no parent."),
@@ -209,15 +204,22 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   openPanel: valueEntry("Open a workspace or browser panel and return a PanelHandle."),
   listPanels: valueEntry("List open panels."),
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
-  workers: namespaceEntry(WORKERS_MEMBERS),
+  workers: namespaceEntry(
+    WORKERS_MEMBERS,
+    "Worker discovery and manifest-declared service resolution. listSources() returns every launchable worker with its source, real manifest entry point, and Durable Object classes; lifecycle uses runtime.createEntity/retireEntity."
+  ),
   workspace: namespaceEntry(WORKSPACE_MEMBERS),
   credentials: namespaceEntry(CREDENTIALS_MEMBERS, undefined, "credentials"),
-  git: namespaceEntry(GIT_MEMBERS),
+  git: namespaceEntry(
+    GIT_MEMBERS,
+    "Typed external Git operations routed through the workspace's configured gitInterop provider.",
+    "gitInterop"
+  ),
   vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),
   gad: namespaceEntry(GAD_MEMBERS),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
-    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
+    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Runtime-only putBytes(Uint8Array | ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
     "blobstore"
   ),
   webhooks: namespaceEntry(WEBHOOKS_MEMBERS),

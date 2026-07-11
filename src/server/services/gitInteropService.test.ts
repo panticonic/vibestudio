@@ -10,6 +10,21 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 import { createGitInteropService } from "./gitInteropService.js";
 
+type GitProviderInvoker = NonNullable<
+  Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
+>;
+
+function cloneProvider(
+  cloneRepo: (ctx: ServiceContext, repoPath: string) => Promise<unknown>
+): GitProviderInvoker {
+  return (async (ctx: ServiceContext, method: string, args: unknown[]) => {
+    if (method !== "cloneRepo") throw new Error(`Unexpected provider method: ${method}`);
+    const input = args[0] as { repoPath: string };
+    await cloneRepo(ctx, input.repoPath);
+    return { stateHash: `state:${input.repoPath}`, changed: true };
+  }) as GitProviderInvoker;
+}
+
 function tempWorkspace(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-git-interop-"));
   fs.mkdirSync(path.join(root, "meta"), { recursive: true });
@@ -47,19 +62,31 @@ function diskConfigPersistence(workspacePath: string) {
     const beforeParsed = before ? ((YAML.parse(before) as Record<string, unknown>) ?? {}) : {};
     return YAML.stringify({ ...beforeParsed, ...nextConfig });
   };
+  const currentConfig = (): WorkspaceConfig =>
+    fs.existsSync(configPath)
+      ? ((YAML.parse(fs.readFileSync(configPath, "utf-8")) as WorkspaceConfig | null) ?? {
+          id: "test",
+        })
+      : { id: "test" };
   return {
-    workspaceConfigWouldChange: vi.fn(async (nextConfig: WorkspaceConfig) => {
-      const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
-      return before !== render(nextConfig);
-    }),
-    persistWorkspaceConfig: vi.fn(async ({ nextConfig }: { nextConfig: WorkspaceConfig }) => {
-      const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
-      const next = render(nextConfig);
-      if (before === next) return false;
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, next, "utf-8");
-      return true;
-    }),
+    workspaceConfigMutationWouldChange: vi.fn(
+      async (mutate: (current: WorkspaceConfig) => WorkspaceConfig) => {
+        const nextConfig = mutate(currentConfig());
+        const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
+        return before !== render(nextConfig);
+      }
+    ),
+    persistWorkspaceConfigMutation: vi.fn(
+      async ({ mutate }: { mutate: (current: WorkspaceConfig) => WorkspaceConfig }) => {
+        const nextConfig = mutate(currentConfig());
+        const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
+        const next = render(nextConfig);
+        if (before === next) return { changed: false, nextConfig };
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, next, "utf-8");
+        return { changed: true, nextConfig };
+      }
+    ),
   };
 }
 
@@ -77,7 +104,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      cloneRepo,
+      invokeGitProvider: cloneProvider(cloneRepo),
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -87,8 +114,8 @@ describe("gitInteropService", () => {
         remote: {
           name: "origin",
           url: "https://github.com/werg/bgkit.git",
+          branch: "vibestudio-bridge",
         },
-        branch: "vibestudio-bridge",
       },
     ]);
 
@@ -123,7 +150,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      cloneRepo,
+      invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
       grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
@@ -135,8 +162,8 @@ describe("gitInteropService", () => {
         remote: {
           name: "origin",
           url: "https://github.com/werg/bgkit.git",
+          branch: "vibestudio-bridge",
         },
-        branch: "vibestudio-bridge",
       },
     ]);
 
@@ -172,7 +199,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      cloneRepo,
+      invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
       grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
@@ -185,8 +212,8 @@ describe("gitInteropService", () => {
           remote: {
             name: "origin",
             url: "https://github.com/werg/bgkit.git",
+            branch: "vibestudio-bridge",
           },
-          branch: "vibestudio-bridge",
         },
       ])
     ).rejects.toThrow("Workspace config edit denied");
@@ -209,7 +236,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      cloneRepo,
+      invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue: {
         request: vi.fn(async () => "once" as const),
       } as unknown as ApprovalQueue,
@@ -225,8 +252,8 @@ describe("gitInteropService", () => {
           remote: {
             name: "origin",
             url: "https://github.com/werg/bgkit.git",
+            branch: "vibestudio-bridge",
           },
-          branch: "vibestudio-bridge",
         },
       ])
     ).rejects.toThrow("network unavailable");
@@ -288,7 +315,7 @@ describe("gitInteropService", () => {
         invalidate: vi.fn(),
         getSourceTree: vi.fn(async () => ({ children: [] })),
       } as never,
-      cloneRepo,
+      invokeGitProvider: cloneProvider(cloneRepo),
       approvalQueue,
       grantStore: grantStore(),
       onWorkspaceSourceChanged: sourceChanged,
@@ -328,13 +355,18 @@ describe("gitInteropService", () => {
     const projectedConfigPath = path.join(workspacePath, "meta", "vibestudio.yml");
     fs.rmSync(projectedConfigPath, { force: true });
     const workspaceConfig: WorkspaceConfig = { id: "test" };
-    const persistWorkspaceConfig = vi.fn(async () => true);
+    const persistWorkspaceConfigMutation = vi.fn(
+      async ({ mutate }: { mutate: (current: WorkspaceConfig) => WorkspaceConfig }) => ({
+        changed: true,
+        nextConfig: mutate(workspaceConfig),
+      })
+    );
     const service = createGitInteropService({
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      workspaceConfigWouldChange: vi.fn(async () => true),
-      persistWorkspaceConfig,
+      workspaceConfigMutationWouldChange: vi.fn(async () => true),
+      persistWorkspaceConfigMutation,
     });
 
     await service.handler(serviceContext(), "setSharedRemote", [
@@ -345,24 +377,14 @@ describe("gitInteropService", () => {
       },
     ]);
 
-    expect(persistWorkspaceConfig).toHaveBeenCalledWith(
+    expect(persistWorkspaceConfigMutation).toHaveBeenCalledWith(
       expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          git: expect.objectContaining({
-            remotes: expect.objectContaining({
-              projects: expect.objectContaining({
-                bgkit: expect.objectContaining({
-                  origin: "https://github.com/werg/bgkit.git",
-                }),
-              }),
-            }),
-          }),
-        }),
+        mutate: expect.any(Function),
       })
     );
-    expect(workspaceConfig.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toBe(
-      "https://github.com/werg/bgkit.git"
-    );
+    expect(workspaceConfig.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toEqual({
+      url: "https://github.com/werg/bgkit.git",
+    });
     expect(fs.existsSync(projectedConfigPath)).toBe(false);
   });
 
@@ -374,7 +396,7 @@ describe("gitInteropService", () => {
         remotes: {
           projects: {
             bgkit: {
-              origin: "https://github.com/werg/bgkit.git",
+              origin: { url: "https://github.com/werg/bgkit.git" },
             },
           },
         },
@@ -418,34 +440,127 @@ describe("gitInteropService", () => {
 
   it("delegates upstream engine operations to the configured provider", async () => {
     const ctx = serviceContext();
-    const providerResult = [
+    const cases: Array<{ method: string; args: unknown[]; result: unknown }> = [
       {
-        repoPath: "projects/bgkit",
-        remote: "origin",
-        branch: "main",
-        autoPush: false,
-        state: "in-sync",
-        aheadBy: 0,
-        behindBy: 0,
+        method: "upstreamStatus",
+        args: [["projects/bgkit"], { fetch: true }],
+        result: [
+          {
+            repoPath: "projects/bgkit",
+            remote: "origin",
+            branch: "main",
+            autoPush: false,
+            state: "in-sync",
+            aheadBy: 0,
+            behindBy: 0,
+          },
+        ],
+      },
+      {
+        method: "pushUpstream",
+        args: ["projects/bgkit", { force: true }],
+        result: {
+          exported: 1,
+          headCommit: "abc123",
+          pushed: true,
+          status: "in-sync",
+        },
+      },
+      {
+        method: "pullUpstream",
+        args: ["projects/bgkit", { dryRun: true }],
+        result: { behindBy: 1, aheadBy: 0, incoming: [{ sha: "abc123", summary: "change" }] },
+      },
+      {
+        method: "publishRepo",
+        args: [{ repoPath: "projects/bgkit", provider: "github", autoPush: true }],
+        result: {
+          repoPath: "projects/bgkit",
+          provider: "github",
+          remote: "origin",
+          branch: "main",
+          remoteUrl: "https://github.com/octo/bgkit.git",
+          webUrl: "https://github.com/octo/bgkit",
+          owner: "octo",
+          exported: 1,
+          headCommit: "abc123",
+          pushed: true,
+        },
       },
     ];
-    const invokeGitProviderMock = vi.fn(async () => providerResult);
-    const invokeGitProvider = invokeGitProviderMock as unknown as NonNullable<
-      Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
-    >;
+    for (const testCase of cases) {
+      const invokeGitProviderMock = vi.fn(async () => testCase.result);
+      const invokeGitProvider = invokeGitProviderMock as unknown as NonNullable<
+        Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
+      >;
+      const service = createGitInteropService({
+        treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+        invokeGitProvider,
+      });
+
+      await expect(service.handler(ctx, testCase.method, testCase.args)).resolves.toEqual(
+        testCase.result
+      );
+      expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, testCase.method, testCase.args);
+    }
+  });
+
+  it("fails provider operations when no gitInterop provider is available", async () => {
+    const service = createGitInteropService({
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+    });
+    for (const [method, args] of [
+      ["upstreamStatus", [[]]],
+      ["pushUpstream", ["projects/bgkit"]],
+      ["pullUpstream", ["projects/bgkit"]],
+      ["publishRepo", [{ repoPath: "projects/bgkit" }]],
+    ] as Array<[string, unknown[]]>) {
+      await expect(service.handler(serviceContext(), method, args)).rejects.toThrow(
+        "Git upstream provider is unavailable"
+      );
+    }
+  });
+
+  it("rejects provider results outside the canonical contract", async () => {
+    const invokeGitProvider = vi.fn(async () => ({
+      repoPath: "projects/bgkit",
+      provider: "github",
+      remoteUrl: "https://github.com/octo/bgkit.git",
+      webUrl: "https://github.com/octo/bgkit",
+      owner: "octo",
+      exported: 1,
+      headCommit: "abc123",
+      pushed: true,
+    })) as unknown as GitProviderInvoker;
     const service = createGitInteropService({
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider,
     });
 
     await expect(
-      service.handler(ctx, "upstreamStatus", [["projects/bgkit"], { fetch: true }])
-    ).resolves.toBe(providerResult);
+      service.handler(serviceContext(), "publishRepo", [{ repoPath: "projects/bgkit" }])
+    ).rejects.toThrow("Invalid gitInterop.publishRepo provider result");
+  });
 
-    expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, "upstreamStatus", [
-      ["projects/bgkit"],
-      { fetch: true },
-    ]);
+  it("rejects malformed clone results before completing an import", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider: vi.fn(async () => undefined) as unknown as GitProviderInvoker,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await expect(
+      service.handler(serviceContext(), "importProject", [
+        {
+          path: "projects/bgkit",
+          remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
+        },
+      ])
+    ).rejects.toThrow("Invalid gitInterop.cloneRepo provider result");
   });
 
   it("removing a declared remote also removes upstream tracking that points at it", async () => {
@@ -486,8 +601,12 @@ describe("gitInteropService", () => {
       ...diskConfigPersistence(workspacePath),
     });
 
-    await service.handler(serviceContext(), "removeSharedRemote", ["panels/notes", "origin"]);
+    const remaining = await service.handler(serviceContext(), "removeSharedRemote", [
+      "panels/notes",
+      "origin",
+    ]);
 
+    expect(remaining).toEqual({});
     expect(workspaceConfig.git?.remotes?.["panels"]?.["notes"]).toBeUndefined();
     expect(workspaceConfig.git?.upstreams?.["panels"]?.["notes"]).toBeUndefined();
   });

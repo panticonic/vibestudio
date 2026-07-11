@@ -104,6 +104,121 @@ describe("snapshotBrowserPanelFromCdpBridge", () => {
   });
 });
 
+async function createSinglePanelBridge(options?: {
+  callTarget?: ReturnType<typeof vi.fn>;
+  ensureDefaultCdpHostForSlot?: ReturnType<typeof vi.fn>;
+}) {
+  const now = Date.now();
+  const slot = {
+    slot_id: "panel:tree/slot-a",
+    parent_slot_id: null,
+    current_entity_id: "panel:entry-a",
+    current_entity_title: "Target",
+    current_entry_key: "entry-a",
+    position_id: "root",
+    created_at: now,
+    closed_at: null,
+  };
+  const history = {
+    slot_id: slot.slot_id,
+    cursor: 0,
+    entry_key: "entry-a",
+    entity_id: slot.current_entity_id,
+    source: "panels/target",
+    context_id: "ctx-target",
+    state_args: null,
+    recorded_at: now,
+  };
+  const entity = {
+    id: slot.current_entity_id,
+    kind: "panel",
+    source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+    contextId: "ctx-target",
+    key: "entry-a",
+    createdAt: now,
+    status: "active",
+    cleanupComplete: false,
+  };
+  const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+    if (service === "workspace-state" && method === "slot.list") return [slot];
+    if (service === "workspace-state" && method === "slot.get") {
+      return args[0] === slot.slot_id ? slot : null;
+    }
+    if (service === "workspace-state" && method === "slot.history") return [history];
+    if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+    if (service === "workspace-state" && method === "panel.search") return [];
+    if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
+    if (service === "presence" && method === "markPanelActive") return undefined;
+    throw new Error(`Unexpected dispatch: ${service}.${method}`);
+  });
+  const nodes = [{ role: { value: "heading" }, name: { value: "Target" } }];
+  const cdpBridge = {
+    isProviderConnected: vi.fn(() => true),
+    isTargetRegisteredForHost: vi.fn(() => true),
+    isTargetRegistered: vi.fn(() => true),
+    sendHostCommand: vi.fn(async () => nodes),
+  };
+  const callTarget = options?.callTarget ?? vi.fn(async () => ({ kind: "agent" }));
+  const ensureDefaultCdpHostForSlot =
+    options?.ensureDefaultCdpHostForSlot ??
+    vi.fn(() => ({ assigned: true, lease: { holderLabel: "Desktop" } }));
+  const bridge = await createServerPanelTreeBridge({
+    container: {
+      get: vi.fn((name: string) => (name === "rpcServer" ? { server: { callTarget } } : cdpBridge)),
+    },
+    dispatcher: { dispatch },
+    workspace: {},
+    workspacePath: "/tmp/workspace",
+    workspaceConfig: {},
+    adminToken: "admin-token",
+    centralData: null,
+    hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
+    isIpcMode: false,
+    panelRuntimeCoordinator: {
+      resolveHostForSlot: vi.fn(() => ({
+        hostConnectionId: "desktop-host",
+        supportsCdp: true,
+      })),
+      ensureDefaultCdpHostForSlot,
+    },
+    eventService: { emit: vi.fn() },
+  } as never);
+  return { bridge, callTarget, cdpBridge, ensureDefaultCdpHostForSlot, slot };
+}
+
+describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
+  it("loads a panel before reporting focus", async () => {
+    const { bridge, ensureDefaultCdpHostForSlot, slot } = await createSinglePanelBridge();
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "focus", args: [slot.slot_id] })
+    ).resolves.toMatchObject({
+      panelId: slot.slot_id,
+      status: "focused",
+      focused: true,
+      loaded: true,
+    });
+    expect(ensureDefaultCdpHostForSlot).toHaveBeenCalled();
+  });
+
+  it("falls back to an accessibility snapshot when a panel has no agent snapshot API", async () => {
+    const callTarget = vi.fn(async () => {
+      throw new Error("Target not reachable");
+    });
+    const { bridge, cdpBridge, slot } = await createSinglePanelBridge({ callTarget });
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "snapshot", args: [slot.slot_id] })
+    ).resolves.toEqual({
+      kind: "ax",
+      text: "heading: Target",
+      structure: [{ role: { value: "heading" }, name: { value: "Target" } }],
+    });
+    expect(callTarget).toHaveBeenCalledWith(slot.current_entity_id, "_agent.snapshot");
+    expect(cdpBridge.sendHostCommand).toHaveBeenCalledWith(slot.slot_id, "accessibilityTree", []);
+  });
+});
+
 describe("createServerPanelTreeBridge reload", () => {
   it("reloads the target view without unloading the panel runtime lease", async () => {
     const now = Date.now();
@@ -526,6 +641,10 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     });
 
     const eventService = { emit: vi.fn() };
+    const ensureDefaultCdpHostForSlot = vi.fn(() => ({
+      assigned: true,
+      lease: { holderLabel: "Desktop" },
+    }));
     const bridge = await createServerPanelTreeBridge({
       container: { get: vi.fn(() => ({})) },
       dispatcher: { dispatch },
@@ -539,6 +658,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       panelRuntimeCoordinator: {
         resolveHostForSlot: vi.fn(() => null),
         getLease: vi.fn(() => null),
+        ensureDefaultCdpHostForSlot,
       },
       eventService,
       getGatewayPort: () => 0,
@@ -549,13 +669,14 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       callerId: "server",
       callerKind: "server",
       method: "create",
-      args: ["panels/new", {}],
+      args: ["panels/new", { focus: true }],
     });
     expect(rootResult).toMatchObject({
       parentId: null,
       contextId: expect.any(String),
       source: "panels/new",
     });
+    expect(ensureDefaultCdpHostForSlot).toHaveBeenCalled();
 
     // The broadcast tree must contain BOTH roots — the new root must not have
     // wiped the pre-existing one (the addAsRoot fix).

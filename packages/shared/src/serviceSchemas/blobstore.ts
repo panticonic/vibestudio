@@ -211,11 +211,12 @@ export const blobstoreMethods = defineServiceMethods({
   },
   putBase64: {
     description:
-      "Store raw bytes from a base64 payload; returns content digest + byte size (idempotent by content).",
+      "Store raw bytes from exactly one base64 string; returns content digest + byte size (idempotent by content). The blobstore stores bytes only: do not pass MIME/options metadata, and instead carry it alongside the returned digest.",
     args: z.tuple([Base64Schema]),
     returns: z.object({ digest: z.string(), size: z.number() }),
     policy: BLOBSTORE_READ_POLICY,
     access: WRITE_ACCESS,
+    examples: [{ args: ["iVBORw0KGgo="] }],
   },
   getBase64: {
     description: "Full blob contents as a base64 string, or null if absent.",

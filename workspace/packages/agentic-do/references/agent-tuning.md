@@ -40,7 +40,7 @@ Edit `src/agent-config.ts` and set `DEFAULT_MODEL`.
 
 Examples:
 
-- OpenAI Codex: `openai-codex:gpt-5.5`
+- OpenAI Codex: `openai-codex:gpt-5.6-sol`
 - Anthropic flagship: `anthropic:claude-opus-4-7`
 - Anthropic Sonnet: `anthropic:claude-sonnet-4-6`
 - Google Vertex flagship: `google-vertex:gemini-3.1-pro`
@@ -49,6 +49,11 @@ When editing `agent-config.ts`, prefer the provider's current flagship. If you
 do not know what that is, check the provider's announcements page; pi-ai's
 catalog (`@earendil-works/pi-ai`'s `models.generated.d.ts`) is the source of
 truth for ids wired into the runtime.
+
+The enabled thinking levels accepted by the harness are `minimal`, `low`,
+`medium`, `high`, `xhigh`, and `max`. The configuration UI only shows
+levels advertised by the selected model. Programmatic values unsupported by a
+model are clamped by pi-ai to that model's supported range.
 
 ## Adding An OAuth Provider
 

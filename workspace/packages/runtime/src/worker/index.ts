@@ -98,6 +98,7 @@ export type {
   DurableObjectServiceClient,
   ResolvedUserlandService,
   UserlandServiceInfo,
+  WorkerSourceInfo,
 } from "../shared/workerd.js";
 export type {
   WorkspaceClient,
@@ -137,14 +138,7 @@ export type {
   UserlandApprovalRequest,
   UserlandApprovalSubject,
 } from "../approvals.js";
-// Git interop types now live in the shared `gitApi` (used by createHostedRuntime).
-export type {
-  GitRemoteSpec,
-  ImportProjectRequest,
-  ImportedWorkspaceRepo,
-  CompleteWorkspaceDependenciesResult,
-  RuntimeGitApi,
-} from "../shared/gitApi.js";
+export type * from "../shared/git.js";
 export type { WorkspaceRuntime } from "../shared/hostedRuntime.js";
 // Note: createTestDO is intentionally NOT exported here because it depends on
 // sql.js test-only helpers that should not be bundled into production workers.

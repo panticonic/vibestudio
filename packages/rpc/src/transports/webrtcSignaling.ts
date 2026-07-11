@@ -4,7 +4,15 @@
  * signaling box is deliberately dumb: a UUID-addressed rendezvous that
  * blind-relays SDP/ICE between two peers (security lives in the QR pin, not the
  * relay). The room PERSISTS for the connection's lifetime (WebSocket
- * Hibernation API) so it can carry ICE-restart, not just first connect.
+ * Hibernation API) so a reconnect re-joins the SAME room to re-signal a fresh
+ * pipe — the pairing/QR is never needed again — not just first connect.
+ *
+ * NB: reconnect is a full re-establish (fresh DTLS), NOT an in-place ICE-restart.
+ * A true ICE-restart (refresh ICE creds while keeping DTLS/SCTP + the open data
+ * channel) is empirically infeasible on the node-datachannel answerer — a
+ * re-offer neither rotates the ICE ufrag nor survives the channel; see
+ * docs/webrtc-ice-restart-findings.md. The persistent room + persistent server
+ * cert make re-establish seamless (no re-pair; sessions auto-reopen).
  */
 
 import type { RtcIceCandidate, RtcIceServer, RtcSessionDescription } from "./webrtcPeer.js";
@@ -24,6 +32,23 @@ export interface SignalingClient {
    * prefers these over any static `iceServers` in the pairing payload.
    */
   fetchIceServers?(): Promise<RtcIceServer[]>;
+  /**
+   * Proven-live seam: fired once the room WebSocket has actually OPENED (the
+   * relay is reachable), and immediately if it already opened before the
+   * handler subscribed. The answerer's rejoin supervisor resets its backoff
+   * ONLY on this — never on mere client construction, which the WS-eager
+   * `createSignalingClient` performs without ever throwing for an unreachable
+   * host (a down worker would otherwise be hammered ~1 socket/sec forever).
+   * Optional so in-memory fakes/adapters that cannot open async may omit it.
+   */
+  onOpen?(handler: () => void): () => void;
+  /**
+   * Fired when the peer joins the room (`peer-joined`). The offerer re-sends its
+   * current offer on this so a late-arriving server — or one that recovered
+   * after a signaling-buffer overflow — receives an offer instead of waiting
+   * out the connect deadline. Optional (fakes/adapters may omit it).
+   */
+  onPeerJoined?(handler: () => void): () => void;
   /** Signal that the room dropped/closed (so the transport can fail loud). */
   onClosed(handler: (reason?: string) => void): () => void;
   close(): void;

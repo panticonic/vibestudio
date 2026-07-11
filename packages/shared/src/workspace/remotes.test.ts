@@ -9,7 +9,9 @@ import {
   isDeclaredRemoteRepoPath,
   normalizeWorkspaceRepoPath,
   removeDeclaredRemoteFromConfig,
+  removeDeclaredUpstreamFromConfig,
   setDeclaredRemoteInConfig,
+  setDeclaredUpstreamInConfig,
   syncDeclaredRemoteForRepo,
 } from "./remotes.js";
 import type { WorkspaceConfig } from "./types.js";
@@ -68,8 +70,8 @@ describe("workspace remotes", () => {
     });
 
     expect(next.git?.remotes?.["panels"]?.["chat"]).toEqual({
-      origin: "https://github.com/acme/chat.git",
-      ci: "https://github.com/acme/chat-ci.git",
+      origin: { url: "https://github.com/acme/chat.git" },
+      ci: { url: "https://github.com/acme/chat-ci.git" },
     });
     expect(getDeclaredRemoteForRepo(next, "panels/chat")).toMatchObject({
       repoPath: "panels/chat",
@@ -126,8 +128,32 @@ describe("workspace remotes", () => {
     const next = removeDeclaredRemoteFromConfig(config, "panels/chat", "ci");
 
     expect(next.git?.remotes?.["panels"]?.["chat"]).toEqual({
-      origin: "https://github.com/acme/chat.git",
+      origin: { url: "https://github.com/acme/chat.git" },
     });
+  });
+
+  it("prunes empty repo, section, and git maps after the last declaration is removed", () => {
+    const withRemote = setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
+      name: "origin",
+      url: "https://github.com/acme/chat.git",
+    });
+
+    expect(removeDeclaredRemoteFromConfig(withRemote, "panels/chat", "origin")).toEqual({
+      id: "test",
+    });
+  });
+
+  it("prunes the upstream tree without disturbing the remaining remote tree", () => {
+    const withRemote = setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
+      name: "origin",
+      url: "https://github.com/acme/chat.git",
+    });
+    const withUpstream = setDeclaredUpstreamInConfig(withRemote, "panels/chat", {
+      remote: "origin",
+      branch: "main",
+    });
+
+    expect(removeDeclaredUpstreamFromConfig(withUpstream, "panels/chat")).toEqual(withRemote);
   });
 
   it("rejects remote URLs with embedded credentials", () => {

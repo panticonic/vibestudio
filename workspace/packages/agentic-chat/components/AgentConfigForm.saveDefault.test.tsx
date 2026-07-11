@@ -31,17 +31,27 @@ const catalog = {
   ],
 } as unknown as ModelCatalog;
 
+const extendedThinkingCatalog = {
+  models: [
+    {
+      ref: "prov:model-thinking",
+      name: "Thinking Model",
+      provider: "prov",
+      baseUrl: "https://thinking",
+      recommended: true,
+      connectable: true,
+      reasoning: true,
+      thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    },
+  ],
+} as unknown as ModelCatalog;
+
 function renderForm(props: Partial<React.ComponentProps<typeof AgentConfigForm>> = {}) {
   const onChange = vi.fn();
   const value: AgentConfigDraft = { model: "prov:model-a", approvalLevel: 2 };
   const utils = render(
     <Theme>
-      <AgentConfigForm
-        catalog={catalog}
-        value={value}
-        onChange={onChange}
-        {...props}
-      />
+      <AgentConfigForm catalog={catalog} value={value} onChange={onChange} {...props} />
     </Theme>
   );
   return { ...utils, onChange };
@@ -57,7 +67,10 @@ describe("AgentConfigForm — save as defaults", () => {
   it("offers 'Save as workspace defaults' when the config differs, and persists the full config", async () => {
     const onSaveAsDefault = vi.fn();
     // draft = model-a / approval 2; saved defaults use model-b → they differ.
-    renderForm({ onSaveAsDefault, defaultAgentConfig: { model: "prov:model-b", approvalLevel: 2 } });
+    renderForm({
+      onSaveAsDefault,
+      defaultAgentConfig: { model: "prov:model-b", approvalLevel: 2 },
+    });
     const btn = screen.getByRole("button", { name: /save as workspace defaults/i });
     await act(async () => {
       fireEvent.click(btn);
@@ -67,9 +80,30 @@ describe("AgentConfigForm — save as defaults", () => {
 
   it("shows the 'workspace defaults' indicator (no button) when the config already matches", () => {
     const onSaveAsDefault = vi.fn();
-    renderForm({ onSaveAsDefault, defaultAgentConfig: { model: "prov:model-a", approvalLevel: 2 } });
+    renderForm({
+      onSaveAsDefault,
+      defaultAgentConfig: { model: "prov:model-a", approvalLevel: 2 },
+    });
     expect(screen.getByText(/these are your workspace defaults/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /save as workspace defaults/i })).toBeNull();
     expect(onSaveAsDefault).not.toHaveBeenCalled();
+  });
+
+  it("renders and selects extended effort levels advertised by the model", () => {
+    const { onChange } = renderForm({
+      catalog: extendedThinkingCatalog,
+      value: {
+        model: "prov:model-thinking",
+        thinkingLevel: "xhigh",
+        approvalLevel: 2,
+      },
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Max" }));
+    expect(onChange).toHaveBeenCalledWith({
+      model: "prov:model-thinking",
+      thinkingLevel: "max",
+      approvalLevel: 2,
+    });
   });
 });

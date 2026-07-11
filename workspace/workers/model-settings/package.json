@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.80.6",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/runtime": "workspace:*"
   },

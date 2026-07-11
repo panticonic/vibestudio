@@ -129,6 +129,12 @@ export function ensurePersistentCert(opts: {
           `${consequence}.`
       );
     }
+    // The identity.pem is a COMBINED cert+key — the private key lives in this
+    // file, so it must stay `0600`. Minting writes it `0600`, but a file created
+    // out-of-band (restored from a backup, copied in, or written by an older
+    // build) can be world-readable. Re-check on every reuse and repair loudly
+    // rather than silently serving a key any local user can read.
+    repairIdentityPermissionsIfNeeded(identityPemFile);
     console.log(`[webrtc-cert] reusing persistent identity ${fingerprint}`);
     return {
       identityPemFile,
@@ -209,6 +215,36 @@ export function generateSelfSignedEcCert(commonName = "vibestudio-webrtc"): {
   const certDer = derSeq(tbsCertificate, sigAlg, derBitString(signature));
 
   return { certPem: pemEncode("CERTIFICATE", certDer), keyPem };
+}
+
+/**
+ * Ensure a reused combined identity.pem is not group/other-readable. POSIX only
+ * (Windows has no meaningful mode bits here); repairs to `0600` and warns loudly
+ * if it finds the private key exposed.
+ */
+function repairIdentityPermissionsIfNeeded(identityPemFile: string): void {
+  if (process.platform === "win32") return;
+  let mode: number;
+  try {
+    mode = fs.statSync(identityPemFile).mode;
+  } catch {
+    return; // Racing removal — the reuse path already read it; nothing to repair.
+  }
+  const exposedBits = mode & 0o077;
+  if (exposedBits === 0) return;
+  console.warn(
+    `[webrtc-cert] persistent identity ${identityPemFile} was ${(mode & 0o777).toString(8)} ` +
+      "(group/other-readable) — it contains the DTLS PRIVATE KEY. Repairing to 0600."
+  );
+  try {
+    fs.chmodSync(identityPemFile, 0o600);
+  } catch (error) {
+    console.warn(
+      `[webrtc-cert] failed to repair identity permissions on ${identityPemFile}: ${
+        error instanceof Error ? error.message : String(error)
+      } — the private key may remain readable by other local users.`
+    );
+  }
 }
 
 // --- atomic write -----------------------------------------------------------

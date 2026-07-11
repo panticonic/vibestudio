@@ -47,31 +47,32 @@ export function draftToConfig(draft: AgentConfigDraft): AgentSubscriptionConfig 
 }
 
 /**
- * Seed a fresh draft for an agent type from its manifest `defaultConfig`, falling
- * back to the resolved default model. `showReactiveness` decides whether a
- * default respondPolicy is seeded (only meaningful in multi-agent channels).
+ * Seed a fresh draft for an agent type. Effective host defaults (workspace
+ * defaults with any panel override already applied) layer over generic worker
+ * manifest defaults; the catalog is only a final model fallback.
+ * `showReactiveness` decides whether a default respondPolicy is seeded (only
+ * meaningful in multi-agent channels).
  */
 export function draftForAgent(
   agent: AvailableAgent | undefined,
   opts: {
     modelCatalog: ModelCatalog | null;
     defaultModelRef?: string | null;
-    /** Saved workspace defaults — layered over the agent manifest defaults so a
-     *  freshly-seeded draft matches the saved defaults (the "Save as defaults"
-     *  control then only appears once the user changes something). */
+    /** Effective host defaults — saved workspace defaults plus any panel-level
+     *  override. These layer over generic agent manifest defaults so a fresh
+     *  draft matches what the host will launch. */
     defaultAgentConfig?: DefaultAgentConfig | null;
     showReactiveness?: boolean;
   }
 ): AgentConfigDraft {
   const defaults = agent?.defaultConfig ?? {};
   const ws = opts.defaultAgentConfig;
+  const workerModel =
+    typeof defaults.model === "string" && defaults.model ? defaults.model : undefined;
   const defaultHandle =
     typeof defaults["handle"] === "string" ? defaults["handle"] : agent?.proposedHandle;
   return {
-    model:
-      typeof defaults.model === "string"
-        ? defaults.model
-        : pickDefaultModel(opts.modelCatalog, opts.defaultModelRef),
+    model: ws?.model || workerModel || pickDefaultModel(opts.modelCatalog, opts.defaultModelRef),
     thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel ?? "high",
     approvalLevel: ws?.approvalLevel ?? defaults.approvalLevel,
     respondPolicy: defaults.respondPolicy ?? (opts.showReactiveness ? "mentioned" : undefined),

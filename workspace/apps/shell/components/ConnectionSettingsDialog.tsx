@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Dialog, Flex, Text, TextField, Callout, Box, Separator } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { AppDialog } from "@workspace/ui";
@@ -7,11 +7,17 @@ import {
   parseConnectLink,
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
-import { incomingPairLink, remoteCred, type RemoteCredCurrent } from "../shell/client";
+import { app, incomingPairLink, remoteCred, type RemoteCredCurrent } from "../shell/client";
 import { useShellOverlay } from "../shell/useShellOverlay";
+import { useShellEvent } from "../shell/useShellEvent";
 import { PairedDevicesSection } from "./PairedDevicesSection";
 import { AppUpdatesSection } from "./AppUpdatesSection";
 import { AccountProfileSection } from "./AccountProfileSection";
+
+type LiveConnection = {
+  status: "connected" | "connecting" | "disconnected";
+  isRemote: boolean;
+};
 
 interface Props {
   open: boolean;
@@ -25,6 +31,27 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [live, setLive] = useState<LiveConnection | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    app
+      .getInfo()
+      .then((info) =>
+        setLive({
+          status: info.connectionStatus ?? "connected",
+          isRemote: (info.connectionMode ?? "local") === "remote",
+        })
+      )
+      .catch(() => {});
+  }, [open]);
+
+  useShellEvent(
+    "server-connection-changed",
+    useCallback((payload: { status: LiveConnection["status"]; isRemote: boolean }) => {
+      setLive({ status: payload.status, isRemote: payload.isRemote });
+    }, [])
+  );
 
   useEffect(() => {
     // A `vibestudio://connect` link carries the full WebRTC pairing material
@@ -60,7 +87,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       setError(parsed.reason);
       return;
     }
-    setPairLink(raw.trim());
+    setPairLink(raw);
   };
 
   const savePairing = async () => {
@@ -136,7 +163,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
               <Text as="label" size="2" weight="medium">
                 Pairing link
               </Text>
-              <Button size="1" variant="soft" disabled={busy} onClick={onPasteLink}>
+              <Button size="1" variant="soft" disabled={busy} onClick={() => void onPasteLink()}>
                 Paste link
               </Button>
             </Flex>

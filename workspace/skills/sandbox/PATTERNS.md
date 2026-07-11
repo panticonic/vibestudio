@@ -261,10 +261,10 @@ imports; those built-in APIs have their own trust scopes. See
 ## Browser data (cookies/passwords/bookmarks/history/tabs)
 
 `browserData` from `@workspace/panel-browser` is a **panel/component runtime**
-capability: it resolves the manifest-declared broker from
-`providers.browserData.extension` and invokes that extension, which only accepts
-**shell** callers. Server-side eval (caller kind `server`) cannot use it — run
-browser-data work from panel code or an
+capability: it invokes the manifest-selected `browserData` provider namespace,
+whose extension only accepts **shell** callers. It does not resolve or invoke an
+extension package directly. Server-side eval (caller kind `server`) cannot use
+it — run browser-data work from panel code or an
 `inline_ui`/`feedback_custom` component:
 
 ```tsx

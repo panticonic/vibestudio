@@ -86,14 +86,17 @@ describe("remoteCredService", () => {
         "getCurrent",
         []
       )
-    ).resolves.toEqual({ connected: true, configured: false, isActive: false });
+    ).resolves.toMatchObject({ connected: true, configured: false, isActive: false });
   });
 
   it("reports a stored pairing as active only while its server session is live", async () => {
     mocks.store.value = sampleStored;
     const { createRemoteCredService } = await import("./remoteCredService.js");
-    const active = createRemoteCredService({ getServerClient: () => serverClient() });
-    await expect(active.handler(shellCtx, "getCurrent", [])).resolves.toEqual({
+    const active = createRemoteCredService({
+      getServerClient: () => serverClient(),
+      getConnectionMode: () => "remote",
+    });
+    await expect(active.handler(shellCtx, "getCurrent", [])).resolves.toMatchObject({
       connected: true,
       configured: true,
       isActive: true,
@@ -189,11 +192,11 @@ describe("remoteCredService", () => {
     expect(mocks.store.value).toEqual(sampleStored);
   });
 
-  it("surfaces fresh, rotated, and clear persistence failures", async () => {
+  it("keeps the live session usable on save failures but surfaces explicit clear failures", async () => {
     const { clearStoredRemotePairing, persistRotatedRemoteCredential, saveStoredRemote } =
       await import("./remoteCredService.js");
     mocks.store.saveError = new Error("disk full");
-    expect(() => saveStoredRemote(sampleStored)).toThrow(/disk full/);
+    expect(() => saveStoredRemote(sampleStored)).not.toThrow();
 
     mocks.store.saveError = null;
     mocks.store.value = sampleStored;
@@ -203,7 +206,7 @@ describe("remoteCredService", () => {
         deviceId: NEXT_DEVICE_ID,
         refreshToken: NEXT_REFRESH_TOKEN,
       })
-    ).toThrow(/keychain unavailable/);
+    ).not.toThrow();
 
     mocks.store.clearError = new Error("permission denied");
     expect(() => clearStoredRemotePairing()).toThrow(/permission denied/);

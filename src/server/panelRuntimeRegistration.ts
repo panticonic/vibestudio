@@ -754,6 +754,11 @@ export async function createServerPanelTreeBridge(
         const entitySource = await panelManager.getCurrentEntitySource(
           asPanelSlotId(created.panelId)
         );
+        if (options.focus) {
+          await ensureDefaultLoaded(created.panelId);
+          await panelManager.notifyFocused(asPanelSlotId(created.panelId));
+          emitTreeSnapshot();
+        }
         return {
           id: created.panelId,
           title: created.title,
@@ -765,10 +770,13 @@ export async function createServerPanelTreeBridge(
           effectiveVersion: entitySource?.effectiveVersion ?? null,
         };
       }
-      case "focus":
-        await panelManager.notifyFocused(asPanelSlotId(String(args[0])));
+      case "focus": {
+        const panelId = String(args[0]);
+        const loaded = await ensureDefaultLoaded(panelId);
+        await panelManager.notifyFocused(asPanelSlotId(panelId));
         emitTreeSnapshot();
-        return { panelId: String(args[0]), status: "focused", focused: true, loaded: false };
+        return { ...loaded, status: loaded.loaded ? "focused" : loaded.status, focused: true };
+      }
       case "ensureLoaded": {
         const panelId = String(args[0]);
         return ensureDefaultLoaded(panelId);
@@ -914,18 +922,25 @@ export async function createServerPanelTreeBridge(
         await sync();
         const panel = registry.getPanel(panelId);
         if (!panel) throw new Error(`Panel not found: ${panelId}`);
+        const cdpBridge = await ensureHostCommandTargetReady(panelId);
         if (getPanelSource(panel).startsWith("browser:")) {
-          const cdpBridge = deps.container.get<import("./cdpBridge.js").CdpBridge>("cdpBridge");
           return snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
         }
         const runtimeEntityId = await panelManager.getCurrentEntityId(asPanelSlotId(panelId));
         const { server: rpcServer } = deps.container.get<{
           server: import("./rpcServer.js").RpcServer;
         }>("rpcServer");
-        return rpcServer.callTarget(runtimeEntityId, "_agent.snapshot");
+        try {
+          return await rpcServer.callTarget(runtimeEntityId, "_agent.snapshot");
+        } catch {
+          // Not every workspace panel exposes an in-process agent API. The
+          // accessibility tree is the universal readable snapshot surface.
+          return snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
+        }
       }
       case "callAgent": {
         const panelId = String(args[0]);
+        await ensureDefaultLoaded(panelId);
         const runtimeEntityId = await panelManager.getCurrentEntityId(asPanelSlotId(panelId));
         const { server: rpcServer } = deps.container.get<{
           server: import("./rpcServer.js").RpcServer;

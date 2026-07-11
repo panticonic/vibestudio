@@ -1,5 +1,13 @@
 # Agentic Architecture: Channels, Workers, and In-Process Pi
 
+> ⚠️ **Table-level detail predates the Unified Log rework.** The topology and
+> event flow below still hold, but persistence is migrating to the unified
+> log model (`docs/stage0-unified-log-spec.md`, `docs/ws1-agent-loop-spec.md`,
+> `docs/ws2-channel-spec.md`): storage of record is `log_heads`/`log_events`
+> with `trajectory_*` projections in `workspace/workers/gad-store/index.ts`.
+> Read the `pi_sessions`/`delivery_cursor`/`pending_calls` DO-table detail as
+> historical; the specs win where they disagree.
+
 ## Overview
 
 Vibestudio's agentic system is a 2-layer server-side architecture. Pi
@@ -72,7 +80,7 @@ Location: `workspace/packages/agentic-do/src/agent-worker-base.ts`
 
 | Hook                          | Default                                                                  | Purpose                                                                                   |
 | ----------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `getDefaultModel()`           | subclass override required; `AiChatWorker` uses `"openai-codex:gpt-5.5"` | Default model id in `provider:model` format; subscription config can override per channel |
+| `getDefaultModel()`           | subclass override required; `AiChatWorker` uses `"openai-codex:gpt-5.6-sol"` | Default model id in `provider:model` format; subscription config can override per channel |
 | `getDefaultThinkingLevel()`   | `"medium"`                                                               | Default Pi thinking level; state/config can override per channel                          |
 | `getApprovalLevel(channelId)` | `2` (full auto)                                                          | 0 = ask all, 1 = auto safe tools, 2 = full auto                                           |
 | `shouldProcess(event)`        | Panel messages only                                                      | Filter incoming channel events                                                            |

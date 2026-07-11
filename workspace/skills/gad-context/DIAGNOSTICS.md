@@ -158,6 +158,22 @@ summary for a channel. It combines:
 The `summary.ok` flag is false when durable publication, turn, invocation, or
 storage invariants need attention.
 
+When an agent calls this inspector during its own active turn,
+`summary.openTurns` and `summary.nonterminalInvocations` can make `summary.ok`
+false even though publication/storage/hash issue counters are all zero. That is
+an expected in-flight observation, not durable corruption. Judge the named
+issue counters and the specific turn/invocation rows; do not treat the aggregate
+boolean alone as a failure while the inspecting turn is still open.
+
+### Branch And State Lookups
+
+The bounded lookup APIs use ordinary not-found sentinels: an unknown branch in
+`gad.listGadBranchFiles(...)` returns `[]`; an unknown state/file in
+`gad.readGadFileAtState(...)` and an unknown producer in
+`gad.getGadStateProducer(...)` return `null`. These are successful lookups with
+no match. If a test deliberately probes them, label the result as expected data
+instead of throwing or inventing an API error.
+
 ### Build Provenance
 
 Use the build service to check what source artifact the runtime can actually

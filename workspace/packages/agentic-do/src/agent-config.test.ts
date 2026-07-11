@@ -53,7 +53,9 @@ describe("resolveRespondFromHandles", () => {
   });
 
   it("is a no-op on an empty allowlist", () => {
-    expect(resolveRespondFromHandles([], [{ participantId: "p", metadata: { handle: "@p" } }])).toEqual([]);
+    expect(
+      resolveRespondFromHandles([], [{ participantId: "p", metadata: { handle: "@p" } }])
+    ).toEqual([]);
   });
 });
 
@@ -174,7 +176,7 @@ describe("per-agent settings seeding from STATE_ARGS.agentConfig", () => {
       STATE_ARGS: {
         agentConfig: {
           model: "openai:gpt-5.3",
-          thinkingLevel: "high",
+          thinkingLevel: "max",
           approvalLevel: 1,
           // invalid + non-settings keys must be dropped by the sanitizer:
           thinkingLevelTypo: "ultra",
@@ -187,7 +189,7 @@ describe("per-agent settings seeding from STATE_ARGS.agentConfig", () => {
 
     const settings = vessel.getAgentSettings();
     expect(settings.model).toBe("openai:gpt-5.3");
-    expect(settings.thinkingLevel).toBe("high");
+    expect(settings.thinkingLevel).toBe("max");
     expect(settings.approvalLevel).toBe(1);
     // getAgentSettings only ever returns the 7 known settings — never presentation/junk.
     expect(settings).not.toHaveProperty("handle");
@@ -218,6 +220,10 @@ describe("per-agent config invalidation spans all the agent's channels", () => {
     const dropLoop = vi.spyOn(vessel.driverForTest(), "dropLoop");
 
     vessel.configureAgent({ model: "anthropic:claude-sonnet-4-6" });
+    vessel.configureAgent({ thinkingLevel: "xhigh" });
+    expect(vessel.getAgentSettings().thinkingLevel).toBe("xhigh");
+    vessel.configureAgent({ thinkingLevel: "max" });
+    expect(vessel.getAgentSettings().thinkingLevel).toBe("max");
 
     expect(dropLoop).toHaveBeenCalledWith("ch-a");
     expect(dropLoop).toHaveBeenCalledWith("ch-b");

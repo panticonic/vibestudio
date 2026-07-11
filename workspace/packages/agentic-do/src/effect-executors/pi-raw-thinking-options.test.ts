@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  stream,
-  type Api,
-  type Context,
-  type Model,
-  type ProviderStreamOptions,
-} from "@earendil-works/pi-ai";
 // Mistral's provider pulls in its SDK lazily. Preload the real provider during
 // test collection so the payload assertion itself is not timed by SDK startup
 // under full-suite load.
-import "@earendil-works/pi-ai/mistral";
+import "@earendil-works/pi-ai/providers/mistral";
+import { stream } from "@earendil-works/pi-ai/compat";
+import type { Api, Context, Model, ProviderStreamOptions } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@workspace/agent-loop";
 import { buildRawThinkingOptions, type RawThinkingModel } from "./pi-raw-thinking-options.js";
 
@@ -27,7 +22,9 @@ const context: Context = {
 function model(
   api: Api,
   id: string,
-  overrides: Partial<Model<Api>> = {}
+  overrides: Partial<Omit<Model<Api>, "thinkingLevelMap">> & {
+    thinkingLevelMap?: RawThinkingModel["thinkingLevelMap"];
+  } = {}
 ): Model<Api> & RawThinkingModel {
   return {
     id,
@@ -96,14 +93,15 @@ function fakeCodexJwt(): string {
 
 async function capturePayload(
   rawModel: Model<Api> & RawThinkingModel,
-  options: ProviderStreamOptions = {}
+  options: ProviderStreamOptions = {},
+  level: ThinkingLevel = "medium"
 ): Promise<Record<string, unknown>> {
   let captured: unknown;
   const streamResult = stream(rawModel, context, {
     apiKey: rawModel.api === "openai-codex-responses" ? fakeCodexJwt() : "test-key",
     bearerToken: "test-bedrock-bearer",
     ...options,
-    ...buildRawThinkingOptions(rawModel, "medium"),
+    ...buildRawThinkingOptions(rawModel, level),
     onPayload(payload) {
       captured = payload;
       throw new Error("captured payload");
@@ -119,6 +117,20 @@ describe("buildRawThinkingOptions", () => {
   it("maps OpenAI Responses/Codex thinking to raw reasoning options", () => {
     expect(rawThinkingOptions(model("openai-codex-responses", "gpt-5-codex"))).toEqual({
       reasoningEffort: "medium",
+      reasoningSummary: "auto",
+    });
+  });
+
+  it("preserves max effort for Codex models that advertise it", () => {
+    expect(
+      rawThinkingOptions(
+        model("openai-codex-responses", "gpt-5.6-sol", {
+          thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+        }),
+        "max"
+      )
+    ).toEqual({
+      reasoningEffort: "max",
       reasoningSummary: "auto",
     });
   });
@@ -175,6 +187,21 @@ describe("raw provider thinking payloads", () => {
 
     expect(payload).toMatchObject({
       reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
+  it("sends max effort in the OpenAI Codex Responses payload", async () => {
+    const payload = await capturePayload(
+      model("openai-codex-responses", "gpt-5.6-sol", {
+        thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+      }),
+      {},
+      "max"
+    );
+
+    expect(payload).toMatchObject({
+      reasoning: { effort: "max", summary: "auto" },
       include: ["reasoning.encrypted_content"],
     });
   });

@@ -14,6 +14,7 @@ import type { RootStackParamList } from "../navigation/RootNavigator";
 import { resetToNativeBootstrap } from "../services/auth";
 import { readClipboardText } from "../services/nativeCapabilities";
 import { loadShellCredential, clearShellCredential } from "@vibestudio/mobile-webrtc";
+import { parseConnectLink } from "@vibestudio/shared/connect";
 import { ShellClient, type Credentials } from "../services/shellClient";
 import {
   serverUrlAtom,
@@ -74,6 +75,18 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
       const rawUrl = (await readClipboardText()).trim();
       if (!rawUrl) {
         throw new Error("Clipboard is empty. Copy a Vibestudio pairing link first.");
+      }
+      // Validate the pasted link (shape + protocol version) BEFORE touching the
+      // stored credential. Clearing first meant clipboard garbage — or an https
+      // pair link that Android hands straight to the app — wiped the only saved
+      // pairing and stranded the device. Only a well-formed current link may
+      // proceed; anything else surfaces a clear error and leaves the credential
+      // intact so the device can still reconnect.
+      const parsed = parseConnectLink(rawUrl);
+      if (parsed.kind === "error") {
+        throw new Error(
+          `That doesn't look like a valid Vibestudio pairing link. ${parsed.reason}`
+        );
       }
       await clearShellCredential();
       await Linking.openURL(rawUrl);

@@ -40,6 +40,11 @@ const StateArgsSchema = z.record(z.unknown());
 const CreateResultSchema = z.object({
   id: z.string().describe("Stable panel/slot id of the created panel."),
   title: z.string().describe("Display title resolved for the panel."),
+  parentId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Stable parent panel/slot id, or null for a root panel."),
   kind: z
     .enum(["browser", "workspace"])
     .optional()
@@ -156,7 +161,8 @@ export const panelTreeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   setStateArgs: {
-    description: "Replace a panel's state-args; returns the resulting validated state-args.",
+    description:
+      "Merge a patch into a panel's state-args (null removes a key); returns the full resulting validated state-args.",
     args: z.tuple([PanelIdSchema, StateArgsSchema]),
     returns: StateArgsSchema,
     access: WRITE_ACCESS,
@@ -252,7 +258,8 @@ export const panelTreeMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   snapshot: {
-    description: "Return the current snapshot/configuration of a single panel.",
+    description:
+      "Return a readable snapshot of one loaded panel, using its agent snapshot when available and accessibility-tree fallback otherwise.",
     args: z.tuple([PanelIdSchema]),
     returns: z.unknown(),
     access: READ_ACCESS,

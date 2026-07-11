@@ -23,10 +23,17 @@ import {
   type WebhookTarget,
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
+import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 
-const DEFAULT_RELAY_PUBLIC_BASE_URL = "https://vibestudio.app";
-const DEFAULT_RELAY_TOLERANCE_MS = 5 * 60 * 1000;
+/**
+ * Skew tolerance for the relay envelope timestamp. Generous fail-loud backstop:
+ * wide enough that a slow-but-healthy buffered redelivery is never rejected,
+ * tight enough that a stale/replayed frame eventually fails closed.
+ */
+const RELAY_ENVELOPE_TOLERANCE_MS = 5 * 60 * 1000;
 const GOOGLE_OIDC_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+/** Remember processed deliveryIds so a relay retry re-acks without re-dispatching. */
+const DELIVERY_DEDUPE_TTL_MS = 15 * 60 * 1000;
 
 type JwkWithKeyId = crypto.JsonWebKey & { kid?: string };
 
@@ -237,15 +244,29 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
   }
 }
 
+/** Registers/unregisters relay-mode subscriptions over the backhaul (§7). */
+export interface WebhookRelayRegistrar {
+  registerWebhook(subscriptionId: string): void;
+  unregisterWebhook(subscriptionId: string): void;
+}
+
 export interface WebhookIngressServiceDeps {
   relaySigningSecret?: string;
-  relayPublicBaseUrl?: string;
+  /**
+   * The single apex relay origin (VIBESTUDIO_RELAY_URL), e.g.
+   * `https://vibestudio.app`. Relay-mode subscriptions publish
+   * `<relayOrigin>/i/<subscriptionId>` as their provider-facing URL; inbound
+   * deliveries then ride the backhaul, not a public server endpoint.
+   */
+  relayOrigin?: string;
   directPublicBaseUrl?: string | null;
   store?: WebhookIngressStore;
   rpc?: RpcCallerLike;
   now?: () => number;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
+  /** Backhaul registrar; relay-mode subscriptions register through it. */
+  relayRegistrar?: WebhookRelayRegistrar;
 }
 
 export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}): {
@@ -253,21 +274,23 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   routes: ServiceRouteDecl[];
   internal: {
     store: WebhookIngressStore;
-    verifyRelayEnvelope(req: IncomingMessage, rawBody: Buffer): boolean;
+    /** Verify + dispatch a backhaul-delivered webhook; returns the relay ack. */
+    deliverRelayWebhook(frame: RelayWebhookFrame): Promise<WebhookAck>;
+    /** Re-announce every live relay-mode subscription (call on backhaul connect/boot). */
+    reannounceRelaySubscriptions(): Promise<void>;
     revokeForCaller(callerId: string): Promise<number>;
   };
 } {
   const store =
     deps.store ??
     (deps.rpc ? new DOWebhookIngressStore(deps.rpc) : new InMemoryWebhookIngressStore());
-  const relayPublicBaseUrl = normalizeBaseUrl(
-    deps.relayPublicBaseUrl ?? DEFAULT_RELAY_PUBLIC_BASE_URL
-  );
+  const relayOrigin = deps.relayOrigin ? normalizeBaseUrl(deps.relayOrigin) : null;
   const directPublicBaseUrl = deps.directPublicBaseUrl
     ? normalizeBaseUrl(deps.directPublicBaseUrl)
     : null;
   const now = deps.now ?? Date.now;
   const seenReplayKeys = new Map<string, number>();
+  const seenDeliveries = new Map<string, { ack: WebhookAck; expiresAt: number }>();
   const jwksCache = new Map<string, { expiresAt: number; keys: JwkWithKeyId[] }>();
 
   function toSummary(subscription: WebhookIngressSubscription): WebhookIngressSubscriptionSummary {
@@ -298,10 +321,13 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   ): Promise<WebhookIngressSubscriptionSummary> {
     const parsed = createSubscriptionSchema.parse(input) as CreateWebhookIngressSubscriptionRequest;
     ensureTargetIsCallerSource(ctx, parsed.target);
-    const resolvedBase =
-      parsed.delivery.mode === "direct" ? directPublicBaseUrl : relayPublicBaseUrl;
-    if (resolvedBase === undefined) {
-      throw new Error("webhook subscriptions require a configured public base URL");
+    const resolvedBase = parsed.delivery.mode === "direct" ? directPublicBaseUrl : relayOrigin;
+    if (resolvedBase === null || resolvedBase === undefined) {
+      throw new Error(
+        parsed.delivery.mode === "direct"
+          ? "direct webhook subscriptions require a co-located gateway URL"
+          : "relay webhook subscriptions require VIBESTUDIO_RELAY_URL to be configured"
+      );
     }
     const pendingBase = resolvedBase;
     const subscription = await store.create({
@@ -326,6 +352,12 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       updatedAt: now(),
     };
     await store.replace(withUrl);
+    // Relay-mode subscriptions are delivered over the backhaul: claim ownership
+    // now (first-writer-wins on the relay) so a provider POST to
+    // <relayOrigin>/i/<id> can be routed back to this server.
+    if (parsed.delivery.mode === "relay") {
+      deps.relayRegistrar?.registerWebhook(withUrl.subscriptionId);
+    }
     return toSummary(withUrl);
   }
 
@@ -343,6 +375,9 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     if (!subscription) return;
     ensureOwner(ctx, subscription);
     await store.replace({ ...subscription, revokedAt: now() });
+    if (subscription.delivery.mode === "relay") {
+      deps.relayRegistrar?.unregisterWebhook(subscriptionId);
+    }
   }
 
   async function rotateSecret(
@@ -375,31 +410,134 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     };
   }
 
-  function verifyRelayEnvelope(req: IncomingMessage, rawBody: Buffer): boolean {
+  /**
+   * Verify the relay envelope carried IN a backhaul webhook frame. The relay
+   * signs `canonical(method,path,query,timestamp,bodySha256)` with the shared
+   * secret; we recompute the body hash from the decoded body (integrity) and
+   * the HMAC (authenticity), and bound the timestamp skew. Fails closed.
+   */
+  function verifyRelayFrameEnvelope(frame: RelayWebhookFrame, rawBody: Buffer): boolean {
     if (!deps.relaySigningSecret) return false;
-    const method = getHeader(req.headers, "x-vibestudio-relay-method");
-    const path = getHeader(req.headers, "x-vibestudio-relay-path");
-    const query = getHeader(req.headers, "x-vibestudio-relay-query") ?? "";
-    const timestamp = getHeader(req.headers, "x-vibestudio-relay-timestamp");
-    const bodySha256 = getHeader(req.headers, "x-vibestudio-relay-body-sha256");
-    const signature = getHeader(req.headers, "x-vibestudio-relay-signature");
-    if (!method || !path || !timestamp || !bodySha256 || !signature) {
-      return false;
-    }
-    const parsedTs = Number(timestamp);
-    if (!Number.isFinite(parsedTs) || Math.abs(now() - parsedTs) > DEFAULT_RELAY_TOLERANCE_MS) {
+    const relay = frame.relay;
+    if (!relay || !relay.timestamp || !relay.bodySha256 || !relay.signature) return false;
+    const parsedTs = Number(relay.timestamp);
+    if (!Number.isFinite(parsedTs) || Math.abs(now() - parsedTs) > RELAY_ENVELOPE_TOLERANCE_MS) {
       return false;
     }
     const actualBodySha = crypto.createHash("sha256").update(rawBody).digest("hex");
-    if (!timingSafeStringEqual(bodySha256, actualBodySha)) {
-      return false;
-    }
-    const canonical = [method.toUpperCase(), path, query, timestamp, bodySha256].join("\n");
+    if (!timingSafeStringEqual(relay.bodySha256, actualBodySha)) return false;
+    const canonical = [
+      frame.method.toUpperCase(),
+      frame.path,
+      frame.query ?? "",
+      relay.timestamp,
+      relay.bodySha256,
+    ].join("\n");
     const expected = `v1=${crypto
       .createHmac("sha256", deps.relaySigningSecret)
       .update(canonical)
       .digest("hex")}`;
-    return timingSafeStringEqual(signature, expected);
+    return timingSafeStringEqual(relay.signature, expected);
+  }
+
+  function pruneSeenDeliveries(nowMs: number): void {
+    for (const [id, entry] of seenDeliveries) {
+      if (entry.expiresAt <= nowMs) seenDeliveries.delete(id);
+    }
+  }
+
+  /**
+   * Process a webhook delivered over the backhaul and return the ack the relay
+   * needs. Idempotent by deliveryId: a relay retry (its buffered entry survived
+   * an ack loss / reconnect) re-acks the cached response WITHOUT re-dispatching.
+   */
+  async function deliverRelayWebhook(frame: RelayWebhookFrame): Promise<WebhookAck> {
+    const nowMs = now();
+    pruneSeenDeliveries(nowMs);
+    const cached = seenDeliveries.get(frame.deliveryId);
+    if (cached) return cached.ack;
+
+    const remember = (ack: WebhookAck): WebhookAck => {
+      // Only terminal outcomes (ack / permanent nack) are cached; a transient
+      // failure must be retried freshly, not short-circuited.
+      if (ack.ok || ack.permanent) {
+        seenDeliveries.set(frame.deliveryId, { ack, expiresAt: nowMs + DELIVERY_DEDUPE_TTL_MS });
+      }
+      return ack;
+    };
+
+    const rawBody = Buffer.from(frame.bodyBase64 ?? "", "base64");
+    if (!verifyRelayFrameEnvelope(frame, rawBody)) {
+      return remember({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
+    }
+    const subscription = await store.get(frame.subscriptionId);
+    if (!subscription || subscription.revokedAt) {
+      return remember({ ok: false, permanent: true, reason: "subscription-not-found" });
+    }
+    if (subscription.delivery.mode !== "relay") {
+      return remember({ ok: false, permanent: true, reason: "subscription-not-relay" });
+    }
+
+    const headers = frame.headers ?? {};
+    const url = `${relayOrigin ?? "https://relay.invalid"}${frame.path}${
+      frame.query ? `?${frame.query}` : ""
+    }`;
+    if (!(await verifySubscriptionRequestRaw(subscription, headers, rawBody, url))) {
+      return remember({ ok: false, permanent: true, reason: "invalid-webhook-signature" });
+    }
+
+    const payload = parseDeliveryPayload(subscription, rawBody);
+    if (!payload) {
+      if (subscription.response.malformedPayload === "ack") {
+        return remember(
+          ackResponse(subscription, { accepted: false, reason: "malformed-payload" })
+        );
+      }
+      return remember({ ok: false, permanent: true, reason: "malformed-payload" });
+    }
+    if (isReplay(subscription, headers, rawBody, payload, seenReplayKeys, nowMs)) {
+      // Provider-level duplicate: already handled once — ack so the relay drops it.
+      return remember(ackResponse(subscription, { accepted: false, reason: "replay" }));
+    }
+
+    const event: WebhookDeliveryEvent = {
+      subscriptionId: frame.subscriptionId,
+      publicUrl: subscription.publicUrl,
+      receivedAt: nowMs,
+      delivery: subscription.delivery,
+      headers,
+      rawBodyBase64: rawBody.toString("base64"),
+      payload,
+    };
+    if (deps.dispatchToTarget) {
+      try {
+        await deps.dispatchToTarget(subscription.target, event);
+      } catch (err) {
+        if (subscription.response.dispatchError === "ack") {
+          return remember(
+            ackResponse(subscription, {
+              accepted: false,
+              reason: "dispatch-error",
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
+        }
+        // retry: transient nack — the relay keeps the buffered entry and retries.
+        return { ok: false, permanent: false, reason: "dispatch-error" };
+      }
+    }
+    return remember(
+      ackResponse(subscription, { accepted: true, subscriptionId: frame.subscriptionId })
+    );
+  }
+
+  /** Re-announce every non-revoked relay-mode subscription over the backhaul. */
+  async function reannounceRelaySubscriptions(): Promise<void> {
+    if (!deps.relayRegistrar) return;
+    for (const sub of await store.list()) {
+      if (sub.revokedAt) continue;
+      if (sub.delivery.mode === "relay") deps.relayRegistrar.registerWebhook(sub.subscriptionId);
+    }
   }
 
   async function handleIngressRoute(
@@ -416,8 +554,11 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     if (!subscription || subscription.revokedAt) {
       return sendJson(res, 404, { error: "webhook subscription not found" });
     }
-    if (subscription.delivery.mode === "relay" && !verifyRelayEnvelope(req, rawBody)) {
-      return sendJson(res, 401, { error: "invalid relay envelope" });
+    // The co-located HTTP route serves DIRECT subscriptions only. Relay-mode
+    // deliveries ride the authenticated backhaul; accepting one here (with no
+    // relay envelope) would be an unauthenticated inbound path — reject it.
+    if (subscription.delivery.mode !== "direct") {
+      return sendJson(res, 404, { error: "webhook subscription not found" });
     }
     if (!(await verifySubscriptionRequest(subscription, req, rawBody))) {
       return sendJson(res, 401, { error: "invalid webhook signature" });
@@ -459,6 +600,27 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     return sendAccepted(res, subscription, { accepted: true, subscriptionId });
   }
 
+  /**
+   * Map a subscription's success policy to the ack the relay forwards to the
+   * provider verbatim (challenge/response webhooks rely on the body echo).
+   */
+  function ackResponse(
+    subscription: WebhookIngressSubscription,
+    body: Record<string, unknown>
+  ): WebhookAck {
+    if (subscription.response.successStatus === 204) {
+      return { ok: true, response: { status: 204 } };
+    }
+    return {
+      ok: true,
+      response: {
+        status: subscription.response.successStatus,
+        bodyBase64: Buffer.from(JSON.stringify(body), "utf8").toString("base64"),
+        contentType: "application/json; charset=utf-8",
+      },
+    };
+  }
+
   async function verifySubscriptionRequest(
     subscription: WebhookIngressSubscription,
     req: IncomingMessage,
@@ -471,6 +633,19 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       now: now(),
       url: req.url ?? "",
     });
+  }
+
+  /** Same as verifySubscriptionRequest but from a raw headers map + url (backhaul). */
+  async function verifySubscriptionRequestRaw(
+    subscription: WebhookIngressSubscription,
+    headers: Record<string, string>,
+    rawBody: Buffer,
+    url: string
+  ): Promise<boolean> {
+    if (subscription.verifier.type === "oidc-jwt") {
+      return verifyOidcJwt(subscription.verifier, headers, jwksCache, now());
+    }
+    return verifyWebhookPayload(subscription.verifier, rawBody, headers, { now: now(), url });
   }
 
   const definition: ServiceDefinition = {
@@ -520,13 +695,16 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ],
     internal: {
       store,
-      verifyRelayEnvelope,
+      deliverRelayWebhook,
+      reannounceRelaySubscriptions,
       async revokeForCaller(callerId: string): Promise<number> {
         const subs = await store.list(callerId);
         let revoked = 0;
         for (const sub of subs) {
           if (sub.revokedAt != null) continue;
           await store.replace({ ...sub, revokedAt: Date.now() });
+          if (sub.delivery.mode === "relay")
+            deps.relayRegistrar?.unregisterWebhook(sub.subscriptionId);
           revoked += 1;
         }
         return revoked;

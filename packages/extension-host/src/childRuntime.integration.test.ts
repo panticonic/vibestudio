@@ -82,6 +82,11 @@ describe("extension child runtime process", () => {
         "    targetEcho(targetId, method, value) {",
         "      return ctx.rpc.call(targetId, method, value);",
         "    },",
+        "    providerContracts: {",
+        "      gitInterop: {",
+        "        providerPing(value) { return `provider-pong:${value}`; },",
+        "      },",
+        "    },",
         "  };",
         "}",
         "",
@@ -183,6 +188,7 @@ describe("extension child runtime process", () => {
     const ready = await readyPromise;
     expect(ready.message.args[0]).toEqual({
       methods: ["ping", "callerContext", "targetEcho"],
+      providerMethods: { gitInterop: ["providerPing"] },
       hasFetch: false,
     });
 
@@ -227,6 +233,139 @@ describe("extension child runtime process", () => {
       type: "response",
       requestId,
       result: "pong:ok",
+    });
+
+    const providerRequestId = randomUUID();
+    const providerResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      ready.ws.on("message", (raw) => {
+        try {
+          const message = JSON.parse(String(raw)) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === providerRequestId) resolve(rpc);
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+      ready.ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: makeEnvelope("main", "@workspace-extensions/process-test", "server", {
+            type: "request",
+            requestId: providerRequestId,
+            fromId: "main",
+            method: "extension.invokeProvider",
+            args: [
+              "gitInterop",
+              "providerPing",
+              ["ok"],
+              {
+                requestId: providerRequestId,
+                extensionName: "@workspace-extensions/process-test",
+                method: "providers.gitInterop.providerPing",
+                caller: { callerId: "server", callerKind: "server" },
+              },
+            ],
+          } satisfies RpcRequest),
+        } satisfies WsServerMessage)
+      );
+    });
+
+    expect(providerResponse).toEqual({
+      type: "response",
+      requestId: providerRequestId,
+      result: "provider-pong:ok",
+    });
+
+    const flatProviderRequestId = randomUUID();
+    const flatProviderResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      ready.ws.on("message", (raw) => {
+        try {
+          const message = JSON.parse(String(raw)) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === flatProviderRequestId) resolve(rpc);
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+      ready.ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: makeEnvelope("main", "@workspace-extensions/process-test", "server", {
+            type: "request",
+            requestId: flatProviderRequestId,
+            fromId: "main",
+            method: "extension.invoke",
+            args: [
+              "providerPing",
+              ["bypass"],
+              {
+                requestId: flatProviderRequestId,
+                extensionName: "@workspace-extensions/process-test",
+                method: "providerPing",
+                caller: { callerId: "server", callerKind: "server" },
+              },
+            ],
+          } satisfies RpcRequest),
+        } satisfies WsServerMessage)
+      );
+    });
+
+    expect(flatProviderResponse).toMatchObject({
+      type: "response",
+      requestId: flatProviderRequestId,
+      errorCode: "ENOMETHOD",
+    });
+
+    const directRequestId = randomUUID();
+    const directResponse = await waitForMessage<RpcResponse>((resolve, reject) => {
+      ready.ws.on("message", (raw) => {
+        try {
+          const message = JSON.parse(String(raw)) as WsClientMessage;
+          if (message.type !== "ws:rpc") return;
+          const rpc = message.envelope?.message as RpcMessage | undefined;
+          if (rpc?.type === "response" && rpc.requestId === directRequestId) {
+            resolve(rpc);
+          }
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+      ready.ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: {
+            from: "main",
+            target: "@workspace-extensions/process-test",
+            delivery: { caller: { callerId: "panel-1", callerKind: "panel" } },
+            provenance: [{ callerId: "panel-1", callerKind: "panel" }],
+            message: {
+              type: "request",
+              requestId: directRequestId,
+              fromId: "main",
+              method: "extension.invoke",
+              args: [
+                "ping",
+                ["bypass"],
+                {
+                  requestId: directRequestId,
+                  extensionName: "@workspace-extensions/process-test",
+                  method: "ping",
+                  caller: { callerId: "panel-1", callerKind: "panel" },
+                },
+              ],
+            } satisfies RpcRequest,
+          } satisfies RpcEnvelope,
+        } satisfies WsServerMessage)
+      );
+    });
+
+    expect(directResponse).toMatchObject({
+      type: "response",
+      requestId: directRequestId,
+      errorCode: "EACCES",
+      error: expect.stringContaining("trusted host principal"),
     });
 
     const serverTargetRequestId = randomUUID();

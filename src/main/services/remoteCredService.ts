@@ -27,6 +27,30 @@ function remoteCredentialPersistenceDisabled(): boolean {
   return value === "1" || value === "true";
 }
 
+const PAIR_LABEL_ARG_PREFIX = "--vibestudio-pair-label=";
+
+/** Recover the device label carried across the pairing relaunch. */
+export function readPendingPairLabel(argv: readonly string[] = process.argv): string | undefined {
+  const arg = argv.find((value) => value.startsWith(PAIR_LABEL_ARG_PREFIX));
+  if (!arg) return undefined;
+  try {
+    return decodeURIComponent(arg.slice(PAIR_LABEL_ARG_PREFIX.length)).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistOrWarn(description: string, persist: () => void): void {
+  try {
+    persist();
+  } catch (error) {
+    console.error(
+      `[remoteCred] ${description}: ${error instanceof Error ? error.message : String(error)} ` +
+        "— the device will need to re-pair on next launch."
+    );
+  }
+}
+
 /** Read the encrypted WebRTC pairing used by serverSession auto-reconnect. */
 export function loadStoredRemotePairing(): StoredRemote | null {
   return loadStoredRemotePairingFromStore();
@@ -44,21 +68,21 @@ export function persistRotatedRemoteCredential(credential: {
 }): void {
   if (remoteCredentialPersistenceDisabled()) return;
   const existing = loadStoredRemotePairingFromStore();
-  if (!existing) {
-    throw new Error("Cannot persist a rotated device credential without its stored pairing");
-  }
-  saveDeviceCredential({
-    ...existing,
-    deviceId: credential.deviceId,
-    refreshToken: credential.refreshToken,
-    rotatedAt: Date.now(),
-  });
+  if (!existing) return;
+  persistOrWarn("could not persist rotated credential", () =>
+    saveDeviceCredential({
+      ...existing,
+      deviceId: credential.deviceId,
+      refreshToken: credential.refreshToken,
+      rotatedAt: Date.now(),
+    })
+  );
 }
 
 /** Persist a freshly paired WebRTC device using Electron safeStorage. */
 export function saveStoredRemote(value: StoredRemote): void {
   if (remoteCredentialPersistenceDisabled()) return;
-  saveDeviceCredential(value);
+  persistOrWarn("could not persist remote pairing", () => saveDeviceCredential(value));
 }
 
 /** Persist a device-specific workspace route before the desktop relaunches. */
@@ -94,6 +118,14 @@ function hubControlClientFor(client: ServerClient) {
 
 export function createRemoteCredService(deps: {
   getServerClient?: () => ServerClient | null;
+  /**
+   * The current session's transport mode. `getCurrent` reports a remote as
+   * ACTIVE only when the live client is genuinely the remote pipe — after a
+   * `--skip-remote-pairing` fallback the live client is the LOCAL loopback one,
+   * and reporting its `isConnected()` as "remote active" is a lie (the dialog
+   * would show a green "connected to remote" while actually on local).
+   */
+  getConnectionMode?: () => "local" | "remote";
   getViewManager?: () => ViewManager;
 }): ServiceDefinition {
   const requireLiveClient = (): ServerClient => {
@@ -122,13 +154,17 @@ export function createRemoteCredService(deps: {
           return {
             connected: client?.isConnected() ?? false,
             configured: stored !== null,
-            isActive: stored !== null && (client?.isConnected() ?? false),
+            isActive:
+              stored !== null &&
+              deps.getConnectionMode?.() === "remote" &&
+              (client?.isConnected() ?? false),
+            bootstrap: stored ? "device" : "none",
             deviceId: stored?.deviceId,
             workspaceName: stored?.workspaceName,
           };
         }
         case "pair": {
-          const { link } = args[0] as { link: string };
+          const { link, label } = args[0] as { link: string; label?: string };
           const parsed = parseConnectLink(link);
           if (parsed.kind === "error") {
             return { ok: false, error: "invalid-link", message: parsed.reason };
@@ -139,9 +175,14 @@ export function createRemoteCredService(deps: {
             .slice(1)
             .filter(
               (arg) =>
-                !arg.startsWith("vibestudio://") && !arg.startsWith("https://vibestudio.app/pair")
+                !arg.startsWith("vibestudio://") &&
+                !arg.startsWith("https://vibestudio.app/pair") &&
+                !arg.startsWith(PAIR_LABEL_ARG_PREFIX)
             );
           relaunchArgs.push(deepLink);
+          if (typeof label === "string" && label.trim()) {
+            relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
+          }
           relaunchApp({ args: relaunchArgs });
           return { ok: true };
         }

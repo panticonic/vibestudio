@@ -53,6 +53,10 @@ const vibestudioApp = {
       activeListeners.delete(id);
     }
   },
+  // Fire-and-forget signal that the renderer regained network connectivity, so
+  // main can nudge the (possibly stale-"connected") server pipe awake. No
+  // response — a nudge, never a teardown.
+  notifyNetworkOnline: () => ipcRenderer.send("vibestudio:shell.network-online"),
 };
 
 contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);

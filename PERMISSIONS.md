@@ -1,10 +1,11 @@
-# Plan / Requirements for permissions
+# Permissions
 
-- Control browser panels via CDP automation
-  - default: not allowed
-  - whitelist for certain domains
-- Access to git subpaths
-- credential system / oauth access
-- access to unsafe agents (maybe instead make unsafe per se panels)
-- URL / cookie access -- for now browser panels are not partitioned, but we should actually make them partitioned by default and then have permissions to access the root partition state
-Allow for navigator.permissions.query({ name: "foobar" })
+> **Superseded.** This file was an early requirements scratch note. The
+> permission system is documented in:
+>
+> - [`docs/permission-system.md`](docs/permission-system.md) — decision model, capability grants, userland approvals, repo writes
+> - [`docs/approvals.md`](docs/approvals.md) — approval queue architecture and flows
+> - [`docs/capability-approval-design.md`](docs/capability-approval-design.md) — design background
+> - [`docs/credential-system.md`](docs/credential-system.md) — URL-bound credentials and OAuth
+>
+> Agent-facing distillation: `workspace/skills/architecture/SECURITY.md`.
