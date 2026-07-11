@@ -265,6 +265,7 @@ services:
       - vibestudio.gad.workspace.v1
     policy:
       allowed:
+        - app
         - panel
         - shell
         - server
@@ -297,7 +298,7 @@ services:
         - server
         - worker
         - do
-        # git-bridge extension: vcsLog / ingestWorktreeState / listStateFiles
+        # git-bridge extension: vcsLog / ingestWorktreeState / vcsImportPublish
         - extension
         # agent CLI (plan §3.1 grant set): vcsLog, listChannelLogs, mirror reads
         - agent
@@ -382,14 +383,11 @@ providers:
   claudeCode:
     extension: extensions/claude-code
 # App trust grants (approval-gated like every meta edit): which workspace apps
-# may render host chrome and which may manage connections/pairing.
+# may render host chrome.
 trust:
   chromeApps:
     - apps/shell
     - apps/mobile
-  connectionManagementApps:
-    - apps/shell
-    - apps/remote-cli
 # Preferred app per host target, plus startup-ordering constraints
 # (extensions that must run before the app can build).
 hostTargets:

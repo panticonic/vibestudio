@@ -1,29 +1,19 @@
-import {
-  NativeModules,
-} from "react-native";
+import { NativeModules } from "react-native";
 import {
   activatePreparedAppBundle,
-  clearCredentials,
   isWorkspaceMobileHostCallerId,
   resetToNativeBootstrap,
 } from "./auth";
 
 const nativeHost = NativeModules.VibestudioMobileHost as {
-  clearCredentials: jest.Mock;
   resetToNativeBootstrap: jest.Mock;
   activatePreparedAppBundle: jest.Mock;
 };
 
 describe("native host control seam", () => {
   beforeEach(() => {
-    nativeHost.clearCredentials.mockReset().mockResolvedValue(undefined);
     nativeHost.resetToNativeBootstrap.mockReset().mockResolvedValue({ reloading: true });
     nativeHost.activatePreparedAppBundle.mockReset().mockResolvedValue({ activated: false });
-  });
-
-  it("clears native credentials", async () => {
-    await clearCredentials();
-    expect(nativeHost.clearCredentials).toHaveBeenCalled();
   });
 
   it("resets to the shipped bootstrap", async () => {

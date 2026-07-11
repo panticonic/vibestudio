@@ -6,11 +6,13 @@ import { effectiveThemeAtom, loadThemePreferenceAtom } from "../state/themeAtoms
 import { NavigationProvider, useNavigation } from "./NavigationContext";
 import { PanelTreeProvider, PanelDndProvider } from "../shell/hooks/index.js";
 import { useShellEvent } from "../shell/useShellEvent";
-import { app, notification } from "../shell/client";
+import { app, incomingPanelLocation, notification, panel, workspace } from "../shell/client";
+import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 import { PanelStack } from "./PanelStack";
 import type { ChromeCommand } from "./PanelStack";
 import { TitleBar } from "./TitleBar";
 import { NotificationBar } from "./NotificationBar";
+import { UserNotificationBar } from "./UserNotificationBar";
 import { ConsentApprovalBar, APPROVAL_OVERLAY_HOST_ID } from "./ConsentApprovalBar";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import type { PanelChromeState } from "@vibestudio/shared/panelChrome";
@@ -142,6 +144,64 @@ function PanelAppContent() {
     };
   }, [navigateToId]);
 
+  useEffect(() => {
+    let active = true;
+    const openLocation = async (location: PanelLocation) => {
+      if (!active) return;
+      const activeWorkspace = await workspace.getActive();
+      if (location.workspace && location.workspace !== activeWorkspace) {
+        await incomingPanelLocation.prepareWorkspaceRelaunch(location);
+        try {
+          await workspace.select(location.workspace);
+        } catch (error) {
+          await incomingPanelLocation.prepareWorkspaceRelaunch(null);
+          throw error;
+        }
+        return;
+      }
+      const focusedPanelId = await panel.getFocusedPanelId();
+      const common = {
+        ref: location.ref,
+        contextId: location.contextId,
+        stateArgs: location.stateArgs,
+      };
+      const disposition = location.disposition ?? "root";
+      const result =
+        disposition === "current" && focusedPanelId
+          ? await panel.navigate(focusedPanelId, location.source, common)
+          : disposition === "child" && focusedPanelId
+            ? await panel.createChild(focusedPanelId, location.source, {
+                ...common,
+                name: location.name,
+                focus: location.focus ?? true,
+              })
+            : await panel.createPanel(location.source, {
+                ...common,
+                name: location.name,
+                isRoot: true,
+                focus: location.focus ?? true,
+              });
+      if (active && result && location.focus !== false) navigateToId(result.id);
+    };
+    const handle = (location: PanelLocation) => {
+      void openLocation(location).catch((error: unknown) => {
+        void notification.show({
+          type: "error",
+          title: "Panel link could not be opened",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+    void incomingPanelLocation.getPending().then((location) => {
+      if (location) handle(location);
+    });
+    const off = incomingPanelLocation.onLocation(handle);
+    return () => {
+      active = false;
+      off();
+    };
+  }, [navigateToId]);
+
   return (
     <Flex direction="column" height="100dvh" style={{ overflow: "hidden" }}>
       <TitleBar
@@ -152,6 +212,7 @@ function PanelAppContent() {
         onPanelAction={handlePanelAction}
       />
       <NotificationBar />
+      <UserNotificationBar />
       <ConsentApprovalBar />
       {/* Panel region — also the positioning host the approval card portals
           into, so it floats over the panels rather than the chrome. */}

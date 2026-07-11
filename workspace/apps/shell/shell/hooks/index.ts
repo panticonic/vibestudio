@@ -17,6 +17,8 @@ export {
   getProjection,
   removeChildrenOf,
   findParentAtDepth,
+  orderForestGroups,
+  type PanelForestGroup,
   type PanelSummary,
   type PanelAncestor,
   type DescendantSiblingGroup,
@@ -32,3 +34,17 @@ export {
   INDENTATION_WIDTH,
   END_DROP_ZONE_ID,
 } from "./PanelDndContext.js";
+
+// Workspace user presence (WP8 §4) — colours/labels the forest owner bands.
+export {
+  useWorkspacePresence,
+  type WorkspacePresenceEntry,
+  type WorkspacePresenceByUser,
+} from "./useWorkspacePresence.js";
+
+export {
+  useAccountProfiles,
+  useCurrentAccountProfile,
+  type CurrentAccountProfileState,
+  type ShellAccountProfile,
+} from "./useAccountProfiles.js";

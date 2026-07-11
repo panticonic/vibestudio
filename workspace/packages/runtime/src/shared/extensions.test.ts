@@ -62,6 +62,21 @@ describe("createExtensionsClient", () => {
     ]);
   });
 
+  it("fails closed when streaming declarations cannot be loaded", async () => {
+    const rpc = createRpc();
+    rpc.call.mockRejectedValueOnce(new Error("registry unavailable"));
+    const extensions = createExtensionsClient(rpc);
+    const shell = extensions.use("@workspace-extensions/shell");
+
+    await expect(shell.attach("session-1")).rejects.toThrow("registry unavailable");
+    expect(rpc.call).not.toHaveBeenCalledWith(
+      "main",
+      "extensions.invoke",
+      expect.anything()
+    );
+    expect(rpc.stream).not.toHaveBeenCalled();
+  });
+
   it("exposes the untyped `invoke` primitive (so `services.extensions.invoke` works in eval)", async () => {
     const rpc = createRpc();
     const extensions = createExtensionsClient(rpc);

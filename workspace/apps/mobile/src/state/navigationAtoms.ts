@@ -7,7 +7,8 @@
 
 import { atom } from "jotai";
 import type { Panel } from "@vibestudio/shared/types";
-import { panelTreeAtom } from "./shellClientAtom";
+import { panelForestAtom } from "./shellClientAtom";
+import { mobilePanelRoots } from "../shellCore/panelForest";
 
 /** The ID of the currently active/focused panel */
 export const activePanelIdAtom = atom<string | null>(null);
@@ -22,8 +23,8 @@ export const pinsHydratedAtom = atom<boolean>(false);
 export const activePanelAtom = atom<Panel | null>((get) => {
   const id = get(activePanelIdAtom);
   if (!id) return null;
-  const tree = get(panelTreeAtom);
-  return findPanelById(tree, id);
+  const snapshot = get(panelForestAtom);
+  return findPanelById(mobilePanelRoots(snapshot.forest), id);
 });
 
 /** Derived: title of the active panel, or fallback */
@@ -36,8 +37,8 @@ export const activePanelTitleAtom = atom<string>((get) => {
 export const activePanelParentIdAtom = atom<string | null>((get) => {
   const id = get(activePanelIdAtom);
   if (!id) return null;
-  const tree = get(panelTreeAtom);
-  return findParentId(tree, id);
+  const snapshot = get(panelForestAtom);
+  return findParentId(mobilePanelRoots(snapshot.forest), id);
 });
 
 /** Recursively search for a panel by ID */
@@ -51,7 +52,11 @@ function findPanelById(panels: Panel[], id: string): Panel | null {
 }
 
 /** Find the parent ID of a panel */
-function findParentId(panels: Panel[], targetId: string, parentId: string | null = null): string | null {
+function findParentId(
+  panels: Panel[],
+  targetId: string,
+  parentId: string | null = null
+): string | null {
   for (const panel of panels) {
     if (panel.id === targetId) return parentId;
     const found = findParentId(panel.children, targetId, panel.id);

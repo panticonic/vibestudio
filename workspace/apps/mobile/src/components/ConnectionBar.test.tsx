@@ -1,6 +1,6 @@
 import React from "react";
 import { Alert } from "react-native";
-import { fireEvent, render } from "@testing-library/react-native";
+import { act, fireEvent, render } from "@testing-library/react-native";
 import { Provider, createStore } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
 import { connectionStatusAtom, networkReachableAtom } from "../state/connectionAtoms";
@@ -9,6 +9,17 @@ import { shellClientAtom } from "../state/shellClientAtom";
 type AlertButton = { text?: string; onPress?: () => void };
 
 describe("ConnectionBar", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    act(() => {
+      jest.runAllTimers();
+    });
+    jest.useRealTimers();
+  });
+
   it("offers reconnect and re-pair when disconnected", () => {
     const reconnect = jest.fn();
     const onRepair = jest.fn();
@@ -23,6 +34,10 @@ describe("ConnectionBar", () => {
         <ConnectionBar onRepair={onRepair} />
       </Provider>,
     );
+
+    act(() => {
+      jest.runAllTimers();
+    });
 
     fireEvent.press(getByRole("button"));
 
@@ -56,6 +71,10 @@ describe("ConnectionBar", () => {
       </Provider>,
     );
 
+    act(() => {
+      jest.runAllTimers();
+    });
+
     // Offline forces the actionable state even if the transport reports connected.
     fireEvent.press(getByRole("button"));
     const buttons = (alertSpy.mock.calls[0]?.[2] ?? []) as AlertButton[];
@@ -74,6 +93,10 @@ describe("ConnectionBar", () => {
         <ConnectionBar />
       </Provider>,
     );
+
+    act(() => {
+      jest.runAllTimers();
+    });
 
     expect(queryByRole("button")).toBeNull();
   });

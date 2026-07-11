@@ -23,7 +23,7 @@ import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
 import type { WebViewNavigation } from "react-native-webview/lib/WebViewTypes";
-import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
+import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { colorSchemeAtom, themeColorsAtom } from "../state/themeAtoms";
 import { approvalDeepLinkAtom } from "../state/approvalDeepLinkAtom";
 import { pushToastAtom } from "../state/toastAtoms";
@@ -37,7 +37,7 @@ import {
 import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webViewStack";
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
-import { parseHostConfig, getExternalHost } from "../services/panelUrls";
+import { parseHostConfig } from "../services/panelUrls";
 import { materializeMobilePanel } from "../services/panelMaterializer";
 import { handleExternalOpen, type ExternalOpenPayload } from "../services/oauthLoopback";
 import {
@@ -77,6 +77,10 @@ import {
 } from "@vibestudio/shared/shell/approvalState";
 import type { HostConfig } from "../services/panelUrls";
 import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import {
+  channelInviteFromNotification,
+  type UserNotification,
+} from "@vibestudio/shared/userNotifications";
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -96,8 +100,8 @@ function smokePhase(phase: string, extra?: Record<string, unknown>): void {
 export function MainScreen() {
   const navigation = useNavigation();
   const shellClient = useAtomValue(shellClientAtom);
-  const panelTree = useAtomValue(panelTreeAtom);
-  const setPanelTree = useSetAtom(panelTreeAtom);
+  const panelForest = useAtomValue(panelForestAtom);
+  const setPanelForest = useSetAtom(panelForestAtom);
   const setActivePanelId = useSetAtom(activePanelIdAtom);
   const colorScheme = useAtomValue(colorSchemeAtom);
   const activePanelId = useAtomValue(activePanelIdAtom);
@@ -127,6 +131,8 @@ export function MainScreen() {
   const [loadingPanelId, setLoadingPanelId] = useState<string | null>(null);
   const [panelLoadErrors, setPanelLoadErrors] = useState<Record<string, string>>({});
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
+  const userNotificationRefreshSeq = useRef(0);
   const pendingApprovalsRefreshSeq = useRef(0);
   const pendingApprovalsSignatureRef = useRef("");
   const approvalStateControllerRef = useRef<ApprovalStateController | null>(null);
@@ -149,6 +155,43 @@ export function MainScreen() {
   useEffect(() => {
     webViewStackRef.current = webViewStack;
   }, [webViewStack]);
+  useEffect(() => {
+    userNotificationRefreshSeq.current += 1;
+    if (!shellClient) {
+      setUserNotifications([]);
+      return;
+    }
+    let disposed = false;
+    const refresh = async () => {
+      const refreshSequence = ++userNotificationRefreshSeq.current;
+      const next = await shellClient.userNotifications.list();
+      if (!disposed && userNotificationRefreshSeq.current === refreshSequence) {
+        setUserNotifications(next);
+      }
+    };
+    void refresh().catch((error: unknown) => {
+      if (!disposed) console.warn("[MainScreen] Failed to load user notifications:", error);
+    });
+    const unsubscribeEvent = shellClient.transport.on(
+      "event:user-notifications-changed",
+      () => void refresh().catch(() => {})
+    );
+    const unsubscribeResubscribe = shellClient.recovery.registerResubscribeHandler(
+      "mobile-user-notifications",
+      refresh
+    );
+    const unsubscribeColdRecover = shellClient.recovery.registerColdRecoverHandler(
+      "mobile-user-notifications",
+      refresh
+    );
+    return () => {
+      disposed = true;
+      userNotificationRefreshSeq.current += 1;
+      unsubscribeEvent();
+      unsubscribeResubscribe();
+      unsubscribeColdRecover();
+    };
+  }, [shellClient]);
   useEffect(() => {
     let cancelled = false;
     if (!shellClient) {
@@ -197,9 +240,6 @@ export function MainScreen() {
       return null;
     }
   }, [shellClient]);
-  const externalHost = useMemo(() => {
-    return hostConfig ? getExternalHost(hostConfig) : "";
-  }, [hostConfig]);
   const visibleApprovals = useMemo(() => {
     if (!approvalDeepLinkId) return pendingApprovals;
     const linked = pendingApprovals.find((approval) => approval.approvalId === approvalDeepLinkId);
@@ -212,11 +252,11 @@ export function MainScreen() {
   const activePanel = useMemo(() => {
     if (!activePanelId || !shellClient) return null;
     return shellClient.panels.registry.getPanel(activePanelId) ?? null;
-  }, [activePanelId, panelTree, shellClient]);
+  }, [activePanelId, panelForest, shellClient]);
   const activeRuntimeLease = useMemo(() => {
     if (!activePanelId || !shellClient) return null;
     return shellClient.panels.registry.getRuntimeLease(activePanelId);
-  }, [activePanelId, panelTree, shellClient]);
+  }, [activePanelId, panelForest, shellClient]);
   const activePanelLoadError = activePanelId ? panelLoadErrors[activePanelId] : null;
   const activePanelLeasedElsewhere = Boolean(
     activeRuntimeLease && activeRuntimeLease.clientSessionId !== shellClient?.credentials.deviceId
@@ -355,8 +395,7 @@ export function MainScreen() {
   );
   const refreshTree = useCallback(() => {
     if (!shellClient) return;
-    const tree = shellClient.panels.getTree();
-    setPanelTree(tree);
+    setPanelForest(shellClient.panels.getTreeSnapshot());
     setWebViewStack((prev) =>
       prev.filter((entry) => shellClient.panels.registry.getPanel(entry.panelId) !== undefined)
     );
@@ -372,7 +411,7 @@ export function MainScreen() {
       persistPins(next);
       return next;
     });
-  }, [shellClient, setPanelTree, setPinnedPanelIds, persistPins]);
+  }, [shellClient, setPanelForest, setPinnedPanelIds, persistPins]);
   const applyPendingApprovals = useCallback((pending: PendingApproval[]) => {
     setPendingApprovals(pending);
     const signature = pending
@@ -851,13 +890,13 @@ export function MainScreen() {
         return !lease || lease.clientSessionId === shellClient.credentials.deviceId;
       })
     );
-  }, [panelTree, shellClient]);
+  }, [panelForest, shellClient]);
   useEffect(() => {
     if (!shellClient) return;
     if (activePanelId && shellClient.panels.registry.getPanel(activePanelId)) return;
-    const firstRoot = shellClient.panels.registry.getRootPanels()[0];
+    const firstRoot = shellClient.panels.getPreferredRoot();
     setActivePanelId(firstRoot?.id ?? null);
-  }, [activePanelId, panelTree, setActivePanelId, shellClient]);
+  }, [activePanelId, panelForest, setActivePanelId, shellClient]);
   const handleMenuPress = useCallback(() => {
     navigation.dispatch(DrawerActions.openDrawer());
   }, [navigation]);
@@ -1060,6 +1099,54 @@ export function MainScreen() {
   const executeAddressAction = useCallback(
     (action: AddressAction, mode: AddressNavigationMode = "current") => {
       if (!shellClient || !activePanelId) return;
+      if (action.type === "panel-location") {
+        const location = action.location;
+        if (location.workspace && location.workspace !== shellClient.workspaceId) {
+          pushToast({
+            title: "Panel link targets another workspace",
+            message: `Switch to ${location.workspace} before opening this link.`,
+            tone: "warning",
+          });
+          return;
+        }
+        const targetMode = mode === "current" ? (location.disposition ?? mode) : mode;
+        if (targetMode === "external") {
+          if (action.raw) void openExternalUrl(action.raw);
+          return;
+        }
+        const common = {
+          ref: location.ref,
+          contextId: location.contextId,
+          stateArgs: location.stateArgs,
+        };
+        const operation =
+          targetMode === "current"
+            ? shellClient.panels.navigatePanel(activePanelId, location.source, common)
+            : targetMode === "child"
+              ? shellClient.panels.createChildPanel(activePanelId, location.source, {
+                  ...common,
+                  name: location.name,
+                  focus: location.focus ?? true,
+                })
+              : shellClient.panels.createRootPanel(location.source, {
+                  ...common,
+                  name: location.name,
+                  focus: location.focus ?? true,
+                });
+        void operation
+          .then((result) => {
+            refreshTree();
+            if (location.focus !== false) activatePanel(result.id);
+          })
+          .catch((error: unknown) =>
+            pushToast({
+              title: "Navigation failed",
+              message: error instanceof Error ? error.message : "Could not open panel link.",
+              tone: "danger",
+            })
+          );
+        return;
+      }
       if (action.type === "navigate-url") {
         const intent = getBrowserNavigationIntentForAddressAction(action);
         if (intent) pendingHistoryIntentByUrl.current.set(canonicalHistoryKey(action.url), intent);
@@ -1173,13 +1260,61 @@ export function MainScreen() {
           );
       }
     },
-    [activatePanel, activePanelId, pushToast, shellClient, webViewNavigation]
+    [activatePanel, activePanelId, pushToast, refreshTree, shellClient, webViewNavigation]
   );
   const handleNavigateAddress = useCallback(
     (value: string, mode: AddressNavigationMode = "current") => {
       if (!shellClient || !activePanelId) return;
       const parsed = parseAddressInput(value);
       if (!parsed) return;
+      if (parsed.type === "panel-location") {
+        const location = parsed.location;
+        if (location.workspace && location.workspace !== shellClient.workspaceId) {
+          pushToast({
+            title: "Panel link targets another workspace",
+            message: `Switch to ${location.workspace} before opening this link.`,
+            tone: "warning",
+          });
+          return;
+        }
+        const targetMode = mode === "current" ? (location.disposition ?? mode) : mode;
+        if (targetMode === "external") {
+          void openExternalUrl(value);
+          return;
+        }
+        const common = {
+          ref: location.ref,
+          contextId: location.contextId,
+          stateArgs: location.stateArgs,
+        };
+        const created =
+          targetMode === "current"
+            ? shellClient.panels.navigatePanel(activePanelId, location.source, common)
+            : targetMode === "child"
+              ? shellClient.panels.createChildPanel(activePanelId, location.source, {
+                  ...common,
+                  name: location.name,
+                  focus: location.focus ?? true,
+                })
+              : shellClient.panels.createRootPanel(location.source, {
+                  ...common,
+                  name: location.name,
+                  focus: location.focus ?? true,
+                });
+        void created
+          .then((result) => {
+            refreshTree();
+            if (location.focus !== false) activatePanel(result.id);
+          })
+          .catch((error: unknown) =>
+            pushToast({
+              title: "Navigation failed",
+              message: error instanceof Error ? error.message : "Could not open panel link.",
+              tone: "danger",
+            })
+          );
+        return;
+      }
       if (parsed.type === "browser-url") {
         executeAddressAction({ type: "navigate-url", url: parsed.url, recordAsTyped: true }, mode);
         return;
@@ -1205,13 +1340,34 @@ export function MainScreen() {
   const handlePanelNavigate = useCallback(
     (event: PanelNavigationEvent) => {
       if (!shellClient) return;
-      void shellClient.panels
-        .createChildPanel(event.panelId, event.source, {
-          name: event.options.name,
-          contextId: event.contextId ?? event.options.contextId,
-          focus: event.options.focus,
-          stateArgs: event.stateArgs,
-        })
+      if (event.workspace && event.workspace !== shellClient.workspaceId) {
+        pushToast({
+          title: "Panel link targets another workspace",
+          message: `Switch to ${event.workspace} before opening this link.`,
+          tone: "warning",
+        });
+        return;
+      }
+      const common = {
+        ref: event.ref ?? event.options.ref,
+        contextId: event.contextId ?? event.options.contextId,
+        stateArgs: event.stateArgs,
+      };
+      const operation =
+        event.disposition === "child"
+          ? shellClient.panels.createChildPanel(event.panelId, event.source, {
+              ...common,
+              name: event.options.name,
+              focus: event.options.focus ?? true,
+            })
+          : event.disposition === "root"
+            ? shellClient.panels.createRootPanel(event.source, {
+                ...common,
+                name: event.options.name,
+                focus: event.options.focus ?? true,
+              })
+            : shellClient.panels.navigatePanel(event.panelId, event.source, common);
+      void operation
         .then((result) => {
           refreshTree();
           if (event.options.focus !== false) {
@@ -1307,6 +1463,41 @@ export function MainScreen() {
       );
     });
   }, []);
+  const currentUserNotification = userNotifications[0] ?? null;
+  const currentChannelInvite = currentUserNotification
+    ? channelInviteFromNotification(currentUserNotification)
+    : null;
+  const dismissUserNotification = useCallback(async () => {
+    if (!shellClient || !currentUserNotification) return;
+    try {
+      await shellClient.userNotifications.acknowledge(currentUserNotification.id);
+      setUserNotifications((current) =>
+        current.filter((notification) => notification.id !== currentUserNotification.id)
+      );
+    } catch (error) {
+      pushToast({
+        title: "Could not dismiss notification",
+        message: error instanceof Error ? error.message : String(error),
+        tone: "danger",
+      });
+    }
+  }, [currentUserNotification, pushToast, shellClient]);
+  const joinInvitedChannel = useCallback(async () => {
+    if (!shellClient || !currentUserNotification || !currentChannelInvite) return;
+    try {
+      await shellClient.userNotifications.openChannel(currentChannelInvite.channelId);
+      await shellClient.userNotifications.acknowledge(currentUserNotification.id);
+      setUserNotifications((current) =>
+        current.filter((notification) => notification.id !== currentUserNotification.id)
+      );
+    } catch (error) {
+      pushToast({
+        title: "Could not open conversation",
+        message: error instanceof Error ? error.message : String(error),
+        tone: "danger",
+      });
+    }
+  }, [currentChannelInvite, currentUserNotification, pushToast, shellClient]);
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ConnectionBar onRepair={handleRepair} />
@@ -1335,6 +1526,51 @@ export function MainScreen() {
         dirty={Boolean(panelAddressOptions?.repo?.dirty ?? activeChromeState?.repo?.dirty)}
         onShowActions={() => showPanelActions()}
       />
+
+      {currentUserNotification ? (
+        <View
+          accessibilityLiveRegion="polite"
+          style={[
+            styles.userNotification,
+            { backgroundColor: colors.surface, borderColor: colors.primary },
+          ]}
+        >
+          <View style={styles.userNotificationCopy}>
+            <Text style={[styles.userNotificationTitle, { color: colors.text }]}>
+              {currentUserNotification.title}
+            </Text>
+            <Text style={[styles.userNotificationMessage, { color: colors.textSecondary }]}>
+              {currentUserNotification.message ?? currentUserNotification.kind}
+            </Text>
+          </View>
+          {userNotifications.length > 1 ? (
+            <Text style={[styles.userNotificationCount, { color: colors.textSecondary }]}>
+              +{userNotifications.length - 1}
+            </Text>
+          ) : null}
+          {currentChannelInvite ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void joinInvitedChannel()}
+              style={[styles.userNotificationButton, { borderColor: colors.primary }]}
+            >
+              <Text style={[styles.userNotificationButtonText, { color: colors.primary }]}>
+                Join
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Dismiss ${currentUserNotification.title}`}
+            onPress={() => void dismissUserNotification()}
+            style={[styles.userNotificationButton, { borderColor: colors.textSecondary }]}
+          >
+            <Text style={[styles.userNotificationButtonText, { color: colors.textSecondary }]}>
+              Dismiss
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <View style={styles.contentArea}>
         {!activePanelId && (
@@ -1440,7 +1676,6 @@ export function MainScreen() {
                   visible={entry.panelId === activePanelId}
                   managed={entry.managed}
                   panelInit={entry.panelInit}
-                  externalHost={externalHost}
                   managedBasePath={hostConfig?.basePath ?? ""}
                   onPanelNavigate={handlePanelNavigate}
                   onNavigationStateChange={(navState) => {
@@ -1503,6 +1738,43 @@ const styles = StyleSheet.create({
     flex: 1,
     position: "relative",
     overflow: "hidden",
+  },
+  userNotification: {
+    minHeight: 52,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  userNotificationCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  userNotificationTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  userNotificationMessage: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  userNotificationCount: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  userNotificationButton: {
+    minHeight: 34,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderRadius: 7,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  userNotificationButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
   },
   webViewSlot: {
     ...StyleSheet.absoluteFillObject,

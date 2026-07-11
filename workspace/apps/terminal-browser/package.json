@@ -8,8 +8,7 @@
     "app": {
       "target": "terminal",
       "entry": "src/index.ts",
-      "interactive": true,
-      "capabilities": ["connection-management"]
+      "interactive": true
     }
   },
   "dependencies": {

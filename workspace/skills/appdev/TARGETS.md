@@ -48,8 +48,7 @@ chrome. The built-in shell currently declares:
   "open-external",
   "window-management",
   "panel-hosting",
-  "incoming-pair-links",
-  "connection-management"
+  "incoming-pair-links"
 ]
 ```
 
@@ -101,8 +100,7 @@ Manifest:
   "vibestudio": {
     "app": {
       "target": "terminal",
-      "entry": "index.ts",
-      "capabilities": ["connection-management"]
+      "entry": "index.ts"
     }
   }
 }

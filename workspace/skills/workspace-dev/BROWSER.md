@@ -15,8 +15,8 @@ const page = await handle.cdp.lightweightPage();
 
 await page.goto("https://example.com");
 await page.getByRole("button", { name: "Sign in" }).click();
-await page.fill("input[name=query]", "Vibestudio");
-await page.click(".search-button");
+await page.locator("input[name=query]").fill("Vibestudio");
+await page.locator(".search-button").click();
 await handle.click(".search-button"); // same target, convenience wrapper
 
 await handle.cdp.navigate("https://other.com");
@@ -136,9 +136,9 @@ await page.waitForLoadState("networkidle");
 await page.waitForFunction(() => document.readyState === "complete");
 const events = page.consoleEvents(); // live console capture after connect
 
-// Back-compat string forms
-await page.click("button.submit");
-await page.fill('input[name="email"]', "user@example.com");
+// CSS locator forms
+await page.locator("button.submit").click();
+await page.locator('input[name="email"]').fill("user@example.com");
 ```
 
 ### Not supported

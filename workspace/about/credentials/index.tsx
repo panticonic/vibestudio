@@ -98,13 +98,12 @@ function ownerLabel(credential: ManagedCredentialSummary): string {
 function bindingLabel(credential: ManagedCredentialSummary): string {
   const bindings = credential.bindings ?? [];
   if (bindings.length === 0) return "No bindings";
-  return bindings
-    .map((binding) => binding.label ?? `${binding.use}:${binding.id}`)
-    .join(", ");
+  return bindings.map((binding) => binding.label ?? `${binding.use}:${binding.id}`).join(", ");
 }
 
 function audienceLabel(credential: ManagedCredentialSummary): string {
-  const audience = credential.bindings?.flatMap((binding) => binding.audience) ?? credential.audience;
+  const audience =
+    credential.bindings?.flatMap((binding) => binding.audience) ?? credential.audience;
   const urls = [...new Set(audience.map((entry) => entry.url))];
   if (urls.length === 0) return "No audience";
   if (urls.length === 1) return urls[0]!;
@@ -132,11 +131,7 @@ function injectionLabel(credential: ManagedCredentialSummary): string {
 }
 
 function scopeLabel(grant: CredentialAccessGrantSummary): string {
-  if (grant.scope === "caller") return grant.callerId ?? "Caller";
-  if (grant.scope === "version") {
-    return `${grant.repoPath ?? "Unknown repo"} @ ${grant.effectiveVersion ?? "unknown version"}`;
-  }
-  return grant.repoPath ?? "Repository";
+  return `${grant.repoPath} @ ${grant.effectiveVersion}`;
 }
 
 function subjectLabel(subject: CredentialAccessSubjectSummary): string {
@@ -170,7 +165,6 @@ function matchesQuery(credential: ManagedCredentialSummary, query: string): bool
       grant.scope,
       grant.repoPath,
       grant.effectiveVersion,
-      grant.callerId,
       ...grant.subjects.flatMap((subject) => [
         subject.id,
         subject.title,
@@ -327,7 +321,10 @@ function GrantRow({
         <Box px="3" pb="3">
           <Grid columns={{ initial: "1", sm: "2" }} gap="3" pb="2">
             <DetailLine label="Binding" value={grant.bindingLabel ?? grant.bindingId} />
-            <DetailLine label="Granted" value={`${formatDate(grant.grantedAt)} by ${grant.grantedBy}`} />
+            <DetailLine
+              label="Granted"
+              value={`${formatDate(grant.grantedAt)} by ${grant.grantedBy}`}
+            />
           </Grid>
           {grant.subjects.length > 0 ? (
             <Box>
@@ -412,8 +409,14 @@ function CredentialSection({
         <DetailLine label="Bindings" value={bindingLabel(credential)} />
         <DetailLine label="Audience" value={audienceLabel(credential)} />
         <DetailLine label="Injection" value={injectionLabel(credential)} />
-        <DetailLine label="Expires" value={credential.expiresAt ? formatDate(credential.expiresAt) : "Never"} />
-        <DetailLine label="Scopes" value={credential.scopes.length ? credential.scopes.join(", ") : "None"} />
+        <DetailLine
+          label="Expires"
+          value={credential.expiresAt ? formatDate(credential.expiresAt) : "Never"}
+        />
+        <DetailLine
+          label="Scopes"
+          value={credential.scopes.length ? credential.scopes.join(", ") : "None"}
+        />
       </Grid>
 
       {expanded && (
@@ -480,7 +483,9 @@ function CredentialsPage() {
     const active = items.filter((item) => credentialStatus(item).label === "Active").length;
     const grantCount = items.reduce((total, item) => total + item.grants.length, 0);
     const subjects = new Set(
-      items.flatMap((item) => item.grants.flatMap((grant) => grant.subjects.map((subject) => subject.id)))
+      items.flatMap((item) =>
+        item.grants.flatMap((grant) => grant.subjects.map((subject) => subject.id))
+      )
     );
     return { active, grantCount, subjectCount: subjects.size };
   }, [items]);
@@ -536,7 +541,12 @@ function CredentialsPage() {
         maxWidth={980}
         actions={
           <Tooltip content="Refresh">
-            <IconButton variant="soft" onClick={() => void load()} disabled={loading} aria-label="Refresh">
+            <IconButton
+              variant="soft"
+              onClick={() => void load()}
+              disabled={loading}
+              aria-label="Refresh"
+            >
               {loading ? <Spinner /> : <ReloadIcon />}
             </IconButton>
           </Tooltip>
@@ -606,13 +616,18 @@ function CredentialsPage() {
         ) : (
           <Section>
             <Text size="2" color="gray">
-              {items.length === 0 ? "No stored credentials." : "No credentials match the current filter."}
+              {items.length === 0
+                ? "No stored credentials."
+                : "No credentials match the current filter."}
             </Text>
           </Section>
         )}
       </AboutPage>
 
-      <AlertDialog.Root open={Boolean(pendingRevoke)} onOpenChange={(open) => !open && setPendingRevoke(null)}>
+      <AlertDialog.Root
+        open={Boolean(pendingRevoke)}
+        onOpenChange={(open) => !open && setPendingRevoke(null)}
+      >
         <AlertDialog.Content maxWidth="450px">
           <AlertDialog.Title>Revoke credential</AlertDialog.Title>
           <AlertDialog.Description size="2">
@@ -627,7 +642,11 @@ function CredentialsPage() {
               </Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action>
-              <Button color="red" onClick={() => void revokePending()} disabled={Boolean(revokingId)}>
+              <Button
+                color="red"
+                onClick={() => void revokePending()}
+                disabled={Boolean(revokingId)}
+              >
                 {revokingId ? <Spinner /> : <TrashIcon />}
                 Revoke
               </Button>

@@ -8,7 +8,7 @@ export function coercePanelTreeUpdate(
     !data ||
     typeof data !== "object" ||
     typeof (data as { revision?: unknown }).revision !== "number" ||
-    !Array.isArray((data as { rootPanels?: unknown }).rootPanels)
+    !Array.isArray((data as { forest?: unknown }).forest)
   ) {
     return null;
   }

@@ -14,8 +14,7 @@
         "open-external",
         "window-management",
         "panel-hosting",
-        "incoming-pair-links",
-        "connection-management"
+        "incoming-pair-links"
       ]
     }
   },

@@ -7,10 +7,7 @@
     "displayName": "Vibestudio Remote CLI",
     "app": {
       "target": "terminal",
-      "entry": "index.ts",
-      "capabilities": [
-        "connection-management"
-      ]
+      "entry": "index.ts"
     }
   },
   "dependencies": {

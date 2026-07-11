@@ -10,7 +10,7 @@ hosts desktop panel chrome and device-management UI.
 
 ## Devices Surface
 
-- "Connect a phone" mints an invite on the currently connected server, local or
+- "Connect a device" mints an invite on the currently connected server, local or
   remote. The desktop is a broker, never a data relay.
 - Render the HTTPS pair URL and QR from the complete invite object. Do not build
   client-side fallback links or accept nullable `deepLink`/`room`.

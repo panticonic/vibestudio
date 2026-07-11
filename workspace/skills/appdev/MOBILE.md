@@ -60,7 +60,7 @@ foreground login flow can miss approval pushes/actions.
 Clean install:
 
 1. Desktop/server creates a pairing invite.
-2. User opens a `https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2` URL or `vibestudio://connect?...` link on the phone.
+2. User opens a `https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2&ice=all` URL or `vibestudio://connect?...` link on the phone.
 3. Native bootstrap consumes the initial URL or URL event.
 4. Native bootstrap shows a trusted recovery-surface confirmation with the
    target server/workspace label from the link.

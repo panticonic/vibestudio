@@ -25,6 +25,7 @@ import { useShellEvent } from "../useShellEvent.js";
 import { panel as panelService } from "../client.js";
 import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../../state/appModeAtoms.js";
 import { coercePanelTreeUpdate } from "./panelTreeRevision.js";
+import { useCurrentAccountProfile } from "./useAccountProfiles.js";
 import type {
   Panel,
   PanelSummary,
@@ -39,6 +40,13 @@ import { assertPresent } from "../../utils/assertPresent";
 
 // Re-export types for consumers
 export type { PanelSummary, PanelAncestor, DescendantSiblingGroup };
+
+/**
+ * One owner's group of root panels within the forest (WP3). `owner` is a
+ * userId used for attribution/grouping only — never a security token. The
+ * empty string groups unowned/system-seeded roots.
+ */
+export type PanelForestGroup = PanelTreeSnapshot["forest"][number];
 
 // ============================================================================
 // Types
@@ -352,13 +360,51 @@ function panelToFull(panel: Panel, parentId: string | null, position: number): F
   };
 }
 
+/**
+ * Order forest groups own-first: the local user's group leads, everyone
+ * else's stays in snapshot (first-appearance) order below — mutual
+ * inspectability, not isolation. With no known self, snapshot order stands.
+ */
+export function orderForestGroups(
+  forest: PanelForestGroup[],
+  selfUserId: string | null
+): PanelForestGroup[] {
+  if (!selfUserId) return forest;
+  const own = forest.filter((group) => group.owner === selfUserId);
+  if (own.length === 0) return forest;
+  return [...own, ...forest.filter((group) => group.owner !== selfUserId)];
+}
+
+/** Compare authoritative and host-mirror topology without mixing their
+ * independent revision counters or runtime-only panel fields. */
+function panelForestShape(snapshot: PanelTreeSnapshot): string {
+  const nodeShape = (panel: Panel): unknown => [
+    panel.id,
+    panel.owner ?? null,
+    panel.children.map(nodeShape),
+  ];
+  return JSON.stringify(
+    snapshot.forest.map((group) => [group.owner, group.rootPanels.map(nodeShape)])
+  );
+}
+
 // ============================================================================
 // Context
 // ============================================================================
 
 interface PanelTreeContextValue {
-  /** The full panel tree from the main process */
-  tree: Panel[];
+  /** Every owner's root panels, derived from the canonical forest, own-first. */
+  allRootPanels: Panel[];
+  /** Owner-grouped forest (own group first when the local user is known) */
+  forest: PanelForestGroup[];
+  /** The verified local account id, used for own-first ordering and band labels. */
+  selfUserId: string | null;
+  /** A visible diagnostic can be rendered while owner personalization is unavailable. */
+  selfIdentityError: string | null;
+  /** Startup/recovery failure from the authoritative panel-tree read. */
+  treeLoadError: string | null;
+  /** Retry the authoritative panel-tree read without remounting the shell. */
+  refreshTree: () => Promise<void>;
   /** Flat map of all panels for O(1) lookup */
   panelMap: Map<string, Panel>;
   /** Flat map of panel ID to parent ID for O(1) parent lookup */
@@ -394,9 +440,14 @@ interface PanelTreeProviderProps {
 }
 
 export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
-  const [tree, setTree] = useState<Panel[]>([]);
-  const [initialized, setInitialized] = useState(false);
+  const [rawForest, setRawForest] = useState<PanelForestGroup[]>([]);
+  const [treeInitialized, setTreeInitialized] = useState(false);
+  const [ownerTreeAttached, setOwnerTreeAttached] = useState(false);
+  const [treeLoadError, setTreeLoadError] = useState<string | null>(null);
+  const currentAccount = useCurrentAccountProfile();
+  const selfUserId = currentAccount.profile?.userId ?? null;
   const latestRevisionRef = useRef<number>(0);
+  const treeRefreshSeqRef = useRef(0);
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const pinMutationSeq = useAtomValue(pinMutationSeqAtom);
   const pinMutationSeqRef = useRef(pinMutationSeq);
@@ -427,8 +478,8 @@ export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
         return false;
       }
       latestRevisionRef.current = snapshot.revision;
-      setTree(snapshot.rootPanels);
-      setInitialized(true);
+      setRawForest(snapshot.forest);
+      setTreeInitialized(true);
       reconcilePins();
       return true;
     },
@@ -451,12 +502,78 @@ export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
   // Subscribe to panel-tree-updated events
   useShellEvent("panel-tree-updated", handleTreeUpdate);
 
+  // Trigger the authenticated account's first-attach seed on the server, then
+  // consume the corresponding LOCAL host mirror. Server and local registries
+  // have independent revision counters, so applying the server snapshot here
+  // would make later valid local events look stale.
+  const refreshTree = useCallback(async () => {
+    const seq = ++treeRefreshSeqRef.current;
+    try {
+      let expectedShape = panelForestShape(await panelService.ensureOwnerTree());
+      for (let attempt = 0; attempt < 40; attempt++) {
+        if (seq !== treeRefreshSeqRef.current) return;
+        const localSnapshot = await panelService.getTreeSnapshot();
+        if (panelForestShape(localSnapshot) === expectedShape) {
+          if (seq !== treeRefreshSeqRef.current) return;
+          applyTreeSnapshot(localSnapshot);
+          setOwnerTreeAttached(true);
+          setTreeLoadError(null);
+          return;
+        }
+        // Another teammate may mutate the tree during startup. Rebase the
+        // expected topology once rather than waiting forever for an obsolete
+        // exact echo.
+        if (attempt === 19) {
+          expectedShape = panelForestShape(await panelService.ensureOwnerTree());
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error("Timed out while synchronizing the panel forest to this device");
+    } catch (error) {
+      if (seq !== treeRefreshSeqRef.current) return;
+      setTreeLoadError(error instanceof Error ? error.message : String(error));
+    }
+  }, [applyTreeSnapshot]);
+  useEffect(() => {
+    void refreshTree();
+    return () => {
+      treeRefreshSeqRef.current += 1;
+    };
+  }, [refreshTree]);
+
+  // Own-first group ordering, then the flat root list every existing tree
+  // consumer (DnD flatten, navigation hooks) operates on. Group boundaries
+  // stay recoverable from `forest` for owner-band rendering.
+  const forest = useMemo(() => orderForestGroups(rawForest, selfUserId), [rawForest, selfUserId]);
+  const allRootPanels = useMemo(() => forest.flatMap((group) => group.rootPanels), [forest]);
+  const initialized = treeInitialized && ownerTreeAttached && currentAccount.settled;
+
   // Build panel maps for efficient lookups
-  const { panelMap, parentMap } = useMemo(() => buildPanelMaps(tree), [tree]);
+  const { panelMap, parentMap } = useMemo(() => buildPanelMaps(allRootPanels), [allRootPanels]);
 
   const value = useMemo<PanelTreeContextValue>(
-    () => ({ tree, panelMap, parentMap, initialized }),
-    [tree, panelMap, parentMap, initialized]
+    () => ({
+      allRootPanels,
+      forest,
+      selfUserId,
+      selfIdentityError: currentAccount.error,
+      treeLoadError,
+      refreshTree,
+      panelMap,
+      parentMap,
+      initialized,
+    }),
+    [
+      allRootPanels,
+      forest,
+      selfUserId,
+      currentAccount.error,
+      treeLoadError,
+      refreshTree,
+      panelMap,
+      parentMap,
+      initialized,
+    ]
   );
 
   return <PanelTreeContext.Provider value={value}>{children}</PanelTreeContext.Provider>;
@@ -473,9 +590,12 @@ export function useRootPanels(): {
   panels: PanelSummary[];
   loading: boolean;
 } {
-  const { tree, initialized } = usePanelTreeContext();
+  const { allRootPanels, initialized } = usePanelTreeContext();
 
-  const panels = useMemo(() => tree.map((panel, index) => panelToSummary(panel, index)), [tree]);
+  const panels = useMemo(
+    () => allRootPanels.map((panel, index) => panelToSummary(panel, index)),
+    [allRootPanels]
+  );
 
   return { panels, loading: !initialized };
 }
@@ -487,7 +607,7 @@ export function useFullPanel(panelId: string | null): {
   panel: FullPanel | null;
   loading: boolean;
 } {
-  const { tree, panelMap, parentMap, initialized } = usePanelTreeContext();
+  const { allRootPanels, panelMap, parentMap, initialized } = usePanelTreeContext();
 
   const panel = useMemo(() => {
     if (!panelId) return null;
@@ -505,11 +625,11 @@ export function useFullPanel(panelId: string | null): {
         position = parent.children.findIndex((c) => c.id === panelId);
       }
     } else {
-      position = tree.findIndex((r) => r.id === panelId);
+      position = allRootPanels.findIndex((root) => root.id === panelId);
     }
 
     return panelToFull(found, parentId, position);
-  }, [tree, panelMap, panelId]);
+  }, [allRootPanels, panelMap, parentMap, panelId]);
 
   return { panel, loading: !initialized };
 }
@@ -521,7 +641,7 @@ export function useSiblings(panelId: string | null): {
   siblings: PanelSummary[];
   loading: boolean;
 } {
-  const { tree, panelMap, parentMap, initialized } = usePanelTreeContext();
+  const { allRootPanels, panelMap, parentMap, initialized } = usePanelTreeContext();
 
   const siblings = useMemo(() => {
     if (!panelId) return [];
@@ -530,14 +650,14 @@ export function useSiblings(panelId: string | null): {
 
     if (!parentId) {
       // Panel is a root - siblings are all roots
-      return tree.map((panel, index) => panelToSummary(panel, index));
+      return allRootPanels.map((panel, index) => panelToSummary(panel, index));
     }
 
     const parent = panelMap.get(parentId);
     if (!parent) return [];
 
     return parent.children.map((child, index) => panelToSummary(child, index));
-  }, [tree, panelMap, panelId]);
+  }, [allRootPanels, panelMap, parentMap, panelId]);
 
   return { siblings, loading: !initialized };
 }

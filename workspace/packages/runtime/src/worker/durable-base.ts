@@ -343,6 +343,7 @@ export abstract class DurableObjectBase {
               ...(typeof record["callerPanelId"] === "string"
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
+              ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
             } as AuthenticatedCaller,
             ...(invocationToken ? { invocationToken } : {}),
           };
@@ -844,8 +845,10 @@ export abstract class DurableObjectBase {
       // {method, args, __caller} and route it through the SAME converged core
       // dispatch as `__rpc`. `(this)[method]` is gone — `exposeAll` is the single
       // dispatch. Returns the raw method result (the DODispatch contract).
-      const caller: AuthenticatedCaller =
-        verifiedCallerFromBody ?? { callerId: "", callerKind: "unknown" };
+      const caller: AuthenticatedCaller = verifiedCallerFromBody ?? {
+        callerId: "",
+        callerKind: "unknown",
+      };
       const envelope = envelopeFromMessage({
         selfId: `do:${this.env["WORKER_SOURCE"]}:${this.env["WORKER_CLASS_NAME"]}:${this.objectKey}`,
         from: caller.callerId || "unknown",

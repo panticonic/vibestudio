@@ -242,8 +242,8 @@ export class MobileRpcClient
       throw new Error("No stored WebRTC shell credential — re-pair this device");
     }
     smokePhase("workspace-webrtc-connect-start", {
-      room: stored.pairing.room,
-      ice: stored.pairing.ice ?? "all",
+      room: stored.workspacePairing.room,
+      ice: stored.workspacePairing.ice,
     });
     const connection = await reconnectViaWebRtc(stored, (kind) => this.emitRecovery(kind));
     this.connection = connection;

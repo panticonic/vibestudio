@@ -559,14 +559,6 @@ function StandardApprovalActions({
           onClick={() => decide("session")}
         />
       )}
-      {copy.repo && (
-        <DecisionButton
-          label={copy.repo.label}
-          description={copy.repo.description}
-          variant="surface"
-          onClick={() => decide("repo")}
-        />
-      )}
       {copy.version && (
         <DecisionButton
           label={copy.version.label}

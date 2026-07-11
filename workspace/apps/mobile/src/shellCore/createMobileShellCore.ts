@@ -1,6 +1,6 @@
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { PanelManager } from "@vibestudio/shared/shell/panelManager";
-import type { Panel, PanelTreeSnapshot } from "@vibestudio/shared/types";
+import type { PanelTreeSnapshot } from "@vibestudio/shared/types";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -27,10 +27,10 @@ export function createMobileShellCore(deps: {
   workspaceId: string;
   serverUrl: string;
   transport: MobileRpcClient;
-  onTreeUpdated?: (tree: Panel[]) => void;
+  onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
 }) {
   const registry = new PanelRegistry({
-    onTreeUpdated: (snapshot: PanelTreeSnapshot) => deps.onTreeUpdated?.(snapshot.rootPanels),
+    onTreeUpdated: (snapshot: PanelTreeSnapshot) => deps.onTreeUpdated?.(snapshot),
   });
   const host = parseHostConfig(deps.serverUrl);
   const hostWithPort = `${host.host}${host.port ? `:${host.port}` : ""}`;
@@ -62,8 +62,8 @@ export function createMobileShellCore(deps: {
       callVoid("workspace-state.slot.setParent", [slotId, parentSlotId]),
     setSlotPosition: (slotId, positionId) =>
       callVoid("workspace-state.slot.setPosition", [slotId, positionId]),
-    moveSlot: (slotId, parentSlotId, positionId) =>
-      callVoid("workspace-state.slot.move", [slotId, parentSlotId, positionId]),
+    moveSlot: (slotId, parentSlotId, positionId, ownerUserId) =>
+      callVoid("workspace-state.slot.move", [slotId, parentSlotId, positionId, ownerUserId]),
     closeSlot: (slotId) => callVoid("workspace-state.slot.close", [slotId]),
   };
 
@@ -100,7 +100,7 @@ export function createMobileShellCore(deps: {
     workspacePath: "",
     allowMissingManifests: true,
     serverInfo: {
-      gatewayConfig: { serverUrl },
+      gatewayConfig: { serverUrl, workspace: deps.workspaceId },
     },
     grantConnection: (panelId) => call<{ token: string }>("auth.grantConnection", [panelId]),
   });

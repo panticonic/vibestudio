@@ -19,7 +19,15 @@ import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibestudio/shared/shell/approvalState";
-import { blobstore, events, onRpcEvent, panel, shellApproval, shellPresence } from "../shell/client";
+import {
+  account,
+  blobstore,
+  events,
+  onRpcEvent,
+  panel,
+  shellApproval,
+  shellPresence,
+} from "../shell/client";
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
 import { useNavigation } from "./NavigationContext";
@@ -276,10 +284,17 @@ export function ConsentApprovalBar() {
     const stateArgs = { diffTarget: target };
     void (async () => {
       try {
-        const snapshot = await panel.getTreeSnapshot();
-        const existing = findGadBrowserPanel(
-          (snapshot.rootPanels ?? []) as unknown as TreePanelNode[]
-        );
+        const [snapshot, profile] = await Promise.all([
+          panel.getTreeSnapshot(),
+          account.getProfile().catch(() => null),
+        ]);
+        // Reusing a colleague's panel changes their live navigation state. Only
+        // reuse within the acting account's owner group; if identity is
+        // temporarily unavailable, creating a fresh panel is the safe action.
+        const ownRoots = profile
+          ? (snapshot.forest.find((group) => group.owner === profile.userId)?.rootPanels ?? [])
+          : [];
+        const existing = findGadBrowserPanel(ownRoots);
         if (existing) {
           await panel.navigate(existing.id, GAD_BROWSER_SOURCE, { stateArgs });
           navigateToId(existing.id);

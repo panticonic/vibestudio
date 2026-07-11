@@ -202,3 +202,13 @@ Use an app when the code is a trusted client runtime:
 Use a panel when the code is an ordinary workspace surface shown inside the
 shell. Use an extension when the code needs trusted Node/server-side access or
 long-lived service behavior. Use a worker/DO when an isolate service is enough.
+
+## Panel Links
+
+Do not treat a panel's loopback HTTP asset URL as its durable address. Use
+`buildPanelLink()` for an in-app link, `buildPanelDeepLink()` for an installed
+app link, or `buildPanelShareLink()` for an HTTPS App/Universal Link. All three
+preserve `ref`, `contextId`, `stateArgs`, `name`, `focus`, and placement
+(`current`, `child`, or `root`). See
+[`../../../docs/panel-locations.md`](../../../docs/panel-locations.md) for the
+contract and security constraints.

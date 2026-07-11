@@ -1,26 +1,11 @@
 {
-  "//": "Dedicated program for React Native-importing integration tests. react-native's ambient globals (e.g. setTimeout returning number) conflict with @types/node's, so these tests cannot share a program with tsconfig.integration.json's host-flavored graph. compilerOptions mirror apps/mobile/tsconfig.json, which typechecks the RN-importing app code green.",
+  "//": "Dedicated program for React Native-importing integration tests. react-native's ambient globals (e.g. setTimeout returning number) conflict with @types/node's, so these tests cannot share a program with tsconfig.integration.json's host-flavored graph. Extends the base workspace tsconfig purely to inherit its baseUrl + @vibestudio/@workspace path mappings, then overrides lib/types to the RN-safe (node-global-free) shape mirroring apps/mobile/tsconfig.json.",
+  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
     "lib": ["ES2020"],
-    "jsx": "react-jsx",
-    "noEmit": true,
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noPropertyAccessFromIndexSignature": true,
-    "allowUnusedLabels": false,
-    "allowUnreachableCode": false,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
+    "types": [],
     "allowImportingTsExtensions": true,
-    "isolatedModules": true,
-    "types": []
+    "isolatedModules": true
   },
   "include": ["../tests/workspace-integration/mobile-appUpdatePrompt.test.ts"],
   "exclude": ["node_modules", "../node_modules", "**/dist", "**/node_modules"]

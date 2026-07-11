@@ -34,7 +34,14 @@ import {
   useSiblings,
   useDescendantSiblingGroups,
 } from "../shell/hooks/PanelTreeContext";
-import { app, panel as panelService, view } from "../shell/client";
+import {
+  app,
+  incomingPanelLocation,
+  notification,
+  panel as panelService,
+  view,
+  workspace,
+} from "../shell/client";
 import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../state/appModeAtoms";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { useNavigation } from "./NavigationContext";
@@ -177,7 +184,7 @@ export function PanelStack({
 
   // Initial panel selection - set visible panel when root panels load
   useEffect(() => {
-    if (visiblePanelId || rootPanels.length === 0) {
+    if (rootLoading || visiblePanelId || rootPanels.length === 0) {
       return;
     }
     const fallbackPanelId = assertPresent(rootPanels[0]).id;
@@ -193,7 +200,7 @@ export function PanelStack({
         );
       })
       .catch(() => {});
-  }, [rootPanels, visiblePanelId]);
+  }, [rootLoading, rootPanels, visiblePanelId]);
 
   // Handle panel deletion - fall back to first root if current panel is gone
   // Use a small delay to avoid race condition with tree updates when creating new panels.
@@ -647,6 +654,54 @@ export function PanelStack({
           }
           const parsed = parseAddressInput(command.value);
           if (!parsed) return;
+          if (parsed.type === "panel-location") {
+            const location = parsed.location;
+            const mode = command.mode ?? location.disposition ?? "current";
+            if (mode === "external") {
+              void app.openExternal(command.value);
+              return;
+            }
+            void (async () => {
+              if (location.workspace && location.workspace !== (await workspace.getActive())) {
+                await incomingPanelLocation.prepareWorkspaceRelaunch(location);
+                try {
+                  await workspace.select(location.workspace);
+                } catch (error) {
+                  await incomingPanelLocation.prepareWorkspaceRelaunch(null);
+                  throw error;
+                }
+                return;
+              }
+              const common = {
+                ref: location.ref,
+                contextId: location.contextId,
+                stateArgs: location.stateArgs,
+              };
+              const result =
+                mode === "current"
+                  ? await panelService.navigate(panelId, location.source, common)
+                  : mode === "child"
+                    ? await panelService.createChild(panelId, location.source, {
+                        ...common,
+                        name: location.name,
+                        focus: location.focus ?? true,
+                      })
+                    : await panelService.createPanel(location.source, {
+                        ...common,
+                        name: location.name,
+                        isRoot: true,
+                        focus: location.focus ?? true,
+                      });
+              if (result && location.focus !== false) navigateToPanelId(result.id);
+            })().catch((error: unknown) => {
+              void notification.show({
+                type: "error",
+                title: "Panel link could not be opened",
+                message: error instanceof Error ? error.message : String(error),
+              });
+            });
+            return;
+          }
           const mode = command.mode ?? "current";
           if (parsed.type === "browser-url") {
             const action: AddressAction = {
@@ -732,6 +787,54 @@ export function PanelStack({
         mode: AddressNavigationMode,
         ref?: string
       ) {
+        if (action.type === "panel-location") {
+          const location = action.location;
+          const targetMode = mode === "current" ? (location.disposition ?? mode) : mode;
+          if (targetMode === "external") {
+            if (action.raw) void app.openExternal(action.raw);
+            return;
+          }
+          void (async () => {
+            if (location.workspace && location.workspace !== (await workspace.getActive())) {
+              await incomingPanelLocation.prepareWorkspaceRelaunch(location);
+              try {
+                await workspace.select(location.workspace);
+              } catch (error) {
+                await incomingPanelLocation.prepareWorkspaceRelaunch(null);
+                throw error;
+              }
+              return;
+            }
+            const common = {
+              ref: location.ref,
+              contextId: location.contextId,
+              stateArgs: location.stateArgs,
+            };
+            const result =
+              targetMode === "current"
+                ? await panelService.navigate(targetPanelId, location.source, common)
+                : targetMode === "child"
+                  ? await panelService.createChild(targetPanelId, location.source, {
+                      ...common,
+                      name: location.name,
+                      focus: location.focus ?? true,
+                    })
+                  : await panelService.createPanel(location.source, {
+                      ...common,
+                      name: location.name,
+                      isRoot: true,
+                      focus: location.focus ?? true,
+                    });
+            if (result && location.focus !== false) navigateToPanelId(result.id);
+          })().catch((error: unknown) => {
+            void notification.show({
+              type: "error",
+              title: "Panel link could not be opened",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+          return;
+        }
         if (action.type === "navigate-url") {
           const intent = getBrowserNavigationIntentForAddressAction(action);
           if (intent) void panelService.markBrowserNavigationIntent(targetPanelId, intent);

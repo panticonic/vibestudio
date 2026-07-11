@@ -25,7 +25,7 @@ function Probe({ onUpdate }: { onUpdate: (payload: unknown) => void }) {
 
 describe("useShellEvent", () => {
   it("installs the listener before subscribing so immediate snapshots are delivered", async () => {
-    const snapshot = { revision: 1, rootPanels: [] };
+    const snapshot = { revision: 1, forest: [] };
     const received = vi.fn();
     const order: string[] = [];
 

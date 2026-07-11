@@ -197,15 +197,9 @@ export interface ApprovalSheetProps {
     approvalId: string,
     values: Record<string, string>
   ) => Promise<void> | void;
-  onSubmitSecretInput: (
-    approvalId: string,
-    values: Record<string, string>
-  ) => Promise<void> | void;
+  onSubmitSecretInput: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
   onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
-  onResolveExternalAgent: (
-    approvalId: string,
-    behavior: "allow" | "deny"
-  ) => Promise<void> | void;
+  onResolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") => Promise<void> | void;
   /**
    * Optional. When supplied and the current approval comes from a panel,
    * the caller chip becomes touchable and invokes this with the panel id.
@@ -225,7 +219,7 @@ type PendingAction =
 type ButtonVariant = "primary" | "surface" | "danger" | "dangerPrimary" | "outline";
 
 const SECONDARY_GRANT_DECISIONS: Array<
-  Exclude<ApprovalDecision, "once" | "version" | "repo" | "deny" | "dismiss">
+  Exclude<ApprovalDecision, "once" | "version" | "deny" | "dismiss">
 > = ["session"];
 
 export function ApprovalSheet({
@@ -451,7 +445,9 @@ export function ApprovalSheet({
                   <ExternalAgentPanel approval={current} />
                 ) : null}
                 {error ? <InlineError message={error} /> : null}
-                {current.kind === "client-config" || current.kind === "credential-input" || current.kind === "secret-input" ? (
+                {current.kind === "client-config" ||
+                current.kind === "credential-input" ||
+                current.kind === "secret-input" ? (
                   <SecretConfigFields
                     approval={current}
                     values={values}
@@ -731,7 +727,12 @@ function CallerRow({
 
 function getCategoryIcon(approval: PendingApproval): IconComponent {
   if (approval.kind === "capability") return ExternalLink;
-  if (approval.kind === "client-config" || approval.kind === "credential-input" || approval.kind === "secret-input") return Settings2;
+  if (
+    approval.kind === "client-config" ||
+    approval.kind === "credential-input" ||
+    approval.kind === "secret-input"
+  )
+    return Settings2;
   if (approval.kind === "userland")
     return approval.callerKind === "worker"
       ? Workflow
@@ -773,11 +774,7 @@ function ApprovalMarkdown({
   const blocks = parseApprovalMarkdown(source);
   if (blocks.length === 0) return null;
   const color =
-    tone === "danger"
-      ? colors.danger
-      : tone === "muted"
-        ? colors.textSecondary
-        : colors.text;
+    tone === "danger" ? colors.danger : tone === "muted" ? colors.textSecondary : colors.text;
   return (
     <View style={[styles.markdownBlock, compact ? styles.markdownBlockCompact : null]}>
       {blocks.map((block, index) => {
@@ -889,7 +886,10 @@ function SecretConfigFields({
   values,
   onChange,
 }: {
-  approval: PendingClientConfigApproval | PendingCredentialInputApproval | PendingSecretInputApproval;
+  approval:
+    | PendingClientConfigApproval
+    | PendingCredentialInputApproval
+    | PendingSecretInputApproval;
   values: Record<string, string>;
   onChange: (name: string, value: string) => void;
 }) {
@@ -1662,7 +1662,10 @@ function InputApprovalActions({
   submitDescription = "Save this connected service.",
   denyDescription = "Do not save this connected service.",
 }: {
-  approval: PendingClientConfigApproval | PendingCredentialInputApproval | PendingSecretInputApproval;
+  approval:
+    | PendingClientConfigApproval
+    | PendingCredentialInputApproval
+    | PendingSecretInputApproval;
   values: Record<string, string>;
   busy: boolean;
   pendingAction: PendingAction | null;

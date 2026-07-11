@@ -1,4 +1,10 @@
 import type { RpcCaller } from "@vibestudio/rpc";
+import type {
+  PutUserNotificationInput,
+  UserNotification,
+  UserNotificationAcknowledgementResult,
+  UserNotificationListResult,
+} from "@vibestudio/shared/userNotifications";
 import { createGadServiceClient } from "@vibestudio/shared/userlandServiceRpc";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
@@ -8,7 +14,6 @@ import type {
 } from "@vibestudio/shared/serviceSchemas/vcs";
 import {
   hydrateStoredValueRefs,
-  type AgenticEvent,
   type ChannelEnvelope,
   type TrajectoryEvent,
 } from "@workspace/agentic-protocol";
@@ -23,33 +28,6 @@ export interface GadSqlResult {
 export interface GadStatusMetric {
   metric: string;
   value: number;
-}
-
-export interface TrajectoryAppendItem {
-  event: AgenticEvent;
-  eventId?: string | null;
-  publish?: {
-    channelIds: string[];
-    audience?: unknown;
-  } | null;
-}
-
-export interface AppendTrajectoryBatchInput {
-  trajectoryId: string;
-  branchId: string;
-  owner: { kind: "agent"; id: string };
-  expectedHeadEventHash?: string | null;
-  events: TrajectoryAppendItem[];
-}
-
-export interface AppendTrajectoryBatchResult {
-  trajectoryId: string;
-  branchId: string;
-  headEventId: string | null;
-  headEventHash: string | null;
-  headStateHash: string | null;
-  events: TrajectoryEvent[];
-  published: Array<{ eventId: string; channelId: string; envelopeId: string }>;
 }
 
 export interface ChannelPublication {
@@ -161,11 +139,18 @@ export interface GadClient {
   query(sql: GadSqlInput, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
   status(): Promise<GadStatusMetric[]>;
   ensureBlob(hash: string, size?: number, mimeType?: string | null): Promise<void>;
+  /** Durable workspace notifications for the host-verified account caller. */
+  listUserNotificationsForMe(): Promise<UserNotification[]>;
+  /** Dismiss one durable notification for the host-verified account caller. */
+  acknowledgeUserNotification(id: string): Promise<boolean>;
+  /** Publish/update one account notification from a trusted worker/DO. */
+  putUserNotification(input: PutUserNotificationInput): Promise<UserNotification>;
+  /** Withdraw one account notification from a trusted worker/DO. */
+  deleteUserNotification(userId: string, id: string): Promise<boolean>;
   getTrajectoryBranchHead(input: {
     trajectoryId: string;
     branchId: string;
   }): Promise<GadJsonRecord | null>;
-  appendTrajectoryBatch(input: AppendTrajectoryBatchInput): Promise<AppendTrajectoryBatchResult>;
   listTrajectoryEvents(input: {
     trajectoryId?: string | null;
     branchId: string;
@@ -367,11 +352,23 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     query: (input, bindings) => call("query", ...normalizeSqlArgs(input, bindings)),
     status: () => call("getStatus"),
     ensureBlob: (hash, size, mimeType) => call("ensureBlob", hash, size, mimeType),
+    listUserNotificationsForMe: async () =>
+      (await call<UserNotificationListResult>("listUserNotificationsForMe")).notifications,
+    acknowledgeUserNotification: async (id) =>
+      (
+        await call<UserNotificationAcknowledgementResult>("acknowledgeUserNotification", {
+          id,
+        })
+      ).acknowledged,
+    putUserNotification: (input) => call<UserNotification>("putUserNotification", input),
+    deleteUserNotification: async (userId, id) =>
+      (
+        await call<{ deleted: boolean }>("deleteUserNotification", {
+          userId,
+          id,
+        })
+      ).deleted,
     getTrajectoryBranchHead: (input) => call("getTrajectoryBranchHead", input),
-    appendTrajectoryBatch: async (input) => {
-      const result = await call<AppendTrajectoryBatchResult>("appendTrajectoryBatch", input);
-      return { ...result, events: await Promise.all(result.events.map((event) => hydrate(event))) };
-    },
     listTrajectoryEvents: async (input) =>
       Promise.all(
         (await call<TrajectoryEvent[]>("listTrajectoryEvents", input)).map((event) =>

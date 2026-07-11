@@ -13,6 +13,11 @@ import {
 } from "@vibestudio/rpc";
 import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
 import { appMethods } from "@vibestudio/shared/serviceSchemas/app";
+import {
+  accountMethods,
+  type AccountProfile,
+  type AccountProfileUpdate,
+} from "@vibestudio/shared/serviceSchemas/account";
 import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
 import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
 import { menuMethods } from "@vibestudio/shared/serviceSchemas/menu";
@@ -20,16 +25,34 @@ import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notificat
 import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
 import { panelTreeMethods } from "@vibestudio/shared/serviceSchemas/panelTree";
 import { paletteMethods } from "@vibestudio/shared/serviceSchemas/palette";
-import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred";
+import {
+  remoteCredMethods,
+  type RemoteCredCurrent as RemoteCredCurrentContract,
+  type RemoteCredDeviceRecord,
+  type RemoteCredPairingInvite,
+} from "@vibestudio/shared/serviceSchemas/remoteCred";
 import { settingsMethods } from "@vibestudio/shared/serviceSchemas/settings";
 import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
 import { autofillMethods } from "@vibestudio/shared/serviceSchemas/autofill";
 import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
-import { tokensMethods } from "@vibestudio/shared/serviceSchemas/tokens";
 import { viewMethods } from "@vibestudio/shared/serviceSchemas/view";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { workspacePresenceMethods } from "@vibestudio/shared/serviceSchemas/workspacePresence";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  createDurableObjectServiceClient,
+  createGadServiceClient,
+  type DurableObjectServiceClient,
+} from "@vibestudio/shared/userlandServiceRpc";
+import type { ChannelInvite } from "@vibestudio/shared/channelInvites";
+import {
+  channelInviteFromNotification,
+  type UserNotification,
+  type UserNotificationAcknowledgementResult,
+  type UserNotificationListResult,
+} from "@vibestudio/shared/userNotifications";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
+import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -39,9 +62,15 @@ type IncomingPairLinkBridge = {
   getPending: () => Promise<ConnectPairing | null>;
   onLink: (handler: (link: ConnectPairing) => void) => () => void;
 };
+type IncomingPanelLocationBridge = {
+  getPending: () => Promise<PanelLocation | null>;
+  onLocation: (handler: (location: PanelLocation) => void) => () => void;
+  prepareWorkspaceRelaunch: (location: PanelLocation | null) => Promise<void>;
+};
 const g = globalThis as unknown as {
   __vibestudioTransport?: ShellTransportBridge;
   __vibestudioIncomingPairLink?: IncomingPairLinkBridge;
+  __vibestudioIncomingPanelLocation?: IncomingPanelLocationBridge;
 };
 if (!g.__vibestudioTransport) throw new Error("Shell transport not available");
 const transport: EnvelopeRpcTransport = {
@@ -62,6 +91,9 @@ const shellApprovalClient = createTypedServiceClient(
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const appClient = createTypedServiceClient("app", appMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const accountClient = createTypedServiceClient("account", accountMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
 const eventsClient = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
@@ -106,9 +138,6 @@ const settingsClient = createTypedServiceClient(
   settingsMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
-const tokensClient = createTypedServiceClient("tokens", tokensMethods, (service, method, args) =>
-  rpc.call("main", `${service}.${method}`, args)
-);
 const viewClient = createTypedServiceClient("view", viewMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
@@ -122,12 +151,19 @@ const blobstoreClient = createTypedServiceClient(
   blobstoreMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
+const workspacePresenceClient = createTypedServiceClient(
+  "workspacePresence",
+  workspacePresenceMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
 import type {
   ThemeMode,
   ThemeAppearance,
   ThemeConfig,
   MovePanelRequest,
   PaletteCommand,
+  Panel,
+  PanelTreeSnapshot,
 } from "@vibestudio/shared/types";
 import type { BrowserNavigationIntent } from "@vibestudio/shared/panelCommands";
 import type {
@@ -153,8 +189,9 @@ export const app = {
 // Panel Service
 // =============================================================================
 export const panel = {
-  getTree: async () => (await panelClient.getTreeSnapshot()).rootPanels,
   getTreeSnapshot: () => panelClient.getTreeSnapshot(),
+  /** Authenticated server read that performs per-account first-attach seeding. */
+  ensureOwnerTree: () => panelTreeClient.getTreeSnapshot(),
   getFocusedPanelId: () => panelClient.getFocusedPanelId(),
   ensureLoaded: (panelId: string) => panelClient.ensureLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
@@ -209,14 +246,17 @@ export const panel = {
       name?: string;
       isRoot?: boolean;
       ref?: string;
+      contextId?: string;
       stateArgs?: Record<string, unknown>;
+      focus?: boolean;
     }
   ) =>
     panelTreeClient.create(source, {
       name: options?.name,
       ref: options?.ref,
+      contextId: options?.contextId,
       parentId: options?.isRoot === false ? undefined : null,
-      focus: true,
+      focus: options?.focus ?? true,
       stateArgs: options?.stateArgs,
     }),
   createChild: (
@@ -226,6 +266,8 @@ export const panel = {
       name?: string;
       focus?: boolean;
       ref?: string;
+      contextId?: string;
+      stateArgs?: Record<string, unknown>;
     }
   ) =>
     panelTreeClient.create(source, {
@@ -233,6 +275,8 @@ export const panel = {
       name: options?.name,
       focus: options?.focus,
       ref: options?.ref,
+      contextId: options?.contextId,
+      stateArgs: options?.stateArgs,
     }),
   createBrowser: (
     url: string,
@@ -386,6 +430,13 @@ export const incomingPairLink = {
   onLink: (handler: (link: ConnectPairing) => void) =>
     g.__vibestudioIncomingPairLink?.onLink(handler) ?? (() => {}),
 };
+export const incomingPanelLocation = {
+  getPending: () => g.__vibestudioIncomingPanelLocation?.getPending() ?? Promise.resolve(null),
+  onLocation: (handler: (location: PanelLocation) => void) =>
+    g.__vibestudioIncomingPanelLocation?.onLocation(handler) ?? (() => {}),
+  prepareWorkspaceRelaunch: (location: PanelLocation | null) =>
+    g.__vibestudioIncomingPanelLocation?.prepareWorkspaceRelaunch(location) ?? Promise.resolve(),
+};
 // =============================================================================
 // Menu Service
 // =============================================================================
@@ -444,73 +495,23 @@ export const settings = {
 // Remote credential store
 // =============================================================================
 export interface RemoteCredCurrent {
-  configured: boolean;
-  isActive: boolean;
-  bootstrap: "device" | "admin-token" | "hybrid" | "none";
-  remoteId?: string;
-  url?: string;
-  tokenPreview?: string;
-  deviceId?: string;
-  hubUrl?: string;
-  workspaceName?: string;
+  connected: RemoteCredCurrentContract["connected"];
+  configured: RemoteCredCurrentContract["configured"];
+  isActive: RemoteCredCurrentContract["isActive"];
+  deviceId?: RemoteCredCurrentContract["deviceId"];
+  workspaceName?: RemoteCredCurrentContract["workspaceName"];
 }
-export interface RemoteCredSaveArgs {
-  url: string;
-  token: string;
-}
-export interface TestConnectionResult {
-  ok: boolean;
-  error?: "invalid-url" | "unreachable" | "unauthorized" | "unknown";
-  message?: string;
-  serverVersion?: string;
-}
-export interface ExchangePairingCodeArgs {
-  /** A scheme or HTTPS pair link carrying the WebRTC pairing material. */
-  link: string;
-  label?: string;
-}
-export interface DeviceRecord {
-  deviceId: string;
-  label: string;
-  platform?: string;
-  createdAt: number;
-  lastUsedAt?: number;
-  revokedAt?: number;
-}
-export interface PairingInvite {
-  code: string;
-  deepLink: string;
-  pairUrl: string;
-  room: string;
-  fp: string;
-  sig: string;
-  ice?: "all" | "relay";
-  srv?: string;
-  serverUrl: string;
-  publicUrl?: string | null;
-  expiresAt: number;
-  expiresInMs: number;
-  serverId: string;
-  serverBootId: string;
-  workspaceId?: string | null;
-}
+export type DeviceRecord = RemoteCredDeviceRecord;
+export type PairingInvite = RemoteCredPairingInvite;
 export const remoteCred = {
   getCurrent: () => remoteCredClient.getCurrent(),
-  save: (args: RemoteCredSaveArgs) => remoteCredClient.save(args),
-  testConnection: (args: RemoteCredSaveArgs) => remoteCredClient.testConnection(args),
-  exchangePairingCode: (args: ExchangePairingCodeArgs) =>
-    remoteCredClient.exchangePairingCode(args),
-  createPairingInvite: (args?: { ttlMs?: number }) => remoteCredClient.createPairingInvite(args),
+  pair: (link: string) => remoteCredClient.pair({ link }),
+  pairDevice: async (args?: { workspace?: string; ttlMs?: number }) =>
+    (await remoteCredClient.pairDevice(args)).pairing,
   listDevices: () => remoteCredClient.listDevices(),
   revokeDevice: (deviceId: string) => remoteCredClient.revokeDevice(deviceId),
   clear: () => remoteCredClient.clear(),
   relaunch: () => remoteCredClient.relaunch(),
-};
-// =============================================================================
-// Token rotation
-// =============================================================================
-export const tokens = {
-  rotateAdmin: () => tokensClient.rotateAdmin(),
 };
 // =============================================================================
 // Autofill Service
@@ -526,6 +527,178 @@ export const blobstore = {
   getText: (digest: string) => blobstoreClient.getText(digest),
   getBase64: (digest: string) => blobstoreClient.getBase64(digest),
   stat: (digest: string) => blobstoreClient.stat(digest),
+};
+// =============================================================================
+// Workspace Presence Service (WP8 §4 — who's connected to this workspace)
+// =============================================================================
+// Host presence built from live session facts (zero channel coupling). Read
+// once on mount, then keep fresh via the `workspace-presence-changed` event.
+export type { WorkspacePresenceEntry } from "@vibestudio/shared/serviceSchemas/workspacePresence";
+export const workspacePresence = {
+  list: () => workspacePresenceClient.list(),
+};
+// =============================================================================
+// Account profile projection (principal identity + owner labels)
+// =============================================================================
+export type ShellAccountProfile = AccountProfile;
+export type ShellAccountProfileUpdate = AccountProfileUpdate;
+
+export const ACCOUNT_PROFILE_CHANGED_EVENT = "account-profile-changed";
+
+export const account = {
+  getProfile: () => accountClient.getProfile(),
+  resolveProfiles: (userIds: readonly string[]) => accountClient.resolveProfiles([...userIds]),
+  updateProfile: async (input: ShellAccountProfileUpdate) => {
+    const profile = await accountClient.updateProfile(input);
+    window.dispatchEvent(
+      new CustomEvent<ShellAccountProfile>(ACCOUNT_PROFILE_CHANGED_EVENT, { detail: profile })
+    );
+    return profile;
+  },
+};
+// =============================================================================
+// Durable account-scoped user notification inbox
+// =============================================================================
+const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
+const userNotificationStore = createGadServiceClient(rpc);
+const resolvedChannelClients = new Map<string, DurableObjectServiceClient>();
+
+function channelClient(channelId: string): DurableObjectServiceClient {
+  let client = resolvedChannelClients.get(channelId);
+  if (!client) {
+    client = createDurableObjectServiceClient(rpc, CHANNEL_SERVICE_PROTOCOL, channelId);
+    resolvedChannelClients.set(channelId, client);
+  }
+  return client;
+}
+
+export interface ShellChannelInvite extends ChannelInvite {
+  channelTitle: string;
+  inviter?: ShellAccountProfile;
+}
+
+export interface ShellUserNotification extends UserNotification {
+  /** Present for the built-in `channel.invite` kind after shell hydration. */
+  channelInvite?: ShellChannelInvite;
+}
+
+async function describeChannelInvite(invite: ChannelInvite): Promise<ShellChannelInvite> {
+  const config = await channelClient(invite.channelId).call<{ title?: string } | null>("getConfig");
+  return {
+    ...invite,
+    channelTitle: config?.title?.trim() || invite.channelId,
+  };
+}
+
+function findOwnedChannelPanel(
+  snapshot: PanelTreeSnapshot,
+  owner: string,
+  channelId: string
+): Panel | null {
+  const group = snapshot.forest.find((candidate) => candidate.owner === owner);
+  if (!group) return null;
+  const visit = (panels: Panel[]): Panel | null => {
+    for (const candidate of panels) {
+      if (
+        candidate.snapshot.source === "panels/chat" &&
+        candidate.snapshot.stateArgs?.["channelName"] === channelId
+      ) {
+        return candidate;
+      }
+      const descendant = visit(candidate.children);
+      if (descendant) return descendant;
+    }
+    return null;
+  };
+  return visit(group.rootPanels);
+}
+
+export const userNotifications = {
+  /** Read one durable account inbox; never enumerate producer/channel DOs. */
+  async list(): Promise<ShellUserNotification[]> {
+    const { notifications } = await userNotificationStore.call<UserNotificationListResult>(
+      "listUserNotificationsForMe"
+    );
+    const channelInvites = notifications
+      .map((notification) => channelInviteFromNotification(notification))
+      .filter((invite): invite is ChannelInvite => invite !== null);
+    const inviterUserIds = [
+      ...new Set(
+        channelInvites
+          .map((invite) =>
+            invite.addedBy.startsWith("user:") ? invite.addedBy.slice("user:".length) : null
+          )
+          .filter((userId): userId is string => Boolean(userId))
+      ),
+    ];
+    const profilesPromise = inviterUserIds.length
+      ? account
+          .resolveProfiles(inviterUserIds)
+          .catch((): Record<string, ShellAccountProfile> => ({}))
+      : Promise.resolve({} as Record<string, ShellAccountProfile>);
+    const [described, profiles] = await Promise.all([
+      Promise.all(
+        channelInvites.map((invite) =>
+          describeChannelInvite(invite).catch(() => ({
+            ...invite,
+            channelTitle: invite.channelId,
+          }))
+        )
+      ),
+      profilesPromise,
+    ]);
+    const hydratedInvites = new Map<string, ShellChannelInvite>();
+    for (const invite of described) {
+      const inviterUserId = invite.addedBy.startsWith("user:")
+        ? invite.addedBy.slice("user:".length)
+        : null;
+      const inviter = inviterUserId ? profiles[inviterUserId] : undefined;
+      hydratedInvites.set(invite.channelId, inviter ? { ...invite, inviter } : invite);
+    }
+    return notifications.map((notification) => {
+      const invite = channelInviteFromNotification(notification);
+      const channelInvite = invite ? hydratedInvites.get(invite.channelId) : undefined;
+      return channelInvite ? { ...notification, channelInvite } : notification;
+    });
+  },
+
+  async acknowledge(id: string): Promise<boolean> {
+    const result = await userNotificationStore.call<UserNotificationAcknowledgementResult>(
+      "acknowledgeUserNotification",
+      { id }
+    );
+    return result.acknowledged;
+  },
+
+  /** Open the known invited channel in its owning context. Acknowledgement is
+   * deliberately separate so a failed panel creation never consumes the invite. */
+  async openChannel(channelId: string): Promise<{ id: string }> {
+    const [profile, snapshot] = await Promise.all([
+      account.getProfile(),
+      panelTreeClient.getTreeSnapshot(),
+    ]);
+    const existing = profile ? findOwnedChannelPanel(snapshot, profile.userId, channelId) : null;
+    if (existing) {
+      await panelTreeClient.focus(existing.id);
+      return { id: existing.id };
+    }
+
+    const service = channelClient(channelId);
+    const [config, contextId] = await Promise.all([
+      service.call<{ title?: string } | null>("getConfig"),
+      service.call<string | null>("getContextId"),
+    ]);
+    if (!contextId) {
+      throw new Error("This conversation is not ready yet. Please try again in a moment.");
+    }
+    return panelTreeClient.create("panels/chat", {
+      parentId: null,
+      focus: true,
+      contextId,
+      name: config?.title?.trim() || undefined,
+      stateArgs: { channelName: channelId, contextId },
+    });
+  },
 };
 // =============================================================================
 // Events Service

@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
-import { Button, Dialog, Flex, Text, TextField, Callout, Box } from "@radix-ui/themes";
+import { Button, Dialog, Flex, Text, TextField, Callout, Box, Separator } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { AppDialog } from "@workspace/ui";
-import { createConnectDeepLink, parseConnectLink, type ConnectPairing } from "@vibestudio/shared/connect";
 import {
-  incomingPairLink,
-  remoteCred,
-  type RemoteCredCurrent,
-  type TestConnectionResult,
-} from "../shell/client";
+  createConnectDeepLink,
+  parseConnectLink,
+  type ConnectPairing,
+} from "@vibestudio/shared/connect";
+import { incomingPairLink, remoteCred, type RemoteCredCurrent } from "../shell/client";
 import { useShellOverlay } from "../shell/useShellOverlay";
 import { PairedDevicesSection } from "./PairedDevicesSection";
 import { AppUpdatesSection } from "./AppUpdatesSection";
+import { AccountProfileSection } from "./AccountProfileSection";
 
 interface Props {
   open: boolean;
@@ -22,7 +22,6 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   useShellOverlay(open);
   const [current, setCurrent] = useState<RemoteCredCurrent | null>(null);
   const [pairLink, setPairLink] = useState("");
-  const [deviceLabel, setDeviceLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
@@ -53,19 +52,6 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       .catch((err) => setError(String(err)));
   }, [open]);
 
-  function describeTestError(result: TestConnectionResult): string {
-    switch (result.error) {
-      case "invalid-url":
-        return `Invalid URL: ${result.message ?? ""}`;
-      case "unreachable":
-        return `Server unreachable: ${result.message ?? ""}`;
-      case "unauthorized":
-        return "Authentication failed — check the credential.";
-      default:
-        return result.message ?? "Unknown error";
-    }
-  }
-
   const onPasteLink = () => {
     const raw = window.prompt("Paste Vibestudio pairing link");
     if (!raw) return;
@@ -87,16 +73,12 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
     }
     setBusy(true);
     try {
-      const res = await remoteCred.exchangePairingCode({
-        link,
-        label: deviceLabel || undefined,
-      });
+      const res = await remoteCred.pair(link);
       if (!res.ok) {
-        setError(describeTestError(res));
+        setError(res.message ?? "The pairing link is invalid or expired.");
         setBusy(false);
         return;
       }
-      await remoteCred.relaunch();
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -119,26 +101,31 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       open={open}
       onOpenChange={onOpenChange}
       maxWidth="680px"
-      title="Remote server"
-      description="Pair this app with a Vibestudio server running elsewhere."
+      title="Settings"
+      description="Manage your account, connected server, and app updates."
+      style={{ maxHeight: "min(88dvh, 900px)", overflowY: "auto" }}
     >
       <Box mt="3">
+        <AccountProfileSection active={open} />
+        <Separator size="4" my="4" />
+        <Text as="div" size="3" weight="medium" mb="2">
+          Server connection
+        </Text>
         {current?.isActive ? (
           <Callout.Root size="1" color="green" mb="3">
             <Callout.Text>
-              Currently connected to{" "}
-              {current.url ?? current.workspaceName ?? `remote server (device ${current.deviceId})`}
+              Connected remotely
+              {current.workspaceName ? ` to ${current.workspaceName}` : ""}.
             </Callout.Text>
           </Callout.Root>
         ) : current?.configured ? (
-          <Callout.Root size="1" color={current.bootstrap === "device" ? "red" : "amber"} mb="3">
+          <Callout.Root size="1" color="red" mb="3">
             <Callout.Icon>
               <ExclamationTriangleIcon />
             </Callout.Icon>
             <Callout.Text>
-              {current.bootstrap === "device"
-                ? "Device credential rejected or inactive — re-pair from the server."
-                : `Credentials are saved (${current.url}) but app is running in local mode. Relaunch to apply.`}
+              The stored device credential is inactive or rejected. Create a fresh pairing link on
+              the server and pair again.
             </Callout.Text>
           </Callout.Root>
         ) : null}
@@ -159,19 +146,6 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
               onChange={(e) => setPairLink(e.target.value)}
             />
           </Box>
-          <Box>
-            <Text as="label" size="2" weight="medium">
-              Device label{" "}
-              <Text color="gray" size="1">
-                (optional)
-              </Text>
-            </Text>
-            <TextField.Root
-              placeholder="Electron on this laptop"
-              value={deviceLabel}
-              onChange={(e) => setDeviceLabel(e.target.value)}
-            />
-          </Box>
         </Flex>
 
         {error ? (
@@ -183,8 +157,11 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
           </Callout.Root>
         ) : null}
 
-        {current?.isActive && current.bootstrap !== "none" ? (
-          <PairedDevicesSection currentDeviceId={current.deviceId} />
+        {current?.connected && current.workspaceName ? (
+          <PairedDevicesSection
+            currentDeviceId={current.deviceId}
+            workspaceName={current.workspaceName}
+          />
         ) : null}
         <AppUpdatesSection />
 
@@ -224,7 +201,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
               </Button>
             </Dialog.Close>
             <Button onClick={savePairing} disabled={busy}>
-              {busy ? "Saving…" : "Save & relaunch"}
+              {busy ? "Pairing…" : "Pair & relaunch"}
             </Button>
           </Flex>
         </Flex>

@@ -15,6 +15,7 @@ import type {
   WebViewMessageEvent,
 } from "react-native-webview/lib/WebViewTypes";
 import { isManagedHost, parsePanelUrl, LOOPBACK_PANEL_HOST } from "../services/panelUrls";
+import { tryParsePanelLocationLink, type PanelDisposition } from "@vibestudio/shared/panelLocation";
 import { openExternalUrl } from "../services/nativeCapabilities";
 import { VibestudioLogo } from "./VibestudioLogo";
 
@@ -23,7 +24,10 @@ export interface PanelNavigationEvent {
   panelId: string;
   source: string;
   contextId?: string;
-  options: { name?: string; contextId?: string; focus?: boolean };
+  ref?: string;
+  disposition?: PanelDisposition;
+  workspace?: string;
+  options: { name?: string; contextId?: string; focus?: boolean; ref?: string };
   stateArgs?: Record<string, unknown>;
 }
 
@@ -50,12 +54,6 @@ export interface PanelWebViewProps {
   visible: boolean;
   managed: boolean;
   panelInit?: unknown;
-  /**
-   * @deprecated Vestigial — panels load from the loopback façade and the managed
-   * origin is loopback, so this is no longer consulted. Kept only so the mobile
-   * shell (MainScreen) still type-checks; drop it from both when convenient.
-   */
-  externalHost?: string;
   managedBasePath?: string;
   onNavigationStateChange?: (navState: WebViewNavigation) => void;
   onPanelNavigate?: (event: PanelNavigationEvent) => void;
@@ -514,8 +512,28 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
 
   const containerStyle = useMemo(() => [styles.container, !visible && styles.hidden], [visible]);
 
-  const emitManagedNavigation = useCallback(
-    (requestUrl: string): boolean => {
+  const emitPanelNavigation = useCallback(
+    (requestUrl: string, fallbackDisposition?: PanelDisposition): boolean => {
+      const canonical = tryParsePanelLocationLink(requestUrl);
+      if (canonical) {
+        onPanelNavigate?.({
+          type: "panel-switch",
+          panelId,
+          source: canonical.source,
+          workspace: canonical.workspace,
+          contextId: canonical.contextId,
+          ref: canonical.ref,
+          disposition: canonical.disposition ?? fallbackDisposition,
+          options: {
+            name: canonical.name,
+            contextId: canonical.contextId,
+            focus: canonical.focus,
+            ref: canonical.ref,
+          },
+          stateArgs: canonical.stateArgs,
+        });
+        return true;
+      }
       // Panels are served from this WebView's loopback façade origin. Match the
       // exact host:port so another local listener cannot use the bridge.
       if (!isManagedHost(requestUrl, managedHostAuthority)) return false;
@@ -525,7 +543,10 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
         type: "panel-switch",
         panelId,
         source: parsed.source,
+        workspace: parsed.workspace,
         contextId: parsed.contextId,
+        ref: parsed.ref,
+        disposition: parsed.disposition ?? fallbackDisposition,
         options: parsed.options,
         stateArgs: parsed.stateArgs,
       });
@@ -540,7 +561,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
       if (!isTopFrame) return true;
       if (requestUrl === url) return true;
 
-      if (emitManagedNavigation(requestUrl)) {
+      if (emitPanelNavigation(requestUrl)) {
         return false;
       }
 
@@ -551,7 +572,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
 
       return true;
     },
-    [emitManagedNavigation, managed, url]
+    [emitPanelNavigation, managed, onBridgeCall, panelId, url]
   );
 
   const handleNavigationStateChange = useCallback(
@@ -866,7 +887,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
         setSupportMultipleWindows
         onOpenWindow={(syntheticEvent) => {
           const { targetUrl } = syntheticEvent.nativeEvent;
-          if (emitManagedNavigation(targetUrl)) return;
+          if (emitPanelNavigation(targetUrl, "child")) return;
           if (managed && /^https?:\/\//i.test(targetUrl)) {
             void onBridgeCall?.(panelId, "openPanelChild", [targetUrl, { focus: true }]);
             return;

@@ -105,9 +105,8 @@ Workspace app targets are:
 - `terminal` — supervised Node CLI/client processes for terminal-client style
   tooling.
 
-Capabilities are explicit in `package.json`. Connection management actions
-such as minting a pairing invite require the `connection-management`
-capability.
+Capabilities are explicit in `package.json`. User and device invitations are
+account operations on the typed `hubControl` service, not app capabilities.
 
 For the full trust and client-auth model, see
 `docs/trusted-workspace-units.md` in the Vibestudio source checkout.

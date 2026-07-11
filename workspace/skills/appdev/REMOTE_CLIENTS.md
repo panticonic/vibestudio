@@ -1,31 +1,33 @@
 # Remote Clients And Pairing
 
-Vibestudio remote clients use device credentials and short-lived principal grants.
-Apps that help connect other clients need the `connection-management`
-capability.
+Vibestudio remote clients use hub-owned user/device credentials and short-lived
+principal grants. Device and user invitations are hub-control operations made
+by an authenticated human account.
 
 ## Concepts
 
-| Concept           | Purpose                                                                   |
-| ----------------- | ------------------------------------------------------------------------- |
-| Pairing invite    | One-time WebRTC bootstrap material: room, DTLS fingerprint, code, signaling endpoint |
-| Device credential | Long-lived device id plus refresh token, stored by the client/native host |
+| Concept           | Purpose                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| Pairing invite    | One-time WebRTC bootstrap material: room, DTLS fingerprint, code, signaling endpoint   |
+| Device credential | Long-lived device id plus refresh token, stored by the client/native host              |
 | Shell token       | Remote shell credential presented as `refresh:<deviceId>:<refreshToken>` over the pipe |
-| Principal grant   | Short-lived grant scoped to one app/runtime principal                     |
-| Connection info   | WebRTC pairing metadata plus server/workspace identity                    |
+| Principal grant   | Short-lived grant scoped to one app/runtime principal                                  |
+| Connection info   | WebRTC pairing metadata plus server/workspace identity                                 |
 
 ## Desktop Remote Shell
 
 Remote startup is a two-step WebRTC flow:
 
-1. Pair with the server hub and store a device credential.
-2. Select a workspace, which returns a workspace-scoped WebRTC pairing invite.
+1. Redeem a user-bound or root-bootstrap invite and store the global device
+   credential.
+2. Select a workspace through `hubControl.routeWorkspace`, which returns that
+   child's current WebRTC reach information without minting another identity.
 
-`vibestudio remote pair "https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2"`
+`vibestudio remote pair "https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2&ice=all"`
 or the equivalent `vibestudio://connect?...` link exchanges a pairing invite
-over the pipe and stores the hub credential.
-`vibestudio remote select <name>` pairs to the selected workspace's room and keeps
-the hub credential for later workspace listing/selection.
+over the pipe and stores the device credential.
+`vibestudio remote select <name>` switches the selected child's reach while
+keeping that same credential for later workspace listing/selection.
 
 ## Mobile Client
 
@@ -74,17 +76,17 @@ supervised app process. A terminal remote client should:
 
 - connect over `/rpc` with the runner-provided principal grant
 - use app identity and manifest capabilities for privileged calls
-- create pairing invites with `auth.createPairingInvite` only when it has
-  `connection-management`
+- call `hubControl.pairDevice` to mint another-device invites for its acting
+  user, or `hubControl.inviteUser` as root/admin to create a new user
 - parse or accept pairing invites when acting as an external CLI client
 - call `/auth/complete-pairing` for external device bootstrap flows
 - store external device credentials in CLI/user config, not in trusted app
   bundle state
 
 The built-in `@workspace-apps/remote-cli` is the canonical terminal app shape:
-it connects as an app principal, lists workspace status, and can mint a pairing
-invite for another client. It is declared in the template so it is available for
-server pairing/debugging, but it stays dormant until the shell UI or
+it connects as an app principal, lists workspace status, and can ask the hub to
+mint another-device pairing material for its acting user. It is declared in the
+template so it is available for server pairing/debugging, but it stays dormant until the shell UI or
 `workspace.units.restart("@workspace-apps/remote-cli")` starts it.
 
 Fresh workspaces created from the product template trust their initial declared
@@ -94,11 +96,10 @@ approval path.
 
 ## Pairing Invite Creation
 
-An app caller needs `connection-management` to call `auth.createPairingInvite`.
-Host callers can be allowed explicitly at the auth service call site.
-
-Do not grant `connection-management` to arbitrary apps. It lets the app mint
-new client bootstrap material.
+Use the typed `hubControl` service. `pairDevice` always binds the invite to the
+authenticated user's own account; `inviteUser` creates a new user and is
+root/admin-gated. The child forwards the host-stamped subject over its private
+hub control channel, so callers cannot choose the user identity in wire args.
 
 ## URL And Transport Rules
 
@@ -133,18 +134,13 @@ loaded.
 
 When testing pairing or remote-server state without a shell UI:
 
-1. Start the server with `--ready-file` and read `gatewayUrl` plus
-   `adminToken`.
-2. Use `scripts/vibestudio-admin.mjs approvals list` to inspect pending trusted
-   unit approvals.
-3. Use `scripts/vibestudio-admin.mjs approvals approve version` only for local
-   trusted-template/dev scenarios where the unit set is expected.
-4. Use `scripts/vibestudio-admin.mjs units list` to inspect active build keys and
-   lifecycle states.
-5. Use `scripts/vibestudio-admin.mjs units restart <app>` for terminal apps.
-6. Use `scripts/vibestudio-admin.mjs units logs <app>` to inspect stdout/stderr
-   and runner errors.
-7. From app, panel, worker, or eval contexts, use `serverLog.query/tail/stats`
+1. Start the hub with `--ready-file`; on a fresh identity DB, redeem one of
+   `rootInvites` with the CLI to become root.
+2. Select a workspace and inspect/resolve approvals through the authenticated
+   workspace services. Do not mint a shell principal from a process token.
+3. Use `workspace.units.list/restart/logs/diagnostics` from an authenticated
+   client to inspect build keys, lifecycle state, and runner errors.
+4. From app, panel, worker, or eval contexts, use `serverLog.query/tail/stats`
    (`services.serverLog.*` in eval, raw `rpc.call("main", "serverLog.*", ...)`
    elsewhere) or the `about/server-logs` viewer for host server logs such as
    pairing, reconnect, app reconcile, gateway, and shutdown events. See

@@ -10,6 +10,8 @@ export interface GatewayConfig {
   serverUrl: string;
   token: string;
   aliases?: readonly string[];
+  /** Selected logical workspace when it cannot be inferred from serverUrl. */
+  workspace?: string;
 }
 
 /**

@@ -234,9 +234,9 @@ await page.locator("input").focus();
 await page.locator("input").blur();
 await page.locator(".far-below").scrollIntoViewIfNeeded();
 
-// Back-compat string forms
-await page.click("button.submit");
-await page.fill('input[name="email"]', "user@example.com");
+// CSS locator forms
+await page.locator("button.submit").click();
+await page.locator('input[name="email"]').fill("user@example.com");
 ```
 
 ### Reads & state
@@ -284,10 +284,7 @@ const items = await page.evaluate(() =>
 );
 
 // Pass arguments
-const text = await page.evaluate(
-  (sel) => document.querySelector(sel)?.textContent,
-  ".my-class"
-);
+const text = await page.evaluate((sel) => document.querySelector(sel)?.textContent, ".my-class");
 
 // Interact with the page
 await page.evaluate(() => {
@@ -397,9 +394,7 @@ await page.waitForSelector(".dashboard");
 console.log("Logged in, now at:", await page.evaluate(() => location.href));
 
 // Still logged in — same page, same session
-const dashboardData = await page.evaluate(() =>
-  document.querySelector(".stats")?.textContent
-);
+const dashboardData = await page.evaluate(() => document.querySelector(".stats")?.textContent);
 console.log("Dashboard:", dashboardData);
 ```
 
@@ -432,9 +427,7 @@ const title = await page.title();
 console.log("Page title:", title);
 
 // Check if logged in
-const isLoggedIn = await page.evaluate(() =>
-  document.querySelector("img.avatar") !== null
-);
+const isLoggedIn = await page.evaluate(() => document.querySelector("img.avatar") !== null);
 console.log(isLoggedIn ? "Logged in!" : "Not logged in");
 ```
 

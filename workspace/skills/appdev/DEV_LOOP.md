@@ -203,16 +203,9 @@ provided RPC grant, and handles shutdown messages from the runner.
 
 ## Debugging Headless App State
 
-Use the admin helper when testing a server without a desktop shell:
-
-```bash
-node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" approvals list
-node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" approvals approve version
-node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units list
-node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units restart @workspace-apps/remote-cli
-node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units logs @workspace-apps/remote-cli --limit 120
-```
-
+Headless clients authenticate as paired users; there is no operator-token path
+that mints a synthetic human shell. Pair the CLI with the root invite on first
+boot, select a workspace, and use the normal typed services from that session.
 From app, panel, worker, or eval contexts, use `workspace.units.*` for the app
 process and `serverLog.*` for the host server. In eval, `services.serverLog.*`
 is the convenience client; elsewhere use `rpc.call("main", "serverLog.query",

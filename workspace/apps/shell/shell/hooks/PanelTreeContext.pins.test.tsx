@@ -7,11 +7,21 @@ import type { Panel } from "@vibestudio/shared/types";
 
 // The shell client facade is mocked so we control the tree + pin sources.
 const getTreeSnapshot = vi.fn();
+const ensureOwnerTree = vi.fn();
 const listPinnedPanelIds = vi.fn();
+const getProfile = vi.fn(() =>
+  Promise.resolve({ userId: "alice", handle: "alice", displayName: "Alice", role: "member" })
+);
 vi.mock("../client.js", () => ({
+  ACCOUNT_PROFILE_CHANGED_EVENT: "account-profile-changed",
   panel: {
     getTreeSnapshot: (...args: unknown[]) => getTreeSnapshot(...args),
+    ensureOwnerTree: (...args: unknown[]) => ensureOwnerTree(...args),
     listPinnedPanelIds: (...args: unknown[]) => listPinnedPanelIds(...args),
+  },
+  account: {
+    getProfile: () => getProfile(),
+    resolveProfiles: vi.fn(() => Promise.resolve({})),
   },
   workspace: {},
 }));
@@ -43,8 +53,12 @@ function PinProbe() {
 }
 
 function RootProbe() {
-  const { panels } = useRootPanels();
-  return <div data-testid="roots">{panels.map((item) => item.id).join(",")}</div>;
+  const { panels, loading } = useRootPanels();
+  return (
+    <div data-testid="roots" data-loading={loading ? "true" : "false"}>
+      {panels.map((item) => item.id).join(",")}
+    </div>
+  );
 }
 
 function renderProvider() {
@@ -62,14 +76,24 @@ function renderProvider() {
 
 function emitTreeSnapshot(revision: number, rootPanels: Panel[]) {
   act(() => {
-    treeUpdateHandler?.({ revision, rootPanels });
+    treeUpdateHandler?.({ revision, forest: [{ owner: "", rootPanels }] });
   });
+}
+
+function emitForest(revision: number, forest: Array<{ owner: string; rootPanels: Panel[] }>) {
+  act(() => treeUpdateHandler?.({ revision, forest }));
 }
 
 beforeEach(() => {
   treeUpdateHandler = null;
   getTreeSnapshot.mockReset();
+  // Most tests drive the event path explicitly; leave the startup recovery
+  // read pending so it cannot race those snapshots.
+  getTreeSnapshot.mockImplementation(() => new Promise(() => {}));
+  ensureOwnerTree.mockReset();
+  ensureOwnerTree.mockImplementation(() => new Promise(() => {}));
   listPinnedPanelIds.mockReset();
+  getProfile.mockClear();
 });
 
 afterEach(() => {
@@ -85,6 +109,7 @@ describe("PanelTreeProvider pin reconciliation", () => {
     emitTreeSnapshot(1, [panel("panel:tree/a")]);
 
     await waitFor(() => expect(screen.getByTestId("pins").textContent).toBe("panel:tree/a"));
+    expect(screen.getByTestId("roots").dataset["loading"]).toBe("true");
   });
 
   it("re-seeds on every tree update so a reused slot id drops its stale pin", async () => {
@@ -135,14 +160,34 @@ describe("PanelTreeProvider pin reconciliation", () => {
     expect(screen.getByTestId("pins").textContent).toBe("panel:tree/x");
   });
 
-  it("initializes from the subscription snapshot without a separate tree RPC", async () => {
+  it("loads the authoritative forest on mount to trigger account first attach", async () => {
     listPinnedPanelIds.mockResolvedValue([]);
+    const snapshot = {
+      revision: 1,
+      forest: [{ owner: "alice", rootPanels: [panel("panel:tree/a")] }],
+    };
+    ensureOwnerTree.mockResolvedValue(snapshot);
+    getTreeSnapshot.mockResolvedValue(snapshot);
 
     renderProvider();
-    emitTreeSnapshot(1, [panel("panel:tree/a")]);
 
     await waitFor(() => expect(screen.getByTestId("roots").textContent).toBe("panel:tree/a"));
-    expect(getTreeSnapshot).not.toHaveBeenCalled();
+    expect(screen.getByTestId("roots").dataset["loading"]).toBe("false");
+    expect(ensureOwnerTree).toHaveBeenCalledOnce();
+    expect(getTreeSnapshot).toHaveBeenCalledOnce();
     expect(listPinnedPanelIds).toHaveBeenCalled();
+  });
+
+  it("orders the verified account's owner group before other members", async () => {
+    listPinnedPanelIds.mockResolvedValue([]);
+    renderProvider();
+    emitForest(1, [
+      { owner: "bob", rootPanels: [panel("bob-root")] },
+      { owner: "alice", rootPanels: [panel("alice-root")] },
+    ]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("roots").textContent).toBe("alice-root,bob-root")
+    );
   });
 });

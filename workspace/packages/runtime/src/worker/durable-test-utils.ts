@@ -14,14 +14,20 @@ export class MockWebSocket {
   closeCode?: number;
   closeReason?: string;
   private attachment: unknown = undefined;
-  send(data: string) { this.sent.push(data); }
+  send(data: string) {
+    this.sent.push(data);
+  }
   close(code?: number, reason?: string) {
     this.closed = true;
     this.closeCode = code;
     this.closeReason = reason;
   }
-  serializeAttachment(value: unknown) { this.attachment = value; }
-  deserializeAttachment() { return this.attachment; }
+  serializeAttachment(value: unknown) {
+    this.attachment = value;
+  }
+  deserializeAttachment() {
+    return this.attachment;
+  }
 }
 
 interface AcceptedWebSocket {
@@ -80,7 +86,9 @@ function createSqlProxy(db: Database) {
         while (stmt.step()) rows.push(stmt.getAsObject() as Record<string, unknown>);
         stmt.free();
         return {
-          toArray() { return rows; },
+          toArray() {
+            return rows;
+          },
           one() {
             if (rows.length === 0) throw new Error("Expected one row, got none");
             return rows[0]!;
@@ -93,8 +101,12 @@ function createSqlProxy(db: Database) {
           db.run(query, bindings as BindParams);
         }
         return {
-          toArray() { return []; },
-          one() { throw new Error("No rows from mutation"); },
+          toArray() {
+            return [];
+          },
+          one() {
+            throw new Error("No rows from mutation");
+          },
         };
       }
     },
@@ -119,6 +131,8 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
   RPC_AUTH_TOKEN: "test-token",
   WORKER_SOURCE: "test",
   WORKER_CLASS_NAME: "TestDO",
+  WORKERD_SESSION_ID: "test-session",
+  WORKERD_BOOT_GENERATION: "1",
 };
 
 /**
@@ -135,7 +149,7 @@ export async function createTestDO<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DOClass: new (ctx: any, env: any) => T,
   env?: Record<string, unknown>,
-  opts?: { db?: Database },
+  opts?: { db?: Database }
 ): Promise<TestDOResult<T>> {
   const SQL = await getSqlJs();
   // Reuse an existing db to simulate hibernation (fresh DO, same durable storage).
@@ -172,8 +186,16 @@ export async function createTestDO<T>(
           sqlProxy.exec(`RELEASE ${savepoint}`);
           return result;
         } catch (err) {
-          try { sqlProxy.exec(`ROLLBACK TO ${savepoint}`); } catch { /* ignore */ }
-          try { sqlProxy.exec(`RELEASE ${savepoint}`); } catch { /* ignore */ }
+          try {
+            sqlProxy.exec(`ROLLBACK TO ${savepoint}`);
+          } catch {
+            /* ignore */
+          }
+          try {
+            sqlProxy.exec(`RELEASE ${savepoint}`);
+          } catch {
+            /* ignore */
+          }
           throw err;
         }
       },
@@ -182,10 +204,12 @@ export async function createTestDO<T>(
       acceptedWebSockets.push({ ws, tags: tags ?? [] });
     },
     getWebSockets(tag?: string) {
-      if (tag) return acceptedWebSockets.filter(s => s.tags.includes(tag)).map(s => s.ws);
-      return acceptedWebSockets.map(s => s.ws);
+      if (tag) return acceptedWebSockets.filter((s) => s.tags.includes(tag)).map((s) => s.ws);
+      return acceptedWebSockets.map((s) => s.ws);
     },
-    blockConcurrencyWhile<T>(fn: () => Promise<T>) { return fn(); },
+    blockConcurrencyWhile<T>(fn: () => Promise<T>) {
+      return fn();
+    },
   };
 
   const mergedEnv = { ...AGENTIC_ENV_DEFAULTS, ...env };

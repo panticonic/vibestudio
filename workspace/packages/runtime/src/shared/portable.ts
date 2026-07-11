@@ -5,9 +5,10 @@
  * these scattered re-exports, so "portable" is a single declared contract rather
  * than a per-barrel accident.
  *
- * Everything here is import-free / SSR-safe (verified): pure string/path/context
- * helpers, the zod schema lib, the contract-definition helper, and the gateway
- * fetch factory. NO panel globals, DOM, or RPC singletons.
+ * Everything here is side-effect-free / SSR-safe (verified): pure
+ * string/path/context/link helpers, the zod schema lib, the contract-definition
+ * helper, and the gateway fetch factory. NO panel globals, DOM, or RPC
+ * singletons.
  */
 
 import { helpfulNamespace } from "./helpfulNamespace.js";
@@ -23,7 +24,8 @@ export { parseContextId, isValidContextId, getInstanceId } from "../core/context
 export { normalizePath, getFileName, resolvePath } from "./pathUtils.js";
 
 // Panel-link builder (SSR-guarded) + gateway fetch factory
-export { buildPanelLink } from "../core/panelLinks.js";
+export { buildPanelLink, buildPanelDeepLink, buildPanelShareLink } from "../core/panelLinks.js";
+export type { BuildPanelLinkOptions } from "../core/panelLinks.js";
 export { createGatewayFetch } from "./gatewayFetch.js";
 export type { GatewayFetch, GatewayFetchConfig } from "./gatewayFetch.js";
 

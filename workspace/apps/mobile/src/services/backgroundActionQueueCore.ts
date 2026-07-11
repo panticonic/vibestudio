@@ -30,7 +30,10 @@ interface WorkspaceMutationEnvelope {
   mutations: QueuedWorkspaceMutation[];
 }
 
-export function loadPendingActions(raw: string | null | undefined, now = Date.now()): QueuedBackgroundAction[] {
+export function loadPendingActions(
+  raw: string | null | undefined,
+  now = Date.now()
+): QueuedBackgroundAction[] {
   if (!raw) return [];
 
   try {
@@ -54,30 +57,37 @@ export function serializePendingActions(actions: QueuedBackgroundAction[]): stri
 export function enqueueAction(
   actions: QueuedBackgroundAction[],
   action: QueuedBackgroundAction,
-  now = Date.now(),
+  now = Date.now()
 ): QueuedBackgroundAction[] {
-  const pending = pruneStaleActions(actions, now).filter((entry) => entry.approvalId !== action.approvalId);
+  const pending = pruneStaleActions(actions, now).filter(
+    (entry) => entry.approvalId !== action.approvalId
+  );
   return [...pending, action];
 }
 
 export function clearAction(
   actions: QueuedBackgroundAction[],
-  approvalId: string,
+  approvalId: string
 ): QueuedBackgroundAction[] {
   return actions.filter((entry) => entry.approvalId !== approvalId);
 }
 
 export function pruneStaleActions(
   actions: QueuedBackgroundAction[],
-  now = Date.now(),
+  now = Date.now()
 ): QueuedBackgroundAction[] {
   return actions.filter((entry) => now - entry.queuedAt <= BACKGROUND_ACTION_QUEUE_TTL_MS);
 }
 
-export function loadWorkspaceMutations(raw: string | null | undefined, now = Date.now()): QueuedWorkspaceMutation[] {
+export function loadWorkspaceMutations(
+  raw: string | null | undefined,
+  now = Date.now()
+): QueuedWorkspaceMutation[] {
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as Partial<WorkspaceMutationEnvelope> | QueuedWorkspaceMutation[];
+    const parsed = JSON.parse(raw) as
+      | Partial<WorkspaceMutationEnvelope>
+      | QueuedWorkspaceMutation[];
     const mutations = Array.isArray(parsed) ? parsed : parsed.mutations;
     if (!Array.isArray(mutations)) return [];
     return pruneStaleWorkspaceMutations(mutations.filter(isQueuedWorkspaceMutation), now);
@@ -93,22 +103,24 @@ export function serializeWorkspaceMutations(mutations: QueuedWorkspaceMutation[]
 export function enqueueWorkspaceMutation(
   mutations: QueuedWorkspaceMutation[],
   mutation: QueuedWorkspaceMutation,
-  now = Date.now(),
+  now = Date.now()
 ): QueuedWorkspaceMutation[] {
-  const pending = pruneStaleWorkspaceMutations(mutations, now).filter((entry) => entry.id !== mutation.id);
+  const pending = pruneStaleWorkspaceMutations(mutations, now).filter(
+    (entry) => entry.id !== mutation.id
+  );
   return [...pending, mutation];
 }
 
 export function clearWorkspaceMutation(
   mutations: QueuedWorkspaceMutation[],
-  id: string,
+  id: string
 ): QueuedWorkspaceMutation[] {
   return mutations.filter((entry) => entry.id !== id);
 }
 
 export function pruneStaleWorkspaceMutations(
   mutations: QueuedWorkspaceMutation[],
-  now = Date.now(),
+  now = Date.now()
 ): QueuedWorkspaceMutation[] {
   return mutations.filter((entry) => now - entry.queuedAt <= BACKGROUND_ACTION_QUEUE_TTL_MS);
 }
@@ -137,25 +149,25 @@ export function serializeDeepLink(approvalId: string): string {
 function isQueuedBackgroundAction(value: unknown): value is QueuedBackgroundAction {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<QueuedBackgroundAction>;
-  return typeof candidate.approvalId === "string" &&
+  return (
+    typeof candidate.approvalId === "string" &&
     isBackgroundDecision(candidate.decision) &&
-    typeof candidate.queuedAt === "number";
+    typeof candidate.queuedAt === "number"
+  );
 }
 
 function isQueuedWorkspaceMutation(value: unknown): value is QueuedWorkspaceMutation {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<QueuedWorkspaceMutation>;
-  return typeof candidate.id === "string" &&
+  return (
+    typeof candidate.id === "string" &&
     typeof candidate.service === "string" &&
     typeof candidate.method === "string" &&
     Array.isArray(candidate.args) &&
-    typeof candidate.queuedAt === "number";
+    typeof candidate.queuedAt === "number"
+  );
 }
 
 export function isBackgroundDecision(value: unknown): value is BackgroundApprovalDecision {
-  return value === "once" ||
-    value === "session" ||
-    value === "version" ||
-    value === "repo" ||
-    value === "deny";
+  return value === "once" || value === "session" || value === "version" || value === "deny";
 }

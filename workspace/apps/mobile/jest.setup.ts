@@ -82,6 +82,8 @@ jest.mock(
     default: {
       setString: jest.fn(),
       getString: jest.fn(async () => ""),
+      hasImage: jest.fn(async () => false),
+      getImageJPG: jest.fn(async () => ""),
     },
   }),
   { virtual: true }
@@ -100,7 +102,6 @@ jest.mock("react-native-safe-area-context", () => ({
 const { NativeModules } = jest.requireActual("react-native");
 NativeModules.VibestudioMobileHost = {
   firebaseConfigured: true,
-  clearCredentials: jest.fn(async () => undefined),
   resetToNativeBootstrap: jest.fn(async () => ({ reloading: true })),
   appendBundleChunk: jest.fn(async () => undefined),
   finalizeBundleWrite: jest.fn(async () => ({ localPath: "/bundle.js" })),

@@ -5,12 +5,9 @@
  * loads, so the URL only needs to point at the static panel bundle.
  */
 
-import {
-  isManagedHost,
-  parsePanelUrl as parseSharedPanelUrl,
-} from "@vibestudio/shared/shell/urlParsing";
+import { isManagedHost, parsePanelUrl } from "@vibestudio/shared/shell/urlParsing";
 
-export { isManagedHost };
+export { isManagedHost, parsePanelUrl };
 
 /**
  * Panels are served from the loopback asset façade on every platform, so the
@@ -44,7 +41,9 @@ export interface HostConfig {
  */
 export function parseHostConfig(serverUrl: string): HostConfig {
   // Manual parsing instead of `new URL()` — Hermes doesn't fully implement URL API
-  const match = serverUrl.trim().match(/^(https?):\/\/(\[[^\]]+\]|[^/?#:@]+)(?::(\d+))?(\/[^?#]*)?$/);
+  const match = serverUrl
+    .trim()
+    .match(/^(https?):\/\/(\[[^\]]+\]|[^/?#:@]+)(?::(\d+))?(\/[^?#]*)?$/);
   if (!match) throw new Error(`Invalid server URL: ${serverUrl}`);
   const [, protocol, host, port, rawPath] = match;
   if (!protocol || !host) throw new Error(`Invalid server URL: ${serverUrl}`);
@@ -66,11 +65,7 @@ export function parseHostConfig(serverUrl: string): HostConfig {
  *
  * @returns The URL string to load in the WebView
  */
-export function buildPanelUrl(
-  source: string,
-  contextId: string,
-  hostConfig: HostConfig,
-): string {
+export function buildPanelUrl(source: string, contextId: string, hostConfig: HostConfig): string {
   // Panels load from a fixed loopback origin (the on-device asset façade), never
   // a remote server: panel RPC rides the postMessage bridge, not a direct
   // socket. `hostConfig.port` is the loopback façade port; protocol/host are
@@ -80,30 +75,6 @@ export function buildPanelUrl(
   const origin = `http://${LOOPBACK_PANEL_HOST}${portSuffix}${hostConfig.basePath ?? ""}`;
   const encodedPath = encodeURIComponent(source).replace(/%2F/g, "/");
   return `${origin}/${encodedPath}/?contextId=${encodeURIComponent(contextId)}`;
-}
-
-function normalizeBasePath(basePath: string): string {
-  if (!basePath || basePath === "/") return "";
-  return basePath.startsWith("/") ? basePath.replace(/\/+$/, "") : `/${basePath.replace(/\/+$/, "")}`;
-}
-
-function stripBasePath(url: string, basePath: string): string | null {
-  const normalizedBasePath = normalizeBasePath(basePath);
-  if (!normalizedBasePath) return url;
-
-  const match = url.match(/^(https?:\/\/[^/?#]+)([^?#]*)(\?[^#]*)?(#.*)?$/i);
-  if (!match) return null;
-  const [, origin, rawPath = "/", query = "", hash = ""] = match;
-  const path = rawPath || "/";
-  if (path !== normalizedBasePath && !path.startsWith(`${normalizedBasePath}/`)) return null;
-  const nextPath = path.slice(normalizedBasePath.length) || "/";
-  return `${origin}${nextPath}${query}${hash}`;
-}
-
-export function parsePanelUrl(url: string, externalHost: string, basePath = "") {
-  const stripped = stripBasePath(url, basePath);
-  if (!stripped) return null;
-  return parseSharedPanelUrl(stripped, externalHost);
 }
 
 /**

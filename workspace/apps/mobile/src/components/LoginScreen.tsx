@@ -22,7 +22,7 @@ import {
   authErrorAtom,
 } from "../state/authAtoms";
 import { connectionStatusAtom } from "../state/connectionAtoms";
-import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
+import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { VibestudioLogo } from "./VibestudioLogo";
 
@@ -47,7 +47,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const setAuthError = useSetAtom(authErrorAtom);
   const setConnectionStatus = useSetAtom(connectionStatusAtom);
   const setShellClient = useSetAtom(shellClientAtom);
-  const setPanelTree = useSetAtom(panelTreeAtom);
+  const setPanelForest = useSetAtom(panelForestAtom);
   const authLoading = useAtomValue(authLoadingAtom);
   const authError = useAtomValue(authErrorAtom);
 
@@ -118,7 +118,6 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         }
         const credentials: Credentials = {
           deviceId: stored.deviceId,
-          serverId: stored.pairing.srv ?? "",
         };
 
         const client = new ShellClient({
@@ -126,8 +125,8 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           onStatusChange: (status) => {
             setConnectionStatus(status);
           },
-          onTreeUpdated: (tree) => {
-            setPanelTree(tree);
+          onTreeUpdated: (snapshot) => {
+            setPanelForest(snapshot);
           },
         });
         pendingClient = client;
@@ -171,7 +170,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     setAuthLoading,
     setAuthenticated,
     setConnectionStatus,
-    setPanelTree,
+    setPanelForest,
     setServerUrlAtom,
     setShellClient,
   ]);

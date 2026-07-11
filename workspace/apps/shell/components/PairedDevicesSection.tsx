@@ -3,10 +3,23 @@ import { Badge, Box, Button, Callout, Code, Dialog, Flex, Table, Text } from "@r
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import QRCode from "qrcode-terminal/vendor/QRCode/index.js";
 import QRErrorCorrectLevel from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js";
-import { remoteCred, type DeviceRecord, type PairingInvite } from "../shell/client";
+import {
+  account,
+  remoteCred,
+  type DeviceRecord,
+  type PairingInvite,
+  type ShellAccountProfile,
+} from "../shell/client";
 
-export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: string }) {
+export function PairedDevicesSection({
+  currentDeviceId,
+  workspaceName,
+}: {
+  currentDeviceId?: string;
+  workspaceName: string;
+}) {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
+  const [owners, setOwners] = useState<Record<string, ShellAccountProfile>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [invite, setInvite] = useState<PairingInvite | null>(null);
@@ -21,7 +34,9 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   const load = async () => {
     try {
       setError(null);
-      setDevices(await remoteCred.listDevices());
+      const next = await remoteCred.listDevices();
+      setDevices(next);
+      setOwners(await account.resolveProfiles([...new Set(next.map((device) => device.userId))]));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -38,7 +53,7 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   }, [connectOpen, invite]);
 
   useEffect(() => {
-    if (!connectOpen || !invite || pairedDevice) return;
+    if (!connectOpen || !invite || pairedDevice || Date.now() >= invite.expiresAt) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -62,7 +77,11 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   const revoke = async (deviceId: string) => {
     setBusyId(deviceId);
     try {
-      await remoteCred.revokeDevice(deviceId);
+      const result = await remoteCred.revokeDevice(deviceId);
+      if (result.currentDevice) {
+        await remoteCred.relaunch();
+        return;
+      }
       await load();
     } catch (err) {
       setError((err as Error).message);
@@ -79,7 +98,8 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
     try {
       setError(null);
       setKnownDeviceIds(new Set(devices.map((device) => device.deviceId)));
-      setInvite(await remoteCred.createPairingInvite());
+      setInvite(await remoteCred.pairDevice({ workspace: workspaceName }));
+      setNow(Date.now());
       setConnectOpen(true);
     } catch (err) {
       setError((err as Error).message);
@@ -89,16 +109,23 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   };
 
   const copyInvite = async () => {
-    if (!invite) return;
-    await navigator.clipboard.writeText(invite.pairUrl);
-    setCopyLabel("Copied");
+    if (!invite || Date.now() >= invite.expiresAt) return;
+    try {
+      await navigator.clipboard.writeText(invite.pairUrl);
+      setCopyLabel("Copied");
+    } catch (err) {
+      setCopyLabel("Copy failed");
+      setError(`Could not copy the pairing link: ${(err as Error).message}`);
+    }
   };
 
   const remainingMs = invite ? Math.max(0, invite.expiresAt - now) : 0;
   const remainingSeconds = Math.ceil(remainingMs / 1000);
-  const remaining = `${Math.floor(remainingSeconds / 60)}:${String(
-    remainingSeconds % 60
-  ).padStart(2, "0")}`;
+  const expired = !!invite && remainingMs === 0;
+  const remaining = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(
+    2,
+    "0"
+  )}`;
 
   return (
     <Flex direction="column" gap="2" mt="4">
@@ -108,7 +135,7 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
         </Text>
         <Flex gap="2">
           <Button size="1" variant="soft" disabled={inviteBusy} onClick={() => void createInvite()}>
-            {inviteBusy ? "Creating..." : "Connect a phone"}
+            {inviteBusy ? "Creating…" : "Connect a device"}
           </Button>
           <Button size="1" variant="soft" onClick={() => void load()}>
             Refresh
@@ -117,14 +144,26 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
       </Flex>
       <Dialog.Root open={connectOpen} onOpenChange={setConnectOpen}>
         <Dialog.Content maxWidth="560px">
-          <Dialog.Title>Connect a phone</Dialog.Title>
+          <Dialog.Title>Connect another device</Dialog.Title>
           {invite ? (
             <Flex direction="column" gap="4">
               <Flex gap="4" align="start" wrap="wrap">
-                <PairingQrCode value={invite.pairUrl} size={248} />
+                {expired ? (
+                  <Callout.Root color="amber" style={{ flex: "1 1 248px" }}>
+                    <Callout.Icon>
+                      <ExclamationTriangleIcon />
+                    </Callout.Icon>
+                    <Callout.Text>
+                      This pairing link expired. Generate a new link before connecting the device.
+                    </Callout.Text>
+                  </Callout.Root>
+                ) : (
+                  <PairingQrCode value={invite.pairUrl} size={248} />
+                )}
                 <Flex direction="column" gap="3" style={{ minWidth: 0, flex: "1 1 220px" }}>
                   <Text size="2">
-                    Scan this QR with the phone camera. No app yet? The link walks you through install.
+                    Scan this QR with the new device. The link opens Vibestudio and securely pairs
+                    it with your account.
                   </Text>
                   <Text size="2">
                     Server <Code>{invite.srv ?? invite.serverId}</Code>
@@ -135,21 +174,36 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
                   <Badge color={pairedDevice ? "green" : "gray"} style={{ width: "fit-content" }}>
                     {pairedDevice
                       ? `Paired ${pairedDevice.label || pairedDevice.platform || "device"}`
-                      : "Waiting for device..."}
+                      : expired
+                        ? "Invite expired"
+                        : "Waiting for device..."}
                   </Badge>
                 </Flex>
               </Flex>
-              <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
-                <Code>{invite.pairUrl}</Code>
-              </Box>
+              {!expired ? (
+                <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
+                  <Code>{invite.pairUrl}</Code>
+                </Box>
+              ) : null}
               <Flex justify="between" align="center">
                 <Text size="1" color="gray">
                   Pairing code {invite.code}
                 </Text>
                 <Flex gap="2">
-                  <Button size="2" variant="soft" onClick={() => void copyInvite()}>
-                    {copyLabel}
-                  </Button>
+                  {expired ? (
+                    <Button
+                      size="2"
+                      variant="soft"
+                      disabled={inviteBusy}
+                      onClick={() => void createInvite()}
+                    >
+                      {inviteBusy ? "Generating…" : "Generate new link"}
+                    </Button>
+                  ) : (
+                    <Button size="2" variant="soft" onClick={() => void copyInvite()}>
+                      {copyLabel}
+                    </Button>
+                  )}
                   <Dialog.Close>
                     <Button size="2">Done</Button>
                   </Dialog.Close>
@@ -181,6 +235,7 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeaderCell>Label</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>Owner</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell>Platform</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell>Created</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell>Last used</Table.ColumnHeaderCell>
@@ -195,6 +250,9 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
             return (
               <Table.Row key={device.deviceId}>
                 <Table.Cell>{device.label}</Table.Cell>
+                <Table.Cell>
+                  {owners[device.userId] ? `@${owners[device.userId]!.handle}` : device.userId}
+                </Table.Cell>
                 <Table.Cell>{device.platform ?? "unknown"}</Table.Cell>
                 <Table.Cell>{formatTime(device.createdAt)}</Table.Cell>
                 <Table.Cell>{formatTime(device.lastUsedAt)}</Table.Cell>

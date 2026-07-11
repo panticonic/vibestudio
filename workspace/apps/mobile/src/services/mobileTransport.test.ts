@@ -18,14 +18,26 @@ const mockLoadShellCredential = loadShellCredential as jest.MockedFunction<
   typeof loadShellCredential
 >;
 const mockReconnectViaWebRtc = reconnectViaWebRtc as jest.MockedFunction<typeof reconnectViaWebRtc>;
+const DEVICE_ID = `dev_${"d".repeat(24)}`;
+const REFRESH_TOKEN = "r".repeat(43);
 
 const storedCredential: StoredShellCredential = {
-  deviceId: "dev_123",
-  refreshToken: "refresh_123",
-  pairing: {
+  schemaVersion: 3,
+  deviceId: DEVICE_ID,
+  refreshToken: REFRESH_TOKEN,
+  controlPairing: {
+    room: "room-control",
+    fp: "AA".repeat(32),
+    sig: "ws://127.0.0.1:8798",
+    v: 2,
+    ice: "all",
+    srv: "Test server",
+  },
+  workspacePairing: {
     room: "room-123",
     fp: "AA".repeat(32),
     sig: "ws://127.0.0.1:8798",
+    v: 2,
     ice: "all",
     srv: "Test server",
   },
@@ -34,7 +46,7 @@ const storedCredential: StoredShellCredential = {
 
 function makeRpc(overrides: Partial<RpcClient> = {}): RpcClient {
   return {
-    selfId: "shell:dev_123",
+    selfId: `shell:${DEVICE_ID}`,
     call: jest.fn(),
     emit: jest.fn(),
     on: jest.fn(() => jest.fn()),
@@ -47,7 +59,7 @@ function makeRpc(overrides: Partial<RpcClient> = {}): RpcClient {
 function makeSession(overrides: Partial<WebRtcSession> = {}): WebRtcSession {
   return {
     sid: "shell-session",
-    callerId: jest.fn(() => "shell:dev_123"),
+    callerId: jest.fn(() => `shell:${DEVICE_ID}`),
     isClosed: jest.fn(() => false),
     close: jest.fn(),
     onMessage: jest.fn(() => jest.fn()),
@@ -64,8 +76,8 @@ function makeSession(overrides: Partial<WebRtcSession> = {}): WebRtcSession {
 function makeConnection(overrides: Partial<WebRtcConnection> = {}): WebRtcConnection {
   const session = overrides.session ?? makeSession();
   return {
-    callerId: "shell:dev_123",
-    deviceId: "dev_123",
+    callerId: `shell:${DEVICE_ID}`,
+    deviceId: DEVICE_ID,
     rpc: overrides.rpc ?? makeRpc(),
     session,
     transport:
@@ -96,7 +108,7 @@ describe("MobileRpcClient WebRTC transport", () => {
 
     expect(mockLoadShellCredential).toHaveBeenCalledTimes(1);
     expect(mockReconnectViaWebRtc).toHaveBeenCalledWith(storedCredential, expect.any(Function));
-    expect(client.selfId).toBe("shell:dev_123");
+    expect(client.selfId).toBe(`shell:${DEVICE_ID}`);
     expect(client.status).toBe("connected");
     await expect(client.call("main", "demo.hello", ["world"])).resolves.toEqual({ ok: true });
     expect(rpc.call).toHaveBeenCalledWith("main", "demo.hello", ["world"], undefined);

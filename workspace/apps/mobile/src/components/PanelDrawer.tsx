@@ -1,8 +1,7 @@
 /**
  * PanelDrawer -- Drawer content showing the panel tree as a FlatList.
  *
- * Uses `panelShell.getTree()` to get the tree, flattens it with
- * depth/indent levels, and renders PanelTreeItem for each node.
+ * Renders the canonical owner-grouped panel forest with explicit owner bands.
  *
  * Features:
  * - Flattened tree with collapse/expand
@@ -11,7 +10,7 @@
  * - Swipe-to-archive on individual items
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -26,7 +25,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { useAtomValue, useSetAtom } from "jotai";
-import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
+import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
@@ -37,33 +36,16 @@ import { buildPanelChromeState, isBrowserPanelSource } from "@vibestudio/shared/
 import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
+import {
+  buildMobilePanelForestRows,
+  mobilePanelRoots,
+  type MobileOwnerProfile,
+  type MobilePanelForestRow,
+} from "../shellCore/panelForest";
 
 interface PanelDrawerProps {
   /** Called when a panel is selected; parent should close the drawer */
   onSelectPanel: (panelId: string) => void;
-}
-
-/**
- * Flatten the panel tree into a list respecting collapsed state.
- * Collapsed panels' children are hidden from the list.
- */
-function flattenTree(panels: Panel[], collapsedIds: Set<string>, depth = 0): FlatPanelItem[] {
-  const result: FlatPanelItem[] = [];
-  for (const panel of panels) {
-    const isCollapsed = collapsedIds.has(panel.id);
-    result.push({
-      id: panel.id,
-      title: panel.title,
-      depth,
-      childCount: panel.children.length,
-      isCollapsed,
-    });
-    // Only recurse into children if not collapsed
-    if (panel.children.length > 0 && !isCollapsed) {
-      result.push(...flattenTree(panel.children, collapsedIds, depth + 1));
-    }
-  }
-  return result;
 }
 
 function findPanelById(panels: Panel[], panelId: string): Panel | null {
@@ -77,8 +59,8 @@ function findPanelById(panels: Panel[], panelId: string): Panel | null {
 
 export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const shellClient = useAtomValue(shellClientAtom);
-  const panelTree = useAtomValue(panelTreeAtom);
-  const setPanelTree = useSetAtom(panelTreeAtom);
+  const panelForest = useAtomValue(panelForestAtom);
+  const setPanelForest = useSetAtom(panelForestAtom);
   const colors = useAtomValue(themeColorsAtom);
   const activePanelId = useAtomValue(activePanelIdAtom);
   const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
@@ -86,15 +68,51 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
+  const [ownerProfiles, setOwnerProfiles] = useState<Map<string, MobileOwnerProfile>>(new Map());
+
+  const panelRoots = useMemo(() => mobilePanelRoots(panelForest.forest), [panelForest]);
+  const ownerIds = useMemo(
+    () => panelForest.forest.map((group) => group.owner).filter(Boolean),
+    [panelForest]
+  );
+  useEffect(() => {
+    if (!shellClient) {
+      setOwnerProfiles(new Map());
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const profiles = await shellClient.resolveAccountProfiles(ownerIds);
+        if (!cancelled) setOwnerProfiles(new Map(Object.entries(profiles)));
+      } catch {
+        // Keep the last successful labels during a transient reconnect.
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [ownerIds, shellClient]);
 
   // Build the collapsed set from the shell client's registry
   const collapsedIds = useMemo(() => {
     if (!shellClient) return new Set<string>();
     return new Set(shellClient.panels.getCollapsedIds());
-  }, [shellClient, panelTree]); // panelTree dependency triggers re-compute on tree changes
+  }, [shellClient, panelForest]);
 
-  // Flatten tree with collapse awareness
-  const flatItems = useMemo(() => flattenTree(panelTree, collapsedIds), [panelTree, collapsedIds]);
+  const flatItems = useMemo(
+    () =>
+      buildMobilePanelForestRows(
+        panelForest.forest,
+        collapsedIds,
+        shellClient?.currentUserId ?? null,
+        ownerProfiles
+      ),
+    [collapsedIds, ownerProfiles, panelForest, shellClient]
+  );
 
   const handleRefresh = useCallback(async () => {
     if (!shellClient) return;
@@ -103,12 +121,12 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       // Re-init forces a fresh fetch from the server
       await shellClient.panels.refresh();
       // Update the atom so the UI re-renders with the new tree
-      setPanelTree(shellClient.panels.getTree());
+      setPanelForest(shellClient.panels.getTreeSnapshot());
     } catch {
       // Offline -- ignore
     }
     setRefreshing(false);
-  }, [shellClient, setPanelTree]);
+  }, [shellClient, setPanelForest]);
 
   const handlePanelPress = useCallback(
     (panelId: string) => {
@@ -128,7 +146,10 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const handleArchive = useCallback(
     (panelId: string) => {
       if (!shellClient) return;
-      void shellClient.panels.archive(panelId);
+      void shellClient.panels
+        .archive(panelId)
+        .then(() => shellClient.panels.refresh())
+        .catch(() => {});
     },
     [shellClient]
   );
@@ -150,7 +171,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const performPanelCommand = useCallback(
     (command: PanelCommandId, panelId: string) => {
       if (!shellClient) return;
-      const panel = findPanelById(panelTree, panelId);
+      const panel = findPanelById(panelRoots, panelId);
       if (!panel) return;
       const snapshot = getCurrentSnapshot(panel);
 
@@ -184,20 +205,21 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           }
           return;
         case "archive":
-          void shellClient.panels.archive(panelId).then(() => {
-            setPanelTree(shellClient.panels.getTree());
-          });
+          void shellClient.panels
+            .archive(panelId)
+            .then(() => shellClient.panels.refresh())
+            .catch(() => {});
           return;
         default:
           onSelectPanel(panelId);
       }
     },
-    [onSelectPanel, panelTree, setPanelTree, shellClient, togglePanelPin]
+    [onSelectPanel, panelRoots, shellClient, togglePanelPin]
   );
 
   const handlePanelLongPress = useCallback(
     (panelId: string) => {
-      const panel = findPanelById(panelTree, panelId);
+      const panel = findPanelById(panelRoots, panelId);
       if (!panel) return;
       const commands = getAvailablePanelCommands(
         { chrome: buildPanelChromeState({ panel }), isPinned: pinnedPanelIds.has(panelId) },
@@ -228,7 +250,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
         { text: "Cancel", style: "cancel" },
       ]);
     },
-    [panelTree, performPanelCommand, pinnedPanelIds]
+    [panelRoots, performPanelCommand, pinnedPanelIds]
   );
 
   const handleSettingsPress = useCallback(() => {
@@ -236,18 +258,37 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   }, [navigation]);
 
   const renderItem = useCallback(
-    ({ item }: { item: FlatPanelItem }) => (
-      <PanelTreeItem
-        item={item}
-        isActive={item.id === activePanelId}
-        isPinned={pinnedPanelIds.has(item.id)}
-        colors={colors}
-        onPress={handlePanelPress}
-        onLongPress={handlePanelLongPress}
-        onToggleCollapse={handleToggleCollapse}
-        onArchive={handleArchive}
-      />
-    ),
+    ({ item }: { item: MobilePanelForestRow }) => {
+      if (item.kind === "owner") {
+        return (
+          <View style={styles.ownerHeader} accessibilityRole="header">
+            <View
+              style={[styles.ownerDot, { backgroundColor: item.color ?? colors.textSecondary }]}
+            />
+            <Text style={[styles.ownerLabel, { color: colors.textSecondary }]}>{item.label}</Text>
+          </View>
+        );
+      }
+      const panelItem: FlatPanelItem = {
+        id: item.panel.id,
+        title: item.panel.title,
+        depth: item.depth,
+        childCount: item.panel.children.length,
+        isCollapsed: item.isCollapsed,
+      };
+      return (
+        <PanelTreeItem
+          item={panelItem}
+          isActive={panelItem.id === activePanelId}
+          isPinned={pinnedPanelIds.has(panelItem.id)}
+          colors={colors}
+          onPress={handlePanelPress}
+          onLongPress={handlePanelLongPress}
+          onToggleCollapse={handleToggleCollapse}
+          onArchive={handleArchive}
+        />
+      );
+    },
     [
       activePanelId,
       pinnedPanelIds,
@@ -259,7 +300,11 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     ]
   );
 
-  const keyExtractor = useCallback((item: FlatPanelItem) => item.id, []);
+  const keyExtractor = useCallback(
+    (item: MobilePanelForestRow) =>
+      item.kind === "owner" ? `owner:${item.owner || "workspace"}` : `panel:${item.panel.id}`,
+    []
+  );
 
   return (
     <View
@@ -320,6 +365,27 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 8,
+  },
+  ownerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 36,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  ownerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  ownerLabel: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
   },
   emptyContainer: {
     flex: 1,

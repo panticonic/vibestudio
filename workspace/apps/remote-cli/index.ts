@@ -1,25 +1,20 @@
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
 import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
 import { createServerWsTransport } from "@vibestudio/shared/shell/transport/serverWsTransport";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import {
+  hubControlMethods,
+  type HubPairingInvite,
+} from "@vibestudio/shared/serviceSchemas/hubControl";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import WebSocket from "ws";
 
-export interface PairingInviteLike {
-  connectUrl?: string;
-  code: string;
-  deepLink?: string;
-  pairUrl?: string;
-  expiresAt?: number;
-}
-
-export function formatPairingInvite(invite: PairingInviteLike): string {
-  const expires = invite.expiresAt ? `\nExpires: ${new Date(invite.expiresAt).toISOString()}` : "";
-  const lines = [`Pairing code: ${invite.code}`];
-  if (invite.pairUrl) lines.push(`Pair URL: ${invite.pairUrl}`);
-  else if (invite.deepLink) lines.push(`Deep link: ${invite.deepLink}`);
-  return `${lines.join("\n")}${expires}`;
+export function formatPairingInvite(invite: HubPairingInvite): string {
+  return [
+    `Pairing code: ${invite.code}`,
+    `Pair URL: ${invite.pairUrl}`,
+    `Expires: ${new Date(invite.expiresAt).toISOString()}`,
+  ].join("\n");
 }
 
 function printBootstrapSummary(): void {
@@ -90,8 +85,10 @@ export async function main(): Promise<void> {
     workspaceMethods,
     (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
-  const authClient = createTypedServiceClient("auth", authMethods, (service, method, args) =>
-    rpc.call("main", `${service}.${method}`, args)
+  const hubControlClient = createTypedServiceClient(
+    "hubControl",
+    hubControlMethods,
+    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
   printBootstrapSummary();
   const workspace = await workspaceClient.getInfo();
@@ -109,8 +106,8 @@ export async function main(): Promise<void> {
   const command = process.env["VIBESTUDIO_TERMINAL_APP_COMMAND"] ?? "invite";
   if (command === "status") return;
   if (command === "invite") {
-    const invite = await authClient.createPairingInvite({ ttlMs: 10 * 60 * 1000 });
-    console.log(formatPairingInvite(invite));
+    const result = await hubControlClient.pairDevice({ ttlMs: 10 * 60 * 1000 });
+    console.log(formatPairingInvite(result.pairing));
   }
 
   process.on("message", (message) => {

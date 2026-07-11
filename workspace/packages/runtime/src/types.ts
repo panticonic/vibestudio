@@ -107,7 +107,8 @@ export interface ReaddirOptions {
 
 /**
  * Filesystem interface for panels and workers.
- * Compatible with Node's fs/promises and @vibestudio/git's FsPromisesLike.
+ * Closely follows Node's fs/promises. Symlink creation is intentionally absent
+ * because workspace RPC filesystems must not expose that escape primitive.
  */
 export interface RuntimeFs {
   /**
@@ -142,7 +143,7 @@ export interface RuntimeFs {
   // Extensions beyond FsPromisesLike
   rm(path: string, options?: RmOptions): Promise<void>;
   exists(path: string): Promise<boolean>;
-  // Additional methods for broader compatibility
+  // Full runtime filesystem operations
   access(path: string, mode?: number): Promise<void>;
   appendFile(path: string, data: string | RuntimeBinaryData): Promise<void>;
   copyFile(src: string, dest: string): Promise<void>;

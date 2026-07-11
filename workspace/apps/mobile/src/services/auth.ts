@@ -30,13 +30,11 @@ export function isMobileShellCallerId(callerId: string, deviceId?: string): bool
 
 export function isWorkspaceMobileHostCallerId(callerId: string, deviceId?: string): boolean {
   return (
-    isMobileShellCallerId(callerId, deviceId) ||
-    isWorkspaceMobileAppCallerId(callerId, deviceId)
+    isMobileShellCallerId(callerId, deviceId) || isWorkspaceMobileAppCallerId(callerId, deviceId)
   );
 }
 
 interface VibestudioMobileHostNative {
-  clearCredentials(): Promise<void>;
   resetToNativeBootstrap(): Promise<ResetToNativeBootstrapResult>;
   activatePreparedAppBundle(
     localPath: string,
@@ -51,10 +49,6 @@ function nativeHost(): VibestudioMobileHostNative {
     throw new Error("VibestudioMobileHost native module is unavailable");
   }
   return module;
-}
-
-export async function clearCredentials(): Promise<void> {
-  await nativeHost().clearCredentials();
 }
 
 export async function resetToNativeBootstrap(): Promise<ResetToNativeBootstrapResult> {

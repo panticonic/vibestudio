@@ -163,7 +163,7 @@ interface PanelDndProviderProps {
 }
 
 export function PanelDndProvider({ children }: PanelDndProviderProps) {
-  const { tree, panelMap } = usePanelTree();
+  const { allRootPanels, panelMap } = usePanelTree();
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -184,7 +184,10 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
   }, []);
 
   // Flatten tree for sortable context
-  const flattenedItems = useMemo(() => flattenTree(tree, collapsedIds), [tree, collapsedIds]);
+  const flattenedItems = useMemo(
+    () => flattenTree(allRootPanels, collapsedIds),
+    [allRootPanels, collapsedIds]
+  );
 
   // Refs for stable callbacks (avoids re-creating indentPanel/unindentPanel on every tree update)
   const flattenedItemsRef = useRef(flattenedItems);

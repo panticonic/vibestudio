@@ -33,7 +33,6 @@ Example:
 | Capability | Meaning |
 | --- | --- |
 | `panel-hosting` | App can manage host panel layout, visibility, theme CSS, overlays, and shell-like view controls. Use only for shell/chrome apps. |
-| `connection-management` | App can create pairing invites and participate in remote-client/device setup flows. |
 | `incoming-pair-links` | Electron app can receive `vibestudio://connect` deep links from the host. |
 | `notifications` | App can use notification surfaces or native notification permission where available. |
 | `open-external` | App can request system-browser external opens through host-gated APIs. |
@@ -62,15 +61,6 @@ as shell chrome. A panel-hosting app may:
 
 Only shell-like apps should declare it. Ordinary Electron apps should be panels
 unless they need trusted client authority.
-
-## `connection-management`
-
-`connection-management` lets an app create pairing invites through
-`auth.createPairingInvite`. This is needed for clients that help connect other
-clients to the server, such as a remote CLI or shell pairing UI.
-
-Long-lived device refresh tokens should stay in native/client credential
-storage. Workspace apps should use short-lived principal grants when possible.
 
 ## Filesystem Capabilities
 

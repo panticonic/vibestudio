@@ -32,11 +32,17 @@ import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import {
+  usePanelTree,
   usePanelDndTree,
   usePanelDndDrag,
+  useAccountProfiles,
+  useWorkspacePresence,
   INDENTATION_WIDTH,
   END_DROP_ZONE_ID,
   type FlattenedPanel,
+  type PanelForestGroup,
+  type ShellAccountProfile,
+  type WorkspacePresenceEntry,
 } from "../shell/hooks/index.js";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import { menu, panel } from "../shell/client.js";
@@ -52,6 +58,8 @@ import { assertPresent } from "../utils/assertPresent";
 // ============================================================================
 
 const ROW_HEIGHT = 26;
+/** Height of an owner band header row. */
+const OWNER_BAND_HEIGHT = 22;
 /** Left padding before the caret gutter of a depth-0 row. */
 const ROW_PADDING_LEFT = 8;
 /** Fixed-width gutter that holds the expand caret so titles align by depth. */
@@ -711,6 +719,160 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
 }
 
 // ============================================================================
+// Owner Bands (WP3 forest)
+// ============================================================================
+
+/**
+ * Display label for an owner band. Persistent account profiles provide names
+ * independently of transient online presence.
+ */
+function ownerBandLabel(
+  owner: string,
+  selfUserId: string | null,
+  profile: ShellAccountProfile | undefined
+): string {
+  if (owner === "") return "Workspace";
+  if (selfUserId !== null && owner === selfUserId) return "Your panels";
+  if (profile) {
+    const label = profile.displayName || `@${profile.handle}`;
+    return profile.revoked ? `${label} (revoked)` : label;
+  }
+  const suffix = owner.length > 10 ? `${owner.slice(0, 6)}…${owner.slice(-4)}` : owner;
+  return `Member ${suffix}`;
+}
+
+/**
+ * A small round presence dot: solid in the owner's colour when online, a hollow
+ * ring when the user is known-but-offline, nothing when we have no presence row
+ * for them. Attribution, not a security signal.
+ */
+function PresenceDot({
+  presence,
+  tint,
+}: {
+  presence: WorkspacePresenceEntry | undefined;
+  tint?: string;
+}) {
+  if (!presence) return null;
+  const dotColor = tint ?? "var(--accent-9)";
+  return (
+    <Box
+      aria-hidden
+      style={{
+        flexShrink: 0,
+        width: 7,
+        height: 7,
+        borderRadius: "50%",
+        backgroundColor: presence.online ? dotColor : "transparent",
+        border: presence.online ? "none" : `1px solid var(--gray-8)`,
+      }}
+    />
+  );
+}
+
+/**
+ * Labelled band separating one owner's trees from the next, dotted with that
+ * owner's WP8 workspace presence. Attribution only: every owner's trees below
+ * it stay fully inspectable and draggable.
+ */
+function OwnerBandHeader({
+  owner,
+  selfUserId,
+  profile,
+  presence,
+}: {
+  owner: string;
+  selfUserId: string | null;
+  profile: ShellAccountProfile | undefined;
+  presence: WorkspacePresenceEntry | undefined;
+}) {
+  const isSelf = selfUserId !== null && owner === selfUserId;
+  const label = ownerBandLabel(owner, selfUserId, profile);
+  // User-selected tints belong on the decorative presence dot. Keeping text
+  // on semantic theme colors preserves contrast in both appearances.
+  const labelColor = isSelf || owner === "" ? "var(--accent-11)" : "var(--gray-11)";
+  const endpoints = presence?.endpoints ?? 0;
+  return (
+    <Flex
+      align="center"
+      gap="2"
+      px="2"
+      style={{ height: OWNER_BAND_HEIGHT }}
+      role="heading"
+      aria-level={2}
+      aria-label={
+        presence
+          ? `Panels owned by ${label} (${presence.online ? "online" : "offline"})`
+          : `Panels owned by ${label}`
+      }
+    >
+      <PresenceDot presence={presence} tint={profile?.color} />
+      <Text
+        size="1"
+        weight="medium"
+        truncate
+        style={{
+          color: labelColor,
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+          fontSize: "10px",
+        }}
+      >
+        {label}
+      </Text>
+      {endpoints > 1 && (
+        <Text
+          size="1"
+          aria-label={`${endpoints} active connections`}
+          style={{ color: "var(--gray-8)", fontSize: "9px", flexShrink: 0 }}
+        >
+          ×{endpoints}
+        </Text>
+      )}
+      <Box style={{ flex: 1, height: 1, backgroundColor: "var(--gray-a4)" }} />
+    </Flex>
+  );
+}
+
+/** A virtualized sidebar row: an owner band header or a sortable panel item. */
+type SidebarRow = { kind: "owner-band"; owner: string } | { kind: "panel"; item: FlattenedPanel };
+
+/**
+ * Interleave owner band headers into the flattened item list at forest group
+ * boundaries. Every populated owner group gets a band, including a single
+ * group: dropping the header would silently restore the old single-user
+ * interpretation and make ownership change meaning as groups appear/disappear.
+ */
+function buildSidebarRows(
+  flattenedItems: FlattenedPanel[],
+  forest: PanelForestGroup[]
+): SidebarRow[] {
+  const populated = forest.filter((group) => group.rootPanels.length > 0);
+  // Owner of each group's roots, keyed by root panel id. Group order matches
+  // the flattened list because the flat tree is forest order flattened.
+  const ownerByRootId = new Map<string, string>();
+  for (const group of populated) {
+    for (const root of group.rootPanels) {
+      ownerByRootId.set(root.id, group.owner);
+    }
+  }
+
+  const rows: SidebarRow[] = [];
+  let currentOwner: string | null = null;
+  for (const item of flattenedItems) {
+    if (item.depth === 0) {
+      const owner = ownerByRootId.get(item.id);
+      if (owner !== undefined && owner !== currentOwner) {
+        rows.push({ kind: "owner-band", owner });
+        currentOwner = owner;
+      }
+    }
+    rows.push({ kind: "panel", item });
+  }
+  return rows;
+}
+
+// ============================================================================
 // Sidebar Component
 // ============================================================================
 
@@ -733,6 +895,14 @@ export function LazyPanelTreeSidebar({
   const setWorkspaceChooserOpen = useSetAtom(workspaceChooserDialogOpenAtom);
   const isTouch = useTouchDevice();
 
+  const { forest, selfUserId, selfIdentityError, treeLoadError, refreshTree } = usePanelTree();
+  const ownerIds = useMemo(
+    () => forest.map((group) => group.owner).filter((owner) => owner !== ""),
+    [forest]
+  );
+  const ownerProfiles = useAccountProfiles(ownerIds);
+  // WP8 §4 workspace presence answers only whether an owner is connected.
+  const presenceByUser = useWorkspacePresence();
   const { flattenedItems, collapsedIds, toggleCollapse, expandIds, indentPanel, unindentPanel } =
     usePanelDndTree();
 
@@ -741,6 +911,10 @@ export function LazyPanelTreeSidebar({
 
   // Per-row connector descriptors (rounded elbows + sibling stems).
   const guidesById = useMemo(() => buildGuides(flattenedItems), [flattenedItems]);
+
+  // Owner bands (WP3): one labelled section per owner group, own group first
+  // (ordering happens in PanelTreeContext), others visible & inspectable below.
+  const rows = useMemo(() => buildSidebarRows(flattenedItems, forest), [flattenedItems, forest]);
 
   // Auto-expand ancestors of selected panel (batched for performance)
   useEffect(() => {
@@ -789,25 +963,63 @@ export function LazyPanelTreeSidebar({
   // Virtual list — only mount items in/near the viewport.
   // +1 for the EndDropZone at the bottom.
   const virtualizer = useVirtualizer({
-    count: flattenedItems.length + 1,
+    count: rows.length + 1,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: (index) => (rows[index]?.kind === "owner-band" ? OWNER_BAND_HEIGHT : ROW_HEIGHT),
     overscan: 10,
   });
 
   // Scroll selected item into view via virtualizer
   useEffect(() => {
     if (selectedId) {
-      const index = flattenedItems.findIndex((item) => item.id === selectedId);
+      const index = rows.findIndex((row) => row.kind === "panel" && row.item.id === selectedId);
       if (index >= 0) {
         virtualizer.scrollToIndex(index, { align: "auto", behavior: "smooth" });
       }
     }
-  }, [selectedId, flattenedItems, virtualizer]);
+  }, [selectedId, rows, virtualizer]);
+
+  const diagnostics =
+    treeLoadError || selfIdentityError ? (
+      <Flex direction="column" gap="1" mx="1" mb="1">
+        {treeLoadError ? (
+          <Flex
+            role="alert"
+            align="center"
+            gap="2"
+            px="2"
+            py="1"
+            title={treeLoadError}
+            style={{ borderRadius: 4, background: "var(--red-a3)" }}
+          >
+            <Text size="1" style={{ color: "var(--red-11)", flex: 1 }}>
+              Panels could not be loaded.
+            </Text>
+            <Button size="1" variant="soft" color="red" onClick={() => void refreshTree()}>
+              Retry
+            </Button>
+          </Flex>
+        ) : null}
+        {selfIdentityError ? (
+          <Box
+            role="status"
+            px="2"
+            py="1"
+            title={selfIdentityError}
+            style={{ borderRadius: 4, background: "var(--amber-a3)" }}
+          >
+            <Text size="1" style={{ color: "var(--amber-11)" }}>
+              Account identity is reconnecting; owner order may be temporary.
+            </Text>
+          </Box>
+        ) : null}
+      </Flex>
+    ) : null;
 
   if (flattenedItems.length === 0) {
     return (
       <Flex direction="column" style={{ flex: 1, minHeight: 0 }}>
+        {diagnostics}
         <Flex
           direction="column"
           align="center"
@@ -848,6 +1060,7 @@ export function LazyPanelTreeSidebar({
 
   return (
     <Flex direction="column" style={{ flex: 1, minHeight: 0 }}>
+      {diagnostics}
       <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         <Box
           p="1"
@@ -858,7 +1071,7 @@ export function LazyPanelTreeSidebar({
         >
           {virtualItems.map((virtualRow) => {
             // Last virtual item is the EndDropZone
-            if (virtualRow.index === flattenedItems.length) {
+            if (virtualRow.index === rows.length) {
               return (
                 <Box
                   key="__end_drop_zone__"
@@ -879,7 +1092,30 @@ export function LazyPanelTreeSidebar({
               );
             }
 
-            const item = assertPresent(flattenedItems[virtualRow.index]);
+            const row = assertPresent(rows[virtualRow.index]);
+            if (row.kind === "owner-band") {
+              return (
+                <Box
+                  key={`__owner_band__${row.owner}`}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <OwnerBandHeader
+                    owner={row.owner}
+                    selfUserId={selfUserId}
+                    profile={ownerProfiles.get(row.owner)}
+                    presence={presenceByUser.get(row.owner)}
+                  />
+                </Box>
+              );
+            }
+
+            const item = row.item;
             return (
               <Box
                 key={item.id}

@@ -17,8 +17,7 @@ const DECISION_BY_DIGIT: Record<number, ApprovalDecisionId> = {
   1: "once",
   2: "session",
   3: "version",
-  4: "repo",
-  5: "deny",
+  4: "deny",
 };
 
 // The default session app (M3). Opening is on-demand; failure is shown inline.
@@ -68,7 +67,10 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
 
   // Track the global approval queue.
   const refreshPending = React.useCallback(() => {
-    void approvals.list().then(setPending).catch(() => {});
+    void approvals
+      .list()
+      .then(setPending)
+      .catch(() => {});
   }, [approvals]);
   React.useEffect(() => {
     refreshPending();
@@ -140,7 +142,10 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
           const decision = DECISION_BY_DIGIT[nav.digit];
           const target = list[selectedRef.current];
           if (decision && target) {
-            void approvals.resolve(target.approvalId, decision).then(refreshPending).catch(() => {});
+            void approvals
+              .resolve(target.approvalId, decision)
+              .then(refreshPending)
+              .catch(() => {});
           }
         }
         return;
@@ -186,9 +191,7 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
         pendingApprovals={pending.length}
       />
       {body}
-      <Text dimColor>
-        {"^P sessions  ^A approvals  ^L logs  ^N new  ^Q quit"}
-      </Text>
+      <Text dimColor>{"^P sessions  ^A approvals  ^L logs  ^N new  ^Q quit"}</Text>
     </Box>
   );
 }

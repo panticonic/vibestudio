@@ -518,7 +518,8 @@ describe("PanelHandle", () => {
 
   it("supports handle.click as a CDP automation convenience", async () => {
     const click = vi.fn(async () => undefined);
-    const page = { click };
+    const locator = vi.fn(() => ({ click }));
+    const page = { locator };
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
@@ -536,7 +537,8 @@ describe("PanelHandle", () => {
     await getPanelHandle("panel-1", "browser").click("button.submit");
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
-    expect(click).toHaveBeenCalledWith("button.submit");
+    expect(locator).toHaveBeenCalledWith("button.submit");
+    expect(click).toHaveBeenCalledWith();
     expect((globalThis as any).__vibestudioRequireAsync__).toHaveBeenCalledWith(
       "@workspace/cdp-client"
     );

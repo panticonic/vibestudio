@@ -52,7 +52,7 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
       rememberLoadError("__vibestudioLoadImport__", error);
-      // Fall through to the legacy async loader/dynamic import paths.
+      // Try the panel loader next, then native dynamic import outside the hosted runtime.
     }
   }
   const runtimeRequireAsync = (globalThis as Record<string, unknown>)[
@@ -134,7 +134,7 @@ export function createCdpAutomation(
     },
     click: async (selector) => {
       const p = await connectPage();
-      await p.click(selector);
+      await p.locator(selector).click();
     },
     screenshot: async (options) => {
       const p = await connectPage();

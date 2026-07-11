@@ -17,20 +17,20 @@ function panel(id: string): Panel {
 }
 
 describe("coercePanelTreeUpdate", () => {
-  it("accepts newer revisioned snapshots", () => {
+  it("accepts newer revisioned forest snapshots", () => {
     const root = panel("root");
 
     expect(
       coercePanelTreeUpdate(
         {
           revision: 3,
-          rootPanels: [root],
+          forest: [{ owner: "", rootPanels: [root] }],
         },
         2
       )
     ).toEqual({
       revision: 3,
-      rootPanels: [root],
+      forest: [{ owner: "", rootPanels: [root] }],
     });
   });
 
@@ -39,7 +39,7 @@ describe("coercePanelTreeUpdate", () => {
       coercePanelTreeUpdate(
         {
           revision: 2,
-          rootPanels: [panel("old")],
+          forest: [{ owner: "", rootPanels: [panel("old")] }],
         },
         3
       )
@@ -48,5 +48,9 @@ describe("coercePanelTreeUpdate", () => {
 
   it("rejects pre-cutover array snapshots", () => {
     expect(coercePanelTreeUpdate([panel("array")], 0)).toBeNull();
+  });
+
+  it("rejects pre-forest flat rootPanels snapshots", () => {
+    expect(coercePanelTreeUpdate({ revision: 1, rootPanels: [panel("flat")] }, 0)).toBeNull();
   });
 });

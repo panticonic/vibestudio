@@ -58,7 +58,7 @@ export function ApprovalsOverlay({
             <Box flexDirection="column" marginTop={1}>
               <ApprovalMarkdown source={summarize(current).detail} />
               <Text>
-                {"[1] once  [2] session  [3] version  [4] repo  [5] deny  · ↑/↓ select · Esc dismiss"}
+                {"[1] once  [2] session  [3] version  [4] deny  · ↑/↓ select · Esc dismiss"}
               </Text>
             </Box>
           ) : null}
@@ -107,7 +107,11 @@ function ApprovalMarkdown({ source }: { source: string }): React.ReactElement | 
   );
 }
 
-function ApprovalMarkdownInlineNodes({ nodes }: { nodes: ApprovalMarkdownInline[] }): React.ReactElement {
+function ApprovalMarkdownInlineNodes({
+  nodes,
+}: {
+  nodes: ApprovalMarkdownInline[];
+}): React.ReactElement {
   return (
     <>
       {nodes.map((node, index) => {

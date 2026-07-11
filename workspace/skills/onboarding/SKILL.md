@@ -98,7 +98,8 @@ chosen setup path.
 5. **First project** — Use the `workspace-dev` skill to scaffold and launch a panel
 6. **Connect devices** — If they want phone or remote-machine access, point them
    to Devices → Connect a phone, or the `remote-access` skill for
-   `vibestudio remote deploy` / `remote invite`
+   `vibestudio remote deploy`, `remote pair-device`, and (for root/admin)
+   `remote invite-user`
 7. **Explore** — Point to the `sandbox` skill for runtime API exploration
 
 ### Returning Users

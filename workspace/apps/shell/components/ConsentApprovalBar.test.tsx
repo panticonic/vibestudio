@@ -4,7 +4,10 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PendingUnitBatchApproval, PendingUserlandApproval } from "@vibestudio/shared/approvals";
+import type {
+  PendingUnitBatchApproval,
+  PendingUserlandApproval,
+} from "@vibestudio/shared/approvals";
 import type { ApprovalCardIntent } from "./approvalCardModel";
 
 type ListPendingFn = () => Promise<unknown[]>;
@@ -19,8 +22,11 @@ const shellClient = vi.hoisted(() => ({
   unsubscribe: vi.fn(() => Promise.resolve()),
   onRpcEvent: vi.fn((_event: string, _listener: (event: { payload: unknown }) => void) => () => {}),
   getText: vi.fn<(hash: string) => Promise<string | null>>(() => Promise.resolve("blob-text")),
-  getTreeSnapshot: vi.fn<() => Promise<{ rootPanels: unknown[] }>>(() =>
-    Promise.resolve({ rootPanels: [] })
+  getProfile: vi.fn(() =>
+    Promise.resolve({ userId: "alice", handle: "alice", displayName: "Alice", role: "member" })
+  ),
+  getTreeSnapshot: vi.fn<() => Promise<{ forest: { owner: string; rootPanels: unknown[] }[] }>>(
+    () => Promise.resolve({ forest: [] })
   ),
   navigate: vi.fn(() => Promise.resolve(null)),
   createPanel: vi.fn(() => Promise.resolve(null)),
@@ -49,6 +55,7 @@ vi.mock("../shell/client", () => ({
   events: { subscribe: shellClient.subscribe, unsubscribe: shellClient.unsubscribe },
   onRpcEvent: shellClient.onRpcEvent,
   blobstore: { getText: shellClient.getText },
+  account: { getProfile: shellClient.getProfile },
   panel: {
     getTreeSnapshot: shellClient.getTreeSnapshot,
     navigate: shellClient.navigate,
@@ -168,6 +175,12 @@ describe("ConsentApprovalBar coordinator", () => {
     shellClient.listPending.mockResolvedValue([]);
     shellClient.resolve.mockImplementation(() => Promise.resolve());
     shellClient.getText.mockResolvedValue("blob-text");
+    shellClient.getProfile.mockResolvedValue({
+      userId: "alice",
+      handle: "alice",
+      displayName: "Alice",
+      role: "member",
+    });
   });
 
   afterEach(() => {
@@ -282,14 +295,20 @@ describe("ConsentApprovalBar coordinator", () => {
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
-    const props = overlay.options?.props as { diffReview?: unknown[]; appearance?: string; blobResults?: unknown };
+    const props = overlay.options?.props as {
+      diffReview?: unknown[];
+      appearance?: string;
+      blobResults?: unknown;
+    };
     expect(Array.isArray(props.diffReview)).toBe(true);
     expect(props.appearance).toBe("light");
     expect(props.blobResults).toEqual({});
   });
 
   it("renders as today (no diffReview) when the approval carries no diff payload", async () => {
-    shellClient.listPending.mockResolvedValueOnce([userlandApproval({ approvalId: "plain", title: "Plain" })]);
+    shellClient.listPending.mockResolvedValueOnce([
+      userlandApproval({ approvalId: "plain", title: "Plain" }),
+    ]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
     const props = overlay.options?.props as { diffReview?: unknown };
@@ -309,7 +328,11 @@ describe("ConsentApprovalBar coordinator", () => {
     });
 
     // A hash NOT present in the payload is ignored (never fetched).
-    emit({ type: "fetch-blob", hash: "not-in-payload", approvalId: "d1" } as unknown as ApprovalCardIntent);
+    emit({
+      type: "fetch-blob",
+      hash: "not-in-payload",
+      approvalId: "d1",
+    } as unknown as ApprovalCardIntent);
     await Promise.resolve();
     expect(shellClient.getText).not.toHaveBeenCalledWith("not-in-payload");
   });
@@ -324,7 +347,7 @@ describe("ConsentApprovalBar coordinator", () => {
   };
 
   it("creates a gad-browser panel with the target on an open-in-gad-browser intent", async () => {
-    shellClient.getTreeSnapshot.mockResolvedValueOnce({ rootPanels: [] });
+    shellClient.getTreeSnapshot.mockResolvedValueOnce({ forest: [] });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -345,9 +368,14 @@ describe("ConsentApprovalBar coordinator", () => {
 
   it("reuses and focuses an existing gad-browser panel instead of creating one", async () => {
     shellClient.getTreeSnapshot.mockResolvedValueOnce({
-      rootPanels: [
-        { id: "other", snapshot: { source: "panels/chat" }, children: [] },
-        { id: "gadb", snapshot: { source: "panels/gad-browser" }, children: [] },
+      forest: [
+        {
+          owner: "alice",
+          rootPanels: [
+            { id: "other", snapshot: { source: "panels/chat" }, children: [] },
+            { id: "gadb", snapshot: { source: "panels/gad-browser" }, children: [] },
+          ],
+        },
       ],
     });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
@@ -367,6 +395,31 @@ describe("ConsentApprovalBar coordinator", () => {
       expect(shellClient.navigateToId).toHaveBeenCalledWith("gadb");
     });
     expect(shellClient.createPanel).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate another owner's gad-browser panel", async () => {
+    shellClient.getTreeSnapshot.mockResolvedValueOnce({
+      forest: [
+        {
+          owner: "bob",
+          rootPanels: [
+            { id: "bob-gadb", snapshot: { source: "panels/gad-browser" }, children: [] },
+          ],
+        },
+      ],
+    });
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({
+      type: "open-in-gad-browser",
+      target: gadTarget,
+      approvalId: "d1",
+    } as unknown as ApprovalCardIntent);
+
+    await waitFor(() => expect(shellClient.createPanel).toHaveBeenCalled());
+    expect(shellClient.navigate).not.toHaveBeenCalled();
   });
 
   it("keeps decisions working while a diff approval is active", async () => {

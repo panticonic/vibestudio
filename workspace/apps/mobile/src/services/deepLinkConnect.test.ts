@@ -1,9 +1,9 @@
 import { parseConnectDeepLink } from "./deepLinkConnect";
 
 const FP = "AA".repeat(32);
-const CODE = "a".repeat(24);
+const CODE = "a".repeat(32);
 function makeLink(sig = "wss://signal.example/"): string {
-  return `vibestudio://connect?room=room-1111-2222&fp=${FP}&code=${CODE}&sig=${encodeURIComponent(sig)}&v=2`;
+  return `vibestudio://connect?room=room-1111-2222&fp=${FP}&code=${CODE}&sig=${encodeURIComponent(sig)}&v=2&ice=all`;
 }
 
 describe("deepLinkConnect", () => {
@@ -25,7 +25,7 @@ describe("deepLinkConnect", () => {
   });
 
   it("rejects a fingerprint that is not a SHA-256", () => {
-    const link = `vibestudio://connect?room=room-1111-2222&fp=DE:AD:BE:EF&code=${CODE}&sig=${encodeURIComponent("wss://signal.example/")}`;
+    const link = `vibestudio://connect?room=room-1111-2222&fp=DE:AD:BE:EF&code=${CODE}&sig=${encodeURIComponent("wss://signal.example/")}&v=2&ice=all`;
     expect(parseConnectDeepLink(link).kind).toBe("error");
   });
 
