@@ -1,5 +1,10 @@
 import { Badge, Button, Callout, Flex, Select, Text, TextArea } from "@radix-ui/themes";
-import { Cross2Icon, ExclamationTriangleIcon, PaperPlaneIcon, PersonIcon } from "@radix-ui/react-icons";
+import {
+  Cross2Icon,
+  ExclamationTriangleIcon,
+  PaperPlaneIcon,
+  PersonIcon,
+} from "@radix-ui/react-icons";
 import { useEffect, useRef, useState } from "react";
 import type { GmailComposeCardState, GmailContactCandidate } from "@workspace/gmail/card-types";
 import { useContainerWidth } from "./use-container-width";
@@ -19,15 +24,22 @@ function splitRecipients(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
-export function reduce(state: GmailComposeState, update: Partial<GmailComposeState>): GmailComposeState {
+export function reduce(
+  state: GmailComposeState,
+  update: Partial<GmailComposeState>
+): GmailComposeState {
   return { ...state, ...update };
 }
 
 export function Pill({ state }: { state: GmailComposeState }) {
   return (
     <Flex align="center" gap="1">
-      <Text size="1" weight="medium">Compose</Text>
-      <Text size="1" color="gray">{state.subject || "(no subject)"}</Text>
+      <Text size="1" weight="medium">
+        Compose
+      </Text>
+      <Text size="1" color="gray">
+        {state.subject || "(no subject)"}
+      </Text>
       {state.status ? <StatusBadge status={state.status} /> : null}
     </Flex>
   );
@@ -107,7 +119,9 @@ function RecipientField({
           background: "var(--color-surface)",
         }}
       >
-        <Text size="1" color="gray" style={{ minWidth: 24 }}>{label}</Text>
+        <Text size="1" color="gray" style={{ minWidth: 24 }}>
+          {label}
+        </Text>
         {chips.map((chip) => (
           <Badge key={chip} size="1" variant="soft">
             {chip}
@@ -153,7 +167,9 @@ function RecipientField({
         />
       </Flex>
       {invalid ? (
-        <Text size="1" color="red">Enter a bare email address (name@example.com)</Text>
+        <Text size="1" color="red">
+          Enter a bare email address (name@example.com)
+        </Text>
       ) : null}
       {suggestions.length > 0 ? (
         <Flex
@@ -194,9 +210,13 @@ function RecipientField({
             >
               <Flex align="center" gap="2" style={{ minWidth: 0 }}>
                 <PersonIcon />
-                <Text size="1" weight="medium">{candidate.displayName ?? candidate.email}</Text>
+                <Text size="1" weight="medium">
+                  {candidate.displayName ?? candidate.email}
+                </Text>
                 {candidate.displayName ? (
-                  <Text size="1" color="gray" truncate>{candidate.email}</Text>
+                  <Text size="1" color="gray" truncate>
+                    {candidate.email}
+                  </Text>
                 ) : null}
               </Flex>
               <Text size="1" color="gray">
@@ -254,7 +274,7 @@ export default function GmailCompose({
     state.status === "sent" ||
     state.status === "discarded";
 
-  // Wire-compat with the compose handler: recipients stay comma-joined strings.
+  // The compose contract carries recipients as comma-joined strings.
   // draftId lets a re-save update the existing Gmail draft instead of
   // creating a duplicate.
   const payload = {
@@ -294,27 +314,35 @@ export default function GmailCompose({
   return (
     <Flex ref={ref} direction="column" gap="2">
       <Flex align="center" justify="between" gap="2">
-        <Text size="3" weight="bold">{state.threadId ? "Reply" : "Compose"}</Text>
+        <Text size="3" weight="bold">
+          {state.threadId ? "Reply" : "Compose"}
+        </Text>
         {state.status ? <StatusBadge status={state.status} /> : null}
       </Flex>
       {state.status === "review" ? (
         <Callout.Root color="amber" size="1">
-          <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
           <Callout.Text>
-            Agent-drafted mail — review the recipient, subject, and body before sending. Nothing
-            is sent until you click Send.
+            Agent-drafted mail — review the recipient, subject, and body before sending. Nothing is
+            sent until you click Send.
           </Callout.Text>
         </Callout.Root>
       ) : null}
       {state.error || localError ? (
         <Callout.Root color="red" size="1">
-          <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
           <Callout.Text>{state.error ?? localError}</Callout.Text>
         </Callout.Root>
       ) : null}
       {state.fromOptions && state.fromOptions.length > 1 ? (
         <Flex align="center" gap="2">
-          <Text size="1" color="gray">From</Text>
+          <Text size="1" color="gray">
+            From
+          </Text>
           <Select.Root size="2" value={from} onValueChange={setFrom} disabled={disabled}>
             <Select.Trigger style={{ flex: 1, minWidth: 0 }} />
             <Select.Content>
@@ -330,7 +358,9 @@ export default function GmailCompose({
       <RecipientField label="To" chips={to} setChips={setTo} disabled={disabled} chat={chat} />
       {!hasTo && candidates.length > 0 ? (
         <Flex gap="1" wrap="wrap" align="center">
-          <Text size="1" color="gray">Suggested:</Text>
+          <Text size="1" color="gray">
+            Suggested:
+          </Text>
           {candidates.slice(0, 5).map((candidate) => (
             <Button
               key={candidate.email}
@@ -340,7 +370,9 @@ export default function GmailCompose({
               onClick={() => setTo([...to, candidate.email])}
             >
               <PersonIcon />
-              {candidate.displayName ? `${candidate.displayName} <${candidate.email}>` : candidate.email}
+              {candidate.displayName
+                ? `${candidate.displayName} <${candidate.email}>`
+                : candidate.email}
               {candidate.sentTo > 0 ? ` · ${candidate.sentTo} sent` : ""}
             </Button>
           ))}
@@ -349,10 +381,22 @@ export default function GmailCompose({
       {ccBccVisible ? (
         <Flex gap="2" wrap="wrap" direction={compact ? "column" : "row"}>
           <div style={compact ? undefined : { flex: "1 1 180px" }}>
-            <RecipientField label="Cc" chips={cc} setChips={setCc} disabled={disabled} chat={chat} />
+            <RecipientField
+              label="Cc"
+              chips={cc}
+              setChips={setCc}
+              disabled={disabled}
+              chat={chat}
+            />
           </div>
           <div style={compact ? undefined : { flex: "1 1 180px" }}>
-            <RecipientField label="Bcc" chips={bcc} setChips={setBcc} disabled={disabled} chat={chat} />
+            <RecipientField
+              label="Bcc"
+              chips={bcc}
+              setChips={setBcc}
+              disabled={disabled}
+              chat={chat}
+            />
           </div>
         </Flex>
       ) : (
@@ -393,9 +437,12 @@ export default function GmailCompose({
       <Flex gap="2" wrap="wrap" direction={compact ? "column" : "row"}>
         {reviewingSend ? (
           <Callout.Root color="amber" size="1" style={{ width: "100%" }}>
-            <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+            <Callout.Icon>
+              <ExclamationTriangleIcon />
+            </Callout.Icon>
             <Callout.Text>
-              Sending to {payload.to || "(missing recipient)"} with subject {subject || "(no subject)"}.
+              Sending to {payload.to || "(missing recipient)"} with subject{" "}
+              {subject || "(no subject)"}.
             </Callout.Text>
           </Callout.Root>
         ) : null}
@@ -411,7 +458,7 @@ export default function GmailCompose({
               setReviewingSend(true);
               return;
             }
-            void call("send", payload, "send");
+            void call("gmail_send", payload, "send");
           }}
         >
           <PaperPlaneIcon />{" "}

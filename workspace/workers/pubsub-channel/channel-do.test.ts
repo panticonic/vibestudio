@@ -11,6 +11,7 @@ import { GadWorkspaceDO } from "../gad-store/index.js";
 import { PubSubChannel } from "./channel-do.js";
 
 type TestDO<T> = Awaited<ReturnType<typeof createTestDO<T>>>;
+const sessionWrappedInstances = new WeakSet<object>();
 
 function deferred<T = void>(): {
   promise: Promise<T>;
@@ -30,13 +31,34 @@ function setRpcCaller(
   instance: PubSubChannel,
   callerId: string | null,
   callerKind: string | null,
-  callerPanelId?: string | null
+  callerPanelId?: string | null,
+  userId?: string
 ): void {
+  if (!sessionWrappedInstances.has(instance)) {
+    sessionWrappedInstances.add(instance);
+    const original = instance.subscribe.bind(instance);
+    (instance as unknown as { subscribe: PubSubChannel["subscribe"] }).subscribe = (
+      participantId,
+      metadata
+    ) =>
+      original(participantId, {
+        __participantSessionId: `${participantId}:test-session`,
+        ...metadata,
+      });
+  }
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
   (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind =
     callerKind;
   (instance as unknown as { _currentRpcCallerPanelId: string | null })._currentRpcCallerPanelId =
     callerPanelId ?? null;
+  (instance as unknown as { _currentVerifiedCaller: unknown })._currentVerifiedCaller = callerId
+    ? {
+        callerId,
+        callerKind: callerKind ?? "unknown",
+        ...(callerPanelId ? { callerPanelId } : {}),
+        ...(userId ? { userId } : {}),
+      }
+    : null;
 }
 
 function agenticEvent(kind = "message.completed") {
@@ -83,6 +105,7 @@ function messageTypeRegisteredEvent(
 async function createGadBackedChannel(
   options: {
     emitted?: unknown[];
+    emittedTargets?: string[];
     channelKey?: string;
     gad?: TestDO<GadWorkspaceDO>;
     blobstorePutText?: (value: string) => Promise<{ digest: string; size: number }>;
@@ -99,7 +122,8 @@ async function createGadBackedChannel(
   // ({ client, respond, deliver }) behind the `rpc` getter; pre-setting
   // `_connectionless` short-circuits the real (network) client construction.
   const mockClient = {
-    emit: vi.fn(async (_target: string, _event: string, payload: unknown) => {
+    emit: vi.fn(async (target: string, _event: string, payload: unknown) => {
+      options.emittedTargets?.push(target);
       options.emitted?.push(payload);
     }),
     call: vi.fn(async (target: string, method: string, args: unknown[]) => {
@@ -138,6 +162,15 @@ async function createGadBackedChannel(
         return blobs.get(String(args[0] ?? "")) ?? null;
       }
       if (target === gadTarget) {
+        const callerId = `do:workers/pubsub-channel:PubSubChannel:${options.channelKey ?? "channel-1"}`;
+        const internal = gad.instance as unknown as {
+          _currentRpcCallerId: string | null;
+          _currentRpcCallerKind: string | null;
+          _currentVerifiedCaller: unknown;
+        };
+        internal._currentRpcCallerId = callerId;
+        internal._currentRpcCallerKind = "do";
+        internal._currentVerifiedCaller = { callerId, callerKind: "do" };
         const callable = gad.instance as unknown as Record<
           string,
           (...methodArgs: unknown[]) => unknown
@@ -224,7 +257,7 @@ describe("PubSubChannel", () => {
     await expect(
       instance.subscribe("panel:phantom", { contextId: "ctx-1", name: "Fake", type: "agent" })
     ).rejects.toThrow("Participant panel:phantom cannot be subscribed by caller agent:session-1");
-    await expect(instance.unsubscribe("panel:user")).rejects.toThrow(
+    await expect(instance.unsubscribe("panel:user", "panel:user:test-session")).rejects.toThrow(
       "unsubscribe: participant panel:user cannot be used by caller agent:session-1"
     );
     await expect(
@@ -246,6 +279,437 @@ describe("PubSubChannel", () => {
     await expect(
       instance.subscribe("shell:dev-1", { contextId: "ctx-1", name: "CLI", type: "client" })
     ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("canonicalizes one human across panels while preserving per-session delivery and ownership", async () => {
+    const emittedTargets: string[] = [];
+    const { instance, sql } = await createGadBackedChannel({ emittedTargets });
+
+    setRpcCaller(instance, "panel:nav-a", "panel", "panel:slot-a", "usr_alice");
+    const first = await instance.subscribe("panel:slot-a", {
+      contextId: "ctx-1",
+      name: "Chat panel A",
+      type: "panel",
+      __participantSessionId: "session-a",
+    });
+    setRpcCaller(instance, "panel:nav-b", "panel", "panel:slot-b", "usr_alice");
+    const second = await instance.subscribe("panel:slot-b", {
+      contextId: "ctx-1",
+      name: "Chat panel B",
+      type: "panel",
+      __participantSessionId: "session-b",
+    });
+
+    expect(first.participantId).toBe("user:usr_alice");
+    expect(second.participantId).toBe("user:usr_alice");
+    expect(sql.exec(`SELECT id FROM participants`).toArray()).toEqual([{ id: "user:usr_alice" }]);
+    expect(
+      sql
+        .exec(`SELECT session_id, delivery_id FROM participant_sessions ORDER BY session_id`)
+        .toArray()
+    ).toEqual([
+      { session_id: "session-a", delivery_id: "panel:slot-a" },
+      { session_id: "session-b", delivery_id: "panel:slot-b" },
+    ]);
+
+    emittedTargets.length = 0;
+    await instance.publish("user:usr_alice", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent(), {
+      idempotencyKey: "human-publish",
+    });
+    await Promise.resolve();
+    expect(new Set(emittedTargets)).toEqual(new Set(["panel:slot-a", "panel:slot-b"]));
+
+    // A second endpoint of the same account cannot keep alive or release the
+    // first endpoint's session even though both share the canonical actor id.
+    await expect(instance.touch("user:usr_alice", "session-a")).rejects.toThrow(
+      /different client endpoint/
+    );
+    await expect(instance.unsubscribe("user:usr_alice", "session-a")).rejects.toThrow(
+      /different client endpoint/
+    );
+    await instance.unsubscribe("user:usr_alice", "session-b");
+    expect(sql.exec(`SELECT id FROM participants`).toArray()).toHaveLength(1);
+
+    setRpcCaller(instance, "panel:nav-a", "panel", "panel:slot-a", "usr_alice");
+    await instance.unsubscribe("user:usr_alice", "session-a");
+    expect(sql.exec(`SELECT id FROM participants`).toArray()).toHaveLength(0);
+    await expect(instance.getChannelPresence()).resolves.toMatchObject({
+      entries: [
+        {
+          participantId: "user:usr_alice",
+          userId: "usr_alice",
+          status: "offline",
+          sessionCount: 0,
+          lastSeenAt: expect.any(Number),
+        },
+      ],
+    });
+  });
+
+  it("rolls back a newly-created participant when its delivery/session pair collides", async () => {
+    const { instance, sql } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice-nav", "panel", "panel:shared-slot", "usr_alice");
+    await instance.subscribe("panel:shared-slot", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "shared-session",
+    });
+
+    // A malformed host routing collision presents the same endpoint/session as
+    // a different verified account. The session UNIQUE constraint must roll
+    // back the identity INSERT from the same transaction.
+    setRpcCaller(instance, "panel:bob-nav", "panel", "panel:shared-slot", "usr_bob");
+    await expect(
+      instance.subscribe("panel:shared-slot", {
+        contextId: "ctx-1",
+        name: "Bob",
+        type: "panel",
+        __participantSessionId: "shared-session",
+      })
+    ).rejects.toThrow(/unique constraint/i);
+
+    expect(sql.exec(`SELECT id FROM participants ORDER BY id`).toArray()).toEqual([
+      { id: "user:usr_alice" },
+    ]);
+    expect(
+      sql
+        .exec(
+          `SELECT participant_id, session_id, delivery_id FROM participant_sessions ORDER BY participant_id`
+        )
+        .toArray()
+    ).toEqual([
+      {
+        participant_id: "user:usr_alice",
+        session_id: "shared-session",
+        delivery_id: "panel:shared-slot",
+      },
+    ]);
+  });
+
+  it("eager reconnect cleanup performs the canonical stale-session release", async () => {
+    const { instance, gad, sql } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice-a", "panel", "panel:alice-a", "usr_alice");
+    await instance.subscribe("panel:alice-a", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "stale-session",
+    });
+    sql.exec(`UPDATE participant_sessions SET last_seen = 0`);
+
+    const callTransport = (
+      instance as unknown as {
+        calls: { failPendingCallsTargeting(id: string, reason: string): Promise<void> };
+      }
+    ).calls;
+    const failPending = vi.spyOn(callTransport, "failPendingCallsTargeting");
+
+    setRpcCaller(instance, "panel:alice-b", "panel", "panel:alice-b", "usr_alice");
+    await instance.subscribe("panel:alice-b", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "fresh-session",
+    });
+
+    expect(failPending).toHaveBeenCalledWith("user:usr_alice", "disconnect");
+    expect(sql.exec(`SELECT session_id, delivery_id FROM participant_sessions`).toArray()).toEqual([
+      { session_id: "fresh-session", delivery_id: "panel:alice-b" },
+    ]);
+    expect(sql.exec(`SELECT id FROM participants`).toArray()).toEqual([{ id: "user:usr_alice" }]);
+    expect(sql.exec(`SELECT * FROM presence_last_seen`).toArray()).toEqual([]);
+    const presence = gad.sql
+      .exec(`SELECT payload_ref_json FROM log_events WHERE payload_kind = 'presence' ORDER BY seq`)
+      .toArray()
+      .map((row) => JSON.parse(String(row["payload_ref_json"])) as Record<string, unknown>);
+    expect(presence).toContainEqual(
+      expect.objectContaining({ action: "leave", leaveReason: "disconnect" })
+    );
+  });
+
+  it("derives online, idle, away, and offline from activity without treating heartbeat as activity", async () => {
+    const { instance, sql } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+    await instance.subscribe("panel:alice", {
+      contextId: "ctx-1",
+      name: "Alice panel",
+      type: "panel",
+      __participantSessionId: "alice-session",
+    });
+    const internal = instance as unknown as { advancePresenceStatuses(): void };
+    const now = Date.now();
+
+    sql.exec(
+      `UPDATE participants SET last_active_at = ?, presence_status = 'online' WHERE id = ?`,
+      now - 6 * 60_000,
+      "user:usr_alice"
+    );
+    await instance.touch("user:usr_alice", "alice-session");
+    internal.advancePresenceStatuses();
+    expect((await instance.getChannelPresence()).entries[0]?.status).toBe("idle");
+
+    sql.exec(
+      `UPDATE participants SET last_active_at = ?, presence_status = 'idle' WHERE id = ?`,
+      now - 31 * 60_000,
+      "user:usr_alice"
+    );
+    internal.advancePresenceStatuses();
+    expect((await instance.getChannelPresence()).entries[0]?.status).toBe("away");
+
+    await instance.setTypingState("user:usr_alice", true);
+    expect((await instance.getChannelPresence()).entries[0]?.status).toBe("online");
+  });
+
+  it("supports durable channel invites without fabricating presence", async () => {
+    const { instance, gad } = await createGadBackedChannel({
+      rpcCall: (_target, method, args) => {
+        if (method === "account.isMember") return args[0] === "usr_bob";
+        if (method === "account.resolveProfiles") {
+          return { usr_bob: { handle: "bob" } };
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+    await instance.subscribe("panel:alice", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "alice-session",
+    });
+    const before = gad.sql.exec(`SELECT COUNT(*) AS count FROM log_events`).one()["count"];
+    await expect(instance.addMember({ userId: "usr_bob" })).resolves.toMatchObject({
+      userId: "usr_bob",
+      memberId: "user:usr_bob",
+      handle: "bob",
+      alreadyMember: false,
+    });
+    expect(
+      gad.sql
+        .exec(
+          `SELECT user_id, notification_id, kind FROM user_notifications WHERE user_id = ?`,
+          "usr_bob"
+        )
+        .toArray()
+    ).toEqual([
+      {
+        user_id: "usr_bob",
+        notification_id: "channel.invite:channel-1",
+        kind: "channel.invite",
+      },
+    ]);
+    const after = gad.sql.exec(`SELECT COUNT(*) AS count FROM log_events`).one()["count"];
+    expect(after).toBe(before);
+
+    setRpcCaller(instance, "panel:bob", "panel", "panel:bob", "usr_bob");
+    await expect(instance.listInvitesForMe()).resolves.toMatchObject({
+      invites: [{ channelId: "channel-1", memberId: "user:usr_bob" }],
+    });
+    await expect(instance.acknowledgeInvite()).resolves.toEqual({ acknowledged: true });
+    await expect(instance.acknowledgeInvite()).resolves.toEqual({ acknowledged: false });
+    await expect(instance.listInvitesForMe()).resolves.toEqual({ invites: [] });
+
+    // Re-adding an existing member refreshes profile data but does not invent a
+    // second pending invitation after the first was acknowledged.
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+    await expect(instance.addMember({ userId: "usr_bob" })).resolves.toMatchObject({
+      alreadyMember: true,
+    });
+    setRpcCaller(instance, "panel:bob", "panel", "panel:bob", "usr_bob");
+    await expect(instance.listInvitesForMe()).resolves.toEqual({ invites: [] });
+
+    // Remove and a subsequent fresh add both converge the workspace index.
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+    await expect(instance.removeMember({ userId: "usr_bob" })).resolves.toEqual({ removed: true });
+    await expect(instance.addMember({ userId: "usr_bob" })).resolves.toMatchObject({
+      alreadyMember: false,
+    });
+    expect(gad.sql.exec(`SELECT COUNT(*) AS count FROM user_notifications`).one()["count"]).toBe(1);
+    await expect(instance.removeMember({ userId: "usr_bob" })).resolves.toEqual({ removed: true });
+    expect(gad.sql.exec(`SELECT COUNT(*) AS count FROM user_notifications`).one()["count"]).toBe(0);
+
+    await expect(instance.addMember({ userId: "usr_outside" })).rejects.toThrow(
+      /not a member of this workspace/
+    );
+    await expect(instance.addMember({ userId: "user:usr_bob" })).rejects.toThrow(
+      /bare workspace account id/
+    );
+  });
+
+  it("retries a lost workspace invite-index write from the durable channel journal", async () => {
+    let failFirstPut = true;
+    const { instance, gad, sql } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (method === "account.isMember") return args[0] === "usr_bob";
+        if (method === "account.resolveProfiles") return { usr_bob: { handle: "bob" } };
+        if (
+          target.includes("GadWorkspaceDO") &&
+          method === "putChannelMembership" &&
+          failFirstPut
+        ) {
+          failFirstPut = false;
+          throw new Error("simulated lost GAD response");
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+
+    await expect(instance.addMember({ userId: "usr_bob" })).rejects.toThrow(
+      /invitation delivery is pending/
+    );
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM invite_index_ops`).one()["count"]).toBe(1);
+    expect(gad.sql.exec(`SELECT COUNT(*) AS count FROM user_notifications`).one()["count"]).toBe(0);
+
+    sql.exec(`UPDATE invite_index_ops SET updated_at = 0`);
+    await instance.alarm();
+
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM invite_index_ops`).one()["count"]).toBe(0);
+    expect(gad.sql.exec(`SELECT COUNT(*) AS count FROM user_notifications`).one()["count"]).toBe(1);
+  });
+
+  it("turns a pending invite put into cleanup when workspace membership was revoked", async () => {
+    let isWorkspaceMember = true;
+    let putAttempts = 0;
+    let deleteAttempts = 0;
+    const { instance, gad, sql } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (method === "account.isMember") return isWorkspaceMember && args[0] === "usr_bob";
+        if (method === "account.resolveProfiles") return { usr_bob: { handle: "bob" } };
+        if (target.includes("GadWorkspaceDO") && method === "putChannelMembership") {
+          putAttempts += 1;
+          throw new Error("simulated unavailable invite index");
+        }
+        if (target.includes("GadWorkspaceDO") && method === "deleteChannelMembership") {
+          deleteAttempts += 1;
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+
+    await expect(instance.addMember({ userId: "usr_bob" })).rejects.toThrow(
+      /invitation delivery is pending/
+    );
+    expect(putAttempts).toBe(1);
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM channel_members`).one()["count"]).toBe(1);
+
+    isWorkspaceMember = false;
+    sql.exec(`UPDATE invite_index_ops SET updated_at = 0`);
+    await instance.alarm();
+
+    expect(putAttempts).toBe(1);
+    expect(deleteAttempts).toBe(1);
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM channel_members`).one()["count"]).toBe(0);
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM invite_index_ops`).one()["count"]).toBe(0);
+    expect(gad.sql.exec(`SELECT COUNT(*) AS count FROM user_notifications`).one()["count"]).toBe(0);
+    await expect(instance.listMembers()).resolves.toEqual({ members: [] });
+  });
+
+  it("keeps remove as the final projection when an older add completes last", async () => {
+    const putStarted = deferred<void>();
+    const releasePut = deferred<void>();
+    let holdFirstPut = true;
+    const { instance, gad } = await createGadBackedChannel({
+      rpcCall: async (target, method, args) => {
+        if (method === "account.isMember") return args[0] === "usr_bob";
+        if (method === "account.resolveProfiles") return { usr_bob: { handle: "bob" } };
+        if (
+          target.includes("GadWorkspaceDO") &&
+          method === "putChannelMembership" &&
+          holdFirstPut
+        ) {
+          holdFirstPut = false;
+          putStarted.resolve(undefined);
+          await releasePut.promise;
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+
+    const add = instance.addMember({ userId: "usr_bob" });
+    await putStarted.promise;
+    await expect(instance.removeMember({ userId: "usr_bob" })).resolves.toEqual({ removed: true });
+    releasePut.resolve(undefined);
+    await expect(add).resolves.toMatchObject({ memberId: "user:usr_bob" });
+
+    expect(
+      gad.sql
+        .exec(
+          `SELECT action, revision FROM channel_membership_revisions
+            WHERE user_id = 'usr_bob' AND channel_id = 'channel-1'`
+        )
+        .toArray()
+    ).toEqual([{ action: "delete", revision: 2 }]);
+    expect(
+      gad.sql
+        .exec(
+          `SELECT 1 FROM channel_membership_index
+            WHERE user_id = 'usr_bob' AND channel_id = 'channel-1'`
+        )
+        .toArray()
+    ).toEqual([]);
+    expect(gad.sql.exec(`SELECT * FROM user_notifications`).toArray()).toEqual([]);
+  });
+
+  it("keeps add as the final projection when an older remove completes last", async () => {
+    const deleteStarted = deferred<void>();
+    const releaseDelete = deferred<void>();
+    let holdDelete = false;
+    const { instance, gad } = await createGadBackedChannel({
+      rpcCall: async (target, method, args) => {
+        if (method === "account.isMember") return args[0] === "usr_bob";
+        if (method === "account.resolveProfiles") return { usr_bob: { handle: "bob" } };
+        if (
+          target.includes("GadWorkspaceDO") &&
+          method === "deleteChannelMembership" &&
+          holdDelete
+        ) {
+          holdDelete = false;
+          deleteStarted.resolve(undefined);
+          await releaseDelete.promise;
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:alice", "panel", "panel:alice", "usr_alice");
+    await instance.addMember({ userId: "usr_bob" });
+
+    holdDelete = true;
+    const remove = instance.removeMember({ userId: "usr_bob" });
+    await deleteStarted.promise;
+    await expect(instance.addMember({ userId: "usr_bob" })).resolves.toMatchObject({
+      alreadyMember: false,
+    });
+    releaseDelete.resolve(undefined);
+    await expect(remove).resolves.toEqual({ removed: true });
+
+    expect(
+      gad.sql
+        .exec(
+          `SELECT action, revision FROM channel_membership_revisions
+            WHERE user_id = 'usr_bob' AND channel_id = 'channel-1'`
+        )
+        .toArray()
+    ).toEqual([{ action: "put", revision: 3 }]);
+    expect(
+      gad.sql
+        .exec(
+          `SELECT member_id FROM channel_membership_index
+            WHERE user_id = 'usr_bob' AND channel_id = 'channel-1'`
+        )
+        .toArray()
+    ).toEqual([{ member_id: "user:usr_bob" }]);
+    expect(
+      gad.sql
+        .exec(
+          `SELECT notification_id FROM user_notifications
+            WHERE user_id = 'usr_bob' AND notification_id = 'channel.invite:channel-1'`
+        )
+        .toArray()
+    ).toEqual([{ notification_id: "channel.invite:channel-1" }]);
   });
 
   it("sendAsCaller ignores an agent-supplied display handle", async () => {
@@ -286,7 +750,9 @@ describe("PubSubChannel", () => {
         type: "client",
       })
     ).rejects.toThrow(`Participant ${arbitraryLabel} cannot be subscribed by caller ${evalDoId}`);
-    await expect(instance.unsubscribe(arbitraryLabel)).rejects.toThrow(
+    await expect(
+      instance.unsubscribe(arbitraryLabel, `${arbitraryLabel}:test-session`)
+    ).rejects.toThrow(
       `unsubscribe: participant ${arbitraryLabel} cannot be used by caller ${evalDoId}`
     );
     await expect(
@@ -359,7 +825,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-1",
       name: "User",
       type: "panel",
-      handle: "user",
+      handle: "alice",
       methods: [
         {
           name: "eval",
@@ -1026,7 +1492,11 @@ describe("PubSubChannel", () => {
       channelKey: "channel-lf-parent",
       rpcCall: (target, method, args) => {
         // Sibling-channel resolve (fork parent): hand back THIS channel's own ref.
-        if (target === "main" && method === "workers.resolveService" && args[0] === "vibestudio.channel.v1") {
+        if (
+          target === "main" &&
+          method === "workers.resolveService" &&
+          args[0] === "vibestudio.channel.v1"
+        ) {
           return {
             source: "workers/pubsub-channel",
             className: "PubSubChannel",
@@ -2235,7 +2705,7 @@ describe("PubSubChannel", () => {
 
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
-    setRpcCaller(instance, null, null);
+    setRpcCaller(instance, targetPid, "do");
     await instance.subscribe(targetPid, {
       contextId: "ctx-1",
       name: "Agent",
@@ -2320,7 +2790,7 @@ describe("PubSubChannel", () => {
       { code: "1 + 1" },
       { invocationId: "invocation-left", transportCallId: "transport-left", turnId: "turn-left" }
     );
-    await instance.unsubscribe("panel:caller");
+    await instance.unsubscribe("panel:caller", "panel:caller:test-session");
 
     const resultId = await instance.handleMethodResult("transport-left", { ok: true }, false);
 
@@ -2898,9 +3368,7 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
   // A cloned CHILD channel whose parent fork op (channel-parent) planted a
   // pending seed marker at postClone. `withSeed:false` clones WITHOUT planting
   // the marker (mirrors a fork with no seed).
-  async function forkedChild(
-    opts: { withSeed?: boolean } = {}
-  ): Promise<{
+  async function forkedChild(opts: { withSeed?: boolean } = {}): Promise<{
     parent: Awaited<ReturnType<typeof createGadBackedChannel>>;
     child: Awaited<ReturnType<typeof createGadBackedChannel>>;
   }> {
@@ -2954,9 +3422,9 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     // Re-drive (crash-resume) returns the SAME durable message; no duplicate.
     const again = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
     expect(again).toEqual(res);
-    expect((await tailAfterFork(child)).filter((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)).toHaveLength(
-      1
-    );
+    expect(
+      (await tailAfterFork(child)).filter((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)
+    ).toHaveLength(1);
   });
 
   it("rejects a call with no pending fork seed marker", async () => {
@@ -2973,9 +3441,9 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     const { child } = await forkedChild();
     setRpcCaller(child.instance, "channel-parent", "do");
 
-    await expect(
-      child.instance.appendSeed({ forkId: "fork-EVIL" }, forkSeed())
-    ).rejects.toThrow(/no pending fork seed for fork fork-EVIL/);
+    await expect(child.instance.appendSeed({ forkId: "fork-EVIL" }, forkSeed())).rejects.toThrow(
+      /no pending fork seed for fork fork-EVIL/
+    );
     expect(await tailAfterFork(child)).toHaveLength(0);
   });
 
@@ -3000,7 +3468,10 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
   it("admits normal channel caller realms at the relay gate", async () => {
     const { instance } = await createGadBackedChannel();
     const gate = instance as unknown as {
-      inboundCallerDenial(method: string, caller: { callerId: string; callerKind: string } | null): string | null;
+      inboundCallerDenial(
+        method: string,
+        caller: { callerId: string; callerKind: string } | null
+      ): string | null;
     };
     for (const kind of ["panel", "worker", "server", "do", "shell"]) {
       expect(

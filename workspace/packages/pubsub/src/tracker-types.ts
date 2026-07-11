@@ -23,7 +23,7 @@ export function isAgentParticipantType(type: string | undefined): boolean {
 }
 
 export function isClientParticipantType(type: string | undefined): boolean {
-  return type === "panel" || type === "headless";
+  return type === "user" || type === "panel" || type === "headless";
 }
 
 /**
@@ -37,14 +37,15 @@ export interface ChatParticipantMetadata extends AgenticParticipantMetadata {
   name: string;
   /**
    * Participant role on the channel:
-   * - `"panel"` — interactive UI client (chat panel) running in a browser/renderer
+   * - `"user"` — canonical authenticated human (possibly many panels/devices)
+   * - `"panel"` — non-canonical interactive UI provider
    * - `"headless"` — programmatic client without a UI (worker, test harness, server)
    * - `"agent"` — AI agent worker responding to user input
    *
    * Adding a new value? Update `isAgentParticipantType` / `isClientParticipantType`
    * in this file so the role-based filters classify it correctly.
    */
-  type: "panel" | "headless" | "agent";
+  type: "user" | "panel" | "headless" | "agent";
   /** Runtime panel/worker ID — allows chat panel to link participant to child panel for focus/reload */
   panelId?: string;
   /** Worker source identifier for agent identification/recovery (e.g., "workers/agent-worker"). */
@@ -80,9 +81,7 @@ export interface ChatParticipantMetadata extends AgenticParticipantMetadata {
 /**
  * Source for sandbox-backed UI components.
  */
-export type SandboxSource =
-  | { type: "code"; code: string }
-  | { type: "file"; path: string };
+export type SandboxSource = { type: "code"; code: string } | { type: "file"; path: string };
 
 /**
  * Inline UI data structure sent as message content (JSON stringified).
@@ -115,7 +114,10 @@ export interface ActionData {
  * This allows trackers to work with any AgenticClient implementation.
  */
 export interface TrackerClient {
-  send(content: string, options?: { replyTo?: string; contentType?: string }): Promise<{ messageId: string }>;
+  send(
+    content: string,
+    options?: { replyTo?: string; contentType?: string }
+  ): Promise<{ messageId: string }>;
   update(
     messageId: string,
     content: string,

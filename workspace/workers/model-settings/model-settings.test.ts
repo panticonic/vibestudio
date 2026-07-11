@@ -203,19 +203,28 @@ describe("ModelSettingsDO", () => {
     ]);
   });
 
-  it("drops invalid behavior fields when persisting", async () => {
+  it("rejects invalid behavior fields instead of silently dropping them", async () => {
     TestModelSettingsDO.config = { id: "test" };
     TestModelSettingsDO.writes = [];
     const { call } = await createTestDO(TestModelSettingsDO);
 
-    await call("setDefaultAgentConfig", {
-      model: "openai:gpt-5",
-      thinkingLevel: "bogus",
-      approvalLevel: 9,
-    });
-    expect(TestModelSettingsDO.writes).toEqual([
-      { key: "defaultAgentConfig", value: { model: "openai:gpt-5" } },
-    ]);
+    await expect(
+      call("setDefaultAgentConfig", {
+        model: "openai:gpt-5",
+        thinkingLevel: "bogus",
+        approvalLevel: 9,
+      })
+    ).rejects.toThrow(/thinkingLevel/);
+    expect(TestModelSettingsDO.writes).toEqual([]);
+  });
+
+  it("rejects malformed stored configuration instead of normalizing it", async () => {
+    TestModelSettingsDO.config = {
+      id: "test",
+      defaultAgentConfig: { model: "openai:gpt-5", retiredField: true },
+    } as never;
+    const { call } = await createTestDO(TestModelSettingsDO);
+    await expect(call("getSettings")).rejects.toThrow(/unknown field/);
   });
 
   it("rejects unknown default model refs", async () => {

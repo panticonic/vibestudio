@@ -70,10 +70,19 @@ interface ThreadBody {
 export function Pill({ state }: { state: GmailThreadState }) {
   return (
     <Flex align="center" gap="1" style={{ minWidth: 0 }}>
-      <Text size="1" weight={state.unreadCount > 0 ? "bold" : "medium"} truncate style={{ minWidth: 0 }}>
+      <Text
+        size="1"
+        weight={state.unreadCount > 0 ? "bold" : "medium"}
+        truncate
+        style={{ minWidth: 0 }}
+      >
         {state.subject}
       </Text>
-      {state.unreadCount > 0 ? <Badge size="1" color="blue">{state.unreadCount}</Badge> : null}
+      {state.unreadCount > 0 ? (
+        <Badge size="1" color="blue">
+          {state.unreadCount}
+        </Badge>
+      ) : null}
     </Flex>
   );
 }
@@ -83,7 +92,11 @@ export function Pill({ state }: { state: GmailThreadState }) {
  * open, reply box with two primary actions (AI draft / Send with two-tap
  * confirm); Archive / Mark read / Refresh behind one "More" disclosure.
  */
-export default function GmailThread({ state, expanded, chat }: {
+export default function GmailThread({
+  state,
+  expanded,
+  chat,
+}: {
   state: GmailThreadState;
   expanded: boolean;
   chat: { callMethodByHandle: (handle: string, method: string, args: unknown) => Promise<unknown> };
@@ -103,7 +116,11 @@ export default function GmailThread({ state, expanded, chat }: {
     setLoading(true);
     setError(null);
     try {
-      const result = await chat.callMethodByHandle("gmail", "getThread", { threadId: state.threadId });
+      const result = await chat.callMethodByHandle("gmail", "gmail_read", {
+        threadId: state.threadId,
+        format: "full",
+        includeAttachmentList: true,
+      });
       if (result && typeof result === "object" && Array.isArray((result as ThreadBody).messages)) {
         const body = result as ThreadBody;
         setThread(body);
@@ -128,7 +145,7 @@ export default function GmailThread({ state, expanded, chat }: {
     setError(null);
     try {
       await chat.callMethodByHandle("gmail", method, args);
-      if (method === "send") {
+      if (method === "gmail_send") {
         setDraft("");
         setConfirmingSend(false);
       }
@@ -155,15 +172,26 @@ export default function GmailThread({ state, expanded, chat }: {
   return (
     <Flex direction="column" gap="2">
       <Flex align="center" justify="between" gap="2" style={{ minWidth: 0 }}>
-        <Text size="3" weight="bold" style={{ minWidth: 0, wordBreak: "break-word" }} title={state.subject}>
+        <Text
+          size="3"
+          weight="bold"
+          style={{ minWidth: 0, wordBreak: "break-word" }}
+          title={state.subject}
+        >
           {state.subject}
         </Text>
         <Badge color={state.status === "archived" ? "gray" : "blue"} style={{ flex: "0 0 auto" }}>
           {state.status}
         </Badge>
       </Flex>
-      <Text size="1" color="gray" truncate>{state.participants.join(", ")}</Text>
-      {error ? <Text size="1" color="red">{error}</Text> : null}
+      <Text size="1" color="gray" truncate>
+        {state.participants.join(", ")}
+      </Text>
+      {error ? (
+        <Text size="1" color="red">
+          {error}
+        </Text>
+      ) : null}
 
       {thread ? (
         <Flex direction="column" gap="2">
@@ -192,7 +220,12 @@ export default function GmailThread({ state, expanded, chat }: {
                     {(message.attachments ?? [])
                       .filter((attachment) => attachment.attachmentId)
                       .map((attachment) => (
-                        <Flex key={attachment.attachmentId} align="center" gap="2" style={{ minHeight: 36 }}>
+                        <Flex
+                          key={attachment.attachmentId}
+                          align="center"
+                          gap="2"
+                          style={{ minHeight: 36 }}
+                        >
                           <Text size="1" color="gray" truncate style={{ minWidth: 0 }}>
                             📎 {attachment.filename}
                             {attachment.size ? ` (${Math.ceil(attachment.size / 1024)} KB)` : ""}
@@ -203,7 +236,7 @@ export default function GmailThread({ state, expanded, chat }: {
                             disabled={busy !== null}
                             onClick={() =>
                               void call(
-                                "getAttachment",
+                                "gmail_get_attachment",
                                 {
                                   messageId: message.id,
                                   attachmentId: attachment.attachmentId,
@@ -224,10 +257,16 @@ export default function GmailThread({ state, expanded, chat }: {
               </Flex>
             );
           })}
-          {savedNote ? <Text size="1" color="gray">{savedNote}</Text> : null}
+          {savedNote ? (
+            <Text size="1" color="gray">
+              {savedNote}
+            </Text>
+          ) : null}
         </Flex>
       ) : (
-        <Text size="2" color="gray">{loading ? "Loading thread…" : state.lastSnippet}</Text>
+        <Text size="2" color="gray">
+          {loading ? "Loading thread…" : state.lastSnippet}
+        </Text>
       )}
 
       <TextArea
@@ -257,7 +296,7 @@ export default function GmailThread({ state, expanded, chat }: {
               setConfirmingSend(true);
               return;
             }
-            void call("send", { threadId: state.threadId, body: draft }, "send");
+            void call("gmail_send", { threadId: state.threadId, body: draft }, "send");
           }}
         >
           {busy === "send" ? "Sending…" : confirmingSend ? "Confirm send" : "Send"}
@@ -296,7 +335,7 @@ export default function GmailThread({ state, expanded, chat }: {
             variant="ghost"
             disabled={busy !== null}
             title="Archive now, remind me tomorrow"
-            onClick={() => void call("snooze", { threadId: state.threadId }, "snooze")}
+            onClick={() => void call("gmail_snooze", { threadId: state.threadId }, "snooze")}
           >
             {busy === "snooze" ? "Snoozing…" : "Snooze 1d"}
           </Button>

@@ -12,12 +12,12 @@
  * ```typescript
  * import { connectViaRpc } from "@workspace/pubsub";
  *
+ * const channelId = "chat";
  * const client = connectViaRpc({
  *   rpc,
- *   channel: "chat",
- *   name: "Chat Panel",
+ *   channel: channelId,
+ *   name: `Channel ${channelId}`,
  *   type: "panel",
- *   handle: "user",
  * });
  *
  * await client.ready();
@@ -119,7 +119,4 @@ export {
 export { AsyncQueue, createFanout } from "./async-queue.js";
 
 // Approval schema builder
-export {
-  createApprovalSchema,
-  type CreateApprovalSchemaParams,
-} from "./approval-schema.js";
+export { createApprovalSchema, type CreateApprovalSchemaParams } from "./approval-schema.js";

@@ -1,57 +1,16 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 
-/**
- * Gmail tables split into two migration regimes:
- *
- * - REBUILDABLE: caches reconstructed from Gmail + channel replay (thread
- *   cache, triage queues, hits, wake bookkeeping). Versioned by
- *   drop-and-recreate — bump the worker schemaVersion when a shape changes.
- * - DURABLE: user data a schema bump must NOT wipe. `gmail_channel_state`
- *   holds the credential pin and setup status (dropping it would re-trigger
- *   first-run onboarding for configured users); prefs/replied-senders/people
- *   hold accumulated user signal. Shape changes here need additive
- *   per-version ALTERs in the worker's migrate(), never a drop.
- */
-const REBUILDABLE_GMAIL_TABLES = [
-  "gmail_threads",
-  "gmail_attention_hits",
-  "gmail_attention_turns",
-  "gmail_attention_queue",
-  "gmail_wake_turns",
-  "gmail_triage_queue",
-  "gmail_triage_runs",
-  // Legacy tables from earlier schema generations.
-  "gmail_categories",
-  "gmail_attention_rules",
-];
-
-export const DURABLE_GMAIL_TABLES = [
-  "gmail_channel_state",
-  "gmail_attention_prefs",
-  "gmail_replied_senders",
-  "gmail_people",
-  "gmail_reminders",
-  "gmail_push_targets",
-];
-
-export function dropRebuildableGmailTables(sql: SqlStorage): void {
-  for (const table of REBUILDABLE_GMAIL_TABLES) {
-    sql.exec(`DROP TABLE IF EXISTS ${table}`);
-  }
-}
-
-/** Full reset (tests / explicit wipe only — never the migration path). */
 export function dropGmailTables(sql: SqlStorage): void {
-  dropRebuildableGmailTables(sql);
-  for (const table of DURABLE_GMAIL_TABLES) {
-    sql.exec(`DROP TABLE IF EXISTS ${table}`);
+  const tables = sql
+    .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'gmail_%'`)
+    .toArray();
+  for (const row of tables) {
+    const table = String(row["name"]);
+    sql.exec(`DROP TABLE "${table.replaceAll('"', '""')}"`);
   }
 }
 
 export function createGmailTables(sql: SqlStorage): void {
-  // Durable: pre-existing rows survive schema bumps. Objects migrated from
-  // older generations may carry extra legacy columns (last_overview_json,
-  // last_search_*) — harmless, all nullable; reads/writes use named columns.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS gmail_channel_state (
       channel_id TEXT PRIMARY KEY,
@@ -214,49 +173,6 @@ export function createGmailTables(sql: SqlStorage): void {
       PRIMARY KEY(email_address, source, class_name, object_key)
     )
   `);
-}
-
-/**
- * Best-effort migration of old rule-engine state into natural-language
- * preference text. Called BEFORE dropGmailTables when upgrading.
- */
-export function extractLegacyAttentionPrefs(
-  sql: SqlStorage
-): Array<{ channelId: string; preferencesText: string }> {
-  let rows: Array<Record<string, unknown>>;
-  try {
-    rows = sql.exec(`SELECT channel_id, rules_json FROM gmail_attention_rules`).toArray();
-  } catch {
-    return [];
-  }
-  const prefs: Array<{ channelId: string; preferencesText: string }> = [];
-  for (const row of rows) {
-    try {
-      const parsed = JSON.parse(String(row["rules_json"])) as {
-        directives?: Array<{ name?: string; description?: string; enabled?: boolean }>;
-      };
-      const lines = (parsed.directives ?? [])
-        .filter((directive) => directive.enabled !== false)
-        .map((directive) => `- ${directive.description ?? directive.name ?? "watch rule"}`);
-      if (lines.length > 0) {
-        prefs.push({ channelId: String(row["channel_id"]), preferencesText: lines.join("\n") });
-      }
-    } catch {
-      // Unparseable legacy rules: fall back to the default preference seed.
-    }
-  }
-  return prefs;
-}
-
-/** Additive column migration for durable tables (no-op when present). */
-export function ensureColumn(sql: SqlStorage, table: string, column: string, ddl: string): void {
-  const existing = sql
-    .exec(`PRAGMA table_info(${table})`)
-    .toArray()
-    .some((row) => String(row["name"]) === column);
-  if (!existing) {
-    sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
-  }
 }
 
 export const DEFAULT_ATTENTION_PREFERENCES =

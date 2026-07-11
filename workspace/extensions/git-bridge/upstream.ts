@@ -1,6 +1,6 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { GitAuthError, GitClient } from "@vibestudio/git";
+import { GitAuthError, GitClient, SYSTEM_GIT_AUTHOR } from "@vibestudio/git";
 import {
   getDeclaredRemoteForRepo,
   getDeclaredRemotesForRepo,
@@ -364,16 +364,16 @@ export class UpstreamEngine {
     pushed: boolean;
   }> {
     if (input.dryRun) {
-      throw new Error("publishRepo dryRun is not supported because publishing creates a remote repo");
+      throw new Error(
+        "publishRepo dryRun is not supported because publishing creates a remote repo"
+      );
     }
     const repo = normalizeWorkspaceRepoPath(input.repoPath);
     const providerId = input.provider ?? "github";
     const provider = getRemoteProvider(providerId);
     if (!provider) throw new Error(`Unknown remote provider: ${providerId}`);
     const repoName = (input.name ?? repo.split("/").at(-1) ?? repo).split("/").at(-1) ?? repo;
-    const remoteName = input.remote
-      ? validateWorkspaceGitRemoteName(input.remote)
-      : "origin";
+    const remoteName = input.remote ? validateWorkspaceGitRemoteName(input.remote) : "origin";
     const branch = input.branch ? validateWorkspaceGitRemoteBranch(input.branch) : DEFAULT_BRANCH;
     const created = await provider.createRepo(this.ctx.credentials, {
       name: repoName,
@@ -854,10 +854,8 @@ export class UpstreamEngine {
     });
   }
 
-  private gitAuthor(
-    upstream: ResolvedWorkspaceGitUpstream
-  ): { name: string; email: string } | undefined {
-    if (!upstream.authorName && !upstream.authorEmail) return undefined;
+  private gitAuthor(upstream: ResolvedWorkspaceGitUpstream): { name: string; email: string } {
+    if (!upstream.authorName && !upstream.authorEmail) return SYSTEM_GIT_AUTHOR;
     return {
       name: upstream.authorName ?? "Vibestudio Git Bridge",
       email: upstream.authorEmail ?? "git-bridge@vibestudio.local",

@@ -33,7 +33,7 @@ export default function GmailActionBar({ chat }: GmailActionBarProps) {
   function submitSearch() {
     const q = query.trim();
     if (!q) return;
-    void run("search", "search", { q }).then(() => {
+    void run("search", "gmail_search", { q }).then(() => {
       setQuery("");
       setSearchOpen(false);
     });

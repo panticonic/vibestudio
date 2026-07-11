@@ -737,11 +737,35 @@ export const MessageCard = React.memo(function MessageCard({
         <Flex className="message-card-body" direction="column" gap="2">
           <Flex align="center" justify="between" gap="2">
             <Flex align="center" gap="1" style={{ minWidth: 0 }}>
+              {/* Live account avatar for human senders (WP6 §6, WP0 §3.8). */}
+              {senderInfo.avatar && (
+                <img
+                  src={senderInfo.avatar}
+                  alt=""
+                  aria-hidden="true"
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    objectFit: "cover",
+                  }}
+                />
+              )}
               <Box style={{ minWidth: 0 }}>
                 <Text size="1" weight="medium" truncate>
                   {senderInfo.name}
                 </Text>
-                <Text as="span" size="1" color="gray" style={{ marginLeft: 6 }}>
+                <Text
+                  as="span"
+                  size="1"
+                  color="gray"
+                  style={{
+                    marginLeft: 6,
+                    // Account tint (WP6 §6) — personalizes the handle only.
+                    ...(senderInfo.color ? { color: senderInfo.color } : {}),
+                  }}
+                >
                   @{senderInfo.handle}
                 </Text>
               </Box>

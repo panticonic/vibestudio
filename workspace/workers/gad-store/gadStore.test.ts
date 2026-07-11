@@ -12,6 +12,42 @@ import { GadWorkspaceDO } from "./index.js";
 const owner = { kind: "agent" as const, id: "agent-1" };
 const GENESIS = GENESIS_EVENT_HASH;
 
+function setVerifiedCaller(instance: GadWorkspaceDO, userId: string | null): void {
+  const internal = instance as unknown as {
+    _currentRpcCallerId: string | null;
+    _currentRpcCallerKind: string | null;
+    _currentVerifiedCaller: unknown;
+  };
+  internal._currentRpcCallerId = userId ? "shell" : null;
+  internal._currentRpcCallerKind = userId ? "shell" : null;
+  internal._currentVerifiedCaller = userId
+    ? { callerId: "shell", callerKind: "shell", userId }
+    : null;
+}
+
+function setDoCaller(instance: GadWorkspaceDO, channelId: string): void {
+  const callerId = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
+  const internal = instance as unknown as {
+    _currentRpcCallerId: string | null;
+    _currentRpcCallerKind: string | null;
+    _currentVerifiedCaller: unknown;
+  };
+  internal._currentRpcCallerId = callerId;
+  internal._currentRpcCallerKind = "do";
+  internal._currentVerifiedCaller = { callerId, callerKind: "do" };
+}
+
+function setServerCaller(instance: GadWorkspaceDO): void {
+  const internal = instance as unknown as {
+    _currentRpcCallerId: string | null;
+    _currentRpcCallerKind: string | null;
+    _currentVerifiedCaller: unknown;
+  };
+  internal._currentRpcCallerId = "server";
+  internal._currentRpcCallerKind = "server";
+  internal._currentVerifiedCaller = { callerId: "server", callerKind: "server" };
+}
+
 function event<K extends AgenticEvent["kind"]>(
   kind: K,
   patch: Omit<AgenticEvent<K>, "kind" | "actor" | "createdAt"> & { createdAt?: string }
@@ -47,7 +83,7 @@ function largeParticipantMetadata() {
   return {
     type: "panel",
     name: "Panel",
-    handle: "user",
+    handle: "alice",
     methods: [
       {
         name: "eval",
@@ -77,6 +113,84 @@ function opaque(envelopeId: string, value: unknown, appendedAt = "2026-05-20T12:
     payload: { value },
     appendedAt,
   };
+}
+
+interface TrajectoryEventFixture {
+  event: AgenticEvent;
+  eventId?: string | null;
+  publish?: { channelIds: string[]; audience?: unknown } | null;
+}
+
+/** Append agentic fixtures through the canonical unified-log RPC. */
+async function appendTrajectoryEvents<T = any>(
+  call: <R>(method: string, ...args: unknown[]) => Promise<R>,
+  input: {
+    trajectoryId: string;
+    branchId: string;
+    owner: { kind: "agent"; id: string; metadata?: Record<string, unknown> };
+    expectedHeadHash?: string | null;
+    events: TrajectoryEventFixture[];
+  }
+): Promise<T> {
+  return call<T>("appendLogEvent", {
+    logId: input.trajectoryId,
+    head: input.branchId,
+    logKind: "trajectory",
+    owner: input.owner,
+    ...("expectedHeadHash" in input ? { expectedHeadHash: input.expectedHeadHash ?? null } : {}),
+    events: input.events.map((item) => {
+      const causality = {
+        ...(item.event.causality ?? {}),
+        ...(item.event.turnId ? { turnId: item.event.turnId } : {}),
+      };
+      return {
+        envelopeId: item.eventId ?? null,
+        actor: item.event.actor,
+        payloadKind: item.event.kind,
+        payload: item.event.payload,
+        ...(Object.keys(causality).length > 0 ? { causality } : {}),
+        appendedAt: item.event.createdAt,
+        ...(item.publish
+          ? {
+              publish: {
+                channels: item.publish.channelIds.map((channelId) => ({
+                  channelId,
+                  audience: item.publish?.audience,
+                })),
+              },
+            }
+          : {}),
+      };
+    }),
+  });
+}
+
+function insertKnowledgeLedger(
+  sql: { exec(query: string, ...bindings: Array<string | number | null>): unknown },
+  input: {
+    entryId: string;
+    kind: "claim_recorded" | "claim_revised" | "claim_retracted" | "claims_related";
+    payload: Record<string, unknown>;
+  }
+): void {
+  const next = Number(
+    (
+      sql.exec(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM gad_knowledge_ledger`) as {
+        one(): Record<string, unknown>;
+      }
+    ).one()["next"]
+  );
+  sql.exec(
+    `INSERT INTO gad_knowledge_ledger
+       (entry_id, seq, kind, payload_json, anchor_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    input.entryId,
+    next,
+    input.kind,
+    JSON.stringify(input.payload),
+    "{}",
+    "2026-05-20T12:00:00.000Z"
+  );
 }
 
 /**
@@ -174,6 +288,203 @@ describe("GadWorkspaceDO unified log (schema v19)", () => {
     ]) {
       expect(names).not.toContain(deadKnowledgeProjection);
     }
+  });
+
+  it("owns the generic user notification inbox and keys reads to the verified caller", async () => {
+    const { instance, sql } = await createTestDO(GadWorkspaceDO);
+    setDoCaller(instance, "channel-b");
+    instance.putChannelMembership({
+      channelId: "channel-b",
+      userId: "usr_bob",
+      memberId: "user:usr_bob",
+      handle: "bob",
+      addedBy: "user:usr_alice",
+      addedAt: 20,
+      revision: 1,
+    });
+    setDoCaller(instance, "channel-a");
+    instance.putChannelMembership({
+      channelId: "channel-a",
+      userId: "usr_bob",
+      memberId: "user:usr_bob",
+      handle: "bob",
+      addedBy: "user:usr_alice",
+      addedAt: 10,
+      revision: 1,
+    });
+    setDoCaller(instance, "channel-private");
+    instance.putChannelMembership({
+      channelId: "channel-private",
+      userId: "usr_charlie",
+      memberId: "user:usr_charlie",
+      handle: "charlie",
+      addedBy: "user:usr_alice",
+      addedAt: 30,
+      revision: 1,
+    });
+
+    setDoCaller(instance, "channel-other");
+    expect(() =>
+      instance.putChannelMembership({
+        channelId: "channel-b",
+        userId: "usr_bob",
+        memberId: "user:usr_bob",
+        handle: "bob",
+        addedBy: "user:usr_mallory",
+        addedAt: 40,
+        revision: 2,
+      })
+    ).toThrow(/only the owning channel DO/);
+    setDoCaller(instance, "channel-b");
+    expect(() =>
+      instance.putChannelMembership({
+        channelId: "channel-b",
+        userId: "usr_bob",
+        memberId: "user:usr_bob",
+        handle: "bob",
+        addedBy: "user:usr_alice",
+        addedAt: 20,
+      } as never)
+    ).toThrow(/revision must be a positive safe integer/);
+
+    setVerifiedCaller(instance, "usr_bob");
+    expect(instance.listUserNotificationsForMe()).toMatchObject({
+      notifications: [
+        { id: "channel.invite:channel-b", kind: "channel.invite", userId: "usr_bob" },
+        { id: "channel.invite:channel-a", kind: "channel.invite", userId: "usr_bob" },
+      ],
+    });
+    expect(instance.acknowledgeUserNotification({ id: "channel.invite:channel-b" })).toEqual({
+      acknowledged: true,
+    });
+    expect(instance.acknowledgeUserNotification({ id: "channel.invite:channel-b" })).toEqual({
+      acknowledged: false,
+    });
+    setDoCaller(instance, "channel-b");
+    expect(
+      instance.putChannelMembership({
+        channelId: "channel-b",
+        userId: "usr_bob",
+        memberId: "user:usr_bob",
+        handle: "bob",
+        addedBy: "user:usr_alice",
+        addedAt: 20,
+        revision: 1,
+      })
+    ).toEqual({ applied: false, currentRevision: 1 });
+    // A lost-response retry of the already-applied put must not resurrect the
+    // pending invite after the user acknowledged it.
+    expect(
+      sql
+        .exec(
+          `SELECT 1 FROM user_notifications
+            WHERE user_id = 'usr_bob' AND notification_id = 'channel.invite:channel-b'
+              AND acknowledged_at IS NULL`
+        )
+        .toArray()
+    ).toEqual([]);
+    expect(
+      sql
+        .exec(`SELECT COUNT(*) AS count FROM user_notifications WHERE acknowledged_at IS NULL`)
+        .one()["count"]
+    ).toBe(2);
+    setServerCaller(instance);
+    expect(instance.listChannelMembershipsForUser({ userId: "usr_bob" })).toEqual({
+      userId: "usr_bob",
+      channelIds: ["channel-a", "channel-b"],
+    });
+    instance.purgeRevokedUserChannelIndexes({ userId: "usr_bob" });
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM user_notifications`).one()["count"]).toBe(1);
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM channel_membership_index`).one()["count"]).toBe(
+      1
+    );
+
+    setVerifiedCaller(instance, null);
+    expect(() => instance.listUserNotificationsForMe()).toThrow(/authenticated workspace account/);
+    setDoCaller(instance, "bad");
+    expect(() =>
+      instance.putChannelMembership({
+        channelId: "bad",
+        userId: "user:usr_bob",
+        memberId: "user:usr_bob",
+        handle: "bob",
+        addedBy: "user:usr_alice",
+        addedAt: 1,
+        revision: 1,
+      })
+    ).toThrow(/bare workspace account id/);
+  });
+
+  it("stores arbitrary notification kinds durably without exposing them cross-account", async () => {
+    const { instance } = await createTestDO(GadWorkspaceDO);
+    setDoCaller(instance, "producer");
+    expect(
+      instance.putUserNotification({
+        id: "build:release-42",
+        userId: "usr_bob",
+        kind: "build.completed",
+        title: "Build complete",
+        message: "Release 42 is ready.",
+        data: { buildId: 42 },
+        createdAt: 42,
+        revision: 1,
+      })
+    ).toMatchObject({
+      id: "build:release-42",
+      kind: "build.completed",
+      userId: "usr_bob",
+      data: { buildId: 42 },
+    });
+
+    setVerifiedCaller(instance, "usr_charlie");
+    expect(instance.listUserNotificationsForMe()).toEqual({ notifications: [] });
+    setVerifiedCaller(instance, "usr_bob");
+    expect(instance.listUserNotificationsForMe()).toMatchObject({
+      notifications: [{ id: "build:release-42", title: "Build complete" }],
+    });
+    expect(instance.acknowledgeUserNotification({ id: "build:release-42" })).toEqual({
+      acknowledged: true,
+    });
+    expect(instance.listUserNotificationsForMe()).toEqual({ notifications: [] });
+    setDoCaller(instance, "producer");
+    instance.putUserNotification({
+      id: "build:release-42",
+      userId: "usr_bob",
+      kind: "build.completed",
+      title: "Build complete",
+      message: "Release 42 is ready.",
+      data: { buildId: 42 },
+      createdAt: 42,
+      revision: 1,
+    });
+    setVerifiedCaller(instance, "usr_bob");
+    expect(instance.listUserNotificationsForMe()).toEqual({ notifications: [] });
+
+    setDoCaller(instance, "producer");
+    instance.putUserNotification({
+      id: "build:release-42",
+      userId: "usr_bob",
+      kind: "build.completed",
+      title: "Build complete again",
+      createdAt: 43,
+      revision: 2,
+    });
+    setVerifiedCaller(instance, "usr_bob");
+    expect(instance.listUserNotificationsForMe()).toMatchObject({
+      notifications: [{ id: "build:release-42", revision: 2 }],
+    });
+
+    setDoCaller(instance, "producer");
+    expect(() =>
+      instance.putUserNotification({
+        id: "channel.invite:forged",
+        userId: "usr_bob",
+        kind: "channel.invite",
+        title: "Forged channel invite",
+        createdAt: 44,
+        revision: 1,
+      })
+    ).toThrow(/reserved for the revisioned channel membership projection/);
   });
 
   // §3.1 — read-only guard
@@ -534,90 +845,11 @@ describe("appendLogEvent core (§3.2)", () => {
   });
 });
 
-describe("appendTrajectoryBatch adapter (§3.3)", () => {
-  it("returns the legacy shape with exactly the input events and a populated published list", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const result = await call<any>("appendTrajectoryBatch", {
-      trajectoryId: "traj-1",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "event-message-1",
-          event: event("message.completed", {
-            turnId: "turn-1" as never,
-            causality: { messageId: "msg-1" as never },
-            payload: textMessagePayload("msg-1", "assistant", "hello from trajectory"),
-          }),
-          publish: { channelIds: ["channel-1"] },
-        },
-        {
-          eventId: "event-message-2",
-          event: event("message.completed", {
-            turnId: "turn-1" as never,
-            createdAt: "2026-05-20T12:00:01.000Z",
-            causality: { messageId: "msg-2" as never },
-            payload: textMessagePayload("msg-2", "assistant", "second"),
-          }),
-        },
-      ],
-    });
-
-    // no synthesized external.envelope_published event
-    expect(result.events).toHaveLength(2);
-    expect(result.events.map((row: any) => row.kind)).toEqual([
-      "message.completed",
-      "message.completed",
-    ]);
-    expect(result.events[0]).toMatchObject({
-      eventId: "event-message-1",
-      trajectoryId: "traj-1",
-      branchId: "main",
-      seq: 1,
-      prevEventHash: GENESIS,
-      turnId: "turn-1",
-      createdAt: "2026-05-20T12:00:00.000Z",
-    });
-    expect(result.events[1]).toMatchObject({
-      eventId: "event-message-2",
-      seq: 2,
-      prevEventHash: result.events[0].eventHash,
-    });
-    expect(result.headEventId).toBe("event-message-2");
-    expect(result.headEventHash).toBe(result.events[1].eventHash);
-    expect(result.published).toEqual([
-      expect.objectContaining({
-        eventId: "event-message-1",
-        channelId: "channel-1",
-        envelopeId: "pub:event-message-1:channel-1",
-      }),
-    ]);
-
-    const events = await call<any[]>("listTrajectoryEvents", {
-      trajectoryId: "traj-1",
-      branchId: "main",
-    });
-    expect(events.map((row) => row.kind)).toEqual(["message.completed", "message.completed"]);
-    expect(events[0]).toMatchObject({ eventId: "event-message-1", seq: 1, prevEventHash: GENESIS });
-
-    const fetched = await call<any>("getTrajectoryEvent", { eventId: "event-message-2" });
-    expect(fetched).toMatchObject({ eventId: "event-message-2", kind: "message.completed" });
-
-    const head = await call<any>("getTrajectoryBranchHead", {
-      trajectoryId: "traj-1",
-      branchId: "main",
-    });
-    expect(head).toMatchObject({
-      head_event_id: "event-message-2",
-      head_event_hash: result.headEventHash,
-    });
-    expect(typeof head.head_state_hash).toBe("string");
-  });
-
+describe("trajectory projection invariants", () => {
   it("rejects duplicate turn.opened events for the same branch turn", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
 
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -634,7 +866,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
     });
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -656,7 +888,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
     const { call } = await createTestDO(GadWorkspaceDO);
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -701,12 +933,12 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
       ],
     };
 
-    const first = await call<any>("appendTrajectoryBatch", input);
-    const second = await call<any>("appendTrajectoryBatch", input);
+    const first = await appendTrajectoryEvents<any>(call, input);
+    const second = await appendTrajectoryEvents<any>(call, input);
 
-    expect(second.headEventId).toBe(first.headEventId);
-    expect(second.headEventHash).toBe(first.headEventHash);
-    expect(second.events.map((row: { eventId: string }) => row.eventId)).toEqual([
+    expect(second.headSeq).toBe(first.headSeq);
+    expect(second.headHash).toBe(first.headHash);
+    expect(second.envelopes.map((row: { envelopeId: string }) => row.envelopeId)).toEqual([
       "event-message-idempotent",
     ]);
     expect(second.published).toEqual(first.published);
@@ -720,7 +952,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
 
   it("continues trajectory append replay from an already-applied prefix", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    const first = await call<any>("appendTrajectoryBatch", {
+    const first = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -737,7 +969,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
       ],
     });
 
-    const replay = await call<any>("appendTrajectoryBatch", {
+    const replay = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -766,7 +998,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
       ],
     });
 
-    expect(replay.events.map((row: { eventId: string }) => row.eventId)).toEqual([
+    expect(replay.envelopes.map((row: { envelopeId: string }) => row.envelopeId)).toEqual([
       "event-prefix",
       "event-suffix",
     ]);
@@ -785,7 +1017,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
 
   it("rejects reused event ids with different event content", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -802,7 +1034,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
     });
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -824,9 +1056,9 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
     );
   });
 
-  it("rejects appends whose expectedHeadEventHash does not match the current head", async () => {
+  it("rejects appends whose expectedHeadHash does not match the current head", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    const first = await call<any>("appendTrajectoryBatch", {
+    const first = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -843,11 +1075,11 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
     });
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
-        expectedHeadEventHash: GENESIS, // stale
+        expectedHeadHash: GENESIS, // stale
         events: [
           {
             eventId: "event-next",
@@ -863,11 +1095,11 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
     ).rejects.toThrow(/log head conflict/u);
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
-        expectedHeadEventHash: first.headEventHash,
+        expectedHeadHash: first.headHash,
         events: [
           {
             eventId: "event-next",
@@ -880,12 +1112,12 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
           },
         ],
       })
-    ).resolves.toMatchObject({ headEventId: "event-next" });
+    ).resolves.toMatchObject({ envelopes: [{ envelopeId: "event-next" }] });
   });
 
   it("indexes transport call ids on projected invocations keyed by (log_id, head)", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -914,8 +1146,19 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
   });
 
   it("projects replayable knowledge events", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    insertKnowledgeLedger(sql, {
+      entryId: "ledger-claim-1",
+      kind: "claim_recorded",
+      payload: {
+        claimId: "claim-1",
+        subject: "system",
+        predicate: "uses",
+        object: "log_events",
+        status: "active",
+      },
+    });
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -926,6 +1169,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               claimId: "claim-1",
+              ledgerEntryId: "ledger-claim-1",
               subject: "system",
               predicate: "uses",
               object: "log_events",
@@ -952,7 +1196,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
 
   it("inspects turn and invocation state without hydrating full payloads", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -1039,7 +1283,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
 
   it("does not count failed terminal messages as streaming", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-failed-terminal",
       branchId: "main",
       owner,
@@ -1099,7 +1343,7 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
   });
 });
 
-describe("channel adapters (§3.4)", () => {
+describe("channel projections (§3.4)", () => {
   it("stores generic opaque channel envelopes and exposes replay windows", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
@@ -1176,10 +1420,12 @@ describe("channel adapters (§3.4)", () => {
         publishedAt: `2026-05-20T12:00:0${index}.000Z`,
       });
     }
-    await call("forkChannelLog", {
-      fromChannelId: "channel-parent",
-      toChannelId: "channel-child",
-      throughSeq: 5,
+    await call("forkLog", {
+      fromLogId: "channel-parent",
+      fromHead: "main",
+      toLogId: "channel-child",
+      toHead: "main",
+      atSeq: 5,
     });
     for (let index = 6; index <= 7; index += 1) {
       await call("appendChannelEnvelope", {
@@ -1332,7 +1578,7 @@ describe("channel adapters (§3.4)", () => {
     expect(annotations.metadata).toEqual({
       type: "panel",
       name: "Panel",
-      handle: "user",
+      handle: "alice",
       methods: [{ name: "eval" }],
     });
   });
@@ -1364,7 +1610,7 @@ describe("channel adapters (§3.4)", () => {
       },
     });
 
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner: { kind: "agent", id: "agent-1", metadata: hugeMetadata },
@@ -1447,7 +1693,7 @@ describe("channel adapters (§3.4)", () => {
                       participantId: "panel:user",
                       metadata: hugeMetadata,
                     },
-                    handle: "user",
+                    handle: "alice",
                     type: "panel",
                     methods: hugeMetadata.methods,
                   },
@@ -1480,7 +1726,7 @@ describe("channel adapters (§3.4)", () => {
     expect(payload.details.roster.participants[0]?.ref.metadata).toEqual({
       type: "panel",
       name: "Panel",
-      handle: "user",
+      handle: "alice",
       methods: [{ name: "eval" }],
     });
     await expect(call("checkGadIntegrity", {})).resolves.toMatchObject({ ok: true });
@@ -1696,7 +1942,7 @@ describe("forkLog no-copy (§3.5)", () => {
 
   it("forks a trajectory log through the identical code path (P5)", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-p5",
       branchId: "main",
       owner,
@@ -1752,7 +1998,7 @@ describe("forkLog no-copy (§3.5)", () => {
     );
     expect(childMessages.rows.map((row) => row["message_id"])).toEqual(["msg-1", "msg-2"]);
 
-    const appended = await call<any>("appendTrajectoryBatch", {
+    const appended = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-p5-fork",
       branchId: "main",
       owner,
@@ -1768,9 +2014,9 @@ describe("forkLog no-copy (§3.5)", () => {
         },
       ],
     });
-    expect(appended.events[0]).toMatchObject({
+    expect(appended.envelopes[0]).toMatchObject({
       seq: 3,
-      prevEventHash: fork.forkHash,
+      prevHash: fork.forkHash,
     });
 
     await expect(
@@ -1781,7 +2027,7 @@ describe("forkLog no-copy (§3.5)", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it("keeps the legacy forkChannelLog adapter shape with inherited counts and empty lineage", async () => {
+  it("forks channel history through the canonical unified-log RPC", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
       channelId: "channel-parent",
@@ -1808,17 +2054,19 @@ describe("forkLog no-copy (§3.5)", () => {
       publishedAt: "2026-05-20T12:00:03.000Z",
     });
 
-    const result = await call<any>("forkChannelLog", {
-      fromChannelId: "channel-parent",
-      toChannelId: "channel-fork",
-      throughSeq: 3,
+    const result = await call<any>("forkLog", {
+      fromLogId: "channel-parent",
+      fromHead: "main",
+      toLogId: "channel-fork",
+      toHead: "main",
+      atSeq: 3,
     });
     // no-copy world: the whole prefix (including presence) is inherited as-is
     expect(result).toMatchObject({
-      fromChannelId: "channel-parent",
-      toChannelId: "channel-fork",
-      copied: 3,
-      lineage: [],
+      fromLogId: "channel-parent",
+      toLogId: "channel-fork",
+      forkSeq: 3,
+      inherited: 3,
     });
 
     const forked = await call<any[]>("listChannelEnvelopesAfter", {
@@ -1883,7 +2131,7 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
     };
 
     // 1. parent appends invocation.started
-    await call("appendTrajectoryBatch", startBatch("traj-div", "main"));
+    await appendTrajectoryEvents(call, startBatch("traj-div", "main"));
 
     // 2. fork two children at the start event (seq 1)
     await call("forkLog", {
@@ -1904,7 +2152,7 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
     });
 
     // 3. parent appends its terminal (completed)
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-div",
       branchId: "main",
       owner,
@@ -1914,7 +2162,7 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
     // 4. child2: appending the parent terminal CONTENT under the same id succeeds
     //    (the parent's terminal is past the fork point, so it is not in child2's
     //    lineage — cross-log dedupe by envelope_id alone must NOT happen) ...
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-div",
       branchId: "child2",
       owner,
@@ -1922,13 +2170,13 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
     });
     //    ... and re-appending it is a lineage-scoped replay no-op.
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-div",
         branchId: "child2",
         owner,
         events: [parentTerminal],
       })
-    ).resolves.toMatchObject({ branchId: "child2" });
+    ).resolves.toMatchObject({ head: "child2" });
     expect(
       await countRows(call, "log_id = ? AND head = ? AND envelope_id = ?", [
         "traj-div",
@@ -1938,7 +2186,7 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
     ).toBe(1);
 
     // 5. child appends a DIVERGENT terminal under the same deterministic id — succeeds
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-div",
       branchId: "child",
       owner,
@@ -1961,13 +2209,13 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
 
     // 6. after child divergence, parent re-append into parent is still a no-op
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-div",
         branchId: "main",
         owner,
         events: [parentTerminal],
       })
-    ).resolves.toMatchObject({ branchId: "main" });
+    ).resolves.toMatchObject({ head: "main" });
     expect(
       await countRows(call, "log_id = ? AND head = ? AND envelope_id = ?", [
         "traj-div",
@@ -2413,7 +2661,7 @@ describe("state.merge_applied (§3.11)", () => {
 describe("projection replay (§3.12)", () => {
   it("rebuilds projections from log_events", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -2472,7 +2720,7 @@ describe("projection replay (§3.12)", () => {
       actor: owner,
       eventId: "apply-a",
     });
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-parent",
       branchId: "branch-parent",
       owner,
@@ -2582,7 +2830,7 @@ describe("projection replay (§3.12)", () => {
 describe("terminal idempotency guards (§3.13)", () => {
   it("enforces terminal invocation idempotency at append time", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -2619,7 +2867,7 @@ describe("terminal idempotency guards (§3.13)", () => {
     });
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -2638,7 +2886,7 @@ describe("terminal idempotency guards (§3.13)", () => {
           },
         ],
       })
-    ).resolves.toMatchObject({ branchId: "main" });
+    ).resolves.toMatchObject({ head: "main" });
 
     const replayInspection = await call<any>("inspectInvocationState", { invocationId: "inv-1" });
     expect(replayInspection.rows[0]).toMatchObject({
@@ -2648,7 +2896,7 @@ describe("terminal idempotency guards (§3.13)", () => {
     });
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -2668,7 +2916,7 @@ describe("terminal idempotency guards (§3.13)", () => {
           },
         ],
       })
-    ).resolves.toMatchObject({ branchId: "main" });
+    ).resolves.toMatchObject({ head: "main" });
 
     const duplicateProjectionInspection = await call<any>("inspectInvocationState", {
       invocationId: "inv-1",
@@ -2682,7 +2930,7 @@ describe("terminal idempotency guards (§3.13)", () => {
     });
 
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -2708,7 +2956,7 @@ describe("terminal idempotency guards (§3.13)", () => {
   it("rejects terminal invocation events without typed terminal outcome", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -2731,7 +2979,7 @@ describe("terminal idempotency guards (§3.13)", () => {
 
   it("enforces terminal approval idempotency at projection time", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -2759,7 +3007,7 @@ describe("terminal idempotency guards (§3.13)", () => {
     // so it is NOT an idempotent retry and must be rejected at projection time
     // rather than silently flipping the recorded decision.
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -2791,7 +3039,7 @@ describe("terminal idempotency guards (§3.13)", () => {
 describe("stored-value refs (§3.14)", () => {
   it("indexes stored value references into log_blob_refs", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -2844,7 +3092,7 @@ describe("stored-value refs (§3.14)", () => {
   it("rejects raw unbounded trajectory payload fields", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await expect(
-      call("appendTrajectoryBatch", {
+      appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
         branchId: "main",
         owner,
@@ -2897,7 +3145,7 @@ describe("stored-value refs (§3.14)", () => {
   it("reports storage diagnostics and garbage-collects unreferenced blob metadata", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await call("ensureBlob", "orphan-digest", 10, "text/plain");
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -2941,7 +3189,7 @@ describe("stored-value refs (§3.14)", () => {
 describe("lineage queries over causality edges (§3.15)", () => {
   it("links trajectory events to deterministic channel publications and back", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    const result = await call<any>("appendTrajectoryBatch", {
+    const result = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -2959,7 +3207,7 @@ describe("lineage queries over causality edges (§3.15)", () => {
     });
     expect(result.published).toEqual([
       expect.objectContaining({
-        eventId: "event-message-1",
+        originEnvelopeId: "event-message-1",
         channelId: "channel-1",
         envelopeId: "pub:event-message-1:channel-1",
       }),
@@ -3057,8 +3305,8 @@ describe("lineage queries over causality edges (§3.15)", () => {
   });
 
   it("keeps side trajectory events private while joining a published summary back to downstream consumers", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-main",
       branchId: "side-task",
       owner,
@@ -3137,7 +3385,18 @@ describe("lineage queries over causality edges (§3.15)", () => {
       digest: "details-side",
     });
 
-    await call("appendTrajectoryBatch", {
+    insertKnowledgeLedger(sql, {
+      entryId: "ledger-consumes-side-summary",
+      kind: "claim_recorded",
+      payload: {
+        claimId: "claim-consumed-side-summary",
+        subject: "main-session",
+        predicate: "consumed-published-envelope",
+        object: publishedEnvelopeId,
+        status: "active",
+      },
+    });
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-main",
       branchId: "main",
       owner,
@@ -3150,6 +3409,7 @@ describe("lineage queries over causality edges (§3.15)", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               claimId: "claim-consumed-side-summary",
+              ledgerEntryId: "ledger-consumes-side-summary",
               subject: "main-session",
               predicate: "consumed-published-envelope",
               object: publishedEnvelopeId,
@@ -3173,7 +3433,7 @@ describe("lineage queries over causality edges (§3.15)", () => {
 describe("checkGadIntegrity (§3.16)", () => {
   it("detects a tampered log event", async () => {
     const { call, sql } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,
@@ -3314,7 +3574,7 @@ describe("cache amnesia (§3.17)", () => {
       actor: owner,
       eventId: "ingest-out",
     });
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-amnesia",
       branchId: "main",
       owner,
@@ -3614,7 +3874,8 @@ describe("GC reachability protections (§3.18)", () => {
       summary: "merge staging",
     });
 
-    await call("runGadGcMark");
+    const mark = await call<{ liveStateHashes: string[] }>("runGadGcMark");
+    expect(mark.liveStateHashes).toContain(staged.stateHash);
     const states = await call<{ rows: Array<{ state_hash: string }> }>(
       "query",
       "SELECT state_hash FROM gad_worktree_states WHERE state_hash = ?",
@@ -4115,7 +4376,7 @@ describe("knowledge ledger + claims (§8.1)", () => {
       "SELECT value FROM state WHERE key = 'schema_version'",
       []
     );
-    expect(version.rows[0]?.value).toBe("26");
+    expect(version.rows[0]?.value).toBe("30");
 
     // The ledger survived the gad_% drop sweep.
     const ledger = await second.call<{ rows: Array<{ kind: string }> }>(
@@ -4280,38 +4541,45 @@ describe("knowledge ledger + claims (§8.1)", () => {
     expect(claims.rows[0]?.n).toBe(2);
   });
 
-  it("projects a directly-appended knowledge.claims_related event (registration + inline fallback)", async () => {
+  it("rejects knowledge relation events without a real ledger entry", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
-      trajectoryId: "traj-x",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "rel-ev-1",
-          event: event("knowledge.claims_related", {
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              relations: [{ src: "claim-a", relation: "supports", dst: "claim-b", weight: 2 }],
-            },
-          }),
-        },
-      ],
-    });
+    const append = (payload: Record<string, unknown>) =>
+      call("appendLogEvent", {
+        logId: "traj-x",
+        head: "main",
+        logKind: "trajectory",
+        owner,
+        events: [
+          {
+            envelopeId: "rel-ev-1",
+            actor: owner,
+            payloadKind: "knowledge.claims_related",
+            payload,
+            appendedAt: "2026-05-20T12:00:00.000Z",
+          },
+        ],
+      });
+
+    await expect(
+      append({
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        relations: [{ src: "claim-a", relation: "supports", dst: "claim-b", weight: 2 }],
+      })
+    ).rejects.toThrow(/ledgerEntryId is required/);
+    await expect(
+      append({
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        ledgerEntryId: "missing-ledger-entry",
+        relations: [{ src: "claim-a", relation: "supports", dst: "claim-b", weight: 2 }],
+      })
+    ).rejects.toThrow(/ledger entry missing-ledger-entry does not exist/);
+
     const rows = await call<{ rows: Array<Record<string, unknown>> }>(
       "query",
       "SELECT event_id, src_claim_id, relation, dst_claim_id, weight FROM gad_claim_relations",
       []
     );
-    expect(rows.rows).toEqual([
-      expect.objectContaining({
-        event_id: "rel-ev-1",
-        src_claim_id: "claim-a",
-        relation: "supports",
-        dst_claim_id: "claim-b",
-        weight: 2,
-      }),
-    ]);
+    expect(rows.rows).toEqual([]);
   });
 
   it("snapshots the anchor (repo, commit message, actor, time) and buckets commit-borne claims", async () => {
@@ -4532,7 +4800,7 @@ describe("knowledge ledger + claims (§8.1)", () => {
 
   it("stamps a per-branch turn ordinal on turn.opened", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    await call("appendTrajectoryBatch", {
+    await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
       owner,

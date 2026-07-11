@@ -34,7 +34,6 @@ Useful APIs:
 
 - `gad.getTrajectoryBranchHead({ trajectoryId, branchId })`
 - `gad.listTrajectoryEvents({ trajectoryId, branchId, cursor, limit })`
-- `gad.appendTrajectoryBatch({ trajectoryId, branchId, owner, events })`
 - `gad.inspectChannelEnvelopes({ channelId, cursor, limit, payloadKind })` for normal debugging; it returns compact payload summaries, byte counts, and stored-ref digests.
 - `gad.listChannelEnvelopes({ channelId, cursor, limit, payloadKind })` only when code needs hydrated semantic envelopes. Do not use it for broad exploratory dumps inside an agent turn.
 - `gad.inspectPublicationIntegrity({ channelId, branchId })` to distinguish real missing trajectory publication joins from expected channel-origin envelopes.

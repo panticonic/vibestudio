@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildModelContext } from "./context.js";
-import { initialAgentState, type AgentLoopConfig, type AgentState, type SessionEntry } from "./state.js";
+import {
+  initialAgentState,
+  type AgentLoopConfig,
+  type AgentState,
+  type SessionEntry,
+} from "./state.js";
 
 const config = {
   model: "anthropic:claude-sonnet-4-6",
@@ -40,20 +45,9 @@ describe("buildModelContext: multi-agent attribution", () => {
     // ai-chat's message is NOT the explorer's own voice — it's attributed user context.
     expect(msgs[0]).toEqual({ role: "user", content: "[ai-chat]: I added the explorer" });
     // the explorer's own message stays assistant.
-    expect(msgs[1]).toEqual({ role: "assistant", blocks: [{ type: "text", content: "my own turn" }] });
-  });
-
-  it("without a selfId, leaves all assistant entries as assistant (back-compat)", () => {
-    const entries: SessionEntry[] = [
-      {
-        kind: "assistant",
-        seq: 1,
-        messageId: "m1",
-        senderRef: { kind: "agent", id: "agent:other" },
-        blocks: [],
-      },
-    ];
-    const state: AgentState = { ...initialAgentState({ channelId: "c", config }), entries };
-    expect(buildModelContext(state)[0]?.role).toBe("assistant");
+    expect(msgs[1]).toEqual({
+      role: "assistant",
+      blocks: [{ type: "text", content: "my own turn" }],
+    });
   });
 });

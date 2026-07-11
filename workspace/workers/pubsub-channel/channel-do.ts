@@ -16,13 +16,20 @@
 
 /// <reference path="../workerd.d.ts" />
 import {
+  createDurableObjectServiceClient,
   rpc,
   DurableObjectBase,
   type DurableObjectContext,
+  type DurableObjectServiceClient,
   type UserlandApprovalChoice,
 } from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
-import type { BootstrapSnapshot, ParticipantSnapshot } from "@workspace/pubsub";
+import type { BootstrapSnapshot, ChannelInvite, ParticipantSnapshot } from "@workspace/pubsub";
+import type {
+  DeleteChannelInviteInput,
+  DeleteChannelMembershipInput,
+  PutChannelMembershipInput,
+} from "@vibestudio/shared/channelInvites";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -64,6 +71,15 @@ import type { PolicyEnvelopeView } from "@workspace/channel-policies";
 
 /** How long before an RPC participant is considered stale (no heartbeat). */
 const PARTICIPANT_STALE_MS = 5 * 60 * 1000; // 5 minutes
+/** Connected humans move through these activity states without being removed
+ * from the roster. Heartbeats are liveness only and never reset activity. */
+const PRESENCE_IDLE_MS = 5 * 60 * 1000;
+const PRESENCE_AWAY_MS = 30 * 60 * 1000;
+/** WP8 §3 — how long a departed user's `presence_last_seen` row is retained so
+ *  offline members still render "last seen Xm ago". A bounded window (decision
+ *  §8.3); older rows are swept alongside the participant sweep. Their account
+ *  identity persists in the hub-owned identity DB regardless. */
+const PRESENCE_LAST_SEEN_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 /** Default channel-envelope replay window. */
 const REPLAY_LIMIT = 50;
 /** Dedup keys are a latency cache; the durable dedupe is the `ik:{key}`
@@ -78,12 +94,16 @@ const PENDING_REDELIVERY_STALE_MS = 10_000;
  *  defeating hibernation). */
 const PENDING_REDELIVERY_INTERVAL_MS = 15_000;
 const PENDING_REDELIVERY_SWEPT_AT_KEY = "pendingRedeliverySweptAt";
+/** Retry cadence for the per-channel membership → workspace invite projection. */
+const INVITE_INDEX_RETRY_MS = 5_000;
+const INVITE_INDEX_REVISION_KEY = "inviteIndexRevision";
 
 const DEFAULT_POLICY_NAME = "agentic.conversation.v1";
 
 /** Service protocol the channel DO resolves for sibling channels (fork parent,
  *  lineage forwarding). */
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
+const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 /** Debounce window before a durable head advance fans out up the lineage. */
 const LINEAGE_REPORT_DEBOUNCE_MS = 500;
 /** Signal contentType for the ephemeral fork.head_changed lineage badge. */
@@ -94,14 +114,7 @@ const FORK_OP_RECONCILE_MS = 5_000;
 
 /** Ordered fork-op phases; a resume skips everything at or below the recorded
  *  phase. `rolledback` is terminal (the op was torn down). */
-const FORK_PHASES = [
-  "journaled",
-  "cloned",
-  "postcloned",
-  "seeded",
-  "announced",
-  "done",
-] as const;
+const FORK_PHASES = ["journaled", "cloned", "postcloned", "seeded", "announced", "done"] as const;
 type ForkPhase = (typeof FORK_PHASES)[number] | "rolledback";
 function forkPhaseReached(phase: string, target: ForkPhase): boolean {
   const a = FORK_PHASES.indexOf(phase as (typeof FORK_PHASES)[number]);
@@ -196,6 +209,51 @@ function parseDOParticipantId(
   return { source, className, objectKey };
 }
 
+/**
+ * Stable principal-derived human participant id (WP6 §4): `user:<userId>`.
+ * One roster identity per human, shared by every live panel/device.
+ */
+function isUserParticipantId(participantId: string): boolean {
+  return participantId.startsWith("user:");
+}
+
+/** Build the stable channel participant id from the canonical bare account id. */
+function toUserMemberId(userId: string): string {
+  return `user:${userId}`;
+}
+
+/** The bare `userId` behind a `user:<id>` member id (idempotent on a bare id). */
+function bareUserId(userIdOrRef: string): string {
+  return userIdOrRef.startsWith("user:") ? userIdOrRef.slice("user:".length) : userIdOrRef;
+}
+
+function requireBareUserId(value: unknown, method: string): string {
+  if (typeof value !== "string" || value.trim() === "" || value.startsWith("user:")) {
+    throw new Error(`${method}: userId must be a bare workspace account id`);
+  }
+  return value.trim();
+}
+
+/**
+ * A human roster row stores ONLY the stable identity (`id: user:<userId>`,
+ * `kind: "user"`) plus functional transport fields (methods, typing, …).
+ * Mutable profile — handle/displayName/color/avatar — is NEVER frozen into
+ * the row; renderers resolve it live from the host-projected identity read
+ * (WP0 §3.7, WP6 §3). Client-asserted identity fields are dropped here: data
+ * hygiene (one source of truth), not an inter-user security wall (plan §0.0).
+ */
+function scrubUserParticipantMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const scrubbed = { ...metadata };
+  delete scrubbed["handle"];
+  delete scrubbed["name"];
+  delete scrubbed["displayName"];
+  delete scrubbed["color"];
+  delete scrubbed["avatar"];
+  scrubbed["type"] = "user";
+  scrubbed["kind"] = "user";
+  return scrubbed;
+}
+
 const ADMIN_AGENT_DEBUG_METHODS = new Set([
   "getDebugState",
   "getAgentSettings",
@@ -228,9 +286,35 @@ interface AgentInspectionResult {
   };
 }
 
+/** A durable channel membership record (WP7 §3) — separate from the ephemeral
+ *  `participants` roster row. Survives reconnects and offline stretches. */
+interface ChannelMember {
+  /** Bare `userId` (the `user:<id>` prefix stripped). */
+  userId: string;
+  /** Stable member id / `channel_members` PK (`user:<userId>`). */
+  memberId: string;
+  /** Invitee handle snapshot at add time (profiles still render LIVE, WP6 §3). */
+  handle: string;
+  /** Acting user's member id (or raw callerId for agent/worker adds). */
+  addedBy: string;
+  addedAt: number;
+}
+
+type ChannelPresenceStatus = "online" | "idle" | "away" | "offline";
+
+interface ChannelPresenceEntry {
+  participantId: string;
+  userId: string;
+  status: ChannelPresenceStatus;
+  lastActiveAt: number | null;
+  lastSeenAt: number | null;
+  sessionCount: number;
+}
+
 export class PubSubChannel extends DurableObjectBase {
-  static override schemaVersion = 106;
+  static override schemaVersion = 112;
   private _channelLog: ChannelLog | null = null;
+  private _inviteIndex: DurableObjectServiceClient | null = null;
   private _policyHost: PolicyHost | null = null;
   private _calls: CallTransport | null = null;
   private readonly publishDedupInFlight = new Map<string, Promise<ChannelEvent>>();
@@ -252,14 +336,35 @@ export class PubSubChannel extends DurableObjectBase {
         id TEXT PRIMARY KEY,
         metadata TEXT NOT NULL,
         transport TEXT NOT NULL CHECK (transport IN ('rpc','do')),
-        connected_at INTEGER NOT NULL,
-        session_id TEXT,
+        -- Freshest real client activity across a user's sessions. Heartbeats
+        -- live in participant_sessions and deliberately do not touch this.
+        last_active_at INTEGER,
+        presence_status TEXT CHECK (presence_status IN ('online','idle','away')),
         handle TEXT,
         do_source TEXT,
         do_class TEXT,
         do_object_key TEXT
       )
     `);
+    // A participant identity may have multiple independently-owned live
+    // sessions. `delivery_id` is the actual RPC endpoint (panel slot / DO id),
+    // while participant_id is the canonical channel actor (`user:<userId>` for
+    // a human).
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS participant_sessions (
+        participant_id TEXT NOT NULL,
+        session_id     TEXT NOT NULL,
+        delivery_id    TEXT NOT NULL,
+        last_seen      INTEGER NOT NULL,
+        PRIMARY KEY (participant_id, session_id),
+        UNIQUE (delivery_id, session_id),
+        FOREIGN KEY (participant_id) REFERENCES participants(id) ON DELETE CASCADE
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_participant_sessions_stale
+         ON participant_sessions(last_seen)`
+    );
     this.sql.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_handle
          ON participants(handle) WHERE handle IS NOT NULL`
@@ -321,6 +426,54 @@ export class PubSubChannel extends DurableObjectBase {
         created_at INTEGER NOT NULL
       )
     `);
+    // Durable channel membership (WP7 §3). This is deliberately separate from
+    // the ephemeral `participants` roster, which is rebuilt on reconnect. The
+    // workspace-wide pending-invite index lives in GAD; membership carries no
+    // duplicate acknowledgement state.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_members (
+        user_id  TEXT PRIMARY KEY,   -- user:<userId>
+        handle   TEXT NOT NULL,
+        added_by TEXT NOT NULL,      -- user:<userId> (or raw callerId)
+        added_at INTEGER NOT NULL
+      )
+    `);
+    // Crash-safe membership → workspace-inbox projection. A row is replaced
+    // atomically whenever the desired state changes, and removed only when the
+    // matching op_id is confirmed by GAD, so an interleaved add/remove cannot
+    // let an older response erase the newer intent.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS invite_index_ops (
+        user_id    TEXT PRIMARY KEY,   -- user:<userId>
+        op_id      TEXT NOT NULL UNIQUE,
+        revision   INTEGER NOT NULL CHECK (revision > 0),
+        action     TEXT NOT NULL CHECK (action IN ('put', 'delete')),
+        handle     TEXT,
+        added_by   TEXT,
+        added_at   INTEGER,
+        updated_at INTEGER NOT NULL,
+        CHECK (
+          action = 'delete' OR
+          (handle IS NOT NULL AND added_by IS NOT NULL AND added_at IS NOT NULL)
+        )
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_invite_index_ops_updated ON invite_index_ops(updated_at)`
+    );
+    // WP8 §3 — retained last-seen for account presence. When a user's LAST live
+    // panel leaves (graceful release, disconnect eviction), we stamp `last_seen`
+    // here so an offline member still renders "last seen Xm ago". Deliberately
+    // OUTLIVES the ephemeral `participants` row (which is deleted on leave); a
+    // (re)join clears the row. Bounded by PRESENCE_LAST_SEEN_RETENTION_MS. Like
+    // `channel_members`, it is durable presence with no other copy, so it is NOT
+    // dropped on a schema bump.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS presence_last_seen (
+        participant_id TEXT PRIMARY KEY,    -- user:<userId>
+        last_seen      INTEGER NOT NULL
+      )
+    `);
   }
 
   protected override migrate(_fromVersion: number, _toVersion: number): void {
@@ -329,14 +482,24 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DROP INDEX IF EXISTS idx_messages_root_chat`);
     this.sql.exec(`DROP TABLE IF EXISTS channel_envelopes`);
     this.sql.exec(`DROP TABLE IF EXISTS messages`);
+    this.sql.exec(`DROP TABLE IF EXISTS participant_sessions`);
     this.sql.exec(`DROP TABLE IF EXISTS participants`);
     this.sql.exec(`DROP TABLE IF EXISTS pending_calls`);
     this.sql.exec(`DROP TABLE IF EXISTS dedup_keys`);
     this.sql.exec(`DROP TABLE IF EXISTS fork_ops`);
     this.sql.exec(`DROP TABLE IF EXISTS lineage_subscribers`);
+    this.sql.exec(`DROP TABLE IF EXISTS invite_index_ops`);
+    // v112 is an intentional pre-release schema cut: projection operations now
+    // carry a required monotonic revision. Older journal rows are not migrated
+    // or retained.
+    this.sql.exec(`DROP TABLE IF EXISTS channel_members`);
     // Channel-side registry cache deleted for good — GAD's
     // channel_message_types projection is the only copy.
     this.sql.exec(`DROP TABLE IF EXISTS message_types`);
+    // Retained last-seen has no schema change and remains the sole bounded
+    // channel-presence record. All membership rows are recreated in the clean
+    // v112 shape; this pre-release cut intentionally carries no compatibility
+    // bridge for the removed acknowledgement column or unversioned mutations.
     this.createTables();
   }
 
@@ -359,6 +522,17 @@ export class PubSubChannel extends DurableObjectBase {
       this.objectKey
     );
     return this._channelLog;
+  }
+
+  private get inviteIndex(): DurableObjectServiceClient {
+    this._inviteIndex ??= createDurableObjectServiceClient(
+      {
+        call: <T = unknown>(targetId: string, method: string, args: unknown[]) =>
+          this.rpc.call<T>(targetId, method, args),
+      },
+      GAD_WORKSPACE_SERVICE_PROTOCOL
+    );
+    return this._inviteIndex;
   }
 
   private get policyHost(): PolicyHost {
@@ -564,10 +738,80 @@ export class PubSubChannel extends DurableObjectBase {
 
   private isAuthorizedParticipantCaller(participantId: string): boolean {
     const caller = this.caller;
-    if (!caller?.callerId) return true;
+    if (!caller?.callerId) return false;
     if (caller.callerId === participantId) return true;
     if (caller.callerKind === "panel" && caller.callerPanelId === participantId) return true;
+    // Principal-derived human identity (WP6 §3-4): any panel/device owned by
+    // the host-verified user acts as the shared `user:<userId>` participant.
+    if (caller.userId && participantId === `user:${caller.userId}`) return true;
     return false;
+  }
+
+  private callerDeliveryId(): string | null {
+    const caller = this.caller;
+    if (!caller) return null;
+    return caller.callerKind === "panel"
+      ? (caller.callerPanelId ?? caller.callerId)
+      : caller.callerId;
+  }
+
+  /** Session ownership is part of every public liveness/release operation. The
+   * participant check prevents cross-user attribution; the delivery-id check
+   * prevents one device of the same user from controlling another device. */
+  private assertParticipantSession(participantId: string, sessionId: string, method: string): void {
+    this.assertParticipantCaller(participantId, method);
+    if (typeof sessionId !== "string" || sessionId.length === 0) {
+      throw new Error(`${method}: sessionId is required`);
+    }
+    const row = this.sql
+      .exec(
+        `SELECT delivery_id FROM participant_sessions
+           WHERE participant_id = ? AND session_id = ?`,
+        participantId,
+        sessionId
+      )
+      .toArray()[0];
+    if (!row) throw new Error(`${method}: session does not belong to participant ${participantId}`);
+    const callerDeliveryId = this.callerDeliveryId();
+    if (callerDeliveryId && row["delivery_id"] !== callerDeliveryId) {
+      throw new Error(`${method}: session is owned by a different client endpoint`);
+    }
+  }
+
+  private participantSessionCount(participantId: string): number {
+    const count = this.sql
+      .exec(
+        `SELECT COUNT(*) AS count FROM participant_sessions WHERE participant_id = ?`,
+        participantId
+      )
+      .toArray()[0]?.["count"];
+    return typeof count === "number" ? count : 0;
+  }
+
+  /**
+   * Eager reconnect cleanup uses the same release path as the alarm and public
+   * unsubscribe flows. Deleting only the stale session row would strand the
+   * participant identity, skip retained last-seen, and leave pending calls
+   * targeting an endpoint that no longer exists.
+   */
+  private async releaseStaleParticipantSessions(
+    participantId: string,
+    cutoff = Date.now() - PARTICIPANT_STALE_MS
+  ): Promise<number> {
+    const staleSessionIds = this.sql
+      .exec(
+        `SELECT session_id FROM participant_sessions
+          WHERE participant_id = ? AND last_seen < ?
+          ORDER BY session_id`,
+        participantId,
+        cutoff
+      )
+      .toArray()
+      .map((row) => String(row["session_id"]));
+    for (const sessionId of staleSessionIds) {
+      await this.unsubscribeParticipant(participantId, "disconnect", sessionId);
+    }
+    return staleSessionIds.length;
   }
 
   private isPrivilegedRpcCaller(): boolean {
@@ -635,6 +879,125 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, event, { kind: "signal" }, senderId);
   }
 
+  private broadcastChannelSignal(
+    type: string,
+    payload: Record<string, unknown>,
+    senderId = "system"
+  ): void {
+    const event = buildChannelEvent(
+      0,
+      crypto.randomUUID(),
+      type,
+      JSON.stringify(payload),
+      senderId,
+      undefined,
+      Date.now()
+    );
+    broadcast(this.broadcastDeps, event, { kind: "signal" }, senderId);
+  }
+
+  private presenceStatusAt(
+    lastActiveAt: number,
+    now = Date.now()
+  ): Exclude<ChannelPresenceStatus, "offline"> {
+    const age = Math.max(0, now - lastActiveAt);
+    if (age < PRESENCE_IDLE_MS) return "online";
+    if (age < PRESENCE_AWAY_MS) return "idle";
+    return "away";
+  }
+
+  /** Record real user activity (message, typing, method interaction). This is
+   * separate from touch(), whose only job is transport liveness. */
+  private markParticipantActive(participantId: string): void {
+    if (!isUserParticipantId(participantId)) return;
+    const now = Date.now();
+    const row = this.sql
+      .exec(`SELECT presence_status FROM participants WHERE id = ?`, participantId)
+      .toArray()[0];
+    if (!row) return;
+    const was = row["presence_status"] as string | null;
+    this.sql.exec(
+      `UPDATE participants SET last_active_at = ?, presence_status = 'online' WHERE id = ?`,
+      now,
+      participantId
+    );
+    if (was !== "online") {
+      this.broadcastPresenceSignal(participantId, "update", {
+        kind: "user",
+        presenceStatus: "online",
+        lastActiveAt: now,
+      });
+    }
+    this.scheduleNextAlarm();
+  }
+
+  private recordOfflinePresence(participantId: string, lastSeen: number): void {
+    this.sql.exec(
+      `INSERT INTO presence_last_seen (participant_id, last_seen) VALUES (?, ?)
+       ON CONFLICT(participant_id) DO UPDATE SET last_seen = excluded.last_seen`,
+      participantId,
+      lastSeen
+    );
+  }
+
+  /** Durable per-channel human presence, including offline members who have no
+   * roster row. Status is server-derived from real activity and session count. */
+  @rpc({ callers: ["panel", "do", "worker", "server", "shell", "agent"] })
+  async getChannelPresence(): Promise<{ entries: ChannelPresenceEntry[]; generatedAt: number }> {
+    const generatedAt = Date.now();
+    const entries = new Map<string, ChannelPresenceEntry>();
+    for (const row of this.sql
+      .exec(
+        `SELECT p.id, p.last_active_at, p.presence_status, COUNT(s.session_id) AS session_count
+           FROM participants p
+           JOIN participant_sessions s ON s.participant_id = p.id
+          WHERE p.id LIKE 'user:%'
+          GROUP BY p.id, p.last_active_at, p.presence_status`
+      )
+      .toArray()) {
+      const participantId = row["id"] as string;
+      const lastActiveAt = (row["last_active_at"] as number | null) ?? generatedAt;
+      entries.set(participantId, {
+        participantId,
+        userId: bareUserId(participantId),
+        status: this.presenceStatusAt(lastActiveAt, generatedAt),
+        lastActiveAt,
+        lastSeenAt: null,
+        sessionCount: Number(row["session_count"] ?? 0),
+      });
+    }
+    for (const row of this.sql
+      .exec(`SELECT participant_id, last_seen FROM presence_last_seen`)
+      .toArray()) {
+      const participantId = row["participant_id"] as string;
+      if (entries.has(participantId)) continue;
+      entries.set(participantId, {
+        participantId,
+        userId: bareUserId(participantId),
+        status: "offline",
+        lastActiveAt: null,
+        lastSeenAt: row["last_seen"] as number,
+        sessionCount: 0,
+      });
+    }
+    for (const row of this.sql.exec(`SELECT user_id FROM channel_members`).toArray()) {
+      const participantId = row["user_id"] as string;
+      if (entries.has(participantId)) continue;
+      entries.set(participantId, {
+        participantId,
+        userId: bareUserId(participantId),
+        status: "offline",
+        lastActiveAt: null,
+        lastSeenAt: null,
+        sessionCount: 0,
+      });
+    }
+    return {
+      entries: [...entries.values()].sort((a, b) => a.participantId.localeCompare(b.participantId)),
+      generatedAt,
+    };
+  }
+
   // ── RPC-callable methods ──────────────────────────────────────────────
 
   /**
@@ -646,9 +1009,38 @@ export class PubSubChannel extends DurableObjectBase {
     participantId: string,
     metadata: Record<string, unknown>
   ): Promise<SubscribeResult> {
-    const doRef = parseDOParticipantId(participantId);
+    const deliveryId = participantId;
+    const doRef = parseDOParticipantId(deliveryId);
     const transport = doRef ? "do" : "rpc";
     const callerId = this.rpcCallerId;
+
+    // ── Principal-derived human identity (WP6 §3-4) ──────────────────────
+    // A human panel/shell joins as the STABLE account participant
+    // `user:<userId>` (kind "user"), stamped from the host-verified caller
+    // userId (WP4 §2.4) — any client-asserted id/handle for a human join is
+    // IGNORED. This is data hygiene (one reliable identity per human, plan
+    // §0.0), not an inter-user security wall. Mutable profile fields
+    // (handle/displayName/color/avatar) are never frozen onto the roster
+    // row; renderers resolve them live from the host-projected identity
+    // read (WP0 §3.7). Agents/vessels keep supplying their own descriptor.
+    const subscribeCaller = this.caller;
+    const verifiedUserId =
+      subscribeCaller?.userId &&
+      (subscribeCaller.callerKind === "panel" || subscribeCaller.callerKind === "shell")
+        ? subscribeCaller.userId
+        : null;
+    // Clean cut: every verified panel/shell is a human account. There is no
+    // client marker, asserted kind, or pre-canonical participant-id convention.
+    if (!doRef && verifiedUserId) {
+      participantId = `user:${verifiedUserId}`;
+    } else if (isUserParticipantId(participantId)) {
+      throw new Error(
+        `subscribe: participant id "${participantId}" is principal-derived; only a ` +
+          `host-verified human caller (panel/shell carrying a userId) may claim it`
+      );
+    }
+    const isUserParticipant = isUserParticipantId(participantId);
+
     if (!this.isAuthorizedParticipantCaller(participantId)) {
       const caller = this.caller;
       throw new Error(
@@ -656,27 +1048,6 @@ export class PubSubChannel extends DurableObjectBase {
       );
     }
 
-    // Validate advertised method names FIRST with the exact legacy message
-    // (agents depend on the text), then the zod schema for everything else.
-    const advertisedMethods = metadata["methods"];
-    if (Array.isArray(advertisedMethods)) {
-      const VALID_METHOD_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
-      const RESERVED_METHOD_NAMES = new Set(["read", "edit", "write", "grep", "find", "ls"]);
-      for (const m of advertisedMethods) {
-        const name =
-          m && typeof m === "object" && typeof (m as { name?: unknown }).name === "string"
-            ? (m as { name: string }).name
-            : null;
-        if (name === null) continue; // unknown shape; let downstream handle it
-        if (!VALID_METHOD_NAME.test(name) || RESERVED_METHOD_NAMES.has(name)) {
-          throw new Error(
-            `Invalid method name "${name}" advertised by participant "${participantId}". ` +
-              `Method names must match /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/ and ` +
-              `not collide with built-in tool names (read, edit, write, grep, find, ls).`
-          );
-        }
-      }
-    }
     const parsedMetadata = participantMetadataSchema.safeParse(metadata);
     if (!parsedMetadata.success) {
       const issue = parsedMetadata.error.issues[0];
@@ -689,6 +1060,11 @@ export class PubSubChannel extends DurableObjectBase {
       typeof metadata[PARTICIPANT_SESSION_METADATA_KEY] === "string"
         ? (metadata[PARTICIPANT_SESSION_METADATA_KEY] as string)
         : null;
+    if (!participantSessionId) {
+      throw new Error(
+        `subscribe: ${PARTICIPANT_SESSION_METADATA_KEY} is required for session ownership`
+      );
+    }
 
     const contextId = metadata["contextId"] as string | undefined;
     const channelConfigRaw = metadata["channelConfig"] as Record<string, unknown> | undefined;
@@ -696,9 +1072,14 @@ export class PubSubChannel extends DurableObjectBase {
       this.initChannel(contextId, channelConfigRaw);
     }
 
-    // Handle uniqueness: friendly pre-check (exact legacy message); the
-    // partial unique index is the race-proof enforcement underneath.
-    const handle = typeof metadata["handle"] === "string" ? (metadata["handle"] as string) : null;
+    // Handle uniqueness: a friendly pre-check complements the partial unique
+    // index that provides race-proof enforcement. Human
+    // rows store NO handle (WP6 §3: the account handle renders live, is
+    // unique server-wide, and never enters this per-channel column).
+    const handle =
+      !isUserParticipant && typeof metadata["handle"] === "string"
+        ? (metadata["handle"] as string)
+        : null;
     if (handle) {
       const conflict = this.sql
         .exec(`SELECT id FROM participants WHERE handle = ? AND id != ?`, handle, participantId)
@@ -722,34 +1103,41 @@ export class PubSubChannel extends DurableObjectBase {
 
     // Re-subscribe with the same participant ID: replace the roster entry, but
     // only redeliver in-flight calls if the underlying client session changed.
+    // Human rows are instead ref-counted (WP6 §4): every live panel/device of
+    // one user MERGES into the single `user:<userId>` row — no leave/replace
+    // churn, no N anonymous rows.
+    // Release dead sessions before deciding whether this is a new logical
+    // join. This must run the canonical release path: a bare session DELETE
+    // would strand last-seen, identity, pending-call, and presence state.
+    await this.releaseStaleParticipantSessions(participantId);
     const existing = this.sql
-      .exec(`SELECT session_id FROM participants WHERE id = ?`, participantId)
+      .exec(`SELECT id FROM participants WHERE id = ?`, participantId)
+      .toArray();
+    const existingSessions = this.sql
+      .exec(
+        `SELECT session_id, delivery_id FROM participant_sessions WHERE participant_id = ?`,
+        participantId
+      )
       .toArray();
     let sessionReplaced = false;
-    if (existing.length > 0) {
-      const previousSessionId = existing[0]!["session_id"] as string | null;
+    let replacedNonUser:
+      | {
+          metadata: Record<string, unknown>;
+          previousSessionId: string | null;
+          leaveReason: "graceful" | "replaced";
+        }
+      | undefined;
+    if (isUserParticipant) {
+      sessionReplaced = !existingSessions.some((row) => row["session_id"] === participantSessionId);
+    } else if (existing.length > 0) {
+      const previousSessionId = (existingSessions[0]?.["session_id"] as string | undefined) ?? null;
       const oldMetadata = this.getSenderMetadata(participantId) ?? {};
-      sessionReplaced =
-        previousSessionId == null ||
-        participantSessionId == null ||
-        previousSessionId !== participantSessionId;
-      await this.publishPresenceEvent(
-        participantId,
-        "leave",
-        oldMetadata,
-        sessionReplaced ? "replaced" : "graceful"
-      );
-      this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
-      cleanupDeliveryChain(this.objectKey, participantId);
-      if (sessionReplaced) {
-        const pendingCountRow = this.sql
-          .exec(`SELECT COUNT(*) as cnt FROM pending_calls WHERE target_id = ?`, participantId)
-          .toArray();
-        const pendingCount = (pendingCountRow[0]?.["cnt"] as number) ?? 0;
-        console.log(
-          `[Channel] Participant session replaced: target=${participantId} previousSession=${previousSessionId ?? "unknown"} newSession=${participantSessionId ?? "unknown"} pendingCalls=${pendingCount}`
-        );
-      }
+      sessionReplaced = previousSessionId !== participantSessionId;
+      replacedNonUser = {
+        metadata: oldMetadata,
+        previousSessionId,
+        leaveReason: sessionReplaced ? "replaced" : "graceful",
+      };
     }
 
     // Extract replay options before cleaning metadata
@@ -758,7 +1146,7 @@ export class PubSubChannel extends DurableObjectBase {
     const replayMessageLimit = metadata["replayMessageLimit"] as number | undefined;
 
     // Clean metadata for storage (remove transport/DO fields and subscribe-time hints)
-    const storedMetadata = { ...metadata };
+    let storedMetadata = { ...metadata };
     delete storedMetadata["contextId"];
     delete storedMetadata["channelConfig"];
     delete storedMetadata["replay"];
@@ -766,23 +1154,79 @@ export class PubSubChannel extends DurableObjectBase {
     delete storedMetadata["replayMessageLimit"];
     delete storedMetadata["transport"];
     delete storedMetadata[PARTICIPANT_SESSION_METADATA_KEY];
+    if (isUserParticipant) storedMetadata = scrubUserParticipantMetadata(storedMetadata);
 
     try {
-      this.sql.exec(
-        `INSERT INTO participants (
-           id, metadata, transport, connected_at, session_id, handle,
-           do_source, do_class, do_object_key
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        participantId,
-        JSON.stringify(storedMetadata),
-        transport === "do" ? "do" : "rpc",
-        Date.now(),
-        participantSessionId,
-        handle,
-        doRef?.source ?? null,
-        doRef?.className ?? null,
-        doRef?.objectKey ?? null
-      );
+      if (isUserParticipant) {
+        // The shared human identity, delivery session, and retained-presence
+        // reset form one storage commit. In particular, a delivery/session
+        // uniqueness collision cannot leave a phantom participant row behind.
+        // Joining IS activity (WP8 §3): seed `last_active_at` on first join and
+        // bump it on every (re)join so a returning panel resets idle/away.
+        const joinNow = Date.now();
+        this.ctx.storage.transactionSync(() => {
+          this.sql.exec(
+            `INSERT INTO participants (
+               id, metadata, transport, last_active_at, presence_status, handle,
+               do_source, do_class, do_object_key
+             ) VALUES (?, ?, 'rpc', ?, 'online', NULL, NULL, NULL, NULL)
+             ON CONFLICT(id) DO UPDATE SET
+               metadata = excluded.metadata,
+               transport = excluded.transport,
+               last_active_at = MAX(COALESCE(participants.last_active_at, 0), excluded.last_active_at),
+               presence_status = 'online'`,
+            participantId,
+            JSON.stringify(storedMetadata),
+            joinNow
+          );
+          this.sql.exec(
+            `INSERT INTO participant_sessions (participant_id, session_id, delivery_id, last_seen)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(participant_id, session_id) DO UPDATE SET
+               delivery_id = excluded.delivery_id,
+               last_seen = excluded.last_seen`,
+            participantId,
+            participantSessionId,
+            deliveryId,
+            joinNow
+          );
+          // Back online — drop retained last-seen in the same commit.
+          this.sql.exec(`DELETE FROM presence_last_seen WHERE participant_id = ?`, participantId);
+        });
+      } else {
+        this.ctx.storage.transactionSync(() => {
+          // A replacement removes the old identity/session and installs the new
+          // pair atomically. If either INSERT fails, the old roster entry remains.
+          if (replacedNonUser) {
+            this.sql.exec(
+              `DELETE FROM participant_sessions WHERE participant_id = ?`,
+              participantId
+            );
+            this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
+          }
+          this.sql.exec(
+            `INSERT INTO participants (
+               id, metadata, transport, last_active_at, presence_status, handle,
+               do_source, do_class, do_object_key
+             ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+            participantId,
+            JSON.stringify(storedMetadata),
+            transport === "do" ? "do" : "rpc",
+            handle,
+            doRef?.source ?? null,
+            doRef?.className ?? null,
+            doRef?.objectKey ?? null
+          );
+          this.sql.exec(
+            `INSERT INTO participant_sessions (participant_id, session_id, delivery_id, last_seen)
+             VALUES (?, ?, ?, ?)`,
+            participantId,
+            participantSessionId,
+            deliveryId,
+            Date.now()
+          );
+        });
+      }
     } catch (err) {
       if (handle && err instanceof Error && /unique/iu.test(err.message)) {
         throw new Error(
@@ -793,8 +1237,33 @@ export class PubSubChannel extends DurableObjectBase {
       throw err;
     }
 
-    // Publish join presence before building replay so the initial roster snapshot includes self.
-    await this.publishPresenceEvent(participantId, "join", storedMetadata);
+    if (replacedNonUser) {
+      cleanupDeliveryChain(this.objectKey, participantId);
+      await this.publishPresenceEvent(
+        participantId,
+        "leave",
+        replacedNonUser.metadata,
+        replacedNonUser.leaveReason
+      );
+      if (sessionReplaced) {
+        const pendingCountRow = this.sql
+          .exec(`SELECT COUNT(*) as cnt FROM pending_calls WHERE target_id = ?`, participantId)
+          .toArray();
+        const pendingCount = (pendingCountRow[0]?.["cnt"] as number) ?? 0;
+        console.log(
+          `[Channel] Participant session replaced: target=${participantId} previousSession=${replacedNonUser.previousSessionId ?? "unknown"} newSession=${participantSessionId} pendingCalls=${pendingCount}`
+        );
+      }
+    }
+
+    // Publish join presence before building replay so the initial roster snapshot
+    // includes self. An additional panel of an already-present user refreshes the
+    // shared row with "update" instead of a duplicate "join".
+    await this.publishPresenceEvent(
+      participantId,
+      isUserParticipant && existingSessions.length > 0 ? "update" : "join",
+      storedMetadata
+    );
 
     const mode = wantsReplay && sinceId && sinceId > 0 ? "after" : "initial";
     const envelope =
@@ -809,7 +1278,7 @@ export class PubSubChannel extends DurableObjectBase {
     // connectViaRpc) receive replay via the `channel:message` emits + subscribe
     // ACK fallback, and have no onChannelEnvelope handler.
     this.queueReplayEnvelope(
-      participantId,
+      deliveryId,
       envelope,
       doRef != null && metadata["receivesChannelEnvelopes"] === true
     );
@@ -828,6 +1297,7 @@ export class PubSubChannel extends DurableObjectBase {
 
     return {
       ok: true,
+      participantId,
       channelConfig: this.getChannelConfig() ?? undefined,
       envelope,
     };
@@ -844,7 +1314,21 @@ export class PubSubChannel extends DurableObjectBase {
         err?.code === "RECONNECT_GRACE_EXPIRED" ||
         err?.code === "DO_NOT_CREATED"
       ) {
-        this.sql.exec(`DELETE FROM participants WHERE id = ?`, subscriberId);
+        const affected = this.sql
+          .exec(
+            `SELECT participant_id FROM participant_sessions WHERE delivery_id = ?`,
+            subscriberId
+          )
+          .toArray();
+        this.sql.exec(`DELETE FROM participant_sessions WHERE delivery_id = ?`, subscriberId);
+        for (const row of affected) {
+          const participantId = row["participant_id"] as string;
+          if (this.participantSessionCount(participantId) > 0) continue;
+          if (isUserParticipantId(participantId)) {
+            this.recordOfflinePresence(participantId, Date.now());
+          }
+          this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
+        }
         cleanupDeliveryChain(this.objectKey, subscriberId);
         return true;
       }
@@ -906,10 +1390,12 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
+  /** Release exactly one caller-owned session. Public callers can never evict
+   * another device or the whole canonical human identity. */
   @rpc({ callers: ["panel", "do", "shell", "agent"] })
-  async unsubscribe(participantId: string): Promise<void> {
-    this.assertParticipantCaller(participantId, "unsubscribe");
-    await this.unsubscribeParticipant(participantId, "graceful");
+  async unsubscribe(participantId: string, sessionId: string): Promise<void> {
+    this.assertParticipantSession(participantId, sessionId, "unsubscribe");
+    await this.unsubscribeParticipant(participantId, "graceful", sessionId);
   }
 
   @rpc({ callers: ["server", "shell"] })
@@ -920,14 +1406,60 @@ export class PubSubChannel extends DurableObjectBase {
 
   private async unsubscribeParticipant(
     participantId: string,
-    leaveReason: "graceful" | "disconnect" | "replaced"
+    leaveReason: "graceful" | "disconnect" | "replaced",
+    sessionId?: string
   ): Promise<void> {
     const metadata = this.getSenderMetadata(participantId) ?? {};
+    const releasedSessions = this.sql
+      .exec(
+        sessionId
+          ? `SELECT session_id, delivery_id FROM participant_sessions
+               WHERE participant_id = ? AND session_id = ?`
+          : `SELECT session_id, delivery_id FROM participant_sessions
+               WHERE participant_id = ?`,
+        ...(sessionId ? [participantId, sessionId] : [participantId])
+      )
+      .toArray();
+    const participantExists =
+      this.sql.exec(`SELECT 1 FROM participants WHERE id = ?`, participantId).toArray().length > 0;
+    if (!participantExists && releasedSessions.length === 0) return;
 
-    this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
+    let releasedLastSession = false;
+    this.ctx.storage.transactionSync(() => {
+      if (sessionId) {
+        this.sql.exec(
+          `DELETE FROM participant_sessions WHERE participant_id = ? AND session_id = ?`,
+          participantId,
+          sessionId
+        );
+      } else {
+        this.sql.exec(`DELETE FROM participant_sessions WHERE participant_id = ?`, participantId);
+      }
+      if (this.participantSessionCount(participantId) > 0) return;
+      releasedLastSession = participantExists;
+      if (releasedLastSession && isUserParticipantId(participantId)) {
+        this.recordOfflinePresence(participantId, Date.now());
+      }
+      if (releasedLastSession) {
+        this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
+      }
+    });
+
+    for (const row of releasedSessions) {
+      cleanupDeliveryChain(this.objectKey, String(row["delivery_id"]));
+    }
+    if (!releasedLastSession) return;
     cleanupDeliveryChain(this.objectKey, participantId);
     await this.calls.failPendingCallsTargeting(participantId, leaveReason);
-    await this.publishPresenceEvent(participantId, "leave", metadata, leaveReason);
+    await this.publishPresenceEvent(
+      participantId,
+      "leave",
+      {
+        ...metadata,
+        ...(isUserParticipantId(participantId) ? { presenceStatus: "offline" } : {}),
+      },
+      leaveReason
+    );
     this.scheduleNextAlarm();
   }
 
@@ -940,14 +1472,19 @@ export class PubSubChannel extends DurableObjectBase {
     await this.calls.failPendingCallsTargeting(targetId, reason);
   }
 
-  /** Heartbeat from an RPC participant. */
+  /** Liveness heartbeat for exactly one caller-owned session. It deliberately
+   * does not update last_active_at: an idle open tab is not user activity. */
   @rpc({ callers: ["panel", "do", "worker"] })
-  async touch(participantId: string): Promise<void> {
+  async touch(participantId: string, sessionId: string): Promise<void> {
+    this.assertParticipantSession(participantId, sessionId, "touch");
     this.sql.exec(
-      `UPDATE participants SET connected_at = ? WHERE id = ?`,
+      `UPDATE participant_sessions SET last_seen = ?
+         WHERE participant_id = ? AND session_id = ?`,
       Date.now(),
-      participantId
+      participantId,
+      sessionId
     );
+    this.scheduleNextAlarm();
   }
 
   /**
@@ -968,6 +1505,7 @@ export class PubSubChannel extends DurableObjectBase {
     }
   ): Promise<{ id?: number }> {
     this.assertParticipantCaller(participantId, "publish");
+    this.markParticipantActive(participantId);
     const ref = opts?.ref;
     const attachments = opts?.attachments;
     const idempotencyKey = opts?.idempotencyKey;
@@ -1145,6 +1683,7 @@ export class PubSubChannel extends DurableObjectBase {
     code?: string
   ): Promise<void> {
     this.assertParticipantCaller(participantId, "error");
+    this.markParticipantActive(participantId);
     const senderMetadata = this.getSenderMetadata(participantId);
     const payload: Record<string, unknown> = { id: messageId, error: errorMessage };
     if (code) payload["code"] = code;
@@ -1166,6 +1705,7 @@ export class PubSubChannel extends DurableObjectBase {
   @rpc({ callers: ["panel", "do", "worker"] })
   async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
     this.assertParticipantCaller(participantId, "sendSignal");
+    this.markParticipantActive(participantId);
     const ts = Date.now();
     const senderMetadata = this.getSenderMetadata(participantId);
 
@@ -1189,6 +1729,7 @@ export class PubSubChannel extends DurableObjectBase {
   @rpc({ callers: ["panel", "do", "worker"] })
   async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
     this.assertParticipantCaller(participantId, "updateMetadata");
+    this.markParticipantActive(participantId);
     await this.updateParticipantMetadata(participantId, metadata);
   }
 
@@ -1205,17 +1746,23 @@ export class PubSubChannel extends DurableObjectBase {
     participantId: string,
     metadata: Record<string, unknown>
   ): Promise<void> {
+    // A human row keeps only its stable identity — re-asserted profile fields
+    // are dropped (WP6 §3: profile renders live, never frozen into the roster).
+    const stored = isUserParticipantId(participantId)
+      ? scrubUserParticipantMetadata(metadata)
+      : metadata;
     this.sql.exec(
       `UPDATE participants SET metadata = ? WHERE id = ?`,
-      JSON.stringify(metadata),
+      JSON.stringify(stored),
       participantId
     );
-    await this.publishPresenceEvent(participantId, "update", metadata);
+    await this.publishPresenceEvent(participantId, "update", stored);
   }
 
   @rpc({ callers: ["panel", "do", "worker"] })
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertParticipantCaller(participantId, "setTypingState");
+    if (typing) this.markParticipantActive(participantId);
     this.setParticipantTypingState(participantId, typing);
   }
 
@@ -1273,6 +1820,331 @@ export class PubSubChannel extends DurableObjectBase {
       }
       return entry;
     });
+  }
+
+  // ── Channel membership + workspace invite index (WP7 §3-4,7) ─────────────
+  //
+  // A durable, per-channel member list layered ON TOP OF — deliberately NOT
+  // inside — the ephemeral `participants` roster (see `channel_members` in
+  // createTables). Membership is notification / roster visibility, NOT a hard
+  // ACL wall: inside a workspace users are mutually trusted (plan §0.0). The
+  // ONE authorization gate is workspace membership of the ADDED user, answered
+  // by the host — userland never opens the identity DB (INV-2).
+
+  /**
+   * Add a workspace member to this channel (WP7 §3). Records durable membership,
+   * journals the workspace-inbox projection, and emits a best-effort live nudge.
+   * Authorization (§4): the added user must be a member of THIS workspace
+   * — checked via the host-projected `account.isMember` predicate (the child
+   * resolves it against its OWN bound workspaceId over the shared identity DB
+   * read-only; userland neither learns the workspaceId nor opens the DB). No
+   * per-channel ACL. Attribution (`added_by`) is the acting caller's
+   * host-verified `userId` (WP4). Idempotent: re-adding refreshes the handle
+   * snapshot without a second invite.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "agent"] })
+  async addMember(input: { userId: string }): Promise<ChannelMember & { alreadyMember: boolean }> {
+    const targetUserId = requireBareUserId(input?.userId, "addMember");
+    const memberId = toUserMemberId(targetUserId);
+
+    const caller = this.caller;
+    const addedBy = caller?.userId ? toUserMemberId(caller.userId) : (caller?.callerId ?? "system");
+
+    // Authorization (WP7 §4): the only gate is workspace membership of the
+    // ADDED user. Host seam — the child opens the shared identity DB RO and
+    // answers `MembershipStore.has(userId, <its own workspaceId>)` (INV-2/§4).
+    const isMember = await this.rpc.call<boolean>("main", "account.isMember", [targetUserId]);
+    if (!isMember) {
+      throw new Error(
+        `addMember: ${memberId} is not a member of this workspace and cannot be added to the channel`
+      );
+    }
+
+    // Denormalize the invitee's current handle for member-list / invite-chip
+    // display. Profiles still render LIVE from the host projection (WP6 §3) —
+    // this snapshot is a convenience, not the source of truth.
+    const profiles = await this.rpc.call<Record<string, { handle?: string }>>(
+      "main",
+      "account.resolveProfiles",
+      [[targetUserId]]
+    );
+    const handle = profiles[targetUserId]?.handle ?? memberId;
+
+    const existing = this.sql
+      .exec(`SELECT added_at, added_by FROM channel_members WHERE user_id = ?`, memberId)
+      .toArray();
+    const alreadyMember = existing.length > 0;
+    if (alreadyMember) {
+      const pendingPut =
+        this.sql
+          .exec(`SELECT 1 FROM invite_index_ops WHERE user_id = ? AND action = 'put'`, memberId)
+          .toArray().length > 0;
+      this.ctx.storage.transactionSync(() => {
+        this.sql.exec(`UPDATE channel_members SET handle = ? WHERE user_id = ?`, handle, memberId);
+        if (pendingPut) {
+          this.journalInvitePut(
+            memberId,
+            handle,
+            String(existing[0]!["added_by"]),
+            Number(existing[0]!["added_at"])
+          );
+        }
+      });
+      if (pendingPut) {
+        this.scheduleNextAlarm();
+        const synced = await this.flushInviteIndexOp(memberId);
+        this.scheduleNextAlarm();
+        if (!synced) {
+          throw new Error(
+            `addMember: membership is saved, but invitation delivery is pending; retry to confirm`
+          );
+        }
+      }
+      return {
+        userId: targetUserId,
+        memberId,
+        handle,
+        addedBy: existing[0]!["added_by"] as string,
+        addedAt: existing[0]!["added_at"] as number,
+        alreadyMember: true,
+      };
+    }
+
+    const addedAt = Date.now();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO channel_members (user_id, handle, added_by, added_at)
+           VALUES (?, ?, ?, ?)`,
+        memberId,
+        handle,
+        addedBy,
+        addedAt
+      );
+      this.journalInvitePut(memberId, handle, addedBy, addedAt);
+    });
+    this.scheduleNextAlarm();
+    const synced = await this.flushInviteIndexOp(memberId);
+    this.scheduleNextAlarm();
+    // Live nudge is a membership signal, never a presence event: inviting an
+    // offline person must not make them appear online.
+    this.broadcastChannelSignal("channel.invite", {
+      channelId: this.objectKey,
+      memberId,
+      userId: targetUserId,
+      addedBy,
+      addedAt,
+    });
+    if (!synced) {
+      throw new Error(
+        `addMember: membership is saved, but invitation delivery is pending; retry to confirm`
+      );
+    }
+    return {
+      userId: targetUserId,
+      memberId,
+      handle,
+      addedBy,
+      addedAt,
+      alreadyMember: false,
+    };
+  }
+
+  /** Remove a member from this channel (WP7 §3, §10.3 — a user may remove
+   *  themselves; mutual trust means anyone may, no ACL). History stays visible. */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "agent"] })
+  async removeMember(input: { userId: string }): Promise<{ removed: boolean }> {
+    const userId = requireBareUserId(input?.userId, "removeMember");
+    const memberId = toUserMemberId(userId);
+    const removed = this.deleteMembershipRow(memberId);
+    this.scheduleNextAlarm();
+    const synced = await this.flushInviteIndexOp(memberId);
+    this.scheduleNextAlarm();
+    if (!synced) {
+      throw new Error(
+        `removeMember: membership was removed, but invitation cleanup is pending; retry to confirm`
+      );
+    }
+    return { removed };
+  }
+
+  /** Delete one durable membership row and journal inbox cleanup. */
+  private deleteMembershipRow(memberId: string): boolean {
+    const existed =
+      this.sql.exec(`SELECT 1 FROM channel_members WHERE user_id = ?`, memberId).toArray().length >
+      0;
+    this.ctx.storage.transactionSync(() => {
+      if (existed) this.sql.exec(`DELETE FROM channel_members WHERE user_id = ?`, memberId);
+      this.journalInviteDelete(memberId);
+    });
+    return existed;
+  }
+
+  /** List this channel's durable members (WP7 §3). Ordered by add time. */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "agent"] })
+  async listMembers(): Promise<{ members: ChannelMember[] }> {
+    const rows = this.sql
+      .exec(
+        `SELECT user_id, handle, added_by, added_at
+           FROM channel_members ORDER BY added_at ASC`
+      )
+      .toArray();
+    return {
+      members: rows.map((row) => {
+        const memberId = row["user_id"] as string;
+        return {
+          userId: bareUserId(memberId),
+          memberId,
+          handle: row["handle"] as string,
+          addedBy: row["added_by"] as string,
+          addedAt: row["added_at"] as number,
+        };
+      }),
+    };
+  }
+
+  /**
+   * Current-channel view of the canonical workspace inbox (WP7 §7). The caller
+   * identity is host-verified and the indexed lookup is exact; no client-supplied
+   * user id and no channel enumeration participate in discovery.
+   */
+  @rpc({ callers: ["panel", "shell"] })
+  async listInvitesForMe(): Promise<{ invites: ChannelInvite[] }> {
+    const caller = this.caller;
+    if (!caller?.userId) throw new Error("listInvitesForMe requires an authenticated user");
+    const invite = await this.inviteIndex.call<ChannelInvite | null>("getChannelInvite", {
+      userId: caller.userId,
+      channelId: this.objectKey,
+    } satisfies DeleteChannelInviteInput);
+    return { invites: invite ? [invite] : [] };
+  }
+
+  /** Remove the calling user's invite from the canonical workspace inbox. */
+  @rpc({ callers: ["panel", "shell"] })
+  async acknowledgeInvite(): Promise<{ acknowledged: boolean }> {
+    const caller = this.caller;
+    if (!caller?.userId) throw new Error("acknowledgeInvite requires an authenticated user");
+    const result = await this.inviteIndex.call<{ deleted: boolean }>("deleteChannelInvite", {
+      userId: caller.userId,
+      channelId: this.objectKey,
+    } satisfies DeleteChannelInviteInput);
+    return { acknowledged: result.deleted };
+  }
+
+  private journalInvitePut(
+    memberId: string,
+    handle: string,
+    addedBy: string,
+    addedAt: number
+  ): void {
+    const revision = this.nextInviteIndexRevision();
+    this.sql.exec(
+      `INSERT OR REPLACE INTO invite_index_ops
+         (user_id, op_id, revision, action, handle, added_by, added_at, updated_at)
+       VALUES (?, ?, ?, 'put', ?, ?, ?, ?)`,
+      memberId,
+      crypto.randomUUID(),
+      revision,
+      handle,
+      addedBy,
+      addedAt,
+      Date.now()
+    );
+  }
+
+  private journalInviteDelete(memberId: string): void {
+    const revision = this.nextInviteIndexRevision();
+    this.sql.exec(
+      `INSERT OR REPLACE INTO invite_index_ops
+         (user_id, op_id, revision, action, handle, added_by, added_at, updated_at)
+       VALUES (?, ?, ?, 'delete', NULL, NULL, NULL, ?)`,
+      memberId,
+      crypto.randomUUID(),
+      revision,
+      Date.now()
+    );
+  }
+
+  /** Allocate the next channel-local projection revision inside the caller's
+   * storage transaction. A single counter is sufficient because GAD compares
+   * revisions within (channel,user), and gives every local intent a total order. */
+  private nextInviteIndexRevision(): number {
+    const current = Number(this.getStateValue(INVITE_INDEX_REVISION_KEY) ?? 0);
+    const revision = current + 1;
+    if (!Number.isSafeInteger(revision) || revision <= 0) {
+      throw new Error("channel membership projection revision overflow");
+    }
+    this.setStateValue(INVITE_INDEX_REVISION_KEY, String(revision));
+    return revision;
+  }
+
+  /** Drive one idempotent index mutation. Failures remain durably journaled. */
+  private async flushInviteIndexOp(memberId: string): Promise<boolean> {
+    const rows = this.sql
+      .exec(
+        `SELECT op_id, revision, action, handle, added_by, added_at
+           FROM invite_index_ops WHERE user_id = ?`,
+        memberId
+      )
+      .toArray();
+    if (rows.length === 0) return true;
+    const row = rows[0]!;
+    const opId = String(row["op_id"]);
+    const userId = bareUserId(memberId);
+    try {
+      if (row["action"] === "put") {
+        // The local row and journal can outlive workspace membership while a
+        // failed GAD write is waiting for its alarm retry. Re-authorize every
+        // delayed put so revocation cannot resurrect the canonical invite.
+        const isStillWorkspaceMember = await this.rpc.call<boolean>("main", "account.isMember", [
+          userId,
+        ]);
+        if (!isStillWorkspaceMember) {
+          this.ctx.storage.transactionSync(() => {
+            this.sql.exec(`DELETE FROM channel_members WHERE user_id = ?`, memberId);
+            this.journalInviteDelete(memberId);
+          });
+          // Flush the newly journaled, higher-revision delete now. If it fails,
+          // the normal retry path retains it durably.
+          return await this.flushInviteIndexOp(memberId);
+        }
+        await this.inviteIndex.call<void>("putChannelMembership", {
+          channelId: this.objectKey,
+          userId,
+          memberId,
+          handle: String(row["handle"]),
+          addedBy: String(row["added_by"]),
+          addedAt: Number(row["added_at"]),
+          revision: Number(row["revision"]),
+        } satisfies PutChannelMembershipInput);
+      } else {
+        await this.inviteIndex.call("deleteChannelMembership", {
+          channelId: this.objectKey,
+          userId,
+          revision: Number(row["revision"]),
+        } satisfies DeleteChannelMembershipInput);
+      }
+      this.sql.exec(`DELETE FROM invite_index_ops WHERE user_id = ? AND op_id = ?`, memberId, opId);
+      return true;
+    } catch (error) {
+      // Anchor the next attempt to this failure, avoiding a 100ms busy-loop once
+      // the original updated_at is already in the past.
+      this.sql.exec(
+        `UPDATE invite_index_ops SET updated_at = ? WHERE user_id = ? AND op_id = ?`,
+        Date.now(),
+        memberId,
+        opId
+      );
+      console.warn(`[Channel] invite index sync failed for ${memberId}:`, error);
+      return false;
+    }
+  }
+
+  private async flushInviteIndexOps(): Promise<void> {
+    const memberIds = this.sql
+      .exec(`SELECT user_id FROM invite_index_ops ORDER BY updated_at ASC`)
+      .toArray()
+      .map((row) => String(row["user_id"]));
+    await Promise.all(memberIds.map((memberId) => this.flushInviteIndexOp(memberId)));
   }
 
   @rpc({ callers: ["panel", "do", "server", "shell", "extension", "agent"] })
@@ -1340,10 +2212,14 @@ export class PubSubChannel extends DurableObjectBase {
     this.assertAdminCaller("adminInspectSchema");
     const tableNames = [
       "participants",
+      "participant_sessions",
       "pending_calls",
       "dedup_keys",
       "fork_ops",
       "lineage_subscribers",
+      "channel_members",
+      "invite_index_ops",
+      "presence_last_seen",
     ];
     const tables = tableNames.map((table) => ({
       table,
@@ -1598,6 +2474,7 @@ export class PubSubChannel extends DurableObjectBase {
     opts?: { invocationId?: string; transportCallId?: string; turnId?: string; timeoutMs?: number }
   ): Promise<void> {
     this.assertParticipantCaller(callerPid, "callMethod");
+    this.markParticipantActive(callerPid);
     await this.calls.callMethod(callerPid, targetPid, callId, method, args, opts);
   }
 
@@ -1616,6 +2493,7 @@ export class PubSubChannel extends DurableObjectBase {
     }
   ): Promise<{ id?: number; dropped?: boolean; reason?: string; recovered?: boolean }> {
     this.assertParticipantCaller(participantId, "submitMethodResult");
+    this.markParticipantActive(participantId);
     const resolution = await this.calls.resolveSubmitterForCall(
       participantId,
       transportCallId,
@@ -1675,6 +2553,7 @@ export class PubSubChannel extends DurableObjectBase {
     }
   ): Promise<void> {
     this.assertParticipantCaller(participantId, "submitMethodProgress");
+    this.markParticipantActive(participantId);
     const resolution = await this.calls.resolveSubmitterForCall(
       participantId,
       transportCallId,
@@ -1777,9 +2656,42 @@ export class PubSubChannel extends DurableObjectBase {
   private nextParticipantSweepAt(now: number): number | null {
     void now;
     const earliest = this.sql
-      .exec(`SELECT MIN(connected_at) AS connectedAt FROM participants WHERE transport = 'rpc'`)
+      .exec(`SELECT MIN(last_seen) AS connectedAt FROM participant_sessions`)
       .toArray()[0]?.["connectedAt"];
     return typeof earliest === "number" ? earliest + PARTICIPANT_STALE_MS : null;
+  }
+
+  private nextPresenceTransitionAt(): number | null {
+    const row = this.sql
+      .exec(
+        `SELECT MIN(
+           CASE presence_status
+             WHEN 'online' THEN last_active_at + ?
+             WHEN 'idle' THEN last_active_at + ?
+             ELSE NULL
+           END
+         ) AS next_at
+         FROM participants
+         WHERE id LIKE 'user:%' AND last_active_at IS NOT NULL`,
+        PRESENCE_IDLE_MS,
+        PRESENCE_AWAY_MS
+      )
+      .toArray()[0]?.["next_at"];
+    return typeof row === "number" ? row : null;
+  }
+
+  private nextPresenceRetentionSweepAt(): number | null {
+    const oldest = this.sql
+      .exec(`SELECT MIN(last_seen) AS oldest FROM presence_last_seen`)
+      .toArray()[0]?.["oldest"];
+    return typeof oldest === "number" ? oldest + PRESENCE_LAST_SEEN_RETENTION_MS : null;
+  }
+
+  private nextInviteIndexSyncAt(): number | null {
+    const oldest = this.sql
+      .exec(`SELECT MIN(updated_at) AS oldest FROM invite_index_ops`)
+      .toArray()[0]?.["oldest"];
+    return typeof oldest === "number" ? oldest + INVITE_INDEX_RETRY_MS : null;
   }
 
   private scheduleNextAlarm(): void {
@@ -1787,6 +2699,9 @@ export class PubSubChannel extends DurableObjectBase {
     const sources = [
       this.nextDedupSweepAt(),
       this.nextParticipantSweepAt(now),
+      this.nextPresenceTransitionAt(),
+      this.nextPresenceRetentionSweepAt(),
+      this.nextInviteIndexSyncAt(),
       this.calls.nextCallDeadlineAt(),
       // While method calls are in flight, wake soon enough for the
       // lost-delivery redelivery sweep (at-least-once within seconds, not
@@ -1823,10 +2738,19 @@ export class PubSubChannel extends DurableObjectBase {
     await super.alarm();
 
     await this.evictStaleParticipants();
+    this.advancePresenceStatuses();
+    this.sql.exec(
+      `DELETE FROM presence_last_seen WHERE last_seen < ?`,
+      Date.now() - PRESENCE_LAST_SEEN_RETENTION_MS
+    );
 
     // Dedup TTL sweep — unconditional (no latch; a key inserted while no
     // publish succeeds is still swept).
     this.sql.exec(`DELETE FROM dedup_keys WHERE created_at < ?`, Date.now() - DEDUP_TTL_MS);
+
+    // Membership mutations are committed locally before their workspace-inbox
+    // projection. Re-drive any operation whose cross-DO response was lost.
+    await this.flushInviteIndexOps();
 
     await this.calls.timeoutExpiredPendingCalls(async (pending, message) => {
       await this.publishMethodCallFeedback(
@@ -1904,28 +2828,48 @@ export class PubSubChannel extends DurableObjectBase {
     const cutoff = Date.now() - PARTICIPANT_STALE_MS;
     const stale = this.sql
       .exec(
-        `SELECT id, metadata FROM participants WHERE transport = 'rpc' AND connected_at < ?`,
+        `SELECT participant_id AS id, session_id
+           FROM participant_sessions
+          WHERE last_seen < ?
+          ORDER BY participant_id, session_id`,
         cutoff
       )
       .toArray();
 
     for (const row of stale) {
       const pid = row["id"] as string;
-      let metadata: Record<string, unknown> = {};
-      try {
-        metadata = JSON.parse(row["metadata"] as string);
-      } catch {
-        /* corrupted metadata, use empty default */
-      }
-      this.sql.exec(`DELETE FROM participants WHERE id = ?`, pid);
-      cleanupDeliveryChain(this.objectKey, pid);
-      await this.calls.failPendingCallsTargeting(pid, "disconnect");
-      await this.publishPresenceEvent(pid, "leave", metadata, "disconnect");
+      await this.unsubscribeParticipant(pid, "disconnect", String(row["session_id"]));
     }
 
     if (stale.length > 0) {
       console.log(`[Channel] Evicted ${stale.length} stale RPC participant(s)`);
       this.scheduleNextAlarm();
+    }
+  }
+
+  private advancePresenceStatuses(): void {
+    const now = Date.now();
+    const rows = this.sql
+      .exec(
+        `SELECT id, last_active_at, presence_status FROM participants
+          WHERE id LIKE 'user:%' AND last_active_at IS NOT NULL`
+      )
+      .toArray();
+    for (const row of rows) {
+      const participantId = row["id"] as string;
+      const lastActiveAt = row["last_active_at"] as number;
+      const next = this.presenceStatusAt(lastActiveAt, now);
+      if (row["presence_status"] === next) continue;
+      this.sql.exec(
+        `UPDATE participants SET presence_status = ? WHERE id = ?`,
+        next,
+        participantId
+      );
+      this.broadcastPresenceSignal(participantId, "update", {
+        kind: "user",
+        presenceStatus: next,
+        lastActiveAt,
+      });
     }
   }
 
@@ -2094,7 +3038,9 @@ export class PubSubChannel extends DurableObjectBase {
           [this.objectKey]
         );
         if (!r.ok) {
-          throw new Error(`Cannot fork participant ${agent.participantId}: ${r.reason ?? "canFork=false"}`);
+          throw new Error(
+            `Cannot fork participant ${agent.participantId}: ${r.reason ?? "canFork=false"}`
+          );
         }
       }
 
@@ -2199,10 +3145,7 @@ export class PubSubChannel extends DurableObjectBase {
       if (opts.seed) {
         seededMessageId = `fork-seed:${forkId}`;
         if (!forkPhaseReached(phase, "seeded")) {
-          await this.rpc.call(doTarget(forkedChannelRef), "appendSeed", [
-            { forkId },
-            opts.seed,
-          ]);
+          await this.rpc.call(doTarget(forkedChannelRef), "appendSeed", [{ forkId }, opts.seed]);
         }
       }
       if (!forkPhaseReached(phase, "seeded")) this.setForkOpPhase(forkId, "seeded");
@@ -2441,9 +3384,7 @@ export class PubSubChannel extends DurableObjectBase {
 
     const marker = this.readForkSeedMarker();
     if (!marker || marker.forkId !== forkId) {
-      throw new Error(
-        `appendSeed: no pending fork seed for fork ${forkId} on this channel`
-      );
+      throw new Error(`appendSeed: no pending fork seed for fork ${forkId} on this channel`);
     }
 
     const author = envelope.author;
@@ -2458,7 +3399,12 @@ export class PubSubChannel extends DurableObjectBase {
         outcome: "completed",
         tier: "primary",
         ...(envelope.replaces
-          ? { replaces: { messageId: envelope.replaces.messageId as never, seq: envelope.replaces.seq } }
+          ? {
+              replaces: {
+                messageId: envelope.replaces.messageId as never,
+                seq: envelope.replaces.seq,
+              },
+            }
           : {}),
       },
       createdAt: new Date().toISOString(),
@@ -2535,10 +3481,7 @@ export class PubSubChannel extends DurableObjectBase {
       this.setStateValue("rootChannelId", forkInit.rootChannelId);
       this.setStateValue("forkId", forkInit.forkId);
       if (forkInit.seed) {
-        this.setStateValue(
-          "forkSeedMarker",
-          JSON.stringify({ forkId: forkInit.forkId })
-        );
+        this.setStateValue("forkSeedMarker", JSON.stringify({ forkId: forkInit.forkId }));
       }
     }
     await this.channelLog.forkFrom(parentChannelId, forkPointId);
@@ -2546,6 +3489,10 @@ export class PubSubChannel extends DurableObjectBase {
     // it runs neither the parent's reconciler nor its head fan-out.
     this.sql.exec(`DELETE FROM fork_ops`);
     this.sql.exec(`DELETE FROM lineage_subscribers`);
+    // A cloned operation was authored for the parent's object key. Membership
+    // may be inherited, but its in-flight projection must never be replayed as
+    // a new pending invite for the child channel.
+    this.sql.exec(`DELETE FROM invite_index_ops`);
     this.deleteStateValue("lineageDirtyAt");
     // Clear operational state + caches
     this.sql.exec(`DELETE FROM participants`);

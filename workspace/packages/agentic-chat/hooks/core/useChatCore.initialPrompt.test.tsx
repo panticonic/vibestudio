@@ -43,12 +43,12 @@ function InitialPromptProbe({
         id: "panel:chat",
         name: "User",
         type: "panel",
-        handle: "user",
+        handle: "alice",
       }) as never,
     },
     channelName: harness.channelId,
     contextId: "ctx-initial-prompt",
-    metadata: { name: "User", type: "panel", handle: "user" },
+    metadata: { name: "User", type: "panel", handle: "alice" },
     initialPrompt: prompt,
   });
   onValue(core);

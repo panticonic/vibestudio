@@ -38,7 +38,6 @@ export type NewsOperationExposure = "tool" | "method";
 
 export interface NewsOperation {
   name: string;
-  methodAliases?: string[];
   description: string;
   schema: Record<string, unknown>;
   exposure: NewsOperationExposure[];
@@ -51,7 +50,6 @@ const NO_ARGS = { type: "object", properties: {}, additionalProperties: false } 
 export const NEWS_OPERATIONS: NewsOperation[] = [
   {
     name: "news_add_feed",
-    methodAliases: ["addFeed"],
     description:
       "Subscribe this channel to an RSS/Atom/JSON feed. The URL is validated by fetching and parsing it once; returns { feedId, title, itemCount }. weight (default 1.0) scales the feed's stories in ranking.",
     schema: {
@@ -68,7 +66,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_import_opml",
-    methodAliases: ["importOpml"],
     description:
       "Bulk-import feed subscriptions from an OPML document (e.g. an export from another reader). Validates and adds each feed; returns { imported, failed, total }.",
     schema: {
@@ -82,7 +79,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_remove_feed",
-    methodAliases: ["removeFeed"],
     description: "Unsubscribe a feed by feedId or url. Already-ingested articles are kept.",
     schema: {
       type: "object",
@@ -106,7 +102,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_follow_topic",
-    methodAliases: ["followTopic"],
     description:
       "Follow a topic: each briefing run web-searches it for fresh stories. Use the user's phrasing ('Rust async runtimes', not just 'Rust').",
     schema: {
@@ -123,7 +118,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_unfollow_topic",
-    methodAliases: ["unfollowTopic"],
     description: "Stop following a topic.",
     schema: {
       type: "object",
@@ -136,7 +130,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_set_preferences",
-    methodAliases: ["setPreferences"],
     description:
       "Persist the user's standing curation preferences as natural language in their own words. Replaces the previous text; fold prior preferences in rather than dropping them.",
     schema: {
@@ -150,7 +143,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_list_articles",
-    methodAliases: ["getArticles"],
     description:
       "List ingested articles, newest first. Returns { count, articles: [{ articleId, title, url, source, blurb, publishedAt, briefedIn, read }] }. Filters: unbriefedOnly, sinceMs (epoch), limit (default 30).",
     schema: {
@@ -214,7 +206,6 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: "news_get_briefing_history",
-    methodAliases: ["getBriefingHistory"],
     description: "Previous briefings with their TLDRs, newest first. limit defaults to 5.",
     schema: {
       type: "object",
@@ -389,10 +380,6 @@ export function buildOperationIndex(): Map<string, NewsOperation> {
   for (const op of NEWS_OPERATIONS) {
     if (index.has(op.name)) throw new Error(`duplicate news operation: ${op.name}`);
     index.set(op.name, op);
-    for (const alias of op.methodAliases ?? []) {
-      if (index.has(alias)) throw new Error(`duplicate news operation alias: ${alias}`);
-      index.set(alias, op);
-    }
   }
   return index;
 }
@@ -404,7 +391,7 @@ export function toolOperations(): NewsOperation[] {
 /** Methods advertised on the participant descriptor (UI + agent surfaces). */
 export function advertisedMethods(): Array<{ name: string; description: string }> {
   return NEWS_OPERATIONS.filter((op) => op.exposure.includes("method")).map((op) => ({
-    name: op.methodAliases?.[0] ?? op.name,
+    name: op.name,
     description: op.description.split(". ")[0]!,
   }));
 }

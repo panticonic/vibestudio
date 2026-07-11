@@ -93,8 +93,7 @@ const ENGINE_PIN: EnginePin = {
       "33e0a3a37debd23908b7b3b8d9c03ce3e06ff95c74ac64121d109478cac47dee",
     "llama-b9895-bin-win-vulkan-x64.zip":
       "8db79022bcfe0fae5a2a9b466e6c6f4a47fe29c0fe4865a9a562a681ae1cd438",
-    "llama-b9895-ui.tar.gz":
-      "6a1771fd5f50585350ae659810b3e859c204249d4b13b48a224416c15825aa60",
+    "llama-b9895-ui.tar.gz": "6a1771fd5f50585350ae659810b3e859c204249d4b13b48a224416c15825aa60",
     "llama-b9895-xcframework.zip":
       "886c75728c7e20c4d7bca819fa5219a5a2d642fb45a04044528a6515305e64a2",
   },
@@ -474,8 +473,12 @@ export async function activate(ctx: Ctx) {
     return modelId.startsWith("local:") ? modelId.slice("local:".length) : modelId;
   }
 
-  // Fire-and-forget: activation must not block on engine install/probing.
-  void ensureBootstrap().catch(() => {});
+  // Fire-and-forget: activation must not block on engine install/probing. The
+  // build-time activation smoke verifies the exported API against a synthetic
+  // context; it must not install native engines or leave background processes.
+  if (process.env["VIBESTUDIO_EXTENSION_SMOKE"] !== "1") {
+    void ensureBootstrap().catch(() => {});
+  }
   const benchmarkRuns = new Map<string, Promise<{ tokensPerSec: number } | null>>();
 
   function hasRecentBenchmark(record: ModelRecord | null): boolean {
@@ -710,7 +713,8 @@ export async function activate(ctx: Ctx) {
         downloadProgress: fallbackDownload?.totalBytes
           ? fallbackDownload.receivedBytes / fallbackDownload.totalBytes
           : null,
-        errorMessage: bootstrapStage === "error" ? (bootstrapError ?? "local-models bootstrap failed") : null,
+        errorMessage:
+          bootstrapStage === "error" ? (bootstrapError ?? "local-models bootstrap failed") : null,
       } satisfies LocalModelEntry);
     }
     return entries;

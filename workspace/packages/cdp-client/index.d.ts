@@ -131,15 +131,6 @@ export interface CdpPage {
     options?: { state?: WaitState; timeout?: number }
   ): Promise<CdpLocator | null>;
   pressKey(key: string): Promise<void>;
-  // Back-compat string-selector convenience
-  click(selector: string, opts?: ActionOptions): Promise<void>;
-  fill(selector: string, value: string, opts?: ActionOptions): Promise<void>;
-  type(selector: string, text: string, opts?: ActionOptions): Promise<void>;
-  isVisible(selector: string): Promise<boolean>;
-  inspect(selector: string): Promise<LightweightDomInspection>;
-  textContent(selector: string): Promise<string | null>;
-  innerText(selector: string): Promise<string>;
-  querySelector(selector: string): Promise<CdpLocator | null>;
   consoleEvents(): LightweightConsoleEvent[];
   clearConsoleEvents(): void;
   screenshot(options?: { type?: "png" | "jpeg"; quality?: number }): Promise<Uint8Array>;

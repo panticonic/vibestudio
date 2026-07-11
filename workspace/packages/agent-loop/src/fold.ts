@@ -88,7 +88,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
   // every participant's events; a foreign-authored turn/message advances the fold position
   // (withAdvance, above) but must NEVER make us adopt their open turn / model call as our
   // own — that's how an agent ends up continuing another agent's turn → GAD id-collision.
-  const foreignAuthor = state.selfId != null && envelope.actor.id !== state.selfId;
+  const foreignAuthor = envelope.actor.id !== state.selfId;
 
   switch (true) {
     case kind === "message.delta":
@@ -134,6 +134,11 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       const request = payload["modelRequest"] as ModelRequestDescriptor | undefined;
       if (!request) {
         throw new Error(`assistant message.started ${messageId} lacks a modelRequest descriptor`);
+      }
+      if (!request.modelSpec || typeof request.modelSpec !== "object") {
+        throw new Error(
+          `assistant message.started ${messageId} lacks the required journaled modelSpec`
+        );
       }
       const contextThroughSeq = request.contextThroughSeq;
       return {
@@ -361,6 +366,9 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
             : undefined,
         name: String(payload["name"] ?? "unknown"),
         transport,
+        ...(Array.isArray(payload["askUserTargets"])
+          ? { askUserTargets: payload["askUserTargets"] as ParticipantRef[] }
+          : {}),
         request: payload["request"],
         requiresApproval: payload["requiresApproval"] === true,
         approvalState: payload["requiresApproval"] === true ? "none" : "none",

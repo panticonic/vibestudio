@@ -6,7 +6,16 @@
  * directly — no cross-context navigation needed.
  */
 
-import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient, openPanel, notifications, extensions } from "@workspace/runtime";
+import {
+  contextId,
+  rpc,
+  panel,
+  buildPanelLink,
+  createDurableObjectServiceClient,
+  openPanel,
+  notifications,
+  extensions,
+} from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,7 +32,12 @@ import type {
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
-import type { AvailableAgent, ModelCatalog, AgentSubscriptionConfig, ConnectProviderResult } from "@workspace/agentic-core";
+import type {
+  AvailableAgent,
+  ModelCatalog,
+  AgentSubscriptionConfig,
+  ConnectProviderResult,
+} from "@workspace/agentic-core";
 import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   DEFAULT_AGENT_MODEL_REF,
@@ -42,7 +56,8 @@ import {
 import { createAndSubscribeAgent } from "./agentLifecycle.js";
 
 function detectHostPlatform(): "mobile" | "electron" {
-  const explicitPlatform = (globalThis as { __vibestudioHostPlatform?: unknown }).__vibestudioHostPlatform;
+  const explicitPlatform = (globalThis as { __vibestudioHostPlatform?: unknown })
+    .__vibestudioHostPlatform;
   if (explicitPlatform === "mobile") {
     return "mobile";
   }
@@ -51,14 +66,6 @@ function detectHostPlatform(): "mobile" | "electron" {
   }
   return "electron";
 }
-
-/** Stable metadata object — avoids creating a new object every render */
-const PANEL_METADATA = {
-  name: "Chat Panel",
-  type: "panel" as const,
-  handle: "user",
-  hostPlatform: detectHostPlatform(),
-};
 
 /** Default DO worker source and class for the AI chat agent */
 const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
@@ -115,7 +122,7 @@ async function getChannelDOParticipants(channelId: string): Promise<ChannelDORef
   const channelService = await rpc.call<{ kind: string; targetId?: string }>(
     "main",
     "workers.resolveService",
-    [CHANNEL_SERVICE_PROTOCOL, channelId],
+    [CHANNEL_SERVICE_PROTOCOL, channelId]
   );
   if (channelService.kind !== "durable-object" || !channelService.targetId) {
     throw new Error("Channel service must resolve to a Durable Object service");
@@ -123,9 +130,11 @@ async function getChannelDOParticipants(channelId: string): Promise<ChannelDORef
   const participants = await rpc.call<ChannelParticipant[]>(
     channelService.targetId,
     "getParticipants",
-    [],
+    []
   );
-  return participants.map((p) => parseDoTargetId(p.participantId)).filter((p): p is ChannelDORef => p !== null);
+  return participants
+    .map((p) => parseDoTargetId(p.participantId))
+    .filter((p): p is ChannelDORef => p !== null);
 }
 
 function delay(ms: number): Promise<void> {
@@ -180,13 +189,13 @@ async function unsubscribeDOFromChannel(
   source: string,
   className: string,
   objectKey: string,
-  channelId: string,
+  channelId: string
 ): Promise<void> {
-  const target = await rpc.call<{ targetId: string }>(
-    "main",
-    "workers.resolveDurableObject",
-    [source, className, objectKey],
-  );
+  const target = await rpc.call<{ targetId: string }>("main", "workers.resolveDurableObject", [
+    source,
+    className,
+    objectKey,
+  ]);
   await rpc.call(target.targetId, "unsubscribeChannel", [channelId]);
 }
 
@@ -233,7 +242,9 @@ export default function ChatPanel() {
   const resolveWorkspaceDefaultAgentConfig = useCallback(async (): Promise<DefaultAgentConfig> => {
     try {
       const settings = await loadModelSettings();
-      return settings.defaultAgentConfig ?? { model: settings.defaultModel || DEFAULT_AGENT_MODEL_REF };
+      return (
+        settings.defaultAgentConfig ?? { model: settings.defaultModel || DEFAULT_AGENT_MODEL_REF }
+      );
     } catch (err) {
       console.warn("[ChatPanel] Failed to load workspace model default:", err);
       return { model: DEFAULT_AGENT_MODEL_REF };
@@ -270,17 +281,17 @@ export default function ChatPanel() {
   // the first create+subscribe attempt.
   const rehydrationCheckedRef = useRef(false);
   useEffect(() => {
-    if (
-      rehydrationCheckedRef.current ||
-      !stateArgs.channelName ||
-      !resolvedContextId
-    ) return;
+    if (rehydrationCheckedRef.current || !stateArgs.channelName || !resolvedContextId) return;
     rehydrationCheckedRef.current = true;
     let cancelled = false;
 
     const channelName = stateArgs.channelName;
     void (async () => {
-      for (let attempt = 1; attempt <= AGENT_SUBSCRIPTION_MAX_ATTEMPTS && !cancelled; attempt += 1) {
+      for (
+        let attempt = 1;
+        attempt <= AGENT_SUBSCRIPTION_MAX_ATTEMPTS && !cancelled;
+        attempt += 1
+      ) {
         try {
           const dos = await getChannelDOParticipants(channelName);
           console.info("[ChatPanel] agent rehydration participant check", {
@@ -424,11 +435,9 @@ export default function ChatPanel() {
   // through `extensions.invoke` (untyped) so the panel needs no extension types.
   const handleOpenClaudeCode = useCallback(async (channelId: string) => {
     try {
-      const prepared = (await extensions.invoke(
-        "@workspace-extensions/claude-code",
-        "prepare",
-        [{ channelId }]
-      )) as {
+      const prepared = (await extensions.invoke("@workspace-extensions/claude-code", "prepare", [
+        { channelId },
+      ])) as {
         contextId: string;
         contextFolder: string;
         env: Record<string, string>;
@@ -454,41 +463,45 @@ export default function ChatPanel() {
     }
   }, []);
 
-  const handleActionBarFileChange = useCallback((value: {
-    path: string | null;
-    props?: Record<string, unknown>;
-    maxHeight?: number;
-  }) => {
-    void panel.stateArgs.set({
-      actionBarFile: value.path,
-      actionBarProps: value.path ? (value.props ?? null) : null,
-      actionBarMaxHeight: value.path ? (value.maxHeight ?? null) : null,
-    });
-  }, []);
+  const handleActionBarFileChange = useCallback(
+    (value: { path: string | null; props?: Record<string, unknown>; maxHeight?: number }) => {
+      void panel.stateArgs.set({
+        actionBarFile: value.path,
+        actionBarProps: value.path ? (value.props ?? null) : null,
+        actionBarMaxHeight: value.path ? (value.maxHeight ?? null) : null,
+      });
+    },
+    []
+  );
 
   // Fetch available worker sources (DO agents) on mount. Only sources that
   // declare an `agent` manifest block are chat agents — this filters out
   // service DOs (pubsub-channel, gad-store, fork, …).
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([]);
   useEffect(() => {
-    rpc.call<WorkerSourceEntry[]>("main", "workers.listSources", []).then((sources) => {
-      const agents: AvailableAgent[] = [];
-      for (const source of sources) {
-        if (!source.agent) continue;
-        for (const cls of source.classes) {
-          agents.push({
-            id: source.source,
-            className: cls.className,
-            name: source.agent.displayName ?? source.title ?? source.name,
-            description: source.agent.description,
-            icon: source.agent.icon,
-            defaultConfig: source.agent.defaultConfig,
-            proposedHandle: source.name.split("-")[0] ?? source.name,
-          });
+    rpc
+      .call<WorkerSourceEntry[]>("main", "workers.listSources", [])
+      .then((sources) => {
+        const agents: AvailableAgent[] = [];
+        for (const source of sources) {
+          if (!source.agent) continue;
+          for (const cls of source.classes) {
+            agents.push({
+              id: source.source,
+              className: cls.className,
+              name: source.agent.displayName ?? source.title ?? source.name,
+              description: source.agent.description,
+              icon: source.agent.icon,
+              defaultConfig: source.agent.defaultConfig,
+              proposedHandle: source.name.split("-")[0] ?? source.name,
+            });
+          }
         }
-      }
-      setAvailableAgents(agents);
-    }).catch((err) => { console.warn("[ChatPanel] Failed to load worker sources:", err); });
+        setAvailableAgents(agents);
+      })
+      .catch((err) => {
+        console.warn("[ChatPanel] Failed to load worker sources:", err);
+      });
   }, []);
 
   // Availability (connected/startable/needs-setup) now arrives on every
@@ -520,7 +533,10 @@ export default function ChatPanel() {
         refreshTimer = null;
         if (disposed) return;
         void loadModelSettings().catch((err) => {
-          console.warn("[ChatPanel] Failed to refresh model settings after local model event:", err);
+          console.warn(
+            "[ChatPanel] Failed to refresh model settings after local model event:",
+            err
+          );
         });
       }, 500);
     };
@@ -541,209 +557,252 @@ export default function ChatPanel() {
   /** Build the subscription config for a new agent: workspace defaults, global
    *  agentConfig, then the per-agent config, with the resolved handle last.
    *  Returns both the wire config and the per-agent config to persist. */
-  const buildSubscribeConfig = useCallback((
-    handle: string,
-    config: AgentSubscriptionConfig | undefined,
-    defaultAgentConfig: DefaultAgentConfig,
-  ) => buildAgentSubscriptionConfig({
-    handle,
-    workspaceDefaultAgentConfig: defaultAgentConfig,
-    globalConfig: panel.stateArgs.get<ChatStateArgs>().agentConfig,
-    perAgentConfig: config,
-    systemPrompt: stateArgs.systemPrompt,
-    systemPromptMode: stateArgs.systemPromptMode,
-  }), [stateArgs.systemPrompt, stateArgs.systemPromptMode]);
+  const buildSubscribeConfig = useCallback(
+    (
+      handle: string,
+      config: AgentSubscriptionConfig | undefined,
+      defaultAgentConfig: DefaultAgentConfig
+    ) =>
+      buildAgentSubscriptionConfig({
+        handle,
+        workspaceDefaultAgentConfig: defaultAgentConfig,
+        globalConfig: panel.stateArgs.get<ChatStateArgs>().agentConfig,
+        perAgentConfig: config,
+        systemPrompt: stateArgs.systemPrompt,
+        systemPromptMode: stateArgs.systemPromptMode,
+      }),
+    [stateArgs.systemPrompt, stateArgs.systemPromptMode]
+  );
 
   // The ONLY path that writes the workspace default agent config (model +
   // behavior). Driven by the explicit "Save as defaults" control.
-  const saveDefaultAgentConfig = useCallback(async (config: DefaultAgentConfig): Promise<void> => {
-    const settings = await getModelSettingsService().call<ModelSettingsSnapshot>(
-      "setDefaultAgentConfig",
-      config
-    );
-    catalogRef.current = settings.catalog;
-    setModelCatalog(settings.catalog);
-    setWorkspaceDefaultModelRef(settings.defaultModel);
-    setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
-  }, [getModelSettingsService]);
+  const saveDefaultAgentConfig = useCallback(
+    async (config: DefaultAgentConfig): Promise<void> => {
+      const settings = await getModelSettingsService().call<ModelSettingsSnapshot>(
+        "setDefaultAgentConfig",
+        config
+      );
+      catalogRef.current = settings.catalog;
+      setModelCatalog(settings.catalog);
+      setWorkspaceDefaultModelRef(settings.defaultModel);
+      setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
+    },
+    [getModelSettingsService]
+  );
 
-  const handleAddAgent = useCallback(async (channelName: string, channelContextId?: string, agentId?: string, config?: AgentSubscriptionConfig) => {
-    const activeContextId = resolveChatContextId(channelContextId, contextId);
-    if (!activeContextId) {
-      throw new Error("Cannot add an agent without a context ID");
-    }
-    // Resolve the agent type. An explicit agentId wins; otherwise honor a
-    // caller-pinned stateArgs.agentSource/agentClass (programmatic opens — e.g.
-    // the test-agent harness, or the onboarding chat — where the agent may not
-    // be in the manifest gallery). Fall back to the DEFAULT chat agent, NOT
-    // availableAgents[0] (whose identity + handle are non-deterministic).
-    const matched = agentId
-      ? availableAgents.find(a => a.id === agentId || a.className === agentId)
-      : undefined;
-    const pinned = panel.stateArgs.get<ChatStateArgs>();
-    const pinnedSource = !agentId ? pinned.agentSource : undefined;
-    const pinnedClass = !agentId ? pinned.agentClass : undefined;
-    const source = matched?.id ?? pinnedSource ?? DEFAULT_WORKER_SOURCE;
-    const className = matched?.className ?? pinnedClass ?? DEFAULT_CLASS_NAME;
-    // Derive the handle from the RESOLVED agent, then sanitize to the channel's
-    // participant-handle rule so a manifest handle with spaces/punctuation (or a
-    // stale handle leaked from a different agent's draft) can never produce an
-    // invalid subscription.
-    const handleFromClass = className === DEFAULT_CLASS_NAME
-      ? DEFAULT_HANDLE
-      : className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-    const configHandle = typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
-    const requestedHandle =
-      configHandle.trim() || matched?.proposedHandle || handleFromClass || DEFAULT_HANDLE;
-    const handle = `${sanitizeHandle(requestedHandle)}-${crypto.randomUUID().slice(0, 4)}`;
-    // Mint key once and persist into installedAgents so rehydration reuses it.
-    const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
-    const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
-    const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config, defaultAgentConfig);
-    await createAndSubscribeAgent({
-      source,
-      className,
-      key: agentKey,
-      channelId: channelName,
-      channelContextId: activeContextId,
-      config: subscribeConfig,
-      replay: true,
-    });
-    // The workspace default model is written ONLY via the explicit "Save as
-    // default" control (onSaveDefaultModel) — never as a side-effect of adding an
-    // agent, so a deferred/auto spawn (e.g. onboarding) can't silently change it.
-    // Persist into stateArgs.installedAgents so the agent rehydrates on reload.
-    // Read the latest snapshot (rather than the captured `stateArgs`) to avoid
-    // clobbering concurrent additions.
-    const currentArgs = panel.stateArgs.get<ChatStateArgs>();
-    const nextInstalled = appendInstalledAgent(currentArgs.installedAgents, {
-      agentId: className,
-      handle,
-      key: agentKey,
-      source,
-      className,
-      ...(Object.keys(perAgent).length > 0 ? { config: perAgent } : {}),
-    });
-    await panel.stateArgs.set({ installedAgents: nextInstalled });
-    return { agentId: source, handle };
-  }, [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]);
+  const handleAddAgent = useCallback(
+    async (
+      channelName: string,
+      channelContextId?: string,
+      agentId?: string,
+      config?: AgentSubscriptionConfig
+    ) => {
+      const activeContextId = resolveChatContextId(channelContextId, contextId);
+      if (!activeContextId) {
+        throw new Error("Cannot add an agent without a context ID");
+      }
+      // Resolve the agent type. An explicit agentId wins; otherwise honor a
+      // caller-pinned stateArgs.agentSource/agentClass (programmatic opens — e.g.
+      // the test-agent harness, or the onboarding chat — where the agent may not
+      // be in the manifest gallery). Fall back to the DEFAULT chat agent, NOT
+      // availableAgents[0] (whose identity + handle are non-deterministic).
+      const matched = agentId
+        ? availableAgents.find((a) => a.id === agentId || a.className === agentId)
+        : undefined;
+      const pinned = panel.stateArgs.get<ChatStateArgs>();
+      const pinnedSource = !agentId ? pinned.agentSource : undefined;
+      const pinnedClass = !agentId ? pinned.agentClass : undefined;
+      const source = matched?.id ?? pinnedSource ?? DEFAULT_WORKER_SOURCE;
+      const className = matched?.className ?? pinnedClass ?? DEFAULT_CLASS_NAME;
+      // Derive the handle from the RESOLVED agent, then sanitize to the channel's
+      // participant-handle rule so a manifest handle with spaces/punctuation (or a
+      // stale handle leaked from a different agent's draft) can never produce an
+      // invalid subscription.
+      const handleFromClass =
+        className === DEFAULT_CLASS_NAME
+          ? DEFAULT_HANDLE
+          : className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+      const configHandle =
+        typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
+      const requestedHandle =
+        configHandle.trim() || matched?.proposedHandle || handleFromClass || DEFAULT_HANDLE;
+      const handle = `${sanitizeHandle(requestedHandle)}-${crypto.randomUUID().slice(0, 4)}`;
+      // Mint key once and persist into installedAgents so rehydration reuses it.
+      const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
+      const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
+      const { subscribeConfig, perAgent } = buildSubscribeConfig(
+        handle,
+        config,
+        defaultAgentConfig
+      );
+      await createAndSubscribeAgent({
+        source,
+        className,
+        key: agentKey,
+        channelId: channelName,
+        channelContextId: activeContextId,
+        config: subscribeConfig,
+        replay: true,
+      });
+      // The workspace default model is written ONLY via the explicit "Save as
+      // default" control (onSaveDefaultModel) — never as a side-effect of adding an
+      // agent, so a deferred/auto spawn (e.g. onboarding) can't silently change it.
+      // Persist into stateArgs.installedAgents so the agent rehydrates on reload.
+      // Read the latest snapshot (rather than the captured `stateArgs`) to avoid
+      // clobbering concurrent additions.
+      const currentArgs = panel.stateArgs.get<ChatStateArgs>();
+      const nextInstalled = appendInstalledAgent(currentArgs.installedAgents, {
+        agentId: className,
+        handle,
+        key: agentKey,
+        source,
+        className,
+        ...(Object.keys(perAgent).length > 0 ? { config: perAgent } : {}),
+      });
+      await panel.stateArgs.set({ installedAgents: nextInstalled });
+      return { agentId: source, handle };
+    },
+    [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]
+  );
 
-  const handleReplaceAgent = useCallback(async (channelName: string, participantId: string, agentId?: string, config?: AgentSubscriptionConfig) => {
-    const activeContextId = resolveChatContextId(stateArgs.contextId, contextId);
-    if (!activeContextId) {
-      throw new Error("Cannot replace an agent without a context ID");
-    }
-    const target = parseDoTargetId(participantId);
-    if (!target) {
-      throw new Error(`Cannot resolve agent participant: ${participantId}`);
-    }
-    // Resolve the new agent type. When agentId is omitted (restart-with-model),
-    // reuse the existing DO's source/className.
-    const agent = agentId
-      ? availableAgents.find(a => a.id === agentId || a.className === agentId)
-      : undefined;
-    const source = agent?.id ?? target.source;
-    const className = agent?.className ?? target.className;
-    // Reuse the existing handle for a stable identity across the switch.
-    const configHandle = typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
-    const handle = configHandle.trim() || agent?.proposedHandle || DEFAULT_HANDLE;
-    const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
-    const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
-    const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config, defaultAgentConfig);
+  const handleReplaceAgent = useCallback(
+    async (
+      channelName: string,
+      participantId: string,
+      agentId?: string,
+      config?: AgentSubscriptionConfig
+    ) => {
+      const activeContextId = resolveChatContextId(stateArgs.contextId, contextId);
+      if (!activeContextId) {
+        throw new Error("Cannot replace an agent without a context ID");
+      }
+      const target = parseDoTargetId(participantId);
+      if (!target) {
+        throw new Error(`Cannot resolve agent participant: ${participantId}`);
+      }
+      // Resolve the new agent type. When agentId is omitted (restart-with-model),
+      // reuse the existing DO's source/className.
+      const agent = agentId
+        ? availableAgents.find((a) => a.id === agentId || a.className === agentId)
+        : undefined;
+      const source = agent?.id ?? target.source;
+      const className = agent?.className ?? target.className;
+      // Reuse the existing handle for a stable identity across the switch.
+      const configHandle =
+        typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
+      const handle = configHandle.trim() || agent?.proposedHandle || DEFAULT_HANDLE;
+      const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
+      const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
+      const { subscribeConfig, perAgent } = buildSubscribeConfig(
+        handle,
+        config,
+        defaultAgentConfig
+      );
 
-    // Kick the exact DO, then invite the replacement (replay restores history).
-    await unsubscribeDOFromChannel(target.source, target.className, target.objectKey, channelName);
-    await createAndSubscribeAgent({
-      source,
-      className,
-      key: agentKey,
-      channelId: channelName,
-      channelContextId: activeContextId,
-      config: subscribeConfig,
-      replay: true,
-    });
-    // Workspace default is written only via the explicit "Save as default"
-    // control — switching an agent never changes it.
-    // Rewrite the matching persisted record (matched by old objectKey) so reload
-    // rehydrates the new model rather than the old one.
-    const currentArgs = panel.stateArgs.get<ChatStateArgs>();
-    const newRecord = {
-      agentId: className,
-      handle,
-      key: agentKey,
-      source,
-      className,
-      ...(Object.keys(perAgent).length > 0 ? { config: perAgent } : {}),
-    };
-    const existing = currentArgs.installedAgents ?? [];
-    const replaced = existing.some((a) => a.key === target.objectKey);
-    const nextInstalled = replaced
-      ? existing.map((a) => (a.key === target.objectKey ? newRecord : a))
-      : [...existing, newRecord];
-    await panel.stateArgs.set({ installedAgents: nextInstalled });
-    return { agentId: source, handle };
-  }, [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]);
-
-  const handleConnectProvider = useCallback(async (
-    providerId: string,
-    modelBaseUrl: string,
-    opts?: { browser?: "internal" | "external" },
-  ): Promise<ConnectProviderResult> => {
-    const request = toPanelConnectRequest(providerId, modelBaseUrl, { browser: opts?.browser });
-    if (!request) {
-      return { ok: false, error: `No connect flow available for ${providerId}` };
-    }
-    try {
-      await rpc.call("main", "credentials.connect", [request]);
-      // Refetch the snapshot — availability is worker-computed, so the new
-      // credential shows up as `ready` entries in the next catalog.
-      await loadModelSettings();
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }, [loadModelSettings]);
-
-  const handlePersistAgentModel = useCallback(async (
-    _channelName: string,
-    participantId: string,
-    model: string,
-  ): Promise<void> => {
-    const target = parseDoTargetId(participantId);
-    if (!target) {
-      throw new Error(`Cannot resolve agent participant: ${participantId}`);
-    }
-    const currentArgs = panel.stateArgs.get<ChatStateArgs>();
-    const existing = currentArgs.installedAgents ?? [];
-    const nextInstalled = existing.map((agent) => {
-      if (agent.key !== target.objectKey) return agent;
-      return {
-        ...agent,
-        config: {
-          ...(agent.config ?? {}),
-          model,
-        },
+      // Kick the exact DO, then invite the replacement (replay restores history).
+      await unsubscribeDOFromChannel(
+        target.source,
+        target.className,
+        target.objectKey,
+        channelName
+      );
+      await createAndSubscribeAgent({
+        source,
+        className,
+        key: agentKey,
+        channelId: channelName,
+        channelContextId: activeContextId,
+        config: subscribeConfig,
+        replay: true,
+      });
+      // Workspace default is written only via the explicit "Save as default"
+      // control — switching an agent never changes it.
+      // Rewrite the matching persisted record (matched by old objectKey) so reload
+      // rehydrates the new model rather than the old one.
+      const currentArgs = panel.stateArgs.get<ChatStateArgs>();
+      const newRecord = {
+        agentId: className,
+        handle,
+        key: agentKey,
+        source,
+        className,
+        ...(Object.keys(perAgent).length > 0 ? { config: perAgent } : {}),
       };
-    });
-    if (!existing.some((agent) => agent.key === target.objectKey)) {
-      throw new Error(`No persisted agent record found for ${participantId}`);
-    }
-    await panel.stateArgs.set({ installedAgents: nextInstalled });
-    // Per-agent model only — the workspace default is changed solely via the
-    // explicit "Save as default" control.
-  }, []);
+      const existing = currentArgs.installedAgents ?? [];
+      const replaced = existing.some((a) => a.key === target.objectKey);
+      const nextInstalled = replaced
+        ? existing.map((a) => (a.key === target.objectKey ? newRecord : a))
+        : [...existing, newRecord];
+      await panel.stateArgs.set({ installedAgents: nextInstalled });
+      return { agentId: source, handle };
+    },
+    [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]
+  );
+
+  const handleConnectProvider = useCallback(
+    async (
+      providerId: string,
+      modelBaseUrl: string,
+      opts?: { browser?: "internal" | "external" }
+    ): Promise<ConnectProviderResult> => {
+      const request = toPanelConnectRequest(providerId, modelBaseUrl, { browser: opts?.browser });
+      if (!request) {
+        return { ok: false, error: `No connect flow available for ${providerId}` };
+      }
+      try {
+        await rpc.call("main", "credentials.connect", [request]);
+        // Refetch the snapshot — availability is worker-computed, so the new
+        // credential shows up as `ready` entries in the next catalog.
+        await loadModelSettings();
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [loadModelSettings]
+  );
+
+  const handlePersistAgentModel = useCallback(
+    async (_channelName: string, participantId: string, model: string): Promise<void> => {
+      const target = parseDoTargetId(participantId);
+      if (!target) {
+        throw new Error(`Cannot resolve agent participant: ${participantId}`);
+      }
+      const currentArgs = panel.stateArgs.get<ChatStateArgs>();
+      const existing = currentArgs.installedAgents ?? [];
+      const nextInstalled = existing.map((agent) => {
+        if (agent.key !== target.objectKey) return agent;
+        return {
+          ...agent,
+          config: {
+            ...(agent.config ?? {}),
+            model,
+          },
+        };
+      });
+      if (!existing.some((agent) => agent.key === target.objectKey)) {
+        throw new Error(`No persisted agent record found for ${participantId}`);
+      }
+      await panel.stateArgs.set({ installedAgents: nextInstalled });
+      // Per-agent model only — the workspace default is changed solely via the
+      // explicit "Save as default" control.
+    },
+    []
+  );
 
   const handleRemoveAgent = useCallback(async (channelName: string, handle: string) => {
     const channelWorkers = await getChannelDOParticipants(channelName);
 
     // Match by objectKey containing the handle prefix (objectKey is "{handle}-{uuid}")
-    const match = channelWorkers.find(w => w.objectKey.startsWith(handle));
+    const match = channelWorkers.find((w) => w.objectKey.startsWith(handle));
     if (match) {
       await unsubscribeDOFromChannel(match.source, match.className, match.objectKey, channelName);
     } else {
       // Fallback: try to unsubscribe the first worker if only one is present
       // TODO: improve handle-to-objectKey resolution when multiple DOs are present
-      console.warn(`[ChatPanel] No DO found matching handle "${handle}" on channel "${channelName}"`);
+      console.warn(
+        `[ChatPanel] No DO found matching handle "${handle}" on channel "${channelName}"`
+      );
       if (channelWorkers.length === 1) {
         const w = channelWorkers[0]!;
         await unsubscribeDOFromChannel(w.source, w.className, w.objectKey, channelName);
@@ -751,54 +810,79 @@ export default function ChatPanel() {
     }
   }, []);
 
-  const chatActions: AgenticChatActions = useMemo(() => ({
-    onNewConversation: handleNewConversation,
-    onAddAgent: handleAddAgent,
-    onReplaceAgent: handleReplaceAgent,
-    onConnectProvider: handleConnectProvider,
-    onPersistAgentModel: handlePersistAgentModel,
-    onSaveDefaults: saveDefaultAgentConfig,
-    onRemoveAgent: handleRemoveAgent,
-    availableAgents,
-    modelCatalog,
-    defaultModelRef: workspaceDefaultModelRef,
-    defaultAgentConfig: effectiveDefaultAgentConfig,
-    onFocusPanel: handleFocusPanel,
-    onReloadPanel: handleReloadPanel,
-    onOpenClaudeCode: handleOpenClaudeCode,
-    onOpenLocalModelsLog: handleOpenLocalModelsLog,
-  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, effectiveDefaultAgentConfig, handleFocusPanel, handleReloadPanel, handleOpenClaudeCode, handleOpenLocalModelsLog]);
+  const chatActions: AgenticChatActions = useMemo(
+    () => ({
+      onNewConversation: handleNewConversation,
+      onAddAgent: handleAddAgent,
+      onReplaceAgent: handleReplaceAgent,
+      onConnectProvider: handleConnectProvider,
+      onPersistAgentModel: handlePersistAgentModel,
+      onSaveDefaults: saveDefaultAgentConfig,
+      onRemoveAgent: handleRemoveAgent,
+      availableAgents,
+      modelCatalog,
+      defaultModelRef: workspaceDefaultModelRef,
+      defaultAgentConfig: effectiveDefaultAgentConfig,
+      onFocusPanel: handleFocusPanel,
+      onReloadPanel: handleReloadPanel,
+      onOpenClaudeCode: handleOpenClaudeCode,
+      onOpenLocalModelsLog: handleOpenLocalModelsLog,
+    }),
+    [
+      handleNewConversation,
+      handleAddAgent,
+      handleReplaceAgent,
+      handleConnectProvider,
+      handlePersistAgentModel,
+      saveDefaultAgentConfig,
+      handleRemoveAgent,
+      availableAgents,
+      modelCatalog,
+      workspaceDefaultModelRef,
+      effectiveDefaultAgentConfig,
+      handleFocusPanel,
+      handleReloadPanel,
+      handleOpenClaudeCode,
+      handleOpenLocalModelsLog,
+    ]
+  );
 
   // --- Fork navigation + review overlay ---------------------------------
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
 
   // In-place fork switch: rebind the panel's channel + context and let the
   // useChatCore bootstrap effect (keyed on channelName/contextId) reconnect.
-  const handleForkSwitch = useCallback((forkChannelId: string, forkContextId: string) => {
-    console.info("[ChatPanel] switching to fork", {
-      fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
-      fromContextId: resolvedContextId,
-      forkChannelId,
-      forkContextId,
-    });
-    initialPromptCaptured.current = undefined;
-    rehydrationCheckedRef.current = false;
-    void panel.stateArgs.set({ channelName: forkChannelId, contextId: forkContextId });
-  }, [bootstrapChannel, resolvedContextId, stateArgs.channelName]);
+  const handleForkSwitch = useCallback(
+    (forkChannelId: string, forkContextId: string) => {
+      console.info("[ChatPanel] switching to fork", {
+        fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
+        fromContextId: resolvedContextId,
+        forkChannelId,
+        forkContextId,
+      });
+      initialPromptCaptured.current = undefined;
+      rehydrationCheckedRef.current = false;
+      void panel.stateArgs.set({ channelName: forkChannelId, contextId: forkContextId });
+    },
+    [bootstrapChannel, resolvedContextId, stateArgs.channelName]
+  );
 
   // Side-by-side: open the fork in a fresh chat panel (news-panel shape).
-  const handleOpenForkPanel = useCallback((forkChannelId: string, forkContextId: string) => {
-    console.info("[ChatPanel] opening fork panel", {
-      fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
-      fromContextId: resolvedContextId,
-      forkChannelId,
-      forkContextId,
-    });
-    void openPanel("panels/chat", {
-      focus: true,
-      stateArgs: { channelName: forkChannelId, contextId: forkContextId },
-    });
-  }, [bootstrapChannel, resolvedContextId, stateArgs.channelName]);
+  const handleOpenForkPanel = useCallback(
+    (forkChannelId: string, forkContextId: string) => {
+      console.info("[ChatPanel] opening fork panel", {
+        fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
+        fromContextId: resolvedContextId,
+        forkChannelId,
+        forkContextId,
+      });
+      void openPanel("panels/chat", {
+        focus: true,
+        stateArgs: { channelName: forkChannelId, contextId: forkContextId },
+      });
+    },
+    [bootstrapChannel, resolvedContextId, stateArgs.channelName]
+  );
 
   const handleReviewContext = useCallback((target: ReviewTarget) => {
     setReviewTarget(target);
@@ -806,7 +890,12 @@ export default function ChatPanel() {
 
   // Shell toast when a fork the user didn't initiate lands while unfocused.
   const handleExternalFork = useCallback(
-    (fork: { forkedChannelId: string; forkedContextId: string; actorName: string; forkPointId: number }) => {
+    (fork: {
+      forkedChannelId: string;
+      forkedContextId: string;
+      actorName: string;
+      forkPointId: number;
+    }) => {
       void notifications.show({
         type: "info",
         title: "Conversation forked",
@@ -843,6 +932,14 @@ export default function ChatPanel() {
 
   // Resolve channel name: from stateArgs (existing chat) or bootstrap (new chat)
   const channelName = stateArgs.channelName ?? bootstrapChannel;
+  const panelMetadata = useMemo(
+    () => ({
+      name: channelName ?? "Channel",
+      type: "panel" as const,
+      hostPlatform: detectHostPlatform(),
+    }),
+    [channelName]
+  );
   const installedAgents = stateArgs.installedAgents ?? undefined;
 
   // Still bootstrapping — show a brief loading indicator
@@ -862,7 +959,9 @@ export default function ChatPanel() {
               overflow: "hidden",
             }}
           >
-            <Text size="2" color="gray">Starting chat...</Text>
+            <Text size="2" color="gray">
+              Starting chat...
+            </Text>
           </Flex>
         </Theme>
       </ErrorBoundary>
@@ -880,16 +979,11 @@ export default function ChatPanel() {
           >
             <Flex align="center" justify="between" gap="3" style={{ width: "100%" }}>
               <Callout.Text>
-                No cloud provider connected — using{" "}
-                <Text weight="medium">{fallbackNotice}</Text> on this device. Answers will be
-                simpler than a frontier model's.
+                No cloud provider connected — using <Text weight="medium">{fallbackNotice}</Text> on
+                this device. Answers will be simpler than a frontier model's.
               </Callout.Text>
               <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-                <Button
-                  size="1"
-                  variant="soft"
-                  onClick={() => setFallbackNoticeDismissed(true)}
-                >
+                <Button size="1" variant="soft" onClick={() => setFallbackNoticeDismissed(true)}>
                   OK
                 </Button>
               </Flex>
@@ -902,7 +996,7 @@ export default function ChatPanel() {
         channelName={channelName}
         channelConfig={stateArgs.channelConfig}
         contextId={resolvedContextId}
-        metadata={PANEL_METADATA}
+        metadata={panelMetadata}
         tools={toolProvider}
         actions={chatActions}
         theme={theme}

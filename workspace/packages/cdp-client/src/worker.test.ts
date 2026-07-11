@@ -254,9 +254,8 @@ describe("worker CDP client", () => {
       tagName: "BODY",
       className: "ready",
     });
-    // Back-compat string-selector convenience forms still work.
-    await expect(page.innerText("body")).resolves.toBe("Hello");
-    await expect(page.isVisible("body")).resolves.toBe(true);
+    expect("innerText" in page).toBe(false);
+    expect("isVisible" in page).toBe(false);
   });
 
   it("dispatches a real CDP mouse sequence for click (auto-waited)", async () => {

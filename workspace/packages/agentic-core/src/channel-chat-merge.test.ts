@@ -633,19 +633,17 @@ describe("chatMessagesFromChannelView", () => {
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({ tier: "primary" });
   });
 
-  it("falls back to secondary for an unstamped assistant message that carried tool calls", () => {
-    // Simulates a transcript predating explicit tiering: narration text plus a
-    // tool call, no tier on the wire. The turn continued after it ⇒ tier 2.
+  it("does not infer a secondary tier from unstamped assistant content", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",
       actor: agent,
-      causality: { messageId: brandId<MessageId>("msg-legacy") },
+      causality: { messageId: brandId<MessageId>("msg-unstamped") },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
         blocks: [
           {
-            blockId: brandId<BlockId>("msg-legacy:block:0"),
+            blockId: brandId<BlockId>("msg-unstamped:block:0"),
             type: "text",
             content: "let me check",
           },
@@ -656,8 +654,8 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:00.000Z",
     };
     const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
-    const standalone = chatMessagesFromChannelView(state).find((m) => m.id === "msg-legacy");
-    expect(standalone).toMatchObject({ tier: "secondary" });
+    const standalone = chatMessagesFromChannelView(state).find((m) => m.id === "msg-unstamped");
+    expect(standalone).toMatchObject({ tier: "primary" });
   });
 
   it("uses the invocation card instead of a blank assistant card for known invocation-only messages", () => {

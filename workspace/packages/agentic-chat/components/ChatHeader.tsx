@@ -1,17 +1,23 @@
 import React, { useRef, useState } from "react";
 import { Badge, Button, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { DotsHorizontalIcon } from "@radix-ui/react-icons";
-import type { Participant } from "@workspace/pubsub";
+import type { ChannelPresenceStatus, Participant } from "@workspace/pubsub";
 import { APPROVAL_LEVELS, type ToolApprovalProps } from "@workspace/tool-ui";
 import { isAgentParticipantType } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
 import type { ChatParticipantMetadata, PendingAgent } from "../types";
+import {
+  useAccountProfiles,
+  type AccountProfile,
+  type AccountRpc,
+} from "../hooks/useAccountProfiles";
 import { ParticipantBadgeMenu } from "./ParticipantBadgeMenu";
 import { PendingAgentBadge } from "./PendingAgentBadge";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
 import { AgentLauncher } from "./AgentLauncher";
 import { AgentDialog } from "./AgentDialog";
 import { ForkSwitcher } from "./ForkSwitcher";
+import { ChannelPeopleMenu } from "./ChannelPeopleMenu";
 
 const NOOP = () => {};
 
@@ -93,7 +99,51 @@ export function ChatHeader() {
     onCallMethod,
     onDebugConsoleChange,
     onRemoveAgent,
+    chat,
+    clientRef,
   } = useChatContext();
+
+  // Live account-profile projection for channel-stamped `user:<userId>`
+  // participants (WP6 §6): handle/displayName/avatar/color resolve from the
+  // host, so an account.updateProfile re-renders here without roster rewrites.
+  const participantIds = React.useMemo(() => Object.keys(participants), [participants]);
+  const accountProfiles = useAccountProfiles(
+    (chat as { rpc?: AccountRpc } | undefined)?.rpc,
+    participantIds
+  );
+
+  const [participantPresenceStatus, setParticipantPresenceStatus] = useState<
+    Map<string, ChannelPresenceStatus>
+  >(new Map());
+  React.useEffect(() => {
+    if (!connected || !channelId) {
+      setParticipantPresenceStatus((current) => (current.size === 0 ? current : new Map()));
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      const client = clientRef.current;
+      if (!client) return;
+      try {
+        const result = await client.getChannelPresence();
+        if (cancelled) return;
+        const next = new Map(
+          result.entries.map((entry) => [entry.participantId, entry.status] as const)
+        );
+        setParticipantPresenceStatus((current) =>
+          mapsShallowEqual(current, next) ? current : next
+        );
+      } catch {
+        // Preserve the last durable snapshot through a transient reconnect.
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [channelId, clientRef, connected]);
 
   // Memoize participant active status: single reverse scan instead of O(P*M) filter per render.
   // Stabilised with a ref — return the previous Map reference when the values haven't
@@ -126,6 +176,8 @@ export function ChatHeader() {
       sessionEnabled={sessionEnabled}
       participants={participants}
       participantActiveStatus={participantActiveStatus}
+      participantPresenceStatus={participantPresenceStatus}
+      accountProfiles={accountProfiles}
       pendingAgents={pendingAgents}
       onCallMethod={onCallMethod}
       toolApproval={toolApproval}
@@ -144,6 +196,9 @@ interface ChatHeaderInnerProps {
   sessionEnabled?: boolean;
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   participantActiveStatus: Map<string, boolean>;
+  participantPresenceStatus: Map<string, ChannelPresenceStatus>;
+  /** Live `user:<userId>` → account profile projection (WP6 §6). */
+  accountProfiles: Map<string, AccountProfile>;
   pendingAgents: Map<string, PendingAgent>;
   onCallMethod?: (providerId: string, methodName: string, args: unknown) => void;
   toolApproval?: ToolApprovalProps;
@@ -161,12 +216,14 @@ function chatHeaderInnerPropsEqual(
     prev.status === next.status &&
     prev.sessionEnabled === next.sessionEnabled &&
     prev.participants === next.participants &&
+    prev.accountProfiles === next.accountProfiles &&
     prev.pendingAgents === next.pendingAgents &&
     prev.onCallMethod === next.onCallMethod &&
     prev.toolApproval === next.toolApproval &&
     prev.onRemoveAgent === next.onRemoveAgent &&
     prev.onDebugConsoleChange === next.onDebugConsoleChange &&
-    mapsShallowEqual(prev.participantActiveStatus, next.participantActiveStatus)
+    mapsShallowEqual(prev.participantActiveStatus, next.participantActiveStatus) &&
+    mapsShallowEqual(prev.participantPresenceStatus, next.participantPresenceStatus)
   );
 }
 
@@ -177,6 +234,8 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   sessionEnabled,
   participants,
   participantActiveStatus,
+  participantPresenceStatus,
+  accountProfiles,
   pendingAgents,
   onCallMethod,
   toolApproval,
@@ -229,6 +288,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           {/* Fork switcher — current branch + siblings/children, next to roster.
               Self-subscribes to ChatContext.forkState (renders null when absent). */}
           <ForkSwitcher />
+          <ChannelPeopleMenu />
           {Object.values(participants).map((p) => {
             const hasActive = participantActiveStatus.get(p.id) ?? false;
 
@@ -236,6 +296,8 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
               <ParticipantBadgeMenu
                 key={p.id}
                 participant={p}
+                profile={accountProfiles.get(p.id)}
+                presenceStatus={participantPresenceStatus.get(p.id)}
                 hasActiveMessage={hasActive}
                 onCallMethod={onCallMethod ?? NOOP}
                 onRemoveAgent={onRemoveAgent}
@@ -284,11 +346,14 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
             aria-label={connected ? "Connected" : status}
           />
           <ForkSwitcher />
+          <ChannelPeopleMenu compact />
         </Flex>
         <ChatHeaderOverflowMenu
           channelId={channelId}
           sessionEnabled={sessionEnabled}
           participants={participants}
+          accountProfiles={accountProfiles}
+          participantPresenceStatus={participantPresenceStatus}
           pendingCount={visiblePendingAgents.length}
           toolApproval={toolApproval}
           onRemoveAgent={onRemoveAgent}
@@ -308,6 +373,8 @@ function ChatHeaderOverflowMenu({
   channelId,
   sessionEnabled,
   participants,
+  accountProfiles,
+  participantPresenceStatus,
   pendingCount,
   toolApproval,
   onRemoveAgent,
@@ -316,6 +383,8 @@ function ChatHeaderOverflowMenu({
   channelId: string | null;
   sessionEnabled?: boolean;
   participants: Record<string, Participant<ChatParticipantMetadata>>;
+  accountProfiles: Map<string, AccountProfile>;
+  participantPresenceStatus: Map<string, ChannelPresenceStatus>;
   pendingCount: number;
   toolApproval?: ToolApprovalProps;
   onRemoveAgent?: (handle: string) => void;
@@ -357,11 +426,32 @@ function ChatHeaderOverflowMenu({
           </DropdownMenu.Label>
           {participantList.length > 0 && <DropdownMenu.Separator />}
           {participantList.map((p) => {
-            const handle = p.metadata.handle;
+            // Humans render their live account handle (WP6 §6); agents keep
+            // their channel-carried handle.
+            const handle = accountProfiles.get(p.id)?.handle ?? p.metadata.handle ?? p.id;
+            const presenceStatus = participantPresenceStatus.get(p.id);
             if (!isAgentParticipantType(p.metadata.type)) {
               return (
                 <DropdownMenu.Item key={p.id} disabled>
-                  @{handle}
+                  <Flex align="center" gap="2">
+                    <span
+                      aria-label={presenceStatus ?? "offline"}
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background:
+                          presenceStatus === "online"
+                            ? "var(--green-9)"
+                            : presenceStatus === "idle"
+                              ? "var(--amber-9)"
+                              : presenceStatus === "away"
+                                ? "var(--orange-9)"
+                                : "var(--gray-8)",
+                      }}
+                    />
+                    @{handle} · {presenceStatus ?? "offline"}
+                  </Flex>
                 </DropdownMenu.Item>
               );
             }
@@ -400,8 +490,10 @@ function ChatHeaderOverflowMenu({
             <DropdownMenu.Sub>
               <DropdownMenu.SubTrigger>
                 Approvals:{" "}
-                {APPROVAL_LEVELS[toolApproval.settings.globalFloor as keyof typeof APPROVAL_LEVELS]
-                  ?.label}
+                {
+                  APPROVAL_LEVELS[toolApproval.settings.globalFloor as keyof typeof APPROVAL_LEVELS]
+                    ?.label
+                }
               </DropdownMenu.SubTrigger>
               <DropdownMenu.SubContent>
                 {([0, 1, 2] as const).map((level) => (

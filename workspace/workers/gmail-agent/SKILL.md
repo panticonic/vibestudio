@@ -111,12 +111,14 @@ These methods are callable on the Gmail participant via
 | `checkNow`                          | `{}`                                  | Sync now                                                                                                       |
 | `markConfigured`                    | `{ summary? }`                        | Finish first-run setup                                                                                         |
 | `reconnect`                         | `{}`                                  | Re-verify the Google credential; returns `{ ok, auth }`                                                        |
-| `search`                            | `{ q, limit?, pageToken? }`           | Search; publishes a `gmail.search` card                                                                        |
-| `getThread`                         | `{ threadId }`                        | Sanitized thread contents (transient)                                                                          |
+| `gmail_search`                      | `{ q, limit?, pageToken? }`           | Search; publishes a `gmail.search` card                                                                        |
+| `gmail_read`                        | `{ threadId, format, ... }`           | Sanitized thread/message contents (transient)                                                                  |
 | `openThread`                        | `{ threadId }`                        | Publish/focus a standalone `gmail.thread` card                                                                 |
 | `compose`                           | `{ to?, subject?, body?, threadId? }` | New compose card (`drafting`)                                                                                  |
 | `draftReply`                        | `{ threadId }`                        | One-shot AI-drafted reply card in `review` state (no-model-turn button path)                                   |
-| `send`                              | compose payload + `messageId`         | Send; user Send click or explicit user request only                                                            |
+| `gmail_send`                        | compose payload + `messageId`         | Send; user Send click or explicit user request only                                                            |
+| `gmail_snooze`                      | `{ threadId, remindAt? }`             | Archive and schedule a reminder                                                                                |
+| `gmail_get_attachment`              | attachment metadata                   | Save an attachment into the workspace                                                                          |
 | `saveDraft` / `discardCompose`      | compose payload / `{ messageId }`     | Save to Gmail drafts (re-save updates via `draftId`) / discard. Recipient-less drafts park in `drafting` state |
 | `resolveContact` / `contactSuggest` | `{ name }` / `{ prefix }`             | Contact resolution / offline typeahead                                                                         |
 | `archiveThread` / `markRead`        | `{ threadId }`                        | Thread-card triage buttons                                                                                     |

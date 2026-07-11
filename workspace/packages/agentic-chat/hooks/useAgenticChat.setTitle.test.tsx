@@ -59,7 +59,7 @@ function Probe({
   const { contextValue } = useAgenticChat({
     config,
     channelName: "chat-title-test",
-    metadata: { name: "Chat Panel", type: "panel", handle: "user" },
+    metadata: { name: "Chat Panel", type: "panel", handle: "alice" },
     sandbox: {
       rpc: config.rpc,
       loadImport: vi.fn(async () => ""),

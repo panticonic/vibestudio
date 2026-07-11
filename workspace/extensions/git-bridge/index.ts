@@ -67,7 +67,6 @@ function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
     store: {
       vcsLog: (repoPath, limit, head) => vcsCall("vcsLog", repoPath, limit, head),
       ingestWorktreeState: (input) => vcsCall("ingestWorktreeState", input),
-      listStateFiles: (stateHash) => vcsCall("listStateFiles", { stateHash }),
       importPublish: (input) => vcsCall("vcsImportPublish", input),
     },
     blobstore: {

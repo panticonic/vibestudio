@@ -185,13 +185,3 @@ export function toServerBaseUrl(raw: string): string {
   const normalized = url.toString();
   return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
-
-/**
- * Legacy converter kept for old tests/scripts that still model launch profiles
- * as websocket RPC endpoints. New profiles use {@link toServerBaseUrl}.
- */
-export function toWsRpcUrl(httpRpcUrl: string): string {
-  if (httpRpcUrl.startsWith("https://")) return `wss://${httpRpcUrl.slice("https://".length)}`;
-  if (httpRpcUrl.startsWith("http://")) return `ws://${httpRpcUrl.slice("http://".length)}`;
-  return httpRpcUrl;
-}

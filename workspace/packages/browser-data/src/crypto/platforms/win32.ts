@@ -3,6 +3,17 @@ import * as fs from "node:fs";
 import { execSync } from "node:child_process";
 import { BrowserDataError } from "../../errors.js";
 
+type Utf8CommandRunner = (
+  command: string,
+  options: {
+    encoding: "utf-8";
+    timeout: number;
+    stdio: ["pipe", "pipe", "pipe"];
+  }
+) => string;
+
+const runUtf8Command: Utf8CommandRunner = (command, options) => execSync(command, options);
+
 /**
  * Get the AES-256-GCM decryption key for a Chromium browser on Windows.
  *
@@ -17,7 +28,7 @@ export async function getWin32DecryptionKey(localStatePath: string): Promise<Buf
     throw new BrowserDataError(
       "DECRYPTION_FAILED",
       `Could not read Local State file: ${localStatePath}`,
-      err instanceof Error ? err.message : String(err),
+      err instanceof Error ? err.message : String(err)
     );
   }
 
@@ -25,7 +36,7 @@ export async function getWin32DecryptionKey(localStatePath: string): Promise<Buf
   if (!encryptedKeyB64) {
     throw new BrowserDataError(
       "DECRYPTION_FAILED",
-      "No encrypted_key found in Local State os_crypt section",
+      "No encrypted_key found in Local State os_crypt section"
     );
   }
 
@@ -51,11 +62,38 @@ export async function getWin32DecryptionKey(localStatePath: string): Promise<Buf
     throw new BrowserDataError(
       "DECRYPTION_FAILED",
       "DPAPI decryption of browser key failed",
-      err instanceof Error ? err.message : String(err),
+      err instanceof Error ? err.message : String(err)
     );
   }
 
   return Buffer.from(result, "base64");
+}
+
+/** Decrypt Chromium's pre-v10, unversioned raw DPAPI value. */
+export function decryptLegacyWin32Value(
+  encrypted: Buffer,
+  execute: Utf8CommandRunner = runUtf8Command
+): string {
+  const psScript = [
+    "Add-Type -AssemblyName System.Security;",
+    `$encrypted = [Convert]::FromBase64String("${encrypted.toString("base64")}");`,
+    "$decrypted = [Security.Cryptography.ProtectedData]::Unprotect($encrypted, $null, 'CurrentUser');",
+    "[Text.Encoding]::UTF8.GetString($decrypted)",
+  ].join(" ");
+
+  try {
+    return execute(`powershell -NoProfile -Command "${psScript}"`, {
+      encoding: "utf-8",
+      timeout: 10000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    throw new BrowserDataError(
+      "DECRYPTION_FAILED",
+      "Legacy DPAPI decryption failed",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 /**

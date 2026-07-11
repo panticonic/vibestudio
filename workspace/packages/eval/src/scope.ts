@@ -210,23 +210,13 @@ export class ScopeManager {
     const p = this.persistence;
     const blobRefs: string[] = [];
     if (spills.length > 0) {
-      if (p.putBlob) {
-        // Spill large values to the content-addressed blob store (lossless), stamping each
-        // placeholder with its digest.
-        for (const spill of spills) {
-          const digest = await p.putBlob(spill.valueJson);
-          spill.placeholder[SCOPE_BLOB_REF] = digest;
-          blobRefs.push(digest);
-        }
-      } else {
-        // No blob store — fall back to dropping the oversized values (legacy behaviour).
-        for (const spill of spills) {
-          delete serialized[spill.key];
-          droppedPaths.push({
-            path: spill.key,
-            reason: `value too large to inline (${spill.bytes} chars) and no blob store available`,
-          });
-        }
+      // Spill large values to the content-addressed blob store (lossless), stamping each
+      // placeholder with its digest. Persistence implementations must provide this store;
+      // a save is never allowed to silently discard an oversized value.
+      for (const spill of spills) {
+        const digest = await p.putBlob(spill.valueJson);
+        spill.placeholder[SCOPE_BLOB_REF] = digest;
+        blobRefs.push(digest);
       }
     }
     await p.upsert({

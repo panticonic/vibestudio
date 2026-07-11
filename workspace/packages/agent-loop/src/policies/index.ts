@@ -6,9 +6,15 @@
 
 import { AGENTIC_PROTOCOL_VERSION, type ParticipantRef } from "@workspace/agentic-protocol";
 import { ids } from "../ids.js";
-import type { AppendItem, ChannelCallEffect, EffectDescriptor } from "../effects.js";
+import {
+  askUserFanoutCallId,
+  askUserFanoutEffectId,
+  type AppendItem,
+  type ChannelCallEffect,
+  type EffectDescriptor,
+} from "../effects.js";
 import type { StepOutput, StepPolicy } from "../step.js";
-import type { AgentState } from "../state.js";
+import type { AgentState, RosterEntry } from "../state.js";
 
 export const DEFAULT_SAFE_TOOL_NAMES = new Set([
   "read",
@@ -164,16 +170,59 @@ export function approvalGatePolicy(): StepPolicy {
   };
 }
 
-/** ask-user: rewrite ask_user invocations to a channel call to the prompter. */
+/** Extract an explicit target hint from ask_user args (`to`/`target`; string or
+ *  first string of an array). Absent/blank ⇒ unaddressed. */
+function askUserTargetHint(raw: unknown): string | undefined {
+  const input = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  for (const key of ["to", "target"]) {
+    const value = input[key];
+    const first = Array.isArray(value) ? value.find((v) => typeof v === "string") : value;
+    if (typeof first === "string" && first.trim()) return first.trim();
+  }
+  return undefined;
+}
+
+/** Resolve a target hint (`@handle`, bare handle, or `user:<id>`) to a human
+ *  roster participant. Attribution/data-hygiene, not security: unresolvable
+ *  hints fall back to broadcast rather than failing the ask. */
+function resolveAskUserTarget(humans: RosterEntry[], hint: string): RosterEntry | undefined {
+  const mention = hint.startsWith("@") ? hint.slice(1) : hint;
+  const lower = mention.toLowerCase();
+  return humans.find(
+    (entry) =>
+      entry.ref.id === hint ||
+      entry.participantId === hint ||
+      entry.handle?.toLowerCase() === lower ||
+      (typeof entry.ref.metadata?.["handle"] === "string" &&
+        (entry.ref.metadata["handle"] as string).toLowerCase() === lower)
+  );
+}
+
+/** ask-user: rewrite ask_user invocations to a channel feedback_form call.
+ *  Multi-human aware (WP7 §5): an explicitly addressed ask (`to`/`target` =
+ *  handle, `@mention`, or `user:<id>`) routes to that user's participant only;
+ *  an unaddressed ask broadcasts to ALL human participants (ref.kind ===
+ *  "user"), first answer wins — the invocation terminal is keyed by
+ *  invocationId, so the first answer settles it and sibling calls are cancelled.
+ *  With no canonical human on the roster, the local ask_user tool fails closed. */
 export function askUserPolicy(): StepPolicy {
   return {
     name: "ask-user",
     intercept({ state, output }) {
-      const promptingUser = state.config.roster?.participants?.find(
-        (participant) => participant.type === "panel" || participant.ref.kind === "user"
-      );
-      if (!promptingUser) return output;
-      const rewrittenIds = new Map<string, ParticipantRef>();
+      const roster = state.config.roster?.participants ?? [];
+      const humans = roster.filter((participant) => participant.ref.kind === "user");
+      if (humans.length === 0) return output;
+      // invocationId → ordered fan-out targets (first is the payload transport
+      // target and keeps the canonical ids).
+      const rewrittenIds = new Map<string, ParticipantRef[]>();
+      const targetsFor = (request: unknown): ParticipantRef[] => {
+        const hint = askUserTargetHint(request);
+        const addressed = hint ? resolveAskUserTarget(humans, hint) : undefined;
+        if (addressed) return [addressed.ref];
+        // An explicit but unknown addressee must never broaden into a broadcast.
+        if (hint) return [];
+        return humans.map((entry) => entry.ref);
+      };
       const append = output.append.map((item) => {
         if (item.payloadKind !== "invocation.started") return item;
         const payload = item.payload as Record<string, unknown>;
@@ -181,7 +230,9 @@ export function askUserPolicy(): StepPolicy {
         const invocationId = String(
           (item.causality as { invocationId?: string } | undefined)?.invocationId ?? ""
         );
-        rewrittenIds.set(invocationId, promptingUser.ref);
+        const targets = targetsFor(payload["request"]);
+        if (targets.length === 0) return item;
+        rewrittenIds.set(invocationId, targets);
         return {
           ...item,
           payload: {
@@ -189,32 +240,43 @@ export function askUserPolicy(): StepPolicy {
             name: "feedback_form",
             invocationType: "user",
             request: feedbackFormArgsFromAskUser(payload["request"]),
+            askUserTargets: targets,
             transport: {
               kind: "channel",
               channelId: state.channelId,
-              target: promptingUser.ref,
+              target: targets[0],
               transportCallId: ids.transportCallId(invocationId),
             },
           },
         };
       });
       if (rewrittenIds.size === 0) return output;
-      const effects = output.effects.map((effect): EffectDescriptor => {
-        if (effect.kind !== "local_tool" || !rewrittenIds.has(effect.invocationId)) return effect;
-        const target = rewrittenIds.get(effect.invocationId)!;
-        return {
-          effectId: effect.effectId,
-          kind: "channel_call",
-          channelId: effect.channelId,
-          idempotencyKey: ids.transportCallId(effect.invocationId),
-          invocationId: effect.invocationId,
-          turnId: effect.turnId,
-          transportCallId: ids.transportCallId(effect.invocationId),
-          target,
-          method: "feedback_form",
-          args: feedbackFormArgsFromAskUser(effect.args),
-          purpose: "ask-user",
-        };
+      const effects = output.effects.flatMap((effect): EffectDescriptor[] => {
+        if (effect.kind !== "local_tool" || !rewrittenIds.has(effect.invocationId)) {
+          return [effect];
+        }
+        const targets = rewrittenIds.get(effect.invocationId)!;
+        const args = feedbackFormArgsFromAskUser(effect.args);
+        return targets.map((target, index): EffectDescriptor => {
+          const callId =
+            index === 0
+              ? ids.transportCallId(effect.invocationId)
+              : askUserFanoutCallId(effect.invocationId, target);
+          return {
+            effectId:
+              index === 0 ? effect.effectId : askUserFanoutEffectId(effect.invocationId, target),
+            kind: "channel_call",
+            channelId: effect.channelId,
+            idempotencyKey: callId,
+            invocationId: effect.invocationId,
+            turnId: effect.turnId,
+            transportCallId: callId,
+            target,
+            method: "feedback_form",
+            args,
+            purpose: "ask-user",
+          };
+        });
       });
       return { append, effects };
     },

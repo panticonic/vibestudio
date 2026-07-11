@@ -129,7 +129,11 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   }
 
   selfParticipantId(): string {
-    return `do:unknown:unknown:${OBJECT_KEY}`;
+    return this.participantId();
+  }
+
+  bootstrapIdentityForTest(): void {
+    this.ensureIdentity();
   }
 
   queueRows(): Array<Record<string, unknown>> {
@@ -159,9 +163,12 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
 async function makeWorker(env?: Record<string, unknown>) {
   const { instance } = await createTestDO(TestableLinkedAgentWorker, {
     __objectKey: OBJECT_KEY,
+    WORKER_SOURCE: "workers/linked-agent",
+    WORKER_CLASS_NAME: "LinkedAgentWorker",
     ...(env ?? {}),
   });
   const worker = instance as TestableLinkedAgentWorker;
+  worker.bootstrapIdentityForTest();
   worker.seedSubscription("ch-1");
   return worker;
 }

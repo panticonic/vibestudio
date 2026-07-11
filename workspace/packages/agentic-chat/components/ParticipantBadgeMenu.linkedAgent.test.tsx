@@ -27,6 +27,30 @@ function participant(
 }
 
 describe("ParticipantBadgeMenu — linked agent", () => {
+  it("shows durable presence directly on a canonical human badge", () => {
+    render(
+      <Theme>
+        <ParticipantBadgeMenu
+          participant={{
+            id: "user:usr_alice",
+            metadata: { name: "Workspace member", type: "user" },
+          }}
+          profile={{
+            userId: "usr_alice",
+            handle: "alice",
+            displayName: "Alice",
+          }}
+          presenceStatus="idle"
+          hasActiveMessage={false}
+          onCallMethod={vi.fn()}
+        />
+      </Theme>
+    );
+    expect(screen.getByText(/@alice/)).toBeTruthy();
+    expect(screen.getByLabelText("idle")).toBeTruthy();
+    expect(screen.getByTitle("Alice — idle")).toBeTruthy();
+  });
+
   it("renders a Claude Code kind badge for a linked agent participant", () => {
     render(
       <Theme>

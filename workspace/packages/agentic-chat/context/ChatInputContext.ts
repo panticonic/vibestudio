@@ -1,17 +1,20 @@
 import { createContext, useContext } from "react";
 import type { Participant } from "@workspace/pubsub";
 import type { ChatInputContextValue, ChatParticipantMetadata } from "../types";
+import type { AccountProfile } from "../hooks/useAccountProfiles";
 
 const MENTION_TOKEN_RE = /(^|[\s([{])@([A-Za-z0-9_.-]+)/g;
+const EMPTY_PROFILES: ReadonlyMap<string, AccountProfile> = new Map();
 
 export function getMentionsFromInput(
   text: string,
   roster: Record<string, Participant<ChatParticipantMetadata>>,
   selectedMentions?: Record<string, string>,
+  profiles: ReadonlyMap<string, AccountProfile> = EMPTY_PROFILES
 ): string[] {
   const handleToIds = new Map<string, string[]>();
   for (const [participantId, participant] of Object.entries(roster)) {
-    const handle = participant.metadata.handle;
+    const handle = profiles.get(participantId)?.handle ?? participant.metadata.handle;
     if (!handle) continue;
     const key = handle.toLowerCase();
     const ids = handleToIds.get(key) ?? [];

@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import { ChromiumCrypto } from "../crypto/chromiumCrypto.js";
 import { deriveKey, decryptLinuxValue } from "../crypto/platforms/linux.js";
 import { decryptDarwinValue, deriveKey as darwinDeriveKey } from "../crypto/platforms/darwin.js";
-import { decryptWin32Value } from "../crypto/platforms/win32.js";
+import { decryptLegacyWin32Value, decryptWin32Value } from "../crypto/platforms/win32.js";
 import { BrowserDataError } from "../errors.js";
 
 // ---- Helper: encrypt with AES-128-CBC (Linux/macOS format) ----
@@ -204,9 +204,9 @@ describe("ChromiumCrypto version detection", () => {
   it("rejects v20 prefix", async () => {
     const encrypted = Buffer.from("v20some-encrypted-data");
 
-    await expect(
-      cryptoInstance.decrypt(encrypted, "chrome", "/tmp/state"),
-    ).rejects.toThrow(BrowserDataError);
+    await expect(cryptoInstance.decrypt(encrypted, "chrome", "/tmp/state")).rejects.toThrow(
+      BrowserDataError
+    );
 
     try {
       await cryptoInstance.decrypt(encrypted, "chrome", "/tmp/state");
@@ -216,13 +216,42 @@ describe("ChromiumCrypto version detection", () => {
     }
   });
 
+  it("rejects unversioned Chromium ciphertext on non-Windows platforms", async () => {
+    await expect(
+      cryptoInstance.decrypt(Buffer.from("plain-or-old-ciphertext"), "chrome", "/tmp/state")
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_ENCRYPTION_VERSION" });
+  });
+
   it("rejects v11 on non-linux platform", async () => {
     const darwinCrypto = new ChromiumCrypto("darwin");
     const encrypted = Buffer.from("v11some-data");
 
-    await expect(
-      darwinCrypto.decrypt(encrypted, "chrome", "/tmp/state"),
-    ).rejects.toThrow(BrowserDataError);
+    await expect(darwinCrypto.decrypt(encrypted, "chrome", "/tmp/state")).rejects.toThrow(
+      BrowserDataError
+    );
+  });
+});
+
+describe("legacy Windows DPAPI decryption", () => {
+  it("decrypts an unversioned raw DPAPI value", () => {
+    const encrypted = Buffer.from([0, 1, 2, 3, 254, 255]);
+    const execute = vi.fn(() => "legacy-secret\n");
+
+    expect(decryptLegacyWin32Value(encrypted, execute)).toBe("legacy-secret");
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringContaining(encrypted.toString("base64")),
+      expect.objectContaining({ encoding: "utf-8", timeout: 10000 })
+    );
+  });
+
+  it("wraps DPAPI failures with the browser-data error code", () => {
+    const execute = vi.fn(() => {
+      throw new Error("powershell failed");
+    });
+
+    expect(() => decryptLegacyWin32Value(Buffer.from("ciphertext"), execute)).toThrowError(
+      expect.objectContaining({ code: "DECRYPTION_FAILED" })
+    );
   });
 });
 

@@ -17,8 +17,7 @@ export class SubscriptionManager {
   constructor(
     private sql: SqlStorage,
     private channelFactory: (channelId: string) => ChannelClient,
-    private identity: DOIdentity,
-    private participantIdFallback?: () => string
+    private identity: DOIdentity
   ) {}
 
   createTables(): void {
@@ -35,10 +34,8 @@ export class SubscriptionManager {
 
   /** Build the participant ID from the DO's identity. */
   private buildParticipantId(): string {
-    const ref = this.identity.refOrNull;
-    if (ref) return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
-    if (this.participantIdFallback) return this.participantIdFallback();
-    return `do:unknown:unknown:unbootstrapped`;
+    const ref = this.identity.ref;
+    return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
   }
 
   async subscribe(opts: {
@@ -82,6 +79,11 @@ export class SubscriptionManager {
     }
 
     const channel = this.channelFactory(opts.channelId);
+    if (!this.identity.sessionId) {
+      throw new Error(
+        "Cannot subscribe before the durable-object session identity is bootstrapped"
+      );
+    }
     const subResult = await channel.subscribe(participantId, metadata);
 
     this.sql.exec(
@@ -108,7 +110,11 @@ export class SubscriptionManager {
     const participantId = this.getParticipantId(channelId);
     if (participantId) {
       const channel = this.channelFactory(channelId);
-      await channel.unsubscribe(participantId);
+      const sessionId = this.identity.sessionId;
+      if (!sessionId) {
+        throw new Error("Cannot unsubscribe without the owning durable-object session id");
+      }
+      await channel.unsubscribe(participantId, sessionId);
     }
   }
 

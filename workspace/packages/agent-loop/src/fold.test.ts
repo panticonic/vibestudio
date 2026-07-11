@@ -8,15 +8,29 @@ import {
   type ModelRequestDescriptor,
 } from "./state.js";
 
-const config = {
+const modelSpec = {
+  id: "claude-sonnet-4-6",
+  name: "Claude Sonnet 4.6",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 64_000,
+} satisfies AgentLoopConfig["modelSpec"];
+
+const config: AgentLoopConfig = {
   model: "anthropic:claude-sonnet-4-6",
+  modelSpec,
   thinkingLevel: "medium",
   approvalLevel: 2,
   respondPolicy: "all",
   systemPromptHash: "blob:sys",
   activeToolNames: ["read"],
   roster: { participants: [] },
-} as unknown as AgentLoopConfig;
+};
 
 function turnOpened(actorId: string, turnId: string, seq: number): LogEnvelope {
   return envelope(actorId, "turn.opened", {}, { turnId }, seq, `turn:${turnId}:opened`);
@@ -49,6 +63,7 @@ function request(contextThroughSeq: number): ModelRequestDescriptor {
   return {
     provider: "test",
     model: "m",
+    modelSpec,
     thinkingLevel: "medium",
     systemPromptHash: "blob:sys",
     activeToolNames: ["read"],
@@ -58,6 +73,28 @@ function request(contextThroughSeq: number): ModelRequestDescriptor {
 }
 
 describe("fold: an agent only owns turns it authored", () => {
+  it("rejects descriptor-less model requests instead of replaying pre-materialization events", () => {
+    const selfId = "agent:self";
+    const turnId = "t:c:trigger:agent:self";
+    const { modelSpec: _modelSpec, ...descriptorWithoutSpec } = request(1);
+    void _modelSpec;
+    let state = initialAgentState({ channelId: "c", config, selfId });
+    state = applyEvent(state, turnOpened(selfId, turnId, 1));
+
+    expect(() =>
+      applyEvent(
+        state,
+        envelope(
+          selfId,
+          "message.started",
+          { role: "assistant", modelRequest: descriptorWithoutSpec },
+          { messageId: "m:missing-spec", turnId },
+          2
+        )
+      )
+    ).toThrow(/lacks the required journaled modelSpec/u);
+  });
+
   it("ignores another participant's turn.opened but adopts its own (selfId filter)", () => {
     const selfId = "agent:self";
     let state: AgentState = initialAgentState({ channelId: "c", config, selfId });
@@ -71,12 +108,6 @@ describe("fold: an agent only owns turns it authored", () => {
     // Our OWN turn.opened is adopted.
     state = applyEvent(state, turnOpened(selfId, "t:c:trig:agent:self", 2));
     expect(state.openTurn?.turnId).toBe("t:c:trig:agent:self");
-  });
-
-  it("without a selfId, folds every author's turns (legacy back-compat)", () => {
-    let state: AgentState = initialAgentState({ channelId: "c", config });
-    state = applyEvent(state, turnOpened("agent:other", "t:c:trig:agent:other", 1));
-    expect(state.openTurn?.turnId).toBe("t:c:trig:agent:other");
   });
 
   it("keeps another agent's assistant completion as context without settling our in-flight call", () => {

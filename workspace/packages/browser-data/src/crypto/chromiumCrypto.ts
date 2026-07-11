@@ -21,11 +21,7 @@ export class ChromiumCrypto {
    * Detects the encryption version from the prefix bytes and dispatches
    * to the appropriate platform-specific decryption.
    */
-  async decrypt(
-    encrypted: Buffer,
-    browser: BrowserName,
-    localStatePath: string,
-  ): Promise<string> {
+  async decrypt(encrypted: Buffer, browser: BrowserName, localStatePath: string): Promise<string> {
     if (!encrypted || encrypted.length === 0) {
       return "";
     }
@@ -43,17 +39,22 @@ export class ChromiumCrypto {
       return this.decryptV10(encrypted, browser, localStatePath);
     }
 
-    // No recognized prefix: try platform default (legacy unencrypted or old DPAPI)
-    return this.decryptLegacy(encrypted, browser, localStatePath);
+    if (this.platform === "win32") {
+      const { decryptLegacyWin32Value } = await import("./platforms/win32.js");
+      return decryptLegacyWin32Value(encrypted);
+    }
+
+    throw new BrowserDataError(
+      "UNSUPPORTED_ENCRYPTION_VERSION",
+      `Unrecognized Chromium encryption prefix: ${JSON.stringify(prefix)}`
+    );
   }
 
   /**
    * Whether this platform can decrypt Chromium values.
    */
   canDecrypt(): boolean {
-    return this.platform === "linux"
-      || this.platform === "darwin"
-      || this.platform === "win32";
+    return this.platform === "linux" || this.platform === "darwin" || this.platform === "win32";
   }
 
   /**
@@ -75,34 +76,35 @@ export class ChromiumCrypto {
   private async decryptV10(
     encrypted: Buffer,
     browser: BrowserName,
-    localStatePath: string,
+    localStatePath: string
   ): Promise<string> {
     switch (this.platform) {
       case "linux": {
         const { getLinuxDecryptionKey, decryptLinuxValue } = await import("./platforms/linux.js");
         const key = await this.getCachedKey(`linux:v10:${browser}`, () =>
-          getLinuxDecryptionKey(browser, "v10"),
+          getLinuxDecryptionKey(browser, "v10")
         );
         return decryptLinuxValue(encrypted, key);
       }
       case "darwin": {
-        const { getDarwinDecryptionKey, decryptDarwinValue } = await import("./platforms/darwin.js");
+        const { getDarwinDecryptionKey, decryptDarwinValue } =
+          await import("./platforms/darwin.js");
         const key = await this.getCachedKey(`darwin:${browser}`, () =>
-          getDarwinDecryptionKey(browser),
+          getDarwinDecryptionKey(browser)
         );
         return decryptDarwinValue(encrypted, key);
       }
       case "win32": {
         const { getWin32DecryptionKey, decryptWin32Value } = await import("./platforms/win32.js");
         const key = await this.getCachedKey(`win32:${localStatePath}`, () =>
-          getWin32DecryptionKey(localStatePath),
+          getWin32DecryptionKey(localStatePath)
         );
         return decryptWin32Value(encrypted, key);
       }
       default:
         throw new BrowserDataError(
           "UNSUPPORTED_PLATFORM",
-          `v10 decryption not supported on ${this.platform}`,
+          `v10 decryption not supported on ${this.platform}`
         );
     }
   }
@@ -115,7 +117,7 @@ export class ChromiumCrypto {
     if (this.platform !== "linux") {
       throw new BrowserDataError(
         "UNSUPPORTED_ENCRYPTION_VERSION",
-        `v11 encryption is Linux-specific, current platform: ${this.platform}`,
+        `v11 encryption is Linux-specific, current platform: ${this.platform}`
       );
     }
 
@@ -124,7 +126,7 @@ export class ChromiumCrypto {
     let key: Buffer;
     try {
       key = await this.getCachedKey(`linux:v11:${browser}`, () =>
-        getLinuxDecryptionKey(browser, "v11"),
+        getLinuxDecryptionKey(browser, "v11")
       );
     } catch (err) {
       if (err instanceof BrowserDataError && err.code === "KEYRING_UNAVAILABLE") {
@@ -143,72 +145,18 @@ export class ChromiumCrypto {
    * v20: App-Bound Encryption (Windows only, Chrome 127+).
    * Currently not decryptable without elevated privileges.
    */
-  private async decryptV20(
-    _encrypted: Buffer,
-    _localStatePath: string,
-  ): Promise<string> {
+  private async decryptV20(_encrypted: Buffer, _localStatePath: string): Promise<string> {
     throw new BrowserDataError(
       "UNSUPPORTED_ENCRYPTION_VERSION",
       "v20 (App-Bound Encryption) is not yet supported. " +
         "Chrome 127+ on Windows uses this for cookies. " +
-        "Password export via CSV is recommended instead.",
-    );
-  }
-
-  /**
-   * Legacy: No version prefix.
-   * - Windows: raw DPAPI-encrypted blob (pre-v10)
-   * - Linux/macOS: may be plaintext or very old encryption
-   */
-  private async decryptLegacy(
-    encrypted: Buffer,
-    _browser: BrowserName,
-    _localStatePath: string,
-  ): Promise<string> {
-    if (this.platform === "win32") {
-      // Old Windows DPAPI without AES layer - decrypt directly via PowerShell
-      const { execSync } = await import("node:child_process");
-      const psScript = [
-        "Add-Type -AssemblyName System.Security;",
-        `$encrypted = [Convert]::FromBase64String("${encrypted.toString("base64")}");`,
-        "$decrypted = [Security.Cryptography.ProtectedData]::Unprotect($encrypted, $null, 'CurrentUser');",
-        "[Text.Encoding]::UTF8.GetString($decrypted)",
-      ].join(" ");
-
-      try {
-        return execSync(`powershell -NoProfile -Command "${psScript}"`, {
-          encoding: "utf-8",
-          timeout: 10000,
-          stdio: ["pipe", "pipe", "pipe"],
-        }).trim();
-      } catch (err) {
-        throw new BrowserDataError(
-          "DECRYPTION_FAILED",
-          "Legacy DPAPI decryption failed",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }
-
-    // On Linux/macOS, values without a prefix might be plaintext
-    const text = encrypted.toString("utf-8");
-    // Heuristic: if it looks like printable text, return it
-    if (/^[\x20-\x7e]*$/.test(text)) {
-      return text;
-    }
-
-    throw new BrowserDataError(
-      "DECRYPTION_FAILED",
-      "Unrecognized encryption format (no version prefix)",
+        "Password export via CSV is recommended instead."
     );
   }
 
   // ---- Key caching ----
 
-  private async getCachedKey(
-    cacheKey: string,
-    derive: () => Promise<Buffer>,
-  ): Promise<Buffer> {
+  private async getCachedKey(cacheKey: string, derive: () => Promise<Buffer>): Promise<Buffer> {
     const cached = this.keyCache.get(cacheKey);
     if (cached) return cached;
 

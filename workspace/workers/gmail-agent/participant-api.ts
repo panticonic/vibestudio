@@ -83,7 +83,11 @@ export class GmailParticipantApi {
   }
 
   getThread(channelId: string, args: Record<string, unknown>) {
-    return this.deps.handlers.getThread(channelId, args);
+    return this.deps.handlers.readMail(channelId, {
+      threadId: stringArg(args, "threadId"),
+      format: "full",
+      includeAttachmentList: true,
+    });
   }
 
   getOverview(channelId: string, needsAttentionCount: number): GmailOverview {

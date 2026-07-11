@@ -70,9 +70,9 @@ export interface AgentLoopConfig {
   model: string;
   /** Materialized descriptor + auth for `model` (design §6.2/§6.3). The
    *  vessel resolves these at the impure edge; the pure planner copies them
-   *  onto every request. Absent only in pre-refactor logs/fixtures — the
-   *  executor rejects requests without a spec (no registry fallback). */
-  modelSpec?: AgentModelSpec;
+   *  onto every request. There is no registry lookup or descriptor-less
+   *  request path after the impure configuration boundary. */
+  modelSpec: AgentModelSpec;
   modelAuth?: ModelAuthMode;
   /** Unattended provider-failure fallback (design §8). When present, the pure
    *  loop can journal exactly one local retry without consulting a registry. */
@@ -162,10 +162,10 @@ export interface ModelRequestDescriptor {
   provider: string;
   model: string;
   /** Journaled pi-ai Model literal — the ONLY resolution path in the
-   *  executor (design §6.2); requests without it fail with a clear error.
+   *  executor (design §6.2).
    *  For local models the journaled baseUrl documents what ran; the live
    *  endpoint from ensureLoaded() wins at execution time (§6.3). */
-  modelSpec?: AgentModelSpec;
+  modelSpec: AgentModelSpec;
   /** Auth mode copied from the catalog entry (design §6.3). Absent ⇒ "url-bound". */
   auth?: ModelAuthMode;
   modelBaseUrl?: string;
@@ -223,6 +223,9 @@ export interface PendingInvocation {
   attemptId?: string;
   name: string;
   transport: InvocationTransport;
+  /** Durable ask_user fan-out audience. The pure effect derivation recreates
+   * one independently journaled channel call per target after a restart. */
+  askUserTargets?: ParticipantRef[];
   request: unknown;
   requiresApproval: boolean;
   approvalId?: string;
@@ -330,8 +333,8 @@ export interface AgentState {
   /** This agent's own participant/actor id for this channel's loop. Turn/message
    *  lifecycle events authored by ANOTHER participant are NOT folded into loop state
    *  (the fold filters by this), so the agent never adopts another agent's open turn
-   *  from the shared channel replay. Undefined ⇒ no filtering (legacy/test folds). */
-  selfId?: string;
+   *  from the shared channel replay. */
+  selfId: string;
 
   config: AgentLoopConfig;
   entries: SessionEntry[];
@@ -358,7 +361,7 @@ export interface InitialStateInput {
   lastSeq?: number;
   lastHash?: string;
   /** The agent's own participant/actor id (see AgentState.selfId). */
-  selfId?: string;
+  selfId: string;
 }
 
 export function initialAgentState(input: InitialStateInput): AgentState {
@@ -370,6 +373,7 @@ export function initialAgentState(input: InitialStateInput): AgentState {
     lastSeq: input.lastSeq ?? input.forkSeq ?? 0,
     lastHash: input.lastHash ?? GENESIS_LAST_HASH,
     forkSeq: input.forkSeq ?? 0,
+    selfId: input.selfId,
     config: input.config,
     entries: [],
     openTurn: null,
@@ -380,7 +384,6 @@ export function initialAgentState(input: InitialStateInput): AgentState {
     steeringQueue: [],
     pendingPrompt: null,
     deferredPostTurnQueue: [],
-    ...(input.selfId ? { selfId: input.selfId } : {}),
   };
 }
 

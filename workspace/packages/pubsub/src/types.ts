@@ -3,6 +3,7 @@
  */
 
 import type { SandboxSource } from "./tracker-types.js";
+import type { ChannelInvite as WorkspaceChannelInvite } from "@vibestudio/shared/channelInvites";
 
 /**
  * Channel configuration persisted with the channel.
@@ -15,7 +16,7 @@ export interface ChannelConfig {
   title?: string;
   /** True when the title came from an explicit title command. */
   titleExplicit?: boolean;
-  approvalLevel?: 0 | 1 | 2;  // 0=Ask All, 1=Auto-Safe, 2=Full Auto (default)
+  approvalLevel?: 0 | 1 | 2; // 0=Ask All, 1=Auto-Safe, 2=Full Auto (default)
   /** Multi-agent conversation policy: "open" | "directed" | "moderated". */
   conversationPolicy?: "open" | "directed" | "moderated";
   /** Cap on consecutive agent-to-agent replies in one causal chain. */
@@ -70,8 +71,11 @@ export interface ParticipantSnapshot {
   metadata: Record<string, unknown>;
 }
 
-export type BootstrapSnapshot =
-  | { kind: "roster-snapshot"; participants: ParticipantSnapshot[]; ts: number };
+export type BootstrapSnapshot = {
+  kind: "roster-snapshot";
+  participants: ParticipantSnapshot[];
+  ts: number;
+};
 
 export interface ReplayReady {
   contextId?: string;
@@ -91,6 +95,27 @@ export interface ChannelReplayEnvelope {
   ready: ReplayReady;
 }
 
+export interface ChannelMember {
+  userId: string;
+  memberId: string;
+  handle: string;
+  addedBy: string;
+  addedAt: number;
+}
+
+export type ChannelInvite = WorkspaceChannelInvite;
+
+export type ChannelPresenceStatus = "online" | "idle" | "away" | "offline";
+
+export interface ChannelPresenceEntry {
+  participantId: string;
+  userId: string;
+  status: ChannelPresenceStatus;
+  lastActiveAt: number | null;
+  lastSeenAt: number | null;
+  sessionCount: number;
+}
+
 export type CustomMessageDisplayMode = "inline" | "row";
 
 export interface MessageTypeDefinition {
@@ -100,7 +125,12 @@ export interface MessageTypeDefinition {
   imports?: Record<string, string>;
   stateSchema?: Record<string, unknown>;
   updateSchema?: Record<string, unknown>;
-  registeredBy?: { kind: string; id: string; displayName?: string; metadata?: Record<string, unknown> };
+  registeredBy?: {
+    kind: string;
+    id: string;
+    displayName?: string;
+    metadata?: Record<string, unknown>;
+  };
   updatedAtSeq: number;
   clearedAtSeq?: number;
 }
@@ -243,5 +273,4 @@ export interface PublishOptions {
 /**
  * Options for updating participant metadata.
  */
-export interface UpdateMetadataOptions {
-}
+export interface UpdateMetadataOptions {}

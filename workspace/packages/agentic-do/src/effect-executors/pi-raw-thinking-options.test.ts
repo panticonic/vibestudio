@@ -6,6 +6,10 @@ import {
   type Model,
   type ProviderStreamOptions,
 } from "@earendil-works/pi-ai";
+// Mistral's provider pulls in its SDK lazily. Preload the real provider during
+// test collection so the payload assertion itself is not timed by SDK startup
+// under full-suite load.
+import "@earendil-works/pi-ai/mistral";
 import type { ThinkingLevel } from "@workspace/agent-loop";
 import { buildRawThinkingOptions, type RawThinkingModel } from "./pi-raw-thinking-options.js";
 

@@ -1523,9 +1523,9 @@ export default function NewsPanel() {
                         existingTopics={existingTopics}
                         feedDraft={feedDraft}
                         onFeedDraft={setFeedDraft}
-                        onAddFeed={(url) => void callAgent("addFeed", { url })}
-                        onFollowTopic={(topic) => void callAgent("followTopic", { topic })}
-                        onImportOpml={(opml) => void callAgent("importOpml", { opml })}
+                        onAddFeed={(url) => void callAgent("news_add_feed", { url })}
+                        onFollowTopic={(topic) => void callAgent("news_follow_topic", { topic })}
+                        onImportOpml={(opml) => void callAgent("news_import_opml", { opml })}
                       />
                     ) : null}
                   </Flex>
@@ -1603,7 +1603,7 @@ function ReaderSettings({
                   size="1"
                   disabled={busy}
                   onClick={() => {
-                    callAgent("setPreferences", { text: prefsDraft ?? "" });
+                    callAgent("news_set_preferences", { text: prefsDraft ?? "" });
                     setPrefsDraft(null);
                   }}
                 >
@@ -1642,7 +1642,7 @@ function ReaderSettings({
                   disabled={busy}
                   title="Remove feed"
                   aria-label="Remove feed"
-                  onClick={() => callAgent("removeFeed", { feedId: feed.feedId })}
+                  onClick={() => callAgent("news_remove_feed", { feedId: feed.feedId })}
                 >
                   <Cross2Icon />
                 </IconButton>
@@ -1660,7 +1660,7 @@ function ReaderSettings({
                 size="1"
                 disabled={busy || newFeedUrl.trim().length === 0}
                 onClick={() => {
-                  callAgent("addFeed", { url: newFeedUrl.trim() });
+                  callAgent("news_add_feed", { url: newFeedUrl.trim() });
                   setNewFeedUrl("");
                 }}
               >
@@ -1685,7 +1685,7 @@ function ReaderSettings({
                       disabled={busy}
                       title="Unfollow topic"
                       aria-label="Unfollow topic"
-                      onClick={() => callAgent("unfollowTopic", { topic: topic.topic })}
+                      onClick={() => callAgent("news_unfollow_topic", { topic: topic.topic })}
                     >
                       <Cross2Icon />
                     </IconButton>
@@ -1705,7 +1705,7 @@ function ReaderSettings({
                 size="1"
                 disabled={busy || newTopic.trim().length === 0}
                 onClick={() => {
-                  callAgent("followTopic", { topic: newTopic.trim() });
+                  callAgent("news_follow_topic", { topic: newTopic.trim() });
                   setNewTopic("");
                 }}
               >

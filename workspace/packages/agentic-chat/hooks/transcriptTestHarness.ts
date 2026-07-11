@@ -170,20 +170,28 @@ export async function appendTrajectoryEventsAndBroadcast(
 ) {
   const result = await harness.gad.call<{
     published: Array<{ channelId: string; envelopeId: string }>;
-  }>("appendTrajectoryBatch", {
-    trajectoryId: "trajectory:test",
-    branchId: "branch:test",
+  }>("appendLogEvent", {
+    logId: "trajectory:test",
+    head: "branch:test",
+    logKind: "trajectory",
     owner: { kind: "agent", id: "agent:onboarding" },
     events: await Promise.all(
-      events.map(async (event) => ({
-        event: await encodeChannelPayloadStoredValues(
+      events.map(async (event) => {
+        const encoded = (await encodeChannelPayloadStoredValues(
           { ...event, turnId: "turn:test" },
           {
             putText: async (value) => harness.putTextBlob(value),
           }
-        ),
-        publish: { channelIds: [harness.channelId] },
-      }))
+        )) as AgenticEvent;
+        return {
+          actor: encoded.actor,
+          payloadKind: encoded.kind,
+          payload: encoded.payload,
+          causality: { ...(encoded.causality ?? {}), turnId: "turn:test" },
+          appendedAt: encoded.createdAt,
+          publish: { channels: [{ channelId: harness.channelId }] },
+        };
+      })
     ),
   });
   await harness.channel.call(

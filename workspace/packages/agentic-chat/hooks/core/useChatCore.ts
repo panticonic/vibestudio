@@ -25,6 +25,7 @@ import { isAgentParticipantType } from "@workspace/pubsub";
 import {
   ConnectionManager,
   type ActionBarPayload,
+  type ClientParticipantMetadata,
   type ConnectionConfig,
   type ChatParticipantMetadata,
   type ChatMessage,
@@ -136,7 +137,9 @@ export interface UseChatCoreOptions {
   channelName: string;
   channelConfig?: ChannelConfig;
   contextId?: string;
-  metadata?: ChatParticipantMetadata;
+  /** Panel LABEL only (WP6 §5) — the channel derives the authoritative human
+   *  identity (`user:<userId>` + account handle) from the verified subject. */
+  metadata?: ClientParticipantMetadata;
   theme?: "light" | "dark";
   /** If set, automatically sent as the first user message once connected */
   initialPrompt?: string;
@@ -210,10 +213,7 @@ export interface ChatCoreState {
     messageId?: string,
     agentHandle?: string
   ) => Promise<void>;
-  handleCancelInvocation: (
-    invocation: InvocationCardPayload,
-    senderId: string
-  ) => Promise<void>;
+  handleCancelInvocation: (invocation: InvocationCardPayload, senderId: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   handleCallMethodResult: (
     providerId: string,
@@ -261,22 +261,20 @@ export interface ChatCoreState {
 // Hook
 // =============================================================================
 
-const DEFAULT_METADATA: ChatParticipantMetadata = {
-  name: "Chat Panel",
-  type: "panel",
-  handle: "user",
-};
-
 export function useChatCore({
   config,
   channelName,
   channelConfig: _channelConfig,
   contextId: _contextId,
-  metadata = DEFAULT_METADATA,
+  metadata: metadataOption,
   theme: themeProp,
   initialPrompt,
   forceInitialPrompt = false,
 }: UseChatCoreOptions): ChatCoreState {
+  const metadata = useMemo<ClientParticipantMetadata>(
+    () => metadataOption ?? { name: channelName, type: "panel" },
+    [channelName, metadataOption]
+  );
   // Appearance flows from the explicit prop OR the system / centralized
   // appearance — never a hardcoded "dark" fallback.
   const theme: "light" | "dark" = themeProp ?? resolveSystemTheme();
@@ -551,7 +549,7 @@ export function useChatCore({
             if (!isAgentParticipantType(prevP?.metadata?.type)) continue;
 
             // Skip expected leaves (graceful, replaced) and expected idle stops.
-            const handle = prevP.metadata.handle;
+            const handle = prevP.metadata.handle ?? pid;
             const isExpectedStop = expectedStopsRef.current.has(handle) || changeIsExpectedLeave;
             expectedStopsRef.current.delete(handle);
             if (isExpectedStop) continue;
@@ -797,11 +795,9 @@ export function useChatCore({
     if (!title) return;
     defaultTitleSetRef.current = true;
     document.title = title;
-    void clientRef.current
-      ?.updateChannelConfig({ title, titleExplicit: false })
-      .catch((err) => {
-        console.warn("[useChatCore] Failed to persist default channel title:", err);
-      });
+    void clientRef.current?.updateChannelConfig({ title, titleExplicit: false }).catch((err) => {
+      console.warn("[useChatCore] Failed to persist default channel title:", err);
+    });
   }, []);
 
   // --- Auto-send initial prompt once connected ---
@@ -844,7 +840,14 @@ export function useChatCore({
       })
       .then(({ pubsubId }) => backfillAfterLocalPublish(pubsubId))
       .catch((err) => console.warn("[Chat] Failed to send initial prompt:", err));
-  }, [backfillAfterLocalPublish, connected, client, channelName, initialPrompt, forceInitialPrompt]);
+  }, [
+    backfillAfterLocalPublish,
+    connected,
+    client,
+    channelName,
+    initialPrompt,
+    forceInitialPrompt,
+  ]);
 
   // --- Load earlier messages (delegates to useChannelMessages pagination) ---
   const loadEarlierMessages = channelLoadEarlier;
@@ -956,7 +959,11 @@ export function useChatCore({
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
       setUndoableAction((current) =>
         current && current.kind === "cancel"
-          ? { kind: "cancel", messageIds: [...current.messageIds, messageId], expiresAt: Date.now() + 5000 }
+          ? {
+              kind: "cancel",
+              messageIds: [...current.messageIds, messageId],
+              expiresAt: Date.now() + 5000,
+            }
           : { kind: "cancel", messageIds: [messageId], expiresAt: Date.now() + 5000 }
       );
       undoTimerRef.current = setTimeout(() => {

@@ -17,6 +17,17 @@ import type { ChatParticipantMetadata, ConnectionConfig } from "./types.js";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
+/**
+ * Client-supplied participant metadata for connecting (WP6 §5). `handle` is
+ * OPTIONAL here: a human panel no longer asserts one — the channel derives the
+ * authoritative identity (`user:<userId>`, account handle/displayName) from the
+ * host-verified subject on the caller envelope (WP6 §3). What the client sends
+ * is a panel LABEL for its own UI, not identity. Agents/vessels still supply
+ * their own descriptor (they are not human accounts).
+ */
+export type ClientParticipantMetadata = Partial<ChatParticipantMetadata> &
+  Pick<ChatParticipantMetadata, "name" | "type">;
+
 export interface ConnectionCallbacks {
   onEvent?: (event: IncomingEvent) => void;
   onRoster?: (roster: RosterUpdate<ChatParticipantMetadata>) => void;
@@ -34,7 +45,7 @@ export interface ConnectionConnectOptions {
 
 export class ConnectionManager {
   private config: ConnectionConfig;
-  private metadata: ChatParticipantMetadata;
+  private metadata: ClientParticipantMetadata;
   private callbacks: ConnectionCallbacks;
   private _client: PubSubClient<ChatParticipantMetadata> | null = null;
   private _status: ConnectionStatus = "disconnected";
@@ -44,7 +55,7 @@ export class ConnectionManager {
 
   constructor(opts: {
     config: ConnectionConfig;
-    metadata: ChatParticipantMetadata;
+    metadata: ClientParticipantMetadata;
     callbacks: ConnectionCallbacks;
   }) {
     this.config = opts.config;
@@ -91,13 +102,18 @@ export class ConnectionManager {
         channel: channelId,
         contextId,
         channelConfig,
-        handle: this.metadata.handle,
+        // No asserted HUMAN handle (WP6 §5): the channel stamps human identity
+        // from the host-verified subject, ignoring client-supplied handles.
+        // Agents/headless workers still pass their own descriptor through.
+        ...(this.metadata.handle !== undefined ? { handle: this.metadata.handle } : {}),
         name: this.metadata.name,
         type: this.metadata.type,
         reconnect: true,
         clientId: this.config.clientId,
         protocol: this.config.protocol,
-        metadata: this.metadata,
+        // Roster reads stay `ChatParticipantMetadata` (the channel fills the
+        // authoritative handle); only the OUTBOUND label may omit it.
+        metadata: this.metadata as ChatParticipantMetadata,
         methods,
         replayMode: "stream",
         replayMessageLimit: this.config.replayMessageLimit ?? 10_000,

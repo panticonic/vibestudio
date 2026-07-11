@@ -70,7 +70,9 @@ export default function NewsSetup({
     <Flex direction="column" gap="3">
       <Flex align="center" gap="2">
         <GearIcon />
-        <Text size="2" weight="bold">News sources</Text>
+        <Text size="2" weight="bold">
+          News sources
+        </Text>
         <Badge size="1" color={state.status === "configured" ? "green" : "amber"}>
           {state.status === "configured" ? "configured" : "setup needed"}
         </Badge>
@@ -87,13 +89,25 @@ export default function NewsSetup({
         </Button>
       </Flex>
       {state.scheduleSummary ? (
-        <Text size="1" color="gray">{state.scheduleSummary}</Text>
+        <Text size="1" color="gray">
+          {state.scheduleSummary}
+        </Text>
       ) : null}
-      {state.lastError ? <Text size="1" color="red">last run: {state.lastError}</Text> : null}
-      {error ? <Text size="1" color="red">{error}</Text> : null}
+      {state.lastError ? (
+        <Text size="1" color="red">
+          last run: {state.lastError}
+        </Text>
+      ) : null}
+      {error ? (
+        <Text size="1" color="red">
+          {error}
+        </Text>
+      ) : null}
 
       <Flex direction="column" gap="2">
-        <Text size="1" weight="bold">Feeds</Text>
+        <Text size="1" weight="bold">
+          Feeds
+        </Text>
         {feeds.map((feed) => (
           <Flex key={feed.feedId} align="center" gap="2" style={{ minWidth: 0 }}>
             <Switch
@@ -117,7 +131,7 @@ export default function NewsSetup({
               variant="ghost"
               color="red"
               disabled={busy}
-              onClick={() => void call("removeFeed", { feedId: feed.feedId })}
+              onClick={() => void call("news_remove_feed", { feedId: feed.feedId })}
             >
               <Cross2Icon />
             </Button>
@@ -135,7 +149,7 @@ export default function NewsSetup({
             size="1"
             disabled={busy || newFeedUrl.trim().length === 0}
             onClick={() => {
-              void call("addFeed", { url: newFeedUrl.trim() }).then(() => setNewFeedUrl(""));
+              void call("news_add_feed", { url: newFeedUrl.trim() }).then(() => setNewFeedUrl(""));
             }}
           >
             <PlusIcon /> Add feed
@@ -144,7 +158,9 @@ export default function NewsSetup({
       </Flex>
 
       <Flex direction="column" gap="2">
-        <Text size="1" weight="bold">Followed topics</Text>
+        <Text size="1" weight="bold">
+          Followed topics
+        </Text>
         <Flex align="center" gap="2" wrap="wrap">
           {topics.map((topic) => (
             <Badge key={topic.topic} size="2" color={topic.enabled ? "blue" : "gray"}>
@@ -154,7 +170,7 @@ export default function NewsSetup({
                 variant="ghost"
                 color="red"
                 disabled={busy}
-                onClick={() => void call("unfollowTopic", { topic: topic.topic })}
+                onClick={() => void call("news_unfollow_topic", { topic: topic.topic })}
               >
                 <Cross2Icon />
               </Button>
@@ -173,7 +189,9 @@ export default function NewsSetup({
             size="1"
             disabled={busy || newTopic.trim().length === 0}
             onClick={() => {
-              void call("followTopic", { topic: newTopic.trim() }).then(() => setNewTopic(""));
+              void call("news_follow_topic", { topic: newTopic.trim() }).then(() =>
+                setNewTopic("")
+              );
             }}
           >
             <PlusIcon /> Follow
@@ -182,7 +200,9 @@ export default function NewsSetup({
       </Flex>
 
       <Flex direction="column" gap="1">
-        <Text size="1" weight="bold">Preferences</Text>
+        <Text size="1" weight="bold">
+          Preferences
+        </Text>
         <TextField.Root
           size="1"
           placeholder="e.g. more open source, less crypto, terse blurbs"
@@ -194,7 +214,9 @@ export default function NewsSetup({
             size="1"
             disabled={busy}
             onClick={() => {
-              void call("setPreferences", { text: prefsDraft }).then(() => setPrefsDraft(null));
+              void call("news_set_preferences", { text: prefsDraft }).then(() =>
+                setPrefsDraft(null)
+              );
             }}
           >
             Save preferences

@@ -3,6 +3,7 @@
 // ===========================================================================
 export type {
   ChatParticipantMetadata,
+  ClientParticipantMetadata,
   ConnectionConfig,
   AgenticChatActions,
   ChatSandboxValue,

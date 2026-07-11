@@ -44,6 +44,7 @@ export interface ChannelCallPort {
     turnId?: string;
     timeoutMs?: number;
   }): Promise<void>;
+  cancelMethodCall(channelId: string, transportCallId: string): Promise<void>;
   publish(input: {
     channelId: string;
     payloadKind: string;

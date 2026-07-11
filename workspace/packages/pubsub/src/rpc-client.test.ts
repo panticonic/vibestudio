@@ -272,6 +272,65 @@ describe("connectViaRpc", () => {
       client.close();
     });
 
+    it("adopts the authoritative human participant id for every post-subscribe operation", async () => {
+      mockRpc.call.mockImplementation(async (target: string, method: string) => {
+        if (target === "main" && method === "workers.resolveService") {
+          return { kind: "durable-object", targetId: DO_TARGET };
+        }
+        if (target === DO_TARGET && method === "subscribe") {
+          return {
+            ok: true,
+            participantId: "user:usr_alice",
+            envelope: {
+              mode: "initial",
+              logEvents: [],
+              snapshots: [
+                {
+                  kind: "roster-snapshot",
+                  participants: [
+                    { id: "user:usr_alice", metadata: { kind: "user", type: "user" } },
+                  ],
+                  ts: Date.now(),
+                },
+              ],
+              ready: {
+                contextId: "ctx-1",
+                totalCount: 0,
+                envelopeCount: 0,
+                hasMoreBefore: false,
+              },
+            },
+          };
+        }
+        if (target === DO_TARGET && method === "publish") return { id: 1 };
+        return undefined;
+      });
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        clientId: "panel:slot-a",
+        name: "Chat panel",
+        type: "panel",
+      });
+
+      await client.ready();
+      expect(client.clientId).toBe("user:usr_alice");
+      await client.publish("test", { ok: true });
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "publish", [
+        "user:usr_alice",
+        "test",
+        { ok: true },
+        expect.any(Object),
+      ]);
+
+      client.close();
+      await Promise.resolve();
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [
+        "user:usr_alice",
+        expect.any(String),
+      ]);
+    });
+
     it("resolves ready() from the subscribe acknowledgment after applying fallback replay", async () => {
       mockRpc.call.mockImplementation(async (target: string, method: string) => {
         if (target === "main" && method === "workers.resolveService") {
@@ -797,9 +856,7 @@ describe("connectViaRpc", () => {
 
       releaseProgress();
       await vi.waitFor(() => {
-        expect(mockRpc.call.mock.calls.some((call) => call[1] === "submitMethodResult")).toBe(
-          true
-        );
+        expect(mockRpc.call.mock.calls.some((call) => call[1] === "submitMethodResult")).toBe(true);
       });
 
       const progressIndex = mockRpc.call.mock.calls.findIndex(
@@ -1214,17 +1271,13 @@ describe("connectViaRpc", () => {
             mockRpc.call.mock.calls.filter((c: unknown[]) => c[1] === "submitMethodResult")
           ).toHaveLength(1);
         });
-        expect(mockRpc.call).toHaveBeenCalledWith(
-          DO_TARGET,
-          "submitMethodResult",
-          [
-            SELF_ID,
-            TRANSPORT_ID_1,
-            `Method "slowWork" reached its journaled deadline`,
-            true,
-            expect.objectContaining({ terminalReasonCode: "method_execution_timeout" }),
-          ]
-        );
+        expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "submitMethodResult", [
+          SELF_ID,
+          TRANSPORT_ID_1,
+          `Method "slowWork" reached its journaled deadline`,
+          true,
+          expect.objectContaining({ terminalReasonCode: "method_execution_timeout" }),
+        ]);
       } finally {
         client.close();
         vi.useRealTimers();
@@ -1365,12 +1418,10 @@ describe("connectViaRpc", () => {
 
     it("recovers a pending method result from a replayed invocation.completed on resubscribe", async () => {
       let recover!: () => Promise<void>;
-      const registerColdRecoverHandler = vi.fn(
-        (_id: string, handler: () => Promise<void>) => {
-          recover = handler;
-          return vi.fn();
-        }
-      );
+      const registerColdRecoverHandler = vi.fn((_id: string, handler: () => Promise<void>) => {
+        recover = handler;
+        return vi.fn();
+      });
       // The resubscribe replay carries the missed terminal as a durable
       // invocation.completed log event (no getSettledResult read-back).
       let pendingCallId: string | undefined;
@@ -1424,10 +1475,68 @@ describe("connectViaRpc", () => {
       await recover();
 
       await expect(handle.result).resolves.toEqual({ content: { answer: 42 } });
-      expect(
-        mockRpc.call.mock.calls.some((call) => call[1] === "getSettledResult")
-      ).toBe(false);
+      expect(mockRpc.call.mock.calls.some((call) => call[1] === "getSettledResult")).toBe(false);
 
+      client.close();
+    });
+  });
+
+  describe("channel membership, invitations, and presence", () => {
+    it("unwraps the typed channel management responses", async () => {
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      await Promise.resolve();
+      await Promise.resolve();
+      mockRpc.call.mockClear();
+      mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+        if (method === "addMember") {
+          return {
+            userId: "usr_bob",
+            memberId: "user:usr_bob",
+            handle: "bob",
+            addedBy: "user:usr_alice",
+            addedAt: 1,
+            alreadyMember: false,
+          };
+        }
+        if (method === "removeMember") return { removed: true };
+        if (method === "listMembers") return { members: [] };
+        if (method === "listInvitesForMe") {
+          return {
+            invites: [
+              {
+                channelId: CHANNEL,
+                userId: "usr_bob",
+                memberId: "user:usr_bob",
+                handle: "bob",
+                addedBy: "user:usr_alice",
+                addedAt: 1,
+              },
+            ],
+          };
+        }
+        if (method === "acknowledgeInvite") return { acknowledged: true };
+        if (method === "getChannelPresence") {
+          return { entries: [], generatedAt: 2 };
+        }
+        return undefined;
+      });
+
+      await expect(client.addMember("usr_bob")).resolves.toMatchObject({
+        memberId: "user:usr_bob",
+        alreadyMember: false,
+      });
+      await expect(client.removeMember("usr_bob")).resolves.toEqual({ removed: true });
+      await expect(client.listMembers()).resolves.toEqual([]);
+      await expect(client.listInvitesForMe()).resolves.toMatchObject([
+        { channelId: CHANNEL, userId: "usr_bob" },
+      ]);
+      await expect(client.acknowledgeInvite()).resolves.toBe(true);
+      await expect(client.getChannelPresence()).resolves.toEqual({ entries: [], generatedAt: 2 });
+
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "addMember", [{ userId: "usr_bob" }]);
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "removeMember", [{ userId: "usr_bob" }]);
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "listInvitesForMe", []);
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "acknowledgeInvite", []);
       client.close();
     });
   });
@@ -1449,8 +1558,12 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // Verify unsubscribe was called
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [SELF_ID]);
+      // Verify unsubscribe was called (session-scoped: WP6 §4 shared user
+      // rows release only this client's session ref)
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [
+        SELF_ID,
+        expect.any(String),
+      ]);
 
       // Verify disconnect handler fired
       expect(disconnectFn).toHaveBeenCalledTimes(1);

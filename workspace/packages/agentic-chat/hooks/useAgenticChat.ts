@@ -16,7 +16,12 @@ import { z } from "zod";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { runtimeMethods } from "@vibestudio/shared/serviceSchemas/runtime";
 import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
-import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
+import type {
+  ChannelConfig,
+  MethodDefinition,
+  MethodExecutionContext,
+  PubSubClient,
+} from "@workspace/pubsub";
 import { executeSandbox, ScopeManager } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, ScopeBlobBackend } from "@workspace/eval";
 import type { ActiveFeedbackSchema, FeedbackResult } from "@workspace/tool-ui";
@@ -43,6 +48,7 @@ import type {
   SandboxConfig,
   ChatSandboxValue,
   ChatParticipantMetadata,
+  ClientParticipantMetadata,
   ChatContextValue,
   ChatInputContextValue,
   ActionBarData,
@@ -78,7 +84,11 @@ function actionBarLoadKey(
   return `${path}\n${propsKey}\n${maxHeight ?? ""}`;
 }
 
-function actorKindFromMetadata(type: string | undefined): ActorKind {
+function actorKindFromMetadata(type: string | undefined, participantId?: string): ActorKind {
+  // A `user:<userId>` participant id is the channel-stamped human identity
+  // (WP6 §4) — it always resolves to the semantic `user` role, regardless of
+  // the client-supplied metadata type.
+  if (participantId?.startsWith("user:")) return "user";
   if (type === "agent" || type === "system" || type === "panel" || type === "external") return type;
   return "user";
 }
@@ -88,13 +98,22 @@ function browserHandoffCallerKindFromMetadata(type: string | undefined): Browser
   return "panel";
 }
 
-function actorForClient(clientId: string | undefined, metadata: ChatParticipantMetadata) {
-  const id = clientId ?? metadata.handle ?? "panel";
+function actorForClient(
+  client: Pick<PubSubClient<ChatParticipantMetadata>, "clientId" | "roster">,
+  metadata: ClientParticipantMetadata
+) {
+  const id = client.clientId ?? metadata.handle ?? "panel";
+  // Live identity projection (WP6 §3/§5): the channel stamps human
+  // participants with `id: user:<userId>` and the ACCOUNT-derived
+  // handle/displayName on the roster row — prefer that over the local panel
+  // label, so events carry the real account participant and profile.
+  const self = client.roster?.[id]?.metadata;
+  const merged = { ...metadata, ...(self ?? {}) };
   return {
-    kind: actorKindFromMetadata(metadata.type),
+    kind: actorKindFromMetadata(merged.type ?? metadata.type, id),
     id,
-    displayName: metadata.name ?? id,
-    metadata: { ...metadata },
+    displayName: merged.name ?? merged.handle ?? id,
+    metadata: { ...merged },
   };
 }
 
@@ -189,7 +208,9 @@ export interface UseAgenticChatOptions {
   channelName: string;
   channelConfig?: ChannelConfig;
   contextId?: string;
-  metadata?: ChatParticipantMetadata;
+  /** Panel LABEL only (WP6 §5) — never the authoritative human identity; the
+   *  channel derives that from the host-verified subject on the connection. */
+  metadata?: ClientParticipantMetadata;
   tools?: ToolProvider;
   actions?: AgenticChatActions;
   theme?: "light" | "dark";
@@ -221,7 +242,9 @@ export function useAgenticChat({
   channelName,
   channelConfig,
   contextId,
-  metadata = { name: "Chat Panel", type: "panel", handle: "user" },
+  // Panel label only — no client-declared human identity: the channel
+  // stamps the account-derived identity from the host-verified subject.
+  metadata: metadataOption,
   tools,
   actions,
   // No "dark" default — appearance flows from the explicit prop OR the system
@@ -240,6 +263,10 @@ export function useAgenticChat({
   contextValue: ChatContextValue;
   inputContextValue: ChatInputContextValue;
 } {
+  const metadata = useMemo<ClientParticipantMetadata>(
+    () => metadataOption ?? { name: channelName, type: "panel" },
+    [channelName, metadataOption]
+  );
   // --- Sandbox config ref (stable access in callbacks) ---
   const sandboxRef = useRef(sandbox);
   sandboxRef.current = sandbox;
@@ -279,7 +306,9 @@ export function useAgenticChat({
           size: number;
         }>,
       getText: (digest: string) =>
-        sandboxRef.current.rpc.call("main", "blobstore.getText", [digest]) as Promise<string | null>,
+        sandboxRef.current.rpc.call("main", "blobstore.getText", [digest]) as Promise<
+          string | null
+        >,
     }),
     []
   );
@@ -531,15 +560,12 @@ export function useAgenticChat({
     },
     []
   );
-  const loadSourceFile = useCallback(
-    async (path: string) => {
-      const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
-        sandboxRef.current.rpc.call("main", `${svc}.${method}`, args)
-      );
-      return (await fsClient.readFile(path, "utf8")) as string;
-    },
-    []
-  );
+  const loadSourceFile = useCallback(async (path: string) => {
+    const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
+      sandboxRef.current.rpc.call("main", `${svc}.${method}`, args)
+    );
+    return (await fsClient.readFile(path, "utf8")) as string;
+  }, []);
   const loadImport = useCallback<NonNullable<SandboxOptions["loadImport"]>>(
     (specifier, ref, externals) => sandboxRef.current.loadImport(specifier, ref, externals),
     []
@@ -618,7 +644,7 @@ export function useAgenticChat({
       await publishTypedAgenticEvent(
         {
           kind: "ui.action_bar.updated",
-          actor: actorForClient(client.clientId, metadata),
+          actor: actorForClient(client, metadata),
           payload: eventPayload,
           createdAt: new Date().toISOString(),
         },
@@ -1073,7 +1099,7 @@ export default function App({ props, chat, scope }) {
               await publishTypedAgenticEvent(
                 {
                   kind: "ui.inline_rendered",
-                  actor: actorForClient(client.clientId, metadata),
+                  actor: actorForClient(client, metadata),
                   payload: eventPayload,
                   createdAt: new Date().toISOString(),
                 },

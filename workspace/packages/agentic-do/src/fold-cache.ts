@@ -80,7 +80,7 @@ export class FoldCache {
     config: AgentLoopConfig;
     /** This agent's participant/actor id — folded into state so the fold filters out
      *  foreign-authored turn lifecycle events (see AgentState.selfId). */
-    selfId?: string;
+    selfId: string;
   }): Promise<AgentState> {
     const remote = await this.gad.call<{
       seq: number;
@@ -98,7 +98,7 @@ export class FoldCache {
         config: input.config,
         forkSeq,
         lastSeq: forkSeq,
-        ...(input.selfId ? { selfId: input.selfId } : {}),
+        selfId: input.selfId,
         ...(remote?.forkHash ? { lastHash: remote.forkHash } : {}),
       });
 
@@ -112,7 +112,7 @@ export class FoldCache {
       return {
         ...cached,
         forkSeq,
-        ...(input.selfId ? { selfId: input.selfId } : {}),
+        selfId: input.selfId,
         config: overlayInputConfig(cached.config, input.config),
       };
     }

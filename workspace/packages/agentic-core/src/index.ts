@@ -79,7 +79,7 @@ export { TypedEmitter } from "./emitter.js";
 
 // --- Connection ---
 export { ConnectionManager } from "./connection.js";
-export type { ConnectionStatus } from "./connection.js";
+export type { ConnectionStatus, ClientParticipantMetadata } from "./connection.js";
 
 // --- SandboxConfig Factories ---
 export { createPanelSandboxConfig } from "./sandbox-factory.js";

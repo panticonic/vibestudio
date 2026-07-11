@@ -1,5 +1,10 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
-import { isGmailApiError, type GmailClient, type GmailMessage, type GmailThread } from "@workspace/gmail";
+import {
+  isGmailApiError,
+  type GmailClient,
+  type GmailMessage,
+  type GmailThread,
+} from "@workspace/gmail";
 import type {
   GmailAttentionPrefs,
   GmailContactCandidate,
@@ -435,7 +440,10 @@ export class GmailHandlers {
     const messageId = stringArg(args, "messageId");
     if (!threadId && !messageId) throw new Error("read requires threadId or messageId");
     const format = stringArg(args, "format") === "metadata" ? "metadata" : "full";
-    const maxBodyChars = Math.max(500, Math.min(numberArg(args, "maxBodyChars") ?? 20_000, 100_000));
+    const maxBodyChars = Math.max(
+      500,
+      Math.min(numberArg(args, "maxBodyChars") ?? 20_000, 100_000)
+    );
     const includeAttachments = booleanArg(args, "includeAttachmentList") ?? false;
     try {
       const gmail = this.deps.gmailFor(channelId);
@@ -460,27 +468,6 @@ export class GmailHandlers {
     } catch (err) {
       return await this.failGmail(channelId, "read", err);
     }
-  }
-
-  /** Legacy-shaped full-thread read used by the participant API and UI. */
-  async getThread(
-    channelId: string,
-    args: Record<string, unknown>
-  ): Promise<
-    | { threadId: string; messages: Array<Record<string, unknown>> }
-    | ReturnType<typeof failureResult>
-  > {
-    const threadId = stringArg(args, "threadId");
-    if (!threadId) throw new Error("getThread requires threadId");
-    // Thread cards render attachment lists, so include them here.
-    const result = await this.readMail(channelId, {
-      threadId,
-      format: "full",
-      includeAttachmentList: true,
-    });
-    return result as
-      | { threadId: string; messages: Array<Record<string, unknown>> }
-      | ReturnType<typeof failureResult>;
   }
 
   // ── snooze / reminders ────────────────────────────────────────────────────
@@ -526,7 +513,12 @@ export class GmailHandlers {
     }
     // The worker alarm fires the reminder; nudge it to recompute scheduling.
     this.deps.setPollAlarm(Math.max(remindAt - now, 1000));
-    return { snoozed: true, threadId, remindAt: new Date(remindAt).toISOString(), archived: archive };
+    return {
+      snoozed: true,
+      threadId,
+      remindAt: new Date(remindAt).toISOString(),
+      archived: archive,
+    };
   }
 
   listReminders(channelId: string): {
@@ -638,7 +630,9 @@ export class GmailHandlers {
     if (booleanArg(args, "archive")) removeNames.push("INBOX");
     const localCategory = stringArg(args, "localCategory");
     if (addNames.length === 0 && removeNames.length === 0 && !localCategory) {
-      throw new Error("modify requires at least one change (labels, markRead, archive, or localCategory)");
+      throw new Error(
+        "modify requires at least one change (labels, markRead, archive, or localCategory)"
+      );
     }
     try {
       const gmail = this.deps.gmailFor(channelId);
@@ -932,7 +926,9 @@ function sanitizeMessage(
     subject: header(message, "Subject") ?? "",
     snippet: message.snippet ?? "",
     labels: message.labelIds ?? [],
-    ...(format === "full" ? { bodyText: textFromPart(message.payload).slice(0, maxBodyChars) } : {}),
+    ...(format === "full"
+      ? { bodyText: textFromPart(message.payload).slice(0, maxBodyChars) }
+      : {}),
     ...(includeAttachments ? { attachments: attachmentList(message) } : {}),
   };
 }
@@ -940,7 +936,8 @@ function sanitizeMessage(
 function attachmentList(
   message: GmailMessage
 ): Array<{ filename: string; mimeType?: string; attachmentId?: string; size?: number }> {
-  const out: Array<{ filename: string; mimeType?: string; attachmentId?: string; size?: number }> = [];
+  const out: Array<{ filename: string; mimeType?: string; attachmentId?: string; size?: number }> =
+    [];
   const walk = (part: NonNullable<GmailMessage["payload"]> | undefined): void => {
     if (!part) return;
     if (part.filename && (part.body?.attachmentId || part.body?.size)) {
@@ -956,7 +953,6 @@ function attachmentList(
   walk(message.payload);
   return out;
 }
-
 
 function stringArrayArg(
   args: Record<string, unknown>,

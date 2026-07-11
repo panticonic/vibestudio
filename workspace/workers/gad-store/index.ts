@@ -1,4 +1,21 @@
 import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import type {
+  ChannelInvite,
+  ChannelMembershipCleanupPlan,
+  DeleteChannelInviteInput,
+  DeleteChannelMembershipInput,
+  PutChannelMembershipInput,
+} from "@vibestudio/shared/channelInvites";
+import {
+  CHANNEL_INVITE_NOTIFICATION_KIND,
+  channelInviteFromNotification,
+  channelInviteNotification,
+  channelInviteNotificationId,
+  type PutUserNotificationInput,
+  type UserNotification,
+  type UserNotificationAcknowledgementResult,
+  type UserNotificationListResult,
+} from "@vibestudio/shared/userNotifications";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -341,6 +358,9 @@ const GAD_REQUIRED_TABLES = [
   "trajectory_checkpoints",
   "channel_message_types",
   "channel_roster",
+  "user_notifications",
+  "channel_membership_index",
+  "channel_membership_revisions",
   "gad_blobs",
   "gad_worktree_states",
   "gad_file_versions",
@@ -538,37 +558,6 @@ export interface IngestWorktreeStateInput {
   turnId?: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Legacy adapter shapes (deleted in the Stage B cut along with the adapters)
-// ---------------------------------------------------------------------------
-
-export interface TrajectoryAppendItem {
-  event: AgenticEvent;
-  eventId?: string | null;
-  publish?: {
-    channelIds: string[];
-    audience?: unknown;
-  } | null;
-}
-
-export interface AppendTrajectoryBatchInput {
-  trajectoryId: string;
-  branchId: string;
-  owner: { kind: "agent"; id: string };
-  expectedHeadEventHash?: string | null;
-  events: TrajectoryAppendItem[];
-}
-
-export interface AppendTrajectoryBatchResult {
-  trajectoryId: string;
-  branchId: string;
-  headEventId: string | null;
-  headEventHash: string | null;
-  headStateHash: string | null;
-  events: TrajectoryEvent[];
-  published: Array<{ eventId: string; channelId: string; envelopeId: string }>;
-}
-
 export interface ChannelPublication {
   eventId: string;
   trajectoryId: string;
@@ -686,27 +675,6 @@ export interface AgentHealthInspection {
   storage: { rows: JsonRecord[] };
 }
 
-export interface ForkChannelLogInput {
-  fromChannelId: string;
-  toChannelId: string;
-  throughSeq?: number | null;
-}
-
-export interface ForkChannelLogResult {
-  fromChannelId: string;
-  toChannelId: string;
-  throughSeq: number | null;
-  copied: number;
-  firstSeq?: number;
-  lastSeq?: number;
-  lineage: Array<{
-    sourceEnvelopeId: string;
-    forkEnvelopeId: string;
-    sourceSeq: number;
-    forkSeq: number;
-  }>;
-}
-
 export interface ForkTrajectoryBranchInput {
   fromTrajectoryId: string;
   fromBranchId: string;
@@ -773,6 +741,38 @@ function json(value: unknown): string | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+/** WP5 §5 — the acting/resolving ACCOUNT (userId+handle) as it rides in an
+ *  approval actor's `metadata`. The account lives in `metadata`, NEVER in
+ *  `actor.kind` (that kind stays the semantic role — "agent"/"user"-authored —
+ *  not an account handle); this reads it back out so the provenance projection
+ *  can carry WHO resolved without conflating the two. Returns null when no
+ *  account is stamped (system-authored or pre-multi-user resolutions). */
+function accountFromActorMetadata(metadata: unknown): { userId: string; handle?: string } | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  const userId = asString(record["userId"]);
+  if (!userId) return null;
+  const handle = asString(record["handle"]);
+  return handle ? { userId, handle } : { userId };
+}
+
+/** Serialize the canonical approval provenance actor shape. Every non-null row
+ *  carries `kind`, `id`, and an explicit `account` (`null` for system actors),
+ *  so readers never need to infer which schema generation produced it. */
+function approvalActorJson(actor: unknown, resolutionMetadata?: unknown): string | null {
+  if (actor == null) return null;
+  if (typeof actor !== "object" || Array.isArray(actor)) {
+    throw new Error("approval actor must be an object");
+  }
+  const record = actor as Record<string, unknown>;
+  if (!asString(record["kind"]) || !asString(record["id"])) {
+    throw new Error("approval actor requires kind and id");
+  }
+  const account =
+    accountFromActorMetadata(record["metadata"]) ?? accountFromActorMetadata(resolutionMetadata);
+  return JSON.stringify({ ...record, account });
 }
 
 function asNumber(value: unknown): number {
@@ -1505,6 +1505,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // working row was cherry-picked from; UX-only provenance).
   // v23 (local gad-system-review): merge of the two v22 lines below; both cuts,
   // one schema.
+  // v30: channel-only invites become an extensible, account-scoped durable
+  // user notification inbox. The host transports only opaque change nudges.
+  // v27: workspace-wide channel invitation inbox. Pending invitations are keyed
+  // by verified account + channel here; clients never enumerate channel DOs.
   // v26: provenance cache key hardening — cache rows are now scoped by repo log,
   // session, recall-key, turn ordinal, content stamp, and knowledge graph version.
   // v25 (gad-provenance-fibers big bang): the provenance graph substrate —
@@ -1517,6 +1521,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // v22 (fabling): P3 narrow-host push/merge orchestration moves into the DO:
   // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
   // `synthetic` column on gad_worktree_edit_ops (import snapshot chain restarts).
+  // v29: channel membership projection mutations carry a required monotonic
+  // revision; retained action tombstones reject delayed older completions and
+  // make lost-response retries idempotent without recreating acknowledged invites.
+  // v28: approval provenance rows have one canonical actor shape with an
+  // explicit account object/null; the destructive reset removes pre-cutover
+  // projection rows instead of retaining a reader compatibility path.
   // v22 (gad-system-review): removes the dead file-mutation/observation
   // projections and their state.file_* event kinds.
   // v21: worktree heads carry explicit commit_event_id, so commit ancestry is
@@ -1535,7 +1545,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // identical content states don't conflate).
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  static override schemaVersion = 26;
+  static override schemaVersion = 30;
 
   /**
    * IntentIds of publish intents this live instance is actively driving — added
@@ -1602,7 +1612,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
            AND (
              name LIKE 'trajectory_%' OR name LIKE 'channel_%' OR name LIKE 'gad_%'
              OR name LIKE 'log_%'
-             OR name IN ('vcs_context_bases', 'vcs_context_provenance', 'refs', 'ref_log', 'branches', 'sessions', 'conversation_turns',
+             OR name IN ('user_notifications', 'vcs_context_bases', 'vcs_context_provenance', 'refs', 'ref_log', 'branches', 'sessions', 'conversation_turns',
                          'tool_calls', 'file_versions', 'tracked_files', 'blobs', 'provenance_for_file', 'edge_graph', 'claim_graph')
            )
            -- §8.1: the durable knowledge ledger is the claim system of record and
@@ -1892,6 +1902,50 @@ export class GadWorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS user_notifications (
+        user_id         TEXT NOT NULL,
+        notification_id TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        title           TEXT NOT NULL,
+        message         TEXT,
+        data_json       TEXT,
+        created_at      INTEGER NOT NULL,
+        producer_revision INTEGER NOT NULL,
+        acknowledged_at INTEGER,
+        PRIMARY KEY (user_id, notification_id)
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created
+        ON user_notifications (user_id, acknowledged_at, created_at DESC, notification_id)
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_membership_index (
+        user_id    TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        member_id  TEXT NOT NULL,
+        handle     TEXT NOT NULL,
+        added_by   TEXT NOT NULL,
+        added_at   INTEGER NOT NULL,
+        PRIMARY KEY (user_id, channel_id)
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_channel_membership_index_user
+        ON channel_membership_index (user_id, channel_id)
+    `);
+    // The last applied membership mutation survives a delete. This tombstone is
+    // the ordering authority for the two materialized projections above.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_membership_revisions (
+        user_id    TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        revision   INTEGER NOT NULL CHECK (revision > 0),
+        action     TEXT NOT NULL CHECK (action IN ('put', 'delete')),
+        PRIMARY KEY (user_id, channel_id)
+      )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS gad_blobs (
         hash TEXT PRIMARY KEY,
         size INTEGER NOT NULL DEFAULT 0,
@@ -2030,9 +2084,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
     this.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_edit_ops_invoc ON gad_worktree_edit_ops(invocation_id)` // causal: edits in a tool-call
-    );
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_gad_edit_ops_output ON gad_worktree_edit_ops(output_state_hash)` // legacy listWorktreeEditOps
     );
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS gad_claims (
@@ -3090,10 +3141,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           bindings.push(segment.throughSeq);
         }
         const rows = this.sql
-          .exec(
-            `SELECT envelope_id FROM log_events WHERE ${clauses.join(" AND ")}`,
-            ...bindings
-          )
+          .exec(`SELECT envelope_id FROM log_events WHERE ${clauses.join(" AND ")}`, ...bindings)
           .toArray() as JsonRecord[];
         for (const row of rows) found.add(String(row["envelope_id"]));
       }
@@ -4047,8 +4095,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
       approvalId,
       envelope.causality?.invocationId ?? null,
       status,
-      kind === "approval.requested" ? JSON.stringify(envelope.actor) : null,
-      kind === "approval.resolved" ? json(payload["resolvedBy"]) : null,
+      // WP5 §5 — provenance rows carry the acting/resolving ACCOUNT (userId+
+      // handle) hoisted from actor metadata; actor.kind stays semantic, never
+      // rewritten to "user". The resolved path falls back to the envelope actor
+      // when payload.resolvedBy itself did not carry the account.
+      kind === "approval.requested" ? approvalActorJson(envelope.actor) : null,
+      kind === "approval.resolved"
+        ? approvalActorJson(payload["resolvedBy"], envelope.actor?.metadata)
+        : null,
       kind === "approval.requested" ? String(envelope.envelopeId) : null,
       kind === "approval.resolved" ? String(envelope.envelopeId) : null,
       nowIso()
@@ -4139,13 +4193,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /**
-   * §8.1: knowledge.* projector. Claim CONTENT is the durable ledger's system
-   * of record; the trajectory event carries only causality + a `ledgerEntryId`
-   * pointer (plus minimal denorm). Content is resolved through the ledger entry
-   * when present, falling back to the event payload for producer-inline claims
-   * that never wrote a ledger row (those are era-scoped, not resurrected on a
-   * schema bump). All rows are global (keyed by claim_id / event_id, never
-   * head), so fork-fold replay under a rewritten head stays correct.
+   * §8.1: knowledge.* projector. Claim CONTENT is owned exclusively by the
+   * durable ledger; trajectory events carry causality plus a required ledger
+   * pointer and minimal denormalized display fields. Missing, dangling, or
+   * kind-mismatched pointers fail the append/replay transaction. All rows are
+   * global (keyed by claim_id / event_id, never head), so fork-fold replay
+   * under a rewritten head stays correct.
    */
   private projectKnowledge(envelope: LogEnvelope): void {
     if (envelope.payloadKind === "knowledge.claims_related") {
@@ -4154,16 +4207,26 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
     if (!envelope.payloadKind.startsWith("knowledge.claim_")) return;
     const payload = envelope.payload as JsonRecord;
-    const ledgerEntryId = asString(payload["ledgerEntryId"]);
-    const ledger = ledgerEntryId ? this.readLedgerEntry(ledgerEntryId) : null;
-    // Ledger payload is the system of record; the event payload is the denorm
-    // fallback when a claim was appended without a ledger entry.
-    const content = (ledger?.payload ?? payload) as JsonRecord;
-    const claimId =
-      asString(payload["claimId"]) ??
-      asString(content["claimId"]) ??
-      asString(payload["id"]) ??
-      String(envelope.envelopeId);
+    const expectedKind =
+      envelope.payloadKind === "knowledge.claim_retracted"
+        ? "claim_retracted"
+        : envelope.payloadKind === "knowledge.claim_updated"
+          ? "claim_revised"
+          : "claim_recorded";
+    const { ledgerEntryId, ledger } = this.requireKnowledgeLedger(envelope, payload, expectedKind);
+    const content = ledger.payload;
+    const claimId = asString(content["claimId"]);
+    if (!claimId) {
+      throw new Error(
+        `${envelope.payloadKind}: ledger entry ${ledgerEntryId} is missing its claimId`
+      );
+    }
+    const denormalizedClaimId = asString(payload["claimId"]);
+    if (denormalizedClaimId && denormalizedClaimId !== claimId) {
+      throw new Error(
+        `${envelope.payloadKind}: event claimId ${denormalizedClaimId} does not match ledger claimId ${claimId}`
+      );
+    }
     this.applyClaimContent({
       claimId,
       eventKind: envelope.payloadKind,
@@ -4290,19 +4353,40 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *  under multiple heads without duplicating edges. */
   private projectClaimRelations(envelope: LogEnvelope): void {
     const payload = envelope.payload as JsonRecord;
-    const ledgerEntryId = asString(payload["ledgerEntryId"]);
-    const ledger = ledgerEntryId ? this.readLedgerEntry(ledgerEntryId) : null;
-    const source = (ledger?.payload ?? payload) as JsonRecord;
-    const relations = Array.isArray(source["relations"]) ? (source["relations"] as unknown[]) : [];
-    // Key by the durable ledger entry id (not the trajectory envelope id) when
-    // one exists, so this projection and the schema-bump ledger rebuild agree on
-    // the unique identity — combining them never duplicates an edge. Inline
-    // (ledger-less) relations fall back to the era-scoped envelope id.
-    this.writeClaimRelations(
-      ledgerEntryId ?? String(envelope.envelopeId),
-      relations,
-      envelope.appendedAt
+    const { ledgerEntryId, ledger } = this.requireKnowledgeLedger(
+      envelope,
+      payload,
+      "claims_related"
     );
+    if (!Array.isArray(ledger.payload["relations"]) || ledger.payload["relations"].length === 0) {
+      throw new Error(`knowledge.claims_related: ledger entry ${ledgerEntryId} has no relations`);
+    }
+    const relations = ledger.payload["relations"] as unknown[];
+    this.writeClaimRelations(ledgerEntryId, relations, envelope.appendedAt);
+  }
+
+  private requireKnowledgeLedger(
+    envelope: LogEnvelope,
+    payload: JsonRecord,
+    expectedKind: "claim_recorded" | "claim_revised" | "claim_retracted" | "claims_related"
+  ): {
+    ledgerEntryId: string;
+    ledger: { kind: string; payload: JsonRecord; anchor: JsonRecord };
+  } {
+    const ledgerEntryId = asString(payload["ledgerEntryId"]);
+    if (!ledgerEntryId) {
+      throw new Error(`${envelope.payloadKind}: ledgerEntryId is required`);
+    }
+    const ledger = this.readLedgerEntry(ledgerEntryId);
+    if (!ledger) {
+      throw new Error(`${envelope.payloadKind}: ledger entry ${ledgerEntryId} does not exist`);
+    }
+    if (ledger.kind !== expectedKind) {
+      throw new Error(
+        `${envelope.payloadKind}: ledger entry ${ledgerEntryId} has kind ${ledger.kind}, expected ${expectedKind}`
+      );
+    }
+    return { ledgerEntryId, ledger };
   }
 
   private writeClaimRelations(eventKey: string, relations: unknown[], at: string): void {
@@ -4393,9 +4477,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const at = asString(row["created_at"]) ?? nowIso();
       const entryId = String(row["entry_id"]);
       if (kind === "claims_related") {
-        const relations = Array.isArray(payload["relations"])
-          ? (payload["relations"] as unknown[])
-          : [];
+        if (!Array.isArray(payload["relations"]) || payload["relations"].length === 0) {
+          throw new Error(`knowledge ledger entry ${entryId} has no relations`);
+        }
+        const relations = payload["relations"] as unknown[];
         this.writeClaimRelations(entryId, relations, at);
         continue;
       }
@@ -4405,11 +4490,18 @@ export class GadWorkspaceDO extends DurableObjectBase {
           : kind === "claim_revised"
             ? "knowledge.claim_updated"
             : "knowledge.claim_recorded";
+      const claimId = asString(payload["claimId"]);
+      const trajectoryEventId = asString(payload["trajectoryEventId"]);
+      if (!claimId || !trajectoryEventId) {
+        throw new Error(
+          `knowledge ledger entry ${entryId} is missing claimId or trajectoryEventId`
+        );
+      }
       this.applyClaimContent({
-        claimId: asString(payload["claimId"]) ?? entryId,
+        claimId,
         eventKind,
         content: payload,
-        trajectoryEventId: asString(payload["trajectoryEventId"]) ?? entryId,
+        trajectoryEventId,
         invocationId: asString(payload["invocationId"]),
         ledgerEntryId: entryId,
         logId: asString(payload["logId"]),
@@ -5458,14 +5550,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { added, removed, changed };
   }
 
-  /** Full recursive file listing of a worktree state (vcs materialize; the
-   *  git-bridge extension's listing fallback for pre-mirroring states). */
-  @rpc({ callers: ["panel", "do", "worker", "server", "extension"] })
-  listStateFiles(input: { stateHash: string }): JsonRecord[] {
-    this.ensureReady();
-    return this.filesForState(input.stateHash);
-  }
-
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   getGadStateProducer(input: { stateHash: string }): JsonRecord | null {
     this.ensureReady();
@@ -5487,19 +5571,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
         .exec(`SELECT * FROM gad_state_transitions WHERE event_id = ?`, input.eventId)
         .toArray()[0] as JsonRecord | undefined) ?? null
     );
-  }
-
-  /** The op union (provenance/intent) that authored a worktree state. */
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  listWorktreeEditOps(input: { outputStateHash: string }): JsonRecord[] {
-    this.ensureReady();
-    return this.sql
-      .exec(
-        `SELECT ordinal, kind, path, old_content_hash, new_content_hash, hunks_json, mode
-         FROM gad_worktree_edit_ops WHERE output_state_hash = ? ORDER BY ordinal ASC`,
-        input.outputStateHash
-      )
-      .toArray() as JsonRecord[];
   }
 
   /** Validate a manifest tree recursively; report missing nodes and hash
@@ -8408,9 +8479,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
       .toArray()[0] as JsonRecord | undefined;
     if (!row) return null;
     const ledgerEntryId = asString(row["ledger_entry_id"]);
-    if (!ledgerEntryId) return null; // era-scoped inline claim: no durable anchor.
+    if (!ledgerEntryId) {
+      throw new Error(`claim ${claimId} is missing its required ledger entry id`);
+    }
     const ledger = this.readLedgerEntry(ledgerEntryId);
-    if (!ledger) return null;
+    if (!ledger) {
+      throw new Error(`claim ${claimId} references missing ledger entry ${ledgerEntryId}`);
+    }
     const anchor = ledger.anchor;
     const commitEventId = asString(anchor["commitEventId"]);
     const commitMessage = asString(anchor["commitMessage"]);
@@ -12247,6 +12322,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     sweptManifests: number;
     sweptFileVersions: number;
     blobCandidates: number;
+    liveStateHashes: string[];
     liveBlobDigests: string[];
   } {
     this.ensureReady();
@@ -12487,6 +12563,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         sweptManifests,
         sweptFileVersions,
         blobCandidates: candidates,
+        liveStateHashes: [...keptStates].sort(),
         liveBlobDigests: [...liveBlobDigests].sort(),
       };
     });
@@ -12841,7 +12918,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   // -------------------------------------------------------------------------
-  // Legacy adapter surface — thin over the unified core (deleted in Stage B)
+  // Typed projections over the canonical unified log
   // -------------------------------------------------------------------------
 
   private trajectoryEventView(
@@ -12889,76 +12966,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
         : {}),
       ...(Object.keys(policyAnnotations).length > 0 ? { annotations: policyAnnotations } : {}),
       publishedAt: envelope.appendedAt,
-    };
-  }
-
-  @rpc({ callers: ["do", "server"] })
-  async appendTrajectoryBatch(
-    input: AppendTrajectoryBatchInput
-  ): Promise<AppendTrajectoryBatchResult> {
-    this.ensureReady();
-    if (!input.trajectoryId) throw new Error("appendTrajectoryBatch requires trajectoryId");
-    if (!input.branchId) throw new Error("appendTrajectoryBatch requires branchId");
-    if (input.events.length === 0)
-      throw new Error("appendTrajectoryBatch requires at least one event");
-
-    const events: LogAppendEventInput[] = input.events.map((item) => {
-      const event = item.event as AgenticEvent & {
-        turnId?: string;
-        causality?: Record<string, unknown>;
-      };
-      const causality: Record<string, unknown> = {
-        ...(event.causality ?? {}),
-        ...(event.turnId ? { turnId: event.turnId } : {}),
-      };
-      return {
-        envelopeId: item.eventId ?? null,
-        actor: event.actor as ActorRef,
-        payloadKind: event.kind,
-        payload: event.payload,
-        ...(Object.keys(causality).length > 0 ? { causality: causality as LogEventCausality } : {}),
-        appendedAt: event.createdAt,
-        ...(item.publish
-          ? {
-              publish: {
-                channels: item.publish.channelIds.map((channelId) => ({
-                  channelId,
-                  audience: item.publish?.audience,
-                })),
-              },
-            }
-          : {}),
-      };
-    });
-
-    const result = await this.appendLogEvent({
-      logId: input.trajectoryId,
-      head: input.branchId,
-      logKind: "trajectory",
-      owner: input.owner,
-      ...("expectedHeadEventHash" in input
-        ? { expectedHeadHash: input.expectedHeadEventHash ?? null }
-        : {}),
-      events,
-    });
-
-    return {
-      trajectoryId: input.trajectoryId,
-      branchId: input.branchId,
-      headEventId: this.headPointer(input.trajectoryId, input.branchId).envelopeId ?? null,
-      headEventHash: result.headHash,
-      headStateHash: this.latestStateHash(input.trajectoryId, input.branchId),
-      events: result.envelopes.map((envelope) =>
-        this.trajectoryEventView(envelope, {
-          trajectoryId: input.trajectoryId,
-          branchId: input.branchId,
-        })
-      ),
-      published: result.published.map((publication) => ({
-        eventId: publication.originEnvelopeId,
-        channelId: publication.channelId,
-        envelopeId: publication.envelopeId,
-      })),
     };
   }
 
@@ -13080,30 +13087,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["do", "server"] })
-  forkChannelLog(input: ForkChannelLogInput): ForkChannelLogResult {
-    this.ensureReady();
-    if (!input.fromChannelId) throw new Error("forkChannelLog requires fromChannelId");
-    if (!input.toChannelId) throw new Error("forkChannelLog requires toChannelId");
-    if (input.fromChannelId === input.toChannelId)
-      throw new Error("forkChannelLog requires distinct channels");
-    const fork = this.forkLog({
-      fromLogId: input.fromChannelId,
-      fromHead: CHANNEL_LOG_HEAD,
-      toLogId: input.toChannelId,
-      toHead: CHANNEL_LOG_HEAD,
-      atSeq: input.throughSeq ?? null,
-    });
-    return {
-      fromChannelId: input.fromChannelId,
-      toChannelId: input.toChannelId,
-      throughSeq: input.throughSeq ?? null,
-      copied: fork.inherited,
-      lineage: [],
-    };
-  }
-
-  // --- Channel adapters ------------------------------------------------------
+  // --- Channel projections ---------------------------------------------------
 
   @rpc({ callers: ["do", "server"] })
   async appendChannelEnvelope(
@@ -14214,6 +14198,512 @@ export class GadWorkspaceDO extends DurableObjectBase {
       },
       { metric: "Claims", value: count(`SELECT COUNT(*) AS value FROM gad_claims`) },
     ];
+  }
+
+  // -------------------------------------------------------------------------
+  // Workspace-wide channel invitation inbox
+  // -------------------------------------------------------------------------
+
+  private requireInviteUserId(value: unknown, method: string): string {
+    if (typeof value !== "string" || value.trim() === "" || value.startsWith("user:")) {
+      throw new Error(`${method}: userId must be a bare workspace account id`);
+    }
+    return value.trim();
+  }
+
+  private requireInviteChannelId(value: unknown, method: string): string {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`${method}: channelId is required`);
+    }
+    return value.trim();
+  }
+
+  private assertInviteChannelAuthority(channelId: string, method: string): void {
+    const caller = this.caller;
+    if (caller?.callerKind === "server") return;
+    const expected = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
+    if (caller?.callerKind !== "do" || caller.callerId !== expected) {
+      throw new Error(`${method}: only the owning channel DO may mutate or inspect this row`);
+    }
+  }
+
+  private requireMembershipRevision(value: unknown, method: string): number {
+    if (!Number.isSafeInteger(value) || Number(value) <= 0) {
+      throw new Error(`${method}: revision must be a positive safe integer`);
+    }
+    return Number(value);
+  }
+
+  private channelMembershipRevision(
+    userId: string,
+    channelId: string
+  ): { revision: number; action: "put" | "delete" } | null {
+    const row = this.sql
+      .exec(
+        `SELECT revision, action FROM channel_membership_revisions
+          WHERE user_id = ? AND channel_id = ?`,
+        userId,
+        channelId
+      )
+      .toArray()[0];
+    if (!row) return null;
+    return {
+      revision: Number(row["revision"]),
+      action: String(row["action"]) as "put" | "delete",
+    };
+  }
+
+  private recordChannelMembershipRevision(
+    userId: string,
+    channelId: string,
+    revision: number,
+    action: "put" | "delete"
+  ): void {
+    this.sql.exec(
+      `INSERT INTO channel_membership_revisions (user_id, channel_id, revision, action)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, channel_id) DO UPDATE SET
+         revision = excluded.revision,
+         action = excluded.action`,
+      userId,
+      channelId,
+      revision,
+      action
+    );
+  }
+
+  private requireUserNotificationText(value: unknown, field: string, method: string): string {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`${method}: ${field} is required`);
+    }
+    const text = value.trim();
+    const max = field === "id" ? 512 : field === "kind" ? 128 : field === "title" ? 256 : 4096;
+    if (text.length > max) throw new Error(`${method}: ${field} exceeds ${max} characters`);
+    return text;
+  }
+
+  private userNotificationFromRow(row: Record<string, unknown>): UserNotification {
+    const dataJson = row["data_json"];
+    let data: unknown;
+    if (typeof dataJson === "string") {
+      try {
+        data = JSON.parse(dataJson);
+      } catch {
+        throw new Error(
+          `Corrupt user notification ${String(row["notification_id"])}: invalid data_json`
+        );
+      }
+    }
+    return {
+      id: String(row["notification_id"]),
+      userId: String(row["user_id"]),
+      kind: String(row["kind"]),
+      title: String(row["title"]),
+      ...(typeof row["message"] === "string" ? { message: row["message"] } : {}),
+      ...(data !== undefined ? { data } : {}),
+      createdAt: Number(row["created_at"]),
+      revision: Number(row["producer_revision"]),
+    };
+  }
+
+  private writeUserNotification(input: PutUserNotificationInput, method: string): UserNotification {
+    const userId = this.requireInviteUserId(input?.userId, method);
+    const id = this.requireUserNotificationText(input?.id, "id", method);
+    const kind = this.requireUserNotificationText(input?.kind, "kind", method);
+    const title = this.requireUserNotificationText(input?.title, "title", method);
+    const message =
+      typeof input.message === "string" && input.message.trim()
+        ? this.requireUserNotificationText(input.message, "message", method)
+        : null;
+    if (!Number.isSafeInteger(input.createdAt) || input.createdAt < 0) {
+      throw new Error(`${method}: createdAt must be a non-negative safe integer`);
+    }
+    if (!Number.isSafeInteger(input.revision) || input.revision <= 0) {
+      throw new Error(`${method}: revision must be a positive safe integer`);
+    }
+    let dataJson: string | null = null;
+    if (input.data !== undefined) {
+      let encoded: string | undefined;
+      try {
+        encoded = JSON.stringify(input.data);
+      } catch {
+        throw new Error(`${method}: data must be JSON-serializable`);
+      }
+      if (encoded === undefined) throw new Error(`${method}: data must be JSON-serializable`);
+      if (new TextEncoder().encode(encoded).byteLength > 64 * 1024) {
+        throw new Error(`${method}: data exceeds 65536 serialized bytes`);
+      }
+      dataJson = encoded;
+    }
+    const existingRow = this.sql
+      .exec(
+        `SELECT user_id, notification_id, kind, title, message, data_json, created_at, producer_revision
+           FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+        userId,
+        id
+      )
+      .toArray()[0];
+    if (existingRow) {
+      const existing = this.userNotificationFromRow(existingRow);
+      if (input.revision < existing.revision) return existing;
+      if (input.revision === existing.revision) {
+        const identical =
+          existing.kind === kind &&
+          existing.title === title &&
+          (existing.message ?? null) === message &&
+          (typeof existingRow["data_json"] === "string" ? existingRow["data_json"] : null) ===
+            dataJson &&
+          existing.createdAt === input.createdAt;
+        if (!identical) {
+          throw new Error(`${method}: revision ${input.revision} was already used for other data`);
+        }
+        return existing;
+      }
+    }
+    this.sql.exec(
+      `INSERT INTO user_notifications
+         (user_id, notification_id, kind, title, message, data_json, created_at, producer_revision, acknowledged_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(user_id, notification_id) DO UPDATE SET
+         kind = excluded.kind,
+         title = excluded.title,
+         message = excluded.message,
+         data_json = excluded.data_json,
+         created_at = excluded.created_at,
+         producer_revision = excluded.producer_revision,
+         acknowledged_at = CASE
+           WHEN excluded.producer_revision > user_notifications.producer_revision THEN NULL
+           ELSE user_notifications.acknowledged_at
+         END
+       WHERE excluded.producer_revision >= user_notifications.producer_revision`,
+      userId,
+      id,
+      kind,
+      title,
+      message,
+      dataJson,
+      input.createdAt,
+      input.revision
+    );
+    const row = this.sql
+      .exec(
+        `SELECT user_id, notification_id, kind, title, message, data_json, created_at, producer_revision
+           FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+        userId,
+        id
+      )
+      .toArray()[0];
+    if (!row) throw new Error(`${method}: notification upsert did not produce a row`);
+    return this.userNotificationFromRow(row);
+  }
+
+  private signalUserNotificationChange(userId: string): void {
+    try {
+      const signal = this.rpc
+        .call("main", "notification.signalUserInbox", [userId])
+        .catch((error: unknown) =>
+          console.warn(`[GAD] live user-notification nudge failed for ${userId}:`, error)
+        );
+      if (this.ctx.waitUntil) this.ctx.waitUntil(signal);
+      else void signal;
+    } catch (error) {
+      // The durable row is authoritative; a reconnect snapshot repairs a missed
+      // best-effort nudge if the host bridge is not initialized yet.
+      console.warn(`[GAD] could not start user-notification nudge for ${userId}:`, error);
+    }
+  }
+
+  /**
+   * Versioned channel-DO projection into membership + pending-invite indexes.
+   * Equal-revision retries are no-ops: in particular, replaying a put after its
+   * invite was acknowledged must not recreate that invite. Older revisions are
+   * rejected without mutating either projection.
+   */
+  @rpc({ callers: ["do", "server"] })
+  putChannelMembership(input: PutChannelMembershipInput): {
+    applied: boolean;
+    currentRevision: number;
+  } {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "putChannelMembership");
+    const channelId = this.requireInviteChannelId(input?.channelId, "putChannelMembership");
+    this.assertInviteChannelAuthority(channelId, "putChannelMembership");
+    const memberId = `user:${userId}`;
+    if (input?.memberId !== memberId) {
+      throw new Error(`putChannelMembership: memberId must equal ${memberId}`);
+    }
+    const handle = typeof input.handle === "string" ? input.handle.trim() : "";
+    const addedBy = typeof input.addedBy === "string" ? input.addedBy.trim() : "";
+    if (!handle) throw new Error("putChannelMembership: handle is required");
+    if (!addedBy) throw new Error("putChannelMembership: addedBy is required");
+    if (!Number.isSafeInteger(input.addedAt) || input.addedAt < 0) {
+      throw new Error("putChannelMembership: addedAt must be a non-negative integer");
+    }
+    const revision = this.requireMembershipRevision(input.revision, "putChannelMembership");
+    let applied = false;
+    let currentRevision = revision;
+    this.ctx.storage.transactionSync(() => {
+      const current = this.channelMembershipRevision(userId, channelId);
+      if (current && revision <= current.revision) {
+        currentRevision = current.revision;
+        if (revision === current.revision && current.action !== "put") {
+          throw new Error(`putChannelMembership: revision ${revision} was already used for delete`);
+        }
+        return;
+      }
+      this.sql.exec(
+        `INSERT INTO channel_membership_index
+           (user_id, channel_id, member_id, handle, added_by, added_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, channel_id) DO UPDATE SET
+           member_id = excluded.member_id,
+           handle = excluded.handle,
+           added_by = excluded.added_by,
+           added_at = excluded.added_at`,
+        userId,
+        channelId,
+        memberId,
+        handle,
+        addedBy,
+        input.addedAt
+      );
+      this.writeUserNotification(
+        channelInviteNotification(
+          {
+            userId,
+            channelId,
+            memberId,
+            handle,
+            addedBy,
+            addedAt: input.addedAt,
+          },
+          revision
+        ),
+        "putChannelMembership"
+      );
+      this.recordChannelMembershipRevision(userId, channelId, revision, "put");
+      applied = true;
+    });
+    if (applied) this.signalUserNotificationChange(userId);
+    return { applied, currentRevision };
+  }
+
+  /** Versioned channel-DO removal from membership and invite indexes. */
+  @rpc({ callers: ["do", "server"] })
+  deleteChannelMembership(input: DeleteChannelMembershipInput): {
+    applied: boolean;
+    currentRevision: number;
+    deleted: boolean;
+  } {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "deleteChannelMembership");
+    const channelId = this.requireInviteChannelId(input?.channelId, "deleteChannelMembership");
+    this.assertInviteChannelAuthority(channelId, "deleteChannelMembership");
+    const revision = this.requireMembershipRevision(input.revision, "deleteChannelMembership");
+    let deleted = false;
+    let applied = false;
+    let currentRevision = revision;
+    this.ctx.storage.transactionSync(() => {
+      const current = this.channelMembershipRevision(userId, channelId);
+      if (current && revision <= current.revision) {
+        currentRevision = current.revision;
+        if (revision === current.revision && current.action !== "delete") {
+          throw new Error(`deleteChannelMembership: revision ${revision} was already used for put`);
+        }
+        return;
+      }
+      deleted =
+        this.sql
+          .exec(
+            `SELECT 1 FROM channel_membership_index WHERE user_id = ? AND channel_id = ?`,
+            userId,
+            channelId
+          )
+          .toArray().length > 0;
+      this.sql.exec(
+        `DELETE FROM channel_membership_index WHERE user_id = ? AND channel_id = ?`,
+        userId,
+        channelId
+      );
+      this.sql.exec(
+        `DELETE FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+        userId,
+        channelInviteNotificationId(channelId)
+      );
+      this.recordChannelMembershipRevision(userId, channelId, revision, "delete");
+      applied = true;
+    });
+    if (applied) this.signalUserNotificationChange(userId);
+    return { applied, currentRevision, deleted };
+  }
+
+  /** Server-only durable plan used by the child revocation cascade. */
+  @rpc({ callers: ["server"] })
+  listChannelMembershipsForUser(input: { userId: string }): ChannelMembershipCleanupPlan {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "listChannelMembershipsForUser");
+    const channelIds = this.sql
+      .exec(
+        `SELECT channel_id FROM channel_membership_index
+         WHERE user_id = ? ORDER BY channel_id`,
+        userId
+      )
+      .toArray()
+      .map((row) => String(row["channel_id"]));
+    return { userId, channelIds };
+  }
+
+  /** Final idempotent scrub after every indexed channel acknowledged removal. */
+  @rpc({ callers: ["server"] })
+  purgeRevokedUserChannelIndexes(input: { userId: string }): void {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "purgeRevokedUserChannelIndexes");
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(`DELETE FROM channel_membership_index WHERE user_id = ?`, userId);
+      this.sql.exec(`DELETE FROM user_notifications WHERE user_id = ?`, userId);
+    });
+    this.signalUserNotificationChange(userId);
+  }
+
+  /** Idempotent channel-DO removal from the workspace inbox. */
+  @rpc({ callers: ["do", "server"] })
+  deleteChannelInvite(input: DeleteChannelInviteInput): { deleted: boolean } {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "deleteChannelInvite");
+    const channelId = this.requireInviteChannelId(input?.channelId, "deleteChannelInvite");
+    this.assertInviteChannelAuthority(channelId, "deleteChannelInvite");
+    const existed =
+      this.sql
+        .exec(
+          `SELECT 1 FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+          userId,
+          channelInviteNotificationId(channelId)
+        )
+        .toArray().length > 0;
+    if (existed) {
+      this.sql.exec(
+        `DELETE FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+        userId,
+        channelInviteNotificationId(channelId)
+      );
+      this.signalUserNotificationChange(userId);
+    }
+    return { deleted: existed };
+  }
+
+  /** Trusted channel-DO lookup for its verified calling user and own channel. */
+  @rpc({ callers: ["do", "server"] })
+  getChannelInvite(input: DeleteChannelInviteInput): ChannelInvite | null {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "getChannelInvite");
+    const channelId = this.requireInviteChannelId(input?.channelId, "getChannelInvite");
+    this.assertInviteChannelAuthority(channelId, "getChannelInvite");
+    const rows = this.sql
+      .exec(
+        `SELECT user_id, notification_id, kind, title, message, data_json, created_at, producer_revision
+           FROM user_notifications
+          WHERE user_id = ? AND notification_id = ? AND acknowledged_at IS NULL`,
+        userId,
+        channelInviteNotificationId(channelId)
+      )
+      .toArray();
+    if (rows.length === 0) return null;
+    const invite = channelInviteFromNotification(this.userNotificationFromRow(rows[0]!));
+    return invite?.channelId === channelId && invite.userId === userId ? invite : null;
+  }
+
+  private verifiedUserNotificationCallerUserId(method: string): string {
+    const userId = this.caller?.userId;
+    if (!userId) throw new Error(`${method} requires an authenticated workspace account`);
+    return this.requireInviteUserId(userId, method);
+  }
+
+  /** Generic durable publish surface for trusted workspace services. */
+  @rpc({ callers: ["do", "server", "worker"] })
+  putUserNotification(input: PutUserNotificationInput): UserNotification {
+    this.ensureReady();
+    if (input?.kind === CHANNEL_INVITE_NOTIFICATION_KIND) {
+      throw new Error(
+        "putUserNotification: channel.invite is reserved for the revisioned channel membership projection"
+      );
+    }
+    const notification = this.writeUserNotification(input, "putUserNotification");
+    this.signalUserNotificationChange(notification.userId);
+    return notification;
+  }
+
+  /** Generic durable removal surface for a notification's trusted producer. */
+  @rpc({ callers: ["do", "server", "worker"] })
+  deleteUserNotification(input: { userId: string; id: string }): { deleted: boolean } {
+    this.ensureReady();
+    const userId = this.requireInviteUserId(input?.userId, "deleteUserNotification");
+    const id = this.requireUserNotificationText(input?.id, "id", "deleteUserNotification");
+    if (id.startsWith(`${CHANNEL_INVITE_NOTIFICATION_KIND}:`)) {
+      throw new Error(
+        "deleteUserNotification: channel invitation notifications are owned by the channel membership projection"
+      );
+    }
+    const deleted =
+      this.sql
+        .exec(
+          `SELECT 1 FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+          userId,
+          id
+        )
+        .toArray().length > 0;
+    if (deleted) {
+      this.sql.exec(
+        `DELETE FROM user_notifications WHERE user_id = ? AND notification_id = ?`,
+        userId,
+        id
+      );
+      this.signalUserNotificationChange(userId);
+    }
+    return { deleted };
+  }
+
+  /** Durable account inbox; never enumerates producer/channel DOs. */
+  @rpc({ callers: ["app", "panel", "shell"] })
+  listUserNotificationsForMe(): UserNotificationListResult {
+    this.ensureReady();
+    const userId = this.verifiedUserNotificationCallerUserId("listUserNotificationsForMe");
+    const rows = this.sql
+      .exec(
+        `SELECT user_id, notification_id, kind, title, message, data_json, created_at, producer_revision
+           FROM user_notifications WHERE user_id = ? AND acknowledged_at IS NULL
+           ORDER BY created_at DESC, notification_id ASC`,
+        userId
+      )
+      .toArray();
+    return { notifications: rows.map((row) => this.userNotificationFromRow(row)) };
+  }
+
+  /** Acknowledge/dismiss one notification for the verified account caller. */
+  @rpc({ callers: ["app", "panel", "shell"] })
+  acknowledgeUserNotification(input: { id: string }): UserNotificationAcknowledgementResult {
+    this.ensureReady();
+    const userId = this.verifiedUserNotificationCallerUserId("acknowledgeUserNotification");
+    const id = this.requireUserNotificationText(input?.id, "id", "acknowledgeUserNotification");
+    const acknowledged =
+      this.sql
+        .exec(
+          `SELECT 1 FROM user_notifications
+            WHERE user_id = ? AND notification_id = ? AND acknowledged_at IS NULL`,
+          userId,
+          id
+        )
+        .toArray().length > 0;
+    if (acknowledged) {
+      this.sql.exec(
+        `UPDATE user_notifications SET acknowledged_at = ?
+          WHERE user_id = ? AND notification_id = ? AND acknowledged_at IS NULL`,
+        Date.now(),
+        userId,
+        id
+      );
+      this.signalUserNotificationChange(userId);
+    }
+    return { acknowledged };
   }
 
   /**

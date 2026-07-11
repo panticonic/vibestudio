@@ -101,7 +101,7 @@ function modelStartItems(
     // Journaled materialization (design §6.2/§6.3): the vessel resolved these
     // at the impure edge; copying them here is what makes replay independent
     // of the installed model registry.
-    ...(modelSpec ? { modelSpec } : {}),
+    modelSpec,
     ...(auth ? { auth } : {}),
     thinkingLevel: config.thinkingLevel,
     systemPromptHash: config.systemPromptHash,

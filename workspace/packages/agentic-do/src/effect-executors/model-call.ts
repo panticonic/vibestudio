@@ -731,17 +731,9 @@ async function executeModelCall(
 
   // Journal-materialized model resolution (design §6.2): the request carries
   // the exact pi-ai Model literal the vessel resolved at the impure edge.
-  // There is no registry fallback in the executor — a spec-less request is
-  // a materialization bug and fails loudly.
+  // There is no registry fallback in the executor: the impure configuration
+  // boundary materializes the descriptor before a request can be journaled.
   const modelSpec = request.modelSpec;
-  if (!modelSpec) {
-    return {
-      kind: "model",
-      blocks: [],
-      stopReason: "error",
-      errorReason: `model spec missing for ${request.provider}:${request.model} (vessel materialization failed)`,
-    };
-  }
   const modelBaseUrl = request.modelBaseUrl ?? modelSpec.baseUrl;
 
   const systemPromptPromise = deps.blobstore.getText(request.systemPromptHash);

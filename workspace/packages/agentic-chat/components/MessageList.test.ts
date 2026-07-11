@@ -2,8 +2,15 @@
 
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { beforeAll, describe, it, expect, vi } from "vitest";
 import type { InlineItem } from "./InlineGroup.js";
+
+beforeAll(async () => {
+  // These are deliberately lazy in production. Load their real modules before
+  // individual MDX assertions start so full-suite CPU contention cannot turn a
+  // module-load delay into a query timeout.
+  await Promise.all([import("@mdx-js/mdx"), import("rehype-highlight")]);
+});
 
 const hookState = vi.hoisted(() => {
   const scrollElement = {

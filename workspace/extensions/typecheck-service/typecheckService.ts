@@ -73,7 +73,9 @@ interface PackageJson {
 
 function readPackageJson(packageDir: string): PackageJson | null {
   try {
-    return JSON.parse(fsSync.readFileSync(path.join(packageDir, "package.json"), "utf-8")) as PackageJson;
+    return JSON.parse(
+      fsSync.readFileSync(path.join(packageDir, "package.json"), "utf-8")
+    ) as PackageJson;
   } catch {
     return null;
   }
@@ -104,9 +106,7 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-async function ensureExternalDeps(
-  deps: Record<string, string>,
-): Promise<string> {
+async function ensureExternalDeps(deps: Record<string, string>): Promise<string> {
   if (Object.keys(deps).length === 0) return "";
 
   const key = hashDeps(deps);
@@ -120,23 +120,29 @@ async function ensureExternalDeps(
   fsSync.mkdirSync(tmpDir, { recursive: true });
   fsSync.writeFileSync(
     path.join(tmpDir, "package.json"),
-    JSON.stringify({
-      name: "external-deps-install",
-      version: "0.0.0",
-      private: true,
-      dependencies: deps,
-    }, null, 2),
+    JSON.stringify(
+      {
+        name: "external-deps-install",
+        version: "0.0.0",
+        private: true,
+        dependencies: deps,
+      },
+      null,
+      2
+    )
   );
 
   try {
-    runNpmInstall(tmpDir);
+    await runNpmInstall(tmpDir);
     fsSync.writeFileSync(path.join(tmpDir, ".ready"), new Date().toISOString());
     try {
       fsSync.renameSync(tmpDir, cacheDir);
     } catch (err: any) {
       if (err.code === "ENOTEMPTY" || err.code === "EEXIST" || err.code === "ENOTDIR") {
         if (fsSync.existsSync(sentinelPath)) {
-          try { fsSync.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+          try {
+            fsSync.rmSync(tmpDir, { recursive: true, force: true });
+          } catch {}
           return nodeModulesDir;
         }
         fsSync.rmSync(cacheDir, { recursive: true, force: true });
@@ -147,8 +153,12 @@ async function ensureExternalDeps(
     }
     return nodeModulesDir;
   } catch (error) {
-    try { fsSync.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-    throw new Error(`Failed to install external dependencies for typecheck: ${error instanceof Error ? error.message : String(error)}`);
+    try {
+      fsSync.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+    throw new Error(
+      `Failed to install external dependencies for typecheck: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -256,7 +266,7 @@ interface SerializedDiagnostic {
 }
 
 function serializeDiagnostics(diagnostics: TypeCheckDiagnostic[]): SerializedDiagnostic[] {
-  return diagnostics.map(d => ({
+  return diagnostics.map((d) => ({
     file: d.file,
     line: d.line,
     column: d.column,
@@ -278,7 +288,7 @@ function normalizeBrowserPackageNames(packageNames?: readonly string[]): string[
   }
   if (packageNames.length > MAX_BROWSER_PACKAGE_TYPES) {
     throw new Error(
-      `typecheck.getBrowserTypeDefinitions: packageNames is limited to ${MAX_BROWSER_PACKAGE_TYPES} packages`,
+      `typecheck.getBrowserTypeDefinitions: packageNames is limited to ${MAX_BROWSER_PACKAGE_TYPES} packages`
     );
   }
 
@@ -287,7 +297,7 @@ function normalizeBrowserPackageNames(packageNames?: readonly string[]): string[
   for (const packageName of packageNames) {
     if (typeof packageName !== "string" || !NPM_PACKAGE_NAME_PATTERN.test(packageName)) {
       throw new Error(
-        `typecheck.getBrowserTypeDefinitions: invalid package name ${JSON.stringify(packageName)}`,
+        `typecheck.getBrowserTypeDefinitions: invalid package name ${JSON.stringify(packageName)}`
       );
     }
     if (seen.has(packageName)) continue;
@@ -298,9 +308,7 @@ function normalizeBrowserPackageNames(packageNames?: readonly string[]): string[
 }
 
 function mapToSortedRecord(map: Map<string, string>): Record<string, string> {
-  return Object.fromEntries(
-    [...map.entries()].sort(([a], [b]) => a.localeCompare(b)),
-  );
+  return Object.fromEntries([...map.entries()].sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function toPackageTypeDefinitionFilePath(packageName: string, relativePath: string): string {
@@ -313,7 +321,7 @@ function toPackageTypeDefinitionFilePath(packageName: string, relativePath: stri
 
 function serializeLoadedPackageTypeDefinitions(
   packageName: string,
-  loaded: LoadedTypeDefinitions | null,
+  loaded: LoadedTypeDefinitions | null
 ): SerializedPackageTypeDefinitions {
   if (!loaded) {
     return {
@@ -347,11 +355,11 @@ function serializeLoadedPackageTypeDefinitions(
 async function loadBrowserPackageTypeDefinitions(
   panelPath: string,
   packageNames: readonly string[],
-  options?: TypeCheckRpcOptions,
+  options?: TypeCheckRpcOptions
 ): Promise<SerializedPackageTypeDefinitions[]> {
   const resolved = path.resolve(panelPath);
   const nodeModulesPaths = [
-    ...await resolveTypecheckNodeModulesPaths(resolved, options),
+    ...(await resolveTypecheckNodeModulesPaths(resolved, options)),
     ...getDefaultNodeModulesPaths(resolved),
   ];
   const loader = createTypeDefinitionLoader({
@@ -360,11 +368,8 @@ async function loadBrowserPackageTypeDefinitions(
 
   return Promise.all(
     packageNames.map(async (packageName) =>
-      serializeLoadedPackageTypeDefinitions(
-        packageName,
-        await loader.loadPackageTypes(packageName),
-      ),
-    ),
+      serializeLoadedPackageTypeDefinitions(packageName, await loader.loadPackageTypes(packageName))
+    )
   );
 }
 
@@ -373,13 +378,13 @@ async function loadBrowserPackageTypeDefinitions(
 // =============================================================================
 
 export const typeCheckRpcMethods = {
-	  "typecheck.check": async (
-	    panelPath: string,
-	    filePath?: string,
-	    fileContent?: string,
-	    options?: TypeCheckRpcOptions
-	  ): Promise<{ diagnostics: SerializedDiagnostic[]; checkedFiles: string[] }> => {
-	    const service = await getOrCreateTypeCheckService(panelPath, options);
+  "typecheck.check": async (
+    panelPath: string,
+    filePath?: string,
+    fileContent?: string,
+    options?: TypeCheckRpcOptions
+  ): Promise<{ diagnostics: SerializedDiagnostic[]; checkedFiles: string[] }> => {
+    const service = await getOrCreateTypeCheckService(panelPath, options);
     const resolved = path.resolve(panelPath);
 
     if (filePath) {
@@ -390,7 +395,9 @@ export const typeCheckRpcMethods = {
         // Always refresh from disk — agent may have edited since service was created
         try {
           service.updateFile(resolvedFile, await fs.readFile(resolvedFile, "utf-8"));
-        } catch { /* file may not exist yet */ }
+        } catch {
+          /* file may not exist yet */
+        }
       }
     } else {
       // Whole-panel check: resync all files from disk
@@ -407,15 +414,19 @@ export const typeCheckRpcMethods = {
     };
   },
 
-	  "typecheck.getTypeInfo": async (
-	    panelPath: string,
-	    filePath: string,
-	    line: number,
-	    column: number,
-	    fileContent?: string,
-	    options?: TypeCheckRpcOptions
-	  ): Promise<{ displayParts: string; documentation?: string; tags?: { name: string; text?: string }[] } | null> => {
-	    const service = await getOrCreateTypeCheckService(panelPath, options);
+  "typecheck.getTypeInfo": async (
+    panelPath: string,
+    filePath: string,
+    line: number,
+    column: number,
+    fileContent?: string,
+    options?: TypeCheckRpcOptions
+  ): Promise<{
+    displayParts: string;
+    documentation?: string;
+    tags?: { name: string; text?: string }[];
+  } | null> => {
+    const service = await getOrCreateTypeCheckService(panelPath, options);
     const resolved = path.resolve(panelPath);
     const resolvedFile = path.resolve(resolved, filePath);
 
@@ -424,7 +435,9 @@ export const typeCheckRpcMethods = {
     } else {
       try {
         service.updateFile(resolvedFile, await fs.readFile(resolvedFile, "utf-8"));
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     }
 
     const info = service.getQuickInfo(resolvedFile, line, column);
@@ -432,19 +445,19 @@ export const typeCheckRpcMethods = {
     return {
       displayParts: info.displayParts,
       documentation: info.documentation,
-      tags: info.tags?.map(t => ({ name: t.name, text: t.text })),
+      tags: info.tags?.map((t) => ({ name: t.name, text: t.text })),
     };
   },
 
-	  "typecheck.getCompletions": async (
-	    panelPath: string,
-	    filePath: string,
-	    line: number,
-	    column: number,
-	    fileContent?: string,
-	    options?: TypeCheckRpcOptions
-	  ): Promise<{ entries: { name: string; kind: string }[] } | null> => {
-	    const service = await getOrCreateTypeCheckService(panelPath, options);
+  "typecheck.getCompletions": async (
+    panelPath: string,
+    filePath: string,
+    line: number,
+    column: number,
+    fileContent?: string,
+    options?: TypeCheckRpcOptions
+  ): Promise<{ entries: { name: string; kind: string }[] } | null> => {
+    const service = await getOrCreateTypeCheckService(panelPath, options);
     const resolved = path.resolve(panelPath);
     const resolvedFile = path.resolve(resolved, filePath);
 
@@ -453,26 +466,28 @@ export const typeCheckRpcMethods = {
     } else {
       try {
         service.updateFile(resolvedFile, await fs.readFile(resolvedFile, "utf-8"));
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     }
 
     const completions = service.getCompletions(resolvedFile, line, column);
     if (!completions || completions.entries.length === 0) return null;
 
     return {
-      entries: completions.entries.map(e => ({ name: e.name, kind: e.kind })),
+      entries: completions.entries.map((e) => ({ name: e.name, kind: e.kind })),
     };
   },
 
   "typecheck.getBrowserTypeDefinitions": async (
     panelPath?: string,
     packageNames?: string[],
-    options?: TypeCheckRpcOptions,
+    options?: TypeCheckRpcOptions
   ): Promise<BrowserTypeDefinitionsResponse> => {
     const normalizedPackageNames = normalizeBrowserPackageNames(packageNames);
     if (normalizedPackageNames.length > 0 && !panelPath) {
       throw new Error(
-        "typecheck.getBrowserTypeDefinitions: panelPath is required when packageNames are requested",
+        "typecheck.getBrowserTypeDefinitions: panelPath is required when packageNames are requested"
       );
     }
 

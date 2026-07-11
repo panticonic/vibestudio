@@ -16,13 +16,7 @@ import {
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 
-import {
-  DEFAULT_ATTENTION_PREFERENCES,
-  createGmailTables,
-  dropRebuildableGmailTables,
-  ensureColumn,
-  extractLegacyAttentionPrefs,
-} from "./schema.js";
+import { DEFAULT_ATTENTION_PREFERENCES, createGmailTables, dropGmailTables } from "./schema.js";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   booleanArg,
@@ -91,10 +85,10 @@ interface GmailPushTarget {
 }
 
 export class GmailAgentWorker extends AgentWorkerBase {
-  // Rebuildable gmail caches are versioned by drop-and-recreate; durable
-  // tables (channel state, prefs, replied senders, people) survive bumps —
-  // see schema.ts. Bump past the base version so dev objects re-run migrate().
-  static override schemaVersion = AgentWorkerBase.schemaVersion + 5;
+  // This pre-release schema has one exact shape. Version changes reset the
+  // Gmail worker's local projection and setup state instead of translating
+  // historical layouts.
+  static override schemaVersion = AgentWorkerBase.schemaVersion + 6;
 
   private gmailClients = new Map<string, GmailClient>();
   private recoveredChannels = new Set<string>();
@@ -204,25 +198,8 @@ export class GmailAgentWorker extends AgentWorkerBase {
 
   protected override migrate(fromVersion: number, toVersion: number): void {
     super.migrate(fromVersion, toVersion);
-    if (
-      fromVersion > 0 &&
-      fromVersion < (this.constructor as typeof GmailAgentWorker).schemaVersion
-    ) {
-      // Carry the old rule engine's intent into natural-language preferences
-      // (reads the legacy rules table before it is dropped below).
-      const legacyPrefs = extractLegacyAttentionPrefs(this.sql);
-      // Only caches are dropped: channel state (credential pin, setup
-      // status), prefs, replied-senders, and the people store survive.
-      dropRebuildableGmailTables(this.sql);
-      createGmailTables(this.sql);
-      for (const pref of legacyPrefs) {
-        if (!this.store.hasSavedPrefs(pref.channelId)) {
-          this.store.setPrefs(pref.channelId, { preferencesText: pref.preferencesText });
-        }
-      }
-      // Durable-table shape changes are additive per-version ALTERs — never
-      // drop-and-recreate.
-      ensureColumn(this.sql, "gmail_channel_state", "watch_expiration", "INTEGER");
+    if (fromVersion !== toVersion) {
+      dropGmailTables(this.sql);
     }
   }
 

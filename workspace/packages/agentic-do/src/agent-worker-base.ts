@@ -718,6 +718,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             description:
               "Whether multiple options may be selected. When true, the prompt shows checkboxes and an explicit submit button.",
           },
+          to: {
+            type: "string",
+            description:
+              "Optional exact channel human target: a user:<id> participant id or @handle from the roster. Omit to ask every human; an unknown target fails closed and is never broadcast.",
+          },
         },
         required: ["question"],
       } as never,

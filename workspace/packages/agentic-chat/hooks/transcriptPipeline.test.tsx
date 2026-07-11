@@ -33,7 +33,7 @@ describe("headless transcript pipeline", () => {
       id: "panel:chat",
       name: "User",
       type: "panel",
-      handle: "user",
+      handle: "alice",
     });
     const agent = harness.connectParticipant({
       id: "agent:onboarding",
@@ -92,7 +92,7 @@ describe("headless transcript pipeline", () => {
       id: "panel:chat",
       name: "User",
       type: "panel",
-      handle: "user",
+      handle: "alice",
     });
     const agent = harness.connectParticipant({
       id: "agent:onboarding",
@@ -158,7 +158,7 @@ describe("headless transcript pipeline", () => {
       id: "panel:chat",
       name: "User",
       type: "panel",
-      handle: "user",
+      handle: "alice",
     });
 
     let latest: UseChannelMessagesResult | undefined;

@@ -141,6 +141,8 @@ export {
   sanitizeAgenticEventParticipantRefs,
   isParticipantKind,
   isParticipantRef,
+  resolveMentionToUser,
+  userParticipantId,
 } from "./participant-ref.js";
 export type {
   PrivateParticipantMetadata,

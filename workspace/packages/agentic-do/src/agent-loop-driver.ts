@@ -132,7 +132,7 @@ function modelProvenanceFromDescriptor(descriptor: EffectDescriptor): MessageMod
   const ref = descriptor.request.provider
     ? `${descriptor.request.provider}:${descriptor.request.model}`
     : descriptor.request.model;
-  const specName = descriptor.request.modelSpec?.name;
+  const specName = descriptor.request.modelSpec.name;
   const displayName = typeof specName === "string" && specName.trim() ? specName : ref;
   return {
     ref,
@@ -1107,6 +1107,7 @@ export class AgentLoopDriver {
       }
     }
     this.kill("after-outcome-append");
+    await this.cancelAskUserSiblings(row);
     this.outbox.delete(row.branchId, row.effectId);
     this.kill("after-outbox-delete");
     for (const envelope of envelopes) {
@@ -1129,6 +1130,43 @@ export class AgentLoopDriver {
     // settle() re-fetches the live loop (the cascade may have reloaded) and
     // checks compaction now that a turn may have closed.
     await this.settle(loop.channelId);
+  }
+
+  /** An unaddressed ask_user journals one call per human. Once any call lands a
+   * durable invocation terminal, remove and cancel every sibling immediately so
+   * no second device keeps showing a stale form. The terminal was appended
+   * before this method runs, so a crash can only leave cancellable derived rows;
+   * reconcile removes them from the folded terminal on recovery. */
+  private async cancelAskUserSiblings(answered: OutboxRow): Promise<void> {
+    const descriptor = answered.descriptor;
+    if (descriptor.kind !== "channel_call" || descriptor.purpose !== "ask-user") return;
+    const siblings = this.outbox.forBranch(answered.branchId).filter((row) => {
+      const candidate = row.descriptor;
+      return (
+        row.effectId !== answered.effectId &&
+        candidate.kind === "channel_call" &&
+        candidate.purpose === "ask-user" &&
+        candidate.invocationId === descriptor.invocationId
+      );
+    });
+    for (const sibling of siblings) this.outbox.delete(sibling.branchId, sibling.effectId);
+    await Promise.all(
+      siblings.map(async (sibling) => {
+        const candidate = sibling.descriptor;
+        if (candidate.kind !== "channel_call") return;
+        try {
+          await this.deps.executorDeps.channel.cancelMethodCall(
+            candidate.channelId,
+            candidate.transportCallId
+          );
+        } catch (error) {
+          console.warn(
+            `[agent-loop-driver] failed to cancel answered ask_user sibling ${candidate.transportCallId}:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      })
+    );
   }
 
   private transformOutcome(loop: LoopInstance, items: AppendItem[]): AppendItem[] {

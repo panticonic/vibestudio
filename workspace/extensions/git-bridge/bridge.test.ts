@@ -143,12 +143,6 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
         vcsLog: async (repoPath, limit, head) => doi.vcsLog(repoPath, limit, head),
         ingestWorktreeState: (input) =>
           doi.ingestWorktreeState(input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]),
-        listStateFiles: async (stateHash) =>
-          doi.listStateFiles({ stateHash }) as unknown as Array<{
-            path: string;
-            content_hash: string;
-            mode: number;
-          }>,
         // Test double of the DO's `vcsImportPublish`: adopt the ingested
         // staging head into the ref map and mirror the publish on the main log.
         // The gated single-writer publish is exercised in doImport.test.ts.
@@ -302,6 +296,30 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     await commitRepo({ "a.txt": "two\n", "b.txt": "bee\n", "c.txt": "sea\n" });
     const incremental = await bridge.exportRepoHead(REPO);
     expect(incremental.exported).toBe(1);
+  });
+
+  it("rejects a state without its canonical content-store tree", async () => {
+    const content = Buffer.from("unmirrored\n", "utf8");
+    const result = await doi.ingestWorktreeState({
+      logId: LOG,
+      head: "main",
+      logKind: "vcs",
+      actor: { id: "user", kind: "user" },
+      files: [
+        {
+          path: "orphan.txt",
+          contentHash: sha256Hex(content),
+          size: content.byteLength,
+          mode: 33188,
+        },
+      ],
+      summary: "unmirrored state",
+    });
+    expect(await mem.store.listTree(result.stateHash)).toBeNull();
+
+    await expect(bridge.exportRepoHead(REPO)).rejects.toThrow(
+      `state ${result.stateHash} is missing its canonical content-store tree`
+    );
   });
 
   it("propagates cross-transition deletions to the exported git tree", async () => {

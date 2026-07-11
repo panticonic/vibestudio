@@ -299,19 +299,16 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   @rpc({ callers: ["panel", "server"] })
   async setDefaultAgentConfig(input: DefaultAgentConfig): Promise<ModelSettingsSnapshot> {
+    const requested = parseDefaultAgentConfig(input, true);
     const catalog = await this.assembleCatalog();
-    const model = catalog.models.find((entry) => entry.ref === input.model);
+    const model = catalog.models.find((entry) => entry.ref === requested.model);
     if (!model) {
-      throw new Error(`Unknown model ref: ${input.model}`);
+      throw new Error(`Unknown model ref: ${requested.model}`);
     }
     const config: DefaultAgentConfig = {
       model: model.ref,
-      ...(input.thinkingLevel && AGENT_THINKING_LEVELS.has(input.thinkingLevel)
-        ? { thinkingLevel: input.thinkingLevel }
-        : {}),
-      ...(input.approvalLevel === 0 || input.approvalLevel === 1 || input.approvalLevel === 2
-        ? { approvalLevel: input.approvalLevel }
-        : {}),
+      ...(requested.thinkingLevel ? { thinkingLevel: requested.thinkingLevel } : {}),
+      ...(requested.approvalLevel !== undefined ? { approvalLevel: requested.approvalLevel } : {}),
     };
     await this.setWorkspaceConfigField(WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD, config);
     return {
@@ -427,23 +424,44 @@ export class ModelSettingsDO extends DurableObjectBase {
   }
 }
 
-/** Parse + validate the stored defaultAgentConfig (tolerates legacy/garbage). */
-function parseDefaultAgentConfig(value: unknown): {
+/** Parse the one current default-agent configuration shape. */
+function parseDefaultAgentConfig(
+  value: unknown,
+  required = false
+): {
   model: string | null;
   thinkingLevel?: AgentThinkingLevel;
   approvalLevel?: 0 | 1 | 2;
 } {
-  if (!value || typeof value !== "object") return { model: null };
+  if (value === undefined || value === null) {
+    if (required) throw new Error("defaultAgentConfig is required");
+    return { model: null };
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("defaultAgentConfig must be an object");
+  }
   const v = value as Record<string, unknown>;
+  const unknownKeys = Object.keys(v).filter(
+    (key) => key !== "model" && key !== "thinkingLevel" && key !== "approvalLevel"
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(`defaultAgentConfig has unknown field(s): ${unknownKeys.join(", ")}`);
+  }
   const rawModel = v["model"];
-  const model = typeof rawModel === "string" && rawModel.trim().length > 0 ? rawModel.trim() : null;
+  if (typeof rawModel !== "string" || rawModel.trim().length === 0) {
+    throw new Error("defaultAgentConfig.model must be a non-empty string");
+  }
+  const model = rawModel.trim();
   const rawThinking = v["thinkingLevel"];
-  const thinkingLevel = AGENT_THINKING_LEVELS.has(rawThinking as string)
-    ? (rawThinking as AgentThinkingLevel)
-    : undefined;
+  if (rawThinking !== undefined && !AGENT_THINKING_LEVELS.has(rawThinking as string)) {
+    throw new Error(`Invalid defaultAgentConfig.thinkingLevel: ${String(rawThinking)}`);
+  }
+  const thinkingLevel = rawThinking as AgentThinkingLevel | undefined;
   const rawApproval = v["approvalLevel"];
-  const approvalLevel =
-    rawApproval === 0 || rawApproval === 1 || rawApproval === 2 ? rawApproval : undefined;
+  if (rawApproval !== undefined && rawApproval !== 0 && rawApproval !== 1 && rawApproval !== 2) {
+    throw new Error(`Invalid defaultAgentConfig.approvalLevel: ${String(rawApproval)}`);
+  }
+  const approvalLevel = rawApproval as 0 | 1 | 2 | undefined;
   return {
     model,
     ...(thinkingLevel ? { thinkingLevel } : {}),

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@workspace/agentic-protocol": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@vibestudio/types": "workspace:*",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24.5"

@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 import type { Participant } from "@workspace/pubsub";
 import type { ChatParticipantMetadata } from "../types";
+import type { AccountProfile } from "./useAccountProfiles";
 
 const HANDLE_CHARS = /^[A-Za-z0-9_.-]*$/;
+const EMPTY_PROFILES: ReadonlyMap<string, AccountProfile> = new Map();
 
 export interface MentionCandidate {
   participantId: string;
@@ -28,6 +30,7 @@ export function useMentionAutocomplete(
   /** This client's own participant id — excluded from candidates (you can't
    *  @-mention the chat panel itself). */
   selfId?: string | null,
+  profiles: ReadonlyMap<string, AccountProfile> = EMPTY_PROFILES
 ): MentionAutocompleteState {
   const [query, setQuery] = useState("");
   const [triggerStart, setTriggerStart] = useState(-1);
@@ -39,16 +42,17 @@ export function useMentionAutocomplete(
     return Object.entries(roster)
       .flatMap(([participantId, participant]): MentionCandidate[] => {
         if (selfId && participantId === selfId) return []; // never mention self
-        const handle = participant.metadata.handle;
+        const profile = profiles.get(participantId);
+        const handle = profile?.handle ?? participant.metadata.handle;
         if (!handle) return [];
-        const name = participant.metadata.name ?? handle;
-        const type = participant.metadata.type ?? "unknown";
+        const name = profile?.displayName ?? participant.metadata.name ?? handle;
+        const type = profile ? "user" : (participant.metadata.type ?? "unknown");
         if (q && !handle.toLowerCase().includes(q) && !name.toLowerCase().includes(q)) return [];
         return [{ participantId, handle, name, type }];
       })
       .sort((a, b) => a.handle.localeCompare(b.handle))
       .slice(0, 8);
-  }, [query, roster, selfId]);
+  }, [profiles, query, roster, selfId]);
 
   const close = useCallback(() => {
     setTriggerStart(-1);
@@ -57,29 +61,32 @@ export function useMentionAutocomplete(
     setCaretPosition(null);
   }, []);
 
-  const updateFromTextArea = useCallback((textArea: HTMLTextAreaElement, text: string) => {
-    const caret = textArea.selectionStart ?? text.length;
-    const beforeCaret = text.slice(0, caret);
-    const at = beforeCaret.lastIndexOf("@");
-    if (at < 0) {
-      close();
-      return;
-    }
-    const prefix = at === 0 ? "" : beforeCaret[at - 1] ?? "";
-    const token = beforeCaret.slice(at + 1);
-    if ((prefix && !/[\s([{]/.test(prefix)) || token.includes(" ") || !HANDLE_CHARS.test(token)) {
-      close();
-      return;
-    }
-    setTriggerStart(at);
-    setQuery(token);
-    setSelectedIndex(0);
-    // Viewport coordinates: the popover renders in a portal with
-    // position:fixed so no ancestor overflow clipping can cut it off.
-    const local = measureCaretPosition(textArea, at);
-    const rect = textArea.getBoundingClientRect();
-    setCaretPosition({ left: rect.left + local.left, top: rect.top + local.top });
-  }, [close]);
+  const updateFromTextArea = useCallback(
+    (textArea: HTMLTextAreaElement, text: string) => {
+      const caret = textArea.selectionStart ?? text.length;
+      const beforeCaret = text.slice(0, caret);
+      const at = beforeCaret.lastIndexOf("@");
+      if (at < 0) {
+        close();
+        return;
+      }
+      const prefix = at === 0 ? "" : (beforeCaret[at - 1] ?? "");
+      const token = beforeCaret.slice(at + 1);
+      if ((prefix && !/[\s([{]/.test(prefix)) || token.includes(" ") || !HANDLE_CHARS.test(token)) {
+        close();
+        return;
+      }
+      setTriggerStart(at);
+      setQuery(token);
+      setSelectedIndex(0);
+      // Viewport coordinates: the popover renders in a portal with
+      // position:fixed so no ancestor overflow clipping can cut it off.
+      const local = measureCaretPosition(textArea, at);
+      const rect = textArea.getBoundingClientRect();
+      setCaretPosition({ left: rect.left + local.left, top: rect.top + local.top });
+    },
+    [close]
+  );
 
   return {
     open: triggerStart >= 0 && candidates.length > 0,
@@ -96,7 +103,7 @@ export function useMentionAutocomplete(
 
 function measureCaretPosition(
   textArea: HTMLTextAreaElement,
-  caretIndex: number,
+  caretIndex: number
 ): { left: number; top: number } {
   const style = window.getComputedStyle(textArea);
   const mirror = document.createElement("div");

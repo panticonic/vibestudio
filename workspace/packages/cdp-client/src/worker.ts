@@ -827,39 +827,6 @@ class WorkerCdpPage {
     await this.connection.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
   }
 
-  // ---- Back-compat string-selector convenience methods ------------------
-  async click(selector: string, opts: ActionOptions = {}): Promise<void> {
-    await this.locator(selector).click(opts);
-  }
-  async fill(selector: string, value: string, opts: ActionOptions = {}): Promise<void> {
-    await this.locator(selector).fill(value, opts);
-  }
-  async type(selector: string, text: string, opts: ActionOptions = {}): Promise<void> {
-    await this.locator(selector).type(text, opts);
-  }
-  async isVisible(selector: string): Promise<boolean> {
-    return this.locator(selector).isVisible();
-  }
-  async inspect(selector: string): Promise<LightweightDomInspection> {
-    return this.locator(selector).inspect();
-  }
-  async textContent(selector: string): Promise<string | null> {
-    return this.locator(selector).textContent();
-  }
-  async innerText(selector: string): Promise<string> {
-    return this.locator(selector).innerText();
-  }
-  async querySelector(selector: string): Promise<WorkerCdpElementHandle | null> {
-    const exists = await this.runLocatorOp(
-      "exists",
-      { steps: [{ by: "css", value: selector }] },
-      null
-    );
-    return exists
-      ? new WorkerCdpElementHandle(this, { steps: [{ by: "css", value: selector }] })
-      : null;
-  }
-
   // ---- Console ----------------------------------------------------------
   consoleEvents(): LightweightConsoleEvent[] {
     return [...this.consoleBuffer];

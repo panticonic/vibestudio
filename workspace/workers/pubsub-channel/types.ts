@@ -9,11 +9,8 @@ import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 const METHOD_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const RESERVED_METHOD_NAMES = new Set(["read", "edit", "write", "grep", "find", "ls"]);
 
-/**
- * Subscribe-time participant metadata validation (WS2 §8.4). Unknown keys flow
- * through to stored metadata; entries in `methods` without a string `name`
- * keep today's unknown-shape tolerance.
- */
+/** Subscribe-time participant metadata validation (WS2 §8.4). Unknown metadata
+ * keys pass through, while every advertised method uses the canonical shape. */
 export const participantMetadataSchema = z
   .object({
     name: z.string().optional(),
@@ -27,14 +24,12 @@ export const participantMetadataSchema = z
             name: z
               .string()
               .regex(METHOD_NAME_PATTERN, {
-                message:
-                  "method names must match /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/",
+                message: "method names must match /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/",
               })
               .refine((name) => !RESERVED_METHOD_NAMES.has(name), {
                 message:
                   "method name collides with a built-in tool name (read, edit, write, grep, find, ls)",
-              })
-              .optional(),
+              }),
           })
           .passthrough()
       )
@@ -54,6 +49,9 @@ export const participantMetadataSchema = z
 /** Result from subscribing a DO participant. */
 export interface SubscribeResult {
   ok: boolean;
+  /** Authoritative channel actor id. Human callers are canonicalized to
+   * `user:<verifiedUserId>` regardless of their delivery endpoint. */
+  participantId: string;
   channelConfig?: Record<string, unknown>;
   envelope: ChannelReplayEnvelope;
 }
@@ -117,7 +115,7 @@ export interface BroadcastEnvelope {
 /** Attachment stored in messages table (JSON). */
 export interface StoredAttachment {
   id: string;
-  data: string;  // base64
+  data: string; // base64
   mimeType: string;
   name?: string;
   size: number;

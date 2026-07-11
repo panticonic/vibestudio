@@ -388,31 +388,10 @@ function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
   );
 }
 
-/**
- * Resolve a message's salience tier. The sender stamps `tier` explicitly
- * (the agent runtime for assistant turns, the client for user/UI sends), so
- * that value wins. The fallback only catches messages that predate explicit
- * tiering: an assistant step that carried tool calls (the turn continued after
- * it) — or produced no content at all — is a secondary intermediate step;
- * everything else (final answers, user input, still-streaming messages) is
- * primary. This mirrors the runtime's stamping rule so old transcripts tier
- * the same way fresh ones do.
- */
+/** Senders stamp salience explicitly. Missing values use the protocol default;
+ * content shape is never reinterpreted as an older tiering convention. */
 function messageTier(message: ProjectedMessage): MessageTier {
-  if (message.tier) return message.tier;
-  if (message.role === "assistant" && assistantMessageIsIntermediate(message)) {
-    return "secondary";
-  }
-  return "primary";
-}
-
-function assistantMessageIsIntermediate(message: ProjectedMessage): boolean {
-  if (message.outcome === "interrupted") return false;
-  if (message.outcome === "tool_calls_only" || message.outcome === "empty") return true;
-  return (message.blocks ?? []).some((block) => {
-    const type = (block as { type?: unknown }).type;
-    return type === "invocation" || type === "toolCall" || type === "tool_call";
-  });
+  return message.tier ?? "primary";
 }
 
 /**
@@ -669,9 +648,9 @@ function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotic
           ? "Model usage limit reached"
           : metadata.failureCode === "context_overflow_terminal"
             ? "Context window exceeded"
-          : metadata.severity === "error"
-            ? "Message failed"
-            : "No assistant response",
+            : metadata.severity === "error"
+              ? "Message failed"
+              : "No assistant response",
     detail: content,
     reason: metadata.reason,
     recoverable: metadata.recoverable,

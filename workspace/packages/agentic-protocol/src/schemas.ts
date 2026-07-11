@@ -615,7 +615,7 @@ const knowledgePayloadSchema = z
     predicate: z.string().optional(),
     object: z.string().optional(),
     claimId: z.string().optional(),
-    ledgerEntryId: z.string().optional(),
+    ledgerEntryId: z.string().min(1),
     text: z.string().optional(),
     kind: z.string().optional(),
     status: z.string().optional(),

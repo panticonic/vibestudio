@@ -119,7 +119,7 @@ function pubsubAgenticEvent(seq: number, payload: AgenticEvent) {
     senderId: payload.actor.id,
     pubsubId: seq,
     ts: Date.parse(payload.createdAt),
-    senderMetadata: { name: "User", type: "panel", handle: "user" },
+    senderMetadata: { name: "User", type: "panel", handle: "alice" },
     payload,
   };
 }
@@ -135,7 +135,7 @@ function rawReplayEvent(seq: number, payload: AgenticEvent) {
     type: AGENTIC_EVENT_PAYLOAD_KIND,
     senderId: payload.actor.id,
     ts: Date.parse(payload.createdAt),
-    senderMetadata: { name: "User", type: "panel", handle: "user" },
+    senderMetadata: { name: "User", type: "panel", handle: "alice" },
     payload,
   };
 }

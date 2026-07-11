@@ -1,9 +1,15 @@
 import { useState, useCallback, useMemo } from "react";
 import { Badge, DropdownMenu, Text } from "@radix-ui/themes";
 import { DotFilledIcon, TriangleDownIcon } from "@radix-ui/react-icons";
-import type { Participant, MethodAdvertisement, ContextWindowUsage } from "@workspace/pubsub";
+import type {
+  Participant,
+  MethodAdvertisement,
+  ContextWindowUsage,
+  ChannelPresenceStatus,
+} from "@workspace/pubsub";
 import { isAgentParticipantType } from "@workspace/agentic-core";
 import type { ChatParticipantMetadata } from "../types";
+import type { AccountProfile } from "../hooks/useAccountProfiles";
 import { MethodArgumentsModal } from "./MethodArgumentsModal";
 import { schemaHasRequiredParams } from "./JsonSchemaForm";
 import { ContextUsageRing } from "./ContextUsageRing";
@@ -11,6 +17,15 @@ import { AgentDialog } from "./AgentDialog";
 
 export interface ParticipantBadgeMenuProps {
   participant: Participant<ChatParticipantMetadata>;
+  /**
+   * Live account profile for a channel-stamped `user:<userId>` participant
+   * (WP6 §6). When present, handle/displayName/avatar/color render from this
+   * projection instead of the roster snapshot, so a profile edit re-renders
+   * without a roster rewrite. Absent for agents/vessels.
+   */
+  profile?: AccountProfile;
+  /** Current durable channel-presence state for a canonical human participant. */
+  presenceStatus?: ChannelPresenceStatus;
   hasActiveMessage: boolean;
   onCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   /** Callback to remove an agent from the channel */
@@ -24,6 +39,7 @@ export interface ParticipantBadgeMenuProps {
  */
 function getParticipantColor(type: string) {
   switch (type) {
+    case "user":
     case "panel":
       return "blue";
     case "headless":
@@ -40,6 +56,8 @@ function getParticipantColor(type: string) {
  */
 export function ParticipantBadgeMenu({
   participant,
+  profile,
+  presenceStatus,
   hasActiveMessage,
   onCallMethod,
   onRemoveAgent,
@@ -83,6 +101,66 @@ export function ParticipantBadgeMenu({
   );
 
   const color = getParticipantColor(participant.metadata.type);
+  // Human participants render their LIVE account identity (WP6 §6): the
+  // channel roster stores only the stable `user:<userId>` id; handle /
+  // displayName / avatar / color come from the host-projected profile.
+  const displayHandle =
+    profile?.handle ??
+    participant.metadata.handle ??
+    (participant.id.startsWith("user:") ? "member" : (participant.metadata.name ?? "participant"));
+  const badgeTitle = `${profile?.displayName ?? participant.metadata.name ?? displayHandle ?? participant.id}${
+    presenceStatus ? ` — ${presenceStatus}` : ""
+  }`;
+  const identityIndicator = profile?.avatar ? (
+    <img
+      src={profile.avatar}
+      alt=""
+      aria-hidden="true"
+      style={{
+        width: 12,
+        height: 12,
+        borderRadius: "50%",
+        marginRight: 4,
+        verticalAlign: "middle",
+        objectFit: "cover",
+      }}
+    />
+  ) : profile?.color ? (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        marginRight: 4,
+        verticalAlign: "middle",
+        background: profile.color,
+      }}
+    />
+  ) : null;
+  const humanPresenceIndicator = presenceStatus ? (
+    <span
+      aria-label={presenceStatus}
+      title={presenceStatus}
+      style={{
+        display: "inline-block",
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        marginLeft: 4,
+        verticalAlign: "middle",
+        background:
+          presenceStatus === "online"
+            ? "var(--green-9)"
+            : presenceStatus === "idle"
+              ? "var(--amber-9)"
+              : presenceStatus === "away"
+                ? "var(--orange-9)"
+                : "var(--gray-8)",
+      }}
+    />
+  ) : null;
   const hasMenuItems = menuMethods.length > 0;
   const isAgent = isAgentParticipantType(participant.metadata.type);
   const isPlanMode = participant.metadata.executionMode === "plan";
@@ -198,15 +276,16 @@ export function ParticipantBadgeMenu({
   ) : null;
 
   // Simple badge without dropdown when no menu items, no debug console, no remove
-  const showDebugConsole = isAgent && onOpenDebugConsole;
-  const showRemove = isAgent && onRemoveAgent;
+  const showDebugConsole = isAgent && !!participant.metadata.handle && onOpenDebugConsole;
+  const showRemove = isAgent && !!participant.metadata.handle && onRemoveAgent;
   const showSettings = isAgent;
   if (!hasMenuItems && !showDebugConsole && !showRemove && !showSettings) {
     return (
       <span style={{ display: "inline-flex", alignItems: "center" }}>
         <span style={{ position: "relative" }}>
-          <Badge color={color}>
-            @{participant.metadata.handle}
+          <Badge color={color} title={badgeTitle}>
+            {identityIndicator}@{displayHandle}
+            {humanPresenceIndicator}
             {linkedKindIndicator}
             {planModeIndicator}
             {statusIndicator}
@@ -225,8 +304,9 @@ export function ParticipantBadgeMenu({
         <span style={{ position: "relative" }}>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger>
-              <Badge color={color} style={{ cursor: "pointer" }}>
-                @{participant.metadata.handle}
+              <Badge color={color} title={badgeTitle} style={{ cursor: "pointer" }}>
+                {identityIndicator}@{displayHandle}
+                {humanPresenceIndicator}
                 {linkedKindIndicator}
                 {planModeIndicator}
                 {statusIndicator}
@@ -271,7 +351,7 @@ export function ParticipantBadgeMenu({
                 <>
                   {(menuMethods.length > 0 || showSettings) && <DropdownMenu.Separator />}
                   <DropdownMenu.Item
-                    onSelect={() => onOpenDebugConsole(participant.metadata.handle)}
+                    onSelect={() => onOpenDebugConsole(participant.metadata.handle!)}
                   >
                     Debug Console
                   </DropdownMenu.Item>
@@ -283,7 +363,7 @@ export function ParticipantBadgeMenu({
                   <DropdownMenu.Separator />
                   <DropdownMenu.Item
                     color="red"
-                    onSelect={() => onRemoveAgent(participant.metadata.handle)}
+                    onSelect={() => onRemoveAgent(participant.metadata.handle!)}
                   >
                     Remove Agent
                   </DropdownMenu.Item>

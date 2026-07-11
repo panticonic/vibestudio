@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  initialAgentState,
+  initialAgentState as createInitialAgentState,
   type AgentLoopConfig,
+  type AgentState,
+  type InitialStateInput,
   type ModelCallEffect,
 } from "@workspace/agent-loop";
 import { CredentialApprovalDeferredError, type ExecutorDeps } from "./types.js";
@@ -21,8 +23,22 @@ vi.mock("@earendil-works/pi-ai", () => ({
 const { modelCallExecutor, toPiAssistantBlocks, toProtocolBlocks } =
   await import("./model-call.js");
 
+const modelSpec: AgentLoopConfig["modelSpec"] = {
+  id: "model",
+  name: "Test Model",
+  api: "openai-completions",
+  provider: "test",
+  baseUrl: "https://api.test.example/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 32768,
+  maxTokens: 4096,
+};
+
 const config: AgentLoopConfig = {
   model: "test:model",
+  modelSpec,
   thinkingLevel: "medium",
   approvalLevel: 2,
   respondPolicy: "all",
@@ -30,6 +46,10 @@ const config: AgentLoopConfig = {
   activeToolNames: [],
   roster: { participants: [] },
 };
+
+function initialAgentState(input: Omit<InitialStateInput, "selfId">): AgentState {
+  return createInitialAgentState({ ...input, selfId: "agent:self" });
+}
 
 function descriptor(requestOverrides: Partial<ModelCallEffect["request"]> = {}): ModelCallEffect {
   return {
@@ -43,19 +63,8 @@ function descriptor(requestOverrides: Partial<ModelCallEffect["request"]> = {}):
       provider: "test",
       model: "model",
       // Journal-materialized spec (design §6.2) — the executor's only
-      // resolution path; requests without it fail with a model error.
-      modelSpec: {
-        id: "model",
-        name: "Test Model",
-        api: "openai-completions",
-        provider: "test",
-        baseUrl: "https://api.test.example/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32768,
-        maxTokens: 4096,
-      },
+      // resolution path.
+      modelSpec,
       auth: "url-bound",
       thinkingLevel: "medium",
       systemPromptHash: "sys",
@@ -80,6 +89,7 @@ function deps(): ExecutorDeps {
       registerCredentialInterest: async () => {},
     },
     channel: {
+      cancelMethodCall: async () => {},
       callMethod: async () => {},
       publish: async () => {},
       sendSignalEvent: async () => {},

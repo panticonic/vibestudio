@@ -15,8 +15,7 @@
  *                `vcsLog` for the export walk, `ingestWorktreeState` for the
  *                import staging transition (non-main head), `importPublish` to
  *                advance the protected `main` through the gated single-writer
- *                path, `listStateFiles` as the listing fallback for
- *                pre-mirroring-invariant historical states.
+ *                path.
  *  - `blobstore` — host content store RPC: blob bytes (`getBase64`/`putBase64`)
  *                and immutable trees (`putTree`/`getTree`/`listTree`). Import
  *                mirrors the scanned tree bottom-up (the eager half of the
@@ -102,10 +101,6 @@ export interface BridgeVcsStore {
     summary?: string;
     metadata?: Record<string, unknown>;
   }): Promise<{ stateHash: string; eventId: string }>;
-  /** Listing fallback for states minted before the mirroring invariant. */
-  listStateFiles(
-    stateHash: string
-  ): Promise<Array<{ path: string; content_hash: string; mode: number }>>;
   /** Publish an ingested import staging head onto the repo's protected `main`
    *  through the DO's gated single-writer `refs.updateMains({operation:"import"})`
    *  path (write-ahead intent + provenance). No-ops when main already matches. */
@@ -193,7 +188,8 @@ const fsLike = {
   lstat: (p: string) => fsp.lstat(p),
   symlink: (target: string, p: string) => fsp.symlink(target, p),
   readlink: (p: string) => fsp.readlink(p),
-} as never;
+  chmod: (p: string, mode: number) => fsp.chmod(p, mode),
+};
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -392,31 +388,25 @@ export class GitBridge {
     return { exported, headCommit: lastSha };
   }
 
-  /** Full file listing of a state: content store first (the tree authority),
-   *  gad-store DO listing as the fallback for pre-invariant historical states. */
+  /** Full file listing of a state from the canonical content-store tree. */
   private async listStateFiles(
     stateHash: string
   ): Promise<Array<{ path: string; contentHash: string; mode: number }>> {
     const listing = await this.host.blobstore.listTree(stateHash, { limit: LIST_TREE_LIMIT });
-    if (listing !== null) {
-      if (listing.length >= LIST_TREE_LIMIT) {
-        // A silently truncated listing would export a WRONG tree — fail loudly.
-        throw new Error(`git export: state ${stateHash} exceeds ${LIST_TREE_LIMIT} tree entries`);
-      }
-      return listing
-        .filter((entry) => entry.kind === "file")
-        .map((entry) => ({
-          path: entry.path,
-          contentHash: entry.contentHash ?? "",
-          mode: entry.mode ?? 33188,
-        }));
+    if (listing === null) {
+      throw new Error(`git export: state ${stateHash} is missing its canonical content-store tree`);
     }
-    const rows = await this.host.store.listStateFiles(stateHash);
-    return rows.map((row) => ({
-      path: row.path,
-      contentHash: row.content_hash,
-      mode: row.mode,
-    }));
+    if (listing.length >= LIST_TREE_LIMIT) {
+      // A silently truncated listing would export a WRONG tree — fail loudly.
+      throw new Error(`git export: state ${stateHash} exceeds ${LIST_TREE_LIMIT} tree entries`);
+    }
+    return listing
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => ({
+        path: entry.path,
+        contentHash: entry.contentHash ?? "",
+        mode: entry.mode ?? 33188,
+      }));
   }
 
   /**

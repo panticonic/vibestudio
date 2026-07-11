@@ -446,7 +446,7 @@ Pi events flow through the trajectory store:
 ```
 Agent emits event
   -> PiRunner maps it to AgenticEvent
-  -> gad.appendTrajectoryBatch(... publish.channelIds for transcript-visible events)
+  -> gad.appendLogEvent(... publish.channels for transcript-visible events)
   -> GAD channel_envelopes payloadKind "agentic.trajectory.v1/event"
   -> trajectory_channel_publications joins the trajectory event to the envelope
   -> clients reduce channel envelopes into chat state

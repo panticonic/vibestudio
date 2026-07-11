@@ -71,7 +71,7 @@ describe("transcript UX smoke", () => {
       id: "panel:chat",
       name: "User",
       type: "panel",
-      handle: "user",
+      handle: "alice",
     });
 
     render(<TranscriptView client={panel} />);
@@ -105,7 +105,7 @@ describe("transcript UX smoke", () => {
       id: "panel:chat",
       name: "User",
       type: "panel",
-      handle: "user",
+      handle: "alice",
     });
 
     render(<TranscriptView client={panel} />);
@@ -144,7 +144,7 @@ describe("transcript UX smoke", () => {
 
 describe("transcript delivery markers", () => {
   const SELF = channelParticipantId("panel:user");
-  const senderInfo = { name: "You", type: "panel" as const, handle: "user" };
+  const senderInfo = { name: "You", type: "panel" as const, handle: "alice" };
   const noop = () => {};
 
   function renderCard(msg: ChatMessage, participants = {}) {

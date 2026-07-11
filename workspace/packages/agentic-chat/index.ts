@@ -55,6 +55,16 @@ export type { LinkedPermissionCardsProps } from "./components/LinkedPermissionCa
 export { useChatCore } from "./hooks/core/useChatCore";
 export type { UseChatCoreOptions, ChatCoreState } from "./hooks/core/useChatCore";
 
+// Live account-profile projection for `user:<userId>` participants (WP6 §6).
+// `resolveAccountProfiles` is the shared seam (also consumed by presence, WP8).
+export {
+  useAccountProfiles,
+  resolveAccountProfiles,
+  userIdFromParticipantId,
+  USER_PARTICIPANT_PREFIX,
+} from "./hooks/useAccountProfiles";
+export type { AccountProfile, AccountRpc } from "./hooks/useAccountProfiles";
+
 // Feature hooks
 export { useChatFeedback } from "./hooks/features/useChatFeedback";
 export type { ChatFeedbackState } from "./hooks/features/useChatFeedback";

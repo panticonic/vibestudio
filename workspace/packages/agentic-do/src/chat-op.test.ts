@@ -35,6 +35,11 @@ async function waitForCall(vessel: TestVessel): Promise<{ callId: string; method
 
 const AGENT_ID = "do:test:TestAgent:agent-key";
 const CHANNEL = "chan-1";
+const TEST_AGENT_ENV = {
+  __objectKey: "agent-key",
+  WORKER_SOURCE: "test",
+  WORKER_CLASS_NAME: "TestAgent",
+} as const;
 
 const WEATHER_TYPE = {
   typeId: "weather",
@@ -90,6 +95,7 @@ class TestVessel extends AgentVesselBase {
    *  post-subscribe machinery (prompt artifacts, driver wake) that needs a live
    *  gateway/GAD. */
   async registerSubscriptionForTest(channelId = CHANNEL, config?: unknown): Promise<void> {
+    this.ensureIdentity();
     await this.subscriptions.subscribe({
       channelId,
       contextId: "ctx-1",
@@ -215,7 +221,7 @@ class ReadyWakeProbe extends TestVessel {
 }
 
 async function makeVessel(): Promise<TestVessel> {
-  const { instance } = await createTestDO(TestVessel, { __objectKey: "agent-key" });
+  const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
   // Register a subscription row so the card path has a participant id, without
   // booting the driver/prompt machinery.
   await instance.registerSubscriptionForTest();
@@ -223,7 +229,7 @@ async function makeVessel(): Promise<TestVessel> {
 }
 
 async function makePromptProbe(): Promise<PromptEventProbe> {
-  const { instance } = await createTestDO(PromptEventProbe, { __objectKey: "agent-key" });
+  const { instance } = await createTestDO(PromptEventProbe, TEST_AGENT_ENV);
   await instance.registerSubscriptionForTest();
   instance.markEmptyRosterFresh(CHANNEL);
   return instance;
@@ -238,7 +244,7 @@ async function expectedEvalCaller(): Promise<string> {
 
 describe("AgentVesselBase channel ready wake policy", () => {
   it("wakes every-envelope subscriptions after subscribe replay", async () => {
-    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+    const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
 
     await instance.subscribeChannel({
       channelId: CHANNEL,
@@ -250,7 +256,7 @@ describe("AgentVesselBase channel ready wake policy", () => {
   });
 
   it("does not generic-wake turn-final supervisor subscriptions after subscribe replay", async () => {
-    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+    const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
 
     await instance.subscribeChannel({
       channelId: CHANNEL,
@@ -263,7 +269,7 @@ describe("AgentVesselBase channel ready wake policy", () => {
   });
 
   it("wakes every-envelope subscriptions when the channel reports ready", async () => {
-    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+    const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
     await instance.registerSubscriptionForTest(CHANNEL);
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
@@ -278,7 +284,7 @@ describe("AgentVesselBase channel ready wake policy", () => {
   });
 
   it("does not generic-wake turn-final supervisor subscriptions on ready", async () => {
-    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+    const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
     await instance.registerSubscriptionForTest(CHANNEL, { wakePolicy: "turn-final" });
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
@@ -653,7 +659,7 @@ class EvalGateProbe extends TestVessel {
 }
 
 async function makeGateProbe(): Promise<EvalGateProbe> {
-  const { instance } = await createTestDO(EvalGateProbe, { __objectKey: "agent-key" });
+  const { instance } = await createTestDO(EvalGateProbe, TEST_AGENT_ENV);
   return instance;
 }
 
@@ -827,7 +833,7 @@ class SubagentSpawnProbe extends TestVessel {
 }
 
 async function makeSubagentSpawnProbe(): Promise<SubagentSpawnProbe> {
-  const { instance } = await createTestDO(SubagentSpawnProbe, { __objectKey: "agent-key" });
+  const { instance } = await createTestDO(SubagentSpawnProbe, TEST_AGENT_ENV);
   await instance.registerSubscriptionForTest();
   return instance;
 }

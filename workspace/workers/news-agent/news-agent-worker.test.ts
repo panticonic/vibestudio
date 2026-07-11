@@ -770,11 +770,21 @@ describe("NewsAgentWorker", () => {
     });
     expect(record(schedule.result)["briefingAtMinutes"]).toBe(480);
 
-    const unknown = await worker.onMethodCall("ch-1", "call-3", "fly", {});
+    const followed = await worker.onMethodCall("ch-1", "call-3", "news_follow_topic", {
+      topic: "distributed systems",
+    });
+    expect(followed.isError).not.toBe(true);
+
+    const retiredAlias = await worker.onMethodCall("ch-1", "call-4", "followTopic", {
+      topic: "legacy",
+    });
+    expect(retiredAlias.isError).toBe(true);
+
+    const unknown = await worker.onMethodCall("ch-1", "call-5", "fly", {});
     expect(unknown.isError).toBe(true);
 
     // Tool-only operations are not callable as methods.
-    const toolOnly = await worker.onMethodCall("ch-1", "call-4", "news_publish_briefing", {});
+    const toolOnly = await worker.onMethodCall("ch-1", "call-6", "news_publish_briefing", {});
     expect(toolOnly.isError).toBe(true);
   });
 

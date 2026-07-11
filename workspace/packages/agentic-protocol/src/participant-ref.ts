@@ -23,6 +23,11 @@ const PUBLIC_METADATA_KEYS = [
   "typing",
   "executionMode",
   "activeModel",
+  // Personalization / presence (WP6 §6, shared with WP8): rendered live for
+  // `user:` participants from the host-projected profile, never frozen.
+  "status",
+  "color",
+  "avatar",
 ] as const;
 
 export interface PublicMethodSummary {
@@ -224,6 +229,51 @@ function sanitizeExternalParticipantObservedPayload(
   };
 }
 
+/**
+ * Stable principal-derived human participant id (WP6 §4): `user:<userId>`.
+ * One roster identity per human, shared across every panel/device.
+ */
+export function userParticipantId(userId: string): string {
+  return userId.startsWith("user:") ? userId : `user:${userId}`;
+}
+
+/**
+ * Resolve an `@mention` / handle / `user:<id>` token to the roster's stable
+ * human participant (WP7 §5). The policy agent uses this to target `ask_user` /
+ * `feedback_form` at a SPECIFIC human; an UNaddressed prompt falls back to all
+ * `kind:"user"` participants (first-answer-wins), so this helper's job is only
+ * the addressed case. Matching is attribution-grade (mutual trust, plan §0.0),
+ * never an authorization check: an explicit `user:<id>` (or bare `<id>`) matches
+ * by participant id first, then an exact case-insensitive handle, then
+ * displayName. Returns the matching `ParticipantRef`, or null when no human in
+ * the roster matches.
+ */
+export function resolveMentionToUser(
+  mention: string,
+  roster: Iterable<ParticipantRef>
+): ParticipantRef | null {
+  const token = mention.trim().replace(/^@/, "");
+  if (token.length === 0) return null;
+  const asMemberId = userParticipantId(token);
+  const needle = token.toLowerCase();
+  let displayNameMatch: ParticipantRef | null = null;
+  for (const ref of roster) {
+    if (ref.kind !== "user") continue;
+    const id = ref.participantId ?? ref.id;
+    if (id === token || id === asMemberId) return ref;
+    const handle = ref.metadata?.["handle"];
+    if (typeof handle === "string" && handle.toLowerCase() === needle) return ref;
+    if (
+      !displayNameMatch &&
+      typeof ref.displayName === "string" &&
+      ref.displayName.toLowerCase() === needle
+    ) {
+      displayNameMatch = ref;
+    }
+  }
+  return displayNameMatch;
+}
+
 function participantKindFromMetadata(
   participantId: string,
   declaredKind: unknown
@@ -238,6 +288,9 @@ function participantKindFromMetadata(
     return declaredKind;
   }
   if (participantId === "system") return "system";
+  // Stable principal-derived human id (WP6 §4): one `user:<userId>` identity
+  // per human, shared across all their panels/devices.
+  if (participantId.startsWith("user:")) return "user";
   if (participantId.startsWith("panel:")) return "panel";
   if (participantId.startsWith("do:")) return "agent";
   return "external";

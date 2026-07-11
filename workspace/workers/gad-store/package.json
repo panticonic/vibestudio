@@ -8,10 +8,15 @@
     "kind": "worker",
     "entry": "index.ts",
     "durable": {
-      "classes": [{ "className": "GadWorkspaceDO" }]
+      "classes": [
+        {
+          "className": "GadWorkspaceDO"
+        }
+      ]
     }
   },
   "dependencies": {
+    "@vibestudio/shared": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/vcs-engine": "workspace:*"

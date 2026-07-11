@@ -21,6 +21,9 @@ import type {
   BootstrapSnapshot,
   MessageTypeDefinition,
   RegisterMessageTypeInput,
+  ChannelMember,
+  ChannelInvite,
+  ChannelPresenceEntry,
 } from "./types.js";
 import type { RpcChannelMessage } from "./protocol-wire.js";
 import { PubSubError } from "./types.js";
@@ -97,6 +100,7 @@ interface ClientIngressMessage {
 
 interface SubscribeResult {
   ok?: boolean;
+  participantId: string;
   channelConfig?: ChannelConfig;
   envelope?: ChannelReplayEnvelope;
 }
@@ -175,7 +179,10 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 ): PubSubClient<T> {
   const { rpc, channel, replayMode = "stream", methods: providedMethods } = opts;
   const protocol = opts.protocol ?? DEFAULT_CHANNEL_SERVICE_PROTOCOL;
-  const pid = opts.clientId ?? rpc.selfId;
+  const deliveryId = opts.clientId ?? rpc.selfId;
+  // The subscribe ACK replaces this with the channel's authoritative actor id
+  // (`user:<verifiedUserId>` for humans). Delivery still targets deliveryId.
+  let pid = deliveryId;
   let doTargetPromise: Promise<string> | null = null;
   const getDoTarget = () => {
     doTargetPromise ??= rpc
@@ -260,6 +267,13 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     if (closed) return;
     console.warn("[PubSubClient] Ready promise rejected:", err);
   });
+  let subscribeAckResolve: (() => void) | null = null;
+  let subscribeAckReject: ((error: Error) => void) | null = null;
+  const subscribeAckPromise = new Promise<void>((resolve, reject) => {
+    subscribeAckResolve = resolve;
+    subscribeAckReject = reject;
+  });
+  subscribeAckPromise.catch(() => {});
 
   function resolveReady(): void {
     readyResolve?.();
@@ -311,8 +325,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   function rememberSubmittedMethodTransportCall(transportCallId: string): void {
     submittedMethodTransportCallIds.add(transportCallId);
     if (submittedMethodTransportCallIds.size <= MAX_SUBMITTED_METHOD_TRANSPORT_CALL_IDS) return;
-    const overflow =
-      submittedMethodTransportCallIds.size - MAX_SUBMITTED_METHOD_TRANSPORT_CALL_IDS;
+    const overflow = submittedMethodTransportCallIds.size - MAX_SUBMITTED_METHOD_TRANSPORT_CALL_IDS;
     const iter = submittedMethodTransportCallIds.values();
     for (let i = 0; i < overflow; i++) {
       const { value } = iter.next();
@@ -743,6 +756,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   }
 
   function applySubscribeAckFallback(result: SubscribeResult | undefined): void {
+    if (result?.participantId) pid = result.participantId;
     if (!result?.envelope || replayComplete) return;
     ingestReplayEnvelope(result.envelope, "ack");
   }
@@ -772,7 +786,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     attachments: Attachment[] | undefined
   ): void {
     const ev = payload as
-      | { kind?: string; causality?: { invocationId?: string; transportCallId?: string }; payload?: Record<string, unknown> }
+      | {
+          kind?: string;
+          causality?: { invocationId?: string; transportCallId?: string };
+          payload?: Record<string, unknown>;
+        }
       | undefined;
     if (!ev || typeof ev !== "object") return;
     const kind = ev.kind;
@@ -883,9 +901,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     result: Parameters<typeof applyMethodResultChunk>[0]
   ): Promise<void> {
     const previous = methodResultChains.get(result.callId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(() => applyMethodResultChunk(result));
+    const next = previous.catch(() => undefined).then(() => applyMethodResultChunk(result));
     methodResultChains.set(result.callId, next);
     void next
       .catch((err) => {
@@ -1004,8 +1020,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     // Single-clock discipline (CH-3): only a journaled deadlineAt can impose
     // a call lifetime. Calls without a deadline can legitimately wait on a
     // human or a long-running agentic continuation.
-    const remainingMs =
-      typeof event.deadlineAt === "number" ? event.deadlineAt - Date.now() : null;
+    const remainingMs = typeof event.deadlineAt === "number" ? event.deadlineAt - Date.now() : null;
     if (remainingMs !== null && remainingMs <= 1_000) {
       // Redelivered at/after its deadline: executing now can't beat the
       // channel's own expiry; let the channel settle it.
@@ -1025,9 +1040,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     const pendingStreamSubmissions = new Set<Promise<void>>();
     const trackStreamSubmission = (promise: Promise<void>): Promise<void> => {
       pendingStreamSubmissions.add(promise);
-      void promise
-        .catch(() => undefined)
-        .finally(() => pendingStreamSubmissions.delete(promise));
+      void promise.catch(() => undefined).finally(() => pendingStreamSubmissions.delete(promise));
       return promise;
     };
     const drainStreamSubmissions = async (): Promise<void> => {
@@ -1094,10 +1107,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           })
         );
       },
-      streamWithAttachments: async (
-        content: unknown,
-        attachments: AttachmentInput[]
-      ) => {
+      streamWithAttachments: async (content: unknown, attachments: AttachmentInput[]) => {
         await trackStreamSubmission(
           submitMethodProgress(event.invocationId, event.transportCallId, content, {
             turnId: event.turnId,
@@ -1105,10 +1115,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           })
         );
       },
-      resultWithAttachments: <R>(
-        content: R,
-        attachments: AttachmentInput[]
-      ) => ({
+      resultWithAttachments: <R>(content: R, attachments: AttachmentInput[]) => ({
         content,
         attachments,
       }),
@@ -1347,16 +1354,16 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   // Subscribe to channel
   const subscribeMetadata: Record<string, unknown> = {
-    name: opts.name,
-    type: opts.type,
-    handle: opts.handle,
+    ...(opts.metadata ? opts.metadata : {}),
+    ...(opts.name !== undefined ? { name: opts.name } : {}),
+    ...(opts.type !== undefined ? { type: opts.type } : {}),
+    ...(opts.handle !== undefined ? { handle: opts.handle } : {}),
     [PARTICIPANT_SESSION_METADATA_KEY]: participantSessionId,
     contextId: opts.contextId,
     channelConfig: opts.channelConfig ? opts.channelConfig : undefined,
     replay: replayMode !== "skip",
     replayMessageLimit: opts.replayMessageLimit ?? 1000,
     sinceId: opts.sinceId,
-    ...(opts.metadata ? opts.metadata : {}),
   };
   if (methodAdvertisements) subscribeMetadata["methods"] = methodAdvertisements;
 
@@ -1381,8 +1388,9 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       return;
     }
     try {
-      // Best-effort unsubscribe old session
-      await callChannel("unsubscribe", pid).catch((err) => {
+      // Best-effort unsubscribe old session (session-scoped: a shared
+      // `user:<userId>` row only drops THIS client's ref, WP6 §4)
+      await callChannel("unsubscribe", pid, participantSessionId).catch((err) => {
         console.warn(`[PubSubClient] Failed to unsubscribe stale session ${pid}:`, err);
       });
       // Reset local roster and presence dedup state so replayed presence events are accepted
@@ -1394,7 +1402,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       replayComplete = false;
       // Re-subscribe with sinceId for catch-up replay
       const resubMeta = { ...subscribeMetadata, sinceId: lastSeenSeq, replay: true };
-      const result = await callChannel<SubscribeResult | undefined>("subscribe", pid, resubMeta);
+      const result = await callChannel<SubscribeResult | undefined>(
+        "subscribe",
+        deliveryId,
+        resubMeta
+      );
       applySubscribeAckFallback(result);
       // In-flight method calls are recovered from replayed invocation.* events
       // (handleInvocationLifecycle), not a settled-results read-back.
@@ -1416,7 +1428,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   const touchInterval = setInterval(() => {
     if (closed) return;
-    callChannel("touch", pid)
+    callChannel("touch", pid, participantSessionId)
       .then(() => {
         consecutiveTouchFailures = 0;
       })
@@ -1436,14 +1448,23 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // Fire subscribe. Replay normally arrives through ordered channel events; the
   // result also carries the same ordered initial replay as a fallback so losing
   // the ready event does not let ready resolve ahead of replay delivery.
-  callChannel<SubscribeResult | undefined>("subscribe", pid, subscribeMetadata)
+  callChannel<SubscribeResult | undefined>("subscribe", deliveryId, subscribeMetadata)
     .then((result) => {
       applySubscribeAckFallback(result);
+      subscribeAckResolve?.();
+      subscribeAckResolve = null;
+      subscribeAckReject = null;
+      if (closed) {
+        void callChannel("unsubscribe", pid, participantSessionId);
+      }
     })
     .catch((err: unknown) => {
       const error = err instanceof Error ? err : new Error(String(err));
       clearInterval(touchInterval);
       const pubsubError = new PubSubError(error.message, "connection");
+      subscribeAckReject?.(pubsubError);
+      subscribeAckResolve = null;
+      subscribeAckReject = null;
       rejectReady(pubsubError);
       handleError(pubsubError);
     });
@@ -1451,15 +1472,15 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // ── Public API ──────────────────────────────────────────────────────────
 
   async function ready(signal?: AbortSignal): Promise<void> {
-    if (replayComplete) return;
     if (closed) throw new PubSubError("connection closed before ready", "connection");
-    if (!signal) return readyPromise;
+    const fullyReady = Promise.all([readyPromise, subscribeAckPromise]).then(() => undefined);
+    if (!signal) return fullyReady;
     if (signal.aborted) throw new PubSubError("ready aborted", "connection");
 
     return new Promise<void>((resolve, reject) => {
       const onAbort = () => reject(new PubSubError("ready aborted", "connection"));
       signal.addEventListener("abort", onAbort, { once: true });
-      readyPromise.then(
+      fullyReady.then(
         () => {
           signal.removeEventListener("abort", onAbort);
           resolve();
@@ -1504,6 +1525,36 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     const newConfig = await callChannel<ChannelConfig>("updateConfig", config);
     serverChannelConfig = newConfig;
     return newConfig;
+  }
+
+  async function addMember(userId: string): Promise<ChannelMember & { alreadyMember: boolean }> {
+    return callChannel("addMember", { userId });
+  }
+
+  async function removeMember(userId: string): Promise<{ removed: boolean }> {
+    return callChannel("removeMember", { userId });
+  }
+
+  async function listMembers(): Promise<ChannelMember[]> {
+    const result = await callChannel<{ members: ChannelMember[] }>("listMembers");
+    return result.members;
+  }
+
+  async function listInvitesForMe(): Promise<ChannelInvite[]> {
+    const result = await callChannel<{ invites: ChannelInvite[] }>("listInvitesForMe");
+    return result.invites;
+  }
+
+  async function acknowledgeInvite(): Promise<boolean> {
+    const result = await callChannel<{ acknowledged: boolean }>("acknowledgeInvite");
+    return result.acknowledged;
+  }
+
+  async function getChannelPresence(): Promise<{
+    entries: ChannelPresenceEntry[];
+    generatedAt: number;
+  }> {
+    return callChannel("getChannelPresence");
   }
 
   async function sendMessage(
@@ -1806,7 +1857,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     }
     executingMethods.clear();
     for (const handler of disconnectHandlers) handler();
-    callChannel("unsubscribe", pid).catch((err) => {
+    callChannel("unsubscribe", pid, participantSessionId).catch((err) => {
       console.warn(`[PubSubClient] Failed to unsubscribe session ${pid} during close:`, err);
     });
   }
@@ -1997,6 +2048,12 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       return () => rosterHandlers.delete(handler);
     },
     updateChannelConfig,
+    addMember,
+    removeMember,
+    listMembers,
+    listInvitesForMe,
+    acknowledgeInvite,
+    getChannelPresence,
     onConfigChange: (handler: (config: ChannelConfig) => void) => {
       configChangeHandlers.add(handler);
       if (serverChannelConfig) handler(serverChannelConfig);

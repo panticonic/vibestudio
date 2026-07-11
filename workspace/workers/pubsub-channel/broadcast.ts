@@ -58,7 +58,7 @@ export function queueEmit(
   deps: BroadcastDeps,
   subscriberId: string,
   payload: unknown,
-  onFatalDelivery?: (err: { code?: string }) => boolean | void,
+  onFatalDelivery?: (err: { code?: string }) => boolean | void
 ): Promise<void> {
   const key = deliveryKey(deps.objectKey, subscriberId);
   return serializeByKey(emitChains, key, () =>
@@ -80,7 +80,7 @@ export function queueDoEnvelope(
   deps: BroadcastDeps,
   participantId: string,
   envelope: RpcChannelMessage,
-  onFatalDelivery?: (err: { code?: string }) => boolean | void,
+  onFatalDelivery?: (err: { code?: string }) => boolean | void
 ): Promise<void> {
   const key = deliveryKey(deps.objectKey, participantId);
   return serializeByKey(deliveryChains, key, () =>
@@ -104,52 +104,57 @@ export function broadcast(
   deps: BroadcastDeps,
   event: ChannelEvent,
   envelope: BroadcastEnvelope,
-  senderId: string,
+  senderId: string
 ): void {
-  const participants = deps.sql.exec(
-    `SELECT id, transport, metadata FROM participants`,
-  ).toArray();
+  const participants = deps.sql
+    .exec(
+      `SELECT p.id, p.transport, p.metadata, s.delivery_id
+       FROM participants p
+       JOIN participant_sessions s ON s.participant_id = p.id`
+    )
+    .toArray();
 
-  const msg = envelope.kind === "log"
-    ? channelEventToRpcLog(event, envelope.phase ?? "live", envelope.ref)
-    : channelEventToRpcSignal(event, envelope.ref);
+  const msg =
+    envelope.kind === "log"
+      ? channelEventToRpcLog(event, envelope.phase ?? "live", envelope.ref)
+      : channelEventToRpcSignal(event, envelope.ref);
 
+  const structuredDelivered = new Set<string>();
   for (const p of participants) {
     const pid = p["id"] as string;
-    const removeParticipantOnFatalDelivery = (err: { code?: string }) => {
-      const code = err?.code;
-      if (
-        code === "TARGET_NOT_REACHABLE" ||
-        code === "RECONNECT_GRACE_EXPIRED" ||
-        code === "DO_NOT_CREATED"
-      ) {
-        deps.sql.exec(`DELETE FROM participants WHERE id = ?`, pid);
-        cleanupDeliveryChain(deps.objectKey, pid);
-        return true;
-      }
-      return false;
-    };
-    const data = pid === senderId && envelope.ref !== undefined
-      ? { channelId: deps.objectKey, message: { ...msg, ref: envelope.ref } }
-      : { channelId: deps.objectKey, message: msg };
+    const deliveryId = p["delivery_id"] as string;
+    // A failed emit is not authoritative evidence that the logical participant
+    // left. Its independently-heartbeating session is evicted by the channel's
+    // single alarm after the liveness window, which also records durable
+    // offline/last-seen state.
+    const ignoreTransientDeliveryFailure = () => true;
+    const data =
+      pid === senderId && envelope.ref !== undefined
+        ? { channelId: deps.objectKey, message: { ...msg, ref: envelope.ref } }
+        : { channelId: deps.objectKey, message: msg };
 
     // Route through the per-subscriber emit chain so replay emits queued
     // during a concurrent subscribe stay ahead of live broadcasts.
-    void queueEmit(deps, pid, data, removeParticipantOnFatalDelivery);
+    void queueEmit(deps, deliveryId, data, ignoreTransientDeliveryFailure);
 
     // Additionally deliver the STRUCTURED envelope (onChannelEnvelope) — but ONLY
     // to DO participants that opted into it (agent vessels set
     // `receivesChannelEnvelopes`). RPC-style DO clients (e.g. the eval's
     // connectViaRpc) consume the `channel:message` emit above and have no
     // onChannelEnvelope handler, so pushing it to them just 500s the delivery.
-    if (p["transport"] === "do" && participantReceivesChannelEnvelopes(p["metadata"])) {
+    if (
+      p["transport"] === "do" &&
+      participantReceivesChannelEnvelopes(p["metadata"]) &&
+      !structuredDelivered.has(pid)
+    ) {
+      structuredDelivered.add(pid);
       void queueDoEnvelope(
         deps,
         pid,
         envelope.kind === "log"
           ? { kind: "log", phase: envelope.phase ?? "live", event }
           : channelEventToRpcSignal(event),
-        removeParticipantOnFatalDelivery,
+        ignoreTransientDeliveryFailure
       );
     }
   }
@@ -170,17 +175,22 @@ export function buildChannelEvent(
   senderMetadata: Record<string, unknown> | undefined,
   ts: number,
   attachments?: Array<{ id: string; data: string; mimeType: string; name?: string; size: number }>,
-  annotations?: Record<string, unknown>,
+  annotations?: Record<string, unknown>
 ): ChannelEvent {
   let parsedPayload: unknown;
-  try { parsedPayload = JSON.parse(payloadJson); } catch { parsedPayload = payloadJson; }
+  try {
+    parsedPayload = JSON.parse(payloadJson);
+  } catch {
+    parsedPayload = payloadJson;
+  }
 
-  const payloadObj = parsedPayload && typeof parsedPayload === "object"
-    ? parsedPayload as Record<string, unknown>
-    : null;
+  const payloadObj =
+    parsedPayload && typeof parsedPayload === "object"
+      ? (parsedPayload as Record<string, unknown>)
+      : null;
   const contentType = payloadObj?.["contentType"] as string | undefined;
 
-  const mappedAttachments = attachments?.map(att => ({
+  const mappedAttachments = attachments?.map((att) => ({
     id: att.id,
     type: att.mimeType?.startsWith("image/") ? "image" : "file",
     data: att.data,
@@ -198,7 +208,9 @@ export function buildChannelEvent(
     senderMetadata,
     ...(contentType ? { contentType } : {}),
     ts,
-    ...(mappedAttachments && mappedAttachments.length > 0 ? { attachments: mappedAttachments } : {}),
+    ...(mappedAttachments && mappedAttachments.length > 0
+      ? { attachments: mappedAttachments }
+      : {}),
     ...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {}),
   };
 }
@@ -218,10 +230,7 @@ export function channelEventToRpcLog(
   };
 }
 
-export function channelEventToRpcSignal(
-  event: ChannelEvent,
-  ref?: number
-): RpcChannelMessage {
+export function channelEventToRpcSignal(event: ChannelEvent, ref?: number): RpcChannelMessage {
   return {
     kind: "signal",
     type: event.type,

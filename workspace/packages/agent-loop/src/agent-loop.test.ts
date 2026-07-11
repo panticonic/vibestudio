@@ -21,8 +21,22 @@ import { defaultPolicies, publishPolicyPolicy } from "./policies/index.js";
 import { ids } from "./ids.js";
 import type { StepPolicy } from "./step.js";
 
+const primaryModelSpec: AgentModelSpec = {
+  id: "claude-sonnet-4-6",
+  name: "Claude Sonnet 4.6",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 64_000,
+};
+
 const baseConfig: AgentLoopConfig = {
   model: "anthropic:claude-sonnet-4-6",
+  modelSpec: primaryModelSpec,
   thinkingLevel: "medium",
   approvalLevel: 2,
   respondPolicy: "all",
@@ -62,12 +76,13 @@ function scenario(
   return createScenario({
     state: initialAgentState({
       channelId: "chan-1",
+      selfId: "agent:self",
       config: {
         ...baseConfig,
         model: opts.model ?? baseConfig.model,
+        modelSpec: opts.modelSpec ?? baseConfig.modelSpec,
         approvalLevel: opts.approvalLevel ?? 2,
         roster: opts.roster ?? baseConfig.roster,
-        ...(opts.modelSpec ? { modelSpec: opts.modelSpec } : {}),
         ...(opts.modelAuth ? { modelAuth: opts.modelAuth } : {}),
         ...(opts.fallback ? { fallbackModelRef, fallbackModelSpec } : {}),
         ...(opts.maxModelCallsPerTurn !== undefined
@@ -516,7 +531,7 @@ describe("agent-loop core lifecycle", () => {
     ];
     const s = createScenario({
       state: {
-        ...initialAgentState({ channelId: "chan-1", config: baseConfig }),
+        ...initialAgentState({ channelId: "chan-1", config: baseConfig, selfId: "agent:self" }),
         entries,
         lastSeq: 12,
       },
@@ -536,7 +551,11 @@ describe("agent-loop core lifecycle", () => {
   it("wake recovery does not re-expand inherited assistant tool calls from another turn", () => {
     const childTurnId = ids.turnId("chan-1", "child-seed", "agent:self");
     const childMessageId = ids.messageId(childTurnId, 0);
-    const state = initialAgentState({ channelId: "chan-1", config: baseConfig });
+    const state = initialAgentState({
+      channelId: "chan-1",
+      config: baseConfig,
+      selfId: "agent:self",
+    });
     const s = createScenario({
       state: {
         ...state,
@@ -571,6 +590,7 @@ describe("agent-loop core lifecycle", () => {
           request: {
             provider: "anthropic",
             model: "claude-sonnet-4-6",
+            modelSpec: primaryModelSpec,
             thinkingLevel: "medium",
             systemPromptHash: "blob:system-prompt",
             activeToolNames: ["read", "write"],
@@ -974,9 +994,10 @@ describe("ask user policy", () => {
       roster: {
         participants: [
           {
-            participantId: "panel:user",
-            ref: { kind: "panel", id: "panel:user", participantId: "panel:user" },
-            type: "panel",
+            participantId: "user:alice",
+            ref: { kind: "user", id: "user:alice", participantId: "user:alice" },
+            type: "user",
+            handle: "alice",
             methods: [{ name: "feedback_form" }],
           },
         ],
@@ -1010,7 +1031,7 @@ describe("ask user policy", () => {
       transport: {
         kind: "channel",
         channelId: "chan-1",
-        target: { participantId: "panel:user" },
+        target: { participantId: "user:alice" },
       },
     });
     expect(request["hideSubmit"]).toBe(false);
@@ -1034,6 +1055,100 @@ describe("ask user policy", () => {
       method: "feedback_form",
       purpose: "ask-user",
     });
+  });
+
+  it("durably fans an unaddressed ask out to every canonical human", () => {
+    const humans = ["alice", "bob"].map((handle) => ({
+      participantId: `user:${handle}`,
+      ref: {
+        kind: "user" as const,
+        id: `user:${handle}`,
+        participantId: `user:${handle}`,
+      },
+      type: "user",
+      handle,
+      methods: [{ name: "feedback_form" }],
+    }));
+    const s = scenario({ roster: { participants: humans } });
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "tc-everyone",
+          name: "ask_user",
+          arguments: { question: "Ship it?" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    const started = s.log.find((row) => row.envelopeId === ids.invocationStart("tc-everyone"))!;
+    expect((started.payload as { askUserTargets?: unknown }).askUserTargets).toEqual(
+      humans.map((human) => human.ref)
+    );
+    expect([...s.effects.values()]).toEqual([
+      expect.objectContaining({
+        effectId: ids.invocationEffect("tc-everyone"),
+        target: humans[0]!.ref,
+        purpose: "ask-user",
+      }),
+      expect.objectContaining({
+        effectId: `${ids.invocationEffect("tc-everyone")}#user:bob`,
+        target: humans[1]!.ref,
+        purpose: "ask-user",
+      }),
+    ]);
+  });
+
+  it("routes an addressed ask to exactly one human and never broadcasts an unknown target", () => {
+    const participants = ["alice", "bob"].map((handle) => ({
+      participantId: `user:${handle}`,
+      ref: {
+        kind: "user" as const,
+        id: `user:${handle}`,
+        participantId: `user:${handle}`,
+      },
+      type: "user",
+      handle,
+      methods: [{ name: "feedback_form" }],
+    }));
+    const addressed = scenario({ roster: { participants } });
+    prompt(addressed);
+    resolveEffect(addressed, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "tc-bob",
+          name: "ask_user",
+          arguments: { question: "Bob?", to: "@bob" },
+        },
+      ],
+      stopReason: "completed",
+    });
+    expect([...addressed.effects.values()]).toEqual([
+      expect.objectContaining({ target: participants[1]!.ref, purpose: "ask-user" }),
+    ]);
+
+    const unknown = scenario({ roster: { participants } });
+    prompt(unknown);
+    resolveEffect(unknown, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "tc-unknown",
+          name: "ask_user",
+          arguments: { question: "Mystery?", to: "@nobody" },
+        },
+      ],
+      stopReason: "completed",
+    });
+    expect([...unknown.effects.values()]).toEqual([
+      expect.objectContaining({ kind: "local_tool", tool: "ask_user" }),
+    ]);
   });
 });
 

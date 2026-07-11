@@ -763,7 +763,7 @@ export interface KnowledgePayload {
   object?: string;
   claimId?: string;
   /** Pointer to the durable knowledge-ledger entry that owns this claim's content (§8.1). */
-  ledgerEntryId?: string;
+  ledgerEntryId: string;
   /** Free-text claim statement (nullable alongside subject/predicate/object). */
   text?: string;
   /** Claim kind (entity | predicate | statement, etc.). */

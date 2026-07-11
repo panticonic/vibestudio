@@ -1,5 +1,15 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Box, Button, Callout, Card, Flex, IconButton, Spinner, Text, TextArea } from "@radix-ui/themes";
+import {
+  Box,
+  Button,
+  Callout,
+  Card,
+  Flex,
+  IconButton,
+  Spinner,
+  Text,
+  TextArea,
+} from "@radix-ui/themes";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import {
   isAgentParticipantType,
@@ -14,6 +24,7 @@ import { MentionAutocomplete } from "./MentionAutocomplete";
 import { ModelCommandMenu } from "./ModelCommandMenu";
 import { SendButton } from "./SendButton";
 import { useMentionAutocomplete, type MentionCandidate } from "../hooks/useMentionAutocomplete";
+import { useAccountProfiles, type AccountRpc } from "../hooks/useAccountProfiles";
 import {
   getImagesFromClipboard,
   createPendingImage,
@@ -113,6 +124,7 @@ export function ChatInput() {
     modelCatalog,
     onReplaceAgent,
     onCallMethodResult,
+    chat,
   } = useChatContext();
   const {
     input,
@@ -144,7 +156,11 @@ export function ChatInput() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [showImageInput, setShowImageInput] = useState(false);
   const [selectedMentionIds, setSelectedMentionIds] = useState<Record<string, string>>({});
-  const mentions = useMentionAutocomplete(allParticipants, selfId);
+  const accountProfiles = useAccountProfiles(
+    (chat as { rpc?: AccountRpc } | undefined)?.rpc,
+    Object.keys(allParticipants)
+  );
+  const mentions = useMentionAutocomplete(allParticipants, selfId, accountProfiles);
 
   // --- `/model` composer quick-switcher (item 7) -------------------------
   const [modelMenuIndex, setModelMenuIndex] = useState(0);
@@ -316,7 +332,12 @@ export function ChatInput() {
             : undefined;
         const effectiveMode = mode === "after-turn" && hasOpenTurn ? "after-turn" : "default";
         await onSendMessage(attachments, {
-          mentions: getMentionsFromInput(input, allParticipants, selectedMentionIds),
+          mentions: getMentionsFromInput(
+            input,
+            allParticipants,
+            selectedMentionIds,
+            accountProfiles
+          ),
           replyTo: replyTo ?? undefined,
           // After-turn delivery is a message intent in payload.metadata.
           ...(effectiveMode === "after-turn" ? { metadata: { deliverAfterTurn: true } } : {}),
@@ -342,6 +363,7 @@ export function ChatInput() {
       input,
       allParticipants,
       selectedMentionIds,
+      accountProfiles,
       replyTo,
       mentions,
       hapticTick,
@@ -611,7 +633,14 @@ export function ChatInput() {
         </Box>
         {/* Transient "Sending…" ghost — the only sub-row, shown only in flight. */}
         {pendingSendCount > 0 && (
-          <Flex align="center" justify="end" gap="1" mt="1" className="chat-sending-ghost" aria-live="polite">
+          <Flex
+            align="center"
+            justify="end"
+            gap="1"
+            mt="1"
+            className="chat-sending-ghost"
+            aria-live="polite"
+          >
             <Spinner size="1" />
             <Text size="1" color="gray">
               Sending…

@@ -20,19 +20,13 @@ export interface GmailOperationAuth {
 export interface GmailOperation {
   /** Canonical name; model tools use this verbatim. */
   name: string;
-  /** Legacy / UI-facing onMethodCall aliases. */
-  methodAliases?: string[];
   description: string;
   schema: Record<string, unknown>;
   exposure: GmailOperationExposure[];
   auth?: GmailOperationAuth;
   /** Run ensureRecovered (channel replay catch-up) before dispatching. */
   needsRecovery?: boolean;
-  run: (
-    ctx: GmailOperationContext,
-    channelId: string,
-    args: Record<string, unknown>
-  ) => unknown;
+  run: (ctx: GmailOperationContext, channelId: string, args: Record<string, unknown>) => unknown;
 }
 
 const NO_ARGS = { type: "object", properties: {}, additionalProperties: false } as const;
@@ -230,7 +224,6 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   // ── model tools (also callable as methods) ─────────────────────────────────
   {
     name: "gmail_search",
-    methodAliases: ["search"],
     description:
       'Search Gmail with full query syntax (e.g. "in:inbox newer_than:1d", "from:alice@example.com has:attachment"). ' +
       "Returns { query, count, nextPageToken?, results: [{ threadId, subject, from, fromEmail, snippet, unread, date }] }. " +
@@ -244,7 +237,6 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   },
   {
     name: "gmail_read",
-    methodAliases: ["getThread", "read"],
     description:
       "Read a thread or single message. { threadId? | messageId?, format?: 'metadata'|'full' (default full), maxBodyChars?, includeAttachmentList? }. " +
       "Use format 'metadata' when you only need headers/snippets — it is much cheaper. " +
@@ -256,7 +248,6 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   },
   {
     name: "gmail_modify",
-    methodAliases: ["modify"],
     description:
       "Modify threads/messages in Gmail: { threadIds?|messageIds?, addLabels?, removeLabels?, markRead?, archive?, localCategory? }. " +
       "Labels are REAL Gmail labels by name (created automatically when missing) — use them for durable organization. " +
@@ -270,7 +261,6 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   },
   {
     name: "gmail_draft",
-    methodAliases: ["draft"],
     description:
       "Create or update a draft on a compose card: { mode: 'new'|'reply', threadId?, to?, cc?, bcc?, subject?, body?, composeCardId?, saveToGmail?, toCandidates? }. " +
       "YOU write the body. The card lands in 'review' when complete (user's Send click is the only authorization to send) or 'drafting' when recipient/subject/body are missing — that is not an error. " +
@@ -284,7 +274,6 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   },
   {
     name: "gmail_send",
-    methodAliases: ["send"],
     description:
       "Send a Gmail message immediately. Use ONLY when the user explicitly asked to send without review; otherwise use gmail_draft so the user reviews and clicks Send on the compose card. " +
       "Parameters: { to: string, cc?, bcc?, from? (must be a configured send-as alias), subject: string, body: string, threadId?, messageId? }.",
@@ -318,12 +307,10 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
     schema: SET_ATTENTION_SCHEMA,
     exposure: ["tool", "method"],
     // Tool calls default to a dry run; the setAttentionPrefs RPC does not.
-    run: (ctx, channelId, args) =>
-      ctx.handlers.setAttention(channelId, { dryRun: true, ...args }),
+    run: (ctx, channelId, args) => ctx.handlers.setAttention(channelId, { dryRun: true, ...args }),
   },
   {
     name: "gmail_snooze",
-    methodAliases: ["snooze"],
     description:
       "Snooze a thread: archive it now (archive: false to keep it) and get a reminder wake at the given time: { threadId, remindAt?: ISO datetime, inMs?: number, note?, archive? }. " +
       "Default reminder is 24h. The reminder arrives as a wake digest ('Reminder: …'). Re-snoozing a thread replaces its reminder.",
@@ -346,7 +333,6 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   },
   {
     name: "gmail_list_reminders",
-    methodAliases: ["listReminders"],
     description: "List this channel's snoozed-thread reminders.",
     schema: NO_ARGS,
     exposure: ["tool", "method"],
@@ -355,13 +341,17 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "cancelReminder",
     description: "Cancel a snoozed-thread reminder",
-    schema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { threadId: { type: "string" } },
+      required: ["threadId"],
+      additionalProperties: false,
+    },
     exposure: ["method"],
     run: (ctx, channelId, args) => ctx.handlers.cancelReminder(channelId, args),
   },
   {
     name: "gmail_get_attachment",
-    methodAliases: ["getAttachment"],
     description:
       "Fetch an email attachment and save it as a workspace file: { messageId, attachmentId, filename?, mimeType?, threadId?, saveAs? }. " +
       "Returns { saved, path, size, mimeType? } — read the saved file with normal workspace tools (e.g. to extract an invoice amount from a PDF). " +
@@ -407,7 +397,11 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "markConfigured",
     description: "Mark first-run Gmail setup complete",
-    schema: { type: "object", properties: { summary: { type: "string" } }, additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      additionalProperties: false,
+    },
     exposure: ["method"],
     run: (ctx, channelId, args) => ctx.handlers.markConfigured(channelId, args),
   },
@@ -422,7 +416,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "openThread",
     description: "Publish or focus a Gmail thread card",
-    schema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { threadId: { type: "string" } },
+      required: ["threadId"],
+      additionalProperties: false,
+    },
     exposure: ["method"],
     auth: GMAIL_READ_AUTH,
     needsRecovery: true,
@@ -438,7 +437,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "draftReply",
     description: "Create an AI-drafted reply compose card for a Gmail thread",
-    schema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: true },
+    schema: {
+      type: "object",
+      properties: { threadId: { type: "string" } },
+      required: ["threadId"],
+      additionalProperties: true,
+    },
     exposure: ["method"],
     auth: GMAIL_SEND_AS_AUTH,
     needsRecovery: true,
@@ -463,7 +467,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "archiveThread",
     description: "Archive a Gmail thread",
-    schema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { threadId: { type: "string" } },
+      required: ["threadId"],
+      additionalProperties: false,
+    },
     exposure: ["method"],
     auth: GMAIL_WRITE_AUTH,
     needsRecovery: true,
@@ -472,7 +481,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "markRead",
     description: "Mark a Gmail thread read",
-    schema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { threadId: { type: "string" } },
+      required: ["threadId"],
+      additionalProperties: false,
+    },
     exposure: ["method"],
     auth: GMAIL_WRITE_AUTH,
     needsRecovery: true,
@@ -482,7 +496,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
     name: "resolveContact",
     description:
       "Resolve a person name to email candidates with interaction evidence (history first, Google contacts fallback)",
-    schema: { type: "object", properties: { name: { type: "string" }, limit: { type: "number" } }, required: ["name"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { name: { type: "string" }, limit: { type: "number" } },
+      required: ["name"],
+      additionalProperties: false,
+    },
     exposure: ["method"],
     auth: GMAIL_CONTACTS_AUTH,
     needsRecovery: true,
@@ -491,14 +510,22 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "contactSuggest",
     description: "Fast typeahead over the derived address book (no network)",
-    schema: { type: "object", properties: { prefix: { type: "string" }, limit: { type: "number" } }, additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { prefix: { type: "string" }, limit: { type: "number" } },
+      additionalProperties: false,
+    },
     exposure: ["method"],
     run: (ctx, channelId, args) => ctx.handlers.contactSuggest(channelId, args),
   },
   {
     name: "listActionableThreads",
     description: "Return current actionable Gmail threads",
-    schema: { type: "object", properties: { limit: { type: "number" } }, additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { limit: { type: "number" } },
+      additionalProperties: false,
+    },
     exposure: ["method"],
     needsRecovery: true,
     run: (ctx, channelId, args) =>
@@ -507,7 +534,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "setPollInterval",
     description: "Configure Gmail polling interval",
-    schema: { type: "object", properties: { pollIntervalMs: { type: "number" } }, required: ["pollIntervalMs"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { pollIntervalMs: { type: "number" } },
+      required: ["pollIntervalMs"],
+      additionalProperties: false,
+    },
     exposure: ["method"],
     run: (ctx, channelId, args) => ctx.handlers.setPollInterval(channelId, args),
   },
@@ -524,7 +556,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
     name: "gmail_query",
     description:
       "Agent API: search threads (cache-first). Returns { source, query, count, results: [{ threadId, subject, from, fromEmail, snippet, unread, date }] }.",
-    schema: { type: "object", properties: { q: { type: "string" }, maxResults: { type: "number" } }, required: ["q"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { q: { type: "string" }, maxResults: { type: "number" } },
+      required: ["q"],
+      additionalProperties: false,
+    },
     exposure: ["participant"],
     auth: GMAIL_READ_AUTH,
     needsRecovery: true,
@@ -533,7 +570,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   {
     name: "gmail_getThread",
     description: "Agent API: fetch sanitized thread contents",
-    schema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { threadId: { type: "string" } },
+      required: ["threadId"],
+      additionalProperties: false,
+    },
     exposure: ["participant"],
     auth: GMAIL_READ_AUTH,
     run: (ctx, channelId, args) => ctx.participantApi.getThread(channelId, args),
@@ -545,7 +587,8 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
     exposure: ["participant"],
     auth: GMAIL_READ_AUTH,
     needsRecovery: true,
-    run: (ctx, channelId) => ctx.participantApi.getOverview(channelId, ctx.queuedWakeCount(channelId)),
+    run: (ctx, channelId) =>
+      ctx.participantApi.getOverview(channelId, ctx.queuedWakeCount(channelId)),
   },
   {
     name: "gmail_requestDraft",
@@ -560,7 +603,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
     name: "gmail_resolveContact",
     description:
       "Agent API: resolve a person name to email candidates with interaction evidence (read-only)",
-    schema: { type: "object", properties: { name: { type: "string" }, limit: { type: "number" } }, required: ["name"], additionalProperties: false },
+    schema: {
+      type: "object",
+      properties: { name: { type: "string" }, limit: { type: "number" } },
+      required: ["name"],
+      additionalProperties: false,
+    },
     exposure: ["participant"],
     auth: GMAIL_CONTACTS_AUTH,
     needsRecovery: true,
@@ -568,16 +616,12 @@ export const GMAIL_OPERATIONS: GmailOperation[] = [
   },
 ];
 
-/** Dispatch index: canonical names + aliases → operation. */
+/** Dispatch index keyed by the exact current operation names. */
 export function buildOperationIndex(): Map<string, GmailOperation> {
   const index = new Map<string, GmailOperation>();
   for (const op of GMAIL_OPERATIONS) {
     if (index.has(op.name)) throw new Error(`duplicate gmail operation: ${op.name}`);
     index.set(op.name, op);
-    for (const alias of op.methodAliases ?? []) {
-      if (index.has(alias)) throw new Error(`duplicate gmail operation alias: ${alias}`);
-      index.set(alias, op);
-    }
   }
   return index;
 }

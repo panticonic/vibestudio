@@ -418,6 +418,11 @@ class TestGmailAgentWorker extends GmailAgentWorker {
 
   runMigration(fromVersion = 1) {
     this.migrate(fromVersion, (this.constructor as typeof GmailAgentWorker).schemaVersion);
+    this.createTables();
+  }
+
+  bootstrapIdentityForTest(): void {
+    this.ensureIdentity();
   }
 }
 
@@ -580,8 +585,13 @@ describe("GmailAgentWorker", () => {
   });
 
   it("forks cloned agent state at genesis when no prior trajectory event was published", async () => {
-    const { instance } = await createTestDO(TestGmailAgentWorker, { __objectKey: "agent-clone" });
+    const { instance } = await createTestDO(TestGmailAgentWorker, {
+      __objectKey: "agent-clone",
+      WORKER_SOURCE: "workers/gmail-agent",
+      WORKER_CLASS_NAME: "GmailAgentWorker",
+    });
     const worker = instance as TestGmailAgentWorker;
+    worker.bootstrapIdentityForTest();
     worker.seedSubscription("old-channel", "agent-gmail");
 
     await worker.postClone("parent-agent", "new-channel", "old-channel", 12, "ctx-forked");
@@ -598,7 +608,10 @@ describe("GmailAgentWorker", () => {
       atSeq: 0,
     });
     expect(worker.subscriptionRows()).toEqual([
-      { channel_id: "new-channel", participant_id: "do:unknown:unknown:agent-clone" },
+      {
+        channel_id: "new-channel",
+        participant_id: "do:workers/gmail-agent:GmailAgentWorker:agent-clone",
+      },
     ]);
   });
 
@@ -904,14 +917,12 @@ describe("GmailAgentWorker", () => {
     expect(gmailAlarms).toEqual([]);
   });
 
-  it("preserves durable user state across schema migrations while rebuilding caches", async () => {
+  it("resets Gmail state to the one current schema without translating prior layouts", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
     worker.seedSubscription();
     worker.seedRepliedSender("ch-1", "friend@example.com");
 
-    // A configured channel with a credential pin, saved prefs, people, and
-    // populated caches.
     await worker.onMethodCall("ch-1", "call-1", "gmail_set_attention", {
       preferences: "Invoices and urgent mail.",
       markConfigured: true,
@@ -925,63 +936,23 @@ describe("GmailAgentWorker", () => {
     await worker.onMethodCall("ch-1", "call-3", "checkNow", {});
     expect(worker.rows(`SELECT * FROM gmail_threads`)).not.toEqual([]);
     const turnsBefore = worker.agentInitiatedTurns.length;
+    worker.execSqlForTest(`CREATE TABLE gmail_retired_shape (value TEXT)`);
 
     worker.runMigration(1);
 
-    // Caches rebuilt empty; durable state intact.
     expect(worker.rows(`SELECT * FROM gmail_threads`)).toEqual([]);
     expect(worker.rows(`SELECT * FROM gmail_triage_queue`)).toEqual([]);
-    expect(worker.channelStateRow("ch-1")).toMatchObject({
-      setup_status: "configured",
-      credential_id: "google-cred-7",
-    });
-    await expect(worker.getAttentionPrefs("ch-1")).resolves.toMatchObject({
-      preferencesText: "Invoices and urgent mail.",
-    });
+    expect(worker.channelStateRow("ch-1")).toBeUndefined();
+    expect(worker.rows(`SELECT * FROM gmail_attention_prefs`)).toEqual([]);
+    expect(worker.rows(`SELECT * FROM gmail_replied_senders`)).toEqual([]);
     expect(
-      worker.rows(`SELECT email FROM gmail_replied_senders WHERE channel_id = ?`, "ch-1")
-    ).toEqual([{ email: "friend@example.com" }]);
+      worker.rows(`SELECT name FROM sqlite_master WHERE name = 'gmail_retired_shape'`)
+    ).toEqual([]);
 
-    // A configured channel does not get re-onboarded after migration.
     await (
       worker as unknown as { startSetupTurnIfNeeded(channelId: string): Promise<void> }
     ).startSetupTurnIfNeeded("ch-1");
-    expect(worker.agentInitiatedTurns.length).toBe(turnsBefore);
-  });
-
-  it("folds legacy rule-engine state into preference text exactly once", async () => {
-    const { instance } = await createTestDO(TestGmailAgentWorker);
-    const worker = instance as TestGmailAgentWorker;
-    worker.seedSubscription();
-    // Simulate a pre-rearchitecture object: legacy rules table present.
-    worker.execSqlForTest(
-      `CREATE TABLE IF NOT EXISTS gmail_attention_rules (channel_id TEXT PRIMARY KEY, rules_json TEXT NOT NULL, updated_at INTEGER NOT NULL)`
-    );
-    worker.execSqlForTest(
-      `INSERT OR REPLACE INTO gmail_attention_rules (channel_id, rules_json, updated_at) VALUES (?, ?, ?)`,
-      "ch-1",
-      JSON.stringify({
-        version: 1,
-        directives: [
-          { name: "VIP domain", description: "Wake for mail from *@vip.example", enabled: true },
-          { name: "Disabled rule", enabled: false },
-        ],
-      }),
-      Date.now()
-    );
-
-    worker.runMigration(1);
-
-    const migrated = await worker.getAttentionPrefs("ch-1");
-    expect(migrated.preferencesText).toContain("Wake for mail from *@vip.example");
-    expect(migrated.preferencesText).not.toContain("Disabled rule");
-
-    // Saved preferences are never clobbered by a later migration pass.
-    await worker.setAttentionPrefs("ch-1", { preferences: "Only my team." });
-    worker.runMigration(1);
-    await expect(worker.getAttentionPrefs("ch-1")).resolves.toMatchObject({
-      preferencesText: "Only my team.",
-    });
+    expect(worker.agentInitiatedTurns.length).toBe(turnsBefore + 1);
   });
 
   it("saves natural-language attention preferences and reads them back", async () => {
@@ -1157,7 +1128,11 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    const result = await worker.onMethodCall("ch-1", "call-1", "getThread", { threadId: "thr-1" });
+    const result = await worker.onMethodCall("ch-1", "call-1", "gmail_read", {
+      threadId: "thr-1",
+      format: "full",
+      includeAttachmentList: true,
+    });
 
     expect(result.isError).toBeUndefined();
     expect(result.result).toMatchObject({
@@ -1192,7 +1167,7 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    const result = await worker.onMethodCall("ch-1", "call-1", "send", {
+    const result = await worker.onMethodCall("ch-1", "call-1", "gmail_send", {
       to: "b@example.com",
       subject: "Re: Question",
       body: "Done",
@@ -1210,7 +1185,7 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    const result = await worker.onMethodCall("ch-1", "call-1", "send", {
+    const result = await worker.onMethodCall("ch-1", "call-1", "gmail_send", {
       threadId: "thr-1",
       body: "Inline reply",
     });
@@ -1526,7 +1501,7 @@ describe("GmailAgentWorker", () => {
       { sendAsEmail: "support@example.com", displayName: "Support" },
     ]);
 
-    const ok = await worker.onMethodCall("ch-1", "call-1", "send", {
+    const ok = await worker.onMethodCall("ch-1", "call-1", "gmail_send", {
       to: "b@example.com",
       from: "support@example.com",
       subject: "Hello",
@@ -1537,7 +1512,7 @@ describe("GmailAgentWorker", () => {
       expect.objectContaining({ from: "Support <support@example.com>" })
     );
 
-    const bad = await worker.onMethodCall("ch-1", "call-2", "send", {
+    const bad = await worker.onMethodCall("ch-1", "call-2", "gmail_send", {
       to: "b@example.com",
       from: "spoofed@evil.example",
       subject: "Hello",

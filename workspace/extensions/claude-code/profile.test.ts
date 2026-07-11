@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { toServerBaseUrl } from "./profile.js";
 
 describe("toServerBaseUrl", () => {
-  it("normalizes legacy rpc endpoint URLs to the HTTP server base", () => {
+  it("normalizes websocket marker URLs to the HTTP server base", () => {
     expect(toServerBaseUrl("ws://127.0.0.1:5000/rpc")).toBe("http://127.0.0.1:5000");
     expect(toServerBaseUrl("wss://host.example/_workspace/dev/rpc")).toBe(
       "https://host.example/_workspace/dev"

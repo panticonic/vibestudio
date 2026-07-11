@@ -15,12 +15,11 @@ import type {
   ChannelReplayEnvelope,
   MessageTypeDefinition,
   RegisterMessageTypeInput,
+  ChannelMember,
+  ChannelInvite,
+  ChannelPresenceEntry,
 } from "./types.js";
-import type {
-  EventStreamItem,
-  EventStreamOptions,
-  MethodCallHandle,
-} from "./protocol-types.js";
+import type { EventStreamItem, EventStreamOptions, MethodCallHandle } from "./protocol-types.js";
 
 /**
  * PubSub client interface.
@@ -74,6 +73,18 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
   /** Update the channel config (merges with existing config). */
   updateChannelConfig(config: Partial<ChannelConfig>): Promise<ChannelConfig>;
 
+  /** Add/remove/list durable human membership for this channel. */
+  addMember(userId: string): Promise<ChannelMember & { alreadyMember: boolean }>;
+  removeMember(userId: string): Promise<{ removed: boolean }>;
+  listMembers(): Promise<ChannelMember[]>;
+
+  /** Current-channel invite inbox and acknowledgement for the authenticated user. */
+  listInvitesForMe(): Promise<ChannelInvite[]>;
+  acknowledgeInvite(): Promise<boolean>;
+
+  /** Connected and retained offline human presence for this channel. */
+  getChannelPresence(): Promise<{ entries: ChannelPresenceEntry[]; generatedAt: number }>;
+
   /** Register channel config change handler. Returns unsubscribe function. */
   onConfigChange(handler: (config: ChannelConfig) => void): () => void;
 
@@ -105,20 +116,33 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
   getMessageType(typeId: string): Promise<MessageTypeDefinition | null>;
 
   /** Register or replace a custom message type. */
-  registerMessageType(input: RegisterMessageTypeInput, options?: { idempotencyKey?: string }): Promise<number | undefined>;
+  registerMessageType(
+    input: RegisterMessageTypeInput,
+    options?: { idempotencyKey?: string }
+  ): Promise<number | undefined>;
 
   /** Clear a custom message type registration. */
-  clearMessageType(typeId: string, options?: { idempotencyKey?: string }): Promise<number | undefined>;
+  clearMessageType(
+    typeId: string,
+    options?: { idempotencyKey?: string }
+  ): Promise<number | undefined>;
 
   /** Publish a custom message instance and return its message id and pubsub id. */
-  publishCustomMessage(input: {
-    typeId: string;
-    initialState?: unknown;
-    displayMode?: "inline" | "row";
-  }, options?: { idempotencyKey?: string }): Promise<{ messageId: string; pubsubId: number | undefined }>;
+  publishCustomMessage(
+    input: {
+      typeId: string;
+      initialState?: unknown;
+      displayMode?: "inline" | "row";
+    },
+    options?: { idempotencyKey?: string }
+  ): Promise<{ messageId: string; pubsubId: number | undefined }>;
 
   /** Publish an update for a custom message instance. */
-  updateCustomMessage(messageId: string, update: unknown, options?: { idempotencyKey?: string }): Promise<number | undefined>;
+  updateCustomMessage(
+    messageId: string,
+    update: unknown,
+    options?: { idempotencyKey?: string }
+  ): Promise<number | undefined>;
 
   /**
    * Async iterator for typed protocol events.
@@ -190,7 +214,12 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
     providerId: string,
     methodName: string,
     args?: unknown,
-    options?: { signal?: AbortSignal; invocationId?: string; transportCallId?: string; turnId?: string }
+    options?: {
+      signal?: AbortSignal;
+      invocationId?: string;
+      transportCallId?: string;
+      turnId?: string;
+    }
   ): MethodCallHandle;
 
   /** Cancel a specific in-flight method dispatch by transport call id. */

@@ -42,7 +42,6 @@ vi.mock("./profile.js", () => ({
   ),
   removeLaunchProfile: vi.fn(async () => {}),
   toServerBaseUrl: (u: string) => u.replace(/^ws/, "http").replace(/\/rpc$/, ""),
-  toWsRpcUrl: (u: string) => u.replace(/^http/, "ws"),
 }));
 
 import { activate } from "./index.js";
@@ -292,9 +291,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       VIBESTUDIO_SUBAGENT_RUN_ID: "run-1",
       VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: "home-chan",
     });
-    expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain(
-      "## Subagent Operating Contract"
-    );
+    expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain("## Subagent Operating Contract");
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain(
       "Only `complete` ends this subagent run"
     );
@@ -373,9 +370,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     };
     const result = await api.launchSubagent({ channelId: CHANNEL, task: "audit", subagent });
 
-    const exitHandler = childProcessMock.child.on.mock.calls.find(
-      (c) => c[0] === "exit"
-    )![1] as (code: number | null, signal: string | null) => void;
+    const exitHandler = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
+      code: number | null,
+      signal: string | null
+    ) => void;
 
     // The session died on its own → the vessel is told so the run settles.
     exitHandler(1, null);
@@ -389,9 +387,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     childProcessMock.child.on.mockClear();
     await api.launchSubagent({ channelId: CHANNEL, task: "audit again", subagent });
     await api.release({ entityId: result.entityId });
-    const exitHandler2 = childProcessMock.child.on.mock.calls.find(
-      (c) => c[0] === "exit"
-    )![1] as (code: number | null, signal: string | null) => void;
+    const exitHandler2 = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
+      code: number | null,
+      signal: string | null
+    ) => void;
     exitHandler2(null, "SIGTERM");
     expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit")).toBeUndefined();
   });

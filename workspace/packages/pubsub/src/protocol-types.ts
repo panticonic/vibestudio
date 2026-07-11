@@ -16,8 +16,11 @@ import type {
   ChannelConfig,
   ChannelReplayEnvelope,
 } from "./types.js";
-import { AGENTIC_EVENT_PAYLOAD_KIND,
-  CREDENTIAL_CONNECT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
+import {
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  CREDENTIAL_CONNECT_PAYLOAD_KIND,
+  type AgenticEvent,
+} from "@workspace/agentic-protocol";
 import type { z } from "zod";
 
 export interface AgentBuildError {
@@ -32,14 +35,7 @@ export interface AgentBuildError {
 }
 
 // Re-export types from pubsub for convenience
-export type {
-  Attachment,
-  AttachmentInput,
-  ChannelConfig,
-  RosterUpdate,
-  RosterChange,
-  LeaveReason,
-};
+export type { Attachment, AttachmentInput, ChannelConfig, RosterUpdate, RosterChange, LeaveReason };
 
 /** JSON Schema representation for method parameters/returns. */
 export type JsonSchema = Record<string, unknown>;
@@ -61,10 +57,11 @@ export interface AgenticParticipantMetadata extends ParticipantMetadata {
    */
   type: string;
   /**
-   * Unique handle for @-mentions (e.g., "user", "claude", "headless").
-   * Must be unique within the channel. Conflicts cause connection errors.
+   * Unique channel handle for non-human providers (agents/headless tools).
+   * Human handles are account profiles resolved by participant id and are not
+   * client-supplied participant metadata.
    */
-  handle: string;
+  handle?: string;
   /** Methods this participant provides (auto-populated from ConnectOptions.methods) */
   methods?: MethodAdvertisement[];
 }
@@ -134,8 +131,7 @@ export class ValidationError extends Error {
 /**
  * Union type for all incoming message types.
  */
-export type IncomingMessage =
-  | IncomingErrorMessage;
+export type IncomingMessage = IncomingErrorMessage;
 
 /**
  * Union type for all incoming event types.
@@ -490,7 +486,9 @@ export interface MethodDefinition<TArgs extends z.ZodTypeAny = z.ZodTypeAny, TRe
 /**
  * Options for connecting to an agentic messaging channel.
  */
-export interface AgenticConnectOptions<T extends AgenticParticipantMetadata = AgenticParticipantMetadata> {
+export interface AgenticConnectOptions<
+  T extends AgenticParticipantMetadata = AgenticParticipantMetadata,
+> {
   /** Pubsub server URL */
   serverUrl: string;
   /** Authentication token */
@@ -618,7 +616,14 @@ export interface AgenticClient<T extends AgenticParticipantMetadata = AgenticPar
     providerId: string,
     methodName: string,
     args: unknown,
-    options?: { signal?: AbortSignal; validateArgs?: z.ZodTypeAny; invocationId?: string; transportCallId?: string; turnId?: string; timeoutMs?: number }
+    options?: {
+      signal?: AbortSignal;
+      validateArgs?: z.ZodTypeAny;
+      invocationId?: string;
+      transportCallId?: string;
+      turnId?: string;
+      timeoutMs?: number;
+    }
   ): MethodCallHandle;
   cancelMethodCall(callId: string): Promise<void>;
 

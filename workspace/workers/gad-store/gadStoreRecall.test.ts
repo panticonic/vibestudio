@@ -423,17 +423,25 @@ describe("GadWorkspaceDO — recall dedup / touches / prune / turn ordinal", () 
   });
 
   it("trajectory_turns.ordinal is stamped per branch; currentTurnOrdinal reads the max", async () => {
-    await gad.call("appendTrajectoryBatch", {
-      trajectoryId: "traj-1",
-      branchId: "main",
+    await gad.call("appendLogEvent", {
+      logId: "traj-1",
+      head: "main",
+      logKind: "trajectory",
       owner,
-      events: [1, 2, 3].map((n) => ({
-        eventId: `turn-opened-${n}`,
-        event: event("turn.opened", {
+      events: [1, 2, 3].map((n) => {
+        const trajectoryEvent = event("turn.opened", {
           turnId: `turn-${n}` as never,
           payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: `turn ${n}` },
-        }),
-      })),
+        });
+        return {
+          envelopeId: `turn-opened-${n}`,
+          actor: trajectoryEvent.actor,
+          payloadKind: trajectoryEvent.kind,
+          payload: trajectoryEvent.payload,
+          causality: { turnId: trajectoryEvent.turnId },
+          appendedAt: trajectoryEvent.createdAt,
+        };
+      }),
     });
 
     const ordinals = (

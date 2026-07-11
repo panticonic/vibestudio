@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Box,
@@ -27,7 +27,7 @@ import {
   TrashIcon,
   UploadIcon,
 } from "@radix-ui/react-icons";
-import { blobstore, extensions, gad } from "@workspace/runtime";
+import { blobstore, extensions, gad, rpc, workspace } from "@workspace/runtime";
 import {
   formatRelativeTime,
   type GitUpstreamState,
@@ -75,6 +75,181 @@ function asText(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+// ---------------------------------------------------------------------------
+// Governance (WP5) — read-only provenance timeline.
+//
+// Two halves, unioned read-only (WP5 §7): the GAD agent-tool-approval
+// projection (`trajectory_approvals`, owned here in userland) and the host log
+// of approval-queue resolutions + membership events (surfaced by the host
+// `governance.list` read RPC, WP5a). Neither store writes the other; the panel
+// only reads. Failures remain explicit so missing provenance is never mistaken
+// for an empty governance history.
+// ---------------------------------------------------------------------------
+
+/** The acting/resolving ACCOUNT (userId+handle) the GAD projector hoists onto
+ *  an approval provenance row (WP5 §5). Deliberately distinct from the actor's
+ *  semantic `kind` (which is never rewritten to "user"): the account is WHO
+ *  resolved; the kind is the authoring role. */
+interface ApprovalAccount {
+  userId: string;
+  handle?: string;
+}
+
+interface ParsedApprovalActor {
+  kind: string;
+  id: string;
+  account: ApprovalAccount | null;
+}
+
+/** Parse a `requested_by_json` / `resolved_by_json` cell into the raw actor
+ *  (kind/id) plus the explicit canonical account field. A malformed persisted
+ *  row is an invariant violation, not an alternate UI input shape. */
+function parseApprovalActor(value: unknown): ParsedApprovalActor | null {
+  if (value == null) return null;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("approval actor row must be canonical JSON");
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("approval actor row must be an object");
+  }
+  const record = parsed as Record<string, unknown>;
+  const kind = record["kind"];
+  const id = record["id"];
+  if (typeof kind !== "string" || kind.length === 0 || typeof id !== "string" || id.length === 0) {
+    throw new Error("approval actor row requires kind and id");
+  }
+  if (!("account" in record)) throw new Error("approval actor row requires account");
+  if (record["account"] == null) return { kind, id, account: null };
+  if (typeof record["account"] !== "object" || Array.isArray(record["account"])) {
+    throw new Error("approval actor account must be an object or null");
+  }
+  const rawAccount = record["account"] as Record<string, unknown>;
+  const userId = rawAccount["userId"];
+  const handle = rawAccount["handle"];
+  if (typeof userId !== "string" || userId.length === 0) {
+    throw new Error("approval actor account requires userId");
+  }
+  if (handle !== undefined && typeof handle !== "string") {
+    throw new Error("approval actor account handle must be a string");
+  }
+  return { kind, id, account: { userId, ...(handle ? { handle } : {}) } };
+}
+
+/** Primary "who" label — prefers the account handle, then userId, then the raw
+ *  actor `kind:id` for canonical system resolutions. */
+function formatApprovalWho(actor: ParsedApprovalActor | null): string {
+  if (!actor) return "—";
+  if (actor.account?.handle) return `@${actor.account.handle}`;
+  if (actor.account?.userId) return actor.account.userId;
+  return `${actor.kind}:${actor.id}`;
+}
+
+function approvalStatusColor(status: string): ComponentProps<typeof Badge>["color"] {
+  if (status === "granted") return "green";
+  if (status === "denied") return "red";
+  return "gray";
+}
+
+/** Render either a millisecond epoch (host records) or an ISO string (GAD
+ *  `updated_at`) as a relative time. */
+function formatWhen(value: unknown): string {
+  if (typeof value === "number") return formatRelativeTime(value);
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? value : formatRelativeTime(ms);
+  }
+  return "—";
+}
+
+/** A record from the host-owned governance log (WP5 §5/§5.1): an approval
+ *  provenance record or a membership-governance record. The canonical types
+ *  live host-side with the `governance.list` RPC — the panel only reads them,
+ *  so the shape stays loose here. */
+type HostGovernanceRow = Record<string, unknown>;
+
+interface HostGovernanceEntry {
+  when: unknown;
+  category: string;
+  summary: string;
+  actor: string;
+}
+
+function accountLabel(value: unknown): string {
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record["handle"] === "string") return `@${record["handle"]}`;
+    if (typeof record["userId"] === "string") return record["userId"];
+  }
+  return "—";
+}
+
+/** Flatten either host record kind into one timeline row. */
+function describeHostGovernanceRow(row: HostGovernanceRow): HostGovernanceEntry {
+  if (row["kind"] === "membership") {
+    const role = typeof row["role"] === "string" ? ` as ${row["role"]}` : "";
+    return {
+      when: row["at"],
+      category: "membership",
+      summary: `${String(row["op"] ?? "membership")} → ${accountLabel(row["target"])}${role}`,
+      actor: accountLabel(row["actor"]),
+    };
+  }
+  const decision =
+    typeof row["decision"] === "string"
+      ? row["decision"]
+      : row["granted"] === true
+        ? "granted"
+        : "resolved";
+  const approvalKind = String(row["approvalKind"] ?? "approval");
+  const resource =
+    row["resource"] && typeof row["resource"] === "object"
+      ? (row["resource"] as Record<string, unknown>)
+      : undefined;
+  const resourceDetail = resource
+    ? ["capability", "key", "value", "credentialId", "subjectId"]
+        .map((key) => resource[key])
+        .find((value): value is string => typeof value === "string" && value.length > 0)
+    : undefined;
+  const requestedBy =
+    row["requestedBy"] && typeof row["requestedBy"] === "object"
+      ? (row["requestedBy"] as Record<string, unknown>)
+      : undefined;
+  const requester =
+    typeof requestedBy?.["callerId"] === "string" ? ` for ${requestedBy["callerId"]}` : "";
+  return {
+    when: row["resolvedAt"],
+    category: approvalKind,
+    summary: `${approvalKind} · ${decision}${resourceDetail ? ` · ${resourceDetail}` : ""}${requester}`,
+    actor: accountLabel(row["resolvedBy"]),
+  };
+}
+
+function hostGovernanceRowKey(row: HostGovernanceRow, index: number): string {
+  if (row["kind"] === "membership") {
+    return `membership:${asText(row["workspaceId"])}:${asText(row["op"])}:${asText(row["at"])}:${accountLabel(row["target"])}`;
+  }
+  const approvalId = asText(row["approvalId"]);
+  return approvalId
+    ? `approval:${approvalId}`
+    : `approval:${asText(row["workspaceId"])}:${asText(row["resolvedAt"])}:${index}`;
+}
+
+/**
+ * Host-log half of the unified governance timeline (WP5 §7). The query is
+ * always scoped to the active workspace and bounded. Read-only (INV-2).
+ */
+async function fetchHostGovernance(workspaceId: string): Promise<HostGovernanceRow[]> {
+  const result = await rpc.call<unknown>("main", "governance.list", [
+    { filter: { workspaceId }, limit: 200 },
+  ]);
+  if (Array.isArray(result)) return result as HostGovernanceRow[];
+  if (typeof result === "object" && Array.isArray((result as { records?: unknown }).records)) {
+    return (result as { records: HostGovernanceRow[] }).records;
+  }
+  throw new Error("governance.list returned an invalid response");
 }
 
 function DataTable({ rows, columns }: { rows: Row[]; columns: string[] }) {
@@ -125,7 +300,6 @@ function formatGitState(row: GitStatusRow): string {
   if (row.state === "diverged") return `diverged +${row.aheadBy}/+${row.behindBy}`;
   return row.state;
 }
-
 
 function GitTab({
   rows,
@@ -483,6 +657,234 @@ function CompareView({
   );
 }
 
+/** One approval actor cell: the account handle/userId on top, the semantic
+ *  actor kind (and id when an account is also present) below — surfacing the
+ *  WP5 §5 distinction that the account is not the same as `actor.kind`. */
+function ActorCell({ actor }: { actor: ParsedApprovalActor | null }) {
+  if (!actor) {
+    return (
+      <Text size="1" color="gray">
+        —
+      </Text>
+    );
+  }
+  return (
+    <Flex direction="column" style={{ minWidth: 0 }}>
+      <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+        {formatApprovalWho(actor)}
+      </Text>
+      {actor.kind ? (
+        <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+          {actor.kind}
+          {actor.account && actor.id ? ` · ${actor.id}` : ""}
+        </Text>
+      ) : null}
+    </Flex>
+  );
+}
+
+/**
+ * Read-only Governance timeline (WP5 §7). Top section is the GAD agent-tool
+ * approval projection (owned in this DO); bottom section is the host log of
+ * approval-queue resolutions + membership events, unioned in from the host
+ * `governance.list` RPC. Each source reports its own failure so a partial or
+ * unavailable timeline can never look like a genuinely empty history.
+ */
+function GovernanceTab({
+  approvals,
+  hostRecords,
+  loading,
+  loaded,
+  gadError,
+  hostError,
+  onRefresh,
+}: {
+  approvals: Row[];
+  hostRecords: HostGovernanceRow[];
+  loading: boolean;
+  loaded: boolean;
+  gadError: string | null;
+  hostError: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <Flex direction="column" gap="4" style={{ minWidth: 0 }}>
+      <Flex align="center" justify="between" gap="2" wrap="wrap">
+        <Text size="2" color="gray">
+          Read-only provenance — who approved what, and who changed membership.
+        </Text>
+        <Button
+          size="1"
+          variant="soft"
+          color="gray"
+          onClick={onRefresh}
+          disabled={loading}
+          aria-busy={loading}
+        >
+          <ReloadIcon /> {loading ? "Refreshing…" : "Refresh"}
+        </Button>
+      </Flex>
+
+      {loading && !loaded ? (
+        <Text size="2" color="gray">
+          Loading governance history…
+        </Text>
+      ) : null}
+
+      <Flex direction="column" gap="2" style={{ minWidth: 0 }}>
+        <Heading size="2">Agent tool-call approvals</Heading>
+        <Text size="1" color="gray">
+          GAD trajectory projection ({approvals.length}).
+        </Text>
+        {gadError ? (
+          <Box
+            role="alert"
+            style={{
+              border: "1px solid var(--red-a7)",
+              borderRadius: 6,
+              background: "var(--red-a2)",
+              padding: "10px 12px",
+            }}
+          >
+            <Text size="2" color="red">
+              Could not load agent approval provenance: {gadError}
+              {approvals.length > 0 ? " Showing the last loaded records." : ""}
+            </Text>
+          </Box>
+        ) : null}
+        {approvals.length === 0 && loaded && !gadError ? (
+          <Text color="gray" size="2">
+            No agent approvals recorded.
+          </Text>
+        ) : approvals.length > 0 ? (
+          <Table.Root size="1" variant="surface">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeaderCell>Branch</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Approval</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Requested by</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Resolved by</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {approvals.map((row) => {
+                const status = asText(row["status"]);
+                return (
+                  <Table.Row
+                    key={`${asText(row["log_id"])}:${asText(row["head"])}:${asText(row["approval_id"])}`}
+                  >
+                    <Table.Cell>
+                      <Flex direction="column">
+                        <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                          {asText(row["head"]) || "—"}
+                        </Text>
+                        <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                          {asText(row["log_id"]) || "—"}
+                        </Text>
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex direction="column">
+                        <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                          {asText(row["approval_id"])}
+                        </Text>
+                        {row["invocation_id"] ? (
+                          <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                            invocation {asText(row["invocation_id"])}
+                          </Text>
+                        ) : null}
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Badge color={approvalStatusColor(status)}>{status || "—"}</Badge>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <ActorCell actor={parseApprovalActor(row["requested_by_json"])} />
+                    </Table.Cell>
+                    <Table.Cell>
+                      <ActorCell actor={parseApprovalActor(row["resolved_by_json"])} />
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                        {formatWhen(row["updated_at"])}
+                      </Text>
+                    </Table.Cell>
+                  </Table.Row>
+                );
+              })}
+            </Table.Body>
+          </Table.Root>
+        ) : null}
+      </Flex>
+
+      <Flex direction="column" gap="2" style={{ minWidth: 0 }}>
+        <Heading size="2">Host approvals &amp; membership</Heading>
+        {hostError ? (
+          <Box
+            role="alert"
+            style={{
+              border: "1px solid var(--red-a7)",
+              borderRadius: 6,
+              background: "var(--red-a2)",
+              padding: "10px 12px",
+            }}
+          >
+            <Text size="2" color="red">
+              Could not load workspace approval and membership provenance: {hostError}
+              {hostRecords.length > 0 ? " Showing the last loaded records." : ""}
+            </Text>
+          </Box>
+        ) : null}
+        {hostRecords.length === 0 && loaded && !hostError ? (
+          <Text color="gray" size="2">
+            No host governance records.
+          </Text>
+        ) : hostRecords.length > 0 ? (
+          <Table.Root size="1" variant="surface">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeaderCell>Category</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Event</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>Actor</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell>When</Table.ColumnHeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {hostRecords.map((row, index) => {
+                const entry = describeHostGovernanceRow(row);
+                return (
+                  <Table.Row key={hostGovernanceRowKey(row, index)}>
+                    <Table.Cell>
+                      <Badge color="gray">{entry.category}</Badge>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Text size="1" style={{ whiteSpace: "nowrap" }}>
+                        {entry.summary}
+                      </Text>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                        {entry.actor}
+                      </Text>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                        {formatWhen(entry.when)}
+                      </Text>
+                    </Table.Cell>
+                  </Table.Row>
+                );
+              })}
+            </Table.Body>
+          </Table.Root>
+        ) : null}
+      </Flex>
+    </Flex>
+  );
+}
+
 function App() {
   const appearance = usePanelTheme();
   const appTheme = useAppTheme();
@@ -536,6 +938,13 @@ function App() {
   const [invocations, setInvocations] = useState<Row[]>([]);
   const [status, setStatus] = useState<Row[]>([]);
   const [integrity, setIntegrity] = useState<Row[]>([]);
+  const [govApprovals, setGovApprovals] = useState<Row[]>([]);
+  const [hostGovernance, setHostGovernance] = useState<HostGovernanceRow[]>([]);
+  const [govLoading, setGovLoading] = useState(false);
+  const [govLoaded, setGovLoaded] = useState(false);
+  const [govGadError, setGovGadError] = useState<string | null>(null);
+  const [govHostError, setGovHostError] = useState<string | null>(null);
+  const governanceLoadSeq = useRef(0);
   const [gitRows, setGitRows] = useState<GitStatusRow[]>([]);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitPendingRepo, setGitPendingRepo] = useState<string | null>(null);
@@ -588,6 +997,51 @@ function App() {
 
   async function invokeGitBridge<T>(method: string, args: unknown[] = []): Promise<T> {
     return (await extensions.invoke(GIT_BRIDGE_EXTENSION, method, args)) as T;
+  }
+
+  // Governance timeline (WP5 §7): the GAD agent-approval projection plus the
+  // host log half (approval-queue resolutions + membership) via the host RPC
+  // seam. Loaded lazily when the tab is opened (see effect below) and on the
+  // tab's own Refresh — it is workspace-wide provenance, not branch-scoped.
+  async function loadGovernance() {
+    const seq = ++governanceLoadSeq.current;
+    setGovLoading(true);
+    setGovGadError(null);
+    setGovHostError(null);
+    const [approvalsResult, hostResult] = await Promise.allSettled([
+      Promise.resolve().then(() =>
+        gad.query(
+          `SELECT approval_id, invocation_id, status, requested_by_json, resolved_by_json,
+                log_id, head, requested_event_id, resolved_event_id, updated_at
+           FROM trajectory_approvals
+          ORDER BY updated_at DESC
+          LIMIT 200`
+        )
+      ),
+      Promise.resolve()
+        .then(() => workspace.getInfo())
+        .then((info) => fetchHostGovernance(info.config.id)),
+    ]);
+    if (seq !== governanceLoadSeq.current) return;
+
+    if (approvalsResult.status === "fulfilled") {
+      setGovApprovals(approvalsResult.value.rows);
+    } else {
+      setGovGadError(
+        approvalsResult.reason instanceof Error
+          ? approvalsResult.reason.message
+          : String(approvalsResult.reason)
+      );
+    }
+    if (hostResult.status === "fulfilled") {
+      setHostGovernance(hostResult.value);
+    } else {
+      setGovHostError(
+        hostResult.reason instanceof Error ? hostResult.reason.message : String(hostResult.reason)
+      );
+    }
+    setGovLoaded(true);
+    setGovLoading(false);
   }
 
   // fetchRemote only for the explicit Refresh action — after a push/pull the
@@ -741,6 +1195,20 @@ function App() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(
+    () => () => {
+      governanceLoadSeq.current += 1;
+    },
+    []
+  );
+
+  // Lazily load the governance timeline the first time (and whenever) the tab is
+  // opened, so the panel's default view never pays for the extra queries.
+  useEffect(() => {
+    if (activeTab !== "governance") return;
+    void loadGovernance();
+  }, [activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -943,6 +1411,7 @@ function App() {
                   <Tabs.Trigger value="files">Files</Tabs.Trigger>
                   <Tabs.Trigger value="git">Git</Tabs.Trigger>
                   <Tabs.Trigger value="invocations">Invocations</Tabs.Trigger>
+                  <Tabs.Trigger value="governance">Governance</Tabs.Trigger>
                   <Tabs.Trigger value="integrity">Integrity</Tabs.Trigger>
                   <Tabs.Trigger value="status">Status</Tabs.Trigger>
                 </Tabs.List>
@@ -1041,6 +1510,17 @@ function App() {
                           "completed_event_id",
                           "updated_at",
                         ]}
+                      />
+                    </Tabs.Content>
+                    <Tabs.Content value="governance">
+                      <GovernanceTab
+                        approvals={govApprovals}
+                        hostRecords={hostGovernance}
+                        loading={govLoading}
+                        loaded={govLoaded}
+                        gadError={govGadError}
+                        hostError={govHostError}
+                        onRefresh={() => void loadGovernance()}
                       />
                     </Tabs.Content>
                     <Tabs.Content value="integrity">

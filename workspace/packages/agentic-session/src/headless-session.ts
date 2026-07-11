@@ -754,7 +754,7 @@ export class HeadlessSession {
       participants[id] = {
         name: p.metadata.name,
         type: p.metadata.type,
-        handle: p.metadata.handle,
+        handle: p.metadata.handle ?? id,
         connected: true,
       };
     }

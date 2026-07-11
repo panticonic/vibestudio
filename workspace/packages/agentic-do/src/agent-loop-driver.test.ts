@@ -3,6 +3,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
 import {
   ids,
+  askUserPolicy,
   type AgentLoopConfig,
   type AgentTurnMetadata,
   type EffectDescriptor,
@@ -19,6 +20,18 @@ const LOG_ID = ids.logIdForChannel(CHANNEL);
 
 const config: AgentLoopConfig = {
   model: "anthropic:claude-sonnet-4-6",
+  modelSpec: {
+    id: "claude-sonnet-4-6",
+    name: "anthropic:claude-sonnet-4-6",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 64_000,
+  },
   thinkingLevel: "medium",
   approvalLevel: 2,
   respondPolicy: "all",
@@ -71,6 +84,8 @@ async function makeHarness(opts: {
   const ephemerals: EphemeralEmit[] = [];
   const broadcasts: Array<{ channelId: string; envelopeIds: string[] }> = [];
   const channelPublishes: Array<Parameters<ChannelCallPort["publish"]>[0]> = [];
+  const channelCalls: Array<Parameters<ChannelCallPort["callMethod"]>[0]> = [];
+  const cancelledChannelCalls: Array<{ channelId: string; transportCallId: string }> = [];
   const alarms: number[] = [];
   let now = 1_750_000_000_000;
   const setNow = (value: number) => {
@@ -110,7 +125,12 @@ async function makeHarness(opts: {
         },
       },
       channel: {
-        callMethod: async () => {},
+        callMethod: async (input: Parameters<ChannelCallPort["callMethod"]>[0]) => {
+          channelCalls.push(input);
+        },
+        cancelMethodCall: async (channelId: string, transportCallId: string) => {
+          cancelledChannelCalls.push({ channelId, transportCallId });
+        },
         publish: async (input: Parameters<ChannelCallPort["publish"]>[0]) => {
           channelPublishes.push(input);
         },
@@ -143,7 +163,18 @@ async function makeHarness(opts: {
     ...(opts.killPoint ? { killPoint: opts.killPoint } : {}),
   };
   const driver = new AgentLoopDriver(deps);
-  return { driver, gad, driverHost, ephemerals, alarms, broadcasts, channelPublishes, setNow };
+  return {
+    driver,
+    gad,
+    driverHost,
+    ephemerals,
+    alarms,
+    broadcasts,
+    channelPublishes,
+    channelCalls,
+    cancelledChannelCalls,
+    setNow,
+  };
 }
 
 /** Drain the alarm pump until the outbox is quiet (the driver executes
@@ -384,6 +415,81 @@ describe("AgentLoopDriver", () => {
       provider: "anthropic",
       displayName: "anthropic:claude-sonnet-4-6",
     });
+  });
+
+  it("accepts the first ask_user answer and cancels every other human form", async () => {
+    const askConfig: AgentLoopConfig = {
+      ...config,
+      roster: {
+        participants: ["alice", "bob"].map((handle) => ({
+          participantId: `user:${handle}`,
+          ref: {
+            kind: "user" as const,
+            id: `user:${handle}`,
+            participantId: `user:${handle}`,
+          },
+          type: "user",
+          handle,
+          methods: [{ name: "feedback_form" }],
+        })),
+      },
+    };
+    const harness = await makeHarness({
+      config: askConfig,
+      policies: [askUserPolicy()],
+      script: {
+        model: [
+          {
+            kind: "model",
+            blocks: [
+              {
+                type: "toolCall",
+                id: "tc-ask",
+                name: "ask_user",
+                arguments: { question: "Choose" },
+              },
+            ],
+            stopReason: "completed",
+          },
+        ],
+        tool: [],
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver, 2);
+    expect(harness.channelCalls).toHaveLength(2);
+    const askRows = harness.driver.outbox
+      .all()
+      .filter((row) => row.descriptor.kind === "channel_call");
+    expect(askRows).toHaveLength(2);
+
+    // Bob answers first (the secondary effect). The canonical invocation
+    // terminal wins and Alice's still-open form is cancelled immediately.
+    const bob = askRows.find((row) => row.effectId.includes("#user:bob"))!;
+    await harness.driver.deliverEffectOutcome(
+      bob.effectId,
+      { kind: "tool", result: { answer: "yes" }, isError: false },
+      { channelId: CHANNEL }
+    );
+
+    expect(
+      harness.driver.outbox.all().filter((row) => row.descriptor.kind === "channel_call")
+    ).toHaveLength(0);
+    expect(harness.cancelledChannelCalls).toEqual([
+      {
+        channelId: CHANNEL,
+        transportCallId: ids.transportCallId("tc-ask"),
+      },
+    ]);
+    const terminalRows = await harness.gad.call<{
+      rows: Array<{ envelope_id: string }>;
+    }>(
+      "query",
+      `SELECT envelope_id FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'invocation.completed'`,
+      []
+    );
+    expect(terminalRows.rows).toEqual([{ envelope_id: ids.invocationTerminal("tc-ask") }]);
   });
 
   it("keeps equal effect ids isolated by branch", async () => {
@@ -1025,6 +1131,7 @@ describe("AgentLoopDriver", () => {
             modelRequest: {
               provider: "anthropic",
               model: "claude-sonnet-4-6",
+              modelSpec: config.modelSpec,
               thinkingLevel: "medium",
               systemPromptHash: "blob:sys",
               activeToolNames: ["read"],

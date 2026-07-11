@@ -333,6 +333,7 @@ describe("@workspace/agentic-protocol schemas", () => {
         actor: agent,
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
+          ledgerEntryId: `led-${relation}`,
           relations: [{ src: "a", relation, dst: "b" }],
         },
         createdAt: "2026-05-20T12:00:00.000Z",
@@ -347,6 +348,7 @@ describe("@workspace/agentic-protocol schemas", () => {
       actor: agent,
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
+        ledgerEntryId: "led-unknown-relation",
         relations: [{ src: "a", relation: "reticulates", dst: "b" }],
       },
       createdAt: "2026-05-20T12:00:00.000Z",
@@ -361,6 +363,7 @@ describe("@workspace/agentic-protocol schemas", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         claimId: "claim-1",
+        ledgerEntryId: "led-unknown-field",
         // schema rejection fixture: unknown field on a strict payload
         confidence: 0.9,
       },
@@ -376,11 +379,26 @@ describe("@workspace/agentic-protocol schemas", () => {
       causality: { invocationId: brandId<InvocationId>("call-3") },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
+        ledgerEntryId: "led-stored-relation",
         relations: [{ src: "claim-1", relation: "refines", dst: "claim-2" }],
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects knowledge events without a ledger entry id", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claim_recorded",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        claimId: "claim-unanchored",
+        text: "inline-only knowledge is not a current event",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects mismatched terminalOutcome on stored invocation terminal events", () => {

@@ -147,8 +147,7 @@ export function invocationEffect(
       ...base,
       kind: "channel_call",
       idempotencyKey: transport.transportCallId ?? ids.transportCallId(invocation.invocationId),
-      transportCallId:
-        transport.transportCallId ?? ids.transportCallId(invocation.invocationId),
+      transportCallId: transport.transportCallId ?? ids.transportCallId(invocation.invocationId),
       target: transport.target,
       method: invocation.name,
       args: invocation.request,
@@ -164,6 +163,43 @@ export function invocationEffect(
     idempotencyKey: transport.idempotencyKey,
     request: invocation.request,
   };
+}
+
+function participantTargetId(target: ParticipantRef): string {
+  return target.participantId ?? target.id;
+}
+
+/** Deterministic coordinates for non-primary ask_user fan-out calls. */
+export function askUserFanoutCallId(invocationId: string, target: ParticipantRef): string {
+  return ids.transportCallId(`${invocationId}#${participantTargetId(target)}`);
+}
+
+export function askUserFanoutEffectId(invocationId: string, target: ParticipantRef): string {
+  return `${ids.invocationEffect(invocationId)}#${participantTargetId(target)}`;
+}
+
+/** Reconstruct every independently dispatchable ask_user call from the logged
+ * invocation. No secondary target exists only in an interceptor/outbox cache. */
+export function invocationEffects(
+  state: AgentState,
+  invocation: PendingInvocation
+): Array<LocalToolEffect | ChannelCallEffect | HttpCallEffect> {
+  const primary = invocationEffect(state, invocation);
+  const targets = invocation.askUserTargets;
+  if (primary.kind !== "channel_call" || !targets?.length) return [primary];
+  return targets.map((target, index) => {
+    const callId =
+      index === 0 ? primary.transportCallId : askUserFanoutCallId(invocation.invocationId, target);
+    return {
+      ...primary,
+      effectId:
+        index === 0 ? primary.effectId : askUserFanoutEffectId(invocation.invocationId, target),
+      idempotencyKey: callId,
+      transportCallId: callId,
+      target,
+      purpose: "ask-user",
+    };
+  });
 }
 
 export function approvalFormEffect(
@@ -218,7 +254,7 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
   if (state.inFlightModelCall) out.push(modelCallEffect(state, state.inFlightModelCall));
   for (const invocation of Object.values(state.pendingInvocations)) {
     if (invocation.requiresApproval && invocation.approvalState !== "granted") continue; // gated
-    out.push(invocationEffect(state, invocation));
+    out.push(...invocationEffects(state, invocation));
   }
   for (const approval of Object.values(state.pendingApprovals)) {
     out.push(approvalFormEffect(state, approval));
@@ -459,10 +495,7 @@ export function outcomeEvents(
   return []; // publish_envelope: fire-and-forget, no outcome events
 }
 
-function shouldPublishModelOutcome(
-  request: ModelRequestDescriptor,
-  blocks: unknown[]
-): boolean {
+function shouldPublishModelOutcome(request: ModelRequestDescriptor, blocks: unknown[]): boolean {
   const metadata = request.turnMetadata;
   if (!metadata) return true;
   if (metadata.delivery === "none") return false;
@@ -474,7 +507,9 @@ function shouldPublishModelOutcome(
 function blocksLookSuccessful(blocks: unknown[]): boolean {
   const text = blocks
     .map((block) =>
-      block && typeof block === "object" && typeof (block as { content?: unknown }).content === "string"
+      block &&
+      typeof block === "object" &&
+      typeof (block as { content?: unknown }).content === "string"
         ? (block as { content: string }).content.toLowerCase()
         : ""
     )

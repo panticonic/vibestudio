@@ -368,8 +368,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.subscriptions = new SubscriptionManager(
       this.sql,
       (channelId) => this.createChannelClient(channelId),
-      this.identity,
-      () => this.participantId()
+      this.identity
     );
     this.subscriptions.createTables();
     this.subagentRuns = new SubagentRunStore(this.sql);
@@ -617,42 +616,35 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private _identityBootstrapped = false;
 
-  /** Bootstrap identity from the workerd env (idempotent, best-effort). */
+  /** Bootstrap identity from the canonical workerd environment. */
   protected ensureIdentity(): void {
     if (this._identityBootstrapped) return;
-    try {
-      const env = this.env as Record<string, string>;
-      const source = env["WORKER_SOURCE"];
-      const className = env["WORKER_CLASS_NAME"];
-      const sessionId = env["WORKERD_SESSION_ID"];
-      if (source && className && sessionId) {
-        const generationRaw = env["WORKERD_BOOT_GENERATION"];
-        const generation =
-          typeof generationRaw === "string" && generationRaw.length > 0
-            ? Number.parseInt(generationRaw, 10)
-            : null;
-        this.identity.bootstrap(
-          { source, className, objectKey: this.objectKey },
-          sessionId,
-          Number.isFinite(generation) ? generation : null
-        );
-        this._identityBootstrapped = true;
-      }
-    } catch {
-      /* objectKey not assigned yet — retried on next use */
+    const env = this.env as Record<string, string>;
+    const source = env["WORKER_SOURCE"];
+    const className = env["WORKER_CLASS_NAME"];
+    const sessionId = env["WORKERD_SESSION_ID"];
+    if (!source || !className || !sessionId) {
+      throw new Error(
+        "Agent vessel identity requires WORKER_SOURCE, WORKER_CLASS_NAME, and WORKERD_SESSION_ID"
+      );
     }
+    const generationRaw = env["WORKERD_BOOT_GENERATION"];
+    const generation =
+      typeof generationRaw === "string" && generationRaw.length > 0
+        ? Number.parseInt(generationRaw, 10)
+        : null;
+    this.identity.bootstrap(
+      { source, className, objectKey: this.objectKey },
+      sessionId,
+      Number.isFinite(generation) ? generation : null
+    );
+    this._identityBootstrapped = true;
   }
 
   protected participantId(): string {
     this.ensureIdentity();
-    try {
-      const ref = this.identity.ref;
-      return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
-    } catch {
-      // Pre-bootstrap (constructor-time / unit tests): fall back to the
-      // object key, which is stable for a given DO instance.
-      return `do:unknown:unknown:${this.objectKey}`;
-    }
+    const ref = this.identity.ref;
+    return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
   }
 
   protected selfRef(channelId: string): ParticipantRef {
@@ -817,13 +809,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   private executorDeps(): ExecutorDeps {
-    let ref: { source: string; className: string; objectKey: string };
-    try {
-      ref = this.identity.ref;
-    } catch {
-      // Pre-bootstrap fallback (constructor wiring / unit tests).
-      ref = { source: "unknown", className: "unknown", objectKey: this.objectKey };
-    }
+    this.ensureIdentity();
+    const ref = this.identity.ref;
     return {
       selfRef: { kind: "agent", id: this.participantId(), participantId: this.participantId() },
       blobstore: {
@@ -853,6 +840,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
             }
           );
+        },
+        cancelMethodCall: async (channelId, transportCallId) => {
+          await this.createChannelClient(channelId).cancelCall(transportCallId);
         },
         publish: async (input) => {
           await this.rpc.call(await this.channelTarget(input.channelId), "publish", [
@@ -1076,11 +1066,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
   }
 
-  private sendOrderedSignalMessage(
-    channelId: string,
-    content: string,
-    contentType?: string
-  ): void {
+  private sendOrderedSignalMessage(channelId: string, content: string, contentType?: string): void {
     void serializeByKey(this.signalChains, channelId, () =>
       this.createChannelClient(channelId)
         .sendSignal(this.participantId(), content, contentType)
@@ -1215,16 +1201,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const publishPolicy = this.getPublishPolicy(channelId);
     const immediatePrompt = this.immediatePrompt(channelId);
     const materialized = this.materializedModel(channelId, settings.model);
+    if (!materialized) {
+      throw new Error(
+        `Agent model ${JSON.stringify(settings.model)} could not be materialized; ` +
+          "select a model present in the current catalog before starting the agent"
+      );
+    }
     const fallbackMaterialized = this.materializedModel(channelId, LOCAL_FALLBACK_MODEL_REF);
     const toolSchemasHash =
       // Tool-capability gate (design §6.4): omit tool schemas at the source
       // for models whose chat template can't parse them.
-      materialized && !materialized.toolsCapable
+      !materialized.toolsCapable
         ? undefined
         : (this.getStateValue(`agent:toolsHash:${channelId}`) ?? undefined);
     return {
       model: settings.model,
-      ...(materialized ? { modelSpec: materialized.spec, modelAuth: materialized.auth } : {}),
+      modelSpec: materialized.spec,
+      modelAuth: materialized.auth,
       ...(fallbackMaterialized
         ? {
             fallbackModelRef: LOCAL_FALLBACK_MODEL_REF,

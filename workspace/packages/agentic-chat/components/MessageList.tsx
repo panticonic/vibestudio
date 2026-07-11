@@ -17,10 +17,16 @@ import type {
   MessageTypeComponentEntry,
 } from "../types";
 import type { MdxActionHandlers } from "./markdownComponents";
+import { useAccountProfiles, type AccountRpc } from "../hooks/useAccountProfiles";
 
 // Grouped item types produced by the grouping logic
 type GroupedItem =
-  | { type: "inline-group"; items: Array<{ msg: ChatMessage; index: number }>; inlineItems: InlineItem[]; key: string }
+  | {
+      type: "inline-group";
+      items: Array<{ msg: ChatMessage; index: number }>;
+      inlineItems: InlineItem[];
+      key: string;
+    }
   | { type: "chat-message"; msg: ChatMessage; index: number };
 
 // --- Grouping helper functions (module-level for reuse by fast paths) ---
@@ -78,9 +84,7 @@ function groupedItemSignature(item: GroupedItem): string {
 }
 
 /** Transform an inline group's messages into InlineItem[] */
-function buildInlineItems(
-  items: Array<{ msg: ChatMessage; index: number }>,
-): InlineItem[] {
+function buildInlineItems(items: Array<{ msg: ChatMessage; index: number }>): InlineItem[] {
   return items.flatMap(({ msg }) => {
     if (msg.contentType === "invocation") {
       if (!msg.invocation) return [];
@@ -130,7 +134,7 @@ function buildInlineItems(
 
 function pushInlineGroup(
   result: GroupedItem[],
-  items: Array<{ msg: ChatMessage; index: number }>,
+  items: Array<{ msg: ChatMessage; index: number }>
 ): void {
   if (items.length === 0) return;
   const inlineItems = buildInlineItems(items);
@@ -144,9 +148,7 @@ function pushInlineGroup(
 }
 
 /** Full grouping computation — scans all messages from scratch */
-function fullGroupComputation(
-  messages: ChatMessage[],
-): GroupedItem[] {
+function fullGroupComputation(messages: ChatMessage[]): GroupedItem[] {
   const result: GroupedItem[] = [];
   let currentInlineGroup: Array<{ msg: ChatMessage; index: number }> = [];
 
@@ -187,7 +189,7 @@ function fullGroupComputation(
  */
 function buildActiveTypingItems(
   participants: Record<string, Participant<ChatParticipantMetadata>>,
-  selfId: string | null,
+  selfId: string | null
 ): InlineItem[] {
   const items: InlineItem[] = [];
   for (const [pid, p] of Object.entries(participants)) {
@@ -212,6 +214,10 @@ export interface SenderInfo {
   name: string;
   type: "panel" | "headless" | "agent" | "unknown";
   handle: string;
+  /** Live account tint (WP6 §6) — present for `user:<userId>` senders. */
+  color?: string;
+  /** Live inline `data:` URI avatar (WP0 §3.8) — present for human senders. */
+  avatar?: string;
 }
 
 export interface MessageListProps {
@@ -280,13 +286,7 @@ export const MessageList = React.memo(function MessageList({
   // --- Scroll state ---
   const [showNewContent, setShowNewContent] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const {
-    scrollRef,
-    contentRef,
-    scrollToBottom,
-    isAtBottom,
-    isAtBottomRef,
-  } = useStickToBottom({
+  const { scrollRef, contentRef, scrollToBottom, isAtBottom, isAtBottomRef } = useStickToBottom({
     initial: "instant",
     resize: "instant",
   });
@@ -341,28 +341,58 @@ export const MessageList = React.memo(function MessageList({
     }
   }, []);
   const handleClearCopiedMessage = useCallback((messageId: string) => {
-    setCopiedMessageId((current) => current === messageId ? null : current);
+    setCopiedMessageId((current) => (current === messageId ? null : current));
   }, []);
+
+  // --- Live account profiles for `user:<userId>` senders (WP6 §6) ---
+  // The channel stores only the stable id; handle/displayName/avatar/color
+  // resolve from the host projection, so a profile edit re-renders the
+  // transcript without any roster or message rewrite.
+  const senderParticipantIds = useMemo(() => {
+    const ids = new Set<string>(Object.keys(allParticipants));
+    for (const msg of messages) ids.add(msg.senderId);
+    return [...ids];
+  }, [allParticipants, messages]);
+  const accountProfiles = useAccountProfiles(
+    (chat as { rpc?: AccountRpc } | undefined)?.rpc,
+    senderParticipantIds
+  );
 
   // --- Sender info lookup ---
   // Falls back to the message's senderMetadata snapshot (populated from events
   // and history) before defaulting, so historical messages from agents align
   // correctly on reload even when the original participant left the roster.
-  const getSenderInfo = useCallback((senderId: string, msg?: ChatMessage) => {
-    const live = allParticipants[senderId]?.metadata;
-    const stored = msg?.senderMetadata;
-    // Merge stored snapshot (immutable, from DB — always has correct type)
-    // with live roster (may be fresher, but empty {} during join→metadata gap).
-    // Stored is absent for locally-created messages not yet persisted;
-    // live is {} during the connection setup window.
-    return {
-      name: "Unknown",
-      type: "unknown" as const,
-      handle: "unknown",
-      ...(stored?.type ? stored : {}),
-      ...(live?.type ? live : {}),
-    };
-  }, [allParticipants]);
+  const getSenderInfo = useCallback(
+    (senderId: string, msg?: ChatMessage) => {
+      const live = allParticipants[senderId]?.metadata;
+      const stored = msg?.senderMetadata;
+      // Merge stored snapshot (immutable, from DB — always has correct type)
+      // with live roster (may be fresher, but empty {} during join→metadata gap).
+      // Stored is absent for locally-created messages not yet persisted;
+      // live is {} during the connection setup window.
+      const base = {
+        name: "Unknown",
+        type: "unknown" as const,
+        handle: "unknown",
+        ...(stored?.type ? stored : {}),
+        ...(live?.type ? live : {}),
+      };
+      // Human senders: the live account projection wins over any snapshot —
+      // one source of truth for who authored a message (WP6 §3/§6).
+      const profile = accountProfiles.get(senderId);
+      if (profile) {
+        return {
+          ...base,
+          name: profile.displayName,
+          handle: profile.handle,
+          ...(profile.color !== undefined ? { color: profile.color } : {}),
+          ...(profile.avatar !== undefined ? { avatar: profile.avatar } : {}),
+        };
+      }
+      return base;
+    },
+    [allParticipants, accountProfiles]
+  );
 
   // --- Interrupt handler ---
   const handleInterruptMessage = useCallback(
@@ -374,10 +404,13 @@ export const MessageList = React.memo(function MessageList({
   );
 
   // Stable callback for interrupting typing indicators
-  const handleTypingInterrupt = useCallback((senderId: string) => {
-    const handle = allParticipants[senderId]?.metadata?.handle;
-    onInterrupt?.(senderId, undefined, handle);
-  }, [allParticipants, onInterrupt]);
+  const handleTypingInterrupt = useCallback(
+    (senderId: string) => {
+      const handle = allParticipants[senderId]?.metadata?.handle;
+      onInterrupt?.(senderId, undefined, handle);
+    },
+    [allParticipants, onInterrupt]
+  );
 
   // --- Message grouping (with incremental fast paths) ---
   const prevGroupCacheRef = useRef<{
@@ -391,11 +424,13 @@ export const MessageList = React.memo(function MessageList({
     // Fast path A: streaming update — same array length, only last message changed.
     // During streaming, the messages array is replaced with a new reference where only
     // the last element has updated content. All prior elements are reference-equal.
-    if (cache && cache.messages.length === messages.length && messages.length > 0
-) {
+    if (cache && cache.messages.length === messages.length && messages.length > 0) {
       let onlyLastChanged = true;
       for (let i = 0; i < messages.length - 1; i++) {
-        if (messages[i] !== cache.messages[i]) { onlyLastChanged = false; break; }
+        if (messages[i] !== cache.messages[i]) {
+          onlyLastChanged = false;
+          break;
+        }
       }
       if (onlyLastChanged) {
         const lastMsg = messages[messages.length - 1]!;
@@ -403,9 +438,17 @@ export const MessageList = React.memo(function MessageList({
         const lastMsgInlineType = getInlineItemType(lastMsg);
         // If the last grouped item is a regular message with the same id, swap it in-place.
         // Also verify the message hasn't transitioned to an inline type.
-        if (lastItem?.type === "chat-message" && lastItem.msg.id === lastMsg.id && lastMsgInlineType === null) {
+        if (
+          lastItem?.type === "chat-message" &&
+          lastItem.msg.id === lastMsg.id &&
+          lastMsgInlineType === null
+        ) {
           const result = cache.result.slice(); // shallow copy
-          result[result.length - 1] = { type: "chat-message", msg: lastMsg, index: messages.length - 1 };
+          result[result.length - 1] = {
+            type: "chat-message",
+            msg: lastMsg,
+            index: messages.length - 1,
+          };
           prevGroupCacheRef.current = { messages, result };
           return result;
         }
@@ -440,14 +483,20 @@ export const MessageList = React.memo(function MessageList({
     if (cache && messages.length > cache.messages.length) {
       let prefixMatch = true;
       for (let i = 0; i < cache.messages.length; i++) {
-        if (messages[i] !== cache.messages[i]) { prefixMatch = false; break; }
+        if (messages[i] !== cache.messages[i]) {
+          prefixMatch = false;
+          break;
+        }
       }
       if (prefixMatch) {
         const result = cache.result.slice();
         // Process only the new messages, potentially merging with the tail group
         let tailInlineGroup: Array<{ msg: ChatMessage; index: number }> | null = null;
         const lastCached = result[result.length - 1];
-        if (lastCached?.type === "inline-group" && !lastCached.items.some(({ msg }) => isTypingMessage(msg))) {
+        if (
+          lastCached?.type === "inline-group" &&
+          !lastCached.items.some(({ msg }) => isTypingMessage(msg))
+        ) {
           // Pop the last inline group — new messages might extend it
           tailInlineGroup = lastCached.items.slice();
           result.pop();
@@ -492,11 +541,12 @@ export const MessageList = React.memo(function MessageList({
     return result;
   }, [messages]);
   const scrollAnchorItems = useMemo<ScrollAnchorItem[]>(
-    () => groupedItems.map((item) => ({
-      id: groupedItemAnchorId(item),
-      signature: groupedItemSignature(item),
-    })),
-    [groupedItems],
+    () =>
+      groupedItems.map((item) => ({
+        id: groupedItemAnchorId(item),
+        signature: groupedItemSignature(item),
+      })),
+    [groupedItems]
   );
 
   useScrollAnchor({
@@ -515,8 +565,8 @@ export const MessageList = React.memo(function MessageList({
 
   const hasDurableTypingMessages = messages.some((msg) => msg.contentType === "typing");
   const activeTypingItems = useMemo(
-    () => hasDurableTypingMessages ? [] : buildActiveTypingItems(participants, selfId),
-    [participants, selfId, hasDurableTypingMessages],
+    () => (hasDurableTypingMessages ? [] : buildActiveTypingItems(participants, selfId)),
+    [participants, selfId, hasDurableTypingMessages]
   );
 
   // Refs for stable renderItem callback — avoids recreating the closure on every
@@ -530,88 +580,141 @@ export const MessageList = React.memo(function MessageList({
   // Render a single grouped item by index.
   // Each item is wrapped in its own flex column container so that
   // MessageCard's alignSelf works regardless of the parent's display mode.
-  const renderItem = useCallback((index: number) => {
-    const item = groupedItemsRef.current[index];
-    if (!item) return null;
+  const renderItem = useCallback(
+    (index: number) => {
+      const item = groupedItemsRef.current[index];
+      if (!item) return null;
 
-    if (item.type === "inline-group") {
-      if (customRenderInlineGroup) {
-        return <Flex className="message-item" direction="column">{customRenderInlineGroup(item.inlineItems)}</Flex>;
-      }
-      return <Flex className="message-item" direction="column"><InlineGroup key={item.key} items={item.inlineItems} messageTypeComponents={messageTypeComponents} chat={chat} onInterrupt={handleTypingInterrupt} onCancelInvocation={onCancelInvocation} /></Flex>;
-    }
-
-    const { msg, index: msgIndex } = item;
-    const sender = getSenderInfo(msg.senderId, msg);
-    const mentionLabels = (msg.mentions ?? []).map((participantId) => {
-      const participant = allParticipants[participantId];
-      return participant?.metadata.handle ?? participant?.metadata.name ?? participantId;
-    });
-    const repliedTo = msg.replyTo ? messagesById.get(msg.replyTo) : undefined;
-    const replySender = repliedTo ? getSenderInfo(repliedTo.senderId, repliedTo) : null;
-    const replyContext = repliedTo && replySender
-      ? {
-          id: repliedTo.id,
-          senderName: replySender.name,
-          snippet: repliedTo.content.slice(0, 120),
+      if (item.type === "inline-group") {
+        if (customRenderInlineGroup) {
+          return (
+            <Flex className="message-item" direction="column">
+              {customRenderInlineGroup(item.inlineItems)}
+            </Flex>
+          );
         }
-      : undefined;
+        return (
+          <Flex className="message-item" direction="column">
+            <InlineGroup
+              key={item.key}
+              items={item.inlineItems}
+              messageTypeComponents={messageTypeComponents}
+              chat={chat}
+              onInterrupt={handleTypingInterrupt}
+              onCancelInvocation={onCancelInvocation}
+            />
+          </Flex>
+        );
+      }
 
-    if (customRenderMessage) {
-      return <Flex className="message-item" direction="column">{customRenderMessage(msg, sender as SenderInfo)}</Flex>;
-    }
+      const { msg, index: msgIndex } = item;
+      const sender = getSenderInfo(msg.senderId, msg);
+      const mentionLabels = (msg.mentions ?? []).map((participantId) => {
+        const participant = allParticipants[participantId];
+        const profile = accountProfiles.get(participantId);
+        return (
+          profile?.handle ??
+          participant?.metadata.handle ??
+          participant?.metadata.name ??
+          participantId
+        );
+      });
+      const repliedTo = msg.replyTo ? messagesById.get(msg.replyTo) : undefined;
+      const replySender = repliedTo ? getSenderInfo(repliedTo.senderId, repliedTo) : null;
+      const replyContext =
+        repliedTo && replySender
+          ? {
+              id: repliedTo.id,
+              senderName: replySender.name,
+              snippet: repliedTo.content.slice(0, 120),
+            }
+          : undefined;
 
-    // Subagent runs bypass the grouping/MessageCard path for a richer card.
-    if (msg.invocation?.subagent) {
+      if (customRenderMessage) {
+        return (
+          <Flex className="message-item" direction="column">
+            {customRenderMessage(msg, sender as SenderInfo)}
+          </Flex>
+        );
+      }
+
+      // Subagent runs bypass the grouping/MessageCard path for a richer card.
+      if (msg.invocation?.subagent) {
+        return (
+          <Flex className="message-item" direction="column">
+            <SubagentRunCard msg={msg} />
+          </Flex>
+        );
+      }
+
+      // User messages are published as `message.completed`, so streaming is
+      // determined solely by the canonical completion flag.
+      const isStreaming = msg.kind === "message" && !msg.complete;
+
       return (
         <Flex className="message-item" direction="column">
-          <SubagentRunCard msg={msg} />
+          <MessageCard
+            key={msg.id || `fallback-msg-${msgIndex}`}
+            msg={msg}
+            index={msgIndex}
+            selfId={selfId}
+            senderType={sender.type}
+            senderInfo={sender as SenderInfo}
+            participants={allParticipants}
+            mentionLabels={mentionLabels}
+            replyContext={replyContext}
+            isStreaming={isStreaming}
+            isCopied={copiedMessageIdRef.current === msg.id}
+            inlineUiComponents={inlineUiComponents}
+            messageTypeComponents={messageTypeComponents}
+            chat={chat}
+            browserHandoffCaller={browserHandoffCaller}
+            onInterrupt={handleInterruptMessage}
+            onCopy={handleCopyMessage}
+            onClearCopied={handleClearCopiedMessage}
+            onReply={onReply}
+            onFocusPanel={onFocusPanel}
+            onReloadPanel={onReloadPanel}
+            mdxActions={mdxActions}
+          />
         </Flex>
       );
-    }
-
-    // User messages are published as `message.completed` (so `complete` is
-    // already true); the legacy `!pending` term is moot, so drop it.
-    const isStreaming = msg.kind === "message" && !msg.complete;
-
-    return (
-      <Flex className="message-item" direction="column">
-        <MessageCard
-          key={msg.id || `fallback-msg-${msgIndex}`}
-          msg={msg}
-          index={msgIndex}
-          selfId={selfId}
-          senderType={sender.type}
-          senderInfo={sender as SenderInfo}
-          participants={allParticipants}
-          mentionLabels={mentionLabels}
-          replyContext={replyContext}
-          isStreaming={isStreaming}
-          isCopied={copiedMessageIdRef.current === msg.id}
-          inlineUiComponents={inlineUiComponents}
-          messageTypeComponents={messageTypeComponents}
-          chat={chat}
-          browserHandoffCaller={browserHandoffCaller}
-          onInterrupt={handleInterruptMessage}
-          onCopy={handleCopyMessage}
-          onClearCopied={handleClearCopiedMessage}
-          onReply={onReply}
-          onFocusPanel={onFocusPanel}
-          onReloadPanel={onReloadPanel}
-          mdxActions={mdxActions}
-        />
-      </Flex>
-    );
-  }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, browserHandoffCaller, mdxActions, allParticipants, messagesById, onReply,
-      handleInterruptMessage, handleCopyMessage, handleClearCopiedMessage, handleTypingInterrupt, onCancelInvocation, onFocusPanel, onReloadPanel,
-      customRenderMessage, customRenderInlineGroup]);
+    },
+    [
+      getSenderInfo,
+      inlineUiComponents,
+      messageTypeComponents,
+      chat,
+      browserHandoffCaller,
+      mdxActions,
+      allParticipants,
+      messagesById,
+      onReply,
+      handleInterruptMessage,
+      handleCopyMessage,
+      handleClearCopiedMessage,
+      handleTypingInterrupt,
+      onCancelInvocation,
+      onFocusPanel,
+      onReloadPanel,
+      customRenderMessage,
+      customRenderInlineGroup,
+    ]
+  );
 
   // --- Render ---
   return (
-    <Box className="message-list-card" flexGrow="1" overflow="hidden" style={{ minHeight: 0, position: "relative" }}>
+    <Box
+      className="message-list-card"
+      flexGrow="1"
+      overflow="hidden"
+      style={{ minHeight: 0, position: "relative" }}
+    >
       <ScrollArea
         className="message-scroll-area"
-        ref={(node) => { scrollRef(node); }}
+        ref={(node) => {
+          scrollRef(node);
+        }}
         style={{
           height: "100%",
           width: "100%",
@@ -638,18 +741,18 @@ export const MessageList = React.memo(function MessageList({
             </Flex>
           )}
           {groupedItems.length === 0 && activeTypingItems.length === 0 ? (
-            emptyState ?? (
+            (emptyState ?? (
               <Text color="gray" size="2">
                 Send a message to start chatting
               </Text>
-            )
+            ))
           ) : (
             <Flex className="message-list-stack" direction="column" gap="1">
               {groupedItems.map((item, index) => (
                 <div
                   className="message-item"
                   data-scroll-anchor-id={groupedItemAnchorId(item)}
-                  key={item.type === "inline-group" ? item.key : (item.msg.id || `msg-${index}`)}
+                  key={item.type === "inline-group" ? item.key : item.msg.id || `msg-${index}`}
                 >
                   {renderItem(index)}
                 </div>
@@ -657,9 +760,17 @@ export const MessageList = React.memo(function MessageList({
               {activeTypingItems.length > 0 && (
                 <div className="message-item" key="active-typing">
                   <Flex className="message-item" direction="column">
-                    {customRenderInlineGroup
-                      ? customRenderInlineGroup(activeTypingItems)
-                      : <InlineGroup items={activeTypingItems} messageTypeComponents={messageTypeComponents} chat={chat} onInterrupt={handleTypingInterrupt} onCancelInvocation={onCancelInvocation} />}
+                    {customRenderInlineGroup ? (
+                      customRenderInlineGroup(activeTypingItems)
+                    ) : (
+                      <InlineGroup
+                        items={activeTypingItems}
+                        messageTypeComponents={messageTypeComponents}
+                        chat={chat}
+                        onInterrupt={handleTypingInterrupt}
+                        onCancelInvocation={onCancelInvocation}
+                      />
+                    )}
                   </Flex>
                 </div>
               )}
@@ -667,9 +778,7 @@ export const MessageList = React.memo(function MessageList({
           )}
         </div>
       </ScrollArea>
-      {showNewContent && (
-        <NewContentIndicator onClick={handleScrollToNewContent} />
-      )}
+      {showNewContent && <NewContentIndicator onClick={handleScrollToNewContent} />}
     </Box>
   );
 });

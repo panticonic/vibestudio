@@ -7,212 +7,254 @@
 import type { RpcCaller } from "@vibestudio/rpc";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 import {
-    AGENTIC_EVENT_PAYLOAD_KIND,
-    AGENTIC_PROTOCOL_VERSION,
-    type AgenticEvent,
-    type MessageTier,
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  AGENTIC_PROTOCOL_VERSION,
+  type AgenticEvent,
+  type MessageTier,
 } from "@workspace/agentic-protocol";
 interface ChannelSendOptions {
-    senderMetadata?: Record<string, unknown>;
-    replyTo?: string;
-    mentions?: string[];
-    /** Explicit direction: only the selected participants should respond. */
-    to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
-    idempotencyKey?: string;
-    attachments?: Array<{ id?: string; data: string; mimeType: string; name?: string; size?: number }>;
-    /**
-     * Salience tier. A `ChannelClient.send` is an explicit, deliberate message
-     * — the agent (or headless participant) choosing to surface text to the
-     * channel, e.g. the silent agent's `say` tool — so it defaults to "primary"
-     * (tier 1). The model-loop's own turn narration is tiered separately in
-     * agent-loop. Pass "secondary" to send a deliberately slight message.
-     */
-    tier?: MessageTier;
-    /**
-     * Salience flag: `"say"` marks the message as an explicit, deliberate
-     * utterance (the generalized `say` tool). It survives the `turn-final`
-     * wake filter and is surfaced by the chat projection. Omit for ordinary
-     * traffic.
-     */
-    saliency?: "say";
+  senderMetadata?: Record<string, unknown>;
+  replyTo?: string;
+  mentions?: string[];
+  /** Explicit direction: only the selected participants should respond. */
+  to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
+  idempotencyKey?: string;
+  attachments?: Array<{
+    id?: string;
+    data: string;
+    mimeType: string;
+    name?: string;
+    size?: number;
+  }>;
+  /**
+   * Salience tier. A `ChannelClient.send` is an explicit, deliberate message
+   * — the agent (or headless participant) choosing to surface text to the
+   * channel, e.g. the silent agent's `say` tool — so it defaults to "primary"
+   * (tier 1). The model-loop's own turn narration is tiered separately in
+   * agent-loop. Pass "secondary" to send a deliberately slight message.
+   */
+  tier?: MessageTier;
+  /**
+   * Salience flag: `"say"` marks the message as an explicit, deliberate
+   * utterance (the generalized `say` tool). It survives the `turn-final`
+   * wake filter and is surfaced by the chat projection. Omit for ordinary
+   * traffic.
+   */
+  saliency?: "say";
 }
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 interface ResolvedService {
-    kind: "durable-object" | "worker";
-    targetId?: string;
+  kind: "durable-object" | "worker";
+  targetId?: string;
 }
 export class ChannelClient {
-    private targetPromise: Promise<string> | null = null;
-    constructor(private rpc: RpcCaller, private channelId: string, private protocol: string = DEFAULT_CHANNEL_SERVICE_PROTOCOL) { }
-    private async target(): Promise<string> {
-        this.targetPromise ??= this.rpc
-            .call<ResolvedService>("main", "workers.resolveService", [this.protocol, this.channelId])
-            .then((service) => {
-            if (service.kind !== "durable-object" || !service.targetId) {
-                throw new Error("Channel service must resolve to a Durable Object service");
-            }
-            return service.targetId;
-        });
-        return this.targetPromise;
+  private targetPromise: Promise<string> | null = null;
+  constructor(
+    private rpc: RpcCaller,
+    private channelId: string,
+    private protocol: string = DEFAULT_CHANNEL_SERVICE_PROTOCOL
+  ) {}
+  private async target(): Promise<string> {
+    this.targetPromise ??= this.rpc
+      .call<ResolvedService>("main", "workers.resolveService", [this.protocol, this.channelId])
+      .then((service) => {
+        if (service.kind !== "durable-object" || !service.targetId) {
+          throw new Error("Channel service must resolve to a Durable Object service");
+        }
+        return service.targetId;
+      });
+    return this.targetPromise;
+  }
+  private async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
+    return this.rpc.call<T>(await this.target(), method, [...args]);
+  }
+  async send(
+    participantId: string,
+    messageId: string,
+    content: string,
+    opts?: ChannelSendOptions
+  ): Promise<void> {
+    const senderMetadata = opts?.senderMetadata ?? {};
+    const participantType =
+      typeof senderMetadata["type"] === "string" ? senderMetadata["type"] : undefined;
+    const displayName =
+      typeof senderMetadata["name"] === "string" ? senderMetadata["name"] : participantId;
+    const event: AgenticEvent = {
+      kind: "message.completed",
+      actor: {
+        kind:
+          participantType === "agent" ? "agent" : participantType === "headless" ? "user" : "panel",
+        id: participantId,
+        displayName,
+        metadata: senderMetadata,
+      },
+      causality: { messageId: messageId as never },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: participantType === "agent" ? "assistant" : "user",
+        blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content }],
+        outcome: "completed",
+        tier: opts?.tier ?? "primary",
+        ...(opts?.saliency ? { saliency: opts.saliency } : {}),
+        mentions: opts?.mentions,
+        replyTo: opts?.replyTo as never,
+        to: opts?.to,
+      },
+      createdAt: new Date().toISOString(),
+    };
+    await this.publishAgenticEvent(participantId, event, {
+      idempotencyKey: opts?.idempotencyKey,
+      senderMetadata,
+    });
+  }
+  async publishAgenticEvent(
+    participantId: string,
+    event: AgenticEvent,
+    opts?: {
+      idempotencyKey?: string;
+      senderMetadata?: Record<string, unknown>;
     }
-    private async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
-        return this.rpc.call<T>(await this.target(), method, [...args]);
+  ): Promise<{ id?: number }> {
+    return this.call("publish", participantId, AGENTIC_EVENT_PAYLOAD_KIND, event, opts);
+  }
+  async update(
+    participantId: string,
+    messageId: string,
+    content: string,
+    idempotencyKey?: string,
+    opts?: {
+      append?: boolean;
     }
-    async send(participantId: string, messageId: string, content: string, opts?: ChannelSendOptions): Promise<void> {
-        const senderMetadata = opts?.senderMetadata ?? {};
-        const participantType = typeof senderMetadata["type"] === "string" ? senderMetadata["type"] : undefined;
-        const displayName = typeof senderMetadata["name"] === "string" ? senderMetadata["name"] : participantId;
-        const event: AgenticEvent = {
-            kind: "message.completed",
-            actor: {
-                kind: participantType === "agent" ? "agent" : participantType === "headless" ? "user" : "panel",
-                id: participantId,
-                displayName,
-                metadata: senderMetadata,
-            },
-            causality: { messageId: messageId as never },
-            payload: {
-                protocol: AGENTIC_PROTOCOL_VERSION,
-                role: participantType === "agent" ? "assistant" : "user",
-                blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content }],
-                outcome: "completed",
-                tier: opts?.tier ?? "primary",
-                ...(opts?.saliency ? { saliency: opts.saliency } : {}),
-                mentions: opts?.mentions,
-                replyTo: opts?.replyTo as never,
-                to: opts?.to,
-            },
-            createdAt: new Date().toISOString(),
-        };
-        await this.publishAgenticEvent(participantId, event, {
-            idempotencyKey: opts?.idempotencyKey,
-            senderMetadata,
-        });
-    }
-    async publishAgenticEvent(participantId: string, event: AgenticEvent, opts?: {
-        idempotencyKey?: string;
-        senderMetadata?: Record<string, unknown>;
-    }): Promise<{ id?: number }> {
-        return this.call("publish", participantId, AGENTIC_EVENT_PAYLOAD_KIND, event, opts);
-    }
-    async update(participantId: string, messageId: string, content: string, idempotencyKey?: string, opts?: {
-        append?: boolean;
-    }): Promise<void> {
-        await this.call("update", participantId, messageId, content, idempotencyKey, opts);
-    }
-    async complete(participantId: string, messageId: string, idempotencyKey?: string): Promise<void> {
-        await this.call("complete", participantId, messageId, idempotencyKey);
-    }
-    async error(participantId: string, messageId: string, error: string, code?: string): Promise<void> {
-        await this.call("error", participantId, messageId, error, code);
-    }
-    async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
-        await this.call("sendSignal", participantId, content, contentType);
-    }
-    /**
-     * Typed wrapper for signal messages with structured (JSON) payloads.
-     * The payload is JSON-serialized and routed through the same string-based
-     * sendSignal path. Receivers decode via
-     * `parseSignalEvent` from `@workspace/agentic-core`.
-     */
-    async sendSignalEvent<T>(participantId: string, contentType: string, payload: T): Promise<void> {
-        await this.sendSignal(participantId, JSON.stringify(payload), contentType);
-    }
-    async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
-        return this.call("broadcastStoredEnvelopes", envelopeIds) as Promise<{ broadcasted: number }>;
-    }
-    async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
-        await this.call("updateMetadata", participantId, metadata);
-    }
-    async setTypingState(participantId: string, typing: boolean): Promise<void> {
-        await this.call("setTypingState", participantId, typing);
-    }
-    async subscribe(participantId: string, metadata: Record<string, unknown>): Promise<{
-        ok: boolean;
-        channelConfig?: Record<string, unknown>;
-        envelope: ChannelReplayEnvelope;
-    }> {
-        return this.call("subscribe", participantId, metadata) as Promise<{
-            ok: boolean;
-            channelConfig?: Record<string, unknown>;
-            envelope: ChannelReplayEnvelope;
-        }>;
-    }
-    async unsubscribe(participantId: string): Promise<void> {
-        await this.call("unsubscribe", participantId);
-    }
-    async getParticipants(): Promise<Array<{
+  ): Promise<void> {
+    await this.call("update", participantId, messageId, content, idempotencyKey, opts);
+  }
+  async complete(participantId: string, messageId: string, idempotencyKey?: string): Promise<void> {
+    await this.call("complete", participantId, messageId, idempotencyKey);
+  }
+  async error(
+    participantId: string,
+    messageId: string,
+    error: string,
+    code?: string
+  ): Promise<void> {
+    await this.call("error", participantId, messageId, error, code);
+  }
+  async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
+    await this.call("sendSignal", participantId, content, contentType);
+  }
+  /**
+   * Typed wrapper for signal messages with structured (JSON) payloads.
+   * The payload is JSON-serialized and routed through the same string-based
+   * sendSignal path. Receivers decode via
+   * `parseSignalEvent` from `@workspace/agentic-core`.
+   */
+  async sendSignalEvent<T>(participantId: string, contentType: string, payload: T): Promise<void> {
+    await this.sendSignal(participantId, JSON.stringify(payload), contentType);
+  }
+  async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
+    return this.call("broadcastStoredEnvelopes", envelopeIds) as Promise<{ broadcasted: number }>;
+  }
+  async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
+    await this.call("updateMetadata", participantId, metadata);
+  }
+  async setTypingState(participantId: string, typing: boolean): Promise<void> {
+    await this.call("setTypingState", participantId, typing);
+  }
+  async subscribe(
+    participantId: string,
+    metadata: Record<string, unknown>
+  ): Promise<{
+    ok: boolean;
+    participantId: string;
+    channelConfig?: Record<string, unknown>;
+    envelope: ChannelReplayEnvelope;
+  }> {
+    return this.call("subscribe", participantId, metadata) as Promise<{
+      ok: boolean;
+      participantId: string;
+      channelConfig?: Record<string, unknown>;
+      envelope: ChannelReplayEnvelope;
+    }>;
+  }
+  async unsubscribe(participantId: string, sessionId: string): Promise<void> {
+    await this.call("unsubscribe", participantId, sessionId);
+  }
+  async getParticipants(): Promise<
+    Array<{
+      participantId: string;
+      metadata: Record<string, unknown>;
+    }>
+  > {
+    return this.call("getParticipants") as Promise<
+      Array<{
         participantId: string;
         metadata: Record<string, unknown>;
-    }>> {
-        return this.call("getParticipants") as Promise<Array<{
-            participantId: string;
-            metadata: Record<string, unknown>;
-        }>>;
-    }
-    async callMethod(
-        callerPid: string,
-        targetPid: string,
-        callId: string,
-        method: string,
-        args: unknown,
-        opts?: { invocationId?: string; transportCallId?: string; turnId?: string; timeoutMs?: number }
-    ): Promise<void> {
-        await this.call("callMethod", callerPid, targetPid, callId, method, args, opts);
-    }
-    async cancelCall(callId: string): Promise<void> {
-        await this.call("cancelMethodCall", callId);
-    }
-    async timeoutCall(callId: string, reason?: string): Promise<void> {
-        await this.call("timeoutMethodCall", callId, reason);
-    }
-    async getReplayAfter(sinceId: number): Promise<ChannelReplayEnvelope> {
-        return this.call("getReplayAfter", sinceId) as Promise<ChannelReplayEnvelope>;
-    }
-    async getMessageType(typeId: string): Promise<Record<string, unknown> | null> {
-        return this.call("getMessageType", typeId) as Promise<Record<string, unknown> | null>;
-    }
-    async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
-        return this.call("getMessageSender", participantId, messageId) as Promise<string | null>;
-    }
-    async getMessageTypes(): Promise<Record<string, unknown>[]> {
-        return this.call("getMessageTypes") as Promise<Record<string, unknown>[]>;
-    }
-    /** Channel policy fold state (WS2 §4.4 — replaces getConversationState).
-     *  Default policy "agentic.conversation.v1" carries the conversation
-     *  state (last completed sender, agent streak), rebuilt by replay so it
-     *  survives forks. */
-    async getPolicyState(name?: string): Promise<{
-        policy: string;
-        version: number;
-        foldedThroughSeq: number;
-        state: unknown;
-    }> {
-        return this.call("getPolicyState", ...(name ? [name] : [])) as Promise<{
-            policy: string;
-            version: number;
-            foldedThroughSeq: number;
-            state: unknown;
-        }>;
-    }
-    async updateConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {
-        return this.call("updateConfig", config) as Promise<Record<string, unknown>>;
-    }
-    async getConfig(): Promise<Record<string, unknown> | null> {
-        return this.call("getConfig") as Promise<Record<string, unknown> | null>;
-    }
-    /** Channel provenance used for fork/task lineage recovery. */
-    async getProvenance(): Promise<unknown> {
-        return this.call("getProvenance");
-    }
-    /** Stamp task provenance on a subagent task channel so its `getProvenance`
-     *  reports `kind:"task"` (B1). Called by the spawning vessel right after the
-     *  task channel is created/subscribed. */
-    async recordTaskProvenance(args: {
-        parentChannelId: string;
-        parentContextId: string;
-        runId: string;
-    }): Promise<void> {
-        await this.call("recordTaskProvenance", args);
-    }
+      }>
+    >;
+  }
+  async callMethod(
+    callerPid: string,
+    targetPid: string,
+    callId: string,
+    method: string,
+    args: unknown,
+    opts?: { invocationId?: string; transportCallId?: string; turnId?: string; timeoutMs?: number }
+  ): Promise<void> {
+    await this.call("callMethod", callerPid, targetPid, callId, method, args, opts);
+  }
+  async cancelCall(callId: string): Promise<void> {
+    await this.call("cancelMethodCall", callId);
+  }
+  async timeoutCall(callId: string, reason?: string): Promise<void> {
+    await this.call("timeoutMethodCall", callId, reason);
+  }
+  async getReplayAfter(sinceId: number): Promise<ChannelReplayEnvelope> {
+    return this.call("getReplayAfter", sinceId) as Promise<ChannelReplayEnvelope>;
+  }
+  async getMessageType(typeId: string): Promise<Record<string, unknown> | null> {
+    return this.call("getMessageType", typeId) as Promise<Record<string, unknown> | null>;
+  }
+  async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
+    return this.call("getMessageSender", participantId, messageId) as Promise<string | null>;
+  }
+  async getMessageTypes(): Promise<Record<string, unknown>[]> {
+    return this.call("getMessageTypes") as Promise<Record<string, unknown>[]>;
+  }
+  /** Channel policy fold state (WS2 §4.4 — replaces getConversationState).
+   *  Default policy "agentic.conversation.v1" carries the conversation
+   *  state (last completed sender, agent streak), rebuilt by replay so it
+   *  survives forks. */
+  async getPolicyState(name?: string): Promise<{
+    policy: string;
+    version: number;
+    foldedThroughSeq: number;
+    state: unknown;
+  }> {
+    return this.call("getPolicyState", ...(name ? [name] : [])) as Promise<{
+      policy: string;
+      version: number;
+      foldedThroughSeq: number;
+      state: unknown;
+    }>;
+  }
+  async updateConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.call("updateConfig", config) as Promise<Record<string, unknown>>;
+  }
+  async getConfig(): Promise<Record<string, unknown> | null> {
+    return this.call("getConfig") as Promise<Record<string, unknown> | null>;
+  }
+  /** Channel provenance used for fork/task lineage recovery. */
+  async getProvenance(): Promise<unknown> {
+    return this.call("getProvenance");
+  }
+  /** Stamp task provenance on a subagent task channel so its `getProvenance`
+   *  reports `kind:"task"` (B1). Called by the spawning vessel right after the
+   *  task channel is created/subscribed. */
+  async recordTaskProvenance(args: {
+    parentChannelId: string;
+    parentContextId: string;
+    runId: string;
+  }): Promise<void> {
+    await this.call("recordTaskProvenance", args);
+  }
 }
