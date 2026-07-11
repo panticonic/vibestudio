@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
+import { cliConfigRoot } from "./configPaths.js";
 
 export type CliStoredPairing = Omit<ConnectPairing, "code">;
 
@@ -30,10 +30,7 @@ export function credentialPath(): string {
   // Honor XDG_CONFIG_HOME so the CLI, remote-doctor, and remote-setup-signaling
   // all agree on the config dir (otherwise a split-brain: doctor writes to
   // $XDG_CONFIG_HOME while this store reads ~/.config).
-  const configRoot = process.env["XDG_CONFIG_HOME"]
-    ? path.join(process.env["XDG_CONFIG_HOME"], "vibestudio")
-    : path.join(os.homedir(), ".config", "vibestudio");
-  return path.join(configRoot, "cli-credentials.json");
+  return path.join(cliConfigRoot(), "cli-credentials.json");
 }
 
 export function loadCliCredentials(): CliCredentials | null {

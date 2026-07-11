@@ -103,25 +103,33 @@ export function parseInvocation(command: CliCommand, argv: string[]): ParsedInvo
       const spec = isLong
         ? command.flags?.find((flag) => flag.name === name.slice(2))
         : command.flags?.find((flag) => flag.short === name.slice(1));
-      if (!spec) {
+      // Every structured command accepts --plain as the inverse of its common
+      // --json flag. Keeping it implicit avoids duplicating the flag across the
+      // large declarative registry while renderCommandHelp documents it below.
+      const effectiveSpec =
+        spec ??
+        (name === "--plain" && command.flags?.some((flag) => flag.name === "json")
+          ? { name: "plain", takesValue: false, description: "Force readable output in a pipe" }
+          : undefined);
+      if (!effectiveSpec) {
         throw new UsageError(`Unknown flag for ${command.group} ${command.name}: ${name}`);
       }
-      if (spec.takesValue) {
+      if (effectiveSpec.takesValue) {
         if (inlineValue !== undefined) {
-          flags[spec.name] = inlineValue;
-          if (spec.multiple) pushMulti(spec.name, inlineValue);
+          flags[effectiveSpec.name] = inlineValue;
+          if (effectiveSpec.multiple) pushMulti(effectiveSpec.name, inlineValue);
           continue;
         }
         const value = argv[++i];
         if (value === undefined) throw new UsageError(`Flag ${arg} requires a value`);
-        flags[spec.name] = value;
-        if (spec.multiple) pushMulti(spec.name, value);
+        flags[effectiveSpec.name] = value;
+        if (effectiveSpec.multiple) pushMulti(effectiveSpec.name, value);
       } else if (inlineValue !== undefined) {
-        if (inlineValue === "true") flags[spec.name] = true;
-        else if (inlineValue === "false") flags[spec.name] = false;
+        if (inlineValue === "true") flags[effectiveSpec.name] = true;
+        else if (inlineValue === "false") flags[effectiveSpec.name] = false;
         else throw new UsageError(`Flag ${name} is boolean; use ${name} or ${name}=true|false`);
       } else {
-        flags[spec.name] = true;
+        flags[effectiveSpec.name] = true;
       }
     } else {
       positionals.push(arg);
@@ -146,6 +154,9 @@ export function renderCommandHelp(command: CliCommand): string {
       const valueHint = flag.takesValue ? " <value>" : "";
       lines.push(`  ${(label + valueHint).padEnd(28)} ${flag.description ?? ""}`.trimEnd());
     }
+    if (flags.some((flag) => flag.name === "json")) {
+      lines.push(`  ${"--plain".padEnd(28)} Force readable output even when stdout is piped`);
+    }
     lines.push(
       "",
       "Value flags accept --flag value or --flag=value; boolean flags accept --flag or --flag=true|false."
@@ -157,8 +168,8 @@ export function renderCommandHelp(command: CliCommand): string {
 /** Render usage lines for one group's commands. */
 export function renderGroupHelp(commands: CliCommand[], group: string): string {
   const lines = groupCommands(commands, group).map((cmd) => {
-    const usage = cmd.usage ?? `vibestudio ${cmd.group} ${cmd.name}`;
-    return `  ${usage.padEnd(52)} ${cmd.summary}`;
+    const command = `vibestudio ${cmd.group} ${cmd.name}`;
+    return `  ${command.padEnd(36)} ${cmd.summary}`;
   });
   return lines.join("\n");
 }

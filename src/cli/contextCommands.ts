@@ -176,14 +176,25 @@ async function watch(
     void (async () => {
       const targets = await client
         .call<MirrorTarget[]>("mirror.targets", [{ contextId }])
-        .catch(() => null);
+        .catch((error: unknown) => {
+          console.error(
+            `watch: failed to check inbound updates; will retry: ${error instanceof Error ? error.message : String(error)}`
+          );
+          return null;
+        });
       if (!targets) return;
       for (const target of targets) {
         if (lastState.get(target.repoPath) === target.stateHash) continue;
-        lastState.set(target.repoPath, target.stateHash);
-        await writeState(client, target.stateHash, path.join(dir, target.repoPath), (abs) =>
-          suppress.add(abs)
-        ).catch(() => undefined);
+        try {
+          await writeState(client, target.stateHash, path.join(dir, target.repoPath), (abs) =>
+            suppress.add(abs)
+          );
+          lastState.set(target.repoPath, target.stateHash);
+        } catch (error) {
+          console.error(
+            `watch: failed to apply inbound update for ${target.repoPath}; will retry: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
       }
     })();
   }, WATCH_POLL_MS);

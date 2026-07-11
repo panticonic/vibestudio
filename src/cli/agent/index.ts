@@ -482,33 +482,6 @@ async function diag(inv: ParsedInvocation): Promise<number> {
   }
 }
 
-async function turn(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const model = typeof inv.flags["model"] === "string" ? inv.flags["model"].trim() : "";
-    const message = typeof inv.flags["message"] === "string" ? inv.flags["message"].trim() : "";
-    if (!model) throw new UsageError("agent turn requires --model <ref>");
-    if (!message) throw new UsageError("agent turn requires --message <text>");
-    const result = {
-      status: "not yet wired",
-      model,
-      todo: "Wire through the existing channel create/join and agent-vessel turn driver when that CLI plumbing exists.",
-    };
-    printResult(result, {
-      json,
-      human: () => {
-        console.log("not yet wired");
-        console.log(
-          "TODO: wire this through existing channel create/join and agent-vessel turn plumbing."
-        );
-      },
-    });
-    return 1;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
 export const agentCommands: CliCommand[] = [
   {
     group: "agent",
@@ -599,18 +572,6 @@ export const agentCommands: CliCommand[] = [
       JSON_FLAG,
     ],
     run: diag,
-  },
-  {
-    group: "agent",
-    name: "turn",
-    summary: "Run one headless agent turn (not yet wired)",
-    usage: "vibestudio agent turn --model <ref> --message <text> [--json]",
-    flags: [
-      { name: "model", takesValue: true, description: "Model ref to use for the turn" },
-      { name: "message", takesValue: true, description: "User message text" },
-      JSON_FLAG,
-    ],
-    run: turn,
   },
   skillCommand,
 ];

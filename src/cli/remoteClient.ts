@@ -10,7 +10,7 @@ import {
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
 import { loadPersistedAdminToken } from "@vibestudio/shared/centralAuth";
-import { AuthError } from "./output.js";
+import { AuthError, UsageError, networkErrorMessage } from "./output.js";
 import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import {
@@ -90,9 +90,7 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
       }),
     });
   } catch (error) {
-    throw new AuthError(
-      `cannot reach ${parsed.url}: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw new AuthError(`cannot reach ${parsed.url}: ${networkErrorMessage(error)}`);
   }
   const body = (await response.json().catch(() => ({}))) as {
     deviceId?: unknown;
@@ -311,26 +309,30 @@ function pairingInviteArgs(options: PairingInviteOptions): { ttlMs?: number; wor
 
 function parsePairOptions(options: PairOptions): { url: string; code: string } {
   if (options.link) {
-    throw new Error("internal error: WebRTC pairing link reached HTTP pair parser");
+    throw new UsageError("internal error: WebRTC pairing link reached HTTP pair parser");
   }
   if (!options.url || !options.code) {
-    throw new Error("pair requires --url and --code");
+    throw new UsageError(
+      "pairing requires a vibestudio://connect link, or both --url <server> and --code <pairing-code>"
+    );
   }
   if (!PAIRING_CODE_PATTERN.test(options.code)) {
-    throw new Error("pairing code has an unexpected format");
+    throw new UsageError(
+      "pairing code must be 16–512 non-whitespace characters; copy the complete code from the server"
+    );
   }
   const parsedUrl = parseConnectServerUrl(options.url);
-  if (parsedUrl.kind === "error") throw new Error(parsedUrl.reason);
+  if (parsedUrl.kind === "error") throw new UsageError(parsedUrl.reason);
   // parseConnectServerUrl's declared return type unions in ConnectLink, whose ok
   // variant (now WebRTC room/fp, no `url`) it never actually produces — narrow to
   // the origin-bearing result.
-  if (!("url" in parsedUrl)) throw new Error("server URL did not resolve to an origin");
+  if (!("url" in parsedUrl)) throw new UsageError("server URL did not resolve to an origin");
   return { url: parsedUrl.url, code: options.code };
 }
 
 function parsePairingLink(link: string): ConnectPairing {
   const parsed = parseConnectLink(link);
-  if (parsed.kind === "error") throw new Error(parsed.reason);
+  if (parsed.kind === "error") throw new UsageError(parsed.reason);
   const { kind: _kind, ...pairing } = parsed;
   return pairing;
 }

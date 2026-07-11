@@ -22,11 +22,14 @@ import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { isWebRtcCredential } from "./credentialStore.js";
 import { typedClient } from "./typedClients.js";
 import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
+import { TimeoutError } from "./output.js";
 
 export interface TerminalLaunchGateOptions {
   target?: HostTarget;
   yes?: boolean;
   json?: boolean;
+  /** Overall wait deadline. Defaults to ten minutes. */
+  timeoutMs?: number;
 }
 
 export interface TerminalLaunchGateResult {
@@ -47,6 +50,8 @@ export async function runTerminalLaunchGate(
   const eventsRef: { current: TerminalLaunchEventClient | null } = { current: null };
 
   try {
+    const startedAt = Date.now();
+    const timeoutMs = options.timeoutMs ?? 10 * 60_000;
     let session = await workspace.hostTargets.beginLaunch(target);
     let lastProgress = "";
     for (;;) {
@@ -90,9 +95,17 @@ export async function runTerminalLaunchGate(
           }
         }
         eventsRef.current ??= await createTerminalLaunchEventClient(creds, target);
+        const elapsed = Date.now() - startedAt;
+        const remaining = timeoutMs - elapsed;
+        if (remaining <= 0) {
+          throw new TimeoutError(
+            `terminal startup timed out after ${formatElapsed(elapsed)}; last phase: ${formatLaunchSessionProgress(session) || session.status}. ` +
+              "Run `vibestudio agent diag <unit>` for build/runtime details."
+          );
+        }
         const update = await eventsRef.current.waitForLaunchSessionChange(
           session.sessionId,
-          120_000
+          Math.min(30_000, remaining)
         );
         if (update) {
           session = update;
@@ -101,6 +114,11 @@ export async function runTerminalLaunchGate(
         const refreshed = await workspace.hostTargets.getLaunchSession(session.sessionId);
         if (refreshed) {
           session = refreshed;
+          if (!options.json) {
+            output.write(
+              `Still ${session.status} after ${formatElapsed(Date.now() - startedAt)} — ${formatLaunchSessionProgress(session) || "waiting for the workspace host"}. Press Ctrl-C to stop waiting.\n`
+            );
+          }
           continue;
         }
         return {
@@ -114,6 +132,14 @@ export async function runTerminalLaunchGate(
   } finally {
     await eventsRef.current?.close();
   }
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 async function getDecision(

@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
 import { AuthError, CliError } from "../output.js";
+import { printResult } from "../output.js";
 import { CONTEXT_MARKER, findContextMarker } from "./context.js";
 import { agentSocketPath } from "./hookSocket.js";
 import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
@@ -45,7 +46,10 @@ Usage:
 }
 
 /** Group entry point, dispatched from client.ts. */
-export async function runClaudeGroup(argv: string[]): Promise<number> {
+export async function runClaudeGroup(
+  argv: string[],
+  options: { json?: boolean } = {}
+): Promise<number> {
   const [first, ...rest] = argv;
   if (first === "--help" || first === "-h" || first === "help") {
     printClaudeHelp();
@@ -53,7 +57,7 @@ export async function runClaudeGroup(argv: string[]): Promise<number> {
   }
   if (first === "emit") return await runEmit(rest);
   if (first === "channel-host") return await runChannelHost(rest);
-  if (first === "status") return await runStatus();
+  if (first === "status") return await runStatus(options.json === true);
   // Bare `vibestudio claude` or `vibestudio claude --channel <id>` → launcher.
   if (first === undefined || first.startsWith("-")) return await runLauncher(argv);
   console.error(`Unknown claude command: ${first}`);
@@ -218,7 +222,7 @@ async function runChannelHost(argv: string[]): Promise<number> {
 // vibestudio claude status   (tier probe, plan §8.3)
 // ---------------------------------------------------------------------------
 
-async function runStatus(): Promise<number> {
+async function runStatus(json: boolean): Promise<number> {
   const env = process.env;
   const marker = findContextMarker(process.cwd());
   const creds = loadCliCredentials();
@@ -260,7 +264,10 @@ async function runStatus(): Promise<number> {
     }
   }
 
-  console.log(lines.join("\n"));
+  printResult(
+    { tier, paired: Boolean(creds), contextId: marker?.contextId ?? null, lines },
+    { json, human: () => console.log(lines.join("\n")) }
+  );
   return 0;
 }
 

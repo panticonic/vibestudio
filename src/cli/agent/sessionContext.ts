@@ -245,11 +245,16 @@ function resolveSessionFileScope(name: string): SessionScope {
   if (!isValidSessionName(name)) {
     throw new UsageError(`Invalid session name: ${name} (use letters, digits, "_", "-")`);
   }
+  // Pairing is the prerequisite for session lookup. Checking it first avoids
+  // sending a brand-new user through a misleading attach-then-not-paired chain.
+  const creds = requireDeviceCredential();
   const session = loadAgentSession(name);
   if (!session) {
-    throw new CliError(`no session named ${name} — run \`vibestudio agent attach ${name}\` first`);
+    throw new CliError(
+      `no session named ${name} — run \`vibestudio agent attach ${name}\`, pass --context <id>, ` +
+        `or run the command inside a folder created by \`vibestudio context mirror\``
+    );
   }
-  const creds = requireDeviceCredential();
   if (session.serverUrl !== creds.url) {
     throw new StaleSessionError(
       `session ${name} was created for ${session.serverUrl}, but the stored credential targets ${creds.url}`

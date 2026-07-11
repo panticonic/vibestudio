@@ -18,7 +18,7 @@ The vibestudio sandbox:
 
 ## Installation
 
-Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
+Requires **Node.js 22.13+**. Both packages update via npm (re-run with `@latest`).
 
 ### Desktop app (macOS, Linux; Windows soon)
 
@@ -27,7 +27,7 @@ Installs the GUI and the bundled server:
 ```bash
 npm install -g @panticonic/vibestudio
 vibestudio             # launch the desktop app
-vibestudio --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
+vibestudio --help      # grouped CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
 
 On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
@@ -39,9 +39,15 @@ with `ELECTRON_RUN_AS_NODE`) that outlives the app; on launch the app attaches t
 healthy recorded server (validated over the unauthenticated `GET /healthz`) or
 spawns a fresh one. Local and remote use the same auth model (device pairing +
 refresh credentials); only the transport differs — loopback WebSocket locally,
-WebRTC remotely. Quitting the app leaves the server running when background work is
-active (you are prompted, and the choice can be remembered); an idle detached server
-stops on its own. See [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
+WebRTC remotely. Quitting the app leaves the detached server running by default so
+background work is not interrupted; an idle server stops on its own. You can choose
+to stop it on quit in Settings. See [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the
+on-disk files.
+
+On the first launch, choose or create a workspace. The onboarding chat waits for
+you to choose a model provider; it does not send a message on your behalf or begin
+a hidden local-model download. Local models remain an explicit offline option in
+the model picker and Local Models panel.
 
 ### Headless server (remote/home server; clients connect to it)
 
@@ -131,9 +137,9 @@ it only skips rebuilding the local artifacts.
 
 ## How It Works
 
-Each panel in vibestudio is a browser session that can have child panels. This creates a tree structure where you can:
+Each panel in Vibestudio occupies a node in the workspace's panel tree. You can:
 
-1. **Navigate down**: Click "Add Child Browser" to create a nested browser panel
+1. **Open or nest panels**: Use New Panel (`Cmd+T` on macOS, `Ctrl+Shift+T` elsewhere) or panel actions to create content
 2. **Navigate up**: Use ancestor breadcrumbs to go back to parent panels
 3. **Navigate sideways**: Click sibling tabs to switch between panels at the same level
 4. **Navigate down through descendants**: Click descendant breadcrumbs to jump to child panels

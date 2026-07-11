@@ -333,7 +333,11 @@ async function tail(inv: ParsedInvocation): Promise<number> {
 
 function requireChannelId(inv: ParsedInvocation): string {
   const id = inv.positionals[0] ?? process.env["VIBESTUDIO_CHANNEL_ID"];
-  if (!id) throw new UsageError("missing channel id");
+  if (!id) {
+    throw new UsageError(
+      "missing channel id — run `vibestudio channel list`, or set VIBESTUDIO_CHANNEL_ID"
+    );
+  }
   return id;
 }
 

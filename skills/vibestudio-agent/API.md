@@ -110,6 +110,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 | `credentials.getClientConfigStatus` | Return the configured status of an OAuth client config (which fields are set, URLs, status) without revealing secret values; rejects callers outside the config's trust scope. |
 | `credentials.deleteClientConfig` | Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); userland callers are prompted to confirm and only the config's owner may delete it. |
 | `credentials.forwardOAuthCallback` | Deliver an inbound OAuth provider callback (code/state, or a full callback URL) to its pending connection transaction, validating the caller against the transaction's redirect strategy. |
+| `credentials.cancelOAuth` | Cancel a pending interactive OAuth connection transaction. |
 | `credentials.listStoredCredentials` | List summaries of stored URL-bound credentials visible to the caller; secret material is never included. |
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); only an authorized administrator of the credential may call it. |
@@ -341,6 +342,17 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.setCollapsed` | Set whether a panel is collapsed in the tree UI. |
 | `panelTree.expandIds` | Expand (un-collapse) a set of panels in the tree UI. |
 
+## `permissions`
+
+Trusted review and revocation of durable permission grants
+
+Allowed callers: `shell`, `app`, `panel`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `permissions.list` | List durable capability and userland grants for the trusted permissions page. |
+| `permissions.revoke` | Revoke one durable permission grant by its opaque id. |
+
 ## `presence`
 
 Active shell/panel ownership
@@ -416,6 +428,7 @@ Allowed callers: `shell`, `app`, `server`
 | Method | Description |
 |--------|-------------|
 | `shellApproval.resolve` | Record the user's decision (once/session/version/repo/deny/dismiss) on a pending approval, resolving its queued request. |
+| `shellApproval.blockCapability` | Deny a pending capability request and remember that denial for this exact code version until revoked. |
 | `shellApproval.resolveBootstrap` | Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval. |
 | `shellApproval.resolveUserland` | Resolve a pending userland approval by selecting one of the presented option values (or 'dismiss'); rejects if the choice was not offered to the user. |
 | `shellApproval.resolveExternalAgent` | Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request. |

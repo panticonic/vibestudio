@@ -337,6 +337,25 @@ describe("vibestudio CLI", () => {
       expect.stringContaining(["vibestudio", "remote", "start"].join(" "))
     );
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("vibestudio-client"));
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("Getting started:");
+    expect(output).toContain("remote — pairing, servers, workspaces");
+    expect(output).not.toContain("agent turn");
+  });
+
+  it("routes the common help <group> spelling to group help", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["help", "remote"])).resolves.toBe(0);
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("vibestudio remote");
+    expect(output).toContain("vibestudio remote pair");
+    expect(output).not.toContain("vibestudio mobile install");
   });
 
   it("prints the package version", async () => {
@@ -389,6 +408,28 @@ describe("vibestudio CLI", () => {
     await expect(
       main(["remote", "pair", "--url", "https://host.tailnet.ts.net", "--code", "A".repeat(24)])
     ).resolves.toBe(3);
+  });
+
+  it("treats a bare remote pair as an actionable usage error", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["remote", "pair", "--json"])).resolves.toBe(2);
+    const output = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("vibestudio://connect link");
+    expect(output).toContain('exitCode":2');
+  });
+
+  it("explains how to pair when remote status is unpaired", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
+    const output = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("vibestudio remote pair");
+    expect(output).toContain("desktop app");
   });
 
   it("rejects old top-level remote commands", async () => {

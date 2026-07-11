@@ -1,6 +1,10 @@
 # vibestudio CLI
 
 `vibestudio` is the unified terminal entrypoint for remote server and mobile setup.
+Run `vibestudio --help` for a grouped overview, `vibestudio <group> --help` for
+commands in one area, and `vibestudio <group> <command> --help` for full flags.
+Output switches to JSON when stdout is piped; pass `--plain` to keep the readable
+format (or `--json` to request structured output explicitly).
 
 ## Development
 
@@ -88,11 +92,14 @@ running workspace code.
 
 Desktop pairing and workspace selection happen in the desktop bootstrap UI.
 `terminal start` runs fully in the CLI; use `--yes` only for automation that
-should approve each startup request once.
+should approve each startup request once. It reports a heartbeat while the host
+is preparing and stops after 10 minutes by default; override that deadline with
+`--timeout 30s`, `--timeout 20m`, and similar durations.
 
-CLI credentials are stored in `~/.config/vibestudio/cli-credentials.json` with
-file mode `0600`. The server's local admin token is stored separately in
-`~/.config/vibestudio/admin-token`.
+CLI credentials and agent sessions are stored below
+`${XDG_CONFIG_HOME:-~/.config}/vibestudio` with file mode `0600` for credential
+and session files. The server's local admin token is stored separately in the
+same configuration root.
 
 ## Remote Deploy
 
@@ -160,16 +167,6 @@ vibestudio agent services [NAME]
 vibestudio agent logs UNIT
 vibestudio agent diag UNIT
 ```
-
-The planned headless turn command is present as a stub:
-
-```sh
-vibestudio agent turn --model <ref> --message "hello" [--json]
-```
-
-It currently prints `not yet wired`. This command should only be fully
-implemented once the CLI has existing channel create/join and agent-vessel turn
-plumbing to call.
 
 ## Mobile
 
