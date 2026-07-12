@@ -6,6 +6,7 @@ import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import type { IncomingMessage, ServerResponse } from "http";
 import { createDevLogger } from "@vibestudio/dev-log";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   BLOBSTORE_READ_POLICY as READ_POLICY,
@@ -30,6 +31,12 @@ import type {
 } from "@vibestudio/shared/contentTree/worktreeHash";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
+import {
+  blobCasPath,
+  centralBlobCasDir,
+  ensureBlobCasLayout,
+  putBlobBytes,
+} from "../storage/blobCas.js";
 import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("BlobstoreService");
@@ -43,10 +50,7 @@ export interface BlobStat {
   mtime: number;
 }
 
-export function ensureLayout(blobsDir: string): void {
-  fs.mkdirSync(path.join(blobsDir, "tmp"), { recursive: true });
-  fs.mkdirSync(path.join(blobsDir, "sha256"), { recursive: true });
-}
+export const ensureLayout = ensureBlobCasLayout;
 
 function sweepTmp(blobsDir: string): void {
   const tmpDir = path.join(blobsDir, "tmp");
@@ -55,15 +59,40 @@ function sweepTmp(blobsDir: string): void {
   }
 }
 
-function validateDigest(digest: string): void {
-  if (!DIGEST_RE.test(digest)) {
-    throw new Error("Invalid sha256 digest");
+export const blobPath = blobCasPath;
+
+function backingCasDir(blobsDir: string): string {
+  const override = process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+  if (override) return path.resolve(override);
+
+  const resolved = path.resolve(blobsDir);
+  const stateDir = path.dirname(resolved);
+  const workspaceDir = path.dirname(stateDir);
+  const workspacesDir = path.resolve(getCentralDataPath(), "workspaces");
+  if (
+    path.basename(resolved) === "blobs" &&
+    path.basename(stateDir) === "state" &&
+    path.dirname(workspaceDir) === workspacesDir
+  ) {
+    return centralBlobCasDir(getCentralDataPath());
   }
+  return blobsDir;
 }
 
-export function blobPath(blobsDir: string, digest: string): string {
-  validateDigest(digest);
-  return path.join(blobsDir, "sha256", digest.slice(0, 2), digest.slice(2, 4), digest.slice(4));
+async function ensureWorkspaceBlobReference(
+  blobsDir: string,
+  backingDir: string,
+  digest: string
+): Promise<void> {
+  if (path.resolve(blobsDir) === path.resolve(backingDir)) return;
+  const sourcePath = blobCasPath(backingDir, digest);
+  const referencePath = blobPath(blobsDir, digest);
+  await fsp.mkdir(path.dirname(referencePath), { recursive: true });
+  try {
+    await fsp.link(sourcePath, referencePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -105,6 +134,19 @@ async function sha256File(filePath: string): Promise<string> {
   return hash.digest("hex");
 }
 
+async function promoteTempBlob(blobsDir: string, tmpPath: string, digest: string): Promise<void> {
+  const backingDir = backingCasDir(blobsDir);
+  ensureBlobCasLayout(backingDir);
+  const finalPath = blobCasPath(backingDir, digest);
+  await fsp.mkdir(path.dirname(finalPath), { recursive: true });
+  try {
+    await fsp.link(tmpPath, finalPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  await ensureWorkspaceBlobReference(blobsDir, backingDir, digest);
+}
+
 async function putBlob(
   blobsDir: string,
   req: IncomingMessage
@@ -124,13 +166,7 @@ async function putBlob(
   try {
     await pipeline(req, tee, fs.createWriteStream(tmpPath, { flags: "wx" }));
     const digest = hash.digest("hex");
-    const finalPath = blobPath(blobsDir, digest);
-    await fsp.mkdir(path.dirname(finalPath), { recursive: true });
-    try {
-      await fsp.link(tmpPath, finalPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
+    await promoteTempBlob(blobsDir, tmpPath, digest);
     await fsp.unlink(tmpPath).catch((error) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     });
@@ -145,29 +181,10 @@ export async function putBytes(
   blobsDir: string,
   bytes: Buffer
 ): Promise<{ digest: string; size: number }> {
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  const finalPath = blobPath(blobsDir, digest);
-  if (await pathExists(finalPath)) {
-    return { digest, size: bytes.byteLength };
-  }
-
-  const tmpPath = path.join(blobsDir, "tmp", `${process.pid}-${randomUUID()}.tmp`);
-  try {
-    await fsp.writeFile(tmpPath, bytes, { flag: "wx" });
-    await fsp.mkdir(path.dirname(finalPath), { recursive: true });
-    try {
-      await fsp.link(tmpPath, finalPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    await fsp.unlink(tmpPath).catch((error) => {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    });
-    return { digest, size: bytes.byteLength };
-  } catch (error) {
-    await fsp.unlink(tmpPath).catch(() => {});
-    throw error;
-  }
+  const backingDir = backingCasDir(blobsDir);
+  const stored = await putBlobBytes(backingDir, bytes);
+  await ensureWorkspaceBlobReference(blobsDir, backingDir, stored.digest);
+  return stored;
 }
 
 export async function getBytes(blobsDir: string, digest: string): Promise<Buffer | null> {
@@ -206,13 +223,7 @@ export async function putFile(
       fs.createWriteStream(tmpPath, { flags: "wx" })
     );
     const digest = hash.digest("hex");
-    const finalPath = blobPath(blobsDir, digest);
-    await fsp.mkdir(path.dirname(finalPath), { recursive: true });
-    try {
-      await fsp.link(tmpPath, finalPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
+    await promoteTempBlob(blobsDir, tmpPath, digest);
     await fsp.unlink(tmpPath).catch((error) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     });
@@ -1267,6 +1278,8 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
     routes,
     start() {
       ensureLayout(deps.blobsDir);
+      const backingDir = backingCasDir(deps.blobsDir);
+      ensureBlobCasLayout(backingDir);
       sweepTmp(deps.blobsDir);
     },
   };

@@ -15,8 +15,14 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { getUserDataPath } from "@vibestudio/env-paths";
+import { getCentralDataPath, getUserDataPath } from "@vibestudio/env-paths";
 import { assertPresent } from "../../lintHelpers";
+import {
+  blobCasPath,
+  centralBlobCasDir,
+  linkBlobFileSync,
+  putBlobBytesSync,
+} from "../storage/blobCas.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -122,6 +128,29 @@ function getBuildDir(key: string): string {
   return path.join(getBuildsDir(), key);
 }
 
+/**
+ * Shared, content-addressed artifact bytes for managed workspaces.
+ *
+ * Build metadata remains in each workspace because sourceStateHash and builtAt
+ * are workspace-specific. Only immutable artifact payloads are hardlinked.
+ */
+export function getCentralBuildArtifactPoolDir(): string {
+  return centralBlobCasDir(getCentralDataPath());
+}
+
+function getSharedArtifactPoolDir(): string | null {
+  const override = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
+  if (override) return path.resolve(override);
+
+  const userDataPath = path.resolve(getUserDataPath());
+  const workspaceDir = path.dirname(userDataPath);
+  const workspacesDir = path.resolve(getCentralDataPath(), "workspaces");
+  if (path.basename(userDataPath) !== "state" || path.dirname(workspaceDir) !== workspacesDir) {
+    return null;
+  }
+  return getCentralBuildArtifactPoolDir();
+}
+
 function isFileSystemErrorCode(error: unknown, codes: readonly string[]): boolean {
   if (!(error instanceof Error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -188,6 +217,48 @@ function artifactIntegrity(entry: BuildArtifactInput): string {
       ? Buffer.from(entry.content, "base64")
       : Buffer.from(entry.content, "utf-8");
   return `sha256-${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function integrityHex(integrity: string): string | null {
+  const match = /^sha256-([a-f0-9]{64})$/.exec(integrity);
+  return match?.[1] ?? null;
+}
+
+function artifactBlobPath(poolDir: string, integrity: string): string | null {
+  const hex = integrityHex(integrity);
+  return hex ? blobCasPath(poolDir, hex) : null;
+}
+
+function entryBytes(entry: BuildArtifactInput & { encoding: BuildArtifactEncoding }): Buffer {
+  return entry.encoding === "base64"
+    ? Buffer.from(entry.content, "base64")
+    : Buffer.from(entry.content, "utf-8");
+}
+
+function writeArtifactFile(
+  targetPath: string,
+  entry: BuildArtifactInput & { encoding: BuildArtifactEncoding; integrity: string },
+  poolDir: string | null
+): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const bytes = entryBytes(entry);
+  const blobPath = poolDir ? artifactBlobPath(poolDir, entry.integrity) : null;
+  if (poolDir && blobPath) {
+    const stored = putBlobBytesSync(poolDir, bytes);
+    if (stored.filePath !== blobPath) {
+      throw new Error(`Artifact integrity mismatch for ${entry.path}`);
+    }
+    try {
+      fs.linkSync(blobPath, targetPath);
+      return;
+    } catch (error) {
+      // Custom workspace paths can place state and the central pool on
+      // different filesystems. Preserve correctness there, just without
+      // physical deduplication.
+      if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
+    }
+  }
+  fs.writeFileSync(targetPath, bytes);
 }
 
 function buildArtifactSetIntegrity(entries: BuildArtifactManifestEntry[]): string {
@@ -315,6 +386,7 @@ export function primaryArtifactFilePath(
 export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetadata): BuildResult {
   const dir = getBuildDir(key);
   const metadataPath = path.join(dir, "metadata.json");
+  const artifactPoolDir = getSharedArtifactPoolDir();
 
   // Write to temp first, then rename atomically. Use crypto.randomBytes for
   // an unpredictable name — `${Date.now()}.${process.pid}` is guessable and
@@ -337,12 +409,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
       throw new Error(`Invalid build artifact path: ${entry.path}`);
     }
     const targetPath = path.join(tmpDir, entry.path);
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.writeFileSync(
-      targetPath,
-      entry.content,
-      (entry.encoding === "base64" ? "base64" : "utf-8") as BufferEncoding
-    );
+    writeArtifactFile(targetPath, entry, artifactPoolDir);
   }
   const artifactManifest = entries.map(manifestForEntry);
   const storedMetadata = metadataForEntries(metadata, artifactManifest);
@@ -420,4 +487,128 @@ export function gc(activeKeys: Set<string>): { freed: number } {
   }
 
   return { freed };
+}
+
+export interface BuildArtifactDedupeResult {
+  scanned: number;
+  linked: number;
+  alreadyShared: number;
+  skipped: number;
+  estimatedBytesFreed: number;
+  errors: string[];
+}
+
+function sameInode(a: fs.Stats, b: fs.Stats): boolean {
+  // ino is documented as zero on some Windows filesystems. Treat zero as
+  // unknown instead of incorrectly declaring every file shared.
+  return a.dev === b.dev && a.ino !== 0 && a.ino === b.ino;
+}
+
+function ensureArtifactBlobFromFile(
+  poolDir: string,
+  integrity: string,
+  sourcePath: string
+): string {
+  const digest = integrityHex(integrity);
+  if (!digest) throw new Error("Invalid artifact integrity");
+  return linkBlobFileSync(poolDir, digest, sourcePath);
+}
+
+function replaceWithHardlink(filePath: string, blobPath: string): void {
+  const tmpPath = `${filePath}.dedupe.${crypto.randomBytes(16).toString("hex")}`;
+  fs.linkSync(blobPath, tmpPath);
+  try {
+    // Atomic on the managed-workspace filesystems we support: readers see
+    // either the old complete file or the shared complete inode.
+    fs.renameSync(tmpPath, filePath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch (cleanupError) {
+      if (!isFileSystemErrorCode(cleanupError, ["ENOENT"])) {
+        warnCleanupFailure(tmpPath, cleanupError);
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * Relink existing build payloads into the shared artifact CAS.
+ *
+ * This intentionally leaves metadata.json, artifacts.json and package.json in
+ * the workspace build directory. They are tiny and metadata is workspace-local.
+ */
+export function dedupeBuildArtifacts(
+  buildsDir = getBuildsDir(),
+  poolDir = getCentralBuildArtifactPoolDir()
+): BuildArtifactDedupeResult {
+  const result: BuildArtifactDedupeResult = {
+    scanned: 0,
+    linked: 0,
+    alreadyShared: 0,
+    skipped: 0,
+    estimatedBytesFreed: 0,
+    errors: [],
+  };
+  if (!fs.existsSync(buildsDir)) return result;
+
+  for (const buildEntry of fs.readdirSync(buildsDir, { withFileTypes: true })) {
+    if (!buildEntry.isDirectory()) continue;
+    const buildDir = path.join(buildsDir, buildEntry.name);
+    const manifestPath = path.join(buildDir, "artifacts.json");
+    if (!fs.existsSync(manifestPath)) continue;
+
+    let manifest: BuildArtifactManifestEntry[];
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BuildArtifactManifestEntry[];
+    } catch (error) {
+      result.errors.push(
+        `${manifestPath}: ${error instanceof Error ? error.message : String(error)}`
+      );
+      continue;
+    }
+
+    for (const entry of manifest) {
+      result.scanned++;
+      if (
+        !entry.integrity ||
+        path.isAbsolute(entry.path) ||
+        entry.path.split(/[\\/]/).includes("..")
+      ) {
+        result.skipped++;
+        continue;
+      }
+      const blobPath = artifactBlobPath(poolDir, entry.integrity);
+      const filePath = path.join(buildDir, entry.path);
+      if (!blobPath || !fs.existsSync(filePath)) {
+        result.skipped++;
+        continue;
+      }
+
+      try {
+        ensureArtifactBlobFromFile(poolDir, entry.integrity, filePath);
+        const fileStat = fs.statSync(filePath);
+        const blobStat = fs.statSync(blobPath);
+        if (sameInode(fileStat, blobStat)) {
+          result.alreadyShared++;
+          continue;
+        }
+        if (fileStat.size !== blobStat.size) {
+          throw new Error(
+            `integrity collision or corrupt artifact (${fileStat.size} != ${blobStat.size})`
+          );
+        }
+        replaceWithHardlink(filePath, blobPath);
+        result.linked++;
+        if (fileStat.nlink === 1) result.estimatedBytesFreed += fileStat.blocks * 512;
+      } catch (error) {
+        result.errors.push(
+          `${filePath}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  }
+
+  return result;
 }

@@ -7,6 +7,7 @@ import { setUserDataPath } from "@vibestudio/env-paths";
 
 import {
   artifactFilePath,
+  dedupeBuildArtifacts,
   get,
   primaryArtifact,
   primaryArtifactFilePath,
@@ -213,6 +214,73 @@ describe("build artifact helpers", () => {
 
       expect(result).toBeNull();
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates artifact bytes across workspace-local build stores", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    const previousPool = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
+    try {
+      const pool = path.join(root, "artifact-cas");
+      const stateA = path.join(root, "workspaces", "a", "state");
+      const stateB = path.join(root, "workspaces", "b", "state");
+      process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"] = pool;
+
+      setUserDataPath(stateA);
+      const resultA = put(
+        "build-a",
+        { entries: build().artifacts },
+        { ...build().metadata, sourceStateHash: "state:a" }
+      );
+      setUserDataPath(stateB);
+      const resultB = put(
+        "build-b",
+        { entries: build().artifacts },
+        { ...build().metadata, sourceStateHash: "state:b" }
+      );
+
+      const artifactA = fs.statSync(path.join(resultA.dir, "worker.js"));
+      const artifactB = fs.statSync(path.join(resultB.dir, "worker.js"));
+      expect(artifactA.ino).toBe(artifactB.ino);
+      expect(artifactA.nlink).toBeGreaterThanOrEqual(3);
+      expect(resultA.sourceStateHash).toBe("state:a");
+      expect(resultB.sourceStateHash).toBe("state:b");
+      expect(fs.statSync(path.join(resultA.dir, "metadata.json")).ino).not.toBe(
+        fs.statSync(path.join(resultB.dir, "metadata.json")).ino
+      );
+    } finally {
+      if (previousPool === undefined) delete process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
+      else process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"] = previousPool;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates existing independent artifacts into the shared CAS", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    const previousPool = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
+    try {
+      delete process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
+      const stateA = path.join(root, "a");
+      const stateB = path.join(root, "b");
+      setUserDataPath(stateA);
+      const resultA = put("build-a", { entries: build().artifacts }, build().metadata);
+      setUserDataPath(stateB);
+      const resultB = put("build-b", { entries: build().artifacts }, build().metadata);
+      const fileA = path.join(resultA.dir, "worker.js");
+      const fileB = path.join(resultB.dir, "worker.js");
+      expect(fs.statSync(fileA).ino).not.toBe(fs.statSync(fileB).ino);
+
+      const pool = path.join(root, "artifact-cas");
+      const first = dedupeBuildArtifacts(path.join(stateA, "builds"), pool);
+      const second = dedupeBuildArtifacts(path.join(stateB, "builds"), pool);
+
+      expect(first.alreadyShared).toBe(1);
+      expect(second.linked).toBe(1);
+      expect(fs.statSync(fileA).ino).toBe(fs.statSync(fileB).ino);
+    } finally {
+      if (previousPool === undefined) delete process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
+      else process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"] = previousPool;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

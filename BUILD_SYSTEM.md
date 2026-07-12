@@ -105,6 +105,11 @@ Each unit's `package.json` is read. Dependencies matching any workspace scope (`
 
 **Internal deps must use `workspace:*`** (equivalently `*` or an empty spec). GAD workspace builds do **not** support per-dependency branch/commit refs: a spec like `workspace:branch:experimental` or `workspace:commit:abc1234` is rejected — the dep is still treated as an internal edge, but the unit records a `dependencyError` (`validateInternalDepSpec`) and is blocked from building. All units resolve at the same workspace state; there is no per-dep source pinning.
 
+Build manifests and provenance are stored per-workspace, but artifact payloads
+are stored in the central SHA-256 CAS and hardlinked into each workspace build
+directory. Identical bundles, chunks, and assets therefore occupy one physical
+copy across workspaces without sharing workspace-specific metadata.
+
 Whole-build ref targeting is a separate concept (see `refs.ts` / `RuntimeEntityBuildRef`): a build ref is `main`, `state:<stateHash>`, or `ctx:<contextId>` — not a git branch/commit/tag.
 
 ### Effective Version Computation (`effectiveVersion.ts`)

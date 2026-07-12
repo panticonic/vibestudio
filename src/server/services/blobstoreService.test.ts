@@ -14,10 +14,13 @@ import {
   type WorktreeHashFile,
 } from "@vibestudio/shared/contentTree/worktreeHash";
 import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
+import { dedupeBlobNamespaceSync } from "../storage/blobCas.js";
 import {
+  blobPath,
   createBlobstoreService,
   diffTrees,
   ensureLayout,
+  getBytes,
   getTree,
   hasTreeObject,
   listTree,
@@ -181,6 +184,57 @@ describe("blobstoreService", () => {
     } finally {
       await stopServer(server);
     }
+  });
+
+  it("uses one global CAS while preserving per-workspace blob membership", async () => {
+    const previousGlobalCas = process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+    try {
+      const globalCas = path.join(rootDir, "global-cas");
+      const workspaceA = path.join(rootDir, "workspace-a", "blobs");
+      const workspaceB = path.join(rootDir, "workspace-b", "blobs");
+      process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = globalCas;
+      const bytes = Buffer.from("shared workspace content", "utf8");
+
+      const storedA = await putBytes(workspaceA, bytes);
+      const storedB = await putBytes(workspaceB, bytes);
+      const pathA = blobPath(workspaceA, storedA.digest);
+      const pathB = blobPath(workspaceB, storedB.digest);
+      const globalPath = blobPath(globalCas, storedA.digest);
+      const [statA, statB, globalStat] = await Promise.all([
+        fsp.stat(pathA),
+        fsp.stat(pathB),
+        fsp.stat(globalPath),
+      ]);
+
+      expect(storedB).toEqual(storedA);
+      expect(statA.ino).toBe(globalStat.ino);
+      expect(statB.ino).toBe(globalStat.ino);
+      await fsp.unlink(pathA);
+      await expect(getBytes(workspaceA, storedA.digest)).resolves.toBeNull();
+      await expect(getBytes(workspaceB, storedB.digest)).resolves.toEqual(bytes);
+    } finally {
+      if (previousGlobalCas === undefined) delete process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+      else process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = previousGlobalCas;
+    }
+  });
+
+  it("migrates independent workspace blob namespaces into the global CAS", async () => {
+    const namespaceA = path.join(rootDir, "namespace-a");
+    const namespaceB = path.join(rootDir, "namespace-b");
+    const globalCas = path.join(rootDir, "global-cas");
+    const bytes = Buffer.from("legacy duplicate blob", "utf8");
+    const storedA = await putBytes(namespaceA, bytes);
+    const storedB = await putBytes(namespaceB, bytes);
+    const pathA = blobPath(namespaceA, storedA.digest);
+    const pathB = blobPath(namespaceB, storedB.digest);
+    expect((await fsp.stat(pathA)).ino).not.toBe((await fsp.stat(pathB)).ino);
+
+    const first = dedupeBlobNamespaceSync(namespaceA, globalCas);
+    const second = dedupeBlobNamespaceSync(namespaceB, globalCas);
+
+    expect(first.alreadyShared).toBe(1);
+    expect(second.linked).toBe(1);
+    expect((await fsp.stat(pathA)).ino).toBe((await fsp.stat(pathB)).ino);
   });
 
   it("returns 404 for unknown digests and 400 for malformed digests", async () => {
