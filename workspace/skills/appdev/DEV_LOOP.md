@@ -178,7 +178,9 @@ pnpm smoke:full
 ```
 
 That command runs the branded desktop pairing smoke, desktop Playwright e2e, and
-Android mobile smoke, writing logs under `test-results/full-system-smoke/`.
+Android mobile smoke through the deployed signaling service, writing logs under
+`test-results/full-system-smoke/`. Pass `--local-signaling` when intentionally
+testing against local Miniflare/coturn instead.
 
 ## Terminal App Loop
 

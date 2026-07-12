@@ -14,6 +14,7 @@ describe("npm CLI packaging", () => {
     expect(copies).toHaveLength(2);
     expect(fs.existsSync(path.resolve("scripts/cli/remote-serve.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/server-entry.mjs"))).toBe(true);
+    expect(fs.existsSync(path.resolve("scripts/cli/lib/smoke-remote-server.mjs"))).toBe(true);
   });
 
   it("fails staging when a packaged passthrough dependency is absent", () => {
@@ -23,6 +24,7 @@ describe("npm CLI packaging", () => {
       "scripts/cli/remote-doctor.mjs",
       "scripts/cli/lib/server-entry.mjs",
       "scripts/cli/lib/pair-server.mjs",
+      "scripts/cli/lib/smoke-remote-server.mjs",
     ]) {
       const target = path.join(root, relative);
       mkdirSync(path.dirname(target), { recursive: true });

@@ -33,6 +33,7 @@ export function parsePairArgs(argv, config) {
     help: false,
     signalUrl: undefined,
     signalSource: "default",
+    readyFile: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -54,6 +55,8 @@ export function parsePairArgs(argv, config) {
       throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
       options.appRoot = argv[++i] ?? "";
+    } else if (arg === "--ready-file") {
+      options.readyFile = path.resolve(argv[++i] ?? "");
     } else if (arg === "--signal-url" || arg === "--signaling-url") {
       options.signalUrl = argv[++i] ?? "";
       options.signalSource = "flag";
@@ -94,6 +97,9 @@ Options:
       Stable gateway port for the loopback server. Defaults through ${config.portEnv.join(", ")} or 3030.
   --app-root <path>
       Application root passed to the server.
+  --ready-file <path>
+      Write structured server readiness JSON to this path. Intended for
+      deployment checks and smoke automation.
   --signal-url, --signaling-url <url>
       WebRTC signaling endpoint. Resolution: flag > ${signalEnvFor(config).join(", ")} > config > hosted default.
       Use wss:// or https:// for remote endpoints; ws:// and http:// are only
@@ -434,6 +440,8 @@ function buildServerArgs(options, config = {}) {
     serverEntryArg(),
     "--host",
     LOOPBACK_HOST,
+    "--bind-host",
+    LOOPBACK_HOST,
     "--gateway-port",
     String(options.port),
     "--serve-panels",
@@ -442,6 +450,7 @@ function buildServerArgs(options, config = {}) {
 
   if (options.dev) args.push("--ephemeral");
   if (options.appRoot) args.push("--app-root", options.appRoot);
+  if (options.readyFile) args.push("--ready-file", options.readyFile);
   if (config.requireMobileReady) args.push("--require-mobile-ready");
   if (config.requireElectronReady) args.push("--require-electron-ready");
   return args;

@@ -244,6 +244,7 @@ export function assertPassthroughScriptsStaged(root) {
     "scripts/cli/remote-doctor.mjs",
     "scripts/cli/lib/server-entry.mjs",
     "scripts/cli/lib/pair-server.mjs",
+    "scripts/cli/lib/smoke-remote-server.mjs",
   ];
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
   if (missing.length > 0) {
