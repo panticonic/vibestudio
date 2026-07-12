@@ -19,7 +19,7 @@ import {
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Callout, Flex, Text, Theme } from "@radix-ui/themes";
+import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { AgenticChat, ErrorBoundary, ReviewAndPickSurface } from "@workspace/agentic-chat";
 import type {
   ConnectionConfig,
@@ -274,18 +274,31 @@ export default function ChatPanel() {
     })();
   }, [resolvedContextId, stateArgs.channelName]);
 
+  // Resolve this before constructing action callbacks that include the
+  // channel in durable notification ids.
+  const channelName = stateArgs.channelName ?? bootstrapChannel;
+
   // Agent subscription recovery: when a panel has a channel but no DO
   // participants, re-create+subscribe each persisted agent using its stable
   // `key` so we hit the same entity row idempotently. This also covers fresh
   // bootstrap, where server-side startup approvals/builds can briefly race
   // the first create+subscribe attempt.
   const rehydrationCheckedRef = useRef(false);
+  const [rehydrationStatus, setRehydrationStatus] = useState<"idle" | "recovering" | "failed">(
+    "idle"
+  );
+  const [rehydrationError, setRehydrationError] = useState<string | null>(null);
+  const [rehydrationAttempt, setRehydrationAttempt] = useState(0);
   useEffect(() => {
     if (rehydrationCheckedRef.current || !stateArgs.channelName || !resolvedContextId) return;
     rehydrationCheckedRef.current = true;
     let cancelled = false;
 
     const channelName = stateArgs.channelName;
+    if ((stateArgs.installedAgents?.length ?? 0) > 0) {
+      setRehydrationStatus("recovering");
+      setRehydrationError(null);
+    }
     void (async () => {
       for (
         let attempt = 1;
@@ -300,10 +313,16 @@ export default function ChatPanel() {
             participantCount: dos.length,
             attempt,
           });
-          if (dos.length > 0) return;
+          if (dos.length > 0) {
+            setRehydrationStatus("idle");
+            return;
+          }
 
           const installedList = stateArgs.installedAgents ?? [];
-          if (installedList.length === 0) return;
+          if (installedList.length === 0) {
+            setRehydrationStatus("idle");
+            return;
+          }
           const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
           console.warn("[ChatPanel] channel has no DO participants; rehydrating installed agents", {
             channelName,
@@ -346,10 +365,19 @@ export default function ChatPanel() {
               handle: agent.handle,
             });
           }
+          setRehydrationStatus("idle");
           return;
         } catch (err) {
           if (attempt === AGENT_SUBSCRIPTION_MAX_ATTEMPTS) {
             console.warn(`[ChatPanel] Agent subscription recovery failed:`, err);
+            const message = err instanceof Error ? err.message : String(err);
+            setRehydrationError(message);
+            setRehydrationStatus("failed");
+            void notifications.show({
+              type: "error",
+              title: "Couldn't reconnect the chat agent",
+              message,
+            });
             return;
           }
           await delay(AGENT_SUBSCRIPTION_RETRY_DELAY_MS);
@@ -368,6 +396,7 @@ export default function ChatPanel() {
     stateArgs.systemPromptMode,
     resolvedContextId,
     resolveWorkspaceDefaultAgentConfig,
+    rehydrationAttempt,
   ]);
 
   // Build ConnectionConfig from runtime
@@ -419,7 +448,8 @@ export default function ChatPanel() {
   }, []);
 
   const handleReloadPanel = useCallback(async (panelId: string) => {
-    void panel.focusPanel(panelId);
+    await panel.focusPanel(panelId);
+    window.location.reload();
   }, []);
 
   // Deep-link from a local model's red error dot in the picker (item 6) to the
@@ -791,22 +821,30 @@ export default function ChatPanel() {
   );
 
   const handleRemoveAgent = useCallback(async (channelName: string, handle: string) => {
-    const channelWorkers = await getChannelDOParticipants(channelName);
-
-    // Match by objectKey containing the handle prefix (objectKey is "{handle}-{uuid}")
-    const match = channelWorkers.find((w) => w.objectKey.startsWith(handle));
-    if (match) {
-      await unsubscribeDOFromChannel(match.source, match.className, match.objectKey, channelName);
-    } else {
-      // Fallback: try to unsubscribe the first worker if only one is present
-      // TODO: improve handle-to-objectKey resolution when multiple DOs are present
-      console.warn(
-        `[ChatPanel] No DO found matching handle "${handle}" on channel "${channelName}"`
+    try {
+      const currentArgs = panel.stateArgs.get<ChatStateArgs>();
+      const persisted = (currentArgs.installedAgents ?? []).find(
+        (agent) => agent.handle === handle
       );
-      if (channelWorkers.length === 1) {
-        const w = channelWorkers[0]!;
-        await unsubscribeDOFromChannel(w.source, w.className, w.objectKey, channelName);
-      }
+      if (!persisted) throw new Error(`No installed agent record matches @${handle}`);
+      await unsubscribeDOFromChannel(
+        persisted.source,
+        persisted.className,
+        persisted.key,
+        channelName
+      );
+      await panel.stateArgs.set({
+        installedAgents: (currentArgs.installedAgents ?? []).filter(
+          (agent) => agent.key !== persisted.key
+        ),
+      });
+    } catch (err) {
+      void notifications.show({
+        type: "error",
+        title: `Couldn't remove @${handle}`,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
   }, []);
 
@@ -827,6 +865,14 @@ export default function ChatPanel() {
       onReloadPanel: handleReloadPanel,
       onOpenClaudeCode: handleOpenClaudeCode,
       onOpenLocalModelsLog: handleOpenLocalModelsLog,
+      onAttentionRequired: (title, message) => {
+        void notifications.show({
+          id: `chat-attention:${channelName ?? "pending"}`,
+          type: "warning",
+          title,
+          message,
+        });
+      },
     }),
     [
       handleNewConversation,
@@ -844,6 +890,7 @@ export default function ChatPanel() {
       handleReloadPanel,
       handleOpenClaudeCode,
       handleOpenLocalModelsLog,
+      channelName,
     ]
   );
 
@@ -930,8 +977,6 @@ export default function ChatPanel() {
   // all other operations use runtime APIs.
   const toolProvider: ToolProvider = useCallback(() => ({}), []);
 
-  // Resolve channel name: from stateArgs (existing chat) or bootstrap (new chat)
-  const channelName = stateArgs.channelName ?? bootstrapChannel;
   const panelMetadata = useMemo(
     () => ({
       name: channelName ?? "Channel",
@@ -959,17 +1004,55 @@ export default function ChatPanel() {
               overflow: "hidden",
             }}
           >
-            <Text size="2" color="gray">
-              Starting chat...
-            </Text>
+            <Flex align="center" gap="2">
+              <Spinner size="1" />
+              <Text size="2" color="gray">
+                Starting chat…
+              </Text>
+            </Flex>
           </Flex>
         </Theme>
       </ErrorBoundary>
     );
   }
+  const fallbackModelName = fallbackNotice
+    ? (modelCatalog?.models.find((model) => model.ref === fallbackNotice)?.name ??
+      fallbackNotice.replace(/^local:/, ""))
+    : null;
+  const fallbackConsentRequired = Boolean(fallbackNotice && !fallbackNoticeDismissed);
 
   return (
     <>
+      {rehydrationStatus !== "idle" ? (
+        <Theme appearance={theme} {...appTheme}>
+          <Callout.Root
+            color={rehydrationStatus === "failed" ? "red" : "blue"}
+            size="1"
+            style={{ borderRadius: 0 }}
+          >
+            <Flex align="center" justify="between" gap="3" width="100%">
+              <Callout.Text>
+                {rehydrationStatus === "failed"
+                  ? `Couldn't reconnect your agent${rehydrationError ? `: ${rehydrationError}` : "."}`
+                  : "Reconnecting your agent…"}
+              </Callout.Text>
+              {rehydrationStatus === "failed" ? (
+                <Button
+                  size="1"
+                  variant="soft"
+                  color="red"
+                  onClick={() => {
+                    rehydrationCheckedRef.current = false;
+                    setRehydrationAttempt((attempt) => attempt + 1);
+                  }}
+                >
+                  Retry
+                </Button>
+              ) : null}
+            </Flex>
+          </Callout.Root>
+        </Theme>
+      ) : null}
       {fallbackNotice && !fallbackNoticeDismissed && (
         <Theme appearance={theme} {...appTheme}>
           <Callout.Root
@@ -979,12 +1062,14 @@ export default function ChatPanel() {
           >
             <Flex align="center" justify="between" gap="3" style={{ width: "100%" }}>
               <Callout.Text>
-                No cloud provider connected — using <Text weight="medium">{fallbackNotice}</Text> on
-                this device. Answers will be simpler than a frontier model's.
+                No cloud provider is connected. Before sending a first message, choose whether to
+                use <Text weight="medium">{fallbackModelName}</Text> on this device. This downloads
+                roughly 700 MB; progress is available in Local Models, and answers will be simpler
+                than a frontier model's.
               </Callout.Text>
               <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-                <Button size="1" variant="soft" onClick={() => setFallbackNoticeDismissed(true)}>
-                  OK
+                <Button size="1" variant="solid" onClick={() => setFallbackNoticeDismissed(true)}>
+                  Use local model (~700 MB)
                 </Button>
               </Flex>
             </Flex>

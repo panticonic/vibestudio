@@ -27,7 +27,11 @@ import {
   type RpcCallOptions,
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
-import { type WebRtcSession, type WebRtcTransport } from "@vibestudio/rpc/transports/webrtcClient";
+import {
+  type ReconnectProgress,
+  type WebRtcSession,
+  type WebRtcTransport,
+} from "@vibestudio/rpc/transports/webrtcClient";
 import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
 import type {
   PeerConnectionProvider,
@@ -65,7 +69,9 @@ export interface WebRtcServerClientArgs {
   onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
   onServerEvent?: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+  onMainSessionTerminalClose?: (error: Error) => void;
   /**
    * Test seam: a pre-built transport (the real path lazy-loads node-datachannel
    * + signaling). Production callers omit this.
@@ -95,6 +101,7 @@ export async function createWebRtcServerClient(
   // await-retry all live in createPairedConnection now — this file no longer
   // hand-rolls (and can no longer re-diverge on) that sequence.
   const nativePipe = args.transport ? null : await buildNativePipe();
+  let mainSessionTerminalError: Error | null = null;
   const paired = await createPairedConnection({
     pairing: {
       room: args.pairing.room,
@@ -116,10 +123,23 @@ export async function createWebRtcServerClient(
     onRecovery: (kind) => {
       void args.onRecovery?.(kind);
     },
+    onTerminalClose: (error) => {
+      mainSessionTerminalError = error;
+      args.onMainSessionTerminalClose?.(error);
+    },
   });
   const transport = paired.transport;
   const mainSession = paired.mainSession;
-  transport.onStatusChange((status) => args.onConnectionStatusChanged?.(status));
+  const effectiveConnectionStatus = (): ConnectionStatus =>
+    mainSessionTerminalError || mainSession.isClosed() ? "disconnected" : transport.status();
+  transport.onStatusChange(() => args.onConnectionStatusChanged?.(effectiveConnectionStatus()));
+  // Older/custom transports used by embedders and tests may not yet expose
+  // reconnect progress. Treat it as additive observability: real transports
+  // forward it, while a legacy seam must not make an otherwise healthy
+  // connection fail during setup.
+  if (typeof transport.onReconnectProgress === "function") {
+    transport.onReconnectProgress((progress) => args.onReconnectProgress?.(progress));
+  }
   // Relay alarm (§9.8): remember the selected path for the shell and warn loud
   // when TURN engages — a relayed pipe works but P2P failed (or was forced).
   let lastCandidateType: RtcCandidateType | null = transport.candidateType();
@@ -134,7 +154,7 @@ export async function createWebRtcServerClient(
     // the subtle "Relayed" hint would only surface on the next status transition.
     // Reuses the existing status channel — no new IPC surface — and is a no-op for
     // the shell's replay guard (the status value is unchanged).
-    args.onConnectionStatusChanged?.(transport.status());
+    args.onConnectionStatusChanged?.(effectiveConnectionStatus());
   });
   if (args.onServerEvent) {
     mainSession.onMessage((envelope) => {
@@ -288,10 +308,10 @@ export async function createWebRtcServerClient(
     },
     openPanelSession,
     isConnected(): boolean {
-      return transport.status() === "connected";
+      return effectiveConnectionStatus() === "connected";
     },
     getConnectionStatus(): ConnectionStatus {
-      return transport.status();
+      return effectiveConnectionStatus();
     },
     candidateType(): RtcCandidateType | null {
       return lastCandidateType;

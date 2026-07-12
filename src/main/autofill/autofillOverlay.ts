@@ -24,6 +24,8 @@ export class AutofillOverlay {
   private visible = false;
   /** webContents.id of the overlay view, used to attribute IPC senders. */
   private overlayWcId: number | null = null;
+  private credentialIds: number[] = [];
+  private selectedIndex = 0;
 
   constructor(preloadPath: string) {
     this.preloadPath = preloadPath;
@@ -94,6 +96,8 @@ export class AutofillOverlay {
   ): void {
     if (!this.window) return;
     const view = this.ensureView();
+    this.credentialIds = credentials.map((credential) => credential.id);
+    this.selectedIndex = 0;
 
     const itemsHtml = credentials
       .map(
@@ -110,11 +114,11 @@ export class AutofillOverlay {
          border-radius: 6px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
   .item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #eee; }
   .item:last-child { border-bottom: none; }
-  .item:hover, .item:focus { background: #e8f0fe; outline: none; }
+  .item:hover, .item:focus, .item.selected { background: #e8f0fe; outline: none; }
   .item .origin { font-size: 11px; color: #666; margin-top: 2px; }
   @media (prefers-color-scheme: dark) {
     body { background: #2e3135; border-color: #3d4147; color: #eee; }
-    .item:hover, .item:focus { background: #3d3d5c; }
+    .item:hover, .item:focus, .item.selected { background: #3d3d5c; }
     .item .origin { color: #aaa; }
     .item { border-bottom-color: #444; }
   }
@@ -198,6 +202,27 @@ ${itemsHtml}
 
   isVisible(): boolean {
     return this.visible && this.view != null && !this.view.webContents.isDestroyed();
+  }
+
+  handleKey(key: "ArrowDown" | "ArrowUp" | "Enter" | "Escape"): void {
+    if (!this.isVisible() || this.credentialIds.length === 0) return;
+    if (key === "Escape") {
+      this.callbacks?.onDismiss();
+      return;
+    }
+    if (key === "Enter") {
+      const id = this.credentialIds[this.selectedIndex];
+      if (id !== undefined) this.callbacks?.onSelect(id);
+      return;
+    }
+    const delta = key === "ArrowDown" ? 1 : -1;
+    this.selectedIndex =
+      (this.selectedIndex + delta + this.credentialIds.length) % this.credentialIds.length;
+    const view = this.view;
+    if (!view || view.webContents.isDestroyed()) return;
+    void view.webContents.executeJavaScript(
+      `document.querySelectorAll('.item').forEach((item, index) => item.classList.toggle('selected', index === ${this.selectedIndex}))`
+    );
   }
 
   /** Re-add overlay on top after z-order changes */

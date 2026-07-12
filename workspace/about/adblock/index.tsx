@@ -17,8 +17,15 @@ import {
   IconButton,
   Separator,
   Card,
+  Callout,
 } from "@radix-ui/themes";
-import { Cross2Icon, PlusIcon, LockClosedIcon } from "@radix-ui/react-icons";
+import {
+  Cross2Icon,
+  PlusIcon,
+  LockClosedIcon,
+  CheckCircledIcon,
+  ExclamationTriangleIcon,
+} from "@radix-ui/react-icons";
 import { rpc } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
@@ -152,6 +159,8 @@ function AdBlockSettingsPage() {
   const [stats, setStats] = useState<AdBlockStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   // New whitelist domain input
   const [newDomain, setNewDomain] = useState("");
@@ -180,8 +189,20 @@ function AdBlockSettingsPage() {
       const statsData = await rpc.call<AdBlockStats>("main", "adblock.getStats", []);
       setStats(statsData);
     } catch (err) {
-      console.error("Failed to refresh stats:", err);
+      setMutationError(
+        `Couldn't refresh blocking statistics: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
+  };
+
+  const refreshConfig = async () => {
+    const next = await rpc.call<AdBlockConfig>("main", "adblock.getConfig", []);
+    setConfig(next);
+  };
+
+  const reportMutationError = (action: string, err: unknown) => {
+    setSuccessMessage(null);
+    setMutationError(`${action}: ${err instanceof Error ? err.message : String(err)}`);
   };
 
   useEffect(() => {
@@ -194,11 +215,12 @@ function AdBlockSettingsPage() {
   const handleToggleEnabled = async (enabled: boolean) => {
     if (!config) return;
     setIsSaving(true);
+    setMutationError(null);
     try {
       await rpc.call<unknown>("main", "adblock.setEnabled", [enabled]);
       setConfig({ ...config, enabled });
     } catch (err) {
-      console.error("Failed to toggle ad blocking:", err);
+      reportMutationError("Couldn't update ad blocking", err);
     } finally {
       setIsSaving(false);
     }
@@ -207,14 +229,16 @@ function AdBlockSettingsPage() {
   const handleToggleList = async (list: keyof AdBlockListConfig, enabled: boolean) => {
     if (!config) return;
     setIsSaving(true);
+    setMutationError(null);
     try {
       await rpc.call<unknown>("main", "adblock.setListEnabled", [list, enabled]);
       setConfig({
         ...config,
         lists: { ...config.lists, [list]: enabled },
+        lastUpdated: Date.now(),
       });
     } catch (err) {
-      console.error("Failed to toggle filter list:", err);
+      reportMutationError("Couldn't update the filter list", err);
     } finally {
       setIsSaving(false);
     }
@@ -223,6 +247,7 @@ function AdBlockSettingsPage() {
   const handleAddWhitelist = async () => {
     if (!config || !newDomain.trim()) return;
     setIsSaving(true);
+    setMutationError(null);
     try {
       await rpc.call<unknown>("main", "adblock.addToWhitelist", [newDomain.trim()]);
       setConfig({
@@ -231,7 +256,7 @@ function AdBlockSettingsPage() {
       });
       setNewDomain("");
     } catch (err) {
-      console.error("Failed to add to whitelist:", err);
+      reportMutationError("Couldn't whitelist that domain", err);
     } finally {
       setIsSaving(false);
     }
@@ -240,6 +265,7 @@ function AdBlockSettingsPage() {
   const handleRemoveWhitelist = async (domain: string) => {
     if (!config) return;
     setIsSaving(true);
+    setMutationError(null);
     try {
       await rpc.call<unknown>("main", "adblock.removeFromWhitelist", [domain]);
       setConfig({
@@ -247,7 +273,7 @@ function AdBlockSettingsPage() {
         whitelist: config.whitelist.filter((d) => d !== domain),
       });
     } catch (err) {
-      console.error("Failed to remove from whitelist:", err);
+      reportMutationError("Couldn't remove that domain from the whitelist", err);
     } finally {
       setIsSaving(false);
     }
@@ -256,15 +282,17 @@ function AdBlockSettingsPage() {
   const handleAddCustomList = async () => {
     if (!config || !newListUrl.trim()) return;
     setIsSaving(true);
+    setMutationError(null);
     try {
       await rpc.call<unknown>("main", "adblock.addCustomList", [newListUrl.trim()]);
       setConfig({
         ...config,
         customLists: [...config.customLists, newListUrl.trim()],
+        lastUpdated: Date.now(),
       });
       setNewListUrl("");
     } catch (err) {
-      console.error("Failed to add custom list:", err);
+      reportMutationError("Couldn't add that filter list", err);
     } finally {
       setIsSaving(false);
     }
@@ -273,14 +301,16 @@ function AdBlockSettingsPage() {
   const handleRemoveCustomList = async (url: string) => {
     if (!config) return;
     setIsSaving(true);
+    setMutationError(null);
     try {
       await rpc.call<unknown>("main", "adblock.removeCustomList", [url]);
       setConfig({
         ...config,
         customLists: config.customLists.filter((u) => u !== url),
+        lastUpdated: Date.now(),
       });
     } catch (err) {
-      console.error("Failed to remove custom list:", err);
+      reportMutationError("Couldn't remove that filter list", err);
     } finally {
       setIsSaving(false);
     }
@@ -288,10 +318,14 @@ function AdBlockSettingsPage() {
 
   const handleRebuild = async () => {
     setIsSaving(true);
+    setMutationError(null);
+    setSuccessMessage(null);
     try {
       await rpc.call<unknown>("main", "adblock.rebuildEngine", []);
+      await refreshConfig();
+      setSuccessMessage("Filter lists were downloaded and the blocking engine was refreshed.");
     } catch (err) {
-      console.error("Failed to rebuild engine:", err);
+      reportMutationError("Couldn't refresh the filter lists", err);
     } finally {
       setIsSaving(false);
     }
@@ -327,6 +361,22 @@ function AdBlockSettingsPage() {
         </Badge>
       }
     >
+      {mutationError ? (
+        <Callout.Root color="red" role="alert">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>{mutationError}</Callout.Text>
+        </Callout.Root>
+      ) : null}
+      {successMessage ? (
+        <Callout.Root color="green" role="status">
+          <Callout.Icon>
+            <CheckCircledIcon />
+          </Callout.Icon>
+          <Callout.Text>{successMessage}</Callout.Text>
+        </Callout.Root>
+      ) : null}
       {/* Master toggle + session stats */}
       <Section>
         <ToggleRow
@@ -346,7 +396,7 @@ function AdBlockSettingsPage() {
       {/* Filter Lists */}
       <Section
         title="Filter Lists"
-        description="Choose which filter lists to use. Changes require rebuilding the engine."
+        description="Choose which filter lists to use. Toggling a list rebuilds the engine automatically."
       >
         <Flex direction="column" gap="3">
           {(Object.keys(LIST_LABELS) as Array<keyof AdBlockListConfig>).map((list) => (
@@ -362,7 +412,7 @@ function AdBlockSettingsPage() {
         </Flex>
         <Box mt="4">
           <Button variant="soft" onClick={handleRebuild} disabled={isSaving || !config?.enabled}>
-            {isSaving ? <Spinner /> : "Rebuild Filter Engine"}
+            {isSaving ? <Spinner /> : "Re-download Filter Lists"}
           </Button>
         </Box>
       </Section>

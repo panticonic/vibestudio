@@ -12,6 +12,7 @@ import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
+import { Toast } from "./src/components/Toast";
 import { setApprovedAppCapabilities } from "./src/services/appCapabilities";
 import { registerBackgroundHandlers } from "./src/services/backgroundHandlers";
 import { setupOAuthHandler } from "./src/services/oauthHandler";
@@ -160,6 +161,7 @@ function AppContent() {
         <NavigationContainer>
           <RootNavigator />
         </NavigationContainer>
+        <Toast />
       </ErrorBoundary>
     </>
   );

@@ -142,5 +142,13 @@ export const CONFIG_LOADER_JS = `(async () => {
   const bundle = document.createElement("script");
   bundle.type = "module";
   bundle.src = configuredBundleSrc || "./bundle.js";
+  bundle.onerror = () => {
+    const root = document.getElementById("root");
+    if (!root || root.childElementCount > 0) return;
+    root.innerHTML =
+      '<main style="font:14px system-ui;padding:24px;max-width:720px;margin:auto">' +
+      '<h1>Panel failed to start</h1><p>The panel bundle could not be loaded.</p>' +
+      '<button type="button" onclick="location.reload()">Reload panel</button></main>';
+  };
   document.body.appendChild(bundle);
 })();`;

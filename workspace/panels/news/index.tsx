@@ -479,6 +479,7 @@ export default function NewsPanel() {
   const [pastOpen, setPastOpen] = useState(false);
   const [savedArticles, setSavedArticles] = useState<ArticleRow[]>([]);
   const [pendingArticles, setPendingArticles] = useState<ArticleRow[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
@@ -491,6 +492,7 @@ export default function NewsPanel() {
   const lastSeenEventId = useRef(0);
   const latestTldrRef = useRef<string | undefined>(undefined);
   const bootstrapAttempted = useRef(false);
+  const [bootstrapNonce, setBootstrapNonce] = useState(0);
   const modelServiceRef = useRef<DurableObjectServiceClient | null>(null);
   const modelProbeRef = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(null);
   // Snapshot the last-visit time at mount; articles fetched after it are "new".
@@ -561,7 +563,20 @@ export default function NewsPanel() {
         setError(err instanceof Error ? err.message : String(err));
       }
     })();
-  }, [resolvedContextId, stateArgs.agentConfig, stateArgs.agentKey, stateArgs.channelName]);
+  }, [
+    resolvedContextId,
+    stateArgs.agentConfig,
+    stateArgs.agentKey,
+    stateArgs.channelName,
+    bootstrapNonce,
+  ]);
+
+  const retryBootstrap = useCallback(() => {
+    setError(null);
+    setAgentTarget(null);
+    bootstrapAttempted.current = false;
+    setBootstrapNonce((value) => value + 1);
+  }, []);
 
   const handleConnectModel = useCallback(async () => {
     if (!modelConnect) return;
@@ -641,11 +656,12 @@ export default function NewsPanel() {
 
   // ── lightweight agent calls (no busy/refresh churn) + optimistic updates ──
   const quietAgentCall = useCallback(
-    (method: string, args: Record<string, unknown>) => {
+    (method: string, args: Record<string, unknown>, onFailure?: () => void) => {
       if (!agentTarget || !channelName) return;
-      void rpc
-        .call(agentTarget, method, [channelName, args])
-        .catch((err) => console.warn(`[NewsPanel] ${method} failed:`, err));
+      void rpc.call(agentTarget, method, [channelName, args]).catch((err) => {
+        onFailure?.();
+        setError(`Couldn't save that change: ${err instanceof Error ? err.message : String(err)}`);
+      });
     },
     [agentTarget, channelName]
   );
@@ -662,28 +678,54 @@ export default function NewsPanel() {
 
   const markReadLocal = useCallback(
     (articleId: string) => {
+      const previous =
+        [...articles, ...savedArticles, ...(searchResults?.articles ?? [])].find(
+          (article) => article.articleId === articleId
+        )?.read ?? false;
       patchArticle(articleId, { read: true });
-      quietAgentCall("markRead", { articleIds: [articleId] });
+      quietAgentCall("markRead", { articleIds: [articleId] }, () =>
+        patchArticle(articleId, { read: previous })
+      );
     },
-    [patchArticle, quietAgentCall]
+    [articles, savedArticles, searchResults, patchArticle, quietAgentCall]
   );
 
   const setSavedLocal = useCallback(
     (articleId: string, saved: boolean) => {
       patchArticle(articleId, { saved });
       if (!saved) setSavedArticles((prev) => prev.filter((a) => a.articleId !== articleId));
-      quietAgentCall("setSaved", { articleId, saved });
+      quietAgentCall("setSaved", { articleId, saved }, () => {
+        patchArticle(articleId, { saved: !saved });
+        void refresh();
+      });
     },
-    [patchArticle, quietAgentCall]
+    [patchArticle, quietAgentCall, refresh]
   );
 
   /** Reader feedback tap. "less"/"mute" also drop the story from view at once. */
   const reactToStory = useCallback(
     (articleId: string, reaction: "more" | "less" | "mute_source") => {
+      if (reaction === "mute_source") {
+        const article = [...articles, ...savedArticles, ...(searchResults?.articles ?? [])].find(
+          (candidate) => candidate.articleId === articleId
+        );
+        if (
+          !window.confirm(
+            `Mute ${article?.source ?? "this source"}? This disables its feed until you re-enable it in Sources & preferences.`
+          )
+        )
+          return;
+      }
+      const previousRead =
+        [...articles, ...savedArticles, ...(searchResults?.articles ?? [])].find(
+          (article) => article.articleId === articleId
+        )?.read ?? false;
       if (reaction !== "more") patchArticle(articleId, { read: true });
-      quietAgentCall("reactToStory", { articleId, reaction });
+      quietAgentCall("reactToStory", { articleId, reaction }, () =>
+        patchArticle(articleId, { read: previousRead })
+      );
     },
-    [patchArticle, quietAgentCall]
+    [articles, savedArticles, searchResults, patchArticle, quietAgentCall]
   );
 
   /** Copy a briefing to the clipboard as portable markdown. */
@@ -871,8 +913,10 @@ export default function NewsPanel() {
     if (!pendingOpen || !agentTarget || !channelName) return;
     if ((overview?.untriagedCount ?? 0) === 0) {
       setPendingArticles([]);
+      setPendingError(null);
       return;
     }
+    setPendingError(null);
     let cancelled = false;
     void rpc
       .call<{ articles: ArticleRow[] }>(agentTarget, "listArticles", [
@@ -880,9 +924,16 @@ export default function NewsPanel() {
         { untriagedOnly: true, limit: 50 },
       ])
       .then((res) => {
-        if (!cancelled) setPendingArticles(res.articles);
+        if (!cancelled) {
+          setPendingArticles(res.articles);
+          setPendingError(null);
+        }
       })
-      .catch((err) => console.warn("[NewsPanel] pending fetch failed:", err));
+      .catch((err) => {
+        if (!cancelled) {
+          setPendingError(err instanceof Error ? err.message : String(err));
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -900,7 +951,12 @@ export default function NewsPanel() {
       .then((res) => {
         if (!cancelled) setSavedArticles(res.articles);
       })
-      .catch((err) => console.warn("[NewsPanel] saved fetch failed:", err));
+      .catch((err) => {
+        if (!cancelled)
+          setError(
+            `Couldn't load saved stories: ${err instanceof Error ? err.message : String(err)}`
+          );
+      });
     return () => {
       cancelled = true;
     };
@@ -920,7 +976,10 @@ export default function NewsPanel() {
         .then((res) => {
           if (!cancelled) setSearchResults(res);
         })
-        .catch((err) => console.warn("[NewsPanel] search failed:", err));
+        .catch((err) => {
+          if (!cancelled)
+            setError(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
     }, 300);
     return () => {
       cancelled = true;
@@ -1144,10 +1203,27 @@ export default function NewsPanel() {
                     {overview.setup.scheduleSummary}
                   </Text>
                 ) : null}
-                {error ? (
-                  <Text size="1" color="red" style={{ padding: "0 var(--space-3)" }}>
-                    {error}
+                {!narrow ? (
+                  <Text
+                    size="1"
+                    color="gray"
+                    style={{ padding: "2px var(--space-3) 0" }}
+                    title="Reader keyboard shortcuts"
+                  >
+                    Shortcuts: j/k next/previous · o open · s save · m read · d deep-dive
                   </Text>
+                ) : null}
+                {error ? (
+                  <Flex align="center" gap="2" style={{ padding: "0 var(--space-3)" }}>
+                    <Text size="1" color="red" role="alert">
+                      {error}
+                    </Text>
+                    {!agentTarget ? (
+                      <Button size="1" variant="soft" color="red" onClick={retryBootstrap}>
+                        Retry startup
+                      </Button>
+                    ) : null}
+                  </Flex>
                 ) : null}
 
                 {showConnectNudge && modelConnect ? (
@@ -1202,7 +1278,12 @@ export default function NewsPanel() {
                         </Flex>
                         {pendingOpen ? (
                           <Flex direction="column" gap="2" pt="2" pl="3">
-                            {pendingArticles.length === 0 ? (
+                            {pendingError ? (
+                              <Text size="1" color="red" role="alert">
+                                Couldn't load uncategorized stories: {pendingError}. Close and
+                                reopen this section to retry.
+                              </Text>
+                            ) : pendingArticles.length === 0 ? (
                               <Text size="1" color="gray">
                                 Loading…
                               </Text>
@@ -1630,6 +1711,11 @@ function ReaderSettings({
                 <Text size="1" truncate style={{ flex: 1, minWidth: 0 }}>
                   {feed.title ?? feed.url}
                 </Text>
+                {!feed.enabled ? (
+                  <Badge size="1" color="gray">
+                    Muted / disabled
+                  </Badge>
+                ) : null}
                 {feed.failCount > 0 ? (
                   <Badge size="1" color="red" title={feed.lastStatus}>
                     {feed.failCount} fail{feed.failCount === 1 ? "" : "s"}

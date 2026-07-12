@@ -27,6 +27,9 @@ export function getContentScript(): string {
   window.__vibestudio_af_pending = null;      // snapshot of credentials on submit
   window.__vibestudio_af_fields_removed = false;
   window.__vibestudio_af_username_snapshot = null; // carried forward for multi-step login
+  window.__vibestudio_af_overlay_visible = false;
+  window.__vibestudio_af_overlay_key = null;
+  window.__vibestudio_af_force_refill = false;
 
   var ping = window.__vibestudio_autofill ? window.__vibestudio_autofill.ping : function() {};
 
@@ -141,6 +144,7 @@ export function getContentScript(): string {
     // Click icon -> ping to show dropdown
     shadow.firstElementChild.addEventListener('click', function() {
       targetField.focus();
+      window.__vibestudio_af_force_refill = true;
       ping();
     });
 
@@ -162,6 +166,14 @@ export function getContentScript(): string {
   // =========================================================================
 
   function setupFocusTracking(usernameEl, passwordEl) {
+    function onKeyDown(evt) {
+      if (!window.__vibestudio_af_overlay_visible) return;
+      if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp' && evt.key !== 'Enter' && evt.key !== 'Escape') return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      window.__vibestudio_af_overlay_key = evt.key;
+      ping();
+    }
     function onFocus(evt) {
       var el = evt.target;
       if (el !== usernameEl && el !== passwordEl) return;
@@ -186,9 +198,11 @@ export function getContentScript(): string {
     if (usernameEl) {
       usernameEl.addEventListener('focus', onFocus, true);
       usernameEl.addEventListener('blur', onBlur, true);
+      usernameEl.addEventListener('keydown', onKeyDown, true);
     }
     passwordEl.addEventListener('focus', onFocus, true);
     passwordEl.addEventListener('blur', onBlur, true);
+    passwordEl.addEventListener('keydown', onKeyDown, true);
   }
 
   // =========================================================================
@@ -407,13 +421,19 @@ export function getPullStateScript(): string {
     };
   }
   var fieldsRemoved = window.__vibestudio_af_fields_removed || false;
+  var overlayKey = window.__vibestudio_af_overlay_key || null;
+  var forceRefill = window.__vibestudio_af_force_refill || false;
   window.__vibestudio_af_fields_removed = false; // consume — prevent stale re-reads
+  window.__vibestudio_af_overlay_key = null;
+  window.__vibestudio_af_force_refill = false;
   return {
     fields: window.__vibestudio_af_fields || null,
     focus: focus || null,
     pending: window.__vibestudio_af_pending || null,
     fieldsRemoved: fieldsRemoved,
     usernameSnapshot: window.__vibestudio_af_username_snapshot || null,
+    overlayKey: overlayKey,
+    forceRefill: forceRefill,
   };
 })()`;
 }

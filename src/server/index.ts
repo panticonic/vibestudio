@@ -732,11 +732,13 @@ async function main() {
   const { createEgressProxy } = await import("./services/egressProxy.js");
   const { CredentialLifecycle } = await import("./services/credentialLifecycle.js");
   const { CredentialSessionGrantStore } = await import("./services/credentialSessionGrants.js");
+  const { CredentialUseGrantStore } = await import("./services/credentialUseGrantStore.js");
 
   const credentialStore = new CredentialStore();
   const clientConfigStore = new ClientConfigStore();
   const auditLog = new AuditLog({ logDir: path.join(statePath, "credentials-audit") });
   const credentialSessionGrantStore = new CredentialSessionGrantStore();
+  const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
   const { UserlandApprovalGrantStore } = await import("./services/userlandApprovalGrantStore.js");
@@ -797,6 +799,7 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     sessionGrantStore: credentialSessionGrantStore,
+    credentialUseGrantStore,
     credentialLifecycle,
   });
   let panelRuntimeCoordinatorForCleanup:
@@ -1780,6 +1783,7 @@ async function main() {
     createShellApprovalService({
       approvalQueue,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
+      capabilityGrantStore,
     })
   );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
@@ -1795,6 +1799,15 @@ async function main() {
       approvalQueue,
       grantStore: userlandApprovalGrantStore,
       resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
+      onExternalApprovalExpired: ({ operation }) => {
+        eventService.emit("notification:show", {
+          id: `external-approval-expired-${Date.now()}`,
+          type: "warning",
+          title: "Claude Code request expired",
+          message: `${operation} was denied because no answer was received within 10 minutes.`,
+          ttl: 0,
+        });
+      },
     })
   );
 
@@ -1876,6 +1889,7 @@ async function main() {
       egressProxy,
       approvalQueue,
       sessionGrantStore: credentialSessionGrantStore,
+      credentialUseGrantStore,
       credentialLifecycle,
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,

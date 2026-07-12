@@ -517,6 +517,7 @@ export interface WorkspaceNode {
   launchable?: {
     type: "app";
     title: string;
+    description?: string;
     hidden?: boolean;
   };
   /**

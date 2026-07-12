@@ -50,7 +50,7 @@ export function SplitTree(props: {
         resizeKey={props.resizeKey}
         focused={props.focusedSessionId === session.sessionId}
         settingsControl={props.focusedSessionId === session.sessionId ? props.settingsControl : undefined}
-        severity={sessionSeverity(session.sessionId, props.notifications, session.alive)}
+        severity={sessionSeverity(session, props.notifications)}
         onFocus={() => props.onFocus(session.sessionId)}
         onClose={() => props.onClose(session.sessionId)}
         onSplitRight={() => props.onSplit(session.sessionId, "row")}
@@ -80,9 +80,9 @@ export function SplitTree(props: {
   );
 }
 
-function sessionSeverity(sessionId: string, notifications: TerminalNotification[], alive: boolean): NotificationSeverity {
-  if (!alive) return "failure";
-  const severities = notifications.filter((item) => item.sessionId === sessionId && !item.read).map((item) => item.severity);
+export function sessionSeverity(session: Pick<SessionInfo, "sessionId" | "alive" | "exit">, notifications: TerminalNotification[]): NotificationSeverity {
+  if (!session.alive && (session.exit?.code !== 0 || session.exit?.signal)) return "failure";
+  const severities = notifications.filter((item) => item.sessionId === session.sessionId && !item.read).map((item) => item.severity);
   if (severities.includes("failure")) return "failure";
   if (severities.includes("approval")) return "approval";
   if (severities.includes("waiting")) return "waiting";

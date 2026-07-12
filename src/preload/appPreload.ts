@@ -57,6 +57,11 @@ const vibestudioApp = {
   // main can nudge the (possibly stale-"connected") server pipe awake. No
   // response — a nudge, never a teardown.
   notifyNetworkOnline: () => ipcRenderer.send("vibestudio:shell.network-online"),
+  // Tell main whether DOM focus is currently on a chrome control. The native
+  // key forwarder must leave keyboard input in the shell while a user is
+  // operating breadcrumbs, the sidebar, dialogs, or form controls.
+  setChromeInteractiveFocus: (active: boolean) =>
+    ipcRenderer.send("vibestudio:shell.chrome-interactive-focus", active),
 };
 
 contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);

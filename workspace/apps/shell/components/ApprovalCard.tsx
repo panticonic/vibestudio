@@ -6,7 +6,7 @@
  * values stay local and are only emitted on submit.
  */
 import { useState } from "react";
-import type { ComponentProps, CSSProperties, ReactNode } from "react";
+import type { ComponentProps, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import {
   Badge,
   Box,
@@ -82,6 +82,7 @@ export interface ApprovalCardProps {
   /** Queue position for the navigator; null when a single approval is pending. */
   queue: ApprovalQueueInfo | null;
   decisionError: string | null;
+  actionPending?: boolean;
   /** P3.5 diff-review payload; null/omitted → the card renders as it always has. */
   diffReview?: DiffReviewEntry[] | null;
   /** Lazy blob fetcher backing the diff viewer (host-served, content-addressed). */
@@ -96,6 +97,7 @@ export function ApprovalCard({
   caller,
   queue,
   decisionError,
+  actionPending = false,
   diffReview,
   fetchContent,
   appearance = "light",
@@ -106,6 +108,47 @@ export function ApprovalCard({
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
   const emitForApproval = (intent: ApprovalCardIntentBody) => {
     emit({ ...intent, approvalId: approval.approvalId });
+  };
+  const handleKeyboardDecision = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.target instanceof Element && event.target.closest("input, textarea, select")) return;
+    const key = event.key.toLowerCase();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      emitForApproval({ type: "minimize" });
+    } else if (event.key === "ArrowLeft" && queue?.canPrev) {
+      event.preventDefault();
+      emitForApproval({ type: "browse", dir: "prev" });
+    } else if (event.key === "ArrowRight" && queue?.canNext) {
+      event.preventDefault();
+      emitForApproval({ type: "browse", dir: "next" });
+    } else if (key === "d") {
+      event.preventDefault();
+      if (approval.kind === "external-agent") {
+        emitForApproval({ type: "resolve-external-agent", behavior: "deny" });
+      } else if (approval.kind === "userland") {
+        const deny = approval.options.find((option) => option.value === "deny");
+        if (deny) emitForApproval({ type: "resolve-userland", choice: deny.value });
+      } else if (approval.kind !== "device-code") {
+        emitForApproval({ type: "decide", decision: "deny" });
+      }
+    } else if (event.key === "Enter" && !actionPending) {
+      event.preventDefault();
+      if (approval.kind === "client-config") {
+        emitForApproval({ type: "submit-client-config", values: secretConfigValues });
+      } else if (approval.kind === "credential-input") {
+        emitForApproval({ type: "submit-credential-input", values: secretConfigValues });
+      } else if (approval.kind === "secret-input") {
+        emitForApproval({ type: "submit-secret-input", values: secretConfigValues });
+      } else if (approval.kind === "external-agent") {
+        emitForApproval({ type: "resolve-external-agent", behavior: "allow" });
+      } else if (approval.kind === "userland") {
+        const primary =
+          approval.options.find((option) => option.tone === "primary") ?? approval.options[0];
+        if (primary) emitForApproval({ type: "resolve-userland", choice: primary.value });
+      } else if (approval.kind !== "device-code") {
+        emitForApproval({ type: "decide", decision: "once" });
+      }
+    }
   };
 
   const copy = getApprovalCopy(approval);
@@ -163,6 +206,7 @@ export function ApprovalCard({
       <StandardApprovalActions
         approval={approval}
         decide={(decision) => emitForApproval({ type: "decide", decision })}
+        onBlock={() => emitForApproval({ type: "block-capability" })}
       />
     );
 
@@ -173,6 +217,10 @@ export function ApprovalCard({
       data-approval-tone={accent}
       data-approval-card=""
       role="dialog"
+      tabIndex={0}
+      autoFocus
+      aria-keyshortcuts="Enter D Escape ArrowLeft ArrowRight"
+      onKeyDown={handleKeyboardDecision}
       aria-modal="false"
       aria-label={copy.title}
     >
@@ -314,7 +362,19 @@ export function ApprovalCard({
         </Flex>
       </div>
 
-      <div className="approval-card-footer">{actions}</div>
+      <fieldset
+        className="approval-card-footer"
+        disabled={actionPending}
+        aria-busy={actionPending}
+        style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+      >
+        {actions}
+        {actionPending ? (
+          <Text size="1" color="gray" ml="2" role="status">
+            Saving…
+          </Text>
+        ) : null}
+      </fieldset>
     </div>
   );
 }
@@ -537,9 +597,11 @@ function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void
 function StandardApprovalActions({
   approval,
   decide,
+  onBlock,
 }: {
   approval: PendingCredentialApproval | PendingCapabilityApproval;
   decide: (decision: ApprovalDecision) => void;
+  onBlock: () => void;
 }) {
   const copy = getStandardActionCopy(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
@@ -548,7 +610,8 @@ function StandardApprovalActions({
       <DecisionButton
         label={copy.once.label}
         description={copy.once.description}
-        variant="surface"
+        color={isSevereCapability ? "amber" : "sky"}
+        variant="solid"
         onClick={() => decide("once")}
       />
       {copy.session && (
@@ -563,8 +626,7 @@ function StandardApprovalActions({
         <DecisionButton
           label={copy.version.label}
           description={copy.version.description}
-          color={isSevereCapability ? "red" : "sky"}
-          variant="solid"
+          variant="surface"
           onClick={() => decide("version")}
         />
       )}
@@ -576,6 +638,15 @@ function StandardApprovalActions({
         style={{ marginLeft: 6 }}
         onClick={() => decide("deny")}
       />
+      {approval.kind === "capability" ? (
+        <DecisionButton
+          label="Block"
+          description="Deny this request and stop asking for this exact code version. Revoke it later in Permissions."
+          color="red"
+          variant="surface"
+          onClick={onBlock}
+        />
+      ) : null}
       <Tooltip content="Dismiss">
         <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
           <Cross2Icon />
@@ -764,6 +835,12 @@ function UserlandApprovalActions({
   approval: PendingUserlandApproval;
   onChoose: (choice: string) => void;
 }) {
+  const oneTimeOption =
+    approval.promptOptions === "scoped"
+      ? null
+      : (approval.options.find((option) => option.tone === "primary") ??
+        approval.options.find((option) => option.tone !== "danger") ??
+        null);
   return (
     <Flex direction="column" align="end" gap="1">
       <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
@@ -778,6 +855,15 @@ function UserlandApprovalActions({
             onClick={() => onChoose(option.value)}
           />
         ))}
+        {oneTimeOption ? (
+          <DecisionButton
+            label="Only this time"
+            description={`${oneTimeOption.label}, without remembering the choice.`}
+            variant="surface"
+            icon={<CheckCircledIcon />}
+            onClick={() => onChoose(`once:${oneTimeOption.value}`)}
+          />
+        ) : null}
         <Tooltip content="Dismiss">
           <IconButton size="1" variant="ghost" color="gray" onClick={() => onChoose("dismiss")}>
             <Cross2Icon />
@@ -787,7 +873,7 @@ function UserlandApprovalActions({
       <Text size="1" color="gray">
         {approval.promptOptions === "scoped"
           ? "Use the trust option to remember this approval."
-          : "Remembered until revoked."}
+          : "Choices are remembered unless you select Only this time."}
       </Text>
     </Flex>
   );

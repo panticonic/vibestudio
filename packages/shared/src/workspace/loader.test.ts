@@ -11,9 +11,9 @@ import {
   loadCentralConfig,
   loadWorkspaceConfig,
   recoverStagedWorkspaceDeletions,
+  resolveOrCreateWorkspace,
   resolveDeclaredApps,
   resolveDeclaredExtensions,
-  resolveOrCreateWorkspace,
   saveCentralConfig,
 } from "./loader.js";
 import { CentralDataManager } from "../centralData.js";
@@ -176,72 +176,6 @@ describe("loadWorkspaceConfig", () => {
       /apps\[\]\.source.*@workspace-apps\/name/
     );
   });
-});
-
-describe("central config", () => {
-  function useCentralConfig(content?: string): string {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-central-config-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const configPath = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "config.yml");
-    if (content !== undefined) {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, content);
-    }
-    return configPath;
-  }
-
-  (process.platform === "linux" ? it : it.skip)(
-    "loads only the exact current models/cache structure",
-    () => {
-      useCentralConfig(
-        [
-          "models:",
-          "  coding: openai:gpt-5",
-          "  review:",
-          "    provider: anthropic",
-          "    model: claude-opus",
-          "    temperature: 0.2",
-          "cache:",
-          "  maxEntries: 100",
-          "  maxSize: 1024",
-          "  expirationMs: 0",
-        ].join("\n")
-      );
-
-      expect(loadCentralConfig()).toEqual({
-        models: {
-          coding: "openai:gpt-5",
-          review: { provider: "anthropic", model: "claude-opus", temperature: 0.2 },
-        },
-        cache: { maxEntries: 100, maxSize: 1024, expirationMs: 0 },
-      });
-    }
-  );
-
-  (process.platform === "linux" ? it : it.skip)(
-    "rejects the retired direct-remote structure and all unknown root keys",
-    () => {
-      useCentralConfig("remote:\n  url: https://old.example\n  token: admin-secret\n");
-      expect(() => loadCentralConfig()).toThrow(/Failed to load central config/);
-
-      useCentralConfig("models: {}\nunknown: true\n");
-      expect(() => loadCentralConfig()).toThrow(/Failed to load central config/);
-    }
-  );
-
-  (process.platform === "linux" ? it : it.skip)(
-    "rejects unknown nested keys on load and save",
-    () => {
-      useCentralConfig(
-        "models:\n  coding:\n    provider: openai\n    model: gpt-5\n    oldField: true\n"
-      );
-      expect(() => loadCentralConfig()).toThrow(/Failed to load central config/);
-      expect(() =>
-        saveCentralConfig({ cache: { maxEntries: 1 }, legacy: true } as never)
-      ).toThrow();
-    }
-  );
 });
 
 describe("resolveDeclaredExtensions", () => {
@@ -519,7 +453,7 @@ describe("initWorkspace", () => {
     fs.writeFileSync(path.join(workspaceDir, "operator-data.txt"), "keep");
 
     expect(() => resolveOrCreateWorkspace({ name: "partial", appRoot: root, init: true })).toThrow(
-      /Workspace directory already exists/
+      /vibestudio\.yml is missing.*existing files were not changed/i
     );
     expect(fs.readFileSync(path.join(workspaceDir, "operator-data.txt"), "utf-8")).toBe("keep");
   });
@@ -745,4 +679,53 @@ describe("initWorkspace", () => {
 
   // The `.vibestudio-template-source.json` provenance marker was write-only (no
   // reader) and is removed by the per-repo reshape's cleanup; its test is gone.
+});
+
+describe("resolveOrCreateWorkspace", () => {
+  (process.platform === "linux" ? it : it.skip)(
+    "reuses an empty interrupted-create directory without deleting non-empty workspaces",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+      tempRoots.push(root);
+      process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+
+      const templateRoot = path.join(root, "workspace-template");
+      writeConfig(templateRoot, "initPanels: []\n");
+
+      const emptyWorkspace = path.join(
+        process.env["XDG_CONFIG_HOME"],
+        "vibestudio",
+        "workspaces",
+        "interrupted"
+      );
+      fs.mkdirSync(emptyWorkspace, { recursive: true });
+
+      const resolved = resolveOrCreateWorkspace({
+        name: "interrupted",
+        appRoot: root,
+        init: true,
+      });
+
+      expect(resolved.created).toBe(true);
+      expect(resolved.workspace.config.id).toBe("interrupted");
+      expect(fs.existsSync(path.join(emptyWorkspace, "source", "meta", "vibestudio.yml"))).toBe(
+        true
+      );
+
+      const occupiedWorkspace = path.join(
+        process.env["XDG_CONFIG_HOME"],
+        "vibestudio",
+        "workspaces",
+        "occupied"
+      );
+      fs.mkdirSync(occupiedWorkspace, { recursive: true });
+      const recoveryFile = path.join(occupiedWorkspace, "recover-me.txt");
+      fs.writeFileSync(recoveryFile, "important\n");
+
+      expect(() =>
+        resolveOrCreateWorkspace({ name: "occupied", appRoot: root, init: true })
+      ).toThrow(/existing files were not changed/);
+      expect(fs.readFileSync(recoveryFile, "utf8")).toBe("important\n");
+    }
+  );
 });

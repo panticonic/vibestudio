@@ -34,25 +34,17 @@ export function AgentDisconnectedMessage({
           </Text>
           {hasPanelId && (
             <Flex gap="2">
-              <Button
-                size="1"
-                variant="soft"
-                onClick={() => onFocusPanel?.(agent.panelId!)}
-              >
+              <Button size="1" variant="soft" onClick={() => onFocusPanel?.(agent.panelId!)}>
                 Focus Panel
               </Button>
-              <Button
-                size="1"
-                variant="soft"
-                onClick={() => onReloadPanel?.(agent.panelId!)}
-              >
+              <Button size="1" variant="soft" onClick={() => onReloadPanel?.(agent.panelId!)}>
                 Reload
               </Button>
             </Flex>
           )}
           {!hasPanelId && (
             <Text size="1" color="gray">
-              Panel ID not available - agent may need to be re-added.
+              @{agent.handle} stopped unexpectedly. Reload this chat to reconnect it.
             </Text>
           )}
         </Flex>

@@ -13,6 +13,7 @@ export interface CapabilityGrantIdentity {
 }
 
 export interface CapabilityGrant {
+  effect?: "allow" | "deny";
   capability: string;
   resourceKey: string;
   resourceScope?: ApprovalResourceScope;
@@ -45,11 +46,15 @@ export class CapabilityGrantStore {
   ): boolean {
     const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
     return (
-      Array.from(this.sessionGrants.values()).some((grant) =>
-        grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      Array.from(this.sessionGrants.values()).some(
+        (grant) =>
+          grant.effect !== "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
       ) ||
-      this.persistent.grants.some((grant) =>
-        grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      this.persistent.grants.some(
+        (grant) =>
+          grant.effect !== "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
       )
     );
   }
@@ -60,7 +65,8 @@ export class CapabilityGrantStore {
     identity: CapabilityGrantIdentity,
     scope: CapabilityGrantDecision,
     resourceScope?: ApprovalResourceScope,
-    now = Date.now()
+    now = Date.now(),
+    effect: "allow" | "deny" = "allow"
   ): void {
     const normalizedScope = resourceScope ?? exactResourceScope(resourceKey);
     if (scope === "session") {
@@ -72,6 +78,7 @@ export class CapabilityGrantStore {
         callerId: identity.callerId,
         repoPath: identity.repoPath,
         grantedAt: now,
+        effect,
       };
       this.sessionGrants.set(capabilityGrantKey(scope, capability, resourceKey, identity), next);
       return;
@@ -86,6 +93,7 @@ export class CapabilityGrantStore {
       repoPath: identity.repoPath,
       effectiveVersion: scope === "version" ? identity.effectiveVersion : undefined,
       grantedAt: now,
+      effect,
     };
     this.persistent.grants = [
       ...this.persistent.grants.filter(
@@ -102,6 +110,56 @@ export class CapabilityGrantStore {
       next,
     ];
     this.save();
+  }
+
+  hasDenial(
+    capability: string,
+    resourceKey: string,
+    identity: CapabilityGrantIdentity,
+    resourceScope?: ApprovalResourceScope
+  ): boolean {
+    const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
+    return (
+      Array.from(this.sessionGrants.values()).some(
+        (grant) =>
+          grant.effect === "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      ) ||
+      this.persistent.grants.some(
+        (grant) =>
+          grant.effect === "deny" &&
+          grantMatches(grant, capability, resourceKey, requestedScope, identity)
+      )
+    );
+  }
+
+  /** Durable grants only; session decisions intentionally disappear at restart. */
+  listPersistent(): CapabilityGrant[] {
+    return this.persistent.grants.map((grant) => ({ ...grant }));
+  }
+
+  /** Active in-memory decisions, exposed so the trusted Permissions page can revoke them. */
+  listSession(): CapabilityGrant[] {
+    return Array.from(this.sessionGrants.values(), (grant) => ({ ...grant }));
+  }
+
+  revokeSession(id: string): boolean {
+    for (const [key, grant] of this.sessionGrants) {
+      if (capabilityGrantId(grant) !== id) continue;
+      this.sessionGrants.delete(key);
+      return true;
+    }
+    return false;
+  }
+
+  revokePersistent(id: string): boolean {
+    const before = this.persistent.grants.length;
+    this.persistent.grants = this.persistent.grants.filter(
+      (grant) => capabilityGrantId(grant) !== id
+    );
+    if (this.persistent.grants.length === before) return false;
+    this.save();
+    return true;
   }
 
   private load(): void {
@@ -151,6 +209,7 @@ function isPersistentCapabilityGrant(value: unknown): value is CapabilityGrant {
     "repoPath",
     "effectiveVersion",
     "grantedAt",
+    "effect",
   ]);
   return (
     Object.keys(grant).every((key) => allowedKeys.has(key)) &&
@@ -161,6 +220,7 @@ function isPersistentCapabilityGrant(value: unknown): value is CapabilityGrant {
     (grant.callerId === undefined || typeof grant.callerId === "string") &&
     typeof grant.repoPath === "string" &&
     typeof grant.effectiveVersion === "string" &&
+    (grant.effect === undefined || grant.effect === "allow" || grant.effect === "deny") &&
     Number.isFinite(grant.grantedAt) &&
     (!versionGrantRequiresCaller({
       callerId: grant.callerId ?? "",
@@ -188,6 +248,20 @@ function isApprovalResourceScope(value: unknown): value is ApprovalResourceScope
     return Object.keys(scope).length === 2 && typeof scope["domain"] === "string";
   }
   return scope["kind"] === "network" && Object.keys(scope).length === 2 && scope["value"] === "*";
+}
+
+export function capabilityGrantId(grant: CapabilityGrant): string {
+  return canonicalKey([
+    "capability-grant-record",
+    grant.scope,
+    grant.capability,
+    grant.resourceKey,
+    grant.callerId ?? "",
+    grant.repoPath,
+    grant.effectiveVersion ?? "",
+    JSON.stringify(grant.resourceScope ?? null),
+    grant.effect ?? "allow",
+  ]);
 }
 
 export function capabilityGrantKey(

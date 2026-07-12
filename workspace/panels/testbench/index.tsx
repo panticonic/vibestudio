@@ -72,7 +72,11 @@ function TestRow({ result }: { result: TestCaseResult }) {
   const [open, setOpen] = useState(false);
   const hasDetail = Boolean(result.error) || result.logs.length > 0 || result.supervision;
   return (
-    <Card size="1" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => setOpen(!open)}>
+    <Card
+      size="1"
+      style={{ cursor: hasDetail ? "pointer" : "default" }}
+      onClick={() => setOpen(!open)}
+    >
       <Flex justify="between" align="center" gap="2">
         <Text size="2" truncate>
           {result.suite} › {result.name}
@@ -104,7 +108,12 @@ function TestRow({ result }: { result: TestCaseResult }) {
                 Supervision findings
               </Text>
               {result.supervision.findings.slice(0, 10).map((finding, index) => (
-                <Text key={index} size="1" as="div" color={finding.kind === "console-warn" ? "orange" : "red"}>
+                <Text
+                  key={index}
+                  size="1"
+                  as="div"
+                  color={finding.kind === "console-warn" ? "orange" : "red"}
+                >
                   [{finding.kind}] {finding.target}: {finding.message.slice(0, 200)}
                 </Text>
               ))}
@@ -116,17 +125,19 @@ function TestRow({ result }: { result: TestCaseResult }) {
   );
 }
 
-function SuitesTab() {
+function SuitesTab({ runAllNonce = 0 }: { runAllNonce?: number }) {
   const suites = useMemo(() => allSuites(), []);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(suites.map((s) => s.name)));
   const [phase, setPhase] = useState<RunPhase>("idle");
   const [results, setResults] = useState<TestCaseResult[]>([]);
   const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const run = useCallback(async () => {
     setPhase("running");
     setResults([]);
     setSummary(null);
+    setRunError(null);
     const chosen = suites.filter((s) => selected.has(s.name));
     try {
       const result = await runSuites(chosen, {
@@ -135,10 +146,35 @@ function SuitesTab() {
       lastRunResult = result;
       setSummary(summarize(result));
       await saveRun(result, { label: "testbench" }).catch(() => undefined);
+    } catch (err) {
+      setRunError(`Test run failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setPhase("done");
     }
   }, [suites, selected]);
+
+  useEffect(() => {
+    if (runAllNonce === 0) return;
+    setSelected(new Set(suites.map((suite) => suite.name)));
+    void (async () => {
+      setPhase("running");
+      setResults([]);
+      setSummary(null);
+      setRunError(null);
+      try {
+        const result = await runSuites(suites, {
+          onTestEnd: (item) => setResults((prev) => [...prev, item]),
+        });
+        lastRunResult = result;
+        setSummary(summarize(result));
+        await saveRun(result, { label: "palette" }).catch(() => undefined);
+      } catch (err) {
+        setRunError(`Test run failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setPhase("done");
+      }
+    })();
+  }, [runAllNonce, suites]);
 
   return (
     <Stack gap="3">
@@ -177,6 +213,11 @@ function SuitesTab() {
           </Callout.Text>
         </Callout.Root>
       )}
+      {runError ? (
+        <Callout.Root color="red" size="1" role="alert">
+          <Callout.Text>{runError}</Callout.Text>
+        </Callout.Root>
+      ) : null}
       <Flex direction="column" gap="1">
         {results.map((r, index) => (
           <TestRow key={`${r.suite}-${r.name}-${index}`} result={r} />
@@ -188,8 +229,15 @@ function SuitesTab() {
 
 function HistoryTab() {
   const [runs, setRuns] = useState<SavedRunRef[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const refresh = useCallback(() => {
-    void listRuns().then(setRuns);
+    setLoading(true);
+    setLoadError(null);
+    void listRuns()
+      .then(setRuns)
+      .catch((err) => setLoadError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false));
   }, []);
   useEffect(refresh, [refresh]);
   return (
@@ -197,7 +245,12 @@ function HistoryTab() {
       <Button variant="soft" onClick={refresh}>
         <ReloadIcon /> Refresh
       </Button>
-      {runs.length === 0 && (
+      {loadError ? (
+        <Callout.Root color="red" size="1" role="alert">
+          <Callout.Text>Couldn't load saved runs: {loadError}</Callout.Text>
+        </Callout.Root>
+      ) : null}
+      {!loading && !loadError && runs.length === 0 && (
         <Text size="2" color="gray">
           No saved runs yet.
         </Text>
@@ -230,15 +283,29 @@ function HistoryTab() {
 function ProfilesTab() {
   const [profiles, setProfiles] = useState<ProfileRef[]>([]);
   const [flame, setFlame] = useState<{ ref: ProfileRef; root: FlameNode } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const refresh = useCallback(() => {
-    void listProfiles().then(setProfiles);
+    setLoading(true);
+    setProfileError(null);
+    void listProfiles()
+      .then(setProfiles)
+      .catch((err) => setProfileError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false));
   }, []);
   useEffect(refresh, [refresh]);
 
   const openProfile = useCallback(async (ref: ProfileRef) => {
     if (ref.kind !== "cpuprofile") return;
-    const raw = await readProfile(ref.path);
-    setFlame({ ref, root: flameTreeFromProfile(JSON.parse(raw) as V8Profile) });
+    setProfileError(null);
+    try {
+      const raw = await readProfile(ref.path);
+      setFlame({ ref, root: flameTreeFromProfile(JSON.parse(raw) as V8Profile) });
+    } catch (err) {
+      setProfileError(
+        `Couldn't open this profile: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }, []);
 
   return (
@@ -246,7 +313,12 @@ function ProfilesTab() {
       <Button variant="soft" onClick={refresh}>
         <ReloadIcon /> Refresh
       </Button>
-      {profiles.length === 0 && (
+      {profileError ? (
+        <Callout.Root color="red" size="1" role="alert">
+          <Callout.Text>{profileError}</Callout.Text>
+        </Callout.Root>
+      ) : null}
+      {!loading && !profileError && profiles.length === 0 && (
         <Text size="2" color="gray">
           No profiles yet. Capture one with profilePanel()/profileWorkerd() from eval.
         </Text>
@@ -275,6 +347,17 @@ function ProfilesTab() {
               top: {ref.summary.topFunctions.map((fn) => `${fn.name} ${fn.selfMs}ms`).join(", ")}
             </Text>
           )}
+          {ref.kind !== "cpuprofile" ? (
+            <Flex direction="column" gap="1">
+              <Text size="1" color="gray" as="div">
+                Open this artifact in DevTools or speedscope; inline viewing is available for CPU
+                profiles.
+              </Text>
+              <Text size="1" color="gray" as="div">
+                Artifact: <Code>{ref.path}</Code>
+              </Text>
+            </Flex>
+          ) : null}
         </Card>
       ))}
       {flame && (
@@ -296,6 +379,7 @@ function App() {
   const theme = usePanelTheme();
   const appTheme = useAppTheme();
   const [activeTab, setActiveTab] = useState("suites");
+  const [runAllNonce, setRunAllNonce] = useState(0);
 
   // Contribute testbench actions to the app command palette (Cmd/Ctrl+K).
   // Controlled tabs make tab-switching reachable; "Run all" mirrors the RPC
@@ -314,12 +398,8 @@ function App() {
     else if (id === "tb-history") setActiveTab("history");
     else if (id === "tb-profiles") setActiveTab("profiles");
     else if (id === "tb-run-all") {
-      void (async () => {
-        const result = await runSuites(allSuites(), {});
-        lastRunResult = result;
-        await saveRun(result, { label: "palette" }).catch(() => undefined);
-        setActiveTab("history");
-      })();
+      setActiveTab("suites");
+      setRunAllNonce((value) => value + 1);
     }
   });
 
@@ -346,7 +426,7 @@ function App() {
             <ScrollArea style={{ flex: 1, minHeight: 0 }}>
               <Box p="3">
                 <Tabs.Content value="suites">
-                  <SuitesTab />
+                  <SuitesTab runAllNonce={runAllNonce} />
                 </Tabs.Content>
                 <Tabs.Content value="history">
                   <HistoryTab />

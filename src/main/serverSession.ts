@@ -15,6 +15,7 @@ import { getAppRoot } from "./paths.js";
 import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
+import type { ReconnectProgress } from "@vibestudio/rpc/transports/webrtcClient";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
@@ -113,7 +114,9 @@ export function connectRemoteViaWebRtc(
     onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
     onServerEvent?: (event: string, payload: unknown) => void;
     onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+    onReconnectProgress?: (progress: ReconnectProgress) => void;
     onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+    onMainSessionTerminalClose?: (error: Error) => void;
   }
 ): Promise<ServerClient> {
   return createWebRtcServerClient({ pairing, ...options });
@@ -141,7 +144,9 @@ export async function establishServerSession(args: {
   centralData: CentralDataManager;
   onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+  onMainSessionTerminalClose?: (error: Error) => void;
 }): Promise<SessionConnection> {
   const { mode, pendingPairing, skipStoredRemote, onServerEvent } = args;
 
@@ -277,7 +282,9 @@ export async function establishServerSession(args: {
 type RemoteConnectArgs = {
   onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
+  onMainSessionTerminalClose?: (error: Error) => void;
 };
 
 /**
@@ -306,7 +313,9 @@ async function establishRemoteSession(
         }),
       onServerEvent: args.onServerEvent,
       onConnectionStatusChanged: args.onConnectionStatusChanged,
+      onReconnectProgress: args.onReconnectProgress,
       onRecovery: args.onRecovery,
+      onMainSessionTerminalClose: args.onMainSessionTerminalClose,
     }
   );
   try {
@@ -351,7 +360,12 @@ async function establishFreshPairSession(
     // one-time code; we don't know that id yet, so dial with a stable selfId. (If
     // the resolved id is ever threaded back, swap it in here.)
     callerId: "shell:pairing",
-    getShellToken: () => pairing.code,
+    getShellToken: () => {
+      const credential = issuedCredential.current;
+      return credential
+        ? `refresh:${credential.deviceId}:${credential.refreshToken}`
+        : pairing.code;
+    },
     // Persist the issued device credential against the pairing material (minus the
     // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
     onPaired: (credential) => {
@@ -359,7 +373,9 @@ async function establishFreshPairSession(
     },
     onServerEvent: args.onServerEvent,
     onConnectionStatusChanged: args.onConnectionStatusChanged,
+    onReconnectProgress: args.onReconnectProgress,
     onRecovery: args.onRecovery,
+    onMainSessionTerminalClose: args.onMainSessionTerminalClose,
   });
   try {
     if (!issuedCredential.current) {

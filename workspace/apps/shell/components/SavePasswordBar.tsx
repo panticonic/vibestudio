@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Flex, Text, Button } from "@radix-ui/themes";
+import { Flex, Text, Button, Callout } from "@radix-ui/themes";
 import { useShellEvent } from "../shell/useShellEvent";
 import { autofill } from "../shell/client";
 
@@ -18,11 +18,14 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   // Map of panelId -> prompt data; supports background panels queueing prompts
   const [prompts, setPrompts] = useState<Map<string, SavePromptData>>(new Map());
   const [confirmed, setConfirmed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useShellEvent(
     "autofill:save-prompt",
     useCallback((data: SavePromptData) => {
       setConfirmed(false);
+      setSaveError(null);
       setPrompts((prev) => {
         const next = new Map(prev);
         next.set(data.panelId, data);
@@ -115,19 +118,46 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
     });
   };
 
-  const handleSave = () => {
-    void autofill
-      .confirmSave(prompt.panelId, "save")
-      .catch((err: unknown) => console.error("[SavePasswordBar] Save failed:", err));
-    removePrompt(prompt.panelId);
-    setConfirmed(true);
+  let hostname: string;
+  try {
+    hostname = new URL(prompt.origin).hostname;
+  } catch {
+    hostname = prompt.origin;
+  }
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await autofill.confirmSave(prompt.panelId, "save");
+      removePrompt(prompt.panelId);
+      setConfirmed(true);
+    } catch (err) {
+      console.error("[SavePasswordBar] Save failed:", err);
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleNever = () => {
-    void autofill
-      .confirmSave(prompt.panelId, "never")
-      .catch((err: unknown) => console.warn("[SavePasswordBar] Never-save failed:", err));
-    removePrompt(prompt.panelId);
+  const handleNever = async () => {
+    if (
+      !window.confirm(
+        `Never offer to save passwords for ${hostname}? This preference remains until you remove it from Credentials.`
+      )
+    )
+      return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await autofill.confirmSave(prompt.panelId, "never");
+      removePrompt(prompt.panelId);
+    } catch (err) {
+      console.warn("[SavePasswordBar] Never-save failed:", err);
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDismiss = () => {
@@ -136,13 +166,6 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
       .catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
     removePrompt(prompt.panelId);
   };
-
-  let hostname: string;
-  try {
-    hostname = new URL(prompt.origin).hostname;
-  } catch {
-    hostname = prompt.origin;
-  }
 
   const message = prompt.isUpdate
     ? `Update password for ${prompt.username} on ${hostname}?`
@@ -162,17 +185,42 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
         flexShrink: 0,
       }}
     >
-      <Text size="2" style={{ flex: 1, minWidth: 0 }} truncate>
-        {message}
-      </Text>
+      <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 0 }}>
+        <Text size="2" truncate>
+          {message}
+        </Text>
+        {saveError ? (
+          <Callout.Root size="1" color="red" role="alert">
+            <Callout.Text>Couldn&apos;t save the password: {saveError}</Callout.Text>
+          </Callout.Root>
+        ) : null}
+      </Flex>
       <Flex gap="2" style={{ flexShrink: 0 }}>
-        <Button size="1" variant="solid" className="app-touch-target" onClick={handleSave}>
-          {prompt.isUpdate ? "Update" : "Save"}
+        <Button
+          size="1"
+          variant="solid"
+          className="app-touch-target"
+          disabled={saving}
+          onClick={() => void handleSave()}
+        >
+          {saving ? "Saving…" : prompt.isUpdate ? "Update" : "Save"}
         </Button>
-        <Button size="1" variant="soft" className="app-touch-target" onClick={handleNever}>
-          Never
+        <Button
+          size="1"
+          variant="soft"
+          className="app-touch-target"
+          disabled={saving}
+          onClick={() => void handleNever()}
+        >
+          Never for this site
         </Button>
-        <Button size="1" variant="ghost" className="app-touch-target" onClick={handleDismiss}>
+        <Button
+          size="1"
+          variant="ghost"
+          className="app-touch-target"
+          disabled={saving}
+          onClick={handleDismiss}
+        >
           Dismiss
         </Button>
       </Flex>

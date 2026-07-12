@@ -30,7 +30,11 @@ export function ChatFeedbackArea() {
             <FeedbackContainer
               key={feedback.callId}
               title={feedback.title}
-              onDismiss={() => onFeedbackDismiss(feedback.callId)}
+              onDismiss={
+                feedback.dismissible === false
+                  ? undefined
+                  : () => onFeedbackDismiss(feedback.callId)
+              }
               onError={(error) => onFeedbackError(feedback.callId, error)}
             >
               <FeedbackFormRenderer

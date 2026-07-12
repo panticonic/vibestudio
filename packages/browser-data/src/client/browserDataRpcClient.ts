@@ -29,6 +29,7 @@ export interface BrowserDataClient {
     getAll(): Promise<StoredSearchEngine[]>;
   };
   passwords: {
+    getAll(): Promise<StoredPassword[]>;
     getForOrigin(origin: string): Promise<StoredPassword[]>;
     updateLastUsed(id: number): Promise<void>;
     update(
@@ -49,6 +50,9 @@ export interface BrowserDataClient {
     }): Promise<number>;
     addNeverSave(origin: string): Promise<void>;
     isNeverSave(origin: string): Promise<boolean>;
+    delete(id: number): Promise<void>;
+    listNeverSaveOrigins(): Promise<string[]>;
+    removeNeverSave(origin: string): Promise<void>;
   };
 }
 export function createBrowserDataRpcClient(rpc: RpcLike): BrowserDataClient {
@@ -81,6 +85,7 @@ export function createBrowserDataRpcClient(rpc: RpcLike): BrowserDataClient {
       getAll: () => call("getSearchEngines"),
     },
     passwords: {
+      getAll: () => call("getPasswords"),
       getForOrigin: (origin: string) => call("getPasswordForSite", origin),
       updateLastUsed: (id: number) => call<void>("updatePasswordLastUsed", id),
       update: (id: number, partial: Partial<ImportedPassword>) =>
@@ -88,6 +93,9 @@ export function createBrowserDataRpcClient(rpc: RpcLike): BrowserDataClient {
       add: (password) => call("addPassword", password),
       addNeverSave: (origin: string) => call<void>("addNeverSavePassword", origin),
       isNeverSave: (origin: string) => call<boolean>("isNeverSavePassword", origin),
+      delete: (id: number) => call<void>("deletePassword", id),
+      listNeverSaveOrigins: () => call<string[]>("getNeverSavePasswordOrigins"),
+      removeNeverSave: (origin: string) => call<void>("removeNeverSavePassword", origin),
     },
   };
 }

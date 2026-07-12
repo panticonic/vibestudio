@@ -16,7 +16,15 @@ import { createHostedRuntime, type RuntimeHost } from "../shared/hostedRuntime.j
 export * from "../shared/portable.js";
 
 // --- Type re-exports ---
-export type { ThemeAppearance, ThemeConfig, PaletteCommand, RuntimeFs, FileStats, MkdirOptions, RmOptions } from "../types.js";
+export type {
+  ThemeAppearance,
+  ThemeConfig,
+  PaletteCommand,
+  RuntimeFs,
+  FileStats,
+  MkdirOptions,
+  RmOptions,
+} from "../types.js";
 export type {
   DurableObjectServiceClient,
   ResolvedUserlandService,
@@ -82,6 +90,7 @@ import {
   getPanelHandle as _hostGetPanelHandle,
   panelTree as _hostPanelTree,
   onChildCreated as _onChildCreated,
+  onChildCreationError as _onChildCreationError,
 } from "./handle.js";
 export type { PanelHandle } from "./handle.js";
 
@@ -239,6 +248,7 @@ export const panel = helpfulNamespace("panel", {
   onFocus: runtime.onFocus,
   onConnectionError: runtime.onConnectionError,
   onChildCreated: _onChildCreated,
+  onChildCreationError: _onChildCreationError,
   reopen,
   stateArgs: helpfulNamespace("panel.stateArgs", {
     get: getStateArgs,

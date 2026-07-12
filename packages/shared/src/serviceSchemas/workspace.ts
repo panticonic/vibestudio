@@ -296,7 +296,12 @@ export const WorkspaceTreeNodeSchema: z.ZodType<WorkspaceTreeNode> = z.lazy(() =
     path: z.string(),
     isUnit: z.boolean(),
     launchable: z
-      .object({ type: z.literal("app"), title: z.string(), hidden: z.boolean().optional() })
+      .object({
+        type: z.literal("app"),
+        title: z.string(),
+        description: z.string().optional(),
+        hidden: z.boolean().optional(),
+      })
       .optional(),
     packageInfo: z.object({ name: z.string(), version: z.string().optional() }).optional(),
     skillInfo: z.object({ name: z.string(), description: z.string() }).optional(),

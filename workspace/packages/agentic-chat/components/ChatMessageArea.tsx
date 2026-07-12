@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
-import { Flex, Text } from "@radix-ui/themes";
+import { Flex, Spinner, Text } from "@radix-ui/themes";
 import { useChatContext } from "../context/ChatContext";
 import { useChatInputContext } from "../context/ChatInputContext";
 import { AgentSetupInline } from "./AgentSetupInline";
@@ -83,7 +83,12 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
         </Flex>
       );
     }
-    return connected ? <FirstRunCard /> : undefined;
+    return connected ? <FirstRunCard /> : (
+      <Flex role="status" aria-live="polite" align="center" justify="center" gap="2" style={{ height: "100%" }}>
+        <Spinner size="1" />
+        <Text color="gray" size="2">Loading conversation…</Text>
+      </Flex>
+    );
   }, [deferredAgent?.launching, connected]);
 
   // Before the first agent exists, the message canvas hosts the inline setup

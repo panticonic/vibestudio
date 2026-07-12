@@ -2,7 +2,20 @@
  * About Page - Shell panel showing application information.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Card, Flex, Heading, Text, Box, Link, Badge, Separator, DataList } from "@radix-ui/themes";
+import {
+  Card,
+  Flex,
+  Heading,
+  Text,
+  Box,
+  Link,
+  Badge,
+  Separator,
+  DataList,
+  Button,
+  Callout,
+  Spinner,
+} from "@radix-ui/themes";
 import { rpc } from "@workspace/runtime";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { AboutThemeRoot, BrandMark } from "@workspace/about-shared/ui";
@@ -28,9 +41,17 @@ function ConnectionBadge({ info }: { info: AppInfo }) {
 function AboutPage() {
   const isMobile = useIsMobile();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [infoError, setInfoError] = useState<string | null>(null);
 
   const loadInfo = useCallback(() => {
-    rpc.call<AppInfo>("main", "app.getInfo", []).then(setAppInfo).catch(console.error);
+    setLoading(true);
+    setInfoError(null);
+    rpc
+      .call<AppInfo>("main", "app.getInfo", [])
+      .then(setAppInfo)
+      .catch((err) => setInfoError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -60,7 +81,7 @@ function AboutPage() {
           <Flex direction="column" align="center" gap="1">
             <Heading size="7">Vibestudio</Heading>
             <Text color="gray" size="2" align="center">
-              A composable desktop application framework
+              Your personal vibe computer
             </Text>
           </Flex>
 
@@ -70,6 +91,26 @@ function AboutPage() {
               <ConnectionBadge info={appInfo} />
             </Flex>
           )}
+          {loading && !appInfo ? (
+            <Flex align="center" gap="2">
+              <Spinner size="1" />
+              <Text size="2" color="gray">
+                Loading version and connection…
+              </Text>
+            </Flex>
+          ) : null}
+          {infoError ? (
+            <Callout.Root color="red" role="alert" style={{ width: "100%" }}>
+              <Callout.Text>
+                <Flex direction="column" gap="2">
+                  <Text size="2">Couldn't load version and connection details: {infoError}</Text>
+                  <Button size="1" variant="soft" color="red" onClick={loadInfo}>
+                    Retry
+                  </Button>
+                </Flex>
+              </Callout.Text>
+            </Callout.Root>
+          ) : null}
 
           <Separator size="4" />
 

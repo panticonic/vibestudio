@@ -11,6 +11,8 @@ import {
   ArrowRightIcon,
   ReloadIcon,
   StopIcon,
+  ExclamationTriangleIcon,
+  GlobeIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
 import { VibestudioLogo } from "@workspace/ui";
@@ -52,6 +54,7 @@ import {
 import { getAddressNavigationModeFromModifiers } from "@vibestudio/shared/panelCommands";
 import {
   menu,
+  notification,
   panel,
   type NativeShellOverlayEvent,
   type NativeShellOverlayOptions,
@@ -92,7 +95,30 @@ export function TitleBar({
     lazyStatusNavigation: statusNavigation,
   } = useNavigation();
   const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
+  const [degradedEventChannels, setDegradedEventChannels] = useState<Set<string>>(() => new Set());
   const isMobile = useIsMobile();
+
+  useEffect(() => {
+    const degraded = (event: Event) => {
+      const name = (event as CustomEvent<{ event?: string }>).detail?.event;
+      if (!name) return;
+      setDegradedEventChannels((current) => new Set(current).add(name));
+    };
+    const restored = (event: Event) => {
+      const name = (event as CustomEvent<string>).detail;
+      setDegradedEventChannels((current) => {
+        const next = new Set(current);
+        next.delete(name);
+        return next;
+      });
+    };
+    window.addEventListener("shell-event-subscription-degraded", degraded);
+    window.addEventListener("shell-event-subscription-restored", restored);
+    return () => {
+      window.removeEventListener("shell-event-subscription-degraded", degraded);
+      window.removeEventListener("shell-event-subscription-restored", restored);
+    };
+  }, []);
 
   const handleNavigationToggle = () => {
     const nextMode: NavigationMode = navigationMode === "stack" ? "tree" : "stack";
@@ -199,12 +225,20 @@ export function TitleBar({
                 size="2"
                 className="app-touch-target"
                 onClick={async () => {
-                  const result = await panel.createAboutPanel("new");
-                  window.dispatchEvent(
-                    new CustomEvent("shell-panel-created", {
-                      detail: { panelId: result.id },
-                    })
-                  );
+                  try {
+                    const result = await panel.createAboutPanel("new");
+                    window.dispatchEvent(
+                      new CustomEvent("shell-panel-created", {
+                        detail: { panelId: result.id },
+                      })
+                    );
+                  } catch (error) {
+                    void notification.show({
+                      type: "error",
+                      title: "Couldn't create panel",
+                      message: error instanceof Error ? error.message : String(error),
+                    });
+                  }
                 }}
                 aria-label="New panel"
               >
@@ -212,6 +246,14 @@ export function TitleBar({
               </IconButton>
             </Tooltip>
             <ThemeSettings />
+            {degradedEventChannels.size > 0 ? (
+              <Tooltip content="Some live updates are reconnecting…">
+                <ExclamationTriangleIcon
+                  color="var(--amber-11)"
+                  aria-label="Live updates reconnecting"
+                />
+              </Tooltip>
+            ) : null}
             <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           </Flex>
         </Flex>
@@ -300,21 +342,39 @@ export function TitleBar({
             </IconButton>
           </Tooltip>
 
-          <Tooltip content="New panel (Cmd/Ctrl+T)">
+          <Tooltip content="New panel (⌘T / Ctrl+Shift+T)">
             <IconButton
               variant="ghost"
               size="1"
               onClick={async () => {
-                const result = await panel.createAboutPanel("new");
-                window.dispatchEvent(
-                  new CustomEvent("shell-panel-created", {
-                    detail: { panelId: result.id },
-                  })
-                );
+                try {
+                  const result = await panel.createAboutPanel("new");
+                  window.dispatchEvent(
+                    new CustomEvent("shell-panel-created", {
+                      detail: { panelId: result.id },
+                    })
+                  );
+                } catch (error) {
+                  void notification.show({
+                    type: "error",
+                    title: "Couldn't create panel",
+                    message: error instanceof Error ? error.message : String(error),
+                  });
+                }
               }}
               aria-label="New panel"
             >
               <PlusIcon />
+            </IconButton>
+          </Tooltip>
+          <Tooltip content="Open address bar (⌘L / Ctrl+Shift+L)">
+            <IconButton
+              variant="ghost"
+              size="1"
+              onClick={() => setAddressBarVisible(true)}
+              aria-label="Open address bar"
+            >
+              <GlobeIcon />
             </IconButton>
           </Tooltip>
         </Flex>
@@ -372,6 +432,15 @@ export function TitleBar({
           gap="1"
           style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
         >
+          <ThemeSettings />
+          {degradedEventChannels.size > 0 ? (
+            <Tooltip content="Some live updates are reconnecting…">
+              <ExclamationTriangleIcon
+                color="var(--amber-11)"
+                aria-label="Live updates reconnecting"
+              />
+            </Tooltip>
+          ) : null}
           <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           {!isMac && <Box style={{ width: "138px" }} />}
         </Flex>
@@ -983,8 +1052,9 @@ function HoverableBreadcrumbItem({
   };
 
   const archivePanel = () => {
+    if (!window.confirm(`Close “${title}”? Child panels, if any, will also be archived.`)) return;
     void panel.archive(panelId).catch((error) => {
-      console.error("Failed to archive panel from title bar", error);
+      console.error("Failed to close panel from title bar", error);
     });
   };
 
@@ -1049,7 +1119,7 @@ function HoverableBreadcrumbItem({
             variant="ghost"
             color="gray"
             radius="small"
-            aria-label="Archive panel"
+            aria-label="Close panel"
             onClick={handleArchive}
             className="breadcrumb-archive-btn"
             style={

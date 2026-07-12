@@ -19,6 +19,9 @@ type BootstrapBridge = {
   launchLocalWorkspace: (workspaceName: string) => Promise<unknown>;
   launchEphemeralWorkspace: () => Promise<unknown>;
   pairRemote: (payload: { link: string; label?: string }) => Promise<unknown>;
+  retryStartup: () => Promise<unknown>;
+  chooseConnection: () => Promise<unknown>;
+  openLog: (path: string) => Promise<unknown>;
 };
 
 const bootstrapTransport: TransportBridge = (() => {
@@ -58,6 +61,9 @@ const bootstrapBridge: BootstrapBridge = {
   launchEphemeralWorkspace: () =>
     ipcRenderer.invoke("vibestudio:bootstrap:launch-ephemeral-workspace"),
   pairRemote: (payload) => ipcRenderer.invoke("vibestudio:bootstrap:pair-remote", payload),
+  retryStartup: () => ipcRenderer.invoke("vibestudio:bootstrap:retry-startup"),
+  chooseConnection: () => ipcRenderer.invoke("vibestudio:bootstrap:choose-connection"),
+  openLog: (path) => ipcRenderer.invoke("vibestudio:bootstrap:open-log", path),
 };
 
 contextBridge.exposeInMainWorld("__vibestudioTransport", bootstrapTransport);

@@ -1,6 +1,6 @@
 import { atom } from "jotai";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
-import { workspace } from "../shell/client.js";
+import { app, remoteCred, workspace } from "../shell/client.js";
 
 // =============================================================================
 // Workspace State
@@ -25,6 +25,8 @@ export const activeWorkspaceNameAtom = atom<string | null>(null);
  * Transient error for workspace operations (dismissable)
  */
 export const workspaceErrorAtom = atom<string | null>(null);
+/** True while this shell is connected to a paired remote workspace server. */
+export const remoteWorkspaceModeAtom = atom(false);
 
 // =============================================================================
 // Panel Pin State (client-local)
@@ -52,11 +54,24 @@ export const pinMutationSeqAtom = atom<number>(0);
 export const loadRecentWorkspacesAtom = atom(null, async (_get, set) => {
   set(workspacesLoadingAtom, true);
   try {
-    const [workspaces, activeName] = await Promise.all([workspace.list(), workspace.getActive()]);
+    const [workspaces, activeName, appInfo] = await Promise.all([
+      workspace.list(),
+      workspace.getActive(),
+      app.getInfo(),
+    ]);
     set(recentWorkspacesAtom, workspaces);
     set(activeWorkspaceNameAtom, activeName);
+    // Connection liveness and connection topology are different concerns. A
+    // temporarily disconnected remote must not expose local-only create/delete
+    // controls that still target the remote workspace service.
+    set(remoteWorkspaceModeAtom, appInfo.connectionMode === "remote");
+    set(workspaceErrorAtom, null);
   } catch (error) {
     console.error("Failed to load workspaces:", error);
+    set(
+      workspaceErrorAtom,
+      `Couldn't load workspaces: ${error instanceof Error ? error.message : String(error)}`
+    );
   } finally {
     set(workspacesLoadingAtom, false);
   }
@@ -97,7 +112,21 @@ export const removeRecentWorkspaceAtom = atom(null, async (_get, set, name: stri
  */
 export const chooseWorkspaceAtom = atom(null, async (_get, _set, name: string) => {
   try {
-    await workspace.select(name);
+    const result = (await workspace.select(name)) as
+      | { pairing?: { deepLink?: string }; workspaceName?: string }
+      | undefined;
+    const deepLink = result?.pairing?.deepLink;
+    if (deepLink) {
+      // Remote hub selection returns a child-workspace invite. Persist and
+      // relaunch onto that child instead of reconnecting to the old workspace.
+      const exchanged = await remoteCred.pair(
+        deepLink,
+        result?.workspaceName ? `Desktop · ${result.workspaceName}` : undefined
+      );
+      if (!exchanged.ok) {
+        throw new Error(exchanged.message ?? "The remote workspace could not be paired");
+      }
+    }
     // App will relaunch, no need to update state
   } catch (error) {
     console.error("Failed to choose workspace:", error);

@@ -1,4 +1,4 @@
-import { app, Notification } from "electron";
+import { app, clipboard, Notification } from "electron";
 
 const REGISTRY = "https://registry.npmjs.org";
 const CHANNEL_ENV = "VIBESTUDIO_NPM_CHANNEL";
@@ -31,10 +31,18 @@ export async function maybeNotifyNpmUpdate(): Promise<void> {
     const command = `npm install -g ${pkg}@latest`;
     console.log(`[npm-update] ${pkg} ${current} → ${latest} available: ${command}`);
     if (Notification.isSupported()) {
-      new Notification({
+      const notification = new Notification({
         title: `Vibestudio ${latest} is available`,
-        body: `You're on ${current}. Update with:\n${command}`,
-      }).show();
+        body: `You're on ${current}. Click to copy the update command:\n${command}`,
+      });
+      notification.on("click", () => {
+        clipboard.writeText(command);
+        new Notification({
+          title: "Update command copied",
+          body: "Paste it into a terminal, then relaunch Vibestudio when installation finishes.",
+        }).show();
+      });
+      notification.show();
     }
   } catch (err) {
     console.warn(`[npm-update] check failed: ${err instanceof Error ? err.message : String(err)}`);

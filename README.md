@@ -26,7 +26,7 @@ The vibestudio sandbox:
 
 ## Installation
 
-Requires **Node.js 22.13.0+**. Both packages update via npm (re-run with `@latest`).
+Requires **Node.js 22.19.0+**. Both packages update via npm (re-run with `@latest`).
 
 ### Desktop app (macOS, Linux; Windows soon)
 
@@ -35,7 +35,7 @@ Installs the GUI and the bundled server:
 ```bash
 npm install -g @panticonic/vibestudio
 vibestudio             # launch the desktop app
-vibestudio --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
+vibestudio --help      # grouped CLI overview: remote, mobile, fs, vcs, agent, eval, …
 ```
 
 On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
@@ -52,20 +52,26 @@ children running when background work is active (you are prompted, and the
 choice can be remembered); idle children stop on their own. See
 [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
 
+On the first launch, choose or create a workspace. The onboarding chat waits for
+you to choose a model provider; it does not send a message on your behalf or begin
+a hidden local-model download. Local models remain an explicit offline option in
+the model picker and Local Models panel.
+
 ### Headless server (remote/home server; clients connect to it)
 
 ```bash
 npm install -g @panticonic/vibestudio-server
-export VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev
 vibestudio remote serve --port 3030
 # quick one-off (no global install):
-npx -p @panticonic/vibestudio-server vibestudio remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev --port 3030
+npx -p @panticonic/vibestudio-server vibestudio remote serve --port 3030
 ```
 
 The server installs with no compiler (workerd/esbuild ship prebuilt binaries) and
 builds panels/workers on demand. Remote clients pair over WebRTC; the signaling
 endpoint is only used to rendezvous, not to carry workspace data. See
 [docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
+The hosted signaling service (`wss://signal.vibestudio.app`) is used by default;
+self-hosting is optional.
 
 #### Inviting a user
 
@@ -159,9 +165,9 @@ it only skips rebuilding the local artifacts.
 
 ## How It Works
 
-Each panel in vibestudio is a browser session that can have child panels. This creates a tree structure where you can:
+Each panel in Vibestudio occupies a node in the workspace's panel tree. You can:
 
-1. **Navigate down**: Click "Add Child Browser" to create a nested browser panel
+1. **Open or nest panels**: Use New Panel (`Cmd+T` on macOS, `Ctrl+Shift+T` elsewhere) or panel actions to create content
 2. **Navigate up**: Use ancestor breadcrumbs to go back to parent panels
 3. **Navigate sideways**: Click sibling tabs to switch between panels at the same level
 4. **Navigate down through descendants**: Click descendant breadcrumbs to jump to child panels
@@ -239,10 +245,9 @@ For development from a source checkout instead: `pnpm bootstrap && pnpm build`.
 ### Running
 
 ```bash
-export VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev
 vibestudio remote serve --port 3030
 # from a source checkout:
-pnpm cli remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev --port 3030
+pnpm cli remote serve --port 3030
 ```
 
 The installed launcher pins the app root to the package, so it works from any
@@ -257,11 +262,13 @@ Pair a Vibestudio device
 
 ### CLI Flags
 
-| Flag                  | Description                                        |
-| --------------------- | -------------------------------------------------- |
-| `--app-root=PATH`     | Application root (defaults to cwd)                 |
-| `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random) |
-| `--log-level=LEVEL`   | Log level                                          |
+| Flag                                 | Description                                              |
+| ------------------------------------ | -------------------------------------------------------- |
+| `--port PORT`, `--gateway-port PORT` | Hub ingress port (environment override or `3030`)        |
+| `--app-root PATH`                    | Application root (the installed package root by default) |
+| `--signal-url URL`                   | Signaling endpoint (hosted service by default)           |
+| `--dev`                              | Development mode                                         |
+| `--ephemeral`                        | Use a disposable workspace                               |
 
 The gateway binds loopback only; remote clients reach it over WebRTC (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
@@ -274,21 +281,23 @@ reserved for internal child runtimes and are rejected by the public server.
 
 ### Android phone pairing
 
-For phone testing, build the internal Android app and start a QR-pairing server.
+For an npm installation, install the Android app and start a QR-pairing server:
 Pairing is over WebRTC (signaling room + DTLS fingerprint) — no Tailscale/VPN or
 HTTPS serve setup:
 
 ```bash
 vibestudio mobile install --launch
-pnpm build
 vibestudio mobile pair --port 3030
 ```
+
+From a source checkout, run `pnpm build` first, then use `pnpm cli mobile
+install --launch` and `pnpm cli mobile pair --port 3030`.
 
 Scan the printed `vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all` QR. See
 [docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the WebRTC pairing +
 local setup. Use the desktop app's bootstrap screen to pair a laptop without
 copying an admin token. After one desktop client is connected, use **Remote
-server** → **Paired devices** → **Pair another device** for additional links.
+server** → **Paired devices** → **Connect a device** for additional links.
 
 Each panel gets:
 

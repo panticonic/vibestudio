@@ -12,9 +12,11 @@ function defaultIdentityPath(workspace) {
 }
 
 function parseArgs(argv) {
-  const options = { identity: null, workspace: "default", yes: false, help: false };
-  let identityExplicit = false;
-  let workspaceExplicit = false;
+  const options = {
+    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? defaultIdentityPath(),
+    yes: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--identity") {
@@ -96,8 +98,15 @@ function main() {
     ],
     { stdio: "pipe" }
   );
+  if (result.error) {
+    throw new Error(
+      `openssl is required on PATH to regenerate the identity: ${result.error.message}`
+    );
+  }
   if (result.status !== 0) {
-    throw new Error(`openssl failed: ${result.stderr.toString() || result.stdout.toString()}`);
+    throw new Error(
+      `openssl failed: ${result.stderr?.toString() || result.stdout?.toString() || "unknown error"}`
+    );
   }
   const combined = `${fs.readFileSync(cert, "utf8")}\n${fs.readFileSync(key, "utf8")}`;
   fs.writeFileSync(identity, combined, { mode: 0o600 });

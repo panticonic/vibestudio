@@ -354,6 +354,16 @@ async function main() {
     printHelp();
     return;
   }
+  if (
+    !(await fsp
+      .stat(mobileDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false))
+  ) {
+    throw new Error(
+      "mobile dev requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap`."
+    );
+  }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
       throw new Error(
@@ -429,8 +439,15 @@ async function main() {
     if (emulatorChild) {
       await waitForChildExit(emulatorChild);
     }
-    for (const child of startedChildren) {
-      if (child.exitCode == null) child.kill("SIGKILL");
+    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
+      try {
+        await fsp.access(readyInfo.workspaceDir);
+        console.warn(
+          `[mobile-dev] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
+        );
+      } catch {
+        // Server cleanup completed.
+      }
     }
     await Promise.all(startedChildren.map((child) => waitForChildExit(child, 2_000)));
     if (cleanupTurnArtifacts) await cleanupTurnArtifacts().catch(() => undefined);
@@ -443,15 +460,6 @@ async function main() {
   process.on("SIGTERM", () => void cleanup(0));
 
   try {
-    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-dev-"));
-    readyFilePath = path.join(tempRoot, "hub-ready.json");
-    const serverHome = path.join(tempRoot, "server-home");
-    const serverConfig = path.join(tempRoot, "server-xdg-config");
-    await Promise.all([
-      fsp.mkdir(serverHome, { recursive: true }),
-      fsp.mkdir(serverConfig, { recursive: true }),
-    ]);
-
     if (!(await hasAdbDevice(options.device))) {
       if (!options.avd) {
         throw new Error(
@@ -465,8 +473,10 @@ async function main() {
           label: "emulator",
         }
       );
-      await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
-      launchedEmulator = true;
+    }
+
+    if (emulatorChild) {
+      startedChildren.push(emulatorChild);
     }
 
     await waitForAndroidBoot(options.device);
@@ -575,7 +585,7 @@ async function main() {
 
     console.log(`[mobile-dev] Ready`);
     console.log(
-      `[mobile-dev] Workspace: ${workspace.name}${workspace.ephemeral ? " (ephemeral)" : ""}`
+      `[mobile-dev] Workspace: ${ready.workspaceName}${ready.isEphemeral ? " (ephemeral)" : ""}`
     );
     console.log(`[mobile-dev] Gateway:   ${ready.gatewayUrl}`);
     console.log(`[mobile-dev] Device:    ${options.device ?? "default adb device"}`);

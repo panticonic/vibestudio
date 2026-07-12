@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("electron", () => ({ app: mocks.app, safeStorage: mocks.safeStorage }));
 vi.mock("./deviceCredentialStore.js", () => ({
   loadStoredRemotePairing: () => mocks.store.value,
+  loadDeviceCredentialByWorkspaceId: () => null,
   saveDeviceCredential: (value: DeviceCredentialEntry) => {
     if (mocks.store.saveError) throw mocks.store.saveError;
     if (value.transport === "webrtc") mocks.store.value = value as StoredRemote;

@@ -88,6 +88,8 @@ export interface ActiveFeedbackSchema extends ActiveFeedbackBase {
   severity?: "info" | "warning" | "danger";
   hideSubmit?: boolean;
   hideCancel?: boolean;
+  /** Omit the header close button when dismissing would have a destructive meaning. */
+  dismissible?: boolean;
 }
 
 /**
@@ -123,7 +125,7 @@ export interface ToolApprovalSettings {
  */
 export interface UseToolApprovalResult {
   settings: ToolApprovalSettings;
-  setGlobalFloor: (level: ApprovalLevel) => void;
+  setGlobalFloor: (level: ApprovalLevel) => Promise<void>;
 }
 
 /**
@@ -131,7 +133,7 @@ export interface UseToolApprovalResult {
  */
 export interface ToolApprovalProps {
   settings: ToolApprovalSettings;
-  onSetFloor: (level: ApprovalLevel) => void;
+  onSetFloor: (level: ApprovalLevel) => Promise<void>;
 }
 
 // ============================================================================

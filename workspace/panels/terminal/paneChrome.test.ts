@@ -21,6 +21,7 @@ describe("pane chrome", () => {
     expect(headerBorderColor("approval", false)).toBe("var(--amber-8)");
     expect(headerBorderColor("info", true)).toBe("var(--accent-7)");
     expect(severityDotColor("done", true)).toBe("var(--green-9)");
-    expect(severityDotColor("info", false)).toBe("var(--red-9)");
+    expect(severityDotColor("info", false)).toBe("var(--gray-9)");
+    expect(severityDotColor("failure", false)).toBe("var(--red-9)");
   });
 });

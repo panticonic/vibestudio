@@ -11,8 +11,8 @@ function key(mods: Partial<Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey
 }
 
 describe("command launcher model", () => {
-  it("runs Enter in a split-right pane by default", () => {
-    expect(commandTargetForEnter(key())).toBe("splitRight");
+  it("runs plain Enter in the current pane", () => {
+    expect(commandTargetForEnter(key())).toBe("here");
   });
 
   it("runs Shift+Enter in a split-down pane", () => {

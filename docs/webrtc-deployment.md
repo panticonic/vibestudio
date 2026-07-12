@@ -235,7 +235,11 @@ remote OAuth/webhooks:
 
 ```bash
 export VIBESTUDIO_RELAY_URL=https://vibestudio.app
+export VIBESTUDIO_RELAY_SIGNING_SECRET='<same secret configured on the relay worker>'
 ```
+
+Both variables are required together; the home server and relay worker must use
+the same signing secret.
 
 The relay does not have a per-server upstream URL. Each home server opens an
 authenticated outbound `/backhaul` WebSocket and claims its own subscription ids.

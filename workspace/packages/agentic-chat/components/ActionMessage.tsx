@@ -385,6 +385,14 @@ export const ActionPill = React.memo(function ActionPill({
       align="center"
       gap="1"
       onClick={() => onExpand(id)}
+      onKeyDown={(event) => {
+        if (event.currentTarget !== event.target) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onExpand(id);
+        }
+      }}
+      role="button"
       tabIndex={0}
       aria-label={title}
       style={{
@@ -473,6 +481,14 @@ export const ExpandedAction = React.memo(function ExpandedAction({
         align="center"
         gap="2"
         onClick={onCollapse}
+        onKeyDown={(event) => {
+          if (event.currentTarget !== event.target) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onCollapse();
+          }
+        }}
+        role="button"
         tabIndex={0}
         style={{ cursor: "pointer", userSelect: "none" }}
       >

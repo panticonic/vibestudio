@@ -94,6 +94,7 @@
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "audit": null,
+      "cancelOAuth": null,
       "completeCapture": null,
       "configureClient": null,
       "connect": null,
@@ -309,6 +310,13 @@
       "updatePanelState": null
     }
   },
+  "permissions": {
+    "service": ["app", "panel", "server", "shell"],
+    "methods": {
+      "list": null,
+      "revoke": null
+    }
+  },
   "presence": {
     "service": ["server", "shell"],
     "methods": {
@@ -362,6 +370,7 @@
   "shellApproval": {
     "service": ["app", "server", "shell"],
     "methods": {
+      "blockCapability": null,
       "listPending": null,
       "resolve": null,
       "resolveBootstrap": null,

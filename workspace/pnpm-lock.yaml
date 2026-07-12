@@ -326,6 +326,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/runtime
 
+  about/permissions:
+    dependencies:
+      '@workspace/about-shared':
+        specifier: workspace:*
+        version: link:../../packages/about-shared
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
   about/keyboard-shortcuts:
     dependencies:
       '@workspace/about-shared':
@@ -1134,6 +1143,9 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@workspace/ui':
+        specifier: workspace:*
+        version: link:../ui
     devDependencies:
       '@types/react':
         specifier: ^19.2.4

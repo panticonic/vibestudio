@@ -10,22 +10,22 @@ import { APPROVAL_LEVELS, type ToolApprovalSettings, type ApprovalLevel } from "
 
 interface ToolPermissionsDropdownProps {
   settings: ToolApprovalSettings;
-  onSetFloor: (level: ApprovalLevel) => void;
+  onSetFloor: (level: ApprovalLevel) => Promise<void>;
 }
 
-export function ToolPermissionsDropdown({
-  settings,
-  onSetFloor,
-}: ToolPermissionsDropdownProps) {
+export function ToolPermissionsDropdown({ settings, onSetFloor }: ToolPermissionsDropdownProps) {
   // Determine icon color based on floor level
-  const iconColor = settings.globalFloor === 2 ? "orange" : settings.globalFloor === 1 ? "green" : "blue";
+  const iconColor =
+    settings.globalFloor === 2 ? "orange" : settings.globalFloor === 1 ? "green" : "blue";
 
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         <Button variant="soft" size="1" color={iconColor}>
           <LockClosedIcon />
-          <Text size="1">{APPROVAL_LEVELS[settings.globalFloor as keyof typeof APPROVAL_LEVELS]?.label}</Text>
+          <Text size="1">
+            {APPROVAL_LEVELS[settings.globalFloor as keyof typeof APPROVAL_LEVELS]?.label}
+          </Text>
         </Button>
       </DropdownMenu.Trigger>
 
@@ -36,7 +36,14 @@ export function ToolPermissionsDropdown({
           <DropdownMenu.CheckboxItem
             key={level}
             checked={settings.globalFloor === level}
-            onCheckedChange={() => onSetFloor(level)}
+            onCheckedChange={() => {
+              void onSetFloor(level).catch((error: unknown) => {
+                console.error(
+                  "[ToolPermissionsDropdown] Failed to update permission level:",
+                  error
+                );
+              });
+            }}
           >
             <Flex direction="column" gap="1">
               <Text size="2" weight={settings.globalFloor === level ? "bold" : "regular"}>

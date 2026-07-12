@@ -92,6 +92,8 @@ export interface CreatePairedConnectionOptions {
    * surfaced via {@link onPersistError}, never a void'd rejection.
    */
   onPaired?(credential: DeviceCredential): Promise<void> | void;
+  /** Main logical session was rejected or terminally closed while the pipe may remain up. */
+  onTerminalClose?(error: Error): void;
   /** Persistence hook failed after all `onPaired` retries. */
   onPersistError?(error: Error): void;
   /** Post-auth recovery passthrough (fires on every open incl. the first). */
@@ -256,6 +258,7 @@ export async function createPairedConnection(
     ...(options.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),
     getToken: options.getShellToken,
     ...(runOnPaired ? { onPaired: runOnPaired } : {}),
+    ...(options.onTerminalClose ? { onTerminalClose: options.onTerminalClose } : {}),
     onRecovery: fanoutRecovery,
   });
 

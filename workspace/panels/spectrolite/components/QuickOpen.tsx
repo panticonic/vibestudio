@@ -34,10 +34,17 @@ function highlightedText(text: string, query: string): ReactNode {
 
 type QuickAction = { kind: "open"; path: string } | { kind: "create"; name: string };
 
-export function QuickOpenDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function QuickOpenDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const app = useApp();
   const paths = useAppState((s) => s.paths);
   const recentPaths = useAppState((s) => s.recentPaths);
+  const pathsError = useAppState((s) => s.pathsError);
   const [query, setQuery] = useState("");
 
   // Reset the query each time the palette opens.
@@ -80,7 +87,11 @@ export function QuickOpenDialog({ open, onOpenChange }: { open: boolean; onOpenC
       return;
     }
     void (async () => {
-      const title = action.name.replace(/\.mdx$/i, "").split("/").pop() ?? action.name;
+      const title =
+        action.name
+          .replace(/\.mdx$/i, "")
+          .split("/")
+          .pop() ?? action.name;
       const created = await app.vault.createFile(action.name, `# ${title}\n\n`);
       app.openFile(created);
       onOpenChange(false);
@@ -98,7 +109,9 @@ export function QuickOpenDialog({ open, onOpenChange }: { open: boolean; onOpenC
       placeholder="Find or create a note"
       searchIcon={<MagnifyingGlassIcon />}
       maxWidth={560}
-      emptyMessage={query.trim() ? "No matching notes." : "Type to search this vault."}
+      emptyMessage={
+        pathsError ? pathsError : query.trim() ? "No matching notes." : "Type to search this vault."
+      }
     />
   );
 }

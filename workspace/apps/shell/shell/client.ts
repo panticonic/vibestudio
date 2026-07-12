@@ -521,11 +521,12 @@ export type DeviceRecord = RemoteCredDeviceRecord;
 export type PairingInvite = RemoteCredPairingInvite;
 export const remoteCred = {
   getCurrent: () => remoteCredClient.getCurrent(),
-  pair: (link: string) => remoteCredClient.pair({ link }),
+  pair: (link: string, label?: string) => remoteCredClient.pair({ link, label }),
   pairDevice: async (args?: { workspace?: string; ttlMs?: number }) =>
     (await remoteCredClient.pairDevice(args)).pairing,
   listDevices: () => remoteCredClient.listDevices(),
   revokeDevice: (deviceId: string) => remoteCredClient.revokeDevice(deviceId),
+  reconnectNow: () => remoteCredClient.reconnectNow(),
   clear: () => remoteCredClient.clear(),
   relaunch: () => remoteCredClient.relaunch(),
 };
@@ -779,6 +780,7 @@ import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>
     shellApprovalClient.resolve(approvalId, decision),
+  blockCapability: (approvalId: string) => shellApprovalClient.blockCapability(approvalId),
   resolveBootstrap: (approvalId: string, decision: Extract<ApprovalDecision, "once" | "deny">) =>
     shellApprovalClient.resolveBootstrap(approvalId, decision),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>

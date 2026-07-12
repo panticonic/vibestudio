@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { writeFileAtomicSync } from "../atomicFile.js";
+import { cliConfigRoot } from "./configPaths.js";
 
 /**
  * Local record of an agent CLI session: a durable `session` runtime entity
@@ -26,7 +26,7 @@ export function isValidSessionName(name: string): boolean {
 
 /** Same config-dir resolution as credentialStore.ts. */
 export function sessionDir(): string {
-  return path.join(os.homedir(), ".config", "vibestudio", "agent-sessions");
+  return path.join(cliConfigRoot(), "agent-sessions");
 }
 
 export function sessionPath(name: string): string {
@@ -40,7 +40,12 @@ export function loadAgentSession(name: string): AgentSession | null {
   let parsed: Partial<AgentSession>;
   try {
     parsed = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<AgentSession>;
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[vibestudio] Could not read agent session ${p}: ${
+        error instanceof Error ? error.message : String(error)
+      }. Restore or remove this file before re-attaching the session.`
+    );
     return null;
   }
   const allowedKeys = new Set([
@@ -70,6 +75,9 @@ export function loadAgentSession(name: string): AgentSession | null {
     !Number.isFinite(parsed.createdAt) ||
     parsed.createdAt <= 0
   ) {
+    console.warn(
+      `[vibestudio] Agent session file ${p} has an invalid schema. Restore or remove it before re-attaching the session.`
+    );
     return null;
   }
   return parsed as AgentSession;

@@ -126,6 +126,28 @@ export function onChildCreated(
   };
 }
 
+export function onChildCreationError(
+  handler: (info: { url: string; error: string }) => void
+): () => void {
+  const unsubs: Array<() => void> = [];
+  const notify = (payload: unknown) => {
+    const data = payload as { url?: string; error?: string } | null;
+    if (data?.url && data?.error) handler({ url: data.url, error: data.error });
+  };
+  if (shell?.addEventListener) {
+    const listenerId = shell.addEventListener((event: string, payload: unknown) => {
+      if (event === "runtime:child-creation-error") notify(payload);
+    });
+    unsubs.push(() => shell.removeEventListener(listenerId));
+  }
+  unsubs.push(
+    getRpc().on("runtime:child-creation-error", (event: RpcEventContext) => notify(event.payload))
+  );
+  return () => {
+    for (const unsub of unsubs) unsub();
+  };
+}
+
 export function getPanelHandle(
   id: string,
   kind: "workspace" | "browser" = "workspace"

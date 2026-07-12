@@ -98,6 +98,17 @@ export async function createProject(params: {
 }): Promise<{ created: string; files: string[] }> {
   const { projectType, name, title = name, template } = params;
 
+  if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+    throw new Error(
+      "Project name must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens."
+    );
+  }
+  if (!title.trim() || /[`\\\r\n"<>{}&*]|\$\{/.test(title)) {
+    throw new Error(
+      'Project title must be a single non-empty line without code or markup delimiters such as ", <, {, *, backticks, or backslashes.'
+    );
+  }
+
   const typeDir = TYPE_DIRS[projectType];
   if (!typeDir)
     throw new Error(
@@ -144,6 +155,12 @@ export async function createProject(params: {
         }
       }
 
+      if (panelFramework !== "react" && panelFramework !== "svelte") {
+        throw new Error(
+          `Panel framework "${panelFramework}" is not supported by createProject; choose the default React or Svelte template.`
+        );
+      }
+
       if (panelFramework === "svelte") {
         files["package.json"] = JSON.stringify(
           {
@@ -167,7 +184,7 @@ export async function createProject(params: {
         );
         files["index.ts"] = `export { default } from "./App.svelte";\n`;
         files["App.svelte"] = `<script>
-  import { theme } from "@workspace/svelte";
+  import { theme, themeStyle } from "@workspace/svelte";
   import { onMount } from "svelte";
 
   let mode = window.__vibestudioAgentMode ?? "live";
@@ -183,7 +200,7 @@ export async function createProject(params: {
   });
 </script>
 
-<div class="container" class:dark={$theme === "dark"}>
+<div class="container" class:dark={$theme === "dark"} style={$themeStyle}>
   <h1>${title}</h1>
   <p>{data[mode]}</p>
 </div>
@@ -196,7 +213,12 @@ export async function createProject(params: {
     justify-content: center;
     height: 100vh;
     font-family: system-ui, sans-serif;
+    box-sizing: border-box;
+    padding: calc(24px * var(--vibestudio-scale));
+    border-radius: var(--vibestudio-radius);
+    accent-color: var(--vibestudio-accent);
   }
+  h1 { color: var(--vibestudio-accent); }
 </style>
 `;
       } else {
@@ -217,12 +239,14 @@ export async function createProject(params: {
                 "@radix-ui/themes",
                 "@workspace/runtime",
                 "@workspace/react",
+                "@workspace/ui/panel",
               ],
               ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
             },
             dependencies: {
               "@workspace/runtime": "workspace:*",
               "@workspace/react": "workspace:*",
+              "@workspace/ui": "workspace:*",
               "@radix-ui/themes": "^3.2.1",
             },
           },
@@ -232,6 +256,7 @@ export async function createProject(params: {
         files["index.tsx"] =
           `import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { usePanelTheme } from "@workspace/react";
+import { useAppTheme } from "@workspace/ui/panel";
 import { Flex, Text, Theme } from "@radix-ui/themes";
 
 type DataMode = "fixture" | "live";
@@ -258,10 +283,11 @@ function DataModeProvider({ children }: { children: ReactNode }) {
 
 export default function ${toPascalCase(name)}() {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
   const content = <${toPascalCase(name)}Content />;
 
   return (
-    <Theme appearance={theme}>
+    <Theme appearance={theme} {...appTheme}>
       <DataModeProvider>
         {content}
       </DataModeProvider>
@@ -312,7 +338,8 @@ function ${toPascalCase(name)}Content() {
         2
       );
       files["index.ts"] = `/**\n * ${title}\n */\n\nexport {};\n`;
-      files["SKILL.md"] = `---\nname: ${name}\ndescription: ${title}\n---\n\n# ${title}\n`;
+      files["SKILL.md"] =
+        `---\nname: ${name}\ndescription: ${JSON.stringify(title)}\n---\n\n# ${title}\n`;
       break;
 
     case "project":

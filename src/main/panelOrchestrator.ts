@@ -1443,6 +1443,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       if (currentEntityId && currentEntityId !== disposition.previous.runtimeEntityId) {
         return;
       }
+      this.deps.sendPanelEvent(slotId, "runtime:connection-error", {
+        code: 4001,
+        reason: "This panel's runtime moved to another device.",
+        source: "server",
+      });
       await this.unloadPanelIfPresent(slotId, "lease-transfer");
       return;
     }

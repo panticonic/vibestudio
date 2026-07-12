@@ -21,6 +21,8 @@ export interface ServerEventBridgeDeps {
   getServerClient(): ServerClient | null;
   openExternal(url: string): Promise<void>;
   warn(message: string): void;
+  notifyError?(title: string, message: string): void;
+  onAttentionRequired?(title: string, message: string): void;
   /** OS-level attention (badge/flash/notification) for pending approvals. */
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
   /** Host-target apps changed state; desktop bootstrap can retry launch. */
@@ -82,7 +84,22 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
 
     const bareEvent = event.slice("event:".length);
     if (bareEvent === "external-open:open") {
-      void handleExternalOpenPayload(payload as ExternalOpenPayload, {
+      const external = payload as ExternalOpenPayload;
+      const transactionId = external.oauthLoopback?.transactionId;
+      const pendingNotificationId = transactionId ? `oauth-pending-${transactionId}` : null;
+      if (pendingNotificationId && transactionId) {
+        emitNormalized("notification:show", {
+          id: pendingNotificationId,
+          type: "info",
+          title: "Finish signing in in your browser",
+          message: "Vibestudio is waiting for the provider to return you to the app.",
+          ttl: 0,
+          actions: [
+            { id: `oauth-cancel:${transactionId}`, label: "Cancel sign-in", variant: "soft" },
+          ],
+        });
+      }
+      void handleExternalOpenPayload(external, {
         openExternal: deps.openExternal,
         forwardOAuthCallback: (request) => {
           const client = deps.getServerClient();
@@ -90,13 +107,17 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
             ? credentialsClientFor(client).forwardOAuthCallback(request)
             : Promise.resolve();
         },
-      }).catch((err: unknown) => {
-        deps.warn(
-          `[externalOpen] OAuth browser handoff failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
-      });
+      })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[externalOpen] OAuth browser handoff failed: ${message}`);
+          deps.notifyError?.("Sign-in could not continue", message);
+        })
+        .finally(() => {
+          if (pendingNotificationId) {
+            emitNormalized("notification:dismiss", { id: pendingNotificationId });
+          }
+        });
       return;
     }
 
@@ -114,15 +135,29 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       return;
     }
 
+    if (bareEvent === "notification:show") {
+      const notification = payload as { id?: unknown; title?: unknown; message?: unknown };
+      if (
+        typeof notification.id === "string" &&
+        notification.id.startsWith("chat-attention:") &&
+        typeof notification.title === "string"
+      ) {
+        deps.onAttentionRequired?.(
+          notification.title,
+          typeof notification.message === "string" ? notification.message : ""
+        );
+      }
+    }
+
     if (bareEvent === "credential:capture-request") {
       const request = payload as Record<string, unknown>;
       const captureId = request["captureId"];
-      const onCredentialCaptureRequest = deps.onCredentialCaptureRequest;
-      if (typeof captureId !== "string" || !onCredentialCaptureRequest) return;
+      const captureRequest = deps.onCredentialCaptureRequest;
+      if (typeof captureId !== "string" || !captureRequest) return;
       void (async () => {
         let result: Record<string, unknown>;
         try {
-          result = await onCredentialCaptureRequest(request);
+          result = await captureRequest(request);
         } catch (err) {
           result = { error: err instanceof Error ? err.message : String(err) };
         }
@@ -152,11 +187,13 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
     if (bareEvent === "panel:runtimeLeaseChanged") {
       const leaseEvent = payload as PanelRuntimeLeaseChangedEvent;
       void panelOrchestrator?.handleRuntimeLeaseChanged(leaseEvent).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
         deps.warn(
           `[panelRuntime] failed to apply lease change for ${leaseEvent.slotId}/${leaseEvent.runtimeEntityId}: ${
-            err instanceof Error ? err.message : String(err)
+            message
           }`
         );
+        deps.notifyError?.("Panel connection could not be updated", message);
       });
       return;
     }
@@ -186,11 +223,9 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       void appOrchestrator
         ?.applyAppAvailable(appPayload as AppAvailableEvent)
         .catch((err: unknown) => {
-          deps.warn(
-            `[apps] failed to apply app availability: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[apps] failed to apply app availability: ${message}`);
+          deps.notifyError?.("App availability could not be updated", message);
         });
       if (isValidEventName(bareEvent)) {
         emitNormalized(bareEvent, appPayload);
@@ -217,15 +252,26 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       deps.onAppHostTargetChanged?.({ event: bareEvent, payload });
     }
 
+    if (bareEvent === "extensions:error") {
+      const record =
+        payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+      const source = typeof record["source"] === "string" ? record["source"] : "An extension";
+      const message =
+        typeof record["error"] === "string"
+          ? record["error"]
+          : typeof record["message"] === "string"
+            ? record["message"]
+            : "The extension failed to build or start.";
+      deps.notifyError?.(`${source} failed`, message);
+    }
+
     if (bareEvent === "panel-tree-updated") {
       void panelOrchestrator
         ?.applyServerPanelTreeSnapshot(payload as PanelTreeSnapshot)
         .catch((err: unknown) => {
-          deps.warn(
-            `[panelTree] failed to apply server tree snapshot: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[panelTree] failed to apply server tree snapshot: ${message}`);
+          deps.notifyError?.("Workspace panel tree is out of sync", message);
         });
       return;
     }

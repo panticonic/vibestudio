@@ -45,6 +45,17 @@ const baseConfig: AgentLoopConfig = {
   roster: { participants: [] },
 };
 
+const promptingRoster: AgentLoopConfig["roster"] = {
+  participants: [
+    {
+      participantId: "panel:user",
+      ref: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      type: "panel",
+      methods: [{ name: "confirm" }],
+    },
+  ],
+};
+
 const fallbackModelRef = "local:lfm2.5-1.2b";
 const fallbackModelSpec: AgentModelSpec = {
   id: "lfm2.5-1.2b",
@@ -888,7 +899,7 @@ describe("agent-loop core lifecycle", () => {
 
 describe("approval gate (approvalLevel < 2)", () => {
   it("gates unsafe tools, keeps safe tools auto at level 1, and resumes on grant", () => {
-    const s = scenario({ approvalLevel: 1 });
+    const s = scenario({ approvalLevel: 1, roster: promptingRoster });
     prompt(s);
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",
@@ -907,7 +918,7 @@ describe("approval gate (approvalLevel < 2)", () => {
     expect(
       s.log.find((row) => row.envelopeId === ids.approvalRequested(approvalId))!.payload
     ).toMatchObject({
-      question: "Allow tool call?",
+      question: "Allow write to act on “x”?",
       details: { toolName: "write" },
     });
 
@@ -929,7 +940,7 @@ describe("approval gate (approvalLevel < 2)", () => {
   });
 
   it("denial appends invocation.failed (approval denied)", () => {
-    const s = scenario({ approvalLevel: 0 });
+    const s = scenario({ approvalLevel: 0, roster: promptingRoster });
     prompt(s);
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",
@@ -952,7 +963,7 @@ describe("approval gate (approvalLevel < 2)", () => {
   });
 
   it("a failed approval-form effect resolves the approval (no infinite reconcile loop, AL-7)", () => {
-    const s = scenario({ approvalLevel: 0 });
+    const s = scenario({ approvalLevel: 0, roster: promptingRoster });
     prompt(s);
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",

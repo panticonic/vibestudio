@@ -1,4 +1,4 @@
-import { AuthError } from "./output.js";
+import { AuthError, networkErrorMessage } from "./output.js";
 import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
 import { isWebRtcCredential, type CliStoredPairing } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -96,9 +96,7 @@ async function fetchOrAuthError(url: URL, init: RequestInit): Promise<Response> 
   try {
     return await fetch(url, init);
   } catch (error) {
-    throw new AuthError(
-      `cannot reach ${url.origin}: ${error instanceof Error ? error.message : String(error)}`
-    );
+    throw new AuthError(`cannot reach ${url.origin}: ${networkErrorMessage(error)}`);
   }
 }
 

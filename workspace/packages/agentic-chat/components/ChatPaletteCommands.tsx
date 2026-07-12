@@ -11,9 +11,8 @@
  * model — the same "now vs. next", "nothing happens invisibly" semantics as the
  * composer — is reachable by keyboard without hunting for the right gesture.
  *
- * (No "retry failed send" command: failed sends restore their draft to the
- * composer rather than leaving a retriable outbox entry — `failedSendMessageIds`
- * is never populated — so offering it would be a no-op.)
+ * Failed sends restore their draft to the composer rather than leaving a
+ * separate retriable outbox entry.
  */
 import { useMemo } from "react";
 import { usePaletteCommands } from "@workspace/react";

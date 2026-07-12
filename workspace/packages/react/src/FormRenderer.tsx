@@ -344,6 +344,18 @@ export function FormRenderer({
           />
         )}
 
+        {field.type === "textarea" && (
+          <TextArea
+            size={size}
+            placeholder={placeholderText}
+            value={String(currentValue ?? "")}
+            disabled={!isEnabled}
+            onChange={(e) => onChange(field.key, e.target.value)}
+            style={{ minHeight: field.maxHeight ? Math.min(field.maxHeight, 240) : 120, maxHeight: field.maxHeight }}
+            {...clickProps}
+          />
+        )}
+
         {/* Number input */}
         {field.type === "number" && (
           <TextField.Root

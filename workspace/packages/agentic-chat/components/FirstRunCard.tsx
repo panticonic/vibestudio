@@ -4,8 +4,8 @@ import { HomeIcon, LightningBoltIcon, LockClosedIcon } from "@radix-ui/react-ico
 /**
  * First-run narrative card (design §9, item 9). Shown as the empty-transcript
  * state of a brand-new chat: it explains, once and unobtrusively, that this
- * workspace can run models on-device and that a small local model answers for
- * free and offline whenever no cloud provider is connected. It disappears the
+ * workspace can use a connected provider or an explicitly downloaded local
+ * model. It disappears the
  * moment the first message lands, so it never competes with real content.
  */
 export function FirstRunCard() {
@@ -18,29 +18,29 @@ export function FirstRunCard() {
             <Heading size="4">Chat runs on your terms</Heading>
           </Flex>
           <Text size="2" color="gray">
-            Send a message to start. You can point this conversation at a cloud
-            provider or at a model running directly on this device — switch any
-            time from the model picker.
+            Connect a model provider from the model picker to get started. Your first message waits
+            for your choice; Vibestudio will not silently download a model or attribute an
+            onboarding prompt to you.
           </Text>
           <Box>
             <Flex direction="column" gap="2">
               <Feature
                 icon={<HomeIcon width="14" height="14" />}
                 color="green"
-                title="On-device fallback"
-                body="If no cloud provider is connected, a small local model (LFM2.5) answers automatically — free, with nothing leaving your machine."
+                title="Choose a provider"
+                body="Use the model picker to connect OpenAI, Anthropic, or another configured provider. If a request cannot run, the chat shows a connection card."
               />
               <Feature
                 icon={<LightningBoltIcon width="14" height="14" />}
                 color="amber"
-                title="Loaded on demand"
-                body="The local fallback isn't kept running. It loads the first time it's needed, so it costs nothing until you use it."
+                title="Local models are opt-in"
+                body="Prefer offline use? Choose a model in Local Models first. The initial engine and model download can use several hundred MB, and progress is shown there."
               />
               <Feature
                 icon={<LockClosedIcon width="14" height="14" />}
                 color="blue"
                 title="Your keys, your models"
-                body="Connect providers or download local models from the model picker and the Local Models panel."
+                body="Keys stay in Vibestudio's credential store. You can switch providers or local models from the model picker at any time."
               />
             </Flex>
           </Box>

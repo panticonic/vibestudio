@@ -203,6 +203,11 @@ export class IpcDispatcher {
           `[IpcDispatcher] Rejecting vibestudio:rpc:send from unresolved sender ` +
             `(webContentsId=${event.sender.id})`
         );
+        this.rejectRequestEnvelope(
+          event.sender,
+          envelope,
+          "The panel or app is no longer attached."
+        );
         return;
       }
       if (caller.callerKind === "panel") {
@@ -216,6 +221,11 @@ export class IpcDispatcher {
         console.warn(
           `[IpcDispatcher] Rejecting vibestudio:rpc:send from unauthorized sender ` +
             `(webContentsId=${event.sender.id}, kind=${caller.callerKind})`
+        );
+        this.rejectRequestEnvelope(
+          event.sender,
+          envelope,
+          "This sender is not authorized for RPC."
         );
         return;
       }
@@ -439,6 +449,16 @@ export class IpcDispatcher {
         responseEnvelopeFor(requestEnvelope, MAIN_CALLER, response)
       );
     }
+  }
+
+  private rejectRequestEnvelope(sender: WebContents, envelope: RpcEnvelope, error: string): void {
+    const message = envelope.message;
+    if (message?.type !== "request") return;
+    this.sendResponse(sender, envelope, {
+      type: "response",
+      requestId: (message as RpcRequest).requestId,
+      error,
+    });
   }
 
   /**

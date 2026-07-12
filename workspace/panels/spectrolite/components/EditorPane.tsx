@@ -8,9 +8,14 @@
  * through the shell.
  */
 
-import { useCallback, useMemo } from "react";
-import { Box, Button, Flex, Heading, Spinner, Text } from "@radix-ui/themes";
-import { FilePlusIcon, HamburgerMenuIcon } from "@radix-ui/react-icons";
+import { useCallback, useMemo, useState } from "react";
+import { Box, Button, Callout, Flex, Heading, Spinner, Text } from "@radix-ui/themes";
+import {
+  ExclamationTriangleIcon,
+  FilePlusIcon,
+  HamburgerMenuIcon,
+  ReloadIcon,
+} from "@radix-ui/react-icons";
 import { useApp, useAppState } from "../app/context";
 import { DocumentEditor } from "./DocumentEditor";
 import { SuggestionStack } from "./SuggestionCard";
@@ -58,7 +63,7 @@ The panel prefetches them into the sandbox module map. The resident scribe's
 \`eval\` tool picks them up automatically, and you can use them in inline JSX
 blocks in this doc without redeclaring imports.
 
-Delete this file or replace its contents when you're ready.
+Replace these starter contents when you're ready.
 `;
 
 export interface EditorPaneProps {
@@ -74,23 +79,29 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
   const activePath = useAppState((s) => s.activePath);
   const pathsLoading = useAppState((s) => s.pathsLoading || !s.pathsLoaded);
   const vaultEmpty = useAppState((s) => s.pathsLoaded && !s.pathsLoading && s.paths.length === 0);
+  const pathsError = useAppState((s) => s.pathsError);
   const activeDeps = useAppState((s) => s.activeDeps);
   const roster = useAppState((s) => s.roster);
   const removedHandles = useAppState((s) => s.removedHandles);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const mentionCandidates: MentionCandidate[] = useMemo(
-    () => roster
-      .filter((agent) => !removedHandles.includes(agent.handle))
-      .map((agent) => ({ handle: agent.handle })),
-    [roster, removedHandles],
+    () =>
+      roster
+        .filter((agent) => !removedHandles.includes(agent.handle))
+        .map((agent) => ({ handle: agent.handle })),
+    [roster, removedHandles]
   );
 
   const handleCreateWelcomeDoc = useCallback(async () => {
     try {
+      setCreateError(null);
       const created = await app.vault.createFile(SAMPLE_DOC_NAME, SAMPLE_DOC);
       app.openFile(created);
     } catch (err) {
-      console.warn("[Spectrolite] failed to create starter note:", err);
+      setCreateError(
+        `Couldn't create the note: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }, [app]);
 
@@ -115,7 +126,37 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
     return (
       <Flex align="center" justify="center" gap="2" style={{ height: "100%" }}>
         <Spinner size="1" />
-        <Text size="2" color="gray">Loading files...</Text>
+        <Text size="2" color="gray">
+          Loading files...
+        </Text>
+      </Flex>
+    );
+  }
+
+  if (pathsError) {
+    return (
+      <Flex align="center" justify="center" style={{ height: "100%" }} p="6">
+        <Callout.Root color="red" role="alert" style={{ maxWidth: 520 }}>
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            <Flex direction="column" gap="3">
+              <Text>{pathsError}</Text>
+              <Text size="1">
+                Your notes have not been changed. Retry the listing before creating anything.
+              </Text>
+              <Button
+                size="2"
+                variant="soft"
+                color="red"
+                onClick={() => void app.vault.refreshPaths()}
+              >
+                <ReloadIcon /> Retry
+              </Button>
+            </Flex>
+          </Callout.Text>
+        </Callout.Root>
       </Flex>
     );
   }
@@ -131,6 +172,11 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
           <Button size="3" onClick={() => void handleCreateWelcomeDoc()} variant="solid">
             <FilePlusIcon /> Create starter note
           </Button>
+          {createError ? (
+            <Text size="1" color="red" role="alert">
+              {createError}
+            </Text>
+          ) : null}
         </Flex>
       </Flex>
     );
@@ -147,11 +193,21 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
             <HamburgerMenuIcon /> Open files
           </Button>
           {!mobile ? (
-            <Button size="3" variant="soft" color="gray" onClick={() => void handleCreateWelcomeDoc()}>
+            <Button
+              size="3"
+              variant="soft"
+              color="gray"
+              onClick={() => void handleCreateWelcomeDoc()}
+            >
               <FilePlusIcon /> Create note
             </Button>
           ) : null}
         </Flex>
+        {createError ? (
+          <Text size="1" color="red" role="alert">
+            {createError}
+          </Text>
+        ) : null}
       </Flex>
     </Flex>
   );

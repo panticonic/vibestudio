@@ -371,15 +371,39 @@ async function handleRequest(
     log.warn(
       `Panel asset fetch ${unreachable ? "backstopped" : "failed"} for ${reqPath}: ${message}`
     );
+    const wantsDocument = String(req.headers.accept ?? "").includes("text/html");
     if (!res.headersSent) {
-      res.writeHead(unreachable ? 504 : 502, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(unreachable ? 504 : 502, {
+        "Content-Type": wantsDocument ? "text/html; charset=utf-8" : "text/plain; charset=utf-8",
+      });
     }
-    res.end(
-      unreachable
-        ? "Can't reach your server — reconnecting. This panel will retry automatically."
-        : "Panel asset bridge error"
-    );
+    if (wantsDocument) {
+      const title = unreachable ? "Workspace server unavailable" : "Panel asset bridge error";
+      const detail = unreachable
+        ? "Reconnect to the workspace server, then reload this panel."
+        : message;
+      res.end(
+        `<!doctype html><meta name="color-scheme" content="light dark"><title>${title}</title><main style="font:14px system-ui;max-width:640px;margin:15vh auto;padding:24px"><h1>${title}</h1><p>${escapeHtml(detail)}</p><button onclick="location.reload()">Reload panel</button></main>`
+      );
+    } else {
+      res.end(
+        unreachable
+          ? "Can't reach your server. Reconnect, then reload this panel."
+          : "Panel asset bridge error"
+      );
+    }
   }
+}
+
+function escapeHtml(value: string): string {
+  const replacements: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  return value.replace(/[&<>"']/g, (char) => replacements[char] ?? char);
 }
 
 function writePassthrough(

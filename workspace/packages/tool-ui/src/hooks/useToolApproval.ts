@@ -11,21 +11,20 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { ChannelConfig } from "@workspace/pubsub";
-import type {
-  ApprovalLevel,
-  ToolApprovalSettings,
-  UseToolApprovalResult,
-} from "../types";
+import type { ApprovalLevel, ToolApprovalSettings, UseToolApprovalResult } from "../types";
 
 /**
  * Approval level definitions with labels and descriptions.
  * Shared between ToolApprovalPrompt and ToolPermissionsDropdown.
  */
-export const APPROVAL_LEVELS: Record<ApprovalLevel, {
-  label: string;
-  shortDesc: string;
-  details: string[];
-}> = {
+export const APPROVAL_LEVELS: Record<
+  ApprovalLevel,
+  {
+    label: string;
+    shortDesc: string;
+    details: string[];
+  }
+> = {
   0: {
     label: "Ask All",
     shortDesc: "Ask before every tool call",
@@ -57,9 +56,7 @@ interface ConfigClient {
   onConfigChange?(handler: (config: ChannelConfig) => void): () => void;
 }
 
-export function useToolApproval(
-  client: ConfigClient | null,
-): UseToolApprovalResult {
+export function useToolApproval(client: ConfigClient | null): UseToolApprovalResult {
   const [settings, setSettings] = useState<ToolApprovalSettings>(DEFAULT_SETTINGS);
 
   // Use ref so synchronous readers see the selected level before React re-renders.
@@ -83,14 +80,19 @@ export function useToolApproval(
   }, [client]);
 
   const setGlobalFloor = useCallback(
-    (level: ApprovalLevel) => {
-      const newSettings = { globalFloor: level };
-      settingsRef.current = newSettings;
-      setSettings(newSettings);
-      // Write to channel config — this propagates to all participants
-      if (client?.updateChannelConfig) {
-        void client.updateChannelConfig({ approvalLevel: level });
+    async (level: ApprovalLevel): Promise<void> => {
+      // This is a consent control, so never display a level that the channel did
+      // not actually persist. An optimistic update could claim "Ask All" while
+      // agents still enforce Full Auto if the write failed.
+      if (!client?.updateChannelConfig) {
+        throw new Error("Tool permission settings are unavailable while the channel is offline.");
       }
+      const config = await client.updateChannelConfig({ approvalLevel: level });
+      const persisted = config.approvalLevel;
+      const nextLevel = persisted === 0 || persisted === 1 || persisted === 2 ? persisted : level;
+      const nextSettings = { globalFloor: nextLevel as ApprovalLevel };
+      settingsRef.current = nextSettings;
+      setSettings(nextSettings);
     },
     [client]
   );

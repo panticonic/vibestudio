@@ -17,6 +17,7 @@ export function createServerEventSubscriptionBridge(deps: {
   const desired = new Set<EventName>();
   const confirmed = new Set<EventName>();
   const inFlight = new Map<EventName, Promise<void>>();
+  const retryTimers = new Map<EventName, ReturnType<typeof setTimeout>>();
   const log = deps.log ?? console;
 
   const ensureRemote = (event: EventName): Promise<void> => {
@@ -35,6 +36,15 @@ export function createServerEventSubscriptionBridge(deps: {
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`[events] forward subscribe(${event}) to server failed: ${msg}`);
+        if (desired.has(event) && !retryTimers.has(event)) {
+          retryTimers.set(
+            event,
+            setTimeout(() => {
+              retryTimers.delete(event);
+              void ensureRemote(event);
+            }, 2_000)
+          );
+        }
       })
       .finally(() => {
         inFlight.delete(event);
@@ -57,6 +67,8 @@ export function createServerEventSubscriptionBridge(deps: {
     },
     clear() {
       desired.clear();
+      for (const timer of retryTimers.values()) clearTimeout(timer);
+      retryTimers.clear();
     },
     async replay(opts = {}) {
       if (opts.force) {

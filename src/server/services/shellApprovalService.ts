@@ -16,6 +16,7 @@ import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
+import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 /**
@@ -61,6 +62,7 @@ export function createShellApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   metrics?: PushMetrics;
   deviceLabelFor?: (deviceId: string) => string | undefined;
+  capabilityGrantStore?: CapabilityGrantStore;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
@@ -86,6 +88,48 @@ export function createShellApprovalService(deps: {
           // writes the ApprovalProvenanceRecord and broadcasts `resolvedBy`.
           await approvalQueue.resolve(approvalId, decision, resolverFrom(ctx, deviceLabelFor));
           metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
+          return;
+        }
+        case "blockCapability": {
+          const [approvalId] = args as [string];
+          const pending = approvalQueue
+            .listPending()
+            .find((approval) => approval.approvalId === approvalId);
+          if (!pending || pending.kind !== "capability") {
+            throw new ServiceError(
+              serviceName,
+              method,
+              "No pending capability approval found",
+              "ENOENT"
+            );
+          }
+          if (!deps.capabilityGrantStore) {
+            throw new ServiceError(
+              serviceName,
+              method,
+              "Capability grant store unavailable",
+              "ENOSYS"
+            );
+          }
+          const resourceKey = pending.grantResourceKey ?? pending.resource?.value;
+          if (!resourceKey) {
+            throw new ServiceError(serviceName, method, "Capability resource is missing", "EINVAL");
+          }
+          deps.capabilityGrantStore.grant(
+            pending.capability,
+            resourceKey,
+            {
+              callerId: pending.callerId,
+              repoPath: pending.repoPath,
+              effectiveVersion: pending.effectiveVersion,
+            },
+            "version",
+            pending.resourceScope,
+            Date.now(),
+            "deny"
+          );
+          await approvalQueue.resolve(approvalId, "deny", resolverFrom(ctx, deviceLabelFor));
+          metrics.recordApprovalResolved({ decision: "deny", source: ctx.caller.runtime.kind });
           return;
         }
         case "resolveBootstrap": {

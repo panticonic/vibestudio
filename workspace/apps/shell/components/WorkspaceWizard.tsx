@@ -57,90 +57,90 @@ export function WorkspaceWizard() {
       description="Create a new workspace. Fork from an existing workspace to copy its panels and packages, or start with an empty workspace."
     >
       <Flex direction="column" gap="4" mt="4">
+        <Flex direction="column" gap="3">
+          <Text size="2" weight="medium">
+            Workspace Name
+          </Text>
+          <TextField.Root
+            value={formData.workspaceName}
+            onChange={(e) => setFormData({ ...formData, workspaceName: e.target.value })}
+            placeholder="my-workspace"
+            autoFocus
+          />
+          <Text size="1" color={nameError ? "red" : "gray"}>
+            {nameError ?? "Letters, numbers, hyphens, and underscores only."}
+          </Text>
+        </Flex>
+
+        {/* Fork from existing workspace */}
+        {workspaces.length > 0 && (
           <Flex direction="column" gap="3">
             <Text size="2" weight="medium">
-              Workspace Name
+              Fork From{" "}
+              <Text size="1" color="gray">
+                (optional)
+              </Text>
             </Text>
-            <TextField.Root
-              value={formData.workspaceName}
-              onChange={(e) => setFormData({ ...formData, workspaceName: e.target.value })}
-              placeholder="my-workspace"
-              autoFocus
-            />
-            <Text size="1" color={nameError ? "red" : "gray"}>
-              {nameError ?? "Letters, numbers, hyphens, and underscores only."}
+            <Select.Root
+              value={formData.forkFrom || "__none__"}
+              onValueChange={(value) =>
+                setFormData({ ...formData, forkFrom: value === "__none__" ? "" : value })
+              }
+            >
+              <Select.Trigger placeholder="Default template (onboarding chat)" />
+              <Select.Content>
+                <Select.Item value="__none__">Default template (onboarding chat)</Select.Item>
+                {workspaces.map((ws) => (
+                  <Select.Item key={ws.name} value={ws.name}>
+                    {ws.name}
+                    {ws.name === activeWorkspaceName ? " (current)" : ""}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+            <Text size="1" color="gray">
+              Copy panels, packages, and agents from an existing workspace.
             </Text>
           </Flex>
+        )}
 
-          {/* Fork from existing workspace */}
-          {workspaces.length > 0 && (
-            <Flex direction="column" gap="3">
-              <Text size="2" weight="medium">
-                Fork From{" "}
-                <Text size="1" color="gray">
-                  (optional)
-                </Text>
-              </Text>
-              <Select.Root
-                value={formData.forkFrom || "__none__"}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, forkFrom: value === "__none__" ? "" : value })
-                }
-              >
-                <Select.Trigger placeholder="Empty workspace (no panels)" />
-                <Select.Content>
-                  <Select.Item value="__none__">Empty workspace (no panels)</Select.Item>
-                  {workspaces.map((ws) => (
-                    <Select.Item key={ws.name} value={ws.name}>
-                      {ws.name}
-                      {ws.name === activeWorkspaceName ? " (current)" : ""}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-              <Text size="1" color="gray">
-                Copy panels, packages, and agents from an existing workspace.
-              </Text>
-            </Flex>
-          )}
+        {/* Error Display */}
+        {error && (
+          <Callout.Root color="red">
+            <Callout.Icon>
+              <ExclamationTriangleIcon />
+            </Callout.Icon>
+            <Callout.Text>{error}</Callout.Text>
+          </Callout.Root>
+        )}
 
-          {/* Error Display */}
-          {error && (
-            <Callout.Root color="red">
-              <Callout.Icon>
-                <ExclamationTriangleIcon />
-              </Callout.Icon>
-              <Callout.Text>{error}</Callout.Text>
-            </Callout.Root>
-          )}
+        {/* Progress Indicator */}
+        {isCreating && (
+          <Flex align="center" justify="center" gap="2" py="3">
+            <Spinner />
+            <Text size="2" color="gray">
+              Creating workspace...
+            </Text>
+          </Flex>
+        )}
+      </Flex>
 
-          {/* Progress Indicator */}
-          {isCreating && (
-            <Flex align="center" justify="center" gap="2" py="3">
-              <Spinner />
-              <Text size="2" color="gray">
-                Creating workspace...
-              </Text>
-            </Flex>
-          )}
-        </Flex>
-
-        {/* Buttons */}
-        <Flex gap="3" mt="4" justify="end">
-          <Dialog.Close>
-            <Button variant="soft" color="gray" disabled={isCreating}>
-              Cancel
-            </Button>
-          </Dialog.Close>
-
-          <Button
-            onClick={handleCreate}
-            disabled={isCreating || !formData.workspaceName || !!nameError}
-            color="green"
-          >
-            {isCreating ? "Creating..." : "Create Workspace"}
+      {/* Buttons */}
+      <Flex gap="3" mt="4" justify="end">
+        <Dialog.Close>
+          <Button variant="soft" color="gray" disabled={isCreating}>
+            Cancel
           </Button>
-        </Flex>
+        </Dialog.Close>
+
+        <Button
+          onClick={handleCreate}
+          disabled={isCreating || !formData.workspaceName || !!nameError}
+          color="green"
+        >
+          {isCreating ? "Creating..." : "Create Workspace"}
+        </Button>
+      </Flex>
     </AppDialog>
   );
 }

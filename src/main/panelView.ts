@@ -106,6 +106,8 @@ export class PanelView implements PanelViewLike {
   private readonly managedBasePaths: readonly string[];
   private readonly managedWorkspace?: string;
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
+  private onPanelLinkError?: (panelId: string, url: string, message: string) => void;
+  private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
   private autofillManager?: AutofillManagerLike;
   private autofillPreloadPath?: string;
   private panelPreloadPath?: string;
@@ -140,6 +142,8 @@ export class PanelView implements PanelViewLike {
     cdpHost: CdpHostLike;
     panelOrchestrator: PanelOrchestratorLike;
     sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
+    onPanelLinkError?: (panelId: string, url: string, message: string) => void;
+    onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
     autofillManager?: AutofillManagerLike;
     autofillPreloadPath?: string;
     panelPreloadPath?: string;
@@ -158,6 +162,8 @@ export class PanelView implements PanelViewLike {
       ? (selectedWorkspaceNameFromUrl(deps.serverInfo.gatewayConfig.serverUrl) ?? undefined)
       : undefined;
     this.sendPanelEvent = deps.sendPanelEvent;
+    this.onPanelLinkError = deps.onPanelLinkError;
+    this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
     this.autofillManager = deps.autofillManager;
     this.autofillPreloadPath = deps.autofillPreloadPath;
     this.panelPreloadPath = deps.panelPreloadPath;
@@ -542,9 +548,11 @@ export class PanelView implements PanelViewLike {
       },
       unresponsive: () => {
         console.warn(`[PanelView] Panel ${panelId} became unresponsive`);
+        this.onPanelResponsivenessChanged?.(panelId, false);
       },
       responsive: () => {
         log.verbose(` Panel ${panelId} became responsive again`);
+        this.onPanelResponsivenessChanged?.(panelId, true);
       },
       didStartLoading: () => {
         queueStateUpdate({ isLoading: true });
@@ -655,6 +663,11 @@ export class PanelView implements PanelViewLike {
         );
         return { action: "deny" as const };
       }
+      this.handlePanelLinkError(
+        panelId,
+        new Error("This link type is not supported. Use an http(s) or Vibestudio panel link."),
+        url
+      );
       return { action: "deny" as const };
     });
 
@@ -865,6 +878,7 @@ export class PanelView implements PanelViewLike {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`[PanelView] Failed to handle panel link for ${viewId}: ${url}: ${message}`);
     this.sendPanelEvent?.(viewId, "runtime:child-creation-error", { url, error: message });
+    this.onPanelLinkError?.(viewId, url, message);
   }
 
   // ==== Crash recovery ======================================================
@@ -893,16 +907,25 @@ export class PanelView implements PanelViewLike {
         .replace(/"/g, "&quot;");
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
-  body { font-family: system-ui, sans-serif; background: #272a2d; color: #ddd;
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; background: #f7f7f8; color: #202124;
          display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
   .box { max-width: 560px; padding: 2rem; }
-  h1 { font-size: 1.1rem; color: #f48771; }
-  p { font-size: 0.9rem; line-height: 1.5; color: #aaa; word-break: break-word; }
-  a { color: #4fc1ff; }
+  h1 { font-size: 1.1rem; color: #b42318; }
+  p, summary { font-size: 0.9rem; line-height: 1.5; color: #5f6368; word-break: break-word; }
+  a { display: inline-block; color: white; background: #a15c00; padding: .55rem .8rem;
+      border-radius: 6px; text-decoration: none; font-weight: 600; }
+  details { margin: 1rem 0; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #272a2d; color: #ddd; }
+    h1 { color: #f48771; }
+    p, summary { color: #aaa; }
+  }
 </style></head><body><div class="box">
   <h1>${escapeHtml(title)}</h1>
-  <p>${escapeHtml(detail)}</p>
-  ${targetUrl ? `<p><a href="${escapeHtml(targetUrl)}">Reload panel</a></p>` : ""}
+  <p>The panel stopped unexpectedly. Reload it to try again.</p>
+  <details><summary>Technical details</summary><p>${escapeHtml(detail)}</p></details>
+  ${targetUrl ? `<p><a href="${escapeHtml(targetUrl)}">Reload panel</a></p>` : panel ? "<p>Open the panel menu and choose Rebuild.</p>" : "<p>Restart Vibestudio from the launcher to recover the app shell.</p>"}
 </div></body></html>`;
     void contents
       .loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)

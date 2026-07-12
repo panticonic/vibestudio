@@ -19,6 +19,13 @@ export const EXIT_AUTH = 3;
 export const EXIT_TIMEOUT = 4;
 export const EXIT_STALE_SESSION = 5;
 
+let forcedHumanOutput = false;
+
+/** Set once per top-level invocation so --plain can override auto-JSON in pipes. */
+export function setPlainOutput(enabled: boolean): void {
+  forcedHumanOutput = enabled;
+}
+
 export class CliError extends Error {
   constructor(
     message: string,
@@ -63,7 +70,20 @@ export class StaleSessionError extends CliError {
  */
 export function jsonMode(jsonFlag: boolean | undefined): boolean {
   if (jsonFlag === true) return true;
+  if (forcedHumanOutput) return false;
   return !process.stdout.isTTY;
+}
+
+/** Include the useful nested undici/system error instead of just "fetch failed". */
+export function networkErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause;
+  if (!cause || typeof cause !== "object") return error.message;
+  const record = cause as { code?: unknown; message?: unknown };
+  const code = typeof record.code === "string" ? record.code : undefined;
+  const message = typeof record.message === "string" ? record.message : undefined;
+  const detail = [message, code ? `(${code})` : ""].filter(Boolean).join(" ");
+  return detail && detail !== error.message ? `${error.message}: ${detail}` : error.message;
 }
 
 /**

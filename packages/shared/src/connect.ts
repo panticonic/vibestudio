@@ -39,6 +39,8 @@ export interface ConnectPairing {
   ice: TurnPolicy;
   /** Optional server/workspace label to disambiguate servers. */
   srv?: string;
+  /** Invite expiry in epoch milliseconds; clients reject stale QR links immediately. */
+  exp?: number;
 }
 
 export type ConnectLink = ({ kind: "ok" } & ConnectPairing) | { kind: "error"; reason: string };
@@ -83,6 +85,7 @@ function encodeConnectParams(pairing: ConnectPairing): string {
     `ice=${encodeURIComponent(pairing.ice)}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
+  if (pairing.exp) params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
   return params.join("&");
 }
 
@@ -186,7 +189,10 @@ export function parseConnectLink(raw: string): ConnectLink {
   const afterScheme = raw.slice(prefix.length);
   const isSchemeLink =
     raw.startsWith(prefix) &&
-    (afterScheme === "" || afterScheme[0] === "?" || afterScheme[0] === "/" || afterScheme[0] === "#");
+    (afterScheme === "" ||
+      afterScheme[0] === "?" ||
+      afterScheme[0] === "/" ||
+      afterScheme[0] === "#");
   let rawParams: string;
   if (isSchemeLink) {
     const queryStart = raw.indexOf("?");
@@ -197,7 +203,8 @@ export function parseConnectLink(raw: string): ConnectLink {
     // URL-parseable on RN/Hermes (asserted by connect.test.ts). Strip any
     // `#fragment` so it can't fold into the last query value.
     const fragmentStart = raw.indexOf("#", queryStart);
-    rawParams = fragmentStart >= 0 ? raw.slice(queryStart + 1, fragmentStart) : raw.slice(queryStart + 1);
+    rawParams =
+      fragmentStart >= 0 ? raw.slice(queryStart + 1, fragmentStart) : raw.slice(queryStart + 1);
   } else if (raw.startsWith(httpsPrefix)) {
     let url: URL;
     try {
@@ -251,6 +258,17 @@ export function parseConnectLink(raw: string): ConnectLink {
   if (ice !== "all" && ice !== "relay") {
     return { kind: "error", reason: "TURN policy `ice` must be `all` or `relay`" };
   }
+  const expRaw = params.values.get("exp");
+  const exp = expRaw ? Number(expRaw) : undefined;
+  if (expRaw && (!Number.isFinite(exp) || (exp ?? 0) <= 0)) {
+    return { kind: "error", reason: "Pairing link expiry has an unexpected format" };
+  }
+  if (exp !== undefined && exp <= Date.now()) {
+    return {
+      kind: "error",
+      reason: "This pairing link has expired — generate a new invite on the server",
+    };
+  }
 
   return {
     kind: "ok",
@@ -261,6 +279,7 @@ export function parseConnectLink(raw: string): ConnectLink {
     v: PAIRING_PROTOCOL_VERSION,
     ice,
     srv: params.values.get("srv") || undefined,
+    ...(exp !== undefined ? { exp } : {}),
   };
 }
 

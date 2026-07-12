@@ -23,6 +23,13 @@ const ThinkingPill = React.memo(function ThinkingPill({
       align="center"
       gap="1"
       onClick={() => onExpand(id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onExpand(id);
+        }
+      }}
+      role="button"
       style={{
         cursor: "pointer",
         userSelect: "none",
@@ -70,6 +77,14 @@ const ExpandedThinking = React.memo(function ExpandedThinking({
         align="center"
         gap="2"
         onClick={onCollapse}
+        onKeyDown={(event) => {
+          if (event.currentTarget !== event.target) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onCollapse();
+          }
+        }}
+        role="button"
         style={{ cursor: "pointer", userSelect: "none" }}
         tabIndex={0}
       >

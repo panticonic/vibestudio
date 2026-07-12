@@ -17,6 +17,7 @@ import { AccountProfileSection } from "./AccountProfileSection";
 type LiveConnection = {
   status: "connected" | "connecting" | "disconnected";
   isRemote: boolean;
+  reconnect?: { phase: string; attempt: number; reason: string };
 };
 
 interface Props {
@@ -48,9 +49,21 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
 
   useShellEvent(
     "server-connection-changed",
-    useCallback((payload: { status: LiveConnection["status"]; isRemote: boolean }) => {
-      setLive({ status: payload.status, isRemote: payload.isRemote });
-    }, [])
+    useCallback(
+      (payload: {
+        status: LiveConnection["status"];
+        isRemote: boolean;
+        reconnect?: LiveConnection["reconnect"];
+      }) => {
+        setLive((current) => ({
+          status: payload.status,
+          isRemote: payload.isRemote,
+          reconnect:
+            payload.reconnect ?? (payload.status === "connecting" ? current?.reconnect : undefined),
+        }));
+      },
+      []
+    )
   );
 
   useEffect(() => {
@@ -128,9 +141,8 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       open={open}
       onOpenChange={onOpenChange}
       maxWidth="680px"
-      title="Settings"
-      description="Manage your account, connected server, and app updates."
-      style={{ maxHeight: "min(88dvh, 900px)", overflowY: "auto" }}
+      title="Connections & paired devices"
+      description="Connect this desktop to a server, or pair phones and other devices with the current workspace."
     >
       <Box mt="3">
         <AccountProfileSection active={open} />
@@ -141,8 +153,22 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
         {current?.isActive ? (
           <Callout.Root size="1" color="green" mb="3">
             <Callout.Text>
-              Connected remotely
-              {current.workspaceName ? ` to ${current.workspaceName}` : ""}.
+              Currently connected to{" "}
+              {current.workspaceName ?? `your server (device ${current.deviceId})`}
+            </Callout.Text>
+          </Callout.Root>
+        ) : current?.configured && live?.isRemote && live.status === "connecting" ? (
+          // A transient blip — calm, reassuring, NOT the scary re-pair banner.
+          <Callout.Root size="1" color="blue" mb="3">
+            <Callout.Text>
+              Reconnecting to your server
+              {live.reconnect?.attempt ? ` — attempt ${live.reconnect.attempt}` : ""}…
+            </Callout.Text>
+          </Callout.Root>
+        ) : current?.configured && live?.isRemote && live.status === "disconnected" ? (
+          <Callout.Root size="1" color="amber" mb="3">
+            <Callout.Text>
+              Disconnected — Vibestudio will reconnect automatically when your server is reachable.
             </Callout.Text>
           </Callout.Root>
         ) : current?.configured ? (
@@ -184,7 +210,9 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
           </Callout.Root>
         ) : null}
 
-        {current?.connected && current.workspaceName ? (
+        {/* Local server sessions can mint companion-device invites too. Keeping
+            this visible is the desktop entry point the mobile pairing flow promises. */}
+        {current ? (
           <PairedDevicesSection
             currentDeviceId={current.deviceId}
             workspaceName={current.workspaceName}
@@ -194,6 +222,20 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
 
         <Flex justify="between" mt="4" gap="3">
           <Flex gap="2">
+            {live?.isRemote && live.status !== "connected" ? (
+              <Button
+                variant="soft"
+                disabled={busy}
+                onClick={() => {
+                  setError(null);
+                  void remoteCred
+                    .reconnectNow()
+                    .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+                }}
+              >
+                Reconnect now
+              </Button>
+            ) : null}
             {confirmingDisconnect ? (
               <>
                 <Button color="red" disabled={busy} onClick={clearAndRelaunch}>

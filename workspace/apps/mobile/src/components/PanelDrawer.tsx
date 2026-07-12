@@ -28,6 +28,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
+import { pushToastAtom } from "../state/toastAtoms";
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
 import { VibestudioLogo } from "./VibestudioLogo";
@@ -58,6 +59,7 @@ function findPanelById(panels: Panel[], panelId: string): Panel | null {
 }
 
 export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
+  const pushToast = useSetAtom(pushToastAtom);
   const shellClient = useAtomValue(shellClientAtom);
   const panelForest = useAtomValue(panelForestAtom);
   const setPanelForest = useSetAtom(panelForestAtom);
@@ -149,9 +151,15 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       void shellClient.panels
         .archive(panelId)
         .then(() => shellClient.panels.refresh())
-        .catch(() => {});
+        .catch((error: unknown) =>
+          pushToast({
+            title: "Could not archive panel",
+            message: error instanceof Error ? error.message : "Try again.",
+            tone: "danger",
+          })
+        );
     },
-    [shellClient]
+    [pushToast, shellClient]
   );
 
   const togglePanelPin = useCallback(
@@ -319,8 +327,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           <VibestudioLogo size={72} variant="mark" style={styles.emptyLogo} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No panels open yet</Text>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Tap the address bar at the top of the screen and enter a URL or panel source to open
-            your first panel.
+            Tap + to choose a panel, or tap URL in the top bar and enter a website or panel source.
           </Text>
         </View>
       ) : (

@@ -1,4 +1,4 @@
-import { app, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
+import { app, dialog, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
 import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
@@ -23,7 +23,8 @@ export function setMenuEventService(es: EventService): void {
 
 function emitMenuEvent<E extends EventName>(event: E, payload?: EventPayloads[E]): boolean {
   if (!_menuEventService) {
-    throw new Error(`Menu eventService not initialized for "${event}"`);
+    console.warn(`[Menu] event service is not ready for "${event}"`);
+    return false;
   }
   _menuEventService.emit(event, payload);
   return true;
@@ -44,14 +45,36 @@ export function setMenuPanelRegistry(reg: PanelRegistry): void {
   _menuPanelRegistry = reg;
 }
 
-/** Archive the currently focused panel (Cmd+W / Ctrl+W). Falls back to window close if no panel is focused. */
+/** Close the currently focused panel. Falls back to window close if no panel is focused. */
 async function archiveFocusedPanel(mainWindow: Electron.BaseWindow): Promise<void> {
   const focusedId = _menuPanelRegistry?.getFocusedPanelId();
   if (focusedId && _menuPanelLifecycle) {
+    const panel = _menuPanelRegistry?.getPanel(focusedId);
+    const descendantCount = panel ? countPanelDescendants(panel) : 0;
+    if (descendantCount > 0) {
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Close panel tree?",
+        message: `Close “${panel?.title ?? "this panel"}” and ${descendantCount} child panel${descendantCount === 1 ? "" : "s"}?`,
+        detail: "All panels below it will also be archived.",
+        buttons: ["Cancel", "Close panels"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (result.response !== 1) return;
+    }
     await _menuPanelLifecycle.closePanel(focusedId);
   } else {
     mainWindow.close();
   }
+}
+
+function countPanelDescendants(panel: { children: Array<{ children: unknown[] }> }): number {
+  return panel.children.reduce(
+    (count, child) => count + 1 + countPanelDescendants(child as never),
+    0
+  );
 }
 
 function reloadFocusedPanel(force = false): void {
@@ -143,12 +166,16 @@ export function buildCommonMenuItems(
   dev: MenuItemConstructorOptions[];
 } {
   const isMac = process.platform === "darwin";
-  const backAccelerator = isMac ? "Cmd+[" : "Alt+Left";
-  const forwardAccelerator = isMac ? "Cmd+]" : "Alt+Right";
+  const newPanelAccelerator = isMac ? "Cmd+T" : "Ctrl+Shift+T";
+  const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
+  const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
+  const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
+  const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
+  const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const file: MenuItemConstructorOptions[] = [
     {
       label: "New Panel",
-      accelerator: "CmdOrCtrl+T",
+      accelerator: newPanelAccelerator,
       click: () => {
         emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
       },
@@ -156,10 +183,15 @@ export function buildCommonMenuItems(
     { type: "separator" },
     {
       label: "Command Palette...",
-      accelerator: "CmdOrCtrl+K",
+      accelerator: commandPaletteAccelerator,
       click: () => {
         emitMenuEvent("open-command-palette");
       },
+    },
+    {
+      label: "Focus Pending Approval",
+      accelerator: "CmdOrCtrl+Shift+A",
+      click: () => emitMenuEvent("focus-approval-card"),
     },
     {
       label: "Switch Workspace...",
@@ -168,11 +200,20 @@ export function buildCommonMenuItems(
         emitMenuEvent("open-workspace-switcher");
       },
     },
+    { type: "separator" },
+    {
+      label: "Credentials...",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.CREDENTIALS }),
+    },
+    {
+      label: "Permissions...",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS }),
+    },
   ];
 
   const edit: MenuItemConstructorOptions[] = [
     { label: "Undo", accelerator: "CmdOrCtrl+Z", role: "undo" },
-    { label: "Redo", accelerator: "CmdOrCtrl+Y", role: "redo" },
+    { label: "Redo", accelerator: redoAccelerator, role: "redo" },
     { type: "separator" },
     { label: "Cut", accelerator: "CmdOrCtrl+X", role: "cut" },
     { label: "Copy", accelerator: "CmdOrCtrl+C", role: "copy" },
@@ -183,14 +224,12 @@ export function buildCommonMenuItems(
   if (options?.onHistoryBack) {
     view.push({
       label: "Back",
-      accelerator: backAccelerator,
       click: () => options.onHistoryBack?.(),
     });
   }
   if (options?.onHistoryForward) {
     view.push({
       label: "Forward",
-      accelerator: forwardAccelerator,
       click: () => options.onHistoryForward?.(),
     });
   }
@@ -200,21 +239,20 @@ export function buildCommonMenuItems(
   view.push(
     {
       label: "Reload Panel",
-      accelerator: "CmdOrCtrl+R",
+      accelerator: reloadPanelAccelerator,
       click: () => dispatchChromeCommand("reload-panel"),
     },
     {
       label: "Force Reload View",
-      accelerator: "CmdOrCtrl+Shift+R",
+      accelerator: forceReloadAccelerator,
       click: () => dispatchChromeCommand("force-reload-view"),
     },
-    { label: "Stop Loading", accelerator: "Esc", click: () => dispatchChromeCommand("stop") },
+    { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
     {
       label: "Toggle Address Bar",
-      accelerator: "CmdOrCtrl+L",
+      accelerator: addressBarAccelerator,
       click: () => {
         emitMenuEvent("toggle-address-bar");
-        emitMenuEvent("focus-address-bar");
       },
     },
     { type: "separator" },
@@ -236,6 +274,15 @@ export function buildCommonMenuItems(
         }
       },
     }
+  );
+  view.push(
+    { type: "separator" },
+    { label: "Reset Zoom", role: "resetZoom" },
+    { label: "Zoom In", role: "zoomIn" },
+    { label: "Zoom Out", role: "zoomOut" },
+    { type: "separator" },
+    { label: "Toggle Full Screen", role: "togglefullscreen" },
+    { label: "Minimize", role: "minimize" }
   );
 
   const dev: MenuItemConstructorOptions[] = [
@@ -307,21 +354,24 @@ export function setupMenu(
   interceptPanelDevToolsShortcut(shellContents);
 
   const isMac = process.platform === "darwin";
-  const backAccelerator = isMac ? "Cmd+[" : "Alt+Left";
-  const forwardAccelerator = isMac ? "Cmd+]" : "Alt+Right";
+  const newPanelAccelerator = isMac ? "Cmd+T" : "Ctrl+Shift+T";
+  const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
+  const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
+  const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
+  const closePanelAccelerator = isMac ? "Cmd+W" : "Ctrl+Shift+W";
+  const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
+  const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const viewSubmenu: MenuItemConstructorOptions[] = [];
 
   if (options?.onHistoryBack) {
     viewSubmenu.push({
       label: "Back",
-      accelerator: backAccelerator,
       click: () => options.onHistoryBack?.(),
     });
   }
   if (options?.onHistoryForward) {
     viewSubmenu.push({
       label: "Forward",
-      accelerator: forwardAccelerator,
       click: () => options.onHistoryForward?.(),
     });
   }
@@ -355,10 +405,21 @@ export function setupMenu(
       submenu: [
         {
           label: "New Panel",
-          accelerator: "CmdOrCtrl+T",
+          accelerator: newPanelAccelerator,
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
           },
+        },
+        { type: "separator" },
+        {
+          label: "Command Palette...",
+          accelerator: commandPaletteAccelerator,
+          click: () => emitMenuEvent("open-command-palette"),
+        },
+        {
+          label: "Focus Pending Approval",
+          accelerator: "CmdOrCtrl+Shift+A",
+          click: () => emitMenuEvent("focus-approval-card"),
         },
         { type: "separator" },
         {
@@ -371,8 +432,8 @@ export function setupMenu(
         { type: "separator" },
         isMac
           ? {
-              label: "Archive Panel",
-              accelerator: "CmdOrCtrl+W",
+              label: "Close Panel",
+              accelerator: closePanelAccelerator,
               click: () => archiveFocusedPanel(mainWindow),
             }
           : { role: "quit" },
@@ -383,7 +444,7 @@ export function setupMenu(
       label: "Edit",
       submenu: [
         { role: "undo" },
-        { role: "redo" },
+        { label: "Redo", accelerator: redoAccelerator, role: "redo" },
         { type: "separator" },
         { role: "cut" },
         { role: "copy" },
@@ -409,22 +470,21 @@ export function setupMenu(
         ...viewSubmenu,
         {
           label: "Reload Panel",
-          accelerator: "CmdOrCtrl+R",
+          accelerator: reloadPanelAccelerator,
           click: () => dispatchChromeCommand("reload-panel"),
         },
         {
           label: "Force Reload View",
-          accelerator: "CmdOrCtrl+Shift+R",
+          accelerator: forceReloadAccelerator,
           click: () => dispatchChromeCommand("force-reload-view"),
         },
-        { label: "Stop Loading", accelerator: "Esc", click: () => dispatchChromeCommand("stop") },
+        { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
         { type: "separator" },
         {
           label: "Toggle Address Bar",
-          accelerator: "CmdOrCtrl+L",
+          accelerator: addressBarAccelerator,
           click: () => {
             emitMenuEvent("toggle-address-bar");
-            emitMenuEvent("focus-address-bar");
           },
         },
         { type: "separator" },
@@ -475,8 +535,8 @@ export function setupMenu(
           ? [{ type: "separator" }, { role: "front" }, { type: "separator" }, { role: "window" }]
           : [
               {
-                label: "Archive Panel",
-                accelerator: "Ctrl+W",
+                label: "Close Panel",
+                accelerator: closePanelAccelerator,
                 click: () => archiveFocusedPanel(mainWindow),
               },
             ]),
@@ -497,6 +557,18 @@ export function setupMenu(
           label: "Documentation",
           click: () => {
             emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HELP });
+          },
+        },
+        {
+          label: "Credentials",
+          click: () => {
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.CREDENTIALS });
+          },
+        },
+        {
+          label: "Permissions",
+          click: () => {
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS });
           },
         },
         {

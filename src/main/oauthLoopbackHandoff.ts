@@ -36,28 +36,46 @@ export async function handleExternalOpenPayload(
   try {
     await deps.openExternal(payload.url);
     const received = await callback.wait;
-    await deps.forwardOAuthCallback({
-      transactionId: payload.oauthLoopback.transactionId,
-      url: received.url,
-      state: received.state,
-    });
+    try {
+      await deps.forwardOAuthCallback({
+        transactionId: payload.oauthLoopback.transactionId,
+        url: received.url,
+        state: received.state,
+      });
+      received.respond(true);
+    } catch (error) {
+      received.respond(false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   } finally {
     callback.close();
   }
 }
 
 async function startOAuthLoopbackCallback(loopback: OAuthLoopbackHandoff): Promise<{
-  wait: Promise<{ url: string; state?: string }>;
+  wait: Promise<{
+    url: string;
+    state?: string;
+    respond(success: boolean, detail?: string): void;
+  }>;
   close(): void;
 }> {
   const callbackPath = normalizeCallbackPath(loopback.callbackPath);
   let settled = false;
   let listening = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let resolveCallback!: (value: { url: string; state?: string }) => void;
+  let resolveCallback!: (value: {
+    url: string;
+    state?: string;
+    respond(success: boolean, detail?: string): void;
+  }) => void;
   let rejectCallback!: (error: Error) => void;
 
-  const wait = new Promise<{ url: string; state?: string }>((resolve, reject) => {
+  const wait = new Promise<{
+    url: string;
+    state?: string;
+    respond(success: boolean, detail?: string): void;
+  }>((resolve, reject) => {
     resolveCallback = resolve;
     rejectCallback = reject;
   });
@@ -81,13 +99,21 @@ async function startOAuthLoopbackCallback(loopback: OAuthLoopbackHandoff): Promi
       return;
     }
 
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(
-      "<!doctype html><title>Connection complete</title><p>Connection complete. You can close this window.</p>"
-    );
     if (!settled) {
       settled = true;
-      resolveCallback({ url: url.toString(), state });
+      resolveCallback({
+        url: url.toString(),
+        state,
+        respond(success, detail) {
+          if (res.writableEnded) return;
+          res.writeHead(success ? 200 : 502, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(
+            success
+              ? "<!doctype html><title>Connection complete</title><p>Connection complete. You can close this window.</p>"
+              : `<!doctype html><title>Connection failed</title><p>Vibestudio could not finish this connection.</p><p>${escapeHtml(detail ?? "Return to Vibestudio and try again.")}</p>`
+          );
+        },
+      });
     }
   });
 
@@ -142,6 +168,14 @@ async function startOAuthLoopbackCallback(loopback: OAuthLoopbackHandoff): Promi
     listening = false;
     server.close();
   }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function normalizeCallbackPath(path: string): string {

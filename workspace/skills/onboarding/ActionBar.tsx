@@ -17,16 +17,18 @@ const actionGroups = [
       { label: "GitHub", message: "Set up GitHub provider integration" },
       { label: "Slack", message: "Set up Slack provider integration" },
       { label: "Model/API key", message: "Set up a model or API key provider" },
-      { label: "Agent defaults", message: "I want to change the agent's default model or tune its behavior" },
+      {
+        label: "Agent defaults",
+        message: "I want to change the agent's default model or tune its behavior",
+      },
       { label: "Custom API", message: "Set up a custom OAuth or API provider" },
     ],
   },
   {
     title: "Bring in local context",
-    description: "Import browser state when you want cookies, bookmarks, or passwords available locally.",
-    actions: [
-      { label: "Browser import", message: "Import browser data" },
-    ],
+    description:
+      "Import browser state when you want cookies, bookmarks, or passwords available locally.",
+    actions: [{ label: "Browser import", message: "Import browser data" }],
   },
   {
     title: "Build or explore",
@@ -41,9 +43,11 @@ const actionGroups = [
 
 export default function OnboardingActionBar({ chat }: OnboardingActionBarProps) {
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   async function send(label: string, message: string) {
     setPendingLabel(label);
+    setSendError(null);
     try {
       const metadata = { source: "onboarding-action-bar", action: label };
       if (typeof chat.send === "function") {
@@ -55,6 +59,7 @@ export default function OnboardingActionBar({ chat }: OnboardingActionBarProps) 
       }
     } catch (error) {
       console.error("Onboarding action bar send failed", error);
+      setSendError("Couldn't send that request. Check the connection and try again.");
     } finally {
       setPendingLabel(null);
     }
@@ -70,6 +75,11 @@ export default function OnboardingActionBar({ chat }: OnboardingActionBarProps) 
           Pick a path and the onboarding agent will tailor the next step.
         </Text>
       </Flex>
+      {sendError ? (
+        <Text size="1" color="red" role="alert">
+          {sendError}
+        </Text>
+      ) : null}
       <Flex gap="3" wrap="wrap" align="start">
         {actionGroups.map((group) => (
           <Box key={group.title} style={{ minWidth: 190, flex: "1 1 220px" }}>

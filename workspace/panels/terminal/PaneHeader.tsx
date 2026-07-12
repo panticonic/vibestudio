@@ -42,6 +42,7 @@ export function PaneHeader(props: {
 }) {
   const ports = props.session.detectedPorts.slice(0, 3);
   const exitText = sessionExitText(props.session);
+  const cleanExit = !props.session.alive && props.session.exit?.code === 0 && !props.session.exit.signal;
   const preview = previewTarget(props.session);
   const cwd = liveSessionCwd(props.session) ?? props.session.command.cwd;
   const commandState = liveSessionCommandState(props.session);
@@ -63,7 +64,7 @@ export function PaneHeader(props: {
       <Flex align="center" gap="2" minWidth="0">
         <span style={{ width: "0.5rem", height: "0.5rem", borderRadius: "999px", background: severityDotColor(props.severity, props.session.alive) }} />
         <Text size="1" weight="medium" truncate>{props.session.label}</Text>
-        {exitText ? <Badge size="1" color="red" variant="soft">{exitText}</Badge> : null}
+        {exitText ? <Badge size="1" color={cleanExit ? "gray" : "red"} variant="soft">{cleanExit ? "done" : exitText}</Badge> : null}
         {!exitText && commandState.state === "running" ? (
           <Badge size="1" color="blue" variant="soft">running</Badge>
         ) : null}

@@ -12,7 +12,7 @@ import {
   type HubWorkspaceRoute,
 } from "@vibestudio/shared/serviceSchemas/hubControl";
 import type { CliStoredPairing } from "./credentialStore.js";
-import { AuthError } from "./output.js";
+import { AuthError, UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { typedClient } from "./typedClients.js";
 
@@ -192,7 +192,7 @@ export function pairingDeepLink(invite: HubPairingInvite): string {
 
 function parsePairingLink(link: string): ConnectPairing {
   const parsed = parseConnectLink(link);
-  if (parsed.kind === "error") throw new AuthError(parsed.reason);
+  if (parsed.kind === "error") throw new UsageError(parsed.reason);
   const { kind: _kind, ...pairing } = parsed;
   return pairing;
 }

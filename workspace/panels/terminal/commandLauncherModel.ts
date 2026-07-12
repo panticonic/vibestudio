@@ -1,10 +1,11 @@
 export type CommandRunTarget = "here" | "splitRight" | "splitDown";
 
 export function commandTargetForEnter(event: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey">): CommandRunTarget {
-  // Shift (with or without Ctrl/Cmd) splits down; any other modifier combo
-  // splits right.
+  // Plain Enter uses the shell already in focus. Mod+Enter opens right and
+  // Shift+Enter opens down, providing a keyboard path to every target.
   if (event.shiftKey) return "splitDown";
-  return "splitRight";
+  if (event.ctrlKey || event.metaKey) return "splitRight";
+  return "here";
 }
 
 export function hasCommandTargetModifier(event: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey">): boolean {

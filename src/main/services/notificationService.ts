@@ -9,6 +9,7 @@ import { requireAppCapability } from "./appCapabilities.js";
 export function createNotificationService(deps: {
   eventService: EventService;
   getViewManager: () => ViewManager;
+  onAction?: (id: string, actionId: string) => void | Promise<void>;
 }): ServiceDefinition {
   return {
     name: "notification",
@@ -33,6 +34,7 @@ export function createNotificationService(deps: {
         case "reportAction": {
           const [id, actionId] = args as [string, string];
           deps.eventService.emit("notification:action", { id, actionId });
+          await deps.onAction?.(id, actionId);
           return;
         }
         default:

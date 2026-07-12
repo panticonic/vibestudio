@@ -158,7 +158,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <ConnectionBar onRepair={() => void performDisconnect()} />
+      <ConnectionBar onRepair={handleDisconnect} />
 
       <ScrollView
         style={styles.scrollView}

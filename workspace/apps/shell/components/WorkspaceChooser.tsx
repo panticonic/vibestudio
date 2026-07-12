@@ -12,7 +12,7 @@ import {
   Spinner,
   Text,
 } from "@radix-ui/themes";
-import { Cross2Icon, ExclamationTriangleIcon, PlusIcon } from "@radix-ui/react-icons";
+import { ExclamationTriangleIcon, PlusIcon, TrashIcon } from "@radix-ui/react-icons";
 import { Surface, VibestudioLogo } from "@workspace/ui";
 
 import {
@@ -26,6 +26,7 @@ import {
   wizardDialogOpenAtom,
   wizardFormDataAtom,
   workspaceErrorAtom,
+  remoteWorkspaceModeAtom,
 } from "../state/appModeAtoms";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { HostTargetsSection } from "./HostTargetsSection";
@@ -53,25 +54,32 @@ export function WorkspaceChooser() {
   const setWizardDialogOpen = useSetAtom(wizardDialogOpenAtom);
   const setWizardFormData = useSetAtom(wizardFormDataAtom);
   const workspaceError = useAtomValue(workspaceErrorAtom);
+  const remoteWorkspaceMode = useAtomValue(remoteWorkspaceModeAtom);
   const setWorkspaceError = useSetAtom(workspaceErrorAtom);
 
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
-  // Load workspaces on mount and clear stale errors
+  // Load workspaces on mount. The atom owns clearing or replacing stale errors.
   useEffect(() => {
-    setWorkspaceError(null);
     void loadRecentWorkspaces();
-  }, [loadRecentWorkspaces, setWorkspaceError]);
+  }, [loadRecentWorkspaces]);
 
   const handleChooseWorkspace = async (ws: WorkspaceEntry) => {
     if (ws.name === activeWorkspaceName) {
       setWorkspaceChooserOpen(false);
       return;
     }
+    if (remoteWorkspaceMode) {
+      setWorkspaceError(
+        "Switch workspaces on the remote host, then pair this desktop with the target workspace."
+      );
+      return;
+    }
     try {
       await chooseWorkspace(ws.name);
     } catch (error) {
       console.error("Failed to choose workspace:", error);
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -179,8 +187,13 @@ export function WorkspaceChooser() {
                   <>
                     <VibestudioLogo size={44} variant="mark" />
                     <Text size="2" color="gray">
-                      Could not load workspaces
+                      {workspaceError ? "Could not load workspaces" : "No workspaces available"}
                     </Text>
+                    {workspaceError ? (
+                      <Button size="1" variant="soft" onClick={() => void loadRecentWorkspaces()}>
+                        Retry
+                      </Button>
+                    ) : null}
                   </>
                 )}
               </Flex>
@@ -193,6 +206,8 @@ export function WorkspaceChooser() {
                     isActive={ws.name === activeWorkspaceName}
                     onSelect={() => handleChooseWorkspace(ws)}
                     onRemove={(e) => handleRemoveWorkspace(e, ws.name)}
+                    canDelete={!remoteWorkspaceMode}
+                    canSelect={!remoteWorkspaceMode || ws.name === activeWorkspaceName}
                   />
                 ))}
               </Flex>
@@ -202,18 +217,27 @@ export function WorkspaceChooser() {
       </Surface>
 
       {/* Action Buttons */}
-      <Flex gap="3" mt="4" justify="center">
-        <Button
-          variant="soft"
-          size="3"
-          color="green"
-          className="app-touch-target"
-          onClick={handleCreateNew}
-        >
-          <PlusIcon />
-          Create New Workspace
-        </Button>
-      </Flex>
+      {remoteWorkspaceMode ? (
+        <Callout.Root color="blue" mt="4">
+          <Callout.Text>
+            Workspace creation, deletion, and switching are managed on the remote host. Pair this
+            desktop with the target workspace to open it here.
+          </Callout.Text>
+        </Callout.Root>
+      ) : (
+        <Flex gap="3" mt="4" justify="center">
+          <Button
+            variant="soft"
+            size="3"
+            color="green"
+            className="app-touch-target"
+            onClick={handleCreateNew}
+          >
+            <PlusIcon />
+            Create New Workspace
+          </Button>
+        </Flex>
+      )}
 
       {activeWorkspaceName ? <HostTargetsSection /> : null}
 
@@ -251,22 +275,36 @@ interface WorkspaceItemProps {
   isActive: boolean;
   onSelect: () => void;
   onRemove: (e: React.MouseEvent) => void;
+  canDelete: boolean;
+  canSelect: boolean;
 }
 
-function WorkspaceItem({ workspace, isActive, onSelect, onRemove }: WorkspaceItemProps) {
+function WorkspaceItem({
+  workspace,
+  isActive,
+  onSelect,
+  onRemove,
+  canDelete,
+  canSelect,
+}: WorkspaceItemProps) {
   return (
-    <Card asChild style={{ cursor: "pointer" }} className="workspace-item">
-      <button
-        onClick={onSelect}
-        style={{
-          width: "100%",
-          textAlign: "left",
-          background: "transparent",
-          border: "none",
-          padding: 0,
-        }}
-      >
-        <Flex justify="between" align="center" p="3">
+    <Card style={{ position: "relative" }} className="workspace-item">
+      <Flex justify="between" align="center" p="3" gap="2">
+        <button
+          type="button"
+          onClick={onSelect}
+          disabled={!canSelect}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            textAlign: "left",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: canSelect ? "pointer" : "default",
+            opacity: canSelect ? 1 : 0.65,
+          }}
+        >
           <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
             <Text size="2" weight="medium" truncate>
               {workspace.name}
@@ -280,19 +318,21 @@ function WorkspaceItem({ workspace, isActive, onSelect, onRemove }: WorkspaceIte
               {formatRelativeTime(workspace.lastOpened)}
             </Text>
           </Flex>
-          {!isActive && (
-            <IconButton
-              variant="ghost"
-              size="1"
-              color="gray"
-              onClick={onRemove}
-              style={{ flexShrink: 0 }}
-            >
-              <Cross2Icon />
-            </IconButton>
-          )}
-        </Flex>
-      </button>
+        </button>
+        {!isActive && canDelete && (
+          <IconButton
+            variant="ghost"
+            size="1"
+            color="gray"
+            onClick={onRemove}
+            aria-label={`Delete workspace ${workspace.name}`}
+            title={`Delete workspace ${workspace.name}`}
+            style={{ flexShrink: 0 }}
+          >
+            <TrashIcon />
+          </IconButton>
+        )}
+      </Flex>
     </Card>
   );
 }

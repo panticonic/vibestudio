@@ -43,6 +43,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     onConnectProvider,
     onCallMethodResult,
     onOpenLocalModelsLog,
+    toolApproval,
   } = ctx;
 
   const agentParticipants = useMemo(
@@ -58,7 +59,9 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
 
   // Reactiveness matters only when the channel will hold more than one agent.
   const showReactiveness =
-    mode === "add" ? agentParticipants.length >= 1 : mode === "edit" && agentParticipants.length > 1;
+    mode === "add"
+      ? agentParticipants.length >= 1
+      : mode === "edit" && agentParticipants.length > 1;
   const showHandle = mode === "add" && showReactiveness;
 
   const otherParticipants = useMemo(
@@ -128,7 +131,8 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
         setDraft({
           model: settings.model?.value ?? "",
           thinkingLevel: settings.thinkingLevel?.value as AgentConfigDraft["thinkingLevel"],
-          approvalLevel: settings.approvalLevel?.value as AgentConfigDraft["approvalLevel"],
+          approvalLevel: (toolApproval?.settings.globalFloor ??
+            settings.approvalLevel?.value) as AgentConfigDraft["approvalLevel"],
           respondPolicy: settings.respondPolicy?.value as AgentConfigDraft["respondPolicy"],
           respondFrom: settings.respondFrom?.value,
           handle: targetParticipant?.metadata.handle as string | undefined,
@@ -169,7 +173,8 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     selectedModel.connectable;
 
   const verb = mode === "switch" ? "Switch" : mode === "edit" ? "Save" : "Add";
-  const title = mode === "switch" ? "Switch agent" : mode === "edit" ? "Agent settings" : "Add agent";
+  const title =
+    mode === "switch" ? "Switch agent" : mode === "edit" ? "Agent settings" : "Add agent";
 
   const finish = useCallback(async () => {
     setBusy(true);
@@ -184,6 +189,10 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
         }
       }
       const config = draftToConfig(draft);
+      // Tool permission is channel-wide. Persist it before starting/restarting
+      // an agent so the header and every agent enforce the same authoritative
+      // value from the first turn.
+      if (toolApproval) await toolApproval.onSetFloor(draft.approvalLevel ?? 2);
       if (mode === "add") {
         if (!onAddAgent) throw new Error("Adding agents is not available in this host.");
         onAddAgent(agentId, config);
@@ -194,9 +203,6 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
         await onReplaceAgent(targetParticipantId, agentId, config);
       } else if (mode === "edit" && targetParticipantId) {
         // Apply live settings (model is handled by "Restart with this model").
-        await onCallMethodResult(targetParticipantId, "setApprovalLevel", {
-          level: draft.approvalLevel ?? 2,
-        });
         if (draft.thinkingLevel) {
           await onCallMethodResult(targetParticipantId, "setThinkingLevel", {
             level: draft.thinkingLevel,
@@ -227,6 +233,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     onAddAgent,
     onReplaceAgent,
     onCallMethodResult,
+    toolApproval,
     onOpenChange,
   ]);
 
@@ -272,7 +279,9 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content style={{ width: "min(460px, calc(100vw - 24px))", maxHeight: "min(85dvh, 680px)" }}>
+      <Dialog.Content
+        style={{ width: "min(460px, calc(100vw - 24px))", maxHeight: "min(85dvh, 680px)" }}
+      >
         <Dialog.Title>{title}</Dialog.Title>
         <Dialog.Description size="2" color="gray" mb="3">
           {mode === "switch"
@@ -354,7 +363,12 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
 
             <Flex gap="3" mt="4" justify="between" align="center">
               {showGallery ? (
-                <Button variant="ghost" color="gray" onClick={() => setStep("type")} disabled={busy}>
+                <Button
+                  variant="ghost"
+                  color="gray"
+                  onClick={() => setStep("type")}
+                  disabled={busy}
+                >
                   Back
                 </Button>
               ) : (
@@ -379,10 +393,10 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
             {selectedModel &&
               !selectedModel.connectable &&
               selectedModel.availability?.state === "needs-setup" && (
-              <Text size="1" color="gray" as="p" mt="2">
-                Connecting {selectedModel.provider} isn't supported here yet.
-              </Text>
-            )}
+                <Text size="1" color="gray" as="p" mt="2">
+                  Connecting {selectedModel.provider} isn't supported here yet.
+                </Text>
+              )}
           </Box>
         )}
       </Dialog.Content>

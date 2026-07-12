@@ -11,8 +11,8 @@ describe("terminal restore", () => {
 
     const result = await restoreTerminalState(shell, state);
 
-    expect(shell.open).toHaveBeenNthCalledWith(1, { cwd: "/repo/a", label: "Alpha" });
-    expect(shell.open).toHaveBeenNthCalledWith(2, { cwd: "/repo/b", label: "Beta" });
+    expect(shell.open).toHaveBeenNthCalledWith(1, { cwd: "/repo/a", label: "Restored shell (restarted)" });
+    expect(shell.open).toHaveBeenNthCalledWith(2, { cwd: "/repo/b", label: "Restored shell (restarted)" });
     expect(shell.setScrollbackLimit).toHaveBeenCalledWith("new-1", 1024 * 1024);
     expect(shell.setScrollbackLimit).toHaveBeenCalledWith("new-2", 1024 * 1024);
     expect(result.tree).toMatchObject({
@@ -23,12 +23,25 @@ describe("terminal restore", () => {
     expect(result.focusedSessionId).toBe("new-2");
     expect(result.perSession["new-2"]).toMatchObject({
       cwd: "/repo/b",
-      label: "Beta",
+      label: "Restored shell (restarted)",
       readCursor: 22,
       originalArgv: ["pnpm", "dev"],
     });
     expect(shell.dispose).toHaveBeenCalledWith("old-a");
     expect(shell.dispose).toHaveBeenCalledWith("old-b");
+  });
+
+  it("reattaches live server sessions without restarting or disposing them", async () => {
+    const shell = makeShell({ retainOldSessions: true });
+    const result = await restoreTerminalState(shell, stateWithTree("old-b"));
+
+    expect(shell.open).not.toHaveBeenCalled();
+    expect(shell.dispose).not.toHaveBeenCalled();
+    expect(result.focusedSessionId).toBe("old-b");
+    expect(result.tree).toMatchObject({
+      a: { sessionId: "old-a" },
+      b: { sessionId: "old-b" },
+    });
   });
 
   it("prunes leaves that fail to reopen and falls back to the first restored pane", async () => {
@@ -74,9 +87,13 @@ function stateWithTree(focusedSessionId: string): TerminalState {
   };
 }
 
-function makeShell(opts: { failCwd?: string; failGetSessionId?: string } = {}): ShellApi {
+function makeShell(opts: { failCwd?: string; failGetSessionId?: string; retainOldSessions?: boolean } = {}): ShellApi {
   let nextId = 1;
   const sessions = new Map<string, SessionInfo>();
+  if (opts.retainOldSessions) {
+    sessions.set("old-a", session("old-a", "/repo/a", "Alpha"));
+    sessions.set("old-b", session("old-b", "/repo/b", "Beta"));
+  }
   return {
     open: vi.fn(async (req: { cwd?: string; label?: string }) => {
       if (req.cwd === opts.failCwd) throw new Error("denied");

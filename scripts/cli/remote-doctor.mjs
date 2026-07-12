@@ -16,8 +16,8 @@ const UNIT_NAME = "vibestudio-server.service";
 export function parseArgs(argv) {
   const options = {
     signalUrl: null,
-    identity: null,
-    workspace: "default",
+    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? null,
+    identityExplicit: Boolean(process.env.VIBESTUDIO_WEBRTC_IDENTITY),
     json: false,
     help: false,
   };
@@ -28,15 +28,8 @@ export function parseArgs(argv) {
     if (arg === "--signal-url") {
       options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--identity") {
-      identityExplicit = true;
-      const value = argv[++i];
-      if (!value || value.startsWith("--")) throw new Error("--identity requires a path");
-      options.identity = path.resolve(value);
-    } else if (arg === "--workspace") {
-      workspaceExplicit = true;
-      const value = argv[++i];
-      if (!value || value.startsWith("--")) throw new Error("--workspace requires a name");
-      options.workspace = value;
+      options.identity = path.resolve(argv[++i] ?? "");
+      options.identityExplicit = true;
     } else if (arg === "--json") {
       options.json = true;
     } else if (arg === "--help") {
@@ -99,6 +92,7 @@ export function inspectIdentity(identityPath) {
       `legacy WebRTC identity remnants found (run: vibestudio remote repair-identity --yes): ${legacy.join(", ")}`,
       {
         path: identityPath,
+        legacy,
       }
     );
   }
@@ -280,7 +274,12 @@ export async function runDoctor(options, deps = {}) {
   if (port !== null) {
     checks.push(await checkGatewayPort(port));
   }
-  checks.push(inspectIdentity(options.identity));
+  const identityExplicit = options.identityExplicit ?? Boolean(options.identity);
+  checks.push(
+    unit.skipped && !identityExplicit
+      ? skip("identity", "no server identity expected on a client host")
+      : inspectIdentity(options.identity)
+  );
   checks.push(await checkSignaling(options.signalUrl, deps.wsFactory));
   return { ok: checks.filter((entry) => !entry.skipped).every((entry) => entry.ok), checks };
 }

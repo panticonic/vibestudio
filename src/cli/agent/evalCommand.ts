@@ -222,7 +222,7 @@ export const evalCommands: CliCommand[] = [
       {
         name: "timeout",
         takesValue: true,
-        description: "Stop waiting after MS (default 120000)",
+        description: "Stop waiting after MS (unbounded when omitted)",
       },
       {
         name: "fresh-scope",

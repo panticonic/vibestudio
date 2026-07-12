@@ -40,7 +40,6 @@ import {
   loadShellCredential,
   clearShellCredential,
   makeShellTokenProvider,
-  completeFreshMobilePairing,
   activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
 } from "@vibestudio/mobile-webrtc";
 import {
@@ -106,7 +105,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 
 // The shell-credential store + the WebRTC connect helpers
 // (establishWebRtcConnection / reconnectViaWebRtc / persist+loadShellCredential /
-// makeShellTokenProvider / fresh-pairing commit) now live in
+// makeShellTokenProvider) now live in
 // @vibestudio/mobile-webrtc, shared with the post-reload workspace app. Only the
 // fresh-pairing flow below (which emits the smoke phases) stays here.
 
@@ -123,11 +122,18 @@ async function pairViaWebRtc(pairing) {
       tokenProvider.setCredential(credential);
     },
   });
-  await completeFreshMobilePairing({
-    connection,
-    credential: pairedCredential,
-    persistCredential: persistShellCredential,
-  });
+  if (pairedCredential) {
+    await persistShellCredential(pairedCredential, pairing);
+    connection.deviceId = pairedCredential.deviceId;
+  } else {
+    // The server authenticated us but issued no fresh credential — we are
+    // connected for this session but cannot persist a refresh secret. Surface
+    // it loudly rather than pretending a reconnect will work.
+    await connection.close().catch(() => undefined);
+    throw new Error(
+      "The server did not issue a reusable device credential. Generate a fresh pairing invite and try again."
+    );
+  }
   smokePhase("embedded-pairing-complete");
   return connection;
 }
@@ -460,14 +466,17 @@ function VibestudioMobileHostBootstrap() {
       const parsed = parseConnectDeepLink(rawUrl);
       if (!parsed) {
         setPendingConnect(null);
-        setStatus("Open a Vibestudio connect link to pair this device.");
+        setStatus(
+          "That is not a Vibestudio pairing code. Keep the camera pointed at the QR shown by your trusted desktop or server."
+        );
         setBusy(false);
-        return;
+        return false;
       }
       smokePhase("embedded-deep-link-received");
       setPendingConnect({ ...parsed, rawUrl });
       setStatus(`Pair this device with ${pairingLabel(parsed)}?`);
       setBusy(false);
+      return true;
     } catch (error) {
       setPendingConnect(null);
       setStatus(
@@ -476,6 +485,7 @@ function VibestudioMobileHostBootstrap() {
         }\n\nScan a fresh Vibestudio pairing QR code to re-pair this device.`
       );
       setBusy(false);
+      return false;
     }
   }, []);
 
@@ -485,8 +495,11 @@ function VibestudioMobileHostBootstrap() {
       const rawUrl = codes.find((code) => typeof code.value === "string" && code.value)?.value;
       if (!rawUrl || scannerLastValueRef.current === rawUrl) return;
       scannerLastValueRef.current = rawUrl;
-      setScannerOpen(false);
-      presentConnectLink(rawUrl);
+      if (presentConnectLink(rawUrl)) {
+        setScannerOpen(false);
+      } else {
+        scannerLastValueRef.current = null;
+      }
     },
   });
 

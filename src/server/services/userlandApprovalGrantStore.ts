@@ -128,6 +128,26 @@ export class UserlandApprovalGrantStore {
     return [...this.sessionGrants.filter(matches), ...this.persistent.grants.filter(matches)];
   }
 
+  /** Administrative review surface: durable grants across all principals. */
+  listPersistent(): UserlandApprovalGrant[] {
+    return this.persistent.grants.map((grant) => ({
+      ...grant,
+      principal: { ...grant.principal },
+      subject: { ...grant.subject },
+      ...(grant.issuer ? { issuer: { ...grant.issuer } } : {}),
+    }));
+  }
+
+  revokePersistent(id: string): boolean {
+    const before = this.persistent.grants.length;
+    this.persistent.grants = this.persistent.grants.filter(
+      (grant) => userlandApprovalGrantId(grant) !== id
+    );
+    if (this.persistent.grants.length === before) return false;
+    this.save();
+    return true;
+  }
+
   private load(): void {
     try {
       const parsed = JSON.parse(
@@ -147,6 +167,10 @@ export class UserlandApprovalGrantStore {
   private save(): void {
     writeJsonFileAtomic(this.filePath, this.persistent);
   }
+}
+
+export function userlandApprovalGrantId(grant: UserlandApprovalGrant): string {
+  return keyFor(grant.principal, effectiveIssuer(grant), grant.subject.id, grant.scope ?? "caller");
 }
 
 export function keyFor(

@@ -1,5 +1,5 @@
-import { Box, Callout, Flex, IconButton, Text } from "@radix-ui/themes";
-import { Cross1Icon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Flex, IconButton, Text } from "@radix-ui/themes";
+import { Cross1Icon, ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { useChatContext } from "../context/ChatContext";
 
 /**
@@ -13,7 +13,7 @@ import { useChatContext } from "../context/ChatContext";
  * "error" is disambiguated.
  */
 export function ChatConnectionErrorBanner() {
-  const { connectionError, status, dismissConnectionError } = useChatContext();
+  const { connectionError, status, dismissConnectionError, retryConnection } = useChatContext();
   if (!connectionError) return null;
 
   return (
@@ -30,7 +30,7 @@ export function ChatConnectionErrorBanner() {
         <Flex align="center" justify="between" gap="2" width="100%" style={{ minWidth: 0 }}>
           <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
             <Text size="1" weight="medium">
-              Connection error
+              {status.toLowerCase().includes("connect") || status.toLowerCase() === "error" ? "Connection error" : "Action failed"}
             </Text>
             <Text
               size="1"
@@ -42,9 +42,14 @@ export function ChatConnectionErrorBanner() {
                 textOverflow: "ellipsis",
               }}
             >
-              {connectionError.message} · status: {status}
+              {connectionError.message}
             </Text>
           </Flex>
+          {!connectedStatus(status) && retryConnection ? (
+            <Button size="1" variant="soft" color="red" onClick={retryConnection}>
+              <ReloadIcon /> Retry
+            </Button>
+          ) : null}
           {dismissConnectionError && (
             <IconButton
               size="1"
@@ -61,4 +66,8 @@ export function ChatConnectionErrorBanner() {
       </Callout.Root>
     </Box>
   );
+}
+
+function connectedStatus(status: string): boolean {
+  return status.toLowerCase() === "connected";
 }

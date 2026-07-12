@@ -13,6 +13,8 @@ import {
   Text,
   TextField,
   Tooltip,
+  Switch,
+  Link,
 } from "@radix-ui/themes";
 import {
   CheckCircledIcon,
@@ -31,8 +33,10 @@ import {
 import { useIsMobile } from "@workspace/react";
 import {
   credentials,
+  buildPanelLink,
   panel,
   panelTree,
+  rpc,
   type CredentialAccessGrantSummary,
   type CredentialAccessSubjectSummary,
   type ManagedCredentialSummary,
@@ -44,6 +48,8 @@ type CredentialStatus = {
   color: "green" | "amber" | "red";
   icon: "active" | "warning" | "revoked";
 };
+
+type BrowserPasswordSummary = { id: number; origin: string; username: string };
 
 function credentialStatus(credential: ManagedCredentialSummary): CredentialStatus {
   if (credential.revokedAt) return { label: "Revoked", color: "red", icon: "revoked" };
@@ -97,7 +103,7 @@ function ownerLabel(credential: ManagedCredentialSummary): string {
 
 function bindingLabel(credential: ManagedCredentialSummary): string {
   const bindings = credential.bindings ?? [];
-  if (bindings.length === 0) return "No bindings";
+  if (bindings.length === 0) return "Not currently assigned to an app";
   return bindings.map((binding) => binding.label ?? `${binding.use}:${binding.id}`).join(", ");
 }
 
@@ -105,7 +111,7 @@ function audienceLabel(credential: ManagedCredentialSummary): string {
   const audience =
     credential.bindings?.flatMap((binding) => binding.audience) ?? credential.audience;
   const urls = [...new Set(audience.map((entry) => entry.url))];
-  if (urls.length === 0) return "No audience";
+  if (urls.length === 0) return "No network destination";
   if (urls.length === 1) return urls[0]!;
   return `${urls[0]} and ${urls.length - 1} more`;
 }
@@ -114,7 +120,7 @@ function injectionLabel(credential: ManagedCredentialSummary): string {
   const injection = credential.injection;
   switch (injection.type) {
     case "header":
-      return `Header: ${injection.name}`;
+      return `Sent in the ${injection.name} request header`;
     case "query-param":
       return `Query parameter: ${injection.name}`;
     case "basic-auth":
@@ -142,13 +148,15 @@ function subjectDetail(subject: CredentialAccessSubjectSummary): string {
   const parts = [
     subject.source?.repoPath,
     subject.source?.effectiveVersion,
-    subject.contextId ? `ctx:${subject.contextId}` : undefined,
+    subject.contextId ? "This workspace context" : undefined,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : subject.id;
 }
 
 function useActionLabel(grant: CredentialAccessGrantSummary): string {
-  return `${grant.use} / ${grant.action}`;
+  const action = grant.action.replaceAll("_", " ").replaceAll("-", " ");
+  const use = String(grant.use).replaceAll("_", " ").replaceAll("-", " ");
+  return `${use} · ${action}`;
 }
 
 function matchesQuery(credential: ManagedCredentialSummary, query: string): boolean {
@@ -406,15 +414,15 @@ function CredentialSection({
 
       <Grid columns={{ initial: "1", sm: "2" }} gap="3" mt="4">
         <DetailLine label="Owner" value={ownerLabel(credential)} />
-        <DetailLine label="Bindings" value={bindingLabel(credential)} />
-        <DetailLine label="Audience" value={audienceLabel(credential)} />
-        <DetailLine label="Injection" value={injectionLabel(credential)} />
+        <DetailLine label="Available to" value={bindingLabel(credential)} />
+        <DetailLine label="Allowed destinations" value={audienceLabel(credential)} />
+        <DetailLine label="How it is sent" value={injectionLabel(credential)} />
         <DetailLine
           label="Expires"
           value={credential.expiresAt ? formatDate(credential.expiresAt) : "Never"}
         />
         <DetailLine
-          label="Scopes"
+          label="Provider permissions"
           value={credential.scopes.length ? credential.scopes.join(", ") : "None"}
         />
       </Grid>
@@ -455,12 +463,32 @@ function CredentialsPage() {
   const [expandedGrants, setExpandedGrants] = useState<Set<string>>(new Set());
   const [pendingRevoke, setPendingRevoke] = useState<ManagedCredentialSummary | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [showRevoked, setShowRevoked] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [browserPasswords, setBrowserPasswords] = useState<BrowserPasswordSummary[]>([]);
+  const [neverSaveOrigins, setNeverSaveOrigins] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setItems(await credentials.inspectStoredCredentials());
-      setError(null);
+      const managed = await credentials.inspectStoredCredentials();
+      setItems(managed);
+      const [savedPasswords, neverSave] = await Promise.allSettled([
+        rpc.call<BrowserPasswordSummary[]>("main", "autofill.listSavedPasswords", []),
+        rpc.call<string[]>("main", "autofill.listNeverSaveOrigins", []),
+      ]);
+      if (savedPasswords.status === "fulfilled") setBrowserPasswords(savedPasswords.value);
+      if (neverSave.status === "fulfilled") setNeverSaveOrigins(neverSave.value);
+      const browserErrors = [savedPasswords, neverSave]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) =>
+          result.reason instanceof Error ? result.reason.message : String(result.reason)
+        );
+      setError(
+        browserErrors.length > 0
+          ? `Managed credentials loaded, but browser password settings could not be loaded: ${browserErrors.join("; ")}`
+          : null
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -475,9 +503,11 @@ function CredentialsPage() {
 
   const visibleItems = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    if (!query) return items;
-    return items.filter((credential) => matchesQuery(credential, query));
-  }, [items, filter]);
+    return items.filter((credential) => {
+      if (!showRevoked && credential.revokedAt) return false;
+      return !query || matchesQuery(credential, query);
+    });
+  }, [items, filter, showRevoked]);
 
   const metrics = useMemo(() => {
     const active = items.filter((item) => credentialStatus(item).label === "Active").length;
@@ -521,23 +551,48 @@ function CredentialsPage() {
   const revokePending = useCallback(async () => {
     if (!pendingRevoke) return;
     setRevokingId(pendingRevoke.id);
+    setRevokeError(null);
     try {
       await credentials.revokeCredential(pendingRevoke.id);
       setPendingRevoke(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setRevokeError(err instanceof Error ? err.message : String(err));
     } finally {
       setRevokingId(null);
     }
   }, [load, pendingRevoke]);
+
+  const deleteBrowserPassword = useCallback(async (entry: BrowserPasswordSummary) => {
+    if (!window.confirm(`Delete the saved password for ${entry.username} on ${entry.origin}?`))
+      return;
+    try {
+      await rpc.call("main", "autofill.deleteSavedPassword", [entry.id]);
+      setBrowserPasswords((current) => current.filter((item) => item.id !== entry.id));
+    } catch (err) {
+      setError(
+        `Couldn't delete saved password: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }, []);
+
+  const allowPasswordSavesAgain = useCallback(async (origin: string) => {
+    try {
+      await rpc.call("main", "autofill.removeNeverSaveOrigin", [origin]);
+      setNeverSaveOrigins((current) => current.filter((item) => item !== origin));
+    } catch (err) {
+      setError(
+        `Couldn't update password-save preference: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }, []);
 
   return (
     <>
       <AboutPage
         icon={<LockClosedIcon width={20} height={20} />}
         title="Credentials"
-        subtitle="Stored credential access, grants, and active runtime usage"
+        subtitle="See which saved accounts and tokens apps can use"
         maxWidth={980}
         actions={
           <Tooltip content="Refresh">
@@ -575,7 +630,17 @@ function CredentialsPage() {
                 <GlobeIcon />
                 {metrics.grantCount} grants
               </Badge>
+              <Flex align="center" gap="2">
+                <Switch size="1" checked={showRevoked} onCheckedChange={setShowRevoked} />
+                <Text size="1" color="gray">
+                  Show revoked
+                </Text>
+              </Flex>
             </Flex>
+            <Text size="2" color="gray">
+              Looking for lasting app or agent access?{" "}
+              <Link href={buildPanelLink("about/permissions")}>Review saved permissions</Link>.
+            </Text>
           </Flex>
         </Section>
 
@@ -617,16 +682,74 @@ function CredentialsPage() {
           <Section>
             <Text size="2" color="gray">
               {items.length === 0
-                ? "No stored credentials."
-                : "No credentials match the current filter."}
+                ? "No credentials are stored yet. When you connect an account, Vibestudio keeps the secret outside app code and asks before sharing it."
+                : !showRevoked && items.every((item) => item.revokedAt)
+                  ? "All stored credentials are revoked. Turn on “Show revoked” to review them."
+                  : "No credentials match the current filter."}
             </Text>
           </Section>
         )}
+
+        <Section title="Browser passwords">
+          <Flex direction="column" gap="3">
+            {browserPasswords.length === 0 ? (
+              <Text size="2" color="gray">
+                No browser passwords are saved.
+              </Text>
+            ) : (
+              browserPasswords.map((entry) => (
+                <Flex key={entry.id} justify="between" align="center" gap="3">
+                  <Box style={{ minWidth: 0 }}>
+                    <Text size="2" weight="medium">
+                      {entry.username || "Unnamed account"}
+                    </Text>
+                    <Text size="1" color="gray" as="div" style={{ wordBreak: "break-word" }}>
+                      {entry.origin}
+                    </Text>
+                  </Box>
+                  <Button
+                    size="1"
+                    color="red"
+                    variant="soft"
+                    onClick={() => void deleteBrowserPassword(entry)}
+                  >
+                    <TrashIcon /> Delete
+                  </Button>
+                </Flex>
+              ))
+            )}
+          </Flex>
+        </Section>
+
+        <Section title="Sites that never ask to save passwords">
+          <Flex direction="column" gap="3">
+            {neverSaveOrigins.length === 0 ? (
+              <Text size="2" color="gray">
+                No sites are blocked from showing save prompts.
+              </Text>
+            ) : (
+              neverSaveOrigins.map((origin) => (
+                <Flex key={origin} justify="between" align="center" gap="3">
+                  <Text size="2" style={{ wordBreak: "break-word" }}>
+                    {origin}
+                  </Text>
+                  <Button
+                    size="1"
+                    variant="soft"
+                    onClick={() => void allowPasswordSavesAgain(origin)}
+                  >
+                    Ask again
+                  </Button>
+                </Flex>
+              ))
+            )}
+          </Flex>
+        </Section>
       </AboutPage>
 
       <AlertDialog.Root
         open={Boolean(pendingRevoke)}
-        onOpenChange={(open) => !open && setPendingRevoke(null)}
+        onOpenChange={(open) => !open && !revokingId && setPendingRevoke(null)}
       >
         <AlertDialog.Content maxWidth="450px">
           <AlertDialog.Title>Revoke credential</AlertDialog.Title>
@@ -635,22 +758,21 @@ function CredentialsPage() {
               ? `Revoke ${pendingRevoke.label}? Active panels and workers will lose access after this credential is revoked.`
               : ""}
           </AlertDialog.Description>
+          {revokeError ? (
+            <Text size="2" color="red" mt="3" role="alert">
+              Couldn't revoke this credential: {revokeError}
+            </Text>
+          ) : null}
           <Flex gap="3" mt="4" justify="end">
             <AlertDialog.Cancel>
               <Button variant="soft" color="gray" disabled={Boolean(revokingId)}>
                 Cancel
               </Button>
             </AlertDialog.Cancel>
-            <AlertDialog.Action>
-              <Button
-                color="red"
-                onClick={() => void revokePending()}
-                disabled={Boolean(revokingId)}
-              >
-                {revokingId ? <Spinner /> : <TrashIcon />}
-                Revoke
-              </Button>
-            </AlertDialog.Action>
+            <Button color="red" onClick={() => void revokePending()} disabled={Boolean(revokingId)}>
+              {revokingId ? <Spinner /> : <TrashIcon />}
+              {revokingId ? "Revoking…" : "Revoke"}
+            </Button>
           </Flex>
         </AlertDialog.Content>
       </AlertDialog.Root>

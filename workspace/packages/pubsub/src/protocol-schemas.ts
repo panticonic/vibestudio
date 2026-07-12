@@ -98,7 +98,7 @@ export const FieldDefinitionSchema = z.object({
   description: z.string().optional(),
   type: z.enum([
     // Existing types
-    "string", "number", "boolean", "select", "slider", "segmented", "toggle",
+    "string", "textarea", "number", "boolean", "select", "slider", "segmented", "toggle",
     // New types for feedback UI
     "readonly",       // Display-only text (non-editable)
     "code",           // Syntax-highlighted code/JSON block

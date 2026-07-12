@@ -313,6 +313,12 @@ function runInstallSmoke(entry) {
   });
   run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: repoRoot });
   run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: repoRoot });
+  run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
+    cwd: repoRoot,
+  });
+  run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
+    cwd: repoRoot,
+  });
   run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], { cwd: repoRoot });
 }
 

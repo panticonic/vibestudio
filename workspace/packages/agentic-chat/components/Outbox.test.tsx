@@ -23,7 +23,12 @@ beforeAll(() => {
   );
 });
 import type { Participant } from "@workspace/pubsub";
-import { Outbox, deriveOutboxMessages, deriveActiveOutbox, hasOfflinePendingRecipient } from "./Outbox";
+import {
+  Outbox,
+  deriveOutboxMessages,
+  deriveActiveOutbox,
+  hasOfflinePendingRecipient,
+} from "./Outbox";
 import { ChatContext } from "../context/ChatContext";
 import type { ChatContextValue, ChatMessage, ChatParticipantMetadata } from "../types";
 
@@ -44,7 +49,10 @@ const participants: Record<string, Participant<ChatParticipantMetadata>> = {
   "agent:alice": { id: "agent:alice", metadata: { name: "Alice", type: "agent", handle: "alice" } },
 };
 
-function makeContext(messages: ChatMessage[], overrides: Partial<ChatContextValue> = {}): ChatContextValue {
+function makeContext(
+  messages: ChatMessage[],
+  overrides: Partial<ChatContextValue> = {}
+): ChatContextValue {
   return {
     connected: true,
     messages,
@@ -58,8 +66,6 @@ function makeContext(messages: ChatMessage[], overrides: Partial<ChatContextValu
     primaryActionIntent: "send",
     pendingSendCount: 0,
     afterTurnMessageIds: new Set<string>(),
-    failedSendMessageIds: new Set<string>(),
-    retrySend: vi.fn(),
     ...overrides,
   } as unknown as ChatContextValue;
 }
@@ -83,7 +89,13 @@ describe("deriveOutboxMessages", () => {
       }),
       selfMessage("c", "errored", { error: "boom" }),
       selfMessage("d", "retracted", { retracted: true }),
-      { id: "e", senderId: "agent:alice", content: "agent says hi", kind: "message", complete: true },
+      {
+        id: "e",
+        senderId: "agent:alice",
+        content: "agent says hi",
+        kind: "message",
+        complete: true,
+      },
       selfMessage("f", "received only", {
         receipts: { byParticipant: { "agent:alice": "received" }, aggregate: "pending" },
       }),
@@ -115,7 +127,9 @@ describe("deriveOutboxMessages", () => {
 describe("deriveActiveOutbox / hasOfflinePendingRecipient (presence)", () => {
   const ROSTER = { "agent:alice": {} };
   const pendingTo = (id: string, key: string) =>
-    selfMessage(id, "msg", { receipts: { byParticipant: { [key]: "pending" }, aggregate: "pending" } });
+    selfMessage(id, "msg", {
+      receipts: { byParticipant: { [key]: "pending" }, aggregate: "pending" },
+    });
 
   it("treats a pending recipient absent from the live roster as offline", () => {
     expect(hasOfflinePendingRecipient(pendingTo("a", "agent:alice"), ROSTER)).toBe(false);
@@ -168,8 +182,8 @@ describe("Outbox", () => {
     expect(within(list).getByText("hello agent")).toBeTruthy();
     expect(within(list).getByLabelText("Edit message")).toBeTruthy();
     expect(within(list).getByLabelText("Cancel message")).toBeTruthy();
-    // A working drag handle for reordering queued messages.
-    expect(within(list).getByTestId("outbox-drag-handle")).toBeTruthy();
+    // Delivery order is server-owned; the queue exposes only real edit/cancel actions.
+    expect(within(list).queryByTestId("outbox-drag-handle")).toBeNull();
   });
 
   it("renders nothing when there are no unsent messages", () => {
@@ -184,9 +198,7 @@ describe("Outbox", () => {
   });
 
   it("renders nothing until connected (no queue flash during initial replay)", () => {
-    const { container } = renderOutbox(
-      makeContext([selfMessage("a", "hi")], { connected: false })
-    );
+    const { container } = renderOutbox(makeContext([selfMessage("a", "hi")], { connected: false }));
     expect(container.querySelector('[data-testid="outbox"]')).toBeNull();
   });
 
@@ -225,17 +237,11 @@ describe("Outbox", () => {
     expect(editPendingMessage).toHaveBeenCalledWith("a", "new text");
   });
 
-  it("a failed send shows a distinct retry affordance that never disappears", () => {
-    renderOutbox(
-      makeContext([selfMessage("a", "failed one")], { failedSendMessageIds: new Set(["a"]) })
-    );
-    expect(screen.getByText(/Failed — tap to retry/i)).toBeTruthy();
-    expect(screen.getByText("Retry")).toBeTruthy();
-  });
-
   it("the foot-of-queue flush names its effect: 'Send now & interrupt' while busy", () => {
     const flushOutboxAndInterrupt = vi.fn(async () => {});
-    renderOutbox(makeContext([selfMessage("a", "x")], { agentBusy: true, flushOutboxAndInterrupt }));
+    renderOutbox(
+      makeContext([selfMessage("a", "x")], { agentBusy: true, flushOutboxAndInterrupt })
+    );
     fireEvent.click(screen.getByText("Send now & interrupt").closest("button")!);
     expect(flushOutboxAndInterrupt).toHaveBeenCalledTimes(1);
   });

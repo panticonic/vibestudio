@@ -42,13 +42,13 @@ Import from `@workspace/react`:
 
 ```tsx
 import {
-  usePanel,           // Get full runtime API
-  usePanelTheme,      // "light" | "dark", auto-updates
-  usePanelId,         // Panel's unique ID
-  usePanelPartition,  // Storage partition name (null while loading)
-  useContextId,       // Context ID for storage grouping
-  usePanelFocus,      // Whether panel is focused
-  usePanelParent,     // Parent handle (null if root)
+  usePanel, // Get full runtime API
+  usePanelTheme, // "light" | "dark", auto-updates
+  usePanelId, // Panel's unique ID
+  usePanelPartition, // Storage partition name (null while loading)
+  useContextId, // Context ID for storage grouping
+  usePanelFocus, // Whether panel is focused
+  usePanelParent, // Parent handle (null if root)
 } from "@workspace/react";
 ```
 
@@ -57,11 +57,13 @@ import {
 ```tsx
 import { Theme } from "@radix-ui/themes";
 import { usePanelTheme } from "@workspace/react";
+import { useAppTheme } from "@workspace/ui/panel";
 
 export default function App() {
   const appearance = usePanelTheme();
+  const appTheme = useAppTheme();
   return (
-    <Theme appearance={appearance}>
+    <Theme appearance={appearance} {...appTheme}>
       {/* Your UI */}
     </Theme>
   );
@@ -133,13 +135,15 @@ function SessionLauncher() {
     });
 
     // Or open an agent worker in a new tab sharing the same storage
-    window.open(buildPanelLink("workers/agent", {
-      contextId: sessionContextId,
-      stateArgs: {
-        channel: "my-channel",
+    window.open(
+      buildPanelLink("workers/agent", {
         contextId: sessionContextId,
-      },
-    }));
+        stateArgs: {
+          channel: "my-channel",
+          contextId: sessionContextId,
+        },
+      })
+    );
   };
 
   return <button onClick={launchSession}>Start Session</button>;
@@ -250,8 +254,8 @@ export const editorContract = defineContract({
   child: {
     methods: {} as EditorApi,
     emits: {
-      "saved": z.object({ path: z.string(), timestamp: z.number() }),
-      "modified": z.object({ dirty: z.boolean() }),
+      saved: z.object({ path: z.string(), timestamp: z.number() }),
+      modified: z.object({ dirty: z.boolean() }),
     },
   },
 });
@@ -283,9 +287,13 @@ export default function Editor() {
   const [content, setContent] = useState("");
 
   useEffect(() => {
-    rpc.expose({
-      async getContent() { return content; },
-      async setContent(text) { setContent(text); },
+    rpc.exposeAll({
+      async getContent() {
+        return content;
+      },
+      async setContent(text) {
+        setContent(text);
+      },
       async save() {
         // Save logic...
         await parent?.emit("saved", { path: "/file.txt", timestamp: Date.now() });
@@ -296,9 +304,9 @@ export default function Editor() {
   return (
     <textarea
       value={content}
-      onChange={e => {
+      onChange={(e) => {
         setContent(e.target.value);
-        parent.emit("modified", { dirty: true });
+        parent?.emit("modified", { dirty: true });
       }}
     />
   );
@@ -366,7 +374,7 @@ that fails **no head advances** and you get structured diagnostics back.
 
 A **brand-new** panel needs no init: create `panels/my-panel/` files (Quick
 Start above), then the first `vcs.push({ repoPaths: ["panels/my-panel"] })`
-*creates* its `main` from empty as the repo's first commit, build-gated. To
+_creates_ its `main` from empty as the repo's first commit, build-gated. To
 branch off an existing panel **keeping its history**, fork it
 (`vcs.forkRepo("panels/chat", "panels/mychat")` — preserves the log lineage and
 rewrites the `package.json` name leaf; rename the remaining component/contract
@@ -401,12 +409,12 @@ change spans repos or breaks a dependent. Content-only repos
 
 ## Environment Variables
 
-Access environment variables passed to your panel via `env` from the runtime:
+Access environment variables passed to your panel via `panel.env`:
 
 ```typescript
-import { env } from "@workspace/runtime";
+import { panel } from "@workspace/runtime";
 
-const workspace = env["VIBESTUDIO_WORKSPACE"] || "/workspace";
+const workspace = panel.env["VIBESTUDIO_WORKSPACE"] || "/workspace";
 ```
 
 ---
@@ -470,16 +478,16 @@ window.open("https://example.com");
 
 #### PanelHandle CDP methods
 
-| Method | Description |
-|--------|-------------|
+| Method                  | Description                                                   |
+| ----------------------- | ------------------------------------------------------------- |
 | `cdp.lightweightPage()` | Connect the lightweight CDP client and return the active page |
-| `cdp.getCdpEndpoint()` | Get CDP WebSocket URL and token for Playwright |
-| `cdp.navigate(url)` | Load a URL |
-| `cdp.goBack()` | Navigate back |
-| `cdp.goForward()` | Navigate forward |
-| `cdp.reload()` | Reload page |
-| `cdp.stop()` | Stop loading |
-| `close()` | Close browser panel |
+| `cdp.getCdpEndpoint()`  | Get CDP WebSocket URL and token for Playwright                |
+| `cdp.navigate(url)`     | Load a URL                                                    |
+| `cdp.goBack()`          | Navigate back                                                 |
+| `cdp.goForward()`       | Navigate forward                                              |
+| `cdp.reload()`          | Reload page                                                   |
+| `cdp.stop()`            | Stop loading                                                  |
+| `close()`               | Close browser panel                                           |
 
 Use `handle.ensureLoaded()` before RPC calls to an unloaded panel. CDP access
 loads targets automatically after approval.
@@ -566,15 +574,15 @@ REPL.
 
 ## Userland Approval Prompts
 
-Use `requestApproval()` when a panel owns a domain-specific decision and wants
+Use `approvals.request()` when a panel owns a domain-specific decision and wants
 Vibestudio's trusted shell UI to ask the user. The verified panel is shown as the
 issuer, and every non-dismiss choice is remembered for that issuer and
 `subject.id`.
 
 ```tsx
-import { requestApproval, revokeApproval, listApprovals } from "@workspace/runtime";
+import { approvals } from "@workspace/runtime";
 
-const decision = await requestApproval({
+const decision = await approvals.request({
   subject: { id: "sync:push", label: "Sync push" },
   title: "Allow sync push?",
   summary: "This panel wants to let the sync service push changes.",
@@ -588,8 +596,8 @@ if (decision.kind === "choice" && decision.choice === "allow") {
   // Continue with the panel-owned action.
 }
 
-await revokeApproval("sync:push");
-const grants = await listApprovals();
+await approvals.revoke("sync:push");
+const grants = await approvals.list();
 ```
 
 Use built-in APIs instead for built-in host capabilities: `openExternal`,
@@ -605,6 +613,7 @@ Use the workspace-local panel development docs for the current client package
 and examples.
 
 Key channel client APIs:
+
 - `publish(type, payload)` -- Send a message
 - `messages()` -- Async iterator for incoming messages
 - `onRoster(handler)` -- Track connected participants
@@ -620,6 +629,7 @@ Key channel client APIs:
 2. **Use contracts** -- Type safety across panel boundaries catches errors at compile time
 
 3. **Check optional parents** -- Panels may run standalone:
+
    ```typescript
    const parent = getParentWithContract(contract);
    await parent?.emit("event", data);

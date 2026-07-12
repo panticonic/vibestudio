@@ -20,8 +20,8 @@
   --hv-card-bg: #ffffff;
   --hv-border: #d7dbe0;
   --hv-muted: #6b7280;
-  --hv-accent: #2563eb;
-  --hv-accent-fg: #ffffff;
+  --hv-accent: var(--accent-9, #d97706);
+  --hv-accent-fg: var(--accent-contrast, #ffffff);
   --hv-code-bg: #eef1f4;
 }
 
@@ -31,8 +31,8 @@
   --hv-card-bg: #1c2024;
   --hv-border: #2b3036;
   --hv-muted: #9aa3ad;
-  --hv-accent: #3b82f6;
-  --hv-accent-fg: #ffffff;
+  --hv-accent: var(--accent-9, #f59e0b);
+  --hv-accent-fg: var(--accent-contrast, #1c1917);
   --hv-code-bg: #0f1316;
 }
 

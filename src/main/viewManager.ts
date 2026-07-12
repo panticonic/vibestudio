@@ -235,6 +235,8 @@ export class ViewManager {
   private pendingSlotRestores = new Map<string, NativePanelSlotState>();
   /** Whether a shell overlay (dialog) is active — panel views are hidden while true */
   private shellOverlayActive = false;
+  /** Synchronously maintained by the hosted shell preload for key forwarding. */
+  private shellChromeInteractiveFocus = false;
 
   // View protection state
   private protectedViewIds = new Set<string>();
@@ -347,25 +349,7 @@ export class ViewManager {
       }
     });
 
-    this.shellView.webContents.on("before-input-event", (event, input) => {
-      if (this.hidePanelViewsUntilHostedShellReady && !this.nativePanelSlots.hostedShellReady) {
-        return;
-      }
-      const panelId = this.getFocusedPanelId();
-      if (!panelId || this.nativeShellOverlay.isVisible()) return;
-      const focused = electronWebContents.getFocusedWebContents();
-      if (focused && focused.id !== this.shellView.webContents.id) return;
-      const managed = this.views.get(panelId);
-      if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
-      managed.view.webContents.focus();
-      managed.view.webContents.sendInputEvent({
-        type: input.type,
-        keyCode: input.key,
-        modifiers: input.modifiers,
-        isAutoRepeat: input.isAutoRepeat,
-      } as Electron.KeyboardInputEvent);
-      event.preventDefault();
-    });
+    this.installShellKeyForwarding(this.shellView.webContents);
 
     // Update shell and panel bounds when window resizes
     this.window.on("resize", () => {
@@ -393,6 +377,41 @@ export class ViewManager {
     this.startCompositorKeepalive();
     // Start stall detector — capturePage probe for aggressive recovery
     this.startCompositorStallDetector();
+  }
+
+  private installShellKeyForwarding(contents: WebContents): void {
+    contents.on("before-input-event", (event, input) => {
+      if (this.hidePanelViewsUntilHostedShellReady && !this.nativePanelSlots.hostedShellReady) {
+        return;
+      }
+      const panelId = this.getFocusedPanelId();
+      if (!panelId || this.nativeShellOverlay.isVisible() || this.shellChromeInteractiveFocus)
+        return;
+      // These keys operate focused shell controls and navigation widgets. Never
+      // teleport them into a panel even if focus state is momentarily racing.
+      if (
+        input.key === "Tab" ||
+        input.key === "Enter" ||
+        input.key === " " ||
+        input.key === "Space" ||
+        input.key === "Escape" ||
+        input.key.startsWith("Arrow")
+      ) {
+        return;
+      }
+      const focused = electronWebContents.getFocusedWebContents();
+      if (focused && focused.id !== contents.id) return;
+      const managed = this.views.get(panelId);
+      if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
+      managed.view.webContents.focus();
+      managed.view.webContents.sendInputEvent({
+        type: input.type,
+        keyCode: input.key,
+        modifiers: input.modifiers,
+        isAutoRepeat: input.isAutoRepeat,
+      } as Electron.KeyboardInputEvent);
+      event.preventDefault();
+    });
   }
 
   private handleWindowVisibility(visible: boolean): void {
@@ -534,6 +553,7 @@ export class ViewManager {
     };
     this.views.set(config.id, managed);
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
+    if (hostChrome) this.installShellKeyForwarding(view.webContents);
     log.verbose(
       ` Created view for ${config.id}, type: ${config.type}, url: ${config.url?.slice(0, 80)}...`
     );
@@ -566,7 +586,7 @@ export class ViewManager {
           this.showBootstrapShell();
           this.reconcileNativeLayerOrder();
         }
-        if (["crashed", "oom", "launch-failed"].includes(details.reason)) {
+        if (details.reason !== "clean-exit") {
           for (const cb of this.crashCallbacks) {
             cb(config.id, details.reason);
           }
@@ -1095,6 +1115,12 @@ export class ViewManager {
     }
     this.applyBoundsToVisiblePanel();
     this.reconcileNativeLayerOrder();
+  }
+
+  setShellChromeInteractiveFocus(senderWebContentsId: number, active: boolean): void {
+    const shellChrome = this.getShellChromeWebContents();
+    if (!shellChrome || shellChrome.id !== senderWebContentsId) return;
+    this.shellChromeInteractiveFocus = active;
   }
 
   private focusVisibleView(managed: ManagedView): void {

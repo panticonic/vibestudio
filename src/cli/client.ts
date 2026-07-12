@@ -50,11 +50,13 @@ import {
 } from "./commandTable.js";
 import {
   AuthError,
+  CliError,
   UsageError,
   jsonMode,
   printError,
   printResult,
   redactCliSecrets,
+  setPlainOutput,
 } from "./output.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -62,6 +64,9 @@ const require = createRequire(import.meta.url);
 const qrcode = require("qrcode-terminal") as {
   generate(value: string, options?: { small?: boolean }): void;
 };
+const NOT_PAIRED_GUIDANCE =
+  'not paired — run `vibestudio remote pair "vibestudio://connect?..."` ' +
+  "(get an invite from the desktop app or `vibestudio remote invite` on the host)";
 
 // ───────────────────────────────────────────────────────────────────────────
 // remote commands
@@ -77,7 +82,7 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
       (!positional.startsWith("vibestudio://") &&
         !positional.startsWith("https://vibestudio.app/pair"))
     ) {
-      throw new UsageError("pass a vibestudio://connect pairing link");
+      throw new UsageError("pass a vibestudio://connect link");
     }
     const creds = await pairRemoteServer({ link: positional, ...(label ? { label } : {}) });
     saveCliCredentials(creds);
@@ -99,7 +104,9 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const creds = loadCliCredentials();
-    if (!creds) throw new AuthError("not paired");
+    if (!creds) {
+      throw new AuthError(NOT_PAIRED_GUIDANCE);
+    }
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
       throw new AuthError(
         "no remote workspace selected - run `vibestudio remote select <workspace>`"
@@ -305,7 +312,7 @@ async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const creds = loadCliCredentials();
-    if (!creds) throw new AuthError("not paired");
+    if (!creds) throw new AuthError(NOT_PAIRED_GUIDANCE);
     const workspaces = await listRemoteWorkspaces(creds);
     printResult(
       { workspaces },
@@ -332,7 +339,7 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
       (typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"] : "");
     if (!name) throw new UsageError("workspace name is required");
     const creds = loadCliCredentials();
-    if (!creds) throw new AuthError("not paired");
+    if (!creds) throw new AuthError(NOT_PAIRED_GUIDANCE);
     const selected = await selectRemoteWorkspace(creds, name);
     saveCliCredentials(selected);
     printResult(
@@ -474,6 +481,7 @@ async function terminalStart(inv: ParsedInvocation): Promise<number> {
       target: "terminal",
       yes: inv.flags["yes"] === true,
       json,
+      timeoutMs: parseTimeout(inv.flags["timeout"]),
     });
     printResult(result, {
       json,
@@ -512,6 +520,21 @@ async function terminalStart(inv: ParsedInvocation): Promise<number> {
   } catch (error) {
     return printError(error, { json });
   }
+}
+
+function parseTimeout(value: ParsedInvocation["flags"][string] | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new UsageError("--timeout requires a duration");
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/i.exec(value.trim());
+  if (!match) throw new UsageError("--timeout must be a duration such as 30s, 10m, or 1h");
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? "s").toLowerCase();
+  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
+  const timeoutMs = amount * multiplier;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new UsageError("--timeout must be greater than zero");
+  }
+  return timeoutMs;
 }
 
 function scriptCommand(
@@ -692,7 +715,8 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "terminal",
     summary: "Review approvals and start the selected terminal app",
-    usage: "vibestudio remote terminal [--pair <link>] [--workspace <name>] [--yes]",
+    usage:
+      "vibestudio remote terminal [--pair <link>] [--workspace <name>] [--yes] [--timeout 10m]",
     flags: [
       {
         name: "pair",
@@ -705,6 +729,11 @@ const remoteCommands: CliCommand[] = [
         name: "yes",
         takesValue: false,
         description: "Approve each terminal startup approval once without prompting",
+      },
+      {
+        name: "timeout",
+        takesValue: true,
+        description: "Stop waiting after this duration (default 10m)",
       },
       JSON_FLAG,
     ],
@@ -749,6 +778,7 @@ const remoteCommands: CliCommand[] = [
         takesValue: false,
         description: "Download chrome-headless-shell instead of full Chrome",
       },
+      JSON_FLAG,
     ],
     run: remoteHost,
   },
@@ -759,7 +789,7 @@ const terminalCommands: CliCommand[] = [
     group: "terminal",
     name: "start",
     summary: "Review approvals and start the selected terminal app",
-    usage: "vibestudio terminal start [--pair <link>] [--workspace <name>] [--yes]",
+    usage: "vibestudio terminal start [--pair <link>] [--workspace <name>] [--yes] [--timeout 10m]",
     flags: [
       {
         name: "pair",
@@ -772,6 +802,11 @@ const terminalCommands: CliCommand[] = [
         name: "yes",
         takesValue: false,
         description: "Approve each terminal startup approval once without prompting",
+      },
+      {
+        name: "timeout",
+        takesValue: true,
+        description: "Stop waiting after this duration (default 10m)",
       },
       JSON_FLAG,
     ],
@@ -913,18 +948,32 @@ async function createWebRtcHeadlessHostOverrides(
 }
 
 async function remoteHost(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    return await remoteHostImpl(inv);
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+async function remoteHostImpl(inv: ParsedInvocation): Promise<number> {
   const flagStr = (name: string): string | undefined =>
     typeof inv.flags[name] === "string" ? (inv.flags[name] as string) : undefined;
-  const flagMin = (name: string): number | undefined => {
+  const flagMin = (name: string, allowZero = false): number | undefined => {
     const raw = flagStr(name);
     if (!raw) return undefined;
-    const minutes = Number.parseInt(raw, 10);
-    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : undefined;
+    const minutes = Number(raw);
+    if (!Number.isFinite(minutes) || (!allowZero && minutes <= 0) || (allowZero && minutes < 0)) {
+      throw new UsageError(
+        `--${name} must be ${allowZero ? "zero or a positive number" : "a positive number"}`
+      );
+    }
+    return minutes * 60_000;
   };
 
   const creds = loadCliCredentials();
   if (!creds) {
-    console.error("not paired — run `vibestudio remote pair` first");
+    console.error(NOT_PAIRED_GUIDANCE);
     return 3;
   }
   if (!isSelectedWorkspaceUrl(creds.url)) {
@@ -950,14 +999,17 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
     resolveConfig: (overrides: Record<string, unknown>) => unknown;
   };
 
+  const maxPanelsRaw = flagStr("max-panels");
+  const maxPanels = maxPanelsRaw === undefined ? undefined : Number(maxPanelsRaw);
+  if (maxPanels !== undefined && (!Number.isInteger(maxPanels) || maxPanels <= 0)) {
+    throw new UsageError("--max-panels must be a positive integer");
+  }
   const config = resolveConfig({
     ...configOverrides,
     label: flagStr("label"),
-    maxPanels: flagStr("max-panels")
-      ? Number.parseInt(flagStr("max-panels") as string, 10)
-      : undefined,
+    maxPanels,
     idleUnloadMs: flagMin("idle-unload-min"),
-    idleExitMs: flagMin("idle-exit-min"),
+    idleExitMs: flagMin("idle-exit-min", true),
     chromiumPath: flagStr("chromium-path"),
     leanBrowser: inv.flags["lean-browser"] === true,
   });
@@ -968,12 +1020,9 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
     await host.start();
   } catch (error) {
     await cleanup?.().catch(() => undefined);
-    console.error(
-      `headless host failed to start: ${redactCliSecrets(
-        error instanceof Error ? error.message : String(error)
-      )}`
+    throw new CliError(
+      `headless host failed to start: ${redactCliSecrets(error instanceof Error ? error.message : String(error))}`
     );
-    return 1;
   }
   await host.done;
   await cleanup?.().catch(() => undefined);
@@ -1058,8 +1107,25 @@ const GROUP_ORDER = [
 
 export async function main(argv: string[]): Promise<number> {
   const [group, ...rest] = argv;
-  if (!group || group === "--help" || group === "help") {
+  setPlainOutput(argv.includes("--plain"));
+  if (!group || group === "--help") {
     printHelp();
+    return 0;
+  }
+  if (group === "help") {
+    const topic = rest[0];
+    if (!topic) {
+      printHelp();
+      return 0;
+    }
+    if (topic === "claude") {
+      return await runClaudeGroup(["--help"]);
+    }
+    if (!GROUP_ORDER.includes(topic)) {
+      console.error(`Unknown help topic: ${topic}`);
+      return 2;
+    }
+    printGroupHelp(topic);
     return 0;
   }
   if (group === "--version" || group === "-v" || group === "version") {
@@ -1070,7 +1136,13 @@ export async function main(argv: string[]): Promise<number> {
   // `emit`/`channel-host` subcommands) and calls the configured Claude Code
   // provider over RPC — it deliberately owns no `CliCommand` entries.
   if (group === "claude") {
-    return await runClaudeGroup(rest);
+    const json = jsonMode(rest.includes("--json"));
+    const claudeArgs = rest.filter((arg) => arg !== "--json" && arg !== "--plain");
+    try {
+      return await runClaudeGroup(claudeArgs, { json });
+    } catch (error) {
+      return printError(error, { json });
+    }
   }
   if (!GROUP_ORDER.includes(group)) {
     console.error(`Unknown command: ${group}`);
@@ -1131,16 +1203,20 @@ function wantsScriptHelp(args: string[]): boolean {
 }
 
 function runScript(scriptName: string, argv: string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [path.join(repoRoot, "scripts", "cli", scriptName), ...argv],
-      {
-        cwd: repoRoot,
-        env: process.env,
-        stdio: "inherit",
-      }
+  const scriptPath = path.join(repoRoot, "scripts", "cli", scriptName);
+  if (!fs.existsSync(scriptPath)) {
+    console.error(
+      `CLI support file is missing: scripts/cli/${scriptName}. ` +
+        "Reinstall or update Vibestudio; if this persists, the package was published incomplete."
     );
+    return Promise.resolve(1);
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath, ...normalizePassthroughArgs(argv)], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    });
     child.on("error", reject);
     child.on("exit", (code, signal) => {
       if (signal) {
@@ -1154,8 +1230,29 @@ function runScript(scriptName: string, argv: string[]): Promise<number> {
   });
 }
 
+function normalizePassthroughArgs(argv: string[]): string[] {
+  const normalized: string[] = [];
+  let passthrough = false;
+  for (const arg of argv) {
+    if (passthrough || arg === "--") {
+      normalized.push(arg);
+      passthrough = true;
+      continue;
+    }
+    const inline = /^(--[^=]+)=(.*)$/.exec(arg);
+    const flag = inline?.[1];
+    const value = inline?.[2];
+    if (flag !== undefined && value !== undefined) normalized.push(flag, value);
+    else normalized.push(arg);
+  }
+  return normalized;
+}
+
 function printHelp(): void {
-  const sections = GROUP_ORDER.map((group) => renderGroupHelp(commandRegistry, group)).join("\n");
+  const sections = GROUP_ORDER.map(
+    (group) =>
+      `\n${group} — ${GROUP_DESCRIPTIONS[group] ?? "Commands"}\n${renderGroupHelp(commandRegistry, group)}`
+  ).join("\n");
   const claudeSection =
     "  vibestudio claude [--channel <id>]                   Launch Claude Code as a linked channel agent";
   console.log(`vibestudio
@@ -1164,9 +1261,30 @@ Usage:
 ${sections}
 ${claudeSection}
 
+Getting started:
+  1. Get a pairing invite from the desktop app or the server host.
+  2. vibestudio remote pair "vibestudio://connect?..."
+  3. vibestudio remote status
+
+Run \`vibestudio <group> --help\` for a group's commands and
+\`vibestudio <group> <command> --help\` for flags and full usage.
+Piped output is JSON by default; pass --plain to keep readable output.
 Credentials are stored as a 0600 JSON file at ${credentialPath()}.
 `);
 }
+
+const GROUP_DESCRIPTIONS: Record<string, string> = {
+  remote: "pairing, servers, workspaces, and remote hosts",
+  terminal: "launch the terminal workspace app",
+  mobile: "develop, install, inspect, and pair mobile clients",
+  agent: "sessions, diagnostics, services, and workspace skills",
+  fs: "read and edit files in the active agent context",
+  vcs: "inspect, commit, merge, and push workspace repositories",
+  eval: "run sandboxed code in the active agent context",
+  channel: "list, read, send, and follow conversation channels",
+  context: "materialize and watch remote context folders",
+  panel: "inspect and capture workspace panels",
+};
 
 function printGroupHelp(group: string): void {
   console.log(`vibestudio ${group}
@@ -1190,10 +1308,14 @@ function packageVersion(): string {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main(process.argv.slice(2))
-    .then((code) => process.exit(code))
+    .then((code) => {
+      // Let stdout/stderr drain before Node exits. Calling process.exit here
+      // truncates large piped JSON and binary `fs read` output at the pipe buffer.
+      process.exitCode = code;
+    })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      process.exitCode = 1;
     });
 }
 

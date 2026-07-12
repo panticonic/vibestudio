@@ -83,4 +83,14 @@ describe("sessionStore", () => {
     expect(() => sessionPath("../evil")).toThrow(/Invalid session name/);
     expect(() => sessionPath("a/b")).toThrow(/Invalid session name/);
   });
+
+  it("honors XDG_CONFIG_HOME just like the credential store", () => {
+    const xdg = path.join(tmpDir, "xdg");
+    vi.stubEnv("XDG_CONFIG_HOME", xdg);
+    saveAgentSession(makeSession("xdg-session"));
+    expect(sessionPath("xdg-session")).toBe(
+      path.join(xdg, "vibestudio", "agent-sessions", "xdg-session.json")
+    );
+    expect(loadAgentSession("xdg-session")?.name).toBe("xdg-session");
+  });
 });

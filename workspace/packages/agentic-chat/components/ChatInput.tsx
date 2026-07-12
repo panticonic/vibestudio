@@ -675,6 +675,9 @@ export function ChatInput() {
               {undoableAction.messageIds.length > 1
                 ? `${undoableAction.messageIds.length} messages canceled`
                 : "Message canceled"}
+              {undoableAction.textOnlyRestore
+                ? " — Undo restores text only, without attachments or delivery options."
+                : ""}
             </Text>
             <Button size="1" variant="soft" onClick={() => undoLastAction?.()}>
               Undo

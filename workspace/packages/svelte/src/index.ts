@@ -11,6 +11,8 @@
 export { autoMountSveltePanel, shouldAutoMount } from "./autoMount.js";
 export {
   theme,
+  themeConfig,
+  themeStyle,
   panelId,
   contextId,
   connectionError,

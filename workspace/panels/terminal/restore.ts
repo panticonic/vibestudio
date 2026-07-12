@@ -40,7 +40,22 @@ async function restoreTree(
     const saved = perSession[node.sessionId];
     let openedSessionId: string | undefined;
     try {
-      const { sessionId } = await shell.open({ cwd: saved?.cwd, label: saved?.label });
+      try {
+        const existing = await shell.get(node.sessionId);
+        sessions[node.sessionId] = existing;
+        nextPerSession[node.sessionId] = {
+          cwd: existing.command.cwd,
+          originalArgv: saved?.originalArgv ?? existing.command.argv,
+          readCursor: saved?.readCursor ?? 0,
+          lastSeenAt: Date.now(),
+          label: existing.label,
+        };
+        if (opts.scrollbackBytes) await shell.setScrollbackLimit?.(node.sessionId, opts.scrollbackBytes);
+        return { node, sessionMap: { [node.sessionId]: node.sessionId } };
+      } catch {
+        // The host no longer has it; recreate a clearly identified fresh shell.
+      }
+      const { sessionId } = await shell.open({ cwd: saved?.cwd, label: "Restored shell (restarted)" });
       openedSessionId = sessionId;
       const info = await shell.get(sessionId);
       if (opts.scrollbackBytes) await shell.setScrollbackLimit?.(sessionId, opts.scrollbackBytes);
@@ -50,7 +65,7 @@ async function restoreTree(
         originalArgv: saved?.originalArgv ?? info.command.argv,
         readCursor: saved?.readCursor ?? 0,
         lastSeenAt: Date.now(),
-        label: saved?.label,
+        label: info.label,
       };
       if (opts.disposeOriginalLeaves) void shell.dispose?.(node.sessionId).catch(() => {});
       return { node: { kind: "leaf", sessionId }, sessionMap: { [node.sessionId]: sessionId } };

@@ -16,7 +16,7 @@ export function PairedDevicesSection({
   workspaceName,
 }: {
   currentDeviceId?: string;
-  workspaceName: string;
+  workspaceName?: string;
 }) {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [owners, setOwners] = useState<Record<string, ShellAccountProfile>>({});
@@ -101,7 +101,9 @@ export function PairedDevicesSection({
     try {
       setError(null);
       setKnownDeviceIds(new Set(devices.map((device) => device.deviceId)));
-      setInvite(await remoteCred.pairDevice({ workspace: workspaceName }));
+      setInvite(
+        await remoteCred.pairDevice(workspaceName ? { workspace: workspaceName } : undefined)
+      );
       setNow(Date.now());
       setConnectOpen(true);
     } catch (err) {
@@ -112,23 +114,20 @@ export function PairedDevicesSection({
   };
 
   const copyInvite = async () => {
-    if (!invite || Date.now() >= invite.expiresAt) return;
-    try {
-      await navigator.clipboard.writeText(invite.pairUrl);
-      setCopyLabel("Copied");
-    } catch (err) {
-      setCopyLabel("Copy failed");
-      setError(`Could not copy the pairing link: ${(err as Error).message}`);
-    }
+    if (!invite || expired) return;
+    await navigator.clipboard.writeText(invite.pairUrl);
+    setCopyLabel("Copied");
   };
 
   const remainingMs = invite ? Math.max(0, invite.expiresAt - now) : 0;
   const remainingSeconds = Math.ceil(remainingMs / 1000);
-  const expired = !!invite && remainingMs === 0;
   const remaining = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(
     2,
     "0"
   )}`;
+  // Expired = the countdown reached 0 with nobody paired yet. The QR is stale, so
+  // present a clear "Expired — regenerate" instead of a dead-but-scannable code.
+  const expired = !!invite && remainingMs <= 0 && !pairedDevice;
 
   return (
     <Flex direction="column" gap="2" mt="4">
@@ -165,48 +164,58 @@ export function PairedDevicesSection({
                 )}
                 <Flex direction="column" gap="3" style={{ minWidth: 0, flex: "1 1 220px" }}>
                   <Text size="2">
-                    Scan this QR with the new device. The link opens Vibestudio and securely pairs
-                    it with your account.
+                    Scan this QR with a phone camera, or open the link on another desktop. No app
+                    yet? Install Vibestudio first, then open the link again.
                   </Text>
                   <Text size="2">
                     Server <Code>{invite.srv ?? invite.serverId}</Code>
                   </Text>
-                  <Text size="2">
-                    Expires in <Code>{remaining}</Code>
-                  </Text>
-                  <Badge color={pairedDevice ? "green" : "gray"} style={{ width: "fit-content" }}>
-                    {pairedDevice
-                      ? `Paired ${pairedDevice.label || pairedDevice.platform || "device"}`
-                      : expired
-                        ? "Invite expired"
-                        : "Waiting for device..."}
-                  </Badge>
+                  {expired ? (
+                    <Flex direction="column" gap="2" style={{ width: "fit-content" }}>
+                      <Badge color="amber">Expired</Badge>
+                      <Button size="1" disabled={inviteBusy} onClick={() => void createInvite()}>
+                        {inviteBusy ? "Regenerating..." : "Regenerate"}
+                      </Button>
+                    </Flex>
+                  ) : (
+                    <>
+                      <Text size="2">
+                        Expires in <Code>{remaining}</Code>
+                      </Text>
+                      <Badge
+                        color={pairedDevice ? "green" : "gray"}
+                        style={{ width: "fit-content" }}
+                      >
+                        {pairedDevice
+                          ? `Paired ${pairedDevice.label || pairedDevice.platform || "device"}`
+                          : "Waiting for device..."}
+                      </Badge>
+                    </>
+                  )}
                 </Flex>
               </Flex>
-              {!expired ? (
-                <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
-                  <Code>{invite.pairUrl}</Code>
-                </Box>
-              ) : null}
+              <Box
+                style={{
+                  maxWidth: "100%",
+                  overflowWrap: "anywhere",
+                  opacity: expired ? 0.45 : 1,
+                }}
+              >
+                <Code>{invite.pairUrl}</Code>
+              </Box>
               <Flex justify="between" align="center">
                 <Text size="1" color="gray">
                   Pairing code {invite.code}
                 </Text>
                 <Flex gap="2">
-                  {expired ? (
-                    <Button
-                      size="2"
-                      variant="soft"
-                      disabled={inviteBusy}
-                      onClick={() => void createInvite()}
-                    >
-                      {inviteBusy ? "Generating…" : "Generate new link"}
-                    </Button>
-                  ) : (
-                    <Button size="2" variant="soft" onClick={() => void copyInvite()}>
-                      {copyLabel}
-                    </Button>
-                  )}
+                  <Button
+                    size="2"
+                    variant="soft"
+                    disabled={expired}
+                    onClick={() => void copyInvite()}
+                  >
+                    {expired ? "Link expired" : copyLabel}
+                  </Button>
                   <Dialog.Close>
                     <Button size="2">Done</Button>
                   </Dialog.Close>

@@ -6,6 +6,7 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 import { HubDeviceSchema, HubPairingInviteSchema } from "./hubControl.js";
 
 const readAccess: MethodAccessDescriptor = { sensitivity: "read" };
+const writeAccess: MethodAccessDescriptor = { sensitivity: "write" };
 const adminAccess: MethodAccessDescriptor = { sensitivity: "admin" };
 const destructiveAccess: MethodAccessDescriptor = { sensitivity: "destructive" };
 
@@ -91,6 +92,12 @@ export const remoteCredMethods = defineServiceMethods({
       currentDevice: z.boolean(),
     }),
     access: destructiveAccess,
+  },
+  reconnectNow: {
+    description: "Probe the current remote pipe immediately so a dead connection reconnects now.",
+    args: z.tuple([]),
+    returns: z.void(),
+    access: writeAccess,
   },
   clear: {
     description: "Delete this desktop's stored WebRTC device pairing.",

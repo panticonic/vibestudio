@@ -26,7 +26,7 @@ export function headerBackground(focused: boolean): string {
 }
 
 export function severityDotColor(severity: NotificationSeverity, alive: boolean): string {
-  if (!alive) return "var(--red-9)";
+  if (!alive) return severity === "failure" ? "var(--red-9)" : "var(--gray-9)";
   if (severity === "failure") return "var(--red-9)";
   if (severity === "approval") return "var(--amber-9)";
   if (severity === "waiting") return "var(--blue-9)";

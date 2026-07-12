@@ -55,12 +55,12 @@ export function MigrateTab(props: { selection: ProfileSelection; now: number }) 
 
   const runState = useAsync(
     () => browserData.getProfileImportState({ browser: browserName, profilePath }),
-    [sel, importResult],
+    [sel, importResult]
   );
 
   const request = useCallback(
     () => ({ browser: browserName, profile: profilePath, dataTypes: [...types] as never }),
-    [browserName, profilePath, types],
+    [browserName, profilePath, types]
   );
 
   const doPreview = useCallback(async () => {
@@ -98,7 +98,11 @@ export function MigrateTab(props: { selection: ProfileSelection; now: number }) 
 
   return (
     <Flex direction="column" gap="4" p="4" style={{ overflowY: "auto", height: "100%" }}>
-      <MigrationScorecard preview={preview} lastImport={runState.state.data?.lastRun} now={props.now} />
+      <MigrationScorecard
+        preview={preview}
+        lastImport={runState.state.data?.lastRun}
+        now={props.now}
+      />
 
       {selection.browser.tccBlocked && (
         <Callout.Root color="amber">
@@ -167,7 +171,7 @@ function MigrationScorecard(props: {
       acc.skipped += p.skipped;
       return acc;
     },
-    { added: 0, changed: 0, unchanged: 0, skipped: 0 },
+    { added: 0, changed: 0, unchanged: 0, skipped: 0 }
   );
   const lastFinished = props.lastImport ? props.lastImport.finished_at : null;
 
@@ -230,18 +234,14 @@ function ImportDiffTable(props: { preview: PreviewTypeResult[] }) {
             <Table.Row key={p.dataType}>
               <Table.RowHeaderCell>{p.dataType}</Table.RowHeaderCell>
               <Table.Cell>{p.scanned}</Table.Cell>
-              <Table.Cell>
-                {p.added > 0 ? <Badge color="green">{p.added}</Badge> : 0}
-              </Table.Cell>
+              <Table.Cell>{p.added > 0 ? <Badge color="green">{p.added}</Badge> : 0}</Table.Cell>
               <Table.Cell>
                 {p.changed > 0 ? <Badge color="amber">{p.changed}</Badge> : 0}
               </Table.Cell>
               <Table.Cell>
                 <Text color="gray">{p.unchanged}</Text>
               </Table.Cell>
-              <Table.Cell>
-                {p.skipped > 0 ? <Badge color="red">{p.skipped}</Badge> : 0}
-              </Table.Cell>
+              <Table.Cell>{p.skipped > 0 ? <Badge color="red">{p.skipped}</Badge> : 0}</Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
@@ -255,7 +255,12 @@ function ImportDiffTable(props: { preview: PreviewTypeResult[] }) {
             {props.preview.flatMap((p) =>
               p.samples.slice(0, 4).map((s, i) => (
                 <Flex key={`${p.dataType}-${i}`} gap="2" align="center">
-                  <Badge size="1" color={s.status === "added" ? "green" : s.status === "changed" ? "amber" : "red"}>
+                  <Badge
+                    size="1"
+                    color={
+                      s.status === "added" ? "green" : s.status === "changed" ? "amber" : "red"
+                    }
+                  >
                     {s.status}
                   </Badge>
                   <Text size="1">{s.label}</Text>
@@ -265,7 +270,7 @@ function ImportDiffTable(props: { preview: PreviewTypeResult[] }) {
                     </Text>
                   )}
                 </Flex>
-              )),
+              ))
             )}
           </Flex>
         </Box>
@@ -321,7 +326,9 @@ function ImportRunTimeline(props: { runs: ImportRun[]; now: number }) {
             <Flex gap="2" align="center">
               <Badge
                 size="1"
-                color={run.status === "success" ? "green" : run.status === "partial" ? "amber" : "red"}
+                color={
+                  run.status === "success" ? "green" : run.status === "partial" ? "amber" : "red"
+                }
               >
                 {run.status}
               </Badge>
@@ -340,12 +347,14 @@ function ImportRunTimeline(props: { runs: ImportRun[]; now: number }) {
 function OpenTabsPreview(props: { selection: ProfileSelection }) {
   const { selection } = props;
   const { state } = useAsync<ImportedOpenTab[]>(
-    () => browserData.getOpenTabs({ browser: selection.browser.name, profile: selection.profile.path }),
-    [selection.browser.name, selection.profile.path],
+    () =>
+      browserData.getOpenTabs({ browser: selection.browser.name, profile: selection.profile.path }),
+    [selection.browser.name, selection.profile.path]
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState<number | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   const tabKey = (t: ImportedOpenTab) => `${t.windowIndex}.${t.tabIndex}`;
   const tabs = state.data ?? [];
@@ -359,6 +368,7 @@ function OpenTabsPreview(props: { selection: ProfileSelection }) {
   const openSelected = async () => {
     setOpening(true);
     setOpened(null);
+    setOpenError(null);
     try {
       const selection2 = tabs
         .filter((t) => selected.has(tabKey(t)))
@@ -369,6 +379,10 @@ function OpenTabsPreview(props: { selection: ProfileSelection }) {
         ...(selection2.length > 0 ? { selection: selection2 } : {}),
       });
       setOpened(result.panelsOpened);
+    } catch (err) {
+      setOpenError(
+        `Couldn't open the selected tabs: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setOpening(false);
     }
@@ -394,6 +408,23 @@ function OpenTabsPreview(props: { selection: ProfileSelection }) {
         </Callout.Text>
       </Callout.Root>
       {state.status === "loading" && <Spinner size="1" />}
+      {state.status === "denied" && (
+        <Callout.Root size="1" color="amber">
+          <Callout.Text>
+            Access to browser session data was denied. Approve the request and try again.
+          </Callout.Text>
+        </Callout.Root>
+      )}
+      {state.status === "error" && (
+        <Callout.Root size="1" color="red">
+          <Callout.Text>Couldn't read open tabs: {state.error}</Callout.Text>
+        </Callout.Root>
+      )}
+      {openError && (
+        <Callout.Root size="1" color="red">
+          <Callout.Text>{openError}</Callout.Text>
+        </Callout.Root>
+      )}
       {selection.browser.family === "safari" && (
         <Text size="1" color="gray">
           Safari does not expose open tabs.

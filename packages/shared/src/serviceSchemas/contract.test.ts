@@ -30,6 +30,7 @@ import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
 import { panelTreeMethods } from "./panelTree.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
+import { permissionsMethods } from "./permissions.js";
 import { refsMethods } from "./refs.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
@@ -77,6 +78,7 @@ const serviceTables: ServiceTable[] = [
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
   { service: "panelTree", file: "panelTree.ts", methods: panelTreeMethods },
+  { service: "permissions", file: "permissions.ts", methods: permissionsMethods },
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "refs", file: "refs.ts", methods: refsMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },

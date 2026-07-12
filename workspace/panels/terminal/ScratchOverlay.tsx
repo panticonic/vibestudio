@@ -376,6 +376,7 @@ function BufferChip(props: {
         aria-label="Remove buffer"
         onClick={(event) => {
           event.stopPropagation();
+          if (props.buffer.text.trim() && !window.confirm("Delete this scratch buffer? This cannot be undone.")) return;
           props.onEject();
         }}
         style={{ flexShrink: 0 }}

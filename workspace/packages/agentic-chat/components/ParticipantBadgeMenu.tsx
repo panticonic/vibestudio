@@ -363,7 +363,13 @@ export function ParticipantBadgeMenu({
                   <DropdownMenu.Separator />
                   <DropdownMenu.Item
                     color="red"
-                    onSelect={() => onRemoveAgent(participant.metadata.handle!)}
+                    onSelect={() => {
+                      const handle = participant.metadata.handle;
+                      if (!handle) return;
+                      if (window.confirm(`Remove @${handle} and its saved agent settings?`)) {
+                        onRemoveAgent(handle);
+                      }
+                    }}
                   >
                     Remove Agent
                   </DropdownMenu.Item>

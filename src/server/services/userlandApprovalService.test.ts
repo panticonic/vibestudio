@@ -7,7 +7,10 @@ import {
   ServiceError,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { createUserlandApprovalService } from "./userlandApprovalService.js";
+import {
+  createUserlandApprovalService,
+  EXTERNAL_APPROVAL_TIMEOUT_MS,
+} from "./userlandApprovalService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrant } from "@vibestudio/shared/approvals";
 
@@ -302,6 +305,23 @@ describe("userlandApprovalService", () => {
     warn.mockRestore();
   });
 
+  it("supports a one-time envelope only when it names a declared custom choice", async () => {
+    const { service, queued, record } = createDeps();
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "once:allow" });
+
+    await expect(service.handler(workerCtx, "request", [validRequest])).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+    });
+    expect(record).not.toHaveBeenCalled();
+
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "once:not-declared" });
+    await expect(service.handler(workerCtx, "request", [validRequest])).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it("defaults to scoped allow options and records trust-version choices as allow", async () => {
     const { service, queued, record } = createDeps();
     queued.mockResolvedValueOnce({ kind: "choice", choice: "version" });
@@ -565,7 +585,7 @@ describe("userlandApprovalService", () => {
       });
       const promise = service.handler(doCtx, "requestExternal", [externalRequest]);
       // Flush the async principal resolution so the timeout is armed, then fire it.
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(EXTERNAL_APPROVAL_TIMEOUT_MS);
       await expect(promise).resolves.toEqual({ behavior: "deny" });
       expect(capturedSignal?.aborted).toBe(true);
     } finally {

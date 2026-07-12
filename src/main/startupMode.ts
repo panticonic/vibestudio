@@ -11,7 +11,10 @@ import * as fs from "fs";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
-import { resolveWorkspaceName } from "@vibestudio/shared/workspace/loader";
+import {
+  consumeDesktopAutoApproveOnce,
+  resolveWorkspaceName,
+} from "@vibestudio/shared/workspace/loader";
 import { resolveLocalWorkspaceStartup } from "@vibestudio/shared/workspace/startup";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 
@@ -19,6 +22,7 @@ const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
 export const WORKSPACE_CREATE_IF_MISSING_ARG = "--workspace-create-if-missing";
 export const DEV_WEBRTC_REMOTE_ARG = "--dev-webrtc-remote";
+export const PAIR_CONFIRMED_ARG = "--pair-confirmed";
 /**
  * Marks a local launch as a disposable dev workspace: the workspace dir is deleted on exit
  * (see the will-quit cleanup). Paired with `--workspace <name>` so the same workspace is kept
@@ -138,12 +142,9 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
 }
 
 export function workspaceRelaunchArgs(name: string, rawArgs = process.argv.slice(1)): string[] {
-  return [
-    ...stripStartupSelectionArgs(rawArgs),
-    "--workspace",
-    name,
-    WORKSPACE_CREATE_IF_MISSING_ARG,
-  ];
+  // Workspace switching only selects an existing workspace. Creation is an
+  // explicit workflow and must never be triggered by a typo in a select call.
+  return [...stripStartupSelectionArgs(rawArgs), "--workspace", name];
 }
 
 export function chooseConnectionRelaunchArgs(rawArgs = process.argv.slice(1)): string[] {
@@ -186,9 +187,10 @@ export function resolveLocalStartupMode(
     `[Workspace] Loaded: ${startup.resolved.wsDir} (id: ${startup.resolved.workspace.config.id})`
   );
   const isEphemeral = startup.isEphemeral || process.argv.includes(EPHEMERAL_WORKSPACE_ARG);
+  const createdInApp = consumeDesktopAutoApproveOnce(startup.resolved.wsDir);
   const autoApproveStartupUnits =
     process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
-    (startup.resolved.name === "default" && startup.resolved.created && !isEphemeral);
+    ((startup.resolved.created || createdInApp) && !isEphemeral);
   return {
     kind: "local",
     wsDir: startup.resolved.wsDir,

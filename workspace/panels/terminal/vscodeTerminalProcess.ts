@@ -48,6 +48,7 @@ export type VscodeTerminalProcessBridgeOptions = {
   shell: ShellApi;
   onData(event: VscodeProcessDataEvent): void;
   onError(error: string): void;
+  onRecovered?(): void;
 };
 
 /**
@@ -65,6 +66,7 @@ export class VscodeTerminalProcessBridge {
   private generation = 0;
   private lastCursor = 0;
   private cursorWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private streamFailed = false;
   private readonly ackBufferer = new VscodeAckDataBufferer(() => {
     void this.options.shell
       .acknowledgeDataEvent?.(
@@ -114,6 +116,10 @@ export class VscodeTerminalProcessBridge {
           after: String(this.lastCursor),
         });
         if (this.disposed || generation !== this.generation) return;
+        if (this.streamFailed) {
+          this.streamFailed = false;
+          this.options.onRecovered?.();
+        }
         const reader = response.body?.getReader() ?? null;
         this.reader = reader;
         if (!reader) {
@@ -143,6 +149,7 @@ export class VscodeTerminalProcessBridge {
         }
       } catch (err) {
         if (!this.disposed && generation === this.generation) {
+          this.streamFailed = true;
           this.options.onError(err instanceof Error ? err.message : "Terminal output failed");
         }
       } finally {

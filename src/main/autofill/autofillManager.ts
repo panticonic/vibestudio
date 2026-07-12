@@ -31,6 +31,7 @@ const log = createDevLogger("Autofill");
 
 /** Narrow interface for the password store — avoids deep import */
 interface PasswordStoreLike {
+  getAll(): Promise<StoredPassword[]> | StoredPassword[];
   getForOrigin(origin: string): Promise<StoredPassword[]> | StoredPassword[];
   updateLastUsed(id: number): Promise<void> | void;
   update(
@@ -46,6 +47,9 @@ interface PasswordStoreLike {
   }): Promise<number> | number;
   addNeverSave(origin: string): Promise<void> | void;
   isNeverSave(origin: string): Promise<boolean> | boolean;
+  delete(id: number): Promise<void> | void;
+  listNeverSaveOrigins(): Promise<string[]> | string[];
+  removeNeverSave(origin: string): Promise<void> | void;
 }
 
 interface FieldInfo {
@@ -98,6 +102,8 @@ interface PulledState {
   pending: PendingSnapshot | null;
   fieldsRemoved: boolean;
   usernameSnapshot: string | null;
+  overlayKey: "ArrowDown" | "ArrowUp" | "Enter" | "Escape" | null;
+  forceRefill: boolean;
 }
 
 interface AutofillPanelState {
@@ -355,6 +361,24 @@ export class AutofillManager {
             await this.handleConfirmSave(panelId, action);
             return;
           }
+          case "listSavedPasswords": {
+            const rows = await this.passwordStore.getAll();
+            return rows.map((row) => ({
+              id: row.id,
+              origin: row.origin_url,
+              username: row.username,
+            }));
+          }
+          case "deleteSavedPassword": {
+            await this.passwordStore.delete(args[0] as number);
+            return;
+          }
+          case "listNeverSaveOrigins":
+            return await this.passwordStore.listNeverSaveOrigins();
+          case "removeNeverSaveOrigin": {
+            await this.passwordStore.removeNeverSave(args[0] as string);
+            return;
+          }
           default:
             throw new Error(`Unknown autofill method: ${method}`);
         }
@@ -434,6 +458,10 @@ export class AutofillManager {
 
     if (!pulled) return;
 
+    if (pulled.overlayKey && this.activeOverlayWcId === wcId) {
+      this.overlay.handleKey(pulled.overlayKey);
+    }
+
     await this.processPulledState(wcId, wc, state, pulled);
   }
 
@@ -503,7 +531,7 @@ export class AutofillManager {
       pulled.focus &&
       state.credentials.length === 1 &&
       state.fields &&
-      !state.hasAutoFilled
+      (!state.hasAutoFilled || pulled.forceRefill)
     ) {
       // Single credential + first focus (before auto-fill) -> fill now
       await this.fillCredential(wcId, wc, assertPresent(state.credentials[0]), state.fields);
@@ -653,9 +681,19 @@ export class AutofillManager {
 
     this.activeOverlayWcId = wcId;
     this.overlay.show(credentialItems, bounds);
+    void this.executeInActiveFrame(wc, state, "window.__vibestudio_af_overlay_visible = true");
   }
 
   private hideOverlay(): void {
+    const wcId = this.activeOverlayWcId;
+    if (wcId !== null) {
+      const state = this.panelState.get(wcId);
+      const viewId = this.getViewManager().findViewIdByWebContentsId(wcId);
+      const wc = viewId ? this.getViewManager().getWebContents(viewId) : null;
+      if (state && wc && !wc.isDestroyed()) {
+        void this.executeInActiveFrame(wc, state, "window.__vibestudio_af_overlay_visible = false");
+      }
+    }
     this.overlay.hide();
     this.activeOverlayWcId = null;
   }

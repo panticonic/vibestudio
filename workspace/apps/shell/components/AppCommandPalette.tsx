@@ -6,6 +6,7 @@ import { setThemeModeAtom, setThemeConfigAtom } from "../state/themeAtoms";
 import { workspaceChooserDialogOpenAtom } from "../state/appModeAtoms";
 import { panel, palette } from "../shell/client";
 import { useShellEvent } from "../shell/useShellEvent";
+import { useShellOverlay } from "../shell/useShellOverlay";
 
 /** Accent swatches offered as quick theme commands (mirrors ThemeSettings). */
 const ACCENTS = ["amber", "gray", "iris", "blue", "cyan", "grass", "tomato", "violet"] as const;
@@ -35,6 +36,7 @@ export function AppCommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [contributions, setContributions] = useState<PanelContribution[]>([]);
+  useShellOverlay(open);
 
   const setThemeMode = useSetAtom(setThemeModeAtom);
   // The persisting action atom — writes localStorage so accent survives reload
@@ -52,7 +54,7 @@ export function AppCommandPalette() {
   useShellEvent("open-command-palette", openPalette);
 
   useEffect(() => {
-    const electron = (globalThis as { __vibestudioShell?: unknown }).__vibestudioShell;
+    const electron = (globalThis as { __vibestudioApp?: unknown }).__vibestudioApp;
     if (electron) return; // menu accelerator handles it
     const onKey = (e: KeyboardEvent) => {
       if (

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { Box } from "@radix-ui/themes";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Box, Button, Flex, Text } from "@radix-ui/themes";
 
 import { view, type NativePanelSlotBounds, type NativePanelSlotSyncResult } from "../shell/client";
 
@@ -43,6 +43,7 @@ export function PanelSurface({
   const retryTimerRef = useRef<number | null>(null);
   const retryAttemptRef = useRef(0);
   const syncSlotRef = useRef<(() => void) | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const clearRetry = useCallback(() => {
     if (retryTimerRef.current !== null) {
@@ -59,6 +60,7 @@ export function PanelSurface({
       retryAttemptRef.current = attempt;
       if (attempt > 100) {
         console.warn(`[PanelSurface] bind retry exhausted for ${panelId}: ${reason}`);
+        setAttachError(`Panel display did not attach: ${reason}`);
         return;
       }
       const delayMs = Math.min(500, 50 * attempt);
@@ -100,6 +102,7 @@ export function PanelSurface({
         .bindNativePanelSlot({ nativeSlotId, panelId, bounds, focused })
         .then(() => {
           retryAttemptRef.current = 0;
+          setAttachError(null);
         })
         .catch((err: unknown) => {
           boundRef.current = false;
@@ -109,6 +112,7 @@ export function PanelSurface({
             return;
           }
           console.warn("[PanelSurface] bind failed:", err);
+          setAttachError(`Panel display failed to attach: ${message}`);
         });
       return;
     }
@@ -178,6 +182,31 @@ export function PanelSurface({
       }
     };
   }, [clearRetry]);
+
+  if (attachError) {
+    return (
+      <Flex direction="column" align="center" justify="center" gap="2" p="4" style={{ flex: 1 }}>
+        <Text color="red" weight="medium">
+          Panel display unavailable
+        </Text>
+        <Text size="2" color="gray" align="center">
+          {attachError}
+        </Text>
+        <Button
+          size="2"
+          onClick={() => {
+            setAttachError(null);
+            boundRef.current = false;
+            lastBoundsRef.current = null;
+            retryAttemptRef.current = 0;
+            scheduleSync();
+          }}
+        >
+          Retry display
+        </Button>
+      </Flex>
+    );
+  }
 
   return (
     <Box

@@ -12,7 +12,7 @@ import {
 } from "../state/themeAtoms";
 import { useAtomValue } from "jotai";
 import { useShellEvent } from "../shell/useShellEvent";
-import { panel, workspace, shellNetwork } from "../shell/client";
+import { notification, panel, workspace, shellNetwork } from "../shell/client";
 import { ChunkErrorBoundary } from "./ChunkErrorBoundary";
 import { AppCommandPalette } from "./AppCommandPalette";
 
@@ -100,6 +100,11 @@ export function App() {
       );
     } catch (error) {
       console.error(`[App] Failed to create shell panel for ${payload.page}:`, error);
+      void notification.show({
+        type: "error",
+        title: "Couldn't open page",
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }, []);
   useShellEvent("navigate-about", handleNavigateAbout);

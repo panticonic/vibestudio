@@ -1,4 +1,13 @@
-import { Box, Button, ContextMenu, Flex, IconButton, Text } from "@radix-ui/themes";
+import {
+  Box,
+  Button,
+  ContextMenu,
+  Dialog,
+  Flex,
+  IconButton,
+  Text,
+  TextField,
+} from "@radix-ui/themes";
 import { ArrowDownIcon } from "@radix-ui/react-icons";
 import { extensions, notifications, openExternal, openPanel, panel } from "@workspace/runtime";
 import type { ReactNode } from "react";
@@ -72,6 +81,10 @@ export function PaneView(props: {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const terminalRef = useRef<VscodeTerminalInstance | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState(props.session.label);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [dragDepth, setDragDepth] = useState(0);
   const sessionShellRef = useRef(props.shell);
@@ -122,6 +135,7 @@ export function PaneView(props: {
       theme: resolveTerminalTheme(props.appearance, host),
       focused: props.focused,
       onError: setError,
+      onRecovered: () => setError(null),
       onNotification: (notification) => notificationRef.current(notification),
       onFindResult: (result) => setFindResult(result),
       onScrollStateChange: (scrolledUp) => {
@@ -305,9 +319,22 @@ export function PaneView(props: {
   }
 
   async function renameSession() {
-    const label = window.prompt("Session name", props.session.label);
-    if (!label?.trim()) return;
-    await sessionShellRef.current.setLabel?.(props.session.sessionId, label.trim());
+    const label = renameValue.trim();
+    if (!label) {
+      setRenameError("Enter a session name.");
+      return;
+    }
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      await sessionShellRef.current.setLabel?.(props.session.sessionId, label);
+      labelRef.current = label;
+      setRenameOpen(false);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRenaming(false);
+    }
   }
 
   // Jump from a context-scoped Claude Code session to its linked conversation
@@ -554,7 +581,11 @@ export function PaneView(props: {
           if (target?.kind === "url") props.onOpenUrl(target.url);
           else if (target?.kind === "port") props.onOpenPort(target.port);
         }}
-        onRename={() => void renameSession()}
+        onRename={() => {
+          setRenameValue(props.session.label);
+          setRenameError(null);
+          setRenameOpen(true);
+        }}
         onRestart={props.onRestart}
         onRestartCommand={props.onRestartCommand}
         onFind={() => setFindOpen(true)}
@@ -562,6 +593,43 @@ export function PaneView(props: {
         onOpenScratch={props.onOpenScratch}
         onOpenChat={canOpenLinkedChat ? () => void openLinkedConversation() : undefined}
       />
+      <Dialog.Root open={renameOpen} onOpenChange={setRenameOpen}>
+        <Dialog.Content maxWidth="420px">
+          <Dialog.Title>Rename terminal session</Dialog.Title>
+          <Dialog.Description size="2" color="gray" mb="3">
+            Choose the label shown in the pane header and restored session list.
+          </Dialog.Description>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void renameSession();
+            }}
+          >
+            <TextField.Root
+              autoFocus
+              value={renameValue}
+              disabled={renaming}
+              onChange={(event) => setRenameValue(event.currentTarget.value)}
+              aria-label="Session name"
+            />
+            {renameError ? (
+              <Text as="p" size="2" color="red" mt="2" role="alert">
+                {renameError}
+              </Text>
+            ) : null}
+            <Flex justify="end" gap="2" mt="4">
+              <Dialog.Close>
+                <Button type="button" variant="soft" color="gray" disabled={renaming}>
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button type="submit" disabled={renaming || !renameValue.trim()}>
+                {renaming ? "Saving…" : "Save name"}
+              </Button>
+            </Flex>
+          </form>
+        </Dialog.Content>
+      </Dialog.Root>
       <div
         ref={hostRef}
         className="vibestudio-terminal-host"
@@ -599,7 +667,24 @@ export function PaneView(props: {
           </IconButton>
         ) : null}
         {error ? (
-          <Flex height="100%" align="center" justify="center" direction="column" gap="2">
+          <Flex
+            align="center"
+            justify="between"
+            gap="2"
+            role="alert"
+            style={{
+              position: "absolute",
+              zIndex: 4,
+              top: "0.5rem",
+              left: "0.5rem",
+              right: "0.5rem",
+              padding: "0.5rem 0.75rem",
+              border: "1px solid var(--red-7)",
+              borderRadius: "var(--radius-2)",
+              background: "var(--red-2)",
+              boxShadow: "var(--shadow-3)",
+            }}
+          >
             <Text size="2" color="red">
               {error}
             </Text>
@@ -608,9 +693,35 @@ export function PaneView(props: {
             </Button>
           </Flex>
         ) : null}
+        {!props.session.alive ? (
+          <Flex
+            align="center"
+            justify="center"
+            gap="2"
+            role="status"
+            style={{ position: "absolute", zIndex: 3, left: 0, right: 0, bottom: "0.75rem" }}
+          >
+            <Text size="2" color="gray">
+              Session ended
+            </Text>
+            <Button size="1" variant="soft" onClick={props.onRestart}>
+              Restart
+            </Button>
+            <Button size="1" variant="ghost" color="gray" onClick={props.onClose}>
+              Close
+            </Button>
+          </Flex>
+        ) : null}
       </div>
       <Box px="2" py="1">
-        <Text size="1" color={props.session.alive ? "gray" : "red"}>
+        <Text
+          size="1"
+          color={
+            !props.session.alive && (props.session.exit?.code !== 0 || props.session.exit?.signal)
+              ? "red"
+              : "gray"
+          }
+        >
           {sessionFooterText(props.session)}
         </Text>
       </Box>

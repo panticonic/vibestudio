@@ -17,7 +17,7 @@ import type {
   RpcStreamOptions,
 } from "@vibestudio/rpc";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
-import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
+import type { ReconnectProgress, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
 import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
@@ -46,9 +46,10 @@ export function createMobileRpcClient(config: MobileRpcClientConfig = {}): Mobil
   return new MobileRpcClient(config);
 }
 
-export class MobileRpcClient
-  implements Pick<RpcClient, "selfId" | "call" | "emit" | "on" | "stream" | "streamReadable">
-{
+export class MobileRpcClient implements Pick<
+  RpcClient,
+  "selfId" | "call" | "emit" | "on" | "stream" | "streamReadable"
+> {
   private config: MobileRpcClientConfig;
   private connection: WebRtcConnection | null = null;
   private rpc: RpcClient | null = null;
@@ -66,6 +67,7 @@ export class MobileRpcClient
   private currentCallerId: string | null = null;
   private statusState: ConnectionStatus = "disconnected";
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
+  private readonly reconnectProgressListeners = new Set<(progress: ReconnectProgress) => void>();
   private readonly recoveryListeners = new Map<RecoveryKind, Set<() => void | Promise<void>>>();
   private readonly eventSubscriptions = new Map<string, Set<(event: RpcEventContext) => void>>();
   private readonly activeEventUnsubs = new Map<string, () => void>();
@@ -111,6 +113,15 @@ export class MobileRpcClient
 
   reconnect(): void {
     void this.teardown().finally(() => this.connect());
+  }
+
+  onReconnectProgress(listener: (progress: ReconnectProgress) => void): () => void {
+    this.reconnectProgressListeners.add(listener);
+    return () => this.reconnectProgressListeners.delete(listener);
+  }
+
+  private emitReconnectProgress(progress: ReconnectProgress): void {
+    for (const listener of this.reconnectProgressListeners) listener(progress);
   }
 
   disconnect(): void {
@@ -177,7 +188,10 @@ export class MobileRpcClient
    * lease gate (that gates panel HOSTING, not sessions). The grant is one-shot,
    * so `getToken` refetches a fresh one on every (re)open.
    */
-  async openPanelSession(runtimeEntityId: PanelEntityId, connectionId: string): Promise<WebRtcSession> {
+  async openPanelSession(
+    runtimeEntityId: PanelEntityId,
+    connectionId: string
+  ): Promise<WebRtcSession> {
     const rpc = await this.ensureRpc();
     const connection = this.connection;
     if (!connection) throw new Error("WebRTC connection not established");
@@ -277,6 +291,12 @@ export class MobileRpcClient
     // The session reports keepalive/ICE state (hardened in Part A); surface it as
     // the client's connection status so the UI + the recovery hook react to drops.
     connection.session.onStatusChange?.((status) => this.setStatus(status));
+    // Reconnect progress is an additive transport capability. Production
+    // WebRTC transports expose it; older injected/test transports can omit it
+    // without turning a successful connection into a retry loop.
+    if (typeof connection.transport.onReconnectProgress === "function") {
+      connection.transport.onReconnectProgress((progress) => this.emitReconnectProgress(progress));
+    }
     for (const event of this.eventSubscriptions.keys()) this.attachEventSubscription(event);
     this.setStatus(connection.session.status?.() ?? "connected");
     smokePhase("workspace-webrtc-connected", { callerId: connection.callerId });
@@ -303,6 +323,12 @@ export class MobileRpcClient
     while (Date.now() < deadline) {
       attempt += 1;
       this.setStatus("connecting");
+      this.emitReconnectProgress({
+        attempt,
+        phase: "connecting",
+        reason: attempt === 1 ? "initial connection" : "retry",
+        layer: null,
+      });
       try {
         await this.ensureRpc();
         if (attempt > 1) {
@@ -315,6 +341,12 @@ export class MobileRpcClient
         // just asked to drop. Propagate so the awaiting init() unwinds.
         if (error instanceof ConnectSupersededError) throw error;
         lastError = error;
+        this.emitReconnectProgress({
+          attempt,
+          phase: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+          layer: null,
+        });
         await this.teardown();
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) break;
@@ -332,13 +364,21 @@ export class MobileRpcClient
           `[MobileRpcClient] Initial WebRTC connection failed; retrying in ${delayMs}ms`,
           error
         );
+        this.emitReconnectProgress({
+          attempt,
+          phase: "scheduled",
+          reason: errorMessage(error),
+          layer: null,
+        });
         await sleep(delayMs);
       }
     }
 
     throw lastError instanceof Error
       ? lastError
-      : new Error(`WebRTC connection timeout (${maxMs}ms) — re-pair this device`);
+      : new Error(
+          `Could not reach your workspace server after ${Math.round(maxMs / 1000)} seconds. It may be asleep or offline — retry, or re-pair only if the server was replaced.`
+        );
   }
 
   private async teardown(): Promise<void> {

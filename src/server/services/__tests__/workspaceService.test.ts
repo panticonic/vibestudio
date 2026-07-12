@@ -605,7 +605,7 @@ describe("workspace.select", () => {
     });
   });
 
-  it("is a no-op (no error) when eventService is undefined", async () => {
+  it("fails clearly when no desktop shell is attached", async () => {
     const central = makeCentralData();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),

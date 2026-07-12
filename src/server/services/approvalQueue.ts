@@ -1418,7 +1418,7 @@ export function createApprovalQueue(deps: {
         const waiter: ExternalAgentQueueWaiter = { resolve, signal: req.signal };
 
         if (req.signal) {
-          // Auto-deny on expiry (the service arms a ~120s timeout) or caller
+          // Auto-deny on expiry (the service currently arms a ten-minute timeout) or caller
           // cancellation: the card disappears and the relay is denied.
           const onAbort = () => {
             const e = entriesById.get(entry.approval.approvalId);

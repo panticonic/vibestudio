@@ -41,6 +41,17 @@ export function parsePairArgs(argv, config) {
       throw new Error("Raw server flag forwarding is unsupported");
     } else if (arg === "--port") {
       options.port = parsePort(argv[++i], arg);
+    } else if (
+      arg === "--host" ||
+      arg === "--protocol" ||
+      arg === "--public-url" ||
+      arg === "--require-public-url"
+    ) {
+      throw new Error(
+        `${arg} is no longer supported; remote reach is WebRTC and the server binds loopback only`
+      );
+    } else if (arg === "--workspace" || arg === "--workspace-dir") {
+      throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
       options.appRoot = argv[++i] ?? "";
     } else if (arg === "--signal-url") {
@@ -48,6 +59,10 @@ export function parsePairArgs(argv, config) {
       options.signalSource = "flag";
     } else if (arg === "--dev") {
       options.dev = true;
+    } else if (arg === "--no-init") {
+      throw new Error(
+        "--no-init is no longer supported; choose or create a workspace after pairing"
+      );
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -145,6 +160,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   let bannerPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
+  let readinessWarningPrinted = false;
   // Our own SIGINT/SIGTERM forwarders, tracked so we can DEINSTALL them before
   // re-raising a child's fatal signal (otherwise the forwarder catches the
   // re-raised signal and the parent lingers / exits 0 instead of dying by signal).
@@ -171,6 +187,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       desktopInvite = null;
       mobileInvite = null;
       bannerPrinted = false;
+      readinessWarningPrinted = false;
       if (ownedReadyDir) {
         try {
           fs.unlinkSync(readyFile);
@@ -213,6 +230,18 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     if (readyPoll !== null) clearInterval(readyPoll);
     readyPollStartedAt = Date.now();
     readyPoll = setInterval(() => {
+      if (!readinessWarningPrinted && Date.now() - readyPollStartedAt >= 60_000) {
+        readinessWarningPrinted = true;
+        const missing = [
+          !pairing.room && "room",
+          !pairing.fp && "fingerprint",
+          !pairing.sig && "signaling URL",
+          !pairingCode && "pairing code",
+        ].filter(Boolean);
+        console.warn(
+          `[${config.logPrefix}] Still waiting for pairing material (${missing.join(", ")}). Run \`vibestudio remote doctor\` to check signaling and native WebRTC support.`
+        );
+      }
       try {
         const stat = fs.statSync(readyFile);
         if (stat.mtimeMs < readyPollStartedAt - 1) return;
@@ -300,7 +329,25 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
   const handleLine = (line) => {
     const handled = hooks.onServerLine?.(line, control);
-    if (!handled && hooks.onServerLine) process.stdout.write(`${line}\n`);
+    if (handled) return;
+    if (hooks.onServerLine) process.stdout.write(`${line}\n`);
+
+    const roomMatch = line.match(/VIBESTUDIO_PAIRING_ROOM=(\S+)/);
+    if (roomMatch) pairing.room = roomMatch[1];
+    const fpMatch = line.match(/VIBESTUDIO_PAIRING_FP=(\S+)/);
+    if (fpMatch) pairing.fp = fpMatch[1];
+    const sigMatch = line.match(/VIBESTUDIO_PAIRING_SIG=(\S+)/);
+    if (sigMatch) pairing.sig = sigMatch[1];
+    const pairingMatch = line.match(
+      /(?:VIBESTUDIO_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/
+    );
+    if (pairingMatch) pairingCode = pairingMatch[1];
+    const qrPairingMatch = line.match(
+      /(?:VIBESTUDIO_QR_PAIRING_CODE=|QR pairing code:\s+)([A-Za-z0-9_-]+)/
+    );
+    if (qrPairingMatch) qrPairingCode = qrPairingMatch[1];
+
+    tryPrintBanner();
   };
 
   const wireChild = (childProcess) => {

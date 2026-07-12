@@ -142,10 +142,21 @@ export function NotificationBar() {
   );
 
   const handleAction = useCallback(
-    (notificationId: string, action: NonNullable<NotificationPayload["actions"]>[number]) => {
+    async (notificationId: string, action: NonNullable<NotificationPayload["actions"]>[number]) => {
       const actionId = action.id;
-      // Report action to main process via RPC service
-      void notification.reportAction(notificationId, actionId);
+      // Main-side actions can fail (updater unavailable, OAuth cancel while
+      // disconnected). Keep the original notification visible in that case.
+      try {
+        await notification.reportAction(notificationId, actionId);
+      } catch (err) {
+        void notification.show({
+          type: "error",
+          title: "Action failed",
+          message: err instanceof Error ? err.message : String(err),
+          ttl: 0,
+        });
+        return;
+      }
       if (action.command?.type === "app.applyUpdate") {
         const appId = action.command.appId;
         void app
@@ -252,10 +263,19 @@ export function NotificationBar() {
   const isVisible = notifications.size > 0;
   if (!isVisible) return null;
 
-  // Show the most recent notification (last added)
+  // Keep persistent failures visible ahead of routine transient confirmations.
   const entries = Array.from(notifications.values());
-  const current = assertPresent(entries[entries.length - 1]);
-  const queuedNotifications = entries.slice(0, -1).reverse();
+  const priority: Record<NotificationPayload["type"], number> = {
+    error: 5,
+    warning: 4,
+    consent: 3,
+    info: 2,
+    success: 1,
+  };
+  const current = assertPresent(
+    entries.reduce((best, entry) => (priority[entry.type] >= priority[best.type] ? entry : best))
+  );
+  const queuedNotifications = entries.filter((entry) => entry.id !== current.id).reverse();
   const expanded = expandedIds.has(current.id);
   const toggleExpanded = (id: string) => {
     setExpandedIds((prev) => {

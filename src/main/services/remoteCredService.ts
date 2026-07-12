@@ -10,6 +10,7 @@ import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
 import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred";
 import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
+import { PAIR_CONFIRMED_ARG } from "../startupMode.js";
 import {
   createConnectDeepLink,
   normalizeFingerprint,
@@ -180,6 +181,9 @@ export function createRemoteCredService(deps: {
                 !arg.startsWith(PAIR_LABEL_ARG_PREFIX)
             );
           relaunchArgs.push(deepLink);
+          // This link came from an explicit in-app Save/Switch action, so the
+          // trust confirmation already happened. External deep links omit it.
+          relaunchArgs.push(PAIR_CONFIRMED_ARG);
           if (typeof label === "string" && label.trim()) {
             relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
           }
@@ -203,6 +207,16 @@ export function createRemoteCredService(deps: {
           const currentDevice = result.revoked && stored?.deviceId === deviceId;
           if (currentDevice) clearStoredRemotePairingInStore();
           return { ...result, currentDevice };
+        }
+        case "reconnectNow": {
+          const client = deps.getServerClient?.() ?? null;
+          if (!client?.nudge) {
+            throw new Error(
+              "Reconnect isn't available for this connection — try relaunching Vibestudio."
+            );
+          }
+          client.nudge();
+          return;
         }
         case "clear":
           clearStoredRemotePairingInStore();

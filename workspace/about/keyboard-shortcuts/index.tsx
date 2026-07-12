@@ -9,8 +9,7 @@ import { Fragment } from "react";
 import { KeyboardIcon } from "@radix-ui/react-icons";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 
-const IS_MAC =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "");
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "");
 
 interface Shortcut {
   description: string;
@@ -27,7 +26,12 @@ interface ShortcutGroup {
   shortcuts: Shortcut[];
 }
 
-const SYMBOL_TO_TEXT: Record<string, string> = { "⌘": "Ctrl", "⇧": "Shift", "⌥": "Alt", "⌃": "Ctrl" };
+const SYMBOL_TO_TEXT: Record<string, string> = {
+  "⌘": "Ctrl",
+  "⇧": "Shift",
+  "⌥": "Alt",
+  "⌃": "Ctrl",
+};
 
 function keysFor(shortcut: Shortcut): string[] {
   if (IS_MAC) return shortcut.mac;
@@ -38,9 +42,11 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: "General",
     shortcuts: [
-      { description: "New panel / launcher", mac: ["⌘", "T"] },
+      { description: "New panel / launcher", mac: ["⌘", "T"], other: ["Ctrl", "Shift", "T"] },
+      { description: "Command palette", mac: ["⌘", "K"] },
+      { description: "Focus pending approval", mac: ["⌘", "⇧", "A"] },
       { description: "Switch workspace", mac: ["⌘", "⇧", "O"] },
-      { description: "Archive current panel", mac: ["⌘", "W"] },
+      { description: "Close current panel", mac: ["⌘", "W"], other: ["Ctrl", "Shift", "W"] },
       { description: "Keyboard shortcuts", mac: ["⌘", "/"] },
       { description: "Quit application", mac: ["⌘", "Q"] },
     ],
@@ -50,10 +56,9 @@ const shortcutGroups: ShortcutGroup[] = [
     shortcuts: [
       { description: "Back", mac: ["⌘", "["], other: ["Alt", "←"] },
       { description: "Forward", mac: ["⌘", "]"], other: ["Alt", "→"] },
-      { description: "Reload panel", mac: ["⌘", "R"] },
-      { description: "Force reload view", mac: ["⌘", "⇧", "R"] },
-      { description: "Stop loading", mac: ["Esc"] },
-      { description: "Toggle address bar", mac: ["⌘", "L"] },
+      { description: "Reload panel", mac: ["⌘", "R"], other: ["Ctrl", "Shift", "R"] },
+      { description: "Force reload view", mac: ["⌘", "⇧", "R"], other: ["Ctrl", "Alt", "R"] },
+      { description: "Toggle address bar", mac: ["⌘", "L"], other: ["Ctrl", "Shift", "L"] },
     ],
   },
   {

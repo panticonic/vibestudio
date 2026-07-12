@@ -285,6 +285,12 @@ export function useAgenticChat({
     initialPrompt: actions?.onAddAgent ? undefined : initialPrompt,
     forceInitialPrompt: actions?.onAddAgent ? undefined : forceInitialPrompt,
   });
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const retryConnection = useCallback(() => {
+    core.dismissConnectionError();
+    core.hasConnectedRef.current = false;
+    setConnectionAttempt((attempt) => attempt + 1);
+  }, [core.dismissConnectionError, core.hasConnectedRef]);
   // Fork lineage state + actions (switcher, tree, inline rows, subagent review).
   // Only enabled when the panel supplies navigation handlers.
   const forkState = useForkLineage({
@@ -827,6 +833,9 @@ export function useAgenticChat({
                 typeof input.question === "string" && input.question.trim()
                   ? input.question
                   : "Allow this action?";
+              if (typeof document === "undefined" || !document.hasFocus()) {
+                actionsRef.current?.onAttentionRequired?.("Chat needs your approval", question);
+              }
               const fb = feedbackRef.current;
               return new Promise<{ granted: boolean; details?: unknown }>((resolve) => {
                 let settled = false;
@@ -866,6 +875,7 @@ export function useAgenticChat({
                   ],
                   values: {},
                   hideSubmit: true,
+                  dismissible: false,
                   createdAt: Date.now(),
                   complete: (result: FeedbackResult) => {
                     if (result.type === "submit") {
@@ -1187,6 +1197,9 @@ Use package imports available to inline_ui plus relative imports for local helpe
                 placeholder?: string;
                 prefill?: string;
               };
+              if (typeof document === "undefined" || !document.hasFocus()) {
+                actionsRef.current?.onAttentionRequired?.("Chat is waiting for you", title);
+              }
               // Build FieldDefinition[] and an initial values map based on kind.
               let fields: ActiveFeedbackSchema["fields"];
               let initialValues: ActiveFeedbackSchema["values"] = {};
@@ -1236,15 +1249,14 @@ Use package imports available to inline_ui plus relative imports for local helpe
                   },
                 ];
               } else {
-                // editor — no textarea field type exists in FormRenderer; fall
-                // back to a single-line string field. Prefill via default value.
                 resolveKey = "value";
                 fields = [
                   {
                     key: "value",
-                    type: "string",
+                    type: "textarea",
                     label: title,
                     default: prefill ?? "",
+                    maxHeight: 320,
                   },
                 ];
               }
@@ -1311,6 +1323,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     loadActionBarFromFile,
     metadata,
     publishTypedAgenticEvent,
+    connectionAttempt,
   ]);
   // --- Wrap platform actions ---
   const handleAddAgent = useCallback(
@@ -1400,6 +1413,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       replaySettled: core.replaySettled,
       status: core.status,
       channelId: channelName,
+      channelTitle: core.channelTitle,
       browserHandoffCaller: {
         id: runtimeCallerId(config.rpc.selfId),
         kind: browserHandoffCallerKindFromMetadata(metadata.type),
@@ -1407,6 +1421,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       sessionEnabled,
       connectionError: core.connectionError,
       dismissConnectionError: core.dismissConnectionError,
+      retryConnection,
       chat,
       clientRef: core.clientRef,
       panelScopeId: config.clientId,
@@ -1442,8 +1457,6 @@ Use package imports available to inline_ui plus relative imports for local helpe
       undoLastAction: core.undoLastAction,
       pendingSendCount: core.pendingSendCount,
       afterTurnMessageIds: core.afterTurnMessageIds,
-      failedSendMessageIds: core.failedSendMessageIds,
-      retrySend: core.retrySend,
       onLoadEarlierMessages: core.loadEarlierMessages,
       onInterrupt: core.handleInterruptAgent,
       onCancelInvocation: core.handleCancelInvocation,
@@ -1475,11 +1488,13 @@ Use package imports available to inline_ui plus relative imports for local helpe
       core.connected,
       core.replaySettled,
       core.status,
+      core.channelTitle,
       core.selfId,
       config.rpc.selfId,
       metadata.type,
       core.connectionError,
       core.dismissConnectionError,
+      retryConnection,
       config.clientId,
       channelName,
       sessionEnabled,
@@ -1516,8 +1531,6 @@ Use package imports available to inline_ui plus relative imports for local helpe
       core.undoLastAction,
       core.pendingSendCount,
       core.afterTurnMessageIds,
-      core.failedSendMessageIds,
-      core.retrySend,
       core.loadEarlierMessages,
       core.handleInterruptAgent,
       core.handleCallMethod,

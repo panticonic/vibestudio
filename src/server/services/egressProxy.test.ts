@@ -61,6 +61,14 @@ class MemoryCredentialUseGrantStore {
       .map(({ credentialId: _credentialId, ...grant }) => ({ ...grant }));
   }
 
+  listAll(): Array<CredentialUseGrant & { credentialId: string }> {
+    return this.grants.map((grant) => ({ ...grant }));
+  }
+
+  revoke(): boolean {
+    return false;
+  }
+
   upsert(credentialId: string, grant: CredentialUseGrant): void {
     const key = [
       credentialId,

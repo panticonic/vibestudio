@@ -64,7 +64,7 @@ interface PanelTreeItemProps {
   onPress: (panelId: string) => void;
   onLongPress?: (panelId: string) => void;
   onToggleCollapse: (panelId: string, collapsed: boolean) => void;
-  onArchive: (panelId: string) => void;
+  onArchive: (panelId: string) => void | Promise<void>;
 }
 
 export function PanelTreeItem({
@@ -83,12 +83,17 @@ export function PanelTreeItem({
   const hasPassedThreshold = useSharedValue(false);
 
   const handleArchive = useCallback(() => {
-    // Animate removal then call archive
-    itemHeight.value = withTiming(0, { duration: 250 });
-    itemOpacity.value = withTiming(0, { duration: 200 }, () => {
-      runOnJS(onArchive)(item.id);
-    });
-  }, [item.id, onArchive, itemHeight, itemOpacity]);
+    void Promise.resolve(onArchive(item.id))
+      .then(() => {
+        itemHeight.value = withTiming(0, { duration: 250 });
+        itemOpacity.value = withTiming(0, { duration: 200 });
+      })
+      .catch(() => {
+        translateX.value = withTiming(0, { duration: 200 });
+        itemHeight.value = withTiming(ITEM_HEIGHT, { duration: 200 });
+        itemOpacity.value = withTiming(1, { duration: 200 });
+      });
+  }, [item.id, onArchive, itemHeight, itemOpacity, translateX]);
 
   const panGesture = Gesture.Pan()
     .activeOffsetX([-10, 10])
@@ -123,12 +128,7 @@ export function PanelTreeItem({
   }));
 
   const archiveBackgroundStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      translateX.value,
-      [-ARCHIVE_THRESHOLD, 0],
-      [1, 0],
-      Extrapolation.CLAMP,
-    ),
+    opacity: interpolate(translateX.value, [-ARCHIVE_THRESHOLD, 0], [1, 0], Extrapolation.CLAMP),
   }));
 
   const containerAnimatedStyle = useAnimatedStyle(() => ({
@@ -170,16 +170,9 @@ export function PanelTreeItem({
         >
           {/* Expand/collapse chevron */}
           {item.childCount > 0 ? (
-            <Pressable
-              onPress={handleChevronPress}
-              style={styles.chevronButton}
-              hitSlop={8}
-            >
+            <Pressable onPress={handleChevronPress} style={styles.chevronButton} hitSlop={8}>
               <Text
-                style={[
-                  styles.chevron,
-                  { color: isActive ? "#ffffff" : colors.textSecondary },
-                ]}
+                style={[styles.chevron, { color: isActive ? "#ffffff" : colors.textSecondary }]}
               >
                 {item.isCollapsed ? "\u25B6" : "\u25BC"}
               </Text>
@@ -195,10 +188,7 @@ export function PanelTreeItem({
             style={styles.titlePressable}
           >
             <Text
-              style={[
-                styles.title,
-                { color: isActive ? "#ffffff" : colors.text },
-              ]}
+              style={[styles.title, { color: isActive ? "#ffffff" : colors.text }]}
               numberOfLines={1}
               ellipsizeMode="tail"
             >

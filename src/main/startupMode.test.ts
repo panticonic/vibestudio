@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // resetModules + re-import in each test.
 
 const mockResolveWorkspaceName = vi.fn(() => null as string | null);
+const mockConsumeDesktopAutoApproveOnce = vi.fn(() => false);
 const mockIsDev = vi.fn(() => false);
 const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
   resolved: {
@@ -25,6 +26,7 @@ const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
 
 vi.mock("@vibestudio/shared/workspace/loader", () => ({
   resolveWorkspaceName: () => mockResolveWorkspaceName(),
+  consumeDesktopAutoApproveOnce: () => mockConsumeDesktopAutoApproveOnce(),
   resolveOrCreateWorkspace: () => {
     throw new Error("not used in these tests");
   },
@@ -60,6 +62,8 @@ describe("resolveStartupMode interactive desktop policy", () => {
     delete process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
     mockResolveWorkspaceName.mockReset();
     mockResolveWorkspaceName.mockReturnValue(null);
+    mockConsumeDesktopAutoApproveOnce.mockReset();
+    mockConsumeDesktopAutoApproveOnce.mockReturnValue(false);
     mockResolveLocalWorkspaceStartup.mockClear();
     mockIsDev.mockReset();
     mockIsDev.mockReturnValue(false);
@@ -125,12 +129,11 @@ describe("resolveStartupMode interactive desktop policy", () => {
     });
   });
 
-  it("marks chooser-launched local workspaces as create-if-missing", () => {
+  it("builds workspace switches without implicitly creating a missing workspace", () => {
     expect(mod.workspaceRelaunchArgs("default", ["--foo", "--workspace", "old"])).toEqual([
       "--foo",
       "--workspace",
       "default",
-      mod.WORKSPACE_CREATE_IF_MISSING_ARG,
     ]);
   });
 
@@ -155,7 +158,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
         "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
         "vibestudio://panel?v=1&source=about%2Fserver-logs",
       ])
-    ).toEqual(["--foo", "--workspace", "default", mod.WORKSPACE_CREATE_IF_MISSING_ARG]);
+    ).toEqual(["--foo", "--workspace", "default"]);
   });
 
   it("builds ephemeral-workspace relaunch args that pin the name and tag it disposable", () => {
@@ -230,6 +233,25 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
       workspaceName: "default",
+      autoApproveStartupUnits: true,
+    });
+  });
+
+  it("auto-approves shipped startup units for every newly created named workspace", () => {
+    setArgv(["--workspace", "my-first-workspace", "--workspace-create-if-missing"]);
+    mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
+      resolved: {
+        wsDir: "/tmp/vibestudio-my-first-workspace",
+        workspace: { config: { id: "my-first-workspace-id" } },
+        name: "my-first-workspace",
+        created: true,
+      },
+      isEphemeral: false,
+    });
+
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
+      kind: "local",
+      workspaceName: "my-first-workspace",
       autoApproveStartupUnits: true,
     });
   });
