@@ -10,12 +10,28 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DeviceAuthStore } from "./services/deviceAuthStore.js";
 import {
+  buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
   handleRpc,
   mintChildPairingInvite,
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
+
+describe("buildWorkspaceChildArgs", () => {
+  it("uses only current server flags and binds the child gateway to loopback", () => {
+    const args = buildWorkspaceChildArgs({
+      entry: "/app/dist/server.mjs",
+      workspaceName: "default",
+      appRoot: "/app",
+      readyFile: "/tmp/ready.json",
+    });
+
+    expect(args).not.toContain("--protocol");
+    expect(args[args.indexOf("--host") + 1]).toBe("127.0.0.1");
+    expect(args[args.indexOf("--bind-host") + 1]).toBe("127.0.0.1");
+  });
+});
 
 const servers: http.Server[] = [];
 afterEach(async () => {

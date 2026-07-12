@@ -24,6 +24,9 @@ function parseArgs(argv) {
     androidAvd: null,
     androidNoBuild: false,
     androidNoInstall: false,
+    localSignaling: false,
+    requireTurn: false,
+    signalUrl: null,
     timeoutMs: 420_000,
     resultsDir: null,
     help: false,
@@ -31,7 +34,8 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--skip-build") options.skipBuild = true;
+    if (arg === "--") continue;
+    else if (arg === "--skip-build") options.skipBuild = true;
     else if (arg === "--skip-desktop-pairing") options.skipDesktopPairing = true;
     else if (arg === "--skip-desktop-e2e") options.skipDesktopE2e = true;
     else if (arg === "--skip-android") options.skipAndroid = true;
@@ -39,12 +43,18 @@ function parseArgs(argv) {
     else if (arg === "--android-avd") options.androidAvd = argv[++i] ?? null;
     else if (arg === "--android-no-build") options.androidNoBuild = true;
     else if (arg === "--android-no-install") options.androidNoInstall = true;
+    else if (arg === "--local-signaling") options.localSignaling = true;
+    else if (arg === "--require-turn") options.requireTurn = true;
+    else if (arg === "--signal-url") options.signalUrl = argv[++i] ?? "";
     else if (arg === "--timeout-ms") options.timeoutMs = positiveInt(argv[++i], "--timeout-ms");
     else if (arg === "--results-dir") options.resultsDir = path.resolve(argv[++i] ?? "");
     else if (arg === "--help") options.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
 
+  if (options.localSignaling && options.signalUrl) {
+    throw new Error("--local-signaling cannot be combined with --signal-url");
+  }
   return options;
 }
 
@@ -77,14 +87,19 @@ Options:
   --android-avd <name>      Boot/use this AVD when no adb device is connected.
   --android-no-build        Reuse an existing internal APK.
   --android-no-install      Do not reinstall the APK before pairing.
+  --signal-url <url>        Use a specific existing signaling service.
+  --local-signaling         Use local Wrangler signaling for desktop and Android
+                            instead of the hosted production service.
+  --require-turn            Require TURN for the Android pairing phase. By
+                            default it attempts normal host/STUN/TURN ICE.
   --timeout-ms <ms>         Phase timeout passed through to smoke scripts.
   --results-dir <path>      Forensics output directory.
   --help                    Show this message.
 
 The command writes per-phase logs under test-results/full-system-smoke/ and
-fails on the first broken phase. The mobile phase uses the real Android app,
-adb/uiautomator/logcat, local signaling, and a WebRTC answerer. Desktop phases
-use the branded Electron binary through Playwright.
+fails on the first broken phase. Desktop and Android pairing use the deployed
+signaling service and the real remote-serve launcher by default. Pass
+--local-signaling for an offline Miniflare/coturn run.
 `);
 }
 
@@ -181,12 +196,14 @@ async function main() {
     await runPhase("build", "pnpm", ["build"], { resultsDir });
   }
   if (!options.skipDesktopPairing) {
-    await runPhase(
-      "desktop-pairing",
-      process.execPath,
-      [path.join(repoRoot, "scripts", "desktop-pairing-smoke.mjs"), "--timeout-ms", String(options.timeoutMs)],
-      { resultsDir }
-    );
+    const args = [
+      path.join(repoRoot, "scripts", "desktop-pairing-smoke.mjs"),
+      "--timeout-ms",
+      String(options.timeoutMs),
+    ];
+    if (options.localSignaling) args.push("--local-signaling");
+    if (options.signalUrl) args.push("--signal-url", options.signalUrl);
+    await runPhase("desktop-pairing", process.execPath, args, { resultsDir });
   }
   if (!options.skipDesktopE2e) {
     await runPhase("desktop-e2e", "pnpm", ["test:e2e"], { resultsDir });
@@ -205,6 +222,9 @@ async function main() {
     if (options.androidAvd) args.push("--avd", options.androidAvd);
     if (options.androidNoBuild) args.push("--no-build");
     if (options.androidNoInstall) args.push("--no-install");
+    if (options.localSignaling) args.push("--local-signaling");
+    if (options.requireTurn) args.push("--require-turn");
+    if (options.signalUrl) args.push("--signal-url", options.signalUrl);
     await runPhase("android-mobile", process.execPath, args, { resultsDir });
   }
 

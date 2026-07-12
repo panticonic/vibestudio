@@ -142,6 +142,10 @@ function stageServer() {
     "scripts/vibestudio-server-shim.mjs",
     path.join(root, "scripts/vibestudio-server-shim.mjs")
   );
+  // Passthrough CLI commands resolve these scripts relative to the installed
+  // package root, including their shared helpers under scripts/cli/lib.
+  copyTree(path.join(repoRoot, "scripts/cli"), path.join(root, "scripts/cli"), defaultSkip);
+  assertPassthroughScriptsStaged(root);
 
   // Vendor the host's @vibestudio/* packages under vendor/ (NOT node_modules). A
   // partial node_modules shipped in the tarball perturbs npm's reify ordering —
@@ -195,6 +199,8 @@ function stageApp() {
     path.join(root, "scripts/vibestudio-server-shim.mjs")
   );
   copyFile("scripts/branded-electron.mjs", path.join(root, "scripts/branded-electron.mjs"));
+  copyTree(path.join(repoRoot, "scripts/cli"), path.join(root, "scripts/cli"), defaultSkip);
+  assertPassthroughScriptsStaged(root);
   if (fs.existsSync(path.join(repoRoot, "build-resources"))) {
     copyTree(
       path.join(repoRoot, "build-resources"),
@@ -229,6 +235,20 @@ function stageApp() {
     dependencies: computeHostDependencies({ electron: true }),
     publishConfig: { access: "public" },
   });
+}
+
+export function assertPassthroughScriptsStaged(root) {
+  const required = [
+    "scripts/cli/remote-serve.mjs",
+    "scripts/cli/remote-doctor.mjs",
+    "scripts/cli/lib/server-entry.mjs",
+    "scripts/cli/lib/pair-server.mjs",
+    "scripts/cli/lib/smoke-remote-server.mjs",
+  ];
+  const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
+  if (missing.length > 0) {
+    throw new Error(`Staged package is missing CLI support files: ${missing.join(", ")}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

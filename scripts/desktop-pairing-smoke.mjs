@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// End-to-end desktop pairing smoke over WebRTC. Spawns the signaling worker
-// (`wrangler dev apps/signaling`), starts a disposable server as a WebRTC
-// answerer, parses the `vibestudio://connect` pairing link it logs, then launches
+// End-to-end desktop pairing smoke over WebRTC. Uses the deployed hosted
+// signaling service by default, starts the normal `vibestudio remote serve` hub,
+// mints a workspace invite through `remote invite`, then launches
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
@@ -23,10 +23,16 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
-import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
-import { createConnectDeepLink, parseConnectLink } from "./cli/lib/connect-utils.mjs";
+import {
+  DEFAULT_SIGNAL_URL,
+  createConnectDeepLink,
+  parseConnectLink,
+  parseSignalingEndpoint,
+} from "./cli/lib/connect-utils.mjs";
+import { createRemoteServeArgs, mintRemoteInvite } from "./cli/lib/smoke-remote-server.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
@@ -35,7 +41,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const mainPath = path.join(repoRoot, "dist", "main.cjs");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
-const defaultReadyFile = path.join(os.tmpdir(), `vibestudio-desktop-smoke-ready-${process.pid}.json`);
+const defaultReadyFile = path.join(
+  os.tmpdir(),
+  `vibestudio-desktop-smoke-ready-${process.pid}.json`
+);
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = readWorkspacePackageName("apps", "shell");
 
@@ -57,24 +66,39 @@ function parseArgs(argv) {
     timeoutMs: 420_000,
     launchTimeoutMs: 180_000,
     readyFile: defaultReadyFile,
+    localSignaling: false,
+    signalUrl: null,
     help: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
-      throw new Error("Forwarding raw server flags is no longer supported");
+      continue;
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = parsePositiveInt(argv[++i], "--timeout-ms");
     } else if (arg === "--launch-timeout-ms") {
       options.launchTimeoutMs = parsePositiveInt(argv[++i], "--launch-timeout-ms");
     } else if (arg === "--ready-file") {
       options.readyFile = path.resolve(argv[++i] ?? "");
+    } else if (arg === "--local-signaling") {
+      options.localSignaling = true;
+    } else if (arg === "--signal-url") {
+      options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--help") {
       options.help = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+
+  if (options.localSignaling && options.signalUrl) {
+    throw new Error("--local-signaling cannot be combined with --signal-url");
+  }
+  if (options.signalUrl !== null) {
+    const parsed = parseSignalingEndpoint(options.signalUrl);
+    if (parsed.kind === "error") throw new Error(`--signal-url: ${parsed.reason}`);
+    options.signalUrl = parsed.url;
   }
 
   return options;
@@ -99,13 +123,15 @@ Runner options:
   --launch-timeout-ms <ms>  Time to wait for Electron launch and shell load.
                             Defaults to 180000.
   --ready-file <path>       Server ready-file path. Defaults to an OS temp path.
+  --signal-url <url>        Use a specific existing signaling service.
+  --local-signaling         Start a local Wrangler signaling service instead of
+                            the hosted production service.
   --help                    Show this help message.
 
-The smoke spawns the signaling worker (wrangler dev apps/signaling), starts a
-disposable server as a WebRTC answerer, parses the vibestudio://connect pairing
-link it logs, and launches Electron with that deep link so the desktop shell
-connects over the encrypted WebRTC pipe. It then clicks the bootstrap launch
-approval and asserts the hosted shell loads.
+By default the smoke starts the normal remote-serve hub without a signaling
+override, mints an invite with remote invite --workspace default, verifies that
+the invite uses ${DEFAULT_SIGNAL_URL}, and pairs through the deployed service.
+Use --local-signaling for an offline Miniflare run.
 
 Requires the native node-datachannel module: run \`pnpm rebuild node-datachannel\`
 once before this smoke.
@@ -191,25 +217,6 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs) {
   throw new Error(`Timed out waiting for server ready file: ${readyFile}`);
 }
 
-function createServerArgs(readyFilePath) {
-  // Loopback-only: the gateway binds 127.0.0.1; remote reach is the WebRTC pipe
-  // attached to the same RpcServer when VIBESTUDIO_WEBRTC_SIGNAL_URL is set.
-  return [
-    serverEntryArg(),
-    "--app-root",
-    repoRoot,
-    "--ready-file",
-    readyFilePath,
-    "--ephemeral",
-    "--serve-panels",
-    "--print-credentials",
-    "--host",
-    "127.0.0.1",
-    "--bind-host",
-    "127.0.0.1",
-  ];
-}
-
 function findFreePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -244,10 +251,26 @@ async function startSignaling(port) {
   throw new Error("wrangler dev (signaling) did not become healthy");
 }
 
-function extractPairingLink(text) {
-  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
-    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
-    ?? null;
+function signalingHttpUrl(signalUrl, pathname) {
+  const url = new URL(signalUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = pathname;
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+async function verifyExternalSignaling(signalUrl) {
+  const health = await fetch(signalingHttpUrl(signalUrl, "/healthz"));
+  if (!health.ok) throw new Error(`Signaling health failed: HTTP ${health.status}`);
+  const room = `desktop-smoke-${randomUUID()}`;
+  const ice = await fetch(
+    signalingHttpUrl(signalUrl, `/room/${encodeURIComponent(room)}/ice-servers`)
+  );
+  if (!ice.ok) throw new Error(`Signaling ICE lookup failed: HTTP ${ice.status}`);
+  console.log(
+    `[desktop-smoke] Signaling: ${signalUrl} (${ice.headers.get("x-signaling-turn") ?? "ICE ready"})`
+  );
 }
 
 function buildConnectDeepLinkFromLog(loggedLink) {
@@ -262,37 +285,6 @@ function buildConnectDeepLinkFromLog(loggedLink) {
     sig: parsed.sig,
     ice: parsed.ice,
     srv: parsed.srv,
-  });
-}
-
-// Watch the answerer's stdout for either pairing carrier. Human-facing server
-// banners print https pair URLs; command-line smoke injection uses the canonical
-// vibestudio:// carrier rebuilt from the same payload.
-function waitForPairingLink(serverChild, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const link = extractPairingLink(buffer);
-      if (link) {
-        cleanup();
-        resolve(link);
-      }
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          "Timed out waiting for the server's pairing link. " +
-            "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
-        )
-      );
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
   });
 }
 
@@ -551,7 +543,6 @@ async function main() {
   let electronApp = null;
   let cleanedUp = false;
   let tempRoot = "";
-  let readyInfo = null;
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = async () => {
@@ -586,14 +577,6 @@ async function main() {
     if (tempRoot) {
       await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     }
-    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
-      try {
-        await fsp.access(readyInfo.workspaceDir);
-        console.warn(
-          `[desktop-smoke] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
-        );
-      } catch {}
-    }
   };
 
   process.on("SIGINT", () => {
@@ -609,54 +592,73 @@ async function main() {
     } catch {}
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
 
-    // 1. Local signaling (Cloudflare local runtime) — the WebRTC rendezvous.
-    const signalPort = await findFreePort();
-    const signalingChild = await startSignaling(signalPort);
-    children.push(signalingChild);
-    const signalUrl = `ws://127.0.0.1:${signalPort}`;
+    // 1. Production signaling by default. Local Miniflare remains available for
+    // offline development, but must be requested explicitly.
+    let signalUrl = options.signalUrl ?? DEFAULT_SIGNAL_URL;
+    if (options.localSignaling) {
+      const signalPort = await findFreePort();
+      const signalingChild = await startSignaling(signalPort);
+      children.push(signalingChild);
+      signalUrl = `ws://127.0.0.1:${signalPort}`;
+      console.log(`[desktop-smoke] Signaling: ${signalUrl} (local)`);
+    } else {
+      await verifyExternalSignaling(signalUrl);
+    }
 
-    // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs a pairing link whose
-    //    `fp` pins its persistent DTLS cert.
-    const serverArgs = createServerArgs(options.readyFile);
-    const serverInvocation = createServerInvocation(serverArgs);
-    const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
+    // 2. Start the same remote-serve launcher users run. Hosted mode deliberately
+    // removes any inherited override so this exercises the compiled-in default.
+    const gatewayPort = await findFreePort();
+    const serverArgs = createRemoteServeArgs(repoRoot, options.readyFile, gatewayPort);
+    const serverHome = path.join(tempRoot, "server-home");
+    const serverConfig = path.join(tempRoot, "server-config");
+    await Promise.all([
+      fsp.mkdir(serverHome, { recursive: true }),
+      fsp.mkdir(serverConfig, { recursive: true }),
+    ]);
+    const serverEnv = {
+      ...process.env,
+      NODE_ENV: process.env.NODE_ENV ?? "development",
+      VIBESTUDIO_TEST_MODE: "1",
+      HOME: serverHome,
+      XDG_CONFIG_HOME: serverConfig,
+    };
+    if (options.localSignaling || options.signalUrl) {
+      serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
+    } else {
+      delete serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL;
+    }
+    const serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV ?? "development",
-        // Run a single ephemeral workspace server (not the public hub): the WebRTC
-        // answerer is the per-workspace pipe (hubServer.ts:820 "remote reach is the
-        // per-workspace WebRTC pipe"), so the thing a client pairs with is a
-        // workspace server. The hub→workspace remote-selection flow is separate.
-        VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
-        VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
-      },
+      env: serverEnv,
       label: "server",
     });
-    await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
+    await waitForSpawn(serverChild, process.execPath, serverArgs);
     children.push(serverChild);
-    // Start scanning stdout for the pairing link now, before readiness, so the
-    // line is never missed.
-    const pairingLinkPromise = waitForPairingLink(
-      serverChild,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
 
     const ready = await waitForServerReady(
       options.readyFile,
       serverChild,
       Math.max(1_000, deadlineMs - Date.now())
     );
-    readyInfo = ready;
 
-    // 3. Parse the answerer's pairing link and rebuild the scheme deep link
-    //    with the canonical builder for argv injection.
-    const loggedLink = await pairingLinkPromise;
+    // 3. Follow the deployed flow: ask the loopback hub to start/select the
+    // workspace and mint the child answerer's WebRTC invite.
+    const invite = await mintRemoteInvite({
+      repoRoot,
+      env: serverEnv,
+      port: ready.gatewayPort,
+      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
+    });
+    const loggedLink = invite.pairUrl;
     const deepLink = buildConnectDeepLinkFromLog(loggedLink);
     const parsed = parseConnectLink(deepLink);
     if (parsed.kind !== "ok") {
       throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
+    }
+    if (!options.localSignaling && !options.signalUrl && parsed.sig !== DEFAULT_SIGNAL_URL) {
+      throw new Error(
+        `remote serve did not use the hosted default (expected ${DEFAULT_SIGNAL_URL}, got ${parsed.sig})`
+      );
     }
     console.log(`[desktop-smoke] WebRTC pairing: room=${parsed.room} fp=${parsed.fp}`);
     console.log(`[desktop-smoke] Deep link: ${deepLink}`);

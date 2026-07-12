@@ -58,6 +58,10 @@ builds panels/workers on demand. Remote clients pair over WebRTC; the signaling
 endpoint is only used to rendezvous, not to carry workspace data. See
 [docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
 
+The real-client smoke tests use that deployed route, the normal `remote serve`
+hub, and a workspace-scoped `remote invite` by default. Use
+`pnpm smoke:full -- --local-signaling` only for an offline Miniflare/coturn run.
+
 ### Develop (contributors)
 
 ```bash

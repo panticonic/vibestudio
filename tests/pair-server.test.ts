@@ -237,6 +237,27 @@ describe("pair-server runner", () => {
     });
   });
 
+  it("binds the gateway to loopback and accepts an explicit readiness path", () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+    const readyFile = path.join(os.tmpdir(), "vibestudio-pair-explicit-ready.json");
+
+    runPairServer(config, ["--ready-file", readyFile], {
+      spawnServer({ env, serverArgs }: { env: NodeJS.ProcessEnv; serverArgs: string[] }) {
+        expect(env.VIBESTUDIO_HOST).toBe("127.0.0.1");
+        expect(serverArgs).toContain("--bind-host");
+        expect(serverArgs[serverArgs.indexOf("--bind-host") + 1]).toBe("127.0.0.1");
+        expect(serverArgs).toContain("--ready-file");
+        expect(serverArgs[serverArgs.indexOf("--ready-file") + 1]).toBe(readyFile);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+
+    child.emit("exit", 0, null);
+  });
+
   it("lets --signal-url override the signaling env and validates cleartext loopback use", () => {
     vi.stubEnv("VIBESTUDIO_WEBRTC_SIGNAL_URL", "wss://env.signal.test");
     vi.spyOn(console, "log").mockImplementation(() => undefined);

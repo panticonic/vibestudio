@@ -13,10 +13,12 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import {
-  createServerInvocation,
-  serverEntryArg,
-} from "./lib/server-entry.mjs";
-import { createConnectDeepLink, parseConnectLink } from "./lib/connect-utils.mjs";
+  DEFAULT_SIGNAL_URL,
+  createConnectDeepLink,
+  parseConnectLink,
+  parseSignalingEndpoint,
+} from "./lib/connect-utils.mjs";
+import { createRemoteServeArgs, mintRemoteInvite } from "./lib/smoke-remote-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -45,6 +47,9 @@ function parseArgs(argv) {
     noReset: false,
     noTap: false,
     realModel: false,
+    localSignaling: false,
+    requireTurn: false,
+    signalUrl: null,
     timeoutMs: 420_000,
     pairingTimeoutMs: 180_000,
     agentTimeoutMs: 300_000,
@@ -54,7 +59,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
-      throw new Error("Forwarding raw server flags is no longer supported");
+      continue;
     } else if (arg === "--platform") {
       options.platform = argv[++i] ?? "android";
     } else if (arg === "--avd") {
@@ -75,6 +80,12 @@ function parseArgs(argv) {
       options.noTap = true;
     } else if (arg === "--real-model") {
       options.realModel = true;
+    } else if (arg === "--local-signaling") {
+      options.localSignaling = true;
+    } else if (arg === "--require-turn") {
+      options.requireTurn = true;
+    } else if (arg === "--signal-url") {
+      options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = parsePositiveInt(argv[++i], "--timeout-ms");
     } else if (arg === "--pairing-timeout-ms") {
@@ -92,6 +103,14 @@ function parseArgs(argv) {
   if (!options.activityName) throw new Error("--activity must not be empty");
   if (options.platform !== "android" && options.platform !== "ios") {
     throw new Error("--platform must be android or ios");
+  }
+  if (options.localSignaling && options.signalUrl) {
+    throw new Error("--local-signaling cannot be combined with --signal-url");
+  }
+  if (options.signalUrl !== null) {
+    const parsed = parseSignalingEndpoint(options.signalUrl);
+    if (parsed.kind === "error") throw new Error(`--signal-url: ${parsed.reason}`);
+    options.signalUrl = parsed.url;
   }
   return options;
 }
@@ -123,6 +142,11 @@ Runner options:
   --no-tap            Do not automate the Pair button tap.
   --real-model        Use the real model provider/credential path instead of
                        the deterministic E2E model stub.
+  --signal-url <url>  Use a specific existing signaling service.
+  --local-signaling   Start local Wrangler signaling (and coturn for an emulator)
+                       instead of using the hosted production service.
+  --require-turn      Fail before pairing unless signaling provides TURN.
+                       Normal runs allow host, STUN, or TURN ICE paths.
   --timeout-ms <ms>   Time to wait for Android boot, build/install, and server
                        readiness. Defaults to 420000.
   --pairing-timeout-ms <ms>
@@ -134,9 +158,9 @@ Runner options:
   --help              Show this help message.
 
 By default, the smoke delegates APK build/install/reset/launcher startup to
-vibestudio mobile install --reset-app --launch. It then spawns the signaling worker
-(wrangler dev apps/signaling), starts a disposable local server as a WebRTC
-answerer, reverses the signaling and gateway ports through adb, sends a
+vibestudio mobile install --reset-app --launch. It then starts the normal
+remote-serve hub without a signaling override, mints an invite with remote invite
+--workspace default, verifies that it uses ${DEFAULT_SIGNAL_URL}, and sends a
 vibestudio://connect intent (carrying the signaling room, the server's DTLS
 fingerprint, and a pairing code) to the launched internal app, confirms the Pair
 screen, then waits for native bundle activation, workspace connection, panel
@@ -383,31 +407,6 @@ function buildConnectLinkFromLog(loggedLink) {
   });
 }
 
-function extractPairingLink(text) {
-  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
-    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
-    ?? null;
-}
-
-function createServerArgs(readyFilePath) {
-  // Loopback-only: the gateway binds 127.0.0.1; remote reach is the WebRTC pipe
-  // attached to the same RpcServer when VIBESTUDIO_WEBRTC_SIGNAL_URL is set.
-  return [
-    serverEntryArg(),
-    "--app-root",
-    repoRoot,
-    "--ready-file",
-    readyFilePath,
-    "--ephemeral",
-    "--serve-panels",
-    "--print-credentials",
-    "--host",
-    "127.0.0.1",
-    "--bind-host",
-    "127.0.0.1",
-  ];
-}
-
 function findFreePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -473,7 +472,9 @@ async function startLocalTurn() {
   const child = spawnManaged("turnserver", ["-c", confPath], { label: "coturn" });
   await sleep(1_500); // coturn has no health endpoint; let it bind.
   if (child.exitCode != null) {
-    throw new Error(`coturn (turnserver) exited before ready (code ${child.exitCode}) — is it installed?`);
+    throw new Error(
+      `coturn (turnserver) exited before ready (code ${child.exitCode}) — is it installed?`
+    );
   }
   return { child, host: lanIp, port: String(port), user, pass };
 }
@@ -485,17 +486,20 @@ async function startSignaling(port, turn = null) {
   if (turn) {
     // The signaling worker's mintIceServers returns this relay to both peers.
     vars.push(
-      "--var", `VIBESTUDIO_LOCAL_TURN_HOST:${turn.host}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_PORT:${turn.port}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
-      "--var", `VIBESTUDIO_LOCAL_TURN_PASS:${turn.pass}`
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_HOST:${turn.host}`,
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_PORT:${turn.port}`,
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
+      "--var",
+      `VIBESTUDIO_LOCAL_TURN_PASS:${turn.pass}`
     );
   }
-  const child = spawnManaged(
-    wranglerBin,
-    ["dev", "--port", String(port), "--local", ...vars],
-    { cwd: signalingDir, label: "signaling" }
-  );
+  const child = spawnManaged(wranglerBin, ["dev", "--port", String(port), "--local", ...vars], {
+    cwd: signalingDir,
+    label: "signaling",
+  });
   for (let i = 0; i < 90; i++) {
     if (child.exitCode != null) {
       throw new Error(`wrangler dev (signaling) exited before healthy (code ${child.exitCode})`);
@@ -511,65 +515,40 @@ async function startSignaling(port, turn = null) {
   throw new Error("wrangler dev (signaling) did not become healthy");
 }
 
-// Watch the answerer's stdout for either pairing carrier. Human-facing server
-// banners print https pair URLs; adb injection uses the canonical scheme carrier
-// rebuilt from the same payload.
-function waitForPairingLink(serverChild, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const link = extractPairingLink(buffer);
-      if (link) {
-        cleanup();
-        resolve(link);
-      }
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          "Timed out waiting for the server's pairing link. " +
-            "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
-        )
-      );
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
-  });
+function signalingHttpUrl(signalUrl, pathname) {
+  const url = new URL(signalUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = pathname;
+  url.search = "";
+  url.hash = "";
+  return url;
 }
 
-// Pre-warm: wait until the server reports the react-native workspace app BUILT
-// (`status=running`/`available` with a real build key) before we pair. Otherwise
-// the cold Metro-extension + app build (~1-2 min) burns the emulator's ~2-min
-// relay window before the bundle can stream. Best-effort — resolves false on
-// timeout so the run still proceeds (and physical devices don't need it).
-function waitForReactNativeAppReady(serverChild, timeoutMs) {
-  return new Promise((resolve) => {
-    let buffer = "";
-    const ready =
-      /target=react-native\b[^\n]*\bstatus=(?:running|available)\b[^\n]*\bbuild=(?!none\b)[0-9a-f]{6,}/;
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      if (ready.test(buffer)) {
-        cleanup();
-        resolve(true);
-      }
-      if (buffer.length > 1_000_000) buffer = buffer.slice(-200_000);
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      serverChild.stdout?.off("data", onData);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve(false);
-    }, timeoutMs);
-    serverChild.stdout?.on("data", onData);
+async function verifyExternalSignaling(signalUrl, requireTurn) {
+  const health = await fetch(signalingHttpUrl(signalUrl, "/healthz"));
+  if (!health.ok) throw new Error(`Signaling health failed: HTTP ${health.status}`);
+
+  const room = `mobile-smoke-${randomUUID()}`;
+  const ice = await fetch(
+    signalingHttpUrl(signalUrl, `/room/${encodeURIComponent(room)}/ice-servers`)
+  );
+  if (!ice.ok) throw new Error(`Signaling ICE lookup failed: HTTP ${ice.status}`);
+  const body = await ice.json();
+  const iceServers = Array.isArray(body?.iceServers) ? body.iceServers : [];
+  const hasTurn = iceServers.some((server) => {
+    const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+    return urls.some((url) => typeof url === "string" && /^turns?:/.test(url));
   });
+  const turnStatus = ice.headers.get("x-signaling-turn") ?? (hasTurn ? "available" : "missing");
+  if (requireTurn && !hasTurn) {
+    throw new Error(
+      `--require-turn was requested, but ${signalUrl} returned STUN only. ` +
+        "Configure TURN_KEY_ID and TURN_KEY_API_TOKEN on the deployed signaling Worker, " +
+        "or omit --require-turn to exercise normal ICE fallback."
+    );
+  }
+  console.log(`[mobile-smoke] Signaling: ${signalUrl} (ICE ${turnStatus})`);
+  return { hasTurn };
 }
 
 function startLogcat(device, expectedPhases, deadlineMs) {
@@ -1014,10 +993,10 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         stableVisualAgentPolls = 1;
       }
       if (stableVisualAgentPolls >= 3) {
-        const suffix = options.requireNoUnresolvedApproval
-          ? " with no pending approvals"
-          : "";
-        console.log(`[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`);
+        const suffix = options.requireNoUnresolvedApproval ? " with no pending approvals" : "";
+        console.log(
+          `[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`
+        );
         return;
       }
     } else {
@@ -1087,8 +1066,7 @@ function visibleAgentTurnState(labels) {
     /No provider details available/i.test(agentText);
   const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
   const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
-  const hasAgentOutput =
-    hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
+  const hasAgentOutput = hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
   return {
     hasAgentOutput,
     hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
@@ -1152,7 +1130,7 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   let agentTurnCompleted = true;
   try {
     const waitOptions = options.realModel
-        ? {
+      ? {
           requireVisibleAgentOutput: true,
           rejectTestModelResponse: true,
           failOnCredentialSetup: true,
@@ -1385,143 +1363,6 @@ function shellCommand(args) {
   return args.map(shellQuote).join(" ");
 }
 
-function routeUrl(baseUrl, pathName) {
-  const url = new URL(baseUrl);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  url.pathname = `${basePath}${pathName}`;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-async function postJson(baseUrl, pathName, body, token, timeoutMs = 15_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(routeUrl(baseUrl, pathName), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body ?? {}),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    const json = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      throw new Error(`${pathName} failed ${res.status}: ${JSON.stringify(json)}`);
-    }
-    return json;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function rpcHttp(baseUrl, shellToken, callerId, method, args = [], timeoutMs = 60_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const caller = { callerId, callerKind: "shell" };
-  try {
-    const res = await fetch(routeUrl(baseUrl, "/rpc"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${shellToken}`,
-      },
-      body: JSON.stringify({
-        from: caller.callerId,
-        target: "main",
-        delivery: { caller },
-        provenance: [caller],
-        message: {
-          type: "request",
-          requestId: randomUUID(),
-          fromId: caller.callerId,
-          method,
-          args,
-        },
-      }),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    const message = (body?.envelope ?? body)?.message;
-    if (!res.ok || message?.error) {
-      throw new Error(message?.error ?? body?.error ?? `/rpc failed ${res.status}`);
-    }
-    return message?.result;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function describeHostTargetLaunch(result) {
-  if (!result || typeof result !== "object") return "unknown launch result";
-  const bits = [`status=${result.status ?? "unknown"}`];
-  if (result.reason) bits.push(`reason=${result.reason}`);
-  if (result.appId) bits.push(`app=${result.appId}`);
-  if (result.buildKey) bits.push(`build=${result.buildKey}`);
-  return bits.join(" ");
-}
-
-async function prewarmReactNativeAppLaunch(ready, timeoutMs) {
-  if (!ready?.gatewayUrl || !ready?.adminToken) return false;
-  const deadline = Date.now() + timeoutMs;
-  let issued = null;
-  try {
-    issued = await postJson(
-      ready.gatewayUrl,
-      "/_r/s/auth/issue-device",
-      { label: "Mobile smoke pre-warm", platform: "desktop" },
-      ready.adminToken,
-      Math.min(15_000, Math.max(1_000, deadline - Date.now()))
-    );
-    const shellToken = issued?.shellToken;
-    const callerId = issued?.callerId ?? (issued?.deviceId ? `shell:${issued.deviceId}` : null);
-    if (typeof shellToken !== "string" || typeof callerId !== "string") {
-      throw new Error("admin-issued pre-warm credential did not include a shell token");
-    }
-    let last = null;
-    while (Date.now() < deadline) {
-      const remaining = Math.max(1_000, deadline - Date.now());
-      last = await rpcHttp(
-        ready.gatewayUrl,
-        shellToken,
-        callerId,
-        "workspace.hostTargets.launch",
-        ["react-native"],
-        remaining
-      );
-      if (last?.status === "ready") return true;
-      if (last?.status === "approval-required" || last?.status === "unavailable") {
-        console.warn(`[mobile-smoke] pre-warm: ${describeHostTargetLaunch(last)}`);
-        return false;
-      }
-      await sleep(Math.min(2_000, Math.max(1, deadline - Date.now())));
-    }
-    if (last) console.warn(`[mobile-smoke] pre-warm: ${describeHostTargetLaunch(last)}`);
-    return false;
-  } catch (error) {
-    console.warn(
-      `[mobile-smoke] pre-warm: active launch failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    return false;
-  } finally {
-    if (issued?.deviceId && ready?.gatewayUrl && ready?.adminToken) {
-      await postJson(
-        ready.gatewayUrl,
-        "/_r/s/auth/revoke-device",
-        { deviceId: issued.deviceId },
-        ready.adminToken,
-        10_000
-      ).catch(() => {});
-    }
-  }
-}
-
 async function startConnectIntent(device, packageName, activityName, link) {
   const packageResult = await adbCapture(
     device,
@@ -1563,20 +1404,36 @@ async function main() {
     printHelp();
     return;
   }
+  if (
+    !(await fsp
+      .stat(androidDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false))
+  ) {
+    throw new Error(
+      "mobile smoke requires a Vibestudio source checkout. Clone the repository and run `pnpm bootstrap`."
+    );
+  }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
       throw new Error("iOS smoke requires macOS with Xcode and a booted simulator.");
     }
-    await runCommand(process.execPath, [
-      path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
-      "--platform",
-      "ios",
-      "--simulator",
-      "--configuration",
-      "Debug",
-      "--launch",
-    ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
-    console.log("[mobile-smoke] iOS shell installed and launched; pair it with `vibestudio mobile pair`.");
+    await runCommand(
+      process.execPath,
+      [
+        path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
+        "--platform",
+        "ios",
+        "--simulator",
+        "--configuration",
+        "Debug",
+        "--launch",
+      ],
+      { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
+    );
+    console.log(
+      "[mobile-smoke] iOS shell installed and launched; pair it with `vibestudio mobile pair`."
+    );
     return;
   }
 
@@ -1585,7 +1442,8 @@ async function main() {
   let emulatorChild = null;
   let launchedEmulator = false;
   let readyInfo = null;
-  const readyFilePath = path.join(os.tmpdir(), `vibestudio-mobile-smoke-ready-${process.pid}.json`);
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-smoke-"));
+  const readyFilePath = path.join(tempRoot, "server-ready.json");
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = async () => {
@@ -1602,14 +1460,7 @@ async function main() {
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
-    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
-      try {
-        await fsp.access(readyInfo.workspaceDir);
-        console.warn(
-          `[mobile-smoke] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
-        );
-      } catch {}
-    }
+    await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   };
 
   process.on("SIGINT", () => {
@@ -1657,34 +1508,43 @@ async function main() {
       await fsp.unlink(readyFilePath);
     } catch {}
 
-    // 1. Local signaling (Cloudflare local runtime) — the WebRTC rendezvous. The
-    //    phone reaches it over loopback via the adb-reversed signaling port.
-    const signalPort = await findFreePort();
-    // An emulator is NAT'd behind QEMU and can't hold a direct WebRTC pipe, so
-    // relay it through a local coturn. Physical devices on the LAN don't need it.
-    const useTurn = launchedEmulator || (options.device ?? "").startsWith("emulator-");
+    // 1. Use normal production ICE by default: host/STUN candidates are tried,
+    // with TURN used when the service offers it. Local emulator mode supplies
+    // coturn because that deterministic offline path cannot use hosted TURN.
+    const isEmulator = launchedEmulator || (options.device ?? "").startsWith("emulator-");
+    let signalPort = null;
     let turn = null;
-    if (useTurn) {
-      turn = await startLocalTurn();
-      children.push(turn.child);
-      console.log(`[mobile-smoke] Local TURN relay (emulator NAT): turn:${turn.host}:${turn.port}`);
+    let signalUrl = options.signalUrl ?? DEFAULT_SIGNAL_URL;
+    if (options.localSignaling) {
+      signalPort = await findFreePort();
+      if (isEmulator || options.requireTurn) {
+        turn = await startLocalTurn();
+        children.push(turn.child);
+        console.log(`[mobile-smoke] Local TURN relay: turn:${turn.host}:${turn.port}`);
+      }
+      const signalingChild = await startSignaling(signalPort, turn);
+      children.push(signalingChild);
+      signalUrl = `ws://127.0.0.1:${signalPort}`;
+      console.log(`[mobile-smoke] Signaling: ${signalUrl} (local)`);
+    } else {
+      await verifyExternalSignaling(signalUrl, options.requireTurn);
     }
-    const signalingChild = await startSignaling(signalPort, turn);
-    children.push(signalingChild);
-    const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs the vibestudio://connect
-    //    link whose `fp` pins its persistent DTLS cert.
-    const serverArgs = createServerArgs(readyFilePath);
-    const serverInvocation = createServerInvocation(serverArgs);
+    // 2. Start the normal remote-serve hub. Hosted mode removes inherited
+    // overrides so the workspace child exercises the built-in default.
+    const gatewayPort = await findFreePort();
+    const serverArgs = createRemoteServeArgs(repoRoot, readyFilePath, gatewayPort);
+    const serverHome = path.join(tempRoot, "server-home");
+    const serverConfig = path.join(tempRoot, "server-config");
+    await Promise.all([
+      fsp.mkdir(serverHome, { recursive: true }),
+      fsp.mkdir(serverConfig, { recursive: true }),
+    ]);
     const serverEnv = {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "development",
-      VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
-      // Force the single-workspace server path: `--serve-panels` with no workspace
-      // otherwise boots the hub (no WebRTC answerer), so pairing never connects.
-      VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+      HOME: serverHome,
+      XDG_CONFIG_HOME: serverConfig,
       // Auto-approve startup units so the declared react-native app BUILDS at
       // server startup instead of waiting for the post-pairing host-target
       // approval. That makes the launch fast, so the bundle starts streaming
@@ -1696,54 +1556,47 @@ async function main() {
       // pairing link's `ice=relay`, which the client honors.
       ...(turn ? { VIBESTUDIO_WEBRTC_ICE: "relay" } : {}),
     };
+    if (options.localSignaling || options.signalUrl) {
+      serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
+    } else {
+      delete serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL;
+    }
     if (options.realModel) {
       delete serverEnv.VIBESTUDIO_TEST_MODE;
     } else {
       serverEnv.VIBESTUDIO_TEST_MODE = "1";
     }
-    const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
+    const serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
       env: serverEnv,
       label: "server",
     });
-    await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
+    await waitForSpawn(serverChild, process.execPath, serverArgs);
     children.push(serverChild);
-    // Capture the answerer's pairing link from stdout now (before readiness).
-    const pairingLinkPromise = waitForPairingLink(
-      serverChild,
-      Math.max(1_000, deadlineMs - Date.now())
-    );
 
     const ready = await waitForServerReady(
       readyFilePath,
       serverChild,
       Math.max(1_000, deadlineMs - Date.now())
     );
-    readyInfo = ready;
+    readyInfo = {
+      ...ready,
+      workspaceDir: path.join(serverConfig, "vibestudio", "workspaces", "default", "source"),
+    };
 
-    // The phone reaches the host's loopback services over adb reverse: the
-    // signaling room (WebRTC rendezvous) and the gateway (native-bundle bootstrap
-    // + panel HTTP). Remote reach is the encrypted WebRTC pipe — no Tailscale.
-    await adb(options.device, "reverse", `tcp:${signalPort}`, `tcp:${signalPort}`);
-    await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);
-    await adb(options.device, "logcat", "-c");
+    const invite = await mintRemoteInvite({
+      repoRoot,
+      env: serverEnv,
+      port: ready.gatewayPort,
+      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
+    });
 
-    // Pre-warm: give the server time to BUILD the react-native app before pairing,
-    // so the emulator's ~2-min relay window (the clock starts at the pairing tap)
-    // is not consumed by the cold Metro extension + app build. Best-effort and
-    // emulator/TURN-only — physical devices hold the pipe long enough regardless.
-    if (useTurn) {
-      console.log("[mobile-smoke] pre-warm: waiting for the react-native app build…");
-      const prewarmBudgetMs = Math.min(150_000, Math.max(1_000, deadlineMs - Date.now()));
-      let warm = await prewarmReactNativeAppLaunch(ready, prewarmBudgetMs);
-      if (!warm) {
-        warm = await waitForReactNativeAppReady(
-          serverChild,
-          Math.min(prewarmBudgetMs, Math.max(1_000, deadlineMs - Date.now()))
-        );
-      }
-      console.log(`[mobile-smoke] pre-warm: ${warm ? "react-native app built" : "timed out, proceeding"}`);
+    // Local mode needs adb bridges for its host-only dependencies. Hosted mode
+    // intentionally has none: all server traffic must traverse the remote pipe.
+    if (options.localSignaling) {
+      await adb(options.device, "reverse", `tcp:${signalPort}`, `tcp:${signalPort}`);
     }
+    await adb(options.device, "logcat", "-c");
 
     // Embedded WebRTC flow (the host pairs + connects over the DTLS pipe in JS;
     // there is no native HTTP pairing). Phases are emitted by apps/mobile/index.js.
@@ -1765,9 +1618,17 @@ async function main() {
     children.push(logcat.child);
     await waitForLogcatReady(options.device, logcat);
 
-    const link = buildConnectLinkFromLog(await pairingLinkPromise);
-    console.log(`[mobile-smoke] Signaling: ${signalUrl} (adb-reversed)`);
-    console.log(`[mobile-smoke] Gateway:   ${ready.gatewayUrl} (adb-reversed)`);
+    const link = buildConnectLinkFromLog(invite.pairUrl);
+    const parsedLink = parseConnectLink(link);
+    if (parsedLink.kind !== "ok") throw new Error(parsedLink.reason);
+    if (!options.localSignaling && !options.signalUrl && parsedLink.sig !== DEFAULT_SIGNAL_URL) {
+      throw new Error(
+        `remote serve did not use the hosted default (expected ${DEFAULT_SIGNAL_URL}, got ${parsedLink.sig})`
+      );
+    }
+    if (options.localSignaling) {
+      console.log(`[mobile-smoke] Gateway:   ${ready.gatewayUrl} (adb-reversed)`);
+    }
     console.log(`[mobile-smoke] Connect:   ${link}`);
     await ensureDeviceInteractive(options.device);
     // The install helper may launch the app before the server is ready. Deliver

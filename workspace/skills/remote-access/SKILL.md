@@ -68,4 +68,8 @@ pnpm smoke:full
 ```
 
 `pnpm smoke:full` is the composition check: branded Electron pairing, desktop
-Playwright e2e, and Android emulator/mobile pairing with OTA activation.
+Playwright e2e, and Android emulator/mobile pairing with OTA activation. The
+pairing phases use the deployed signaling service, normal `remote serve` hub,
+and a workspace-scoped `remote invite` by default. Android attempts normal ICE;
+use `--require-turn` for a relay-readiness pass or
+`pnpm smoke:full -- --local-signaling` for an offline Miniflare/coturn run.
