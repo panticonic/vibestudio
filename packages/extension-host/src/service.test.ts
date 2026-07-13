@@ -767,6 +767,47 @@ describe("ExtensionHost reconcileDeclared", () => {
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
   });
 
+  it("serializes concurrent rebuilds of the same extension", async () => {
+    const { host, buildSystem, extensionNode } = makeHost();
+    const releases: Array<() => void> = [];
+    let activeStarts = 0;
+    let maxActiveStarts = 0;
+    const start = vi.spyOn(host.processes, "start").mockImplementation(async () => {
+      activeStarts += 1;
+      maxActiveStarts = Math.max(maxActiveStarts, activeStarts);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      activeStarts -= 1;
+    });
+    const onPushBuild = buildSystem.onPushBuild.mock.calls[0]?.[0];
+    expect(onPushBuild).toBeTypeOf("function");
+
+    onPushBuild(extensionNode.relativePath, { head: "main" });
+    onPushBuild(extensionNode.relativePath, { head: "main" });
+
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    expect(maxActiveStarts).toBe(1);
+    releases.shift()?.();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    expect(maxActiveStarts).toBe(1);
+    releases.shift()?.();
+    await vi.waitFor(() => expect(activeStarts).toBe(0));
+  });
+
+  it("retains an approved candidate build when its first activation fails", async () => {
+    const { host, extensionNode } = makeHost({ installed: false });
+    vi.spyOn(host.processes, "start").mockRejectedValue(new Error("ready timeout"));
+
+    await host.reconcileDeclared(declare(extensionNode.name));
+    await host.whenSettled();
+
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      activeEv: "ev-candidate",
+      activeBundleKey: "candidate-key",
+      status: "error",
+      lastError: "ready timeout",
+    });
+  });
+
   it("rebuilds a declared ref change and persists the trusted ref", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = makeHost();
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);

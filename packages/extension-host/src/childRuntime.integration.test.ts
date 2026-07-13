@@ -113,6 +113,7 @@ describe("extension child runtime process", () => {
     if (!address || typeof address === "string") throw new Error("WebSocket server did not bind");
     const gatewayUrl = `http://127.0.0.1:${address.port}`;
 
+    let extensionLogArgs: unknown[] | undefined;
     const readyPromise = waitForMessage<{ ws: import("ws").WebSocket; message: RpcRequest }>(
       (resolve, reject) => {
         server!.once("connection", (ws) => {
@@ -164,6 +165,9 @@ describe("extension child runtime process", () => {
                   envelope: makeEnvelope("main", envelope.from, "server", response),
                 } satisfies WsServerMessage)
               );
+              if (rpc.method === "extensions.log") {
+                extensionLogArgs = rpc.args;
+              }
               if (rpc.method === "extensions.ready") {
                 resolve({ ws, message: rpc });
               }
@@ -191,6 +195,7 @@ describe("extension child runtime process", () => {
       providerMethods: { gitInterop: ["providerPing"] },
       hasFetch: false,
     });
+    expect(extensionLogArgs).toEqual(["info", "activated"]);
 
     const requestId = randomUUID();
     const response = await waitForMessage<RpcResponse>((resolve, reject) => {
