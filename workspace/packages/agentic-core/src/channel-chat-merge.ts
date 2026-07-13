@@ -185,7 +185,9 @@ function projectedSystemNoticeToChatMessage(
   const title =
     notice.kind === "model.local_fallback_continued"
       ? "Continued on local fallback"
-      : notice.summary;
+      : notice.kind === "model.fallback_continued"
+        ? "Continued on fallback model"
+        : notice.summary;
   return {
     id: `system:${notice.noticeId}`,
     senderId: notice.actor.id,
@@ -642,8 +644,8 @@ function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotic
     failureCode: metadata.failureCode,
     severity: metadata.severity,
     title:
-      metadata.code === "max_model_calls_per_turn"
-        ? "Model call limit reached"
+      metadata.code === "model_retry_limit_exceeded"
+        ? "Model retry limit reached"
         : metadata.failureCode === "usage_limit_terminal"
           ? "Model usage limit reached"
           : metadata.failureCode === "context_overflow_terminal"

@@ -29,12 +29,7 @@ export const INVOCATION_OUTCOMES = [
 
 export type InvocationOutcome = (typeof INVOCATION_OUTCOMES)[number];
 
-export const MESSAGE_OUTCOMES = [
-  "completed",
-  "empty",
-  "tool_calls_only",
-  "interrupted",
-] as const;
+export const MESSAGE_OUTCOMES = ["completed", "empty", "tool_calls_only", "interrupted"] as const;
 
 export type MessageOutcome = (typeof MESSAGE_OUTCOMES)[number];
 
@@ -64,7 +59,7 @@ export const TURN_REASON_CODES = [
   "model_credential_required",
   "model_credential_reconnect_required",
   "model_usage_limit_reset",
-  "max_model_calls_per_turn",
+  "model_retry_limit_exceeded",
   "forked",
 ] as const;
 

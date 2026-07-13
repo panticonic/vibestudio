@@ -81,7 +81,10 @@ export class CdpHostBridgeClient {
   private stopped = false;
   private authenticated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly targets = new Map<string, number>(); // targetId(slotId) → tabId
+  private readonly targets = new Map<
+    string,
+    { tabId: number; metadata?: { kind?: string; source?: string } }
+  >();
   private diagnostic: CdpHostBridgeDiagnostic = {
     state: "idle",
     attempt: 0,
@@ -125,9 +128,13 @@ export class CdpHostBridgeClient {
     return { ...this.diagnostic };
   }
 
-  registerTarget(targetId: string, tabId: number): void {
-    this.targets.set(targetId, tabId);
-    this.send({ type: "cdp:register", targetId, tabId });
+  registerTarget(
+    targetId: string,
+    tabId: number,
+    metadata?: { kind?: string; source?: string }
+  ): void {
+    this.targets.set(targetId, { tabId, metadata });
+    this.send({ type: "cdp:register", targetId, tabId, ...metadata });
   }
 
   unregisterTarget(targetId: string): void {
@@ -224,8 +231,13 @@ export class CdpHostBridgeClient {
         this.authenticated = true;
         this.updateDiagnostic({ state: "authenticated", authenticated: true });
         // Re-register every hosted target (initial connect and reconnects).
-        for (const [targetId, tabId] of this.targets) {
-          this.send({ type: "cdp:register", targetId, tabId });
+        for (const [targetId, registration] of this.targets) {
+          this.send({
+            type: "cdp:register",
+            targetId,
+            tabId: registration.tabId,
+            ...registration.metadata,
+          });
         }
         this.opts.onAuthenticated?.();
         return;

@@ -3,7 +3,7 @@
  *
  * Appends and forks target the Stage-0 core surface (`appendLogEvent`,
  * `forkLog`, `getLogEvent`) directly; replay windows ride the lineage-aware
- * `getChannelReplayWindow` read (server-side windowing over `log_events` —
+ * `readChannelEnvelopes` read (server-side windowing over `log_events` —
  * one round trip per page instead of N). Blob spill/hydrate stays here; all
  * schema validation and participant sanitization happens inside the GAD
  * append txn.
@@ -11,10 +11,23 @@
 
 import type { ChannelEvent } from "@workspace/harness";
 import {
+  collectChannelEnvelopePages,
+  type ChannelEnvelopePage,
+  type ChannelEnvelopePageInfo,
+  type ChannelEnvelopeWindow,
+} from "@vibestudio/shared/channelEnvelopePaging";
+import {
   createGadServiceClient,
   type DurableObjectServiceClient,
 } from "@workspace/runtime/workerd-client";
-import type { BootstrapSnapshot, ChannelReplayEnvelope, ServerLogEvent } from "@workspace/pubsub";
+import {
+  DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT,
+  MAX_CHANNEL_REPLAY_PAGE_LIMIT,
+  type BootstrapSnapshot,
+  type ChannelReplayAfterRequest,
+  type ChannelReplayEnvelope,
+  type ServerLogEvent,
+} from "@workspace/pubsub";
 import {
   encodeChannelPayloadStoredValues,
   hydrateStoredValueRefs,
@@ -68,13 +81,21 @@ interface RpcCallerLike {
   call<T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T>;
 }
 
+type GadReplayPage = ChannelEnvelopePage<GadChannelEnvelopeView>;
+type ReplayWindowPageInfo = Pick<
+  ChannelEnvelopePageInfo,
+  | "totalCount"
+  | "firstSeq"
+  | "lastSeq"
+  | "returnedFromSeq"
+  | "returnedToSeq"
+  | "snapshotLastSeq"
+  | "hasMoreBefore"
+  | "hasMoreAfter"
+>;
 interface GadReplayWindow {
-  envelopes: GadChannelEnvelopeView[];
-  totalCount: number;
-  firstEnvelopeSeq?: number;
-  replayFromId?: number;
-  replayToId?: number;
-  hasMoreBefore?: boolean;
+  items: GadChannelEnvelopeView[];
+  pageInfo: ReplayWindowPageInfo;
 }
 
 /** The ChannelEnvelope view shape the gad replay-window read returns. */
@@ -107,8 +128,6 @@ function policyAnnotations(
 
 export class ChannelLog {
   private readonly gad: DurableObjectServiceClient;
-  private static readonly REPLAY_AFTER_LIMIT = 500;
-
   constructor(
     private readonly rpc: RpcCallerLike,
     private readonly channelId: string
@@ -228,14 +247,34 @@ export class ChannelLog {
     });
   }
 
-  async replayAfter(sinceId: number, context: ChannelReplayContext): Promise<ChannelReplayEnvelope> {
-    const window = await this.hydrateReplayWindow(
-      await this.gad.call<GadReplayWindow>("getChannelReplayWindow", {
-        channelId: this.channelId,
-        mode: "after",
-        sinceSeq: sinceId,
-        limit: ChannelLog.REPLAY_AFTER_LIMIT,
-      })
+  async replayAfter(
+    request: ChannelReplayAfterRequest,
+    context: ChannelReplayContext
+  ): Promise<ChannelReplayEnvelope> {
+    const after = request.after;
+    const limit = request.limit ?? DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT;
+    if (!Number.isInteger(after) || after < 0) {
+      throw new RangeError("channel replay after must be a non-negative integer");
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CHANNEL_REPLAY_PAGE_LIMIT) {
+      throw new RangeError(
+        `channel replay limit must be an integer between 1 and ${MAX_CHANNEL_REPLAY_PAGE_LIMIT}`
+      );
+    }
+    if (
+      request.throughSeq !== undefined &&
+      (!Number.isInteger(request.throughSeq) || request.throughSeq < after)
+    ) {
+      throw new RangeError("channel replay throughSeq must be an integer not less than after");
+    }
+    const window = await this.readReplayWindow(
+      {
+        kind: "after",
+        seq: after,
+        ...(request.throughSeq !== undefined ? { throughSeq: request.throughSeq } : {}),
+      },
+      limit,
+      true
     );
     return this.replayFromWindow("after", window, context);
   }
@@ -245,26 +284,27 @@ export class ChannelLog {
     limit: number,
     context: ChannelReplayContext
   ): Promise<ChannelReplayEnvelope> {
-    const window = await this.hydrateReplayWindow(
-      await this.gad.call<GadReplayWindow>("getChannelReplayWindow", {
-        channelId: this.channelId,
-        mode: "before",
-        beforeSeq,
-        limit,
-      })
-    );
+    this.assertReplayLimit(limit);
+    const window = await this.readReplayWindow({ kind: "before", seq: beforeSeq }, limit, true);
     return this.replayFromWindow("before", window, context);
   }
 
-  async replayInitial(limit: number, context: ChannelReplayContext): Promise<ChannelReplayEnvelope> {
-    const window = await this.hydrateReplayWindow(
-      await this.gad.call<GadReplayWindow>("getChannelReplayWindow", {
-        channelId: this.channelId,
-        mode: "initial",
-        limit,
-      })
-    );
+  async replayInitial(
+    limit: number,
+    context: ChannelReplayContext
+  ): Promise<ChannelReplayEnvelope> {
+    this.assertReplayLimit(limit, true);
+    const window = await this.readReplayWindow({ kind: "tail" }, limit, true);
     return this.replayFromWindow("initial", window, context);
+  }
+
+  private assertReplayLimit(limit: number, allowZero = false): void {
+    const minimum = allowZero ? 0 : 1;
+    if (!Number.isInteger(limit) || limit < minimum || limit > MAX_CHANNEL_REPLAY_PAGE_LIMIT) {
+      throw new RangeError(
+        `channel replay limit must be an integer between ${minimum} and ${MAX_CHANNEL_REPLAY_PAGE_LIMIT}`
+      );
+    }
   }
 
   async inspectRows(opts: {
@@ -272,15 +312,16 @@ export class ChannelLog {
     beforeId?: number;
     limit?: number;
   }): Promise<Record<string, unknown>[]> {
-    const mode = opts.beforeId != null ? "before" : opts.afterId != null ? "after" : "initial";
-    const window = await this.gad.call<GadReplayWindow>("getChannelReplayWindow", {
-      channelId: this.channelId,
-      mode,
-      sinceSeq: opts.afterId,
-      beforeSeq: opts.beforeId,
-      limit: opts.limit,
-    });
-    return window.envelopes.map((envelope) => this.inspectionRow(envelope));
+    const window = await this.readReplayWindow(
+      opts.beforeId != null
+        ? { kind: "before", seq: opts.beforeId }
+        : opts.afterId != null
+          ? { kind: "after", seq: opts.afterId }
+          : { kind: "tail" },
+      opts.limit ?? 50,
+      false
+    );
+    return window.items.map((envelope) => this.inspectionRow(envelope));
   }
 
   async inspectEnvelope(envelopeId: string): Promise<Record<string, unknown>[]> {
@@ -325,19 +366,21 @@ export class ChannelLog {
   ): ChannelReplayEnvelope {
     return {
       mode,
-      logEvents: window.envelopes.map(
+      logEvents: window.items.map(
         (envelope): ServerLogEvent => this.eventFromChannelView(envelope)
       ),
       snapshots: context.snapshots ?? [],
       ready: {
         contextId: context.contextId,
         channelConfig: context.channelConfig,
-        totalCount: window.totalCount,
-        envelopeCount: window.totalCount,
-        firstEnvelopeSeq: window.firstEnvelopeSeq,
-        replayFromId: window.replayFromId,
-        replayToId: window.replayToId,
-        ...(window.hasMoreBefore !== undefined ? { hasMoreBefore: window.hasMoreBefore } : {}),
+        totalCount: window.pageInfo.totalCount,
+        envelopeCount: window.pageInfo.totalCount,
+        firstEnvelopeSeq: window.pageInfo.firstSeq,
+        replayFromId: window.pageInfo.returnedFromSeq,
+        replayToId: window.pageInfo.returnedToSeq,
+        snapshotLastSeq: window.pageInfo.snapshotLastSeq,
+        hasMoreBefore: window.pageInfo.hasMoreBefore,
+        hasMoreAfter: window.pageInfo.hasMoreAfter,
       },
     };
   }
@@ -352,9 +395,7 @@ export class ChannelLog {
       envelope.metadata ?? envelope.from.metadata,
       Date.parse(envelope.publishedAt),
       envelope.attachments as StoredAttachment[] | undefined,
-      policyAnnotations(
-        (envelope as { annotations?: Record<string, unknown> }).annotations
-      )
+      policyAnnotations((envelope as { annotations?: Record<string, unknown> }).annotations)
     );
   }
 
@@ -381,10 +422,49 @@ export class ChannelLog {
     });
   }
 
-  private async hydrateReplayWindow(window: GadReplayWindow): Promise<GadReplayWindow> {
+  private async hydrateReplayPage(window: GadReplayPage): Promise<GadReplayPage> {
     return {
       ...window,
-      envelopes: await Promise.all(window.envelopes.map((envelope) => this.hydrate(envelope))),
+      items: await Promise.all(window.items.map((envelope) => this.hydrate(envelope))),
+    };
+  }
+
+  private async readReplayWindow(
+    window: ChannelEnvelopeWindow,
+    maximumItems: number | "all",
+    hydrate: boolean
+  ): Promise<GadReplayWindow> {
+    const pages = await collectChannelEnvelopePages(
+      { channelId: this.channelId, window },
+      { maximumItems },
+      async (request) => {
+        const page = await this.gad.call<GadReplayPage>("readChannelEnvelopes", request);
+        return hydrate ? this.hydrateReplayPage(page) : page;
+      }
+    );
+    const firstPage = pages[0]!;
+    const lastPage = pages[pages.length - 1]!;
+    const items = pages.flatMap((page) => page.items);
+    return {
+      items,
+      pageInfo: {
+        totalCount: firstPage.pageInfo.totalCount,
+        ...(firstPage.pageInfo.firstSeq !== undefined
+          ? { firstSeq: firstPage.pageInfo.firstSeq }
+          : {}),
+        ...(firstPage.pageInfo.lastSeq !== undefined
+          ? { lastSeq: firstPage.pageInfo.lastSeq }
+          : {}),
+        ...(firstPage.pageInfo.snapshotLastSeq !== undefined
+          ? { snapshotLastSeq: firstPage.pageInfo.snapshotLastSeq }
+          : {}),
+        ...(items[0]?.seq !== undefined ? { returnedFromSeq: items[0].seq } : {}),
+        ...(items[items.length - 1]?.seq !== undefined
+          ? { returnedToSeq: items[items.length - 1]!.seq }
+          : {}),
+        hasMoreBefore: firstPage.pageInfo.hasMoreBefore,
+        hasMoreAfter: lastPage.pageInfo.hasMoreAfter,
+      },
     };
   }
 

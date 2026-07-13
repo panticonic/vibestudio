@@ -97,6 +97,9 @@ interface ProviderBridgeMessage {
   method?: string;
   params?: unknown;
   sessionId?: string;
+  /** Optional provider-known target metadata. Registration never waits on it. */
+  kind?: string;
+  source?: string;
 }
 
 interface RegisteredTarget {
@@ -555,6 +558,7 @@ export class CdpBridge {
     switch (msg.type) {
       case "cdp:register": {
         if (typeof msg.targetId !== "string" || typeof msg.tabId !== "number") break;
+        const targetId = msg.targetId;
         // Reject registrations for panels that don't exist (e.g. rolled back
         // after open-tab timeout, or stale mappings from a previous session)
         if (!(await this.isPanelKnown(msg.targetId))) {
@@ -608,18 +612,34 @@ export class CdpBridge {
           }
           break;
         }
-        const targetInfo = (await this.getTargetInfo?.(msg.targetId)) ?? {};
-        this.targetRegistry.set(msg.targetId, {
+        const registration: RegisteredTarget = {
           tabId: msg.tabId,
           hostConnectionId,
-          kind: targetInfo.kind,
-          source: targetInfo.source,
-        });
+          // Treat an unclassified panel conservatively as a workspace target:
+          // raw CDP navigation stays disabled until optional metadata arrives.
+          kind: msg.kind ?? "workspace",
+          source: msg.source,
+        };
+        this.targetRegistry.set(msg.targetId, registration);
         log.info(
           `Target registered: ${msg.targetId} (tab ${msg.tabId}${
             hostConnectionId ? `, host ${hostConnectionId}` : ""
           })`
         );
+        // Target readiness is the provider's authenticated registration, not
+        // a metadata round trip. In particular, panelTree.create can be the DO
+        // request whose completion makes that metadata readable; awaiting it
+        // here creates a circular 30-second readiness timeout. Enrich in the
+        // background and update only if this exact registration is still live.
+        void Promise.resolve(this.getTargetInfo?.(targetId))
+          .then((targetInfo) => {
+            if (!targetInfo || this.targetRegistry.get(targetId) !== registration) return;
+            registration.kind = targetInfo.kind ?? registration.kind;
+            registration.source = targetInfo.source ?? registration.source;
+          })
+          .catch((error) => {
+            log.warn(`Failed to resolve CDP target metadata for ${msg.targetId}: ${String(error)}`);
+          });
         break;
       }
 

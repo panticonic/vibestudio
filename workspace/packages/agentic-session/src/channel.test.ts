@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import {
+  destroyHeadlessAgentContext,
   getRecommendedChannelConfig,
   retireHeadlessAgent,
   subscribeHeadlessAgent,
@@ -287,6 +288,18 @@ describe("retireHeadlessAgent", () => {
 
     expect(rpcCall).toHaveBeenCalledWith("main", "runtime.retireEntity", [
       { id: "do:workers/agent-worker:AiChatWorker:obj-1" },
+    ]);
+  });
+});
+
+describe("destroyHeadlessAgentContext", () => {
+  it("recursively destroys the complete isolated lifecycle tree", async () => {
+    const rpcCall = vi.fn(async () => undefined);
+
+    await destroyHeadlessAgentContext({ rpcCall, contextId: "ctx-headless" });
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "runtime.destroyContext", [
+      { contextId: "ctx-headless", recursive: true },
     ]);
   });
 });

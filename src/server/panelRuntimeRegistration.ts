@@ -74,7 +74,7 @@ async function waitForCdpTargetRegistered(
   bridge: import("./cdpBridge.js").CdpBridge,
   panelId: string,
   hostConnectionId?: string,
-  timeoutMs = 5_000
+  timeoutMs = 30_000
 ): Promise<void> {
   const isReady = () =>
     hostConnectionId
@@ -593,14 +593,25 @@ export async function createServerPanelTreeBridge(
         );
       }
     }
+    const assignmentReason = assigned && !assigned.assigned ? assigned.reason : undefined;
+    const loadedByLease = Boolean(assigned?.assigned || assignmentReason === "already_held");
+    if (loadedByLease) {
+      const holder = deps.panelRuntimeCoordinator?.resolveHostForSlot(panelId) ?? null;
+      // A CDP host lease is only an assignment. Do not report a programmatic
+      // panel as loaded until the host has actually created and registered its
+      // renderer target. Mobile/non-CDP holders have their own load contract.
+      if (holder?.supportsCdp) {
+        if (!cdpBridge.isProviderConnected(holder.hostConnectionId)) {
+          throw new Error(`CDP host provider unavailable for panel: ${panelId}`);
+        }
+        await waitForCdpTargetRegistered(cdpBridge, panelId, holder.hostConnectionId);
+      }
+    }
     return {
       panelId,
-      status:
-        assigned?.assigned || assigned?.reason === "already_held"
-          ? "loaded"
-          : (assigned?.reason ?? "no_default_cdp_host"),
+      status: loadedByLease ? "loaded" : (assignmentReason ?? "no_default_cdp_host"),
       focused: false,
-      loaded: Boolean(assigned?.assigned || assigned?.reason === "already_held"),
+      loaded: loadedByLease,
       holderLabel: assigned?.lease?.holderLabel,
     };
   };
@@ -945,11 +956,45 @@ export async function createServerPanelTreeBridge(
         const { server: rpcServer } = deps.container.get<{
           server: import("./rpcServer.js").RpcServer;
         }>("rpcServer");
-        return rpcServer.callTarget(
-          runtimeEntityId,
-          String(args[1]),
-          ...(Array.isArray(args[2]) ? args[2] : [])
-        );
+        const agentMethod = String(args[1]);
+        try {
+          return await rpcServer.callTarget(
+            runtimeEntityId,
+            agentMethod,
+            ...(Array.isArray(args[2]) ? args[2] : [])
+          );
+        } catch (error) {
+          // The built-in inspection contract is a property of a hosted panel,
+          // not of whether its application bundle happened to import the panel
+          // runtime barrel early enough to expose `_agent.*`. Keep custom RPC
+          // methods fail-loud, but provide universal host-backed fallbacks for
+          // the standard handle inspection methods.
+          if (!agentMethod.startsWith("_agent.")) throw error;
+          const panel = registry.getPanel(panelId);
+          if (!panel) throw error;
+          const cdpBridge = await ensureHostCommandTargetReady(panelId);
+          if (agentMethod === "_agent.snapshot" || agentMethod === "_agent.tree") {
+            const snapshot = await snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
+            return agentMethod === "_agent.tree" ? snapshot.structure : snapshot;
+          }
+          if (agentMethod === "_agent.state") return {};
+          if (agentMethod === "_agent.routes") {
+            const snapshot = getCurrentSnapshot(panel);
+            return {
+              source: getPanelSource(panel),
+              contextId: getPanelContextId(panel),
+              ref: snapshot.options.ref ?? null,
+            };
+          }
+          if (agentMethod === "_agent.setMode") {
+            return {
+              mode: Array.isArray(args[2]) ? args[2][0] : undefined,
+              applied: false,
+              reason: "panel runtime agent API is not exposed; inspection remains host-backed",
+            };
+          }
+          throw error;
+        }
       }
       case "takeOver": {
         if (request.callerKind !== "panel") {
@@ -1021,16 +1066,25 @@ export async function createServerPanelTreeBridge(
 export async function snapshotBrowserPanelFromCdpBridge(
   cdpBridge: Pick<import("./cdpBridge.js").CdpBridge, "isTargetRegistered" | "sendHostCommand">,
   panelId: string
-): Promise<{ kind: "ax"; text: string; structure: unknown[] }> {
+): Promise<{ kind: "synth" | "ax"; text: string; structure: unknown }> {
   if (!cdpBridge.isTargetRegistered(panelId)) {
     throw new Error(`target-not-loaded: ${panelId}`);
   }
-  const nodes = (await cdpBridge.sendHostCommand(panelId, "accessibilityTree", [])) as unknown[];
-  return {
-    kind: "ax",
-    text: summarizeAxNodes(nodes),
-    structure: nodes,
-  };
+  try {
+    const snapshot = (await cdpBridge.sendHostCommand(panelId, "domSnapshot", [])) as {
+      kind?: unknown;
+      text?: unknown;
+      structure?: unknown;
+    };
+    if (snapshot?.kind === "synth" && typeof snapshot.text === "string") {
+      return { kind: "synth", text: snapshot.text, structure: snapshot.structure ?? null };
+    }
+    throw new Error("host returned an invalid DOM snapshot");
+  } catch {
+    // Compatibility for an older connected host during a rolling restart.
+    const nodes = (await cdpBridge.sendHostCommand(panelId, "accessibilityTree", [])) as unknown[];
+    return { kind: "ax", text: summarizeAxNodes(nodes), structure: nodes };
+  }
 }
 
 function summarizeAxNodes(nodes: unknown[]): string {
@@ -1054,8 +1108,13 @@ export interface CommonDeps {
   container: ServiceContainer;
   dispatcher: ServiceDispatcher;
   workspace: Workspace;
+  /** User-facing hub catalog name; may differ from an ephemeral child's disk name. */
+  activeWorkspaceName: string;
   workspacePath: string;
   workspaceConfig: WorkspaceConfig;
+  /** Live config reads and GAD-authoritative protected-main writes. */
+  getWorkspaceConfig?: () => WorkspaceConfig;
+  persistWorkspaceConfigField?: (ctx: ServiceContext, key: string, value: unknown) => Promise<void>;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
   /** Required hub-owned catalog proxy; child servers never mutate the catalog directly. */
@@ -1178,8 +1237,7 @@ export interface CommonDeps {
 }
 
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
-  const { container, workspace, workspacePath, workspaceConfig, adminToken, hostConfig } = deps;
-  const path = await import("path");
+  const { container, workspace, workspaceConfig, adminToken, hostConfig } = deps;
   let serverPanelTreeBridgePromise: Promise<
     (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
   > | null = null;
@@ -1250,16 +1308,19 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");
-    const { createWorkspaceConfigManager } = await import("@vibestudio/shared/workspace/loader");
-    const wsConfigPath = path.join(workspacePath, "meta/vibestudio.yml");
-    const wsConfigManager = createWorkspaceConfigManager(wsConfigPath, workspaceConfig);
 
     container.registerRpc(
       createWorkspaceService({
         workspace,
+        activeWorkspaceName: deps.activeWorkspaceName,
         treeScanner: deps.treeScanner,
-        getConfig: wsConfigManager.get,
-        setConfigField: wsConfigManager.set as (key: string, value: unknown) => void,
+        getConfig: deps.getWorkspaceConfig ?? (() => workspaceConfig),
+        setConfigField: async (key, value, ctx) => {
+          if (!deps.persistWorkspaceConfigField) {
+            throw new Error("GAD-authoritative workspace config publishing is unavailable");
+          }
+          await deps.persistWorkspaceConfigField(ctx, key, value);
+        },
         workspaceCatalog: deps.workspaceCatalog,
         eventService: deps.eventService,
         listUnits: deps.listWorkspaceUnits,

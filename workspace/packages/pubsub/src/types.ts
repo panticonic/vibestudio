@@ -85,7 +85,22 @@ export interface ReplayReady {
   firstEnvelopeSeq?: number;
   replayFromId?: number;
   replayToId?: number;
+  /** Stable high-water mark captured by the first forward page. */
+  snapshotLastSeq?: number;
   hasMoreBefore?: boolean;
+  hasMoreAfter?: boolean;
+}
+
+/** Every replay RPC returns at most one bounded page. */
+export const DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT = 500;
+export const MAX_CHANNEL_REPLAY_PAGE_LIMIT = 500;
+
+/** One bounded, stable forward-replay page. Follow `ready.hasMoreAfter` with
+ * `after=ready.replayToId` and the same `throughSeq=ready.snapshotLastSeq`. */
+export interface ChannelReplayAfterRequest {
+  after: number;
+  limit?: number;
+  throughSeq?: number;
 }
 
 export interface ChannelReplayEnvelope {

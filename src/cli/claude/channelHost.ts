@@ -150,7 +150,7 @@ async function adopt(adoption: AdoptionEnvironment): Promise<BridgeConfig> {
   const creds = load();
   if (!creds) {
     throw new AuthError(
-      'adoption requires a paired device — run `vibestudio remote pair "vibestudio://connect?..."` first'
+      'adoption requires a paired device — run `vibestudio remote pair "<pair-link>"` first'
     );
   }
   const client = adoption.makeClient ? adoption.makeClient(creds) : new RpcClient(creds);

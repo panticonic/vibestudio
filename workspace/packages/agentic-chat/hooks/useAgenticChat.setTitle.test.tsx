@@ -49,6 +49,21 @@ function createClient(): PubSubClient & {
   } as unknown as PubSubClient & { updateChannelConfig: ReturnType<typeof vi.fn> };
 }
 
+function createRpcCall(options?: { failTitleUpdate?: boolean }) {
+  return vi.fn(async (_target: string, method: string) => {
+    if (method === "workers.resolveService") {
+      return { targetId: "do:channel:chat-title-test" };
+    }
+    if (method === "getProvenance") {
+      return { kind: "root" };
+    }
+    if (method === "runtime.setTitle" && options?.failTitleUpdate) {
+      throw new Error("runtime unavailable");
+    }
+    return undefined;
+  }) as unknown as ConnectionConfig["rpc"]["call"];
+}
+
 function Probe({
   config,
   onContext,
@@ -87,7 +102,7 @@ describe("useAgenticChat set_title", () => {
       clientId: "panel:slot-id",
       rpc: {
         selfId: "panel:runtime-entity",
-        call: vi.fn(async () => undefined) as unknown as ConnectionConfig["rpc"]["call"],
+        call: createRpcCall(),
         on: vi.fn(() => () => undefined),
       },
     };
@@ -124,7 +139,7 @@ describe("useAgenticChat set_title", () => {
         return client;
       }
     );
-    const call = vi.fn(async () => undefined) as unknown as ConnectionConfig["rpc"]["call"];
+    const call = createRpcCall();
     const config: ConnectionConfig = {
       clientId: "panel:chat",
       rpc: {
@@ -169,12 +184,7 @@ describe("useAgenticChat set_title", () => {
       }
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const call = vi.fn(async (_target: string, method: string) => {
-      if (method === "runtime.setTitle") {
-        throw new Error("runtime unavailable");
-      }
-      return null;
-    }) as unknown as ConnectionConfig["rpc"]["call"];
+    const call = createRpcCall({ failTitleUpdate: true });
     const config: ConnectionConfig = {
       clientId: "panel:chat",
       rpc: {

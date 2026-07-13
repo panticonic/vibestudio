@@ -51,12 +51,117 @@ export interface PanelScreenshotResult {
   height: number;
 }
 
+export interface PanelDomSnapshot {
+  kind: "synth";
+  text: string;
+  structure: unknown;
+  truncated: boolean;
+  limits: {
+    textChars: number;
+    textNodes: number;
+    structureNodes: number;
+    depth: number;
+    childrenPerNode: number;
+    leafTextChars: number;
+  };
+  observed: { textNodes: number; structureNodes: number };
+}
+
+const DOM_SNAPSHOT_EXPRESSION = `(() => {
+  const limits = {
+    textChars: 32768,
+    textNodes: 2000,
+    structureNodes: 500,
+    depth: 8,
+    childrenPerNode: 50,
+    leafTextChars: 160,
+  };
+  let truncated = false;
+  let structureNodes = 0;
+  let textNodes = 0;
+
+  const boundedText = (root, maximum, maximumNodes) => {
+    if (!root) return "";
+    const chunks = [];
+    let length = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      textNodes += 1;
+      if (textNodes > maximumNodes) {
+        truncated = true;
+        break;
+      }
+      const value = String(walker.currentNode.nodeValue || "").replace(/\\s+/g, " ").trim();
+      if (!value) continue;
+      const separator = chunks.length === 0 ? "" : "\\n";
+      const remaining = maximum - length - separator.length;
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      chunks.push(separator + value.slice(0, remaining));
+      length += separator.length + Math.min(value.length, remaining);
+      if (value.length > remaining) {
+        truncated = true;
+        break;
+      }
+    }
+    return chunks.join("");
+  };
+
+  const describe = (element, depth = 0) => {
+    if (!element) return null;
+    if (depth > limits.depth || structureNodes >= limits.structureNodes) {
+      truncated = true;
+      return null;
+    }
+    structureNodes += 1;
+    const childCount = Number(element.children?.length || 0);
+    if (childCount > limits.childrenPerNode || (depth === limits.depth && childCount > 0)) {
+      truncated = true;
+    }
+    const children = [];
+    if (depth < limits.depth) {
+      for (let index = 0; index < Math.min(childCount, limits.childrenPerNode); index += 1) {
+        const child = describe(element.children[index], depth + 1);
+        if (child) children.push(child);
+        if (structureNodes >= limits.structureNodes) break;
+      }
+    }
+    return {
+      tag: String(element.tagName || "").toLowerCase(),
+      role: element.getAttribute?.("role") || undefined,
+      label: element.getAttribute?.("aria-label") || undefined,
+      text: children.length === 0
+        ? boundedText(element, limits.leafTextChars, limits.textNodes)
+        : undefined,
+      children,
+      depth,
+    };
+  };
+  const text = boundedText(document.body, limits.textChars, limits.textNodes);
+  return {
+    kind: "synth",
+    text,
+    structure: document.body ? describe(document.body) : null,
+    truncated,
+    limits,
+    observed: { textNodes, structureNodes },
+  };
+})()`;
+
+interface DocumentReadyWaiter {
+  resolve(): void;
+  reject(error: Error): void;
+}
+
 export class PageHost {
   private readonly pages = new Map<string, PanelPage>();
   private readonly contextsById = new Map<string, string>(); // contextId → browserContextId
   private readonly relayEventListeners = new Set<
     (slotId: string, method: string, params: unknown, sessionId?: string) => void
   >();
+  private readonly documentReadyWaiters = new Map<string, DocumentReadyWaiter>();
 
   constructor(
     private readonly cdp: CdpConnection,
@@ -120,23 +225,81 @@ export class PageHost {
     };
     this.pages.set(input.slotId, page);
 
-    const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(input.panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
-    await this.cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: initScript }, mgmtSessionId);
-    await Promise.allSettled([
-      this.cdp.send("Page.enable", undefined, mgmtSessionId),
-      this.cdp.send("Runtime.enable", undefined, mgmtSessionId),
-      this.cdp.send("Log.enable", undefined, mgmtSessionId),
-    ]);
-    const nav = (await this.cdp.send("Page.navigate", { url: input.panelUrl }, mgmtSessionId)) as {
-      errorText?: string;
-    };
-    if (nav.errorText && nav.errorText !== "net::ERR_ABORTED") {
-      this.consoleHistory.recordLifecycle(input.slotId, `did-fail-load: ${nav.errorText}`, {
-        url: input.panelUrl,
+    try {
+      const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(input.panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
+      await this.cdp.send(
+        "Page.addScriptToEvaluateOnNewDocument",
+        { source: initScript },
+        mgmtSessionId
+      );
+      await Promise.all([
+        this.cdp.send("Page.enable", undefined, mgmtSessionId),
+        this.cdp.send("Runtime.enable", undefined, mgmtSessionId),
+        this.cdp.send("Log.enable", undefined, mgmtSessionId),
+      ]);
+      await this.navigateAndWait(input.slotId, "panel navigation", async () => {
+        const nav = (await this.cdp.send(
+          "Page.navigate",
+          { url: input.panelUrl },
+          mgmtSessionId
+        )) as { errorText?: string };
+        if (nav.errorText && nav.errorText !== "net::ERR_ABORTED") {
+          this.consoleHistory.recordLifecycle(input.slotId, `did-fail-load: ${nav.errorText}`, {
+            url: input.panelUrl,
+          });
+        }
+        return nav;
       });
-      throw new Error(`panel navigation failed: ${nav.errorText}`);
+    } catch (error) {
+      await this.unloadPanel(input.slotId).catch(() => undefined);
+      throw error;
     }
     log.info(`loaded panel ${input.slotId} (${input.panelUrl})`);
+  }
+
+  private waitForDocumentReady(slotId: string): Promise<void> {
+    this.documentReadyWaiters
+      .get(slotId)
+      ?.reject(new Error(`panel ${slotId} navigation was superseded`));
+    return new Promise((resolve, reject) => {
+      const waiter: DocumentReadyWaiter = {
+        resolve: () => {
+          if (this.documentReadyWaiters.get(slotId) !== waiter) return;
+          this.documentReadyWaiters.delete(slotId);
+          resolve();
+        },
+        reject: (error) => {
+          if (this.documentReadyWaiters.get(slotId) !== waiter) return;
+          this.documentReadyWaiters.delete(slotId);
+          reject(error);
+        },
+      };
+      this.documentReadyWaiters.set(slotId, waiter);
+    });
+  }
+
+  private async navigateAndWait(
+    slotId: string,
+    operation: string,
+    navigate: () => Promise<{ errorText?: string }>
+  ): Promise<void> {
+    const documentReady = this.waitForDocumentReady(slotId);
+    try {
+      const result = await navigate();
+      if (result.errorText && result.errorText !== "net::ERR_ABORTED") {
+        throw new Error(`${operation} failed: ${result.errorText}`);
+      }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.documentReadyWaiters.get(slotId)?.reject(failure);
+      await documentReady.catch(() => undefined);
+      throw failure;
+    }
+    await documentReady;
+  }
+
+  private rejectDocumentReady(slotId: string, reason: string): void {
+    this.documentReadyWaiters.get(slotId)?.reject(new Error(reason));
   }
 
   async reloadPanel(slotId: string, panelUrl: string, panelInit: unknown): Promise<void> {
@@ -148,15 +311,15 @@ export class PageHost {
       { source: initScript },
       page.mgmtSessionId
     );
-    const nav = (await this.cdp.send("Page.navigate", { url: panelUrl }, page.mgmtSessionId)) as {
-      errorText?: string;
-    };
-    if (nav.errorText && nav.errorText !== "net::ERR_ABORTED") {
-      throw new Error(`panel reload failed: ${nav.errorText}`);
-    }
+    await this.navigateAndWait(slotId, "panel reload", () =>
+      this.cdp.send("Page.navigate", { url: panelUrl }, page.mgmtSessionId) as Promise<{
+        errorText?: string;
+      }>
+    );
   }
 
   async unloadPanel(slotId: string): Promise<void> {
+    this.rejectDocumentReady(slotId, `panel ${slotId} unloaded before document readiness`);
     const page = this.pages.get(slotId);
     if (!page) return;
     this.pages.delete(slotId);
@@ -178,16 +341,16 @@ export class PageHost {
     switch (action) {
       case "navigate": {
         if (!url) throw new Error("navigate requires a url");
-        const nav = (await this.cdp.send("Page.navigate", { url }, session)) as {
-          errorText?: string;
-        };
-        if (nav.errorText && nav.errorText !== "net::ERR_ABORTED") {
-          throw new Error(`navigate failed: ${nav.errorText}`);
-        }
+        await this.navigateAndWait(slotId, "navigate", () =>
+          this.cdp.send("Page.navigate", { url }, session) as Promise<{ errorText?: string }>
+        );
         return;
       }
       case "reload":
-        await this.cdp.send("Page.reload", undefined, session);
+        await this.navigateAndWait(slotId, "reload", async () => {
+          await this.cdp.send("Page.reload", undefined, session);
+          return {};
+        });
         return;
       case "goBack":
       case "goForward": {
@@ -198,7 +361,10 @@ export class PageHost {
         const targetIndex = history.currentIndex + (action === "goBack" ? -1 : 1);
         const entry = history.entries[targetIndex];
         if (!entry) return; // nothing to navigate to — match Electron's no-op
-        await this.cdp.send("Page.navigateToHistoryEntry", { entryId: entry.id }, session);
+        await this.navigateAndWait(slotId, action, async () => {
+          await this.cdp.send("Page.navigateToHistoryEntry", { entryId: entry.id }, session);
+          return {};
+        });
         return;
       }
       case "stop":
@@ -220,6 +386,37 @@ export class PageHost {
     } finally {
       await this.cdp.send("Accessibility.disable", undefined, page.mgmtSessionId).catch(() => undefined);
     }
+  }
+
+  /** Bounded agent-readable DOM snapshot; avoids Chromium's hanging full AX traversal. */
+  async domSnapshot(slotId: string): Promise<PanelDomSnapshot> {
+    const page = this.requirePage(slotId);
+    const result = (await this.cdp.send(
+      "Runtime.evaluate",
+      { expression: DOM_SNAPSHOT_EXPRESSION, returnByValue: true, awaitPromise: true },
+      page.mgmtSessionId
+    )) as { result?: { value?: unknown }; exceptionDetails?: unknown };
+    const value = result.result?.value as Partial<PanelDomSnapshot> | undefined;
+    if (!value || value.kind !== "synth" || typeof value.text !== "string") {
+      throw new Error("Runtime.evaluate returned no DOM snapshot");
+    }
+    if (
+      typeof value.truncated !== "boolean" ||
+      !value.limits ||
+      typeof value.limits !== "object" ||
+      !value.observed ||
+      typeof value.observed !== "object"
+    ) {
+      throw new Error("Runtime.evaluate returned an invalid bounded DOM snapshot");
+    }
+    return {
+      kind: "synth",
+      text: value.text,
+      structure: value.structure ?? null,
+      truncated: value.truncated,
+      limits: value.limits as PanelDomSnapshot["limits"],
+      observed: value.observed as PanelDomSnapshot["observed"],
+    };
   }
 
   async captureScreenshot(
@@ -320,6 +517,9 @@ export class PageHost {
     event: { method: string; params: unknown; sessionId?: string }
   ): void {
     switch (event.method) {
+      case "Page.domContentEventFired":
+        this.documentReadyWaiters.get(slotId)?.resolve();
+        return;
       case "Runtime.consoleAPICalled": {
         const params = event.params as {
           type?: string;
@@ -365,6 +565,7 @@ export class PageHost {
         return;
       }
       case "Inspector.targetCrashed":
+        this.rejectDocumentReady(slotId, `panel ${slotId} target crashed during navigation`);
         this.consoleHistory.recordLifecycle(slotId, "render-process-gone: target crashed");
         return;
       default:

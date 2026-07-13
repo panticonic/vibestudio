@@ -14,6 +14,10 @@ import type {
   ChannelConfig,
 } from "@workspace/pubsub";
 import type { ChatParticipantMetadata, ConnectionConfig } from "./types.js";
+import {
+  DEFAULT_CHANNEL_ENVELOPE_PAGE_LIMIT,
+  MAX_CHANNEL_ENVELOPE_PAGE_LIMIT,
+} from "@vibestudio/shared/channelEnvelopePaging";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
@@ -81,6 +85,10 @@ export class ConnectionManager {
 
   async connect(options: ConnectionConnectOptions): Promise<PubSubClient<ChatParticipantMetadata>> {
     const { channelId, methods, channelConfig, contextId } = options;
+    const replayMessageLimit = Math.min(
+      this.config.replayMessageLimit ?? DEFAULT_CHANNEL_ENVELOPE_PAGE_LIMIT,
+      MAX_CHANNEL_ENVELOPE_PAGE_LIMIT
+    );
 
     if (!this.config.rpc) {
       const error = new Error("PubSub RPC configuration not available");
@@ -116,7 +124,7 @@ export class ConnectionManager {
         metadata: this.metadata as ChatParticipantMetadata,
         methods,
         replayMode: "stream",
-        replayMessageLimit: this.config.replayMessageLimit ?? 10_000,
+        replayMessageLimit,
         recoveryCoordinator: this.config.recoveryCoordinator,
       });
 
@@ -134,7 +142,7 @@ export class ConnectionManager {
         channelId,
         requestedContextId: contextId ?? null,
         resolvedContextId: newClient.contextId ?? null,
-        replayMessageLimit: this.config.replayMessageLimit ?? 10_000,
+        replayMessageLimit,
         totalMessageCount: newClient.totalMessageCount ?? null,
         envelopeCount: newClient.envelopeCount ?? null,
         firstEnvelopeSeq: newClient.firstEnvelopeSeq ?? null,

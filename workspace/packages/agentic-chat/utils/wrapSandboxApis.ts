@@ -30,6 +30,8 @@ export function wrapChatForErrorReporting(
       trackPromise(chat.publishCustomMessage(...args), onError),
     updateCustomMessage: (...args: Parameters<ChatSandboxValue["updateCustomMessage"]>) =>
       trackPromise(chat.updateCustomMessage(...args), onError),
+    replayEnvelope: (...args: Parameters<ChatSandboxValue["replayEnvelope"]>) =>
+      trackPromise(chat.replayEnvelope(...args), onError),
     participantByHandle: (...args: Parameters<ChatSandboxValue["participantByHandle"]>) =>
       trackPromise(chat.participantByHandle(...args), onError),
     callMethod: (...args: Parameters<ChatSandboxValue["callMethod"]>) =>

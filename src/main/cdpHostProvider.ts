@@ -209,6 +209,34 @@ export class CdpHostProvider {
     }
   }
 
+  /** Bounded readable snapshot for automation; independent of the full AX domain. */
+  async getDomSnapshot(targetId: string): Promise<unknown> {
+    const contents = this.requireTargetContents(targetId);
+    return contents.executeJavaScript(
+      `(() => {
+      const describe = (element, depth = 0) => {
+        if (!element || depth > 8) return null;
+        const children = Array.from(element.children || []).slice(0, 50)
+          .map((child) => describe(child, depth + 1)).filter(Boolean);
+        return {
+          tag: String(element.tagName || "").toLowerCase(),
+          role: element.getAttribute?.("role") || undefined,
+          label: element.getAttribute?.("aria-label") || undefined,
+          text: children.length === 0 ? String(element.textContent || "").trim().slice(0, 160) : undefined,
+          children,
+          depth,
+        };
+      };
+      return {
+        kind: "synth",
+        text: String(document.body?.innerText || "").replace(/\\n{3,}/g, "\\n\\n").trim(),
+        structure: document.body ? describe(document.body) : null,
+      };
+    })()`,
+      true
+    );
+  }
+
   getConsoleHistory(
     targetId: string,
     options: PanelConsoleHistoryOptions = {}
@@ -407,6 +435,9 @@ export class CdpHostProvider {
     }
     if (action === "accessibilityTree") {
       return this.getAccessibilityTree(targetId);
+    }
+    if (action === "domSnapshot") {
+      return this.getDomSnapshot(targetId);
     }
     if (action === "consoleHistory") {
       return this.getConsoleHistory(targetId, normalizeConsoleHistoryOptions(args[0]));

@@ -77,27 +77,6 @@ function modelSwitchConfigFromSettings(
   if (Array.isArray(respondFrom) && respondFrom.every((value) => typeof value === "string")) {
     config.respondFrom = respondFrom;
   }
-  const maxModelCallsPerTurn = source["maxModelCallsPerTurn"];
-  if (
-    maxModelCallsPerTurn === null ||
-    (typeof maxModelCallsPerTurn === "number" &&
-      Number.isFinite(maxModelCallsPerTurn) &&
-      maxModelCallsPerTurn > 0)
-  ) {
-    config.maxModelCallsPerTurn =
-      typeof maxModelCallsPerTurn === "number"
-        ? Math.floor(maxModelCallsPerTurn)
-        : maxModelCallsPerTurn;
-  }
-  const modelStreamIdleTimeoutMs = source["modelStreamIdleTimeoutMs"];
-  if (
-    modelStreamIdleTimeoutMs === null ||
-    (typeof modelStreamIdleTimeoutMs === "number" &&
-      Number.isFinite(modelStreamIdleTimeoutMs) &&
-      modelStreamIdleTimeoutMs > 0)
-  ) {
-    config.modelStreamIdleTimeoutMs = modelStreamIdleTimeoutMs;
-  }
   return config;
 }
 

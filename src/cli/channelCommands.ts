@@ -67,6 +67,11 @@ interface ServerLogEvent {
 }
 interface ReplayEnvelope {
   logEvents: ServerLogEvent[];
+  ready: {
+    replayToId?: number;
+    snapshotLastSeq?: number;
+    hasMoreAfter?: boolean;
+  };
 }
 interface RosterMember {
   participantId: string;
@@ -176,10 +181,30 @@ async function history(inv: ParsedInvocation): Promise<number> {
     const channelId = requireChannelId(inv);
     const after = intFlag(inv, "after") ?? 0;
     const limit = intFlag(inv, "limit") ?? 50;
+    if (limit < 1) throw new UsageError("--limit must be a positive integer");
     const { client } = resolveSessionScope(inv);
     const target = await resolveTargetId(client, CHANNEL_PROTOCOL, channelId);
-    const envelope = await client.callTarget<ReplayEnvelope>(target, "getReplayAfter", [after]);
-    const entries = envelope.logEvents.slice(0, limit).map(toHistoryEntry);
+    const events: ServerLogEvent[] = [];
+    let cursor = after;
+    let throughSeq: number | undefined;
+    while (events.length < limit) {
+      const envelope = await client.callTarget<ReplayEnvelope>(target, "getReplayAfter", [
+        {
+          after: cursor,
+          limit: Math.min(500, limit - events.length),
+          ...(throughSeq !== undefined ? { throughSeq } : {}),
+        },
+      ]);
+      events.push(...envelope.logEvents);
+      throughSeq ??= envelope.ready.snapshotLastSeq;
+      if (!envelope.ready.hasMoreAfter) break;
+      const next = envelope.ready.replayToId;
+      if (next === undefined || next <= cursor || throughSeq === undefined) {
+        throw new CliError("channel replay did not return a valid continuation cursor");
+      }
+      cursor = next;
+    }
+    const entries = events.map(toHistoryEntry);
     printResult(entries, {
       json,
       human: () => {

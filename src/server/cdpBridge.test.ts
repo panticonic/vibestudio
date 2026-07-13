@@ -141,7 +141,15 @@ async function connectHostProvider(
   tabId = 123
 ): Promise<WebSocket> {
   const ws = await connectHostProviderOnly(harness, hostConnectionId);
-  ws.send(JSON.stringify({ type: "cdp:register", targetId, tabId }));
+  ws.send(
+    JSON.stringify({
+      type: "cdp:register",
+      targetId,
+      tabId,
+      kind: targetId.includes("browser") ? "browser" : "workspace",
+      source: targetId.includes("browser") ? "browser:https://example.test" : "panels/test",
+    })
+  );
   await waitForTargetRegistered(harness, targetId);
   return ws;
 }
@@ -665,6 +673,27 @@ describe("CdpBridge authentication", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(false);
+  });
+
+  it("registers an authenticated lease target without waiting for panel metadata", async () => {
+    let resolveTargetInfo: (info: { kind: string; source: string }) => void = () => {};
+    const targetInfo = new Promise<{ kind: string; source: string }>((resolve) => {
+      resolveTargetInfo = resolve;
+    });
+    const harness = await createHarness({
+      getTargetInfo: () => targetInfo,
+    });
+    const provider = await connectHostProviderOnly(harness, "desktop-host");
+
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
+
+    await waitForTargetRegistered(harness, "panel:tree/panel-1");
+    expect(harness.bridge.isTargetRegisteredForHost("panel:tree/panel-1", "desktop-host")).toBe(
+      true
+    );
+    resolveTargetInfo({ kind: "workspace", source: "panels/test" });
   });
 
   it("does not register targets after the provider closes during panel-known checks", async () => {

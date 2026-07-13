@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { ChannelEvent, SendMessageOptions } from "@workspace/harness";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
+import { MAX_CHANNEL_REPLAY_PAGE_LIMIT } from "@workspace/pubsub";
 
 const METHOD_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const RESERVED_METHOD_NAMES = new Set(["read", "edit", "write", "grep", "find", "ls"]);
@@ -38,7 +39,7 @@ export const participantMetadataSchema = z
     channelConfig: z.record(z.string(), z.unknown()).optional(),
     replay: z.boolean().optional(),
     sinceId: z.number().int().nonnegative().optional(),
-    replayMessageLimit: z.number().int().positive().optional(),
+    replayMessageLimit: z.number().int().positive().max(MAX_CHANNEL_REPLAY_PAGE_LIMIT).optional(),
     // Opt-in: this participant handles the STRUCTURED `onChannelEnvelope` delivery
     // (set by agent vessels). DO participants that omit it (RPC-style clients like
     // the eval's connectViaRpc) receive only the `channel:message` event stream.

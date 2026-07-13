@@ -175,6 +175,8 @@ export interface ChatSandboxValue {
   getMessageType: (typeId: string) => Promise<MessageTypeDefinition | null>;
   /** List all registered message types on the channel. */
   getMessageTypes: () => Promise<MessageTypeDefinition[]>;
+  /** Look up one durable channel envelope by stable id; null when absent. */
+  replayEnvelope: (envelopeId: string) => Promise<unknown | null>;
   /** Call a participant method and resolve to the provider's result payload. */
   callMethod: (
     participantId: string,

@@ -9,7 +9,7 @@ import {
   TURN_SCOPED_OWNER_KINDS,
   validateInvocationTerminalOutcomeForKind,
 } from "./constants.js";
-import { ACTOR_KINDS, PARTICIPANT_KINDS, PRINCIPAL_KINDS } from "./events.js";
+import { ACTOR_KINDS, PARTICIPANT_KINDS, PRINCIPAL_KINDS, type TrajectoryEvent } from "./events.js";
 
 const protocolSchema = z.literal(AGENTIC_PROTOCOL_VERSION);
 
@@ -28,7 +28,7 @@ export const actorRefSchema = z
     metadata: z.record(z.unknown()).optional(),
     participantId: z.string().min(1).optional(),
   })
-  .passthrough();
+  .strict();
 
 export const principalRefSchema = actorRefSchema.extend({
   kind: principalKindSchema,
@@ -42,7 +42,7 @@ export const participantRefSchema = z
     metadata: z.record(z.unknown()).optional(),
     participantId: z.string().min(1).optional(),
   })
-  .passthrough();
+  .strict();
 
 export const participantSelectorSchema = z
   .object({
@@ -1042,8 +1042,9 @@ function stripTrajectoryStorage(value: unknown): unknown {
 }
 
 export const trajectoryEventSchema = z
-  .custom<Record<string, unknown>>(
-    (value) => !!value && typeof value === "object" && !Array.isArray(value),
+  .custom<TrajectoryEvent>(
+    (value): value is TrajectoryEvent =>
+      !!value && typeof value === "object" && !Array.isArray(value),
     "trajectory event must be an object"
   )
   .superRefine((value, ctx) => {

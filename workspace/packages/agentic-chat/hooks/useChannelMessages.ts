@@ -6,7 +6,12 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { Attachment, PubSubClient, ParticipantMetadata } from "@workspace/pubsub";
+import {
+  iterateChannelReplayAfterPages,
+  type Attachment,
+  type PubSubClient,
+  type ParticipantMetadata,
+} from "@workspace/pubsub";
 import {
   actionBarPayloadFromChannelView,
   type ActionBarPayload,
@@ -53,7 +58,7 @@ export interface UseChannelMessagesResult {
  * all durable + replayed channel messages. Supports windowed pagination.
  */
 export function useChannelMessages<T extends ParticipantMetadata = ParticipantMetadata>(
-  client: PubSubClient<T> | null,
+  client: PubSubClient<T> | null
 ): UseChannelMessagesResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actionBar, setActionBar] = useState<ActionBarPayload | null>(null);
@@ -121,39 +126,42 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     }
   }, []);
 
-  const rebuildFromChannelState = useCallback((trimTail = false) => {
-    const byId = byIdRef.current;
-    const order = orderRef.current;
-    const previousById = new Map(byId);
-    const projected = chatMessagesFromChannelView(channelStateRef.current).map((message) => {
-      const attachments = attachmentsByMessageIdRef.current.get(message.id);
-      return attachments && attachments.length > 0 ? { ...message, attachments } : message;
-    });
-    const projectedIds = new Set(projected.map((message) => message.id));
-    for (const id of [...agenticMessageIdsRef.current]) {
-      if (projectedIds.has(id)) continue;
-      byId.delete(id);
-      const index = order.indexOf(id);
-      if (index >= 0) order.splice(index, 1);
-      agenticMessageIdsRef.current.delete(id);
-    }
-
-    let prependIndex = 0;
-    for (const msg of projected) {
-      if (!byId.has(msg.id)) {
-        if (trimTail) {
-          order.splice(prependIndex, 0, msg.id);
-          prependIndex += 1;
-        } else {
-          order.push(msg.id);
-        }
+  const rebuildFromChannelState = useCallback(
+    (trimTail = false) => {
+      const byId = byIdRef.current;
+      const order = orderRef.current;
+      const previousById = new Map(byId);
+      const projected = chatMessagesFromChannelView(channelStateRef.current).map((message) => {
+        const attachments = attachmentsByMessageIdRef.current.get(message.id);
+        return attachments && attachments.length > 0 ? { ...message, attachments } : message;
+      });
+      const projectedIds = new Set(projected.map((message) => message.id));
+      for (const id of [...agenticMessageIdsRef.current]) {
+        if (projectedIds.has(id)) continue;
+        byId.delete(id);
+        const index = order.indexOf(id);
+        if (index >= 0) order.splice(index, 1);
+        agenticMessageIdsRef.current.delete(id);
       }
-      const existing = previousById.get(msg.id);
-      byId.set(msg.id, existing && sameChatMessage(existing, msg) ? existing : msg);
-      agenticMessageIdsRef.current.add(msg.id);
-    }
-    flush(trimTail);
-  }, [flush]);
+
+      let prependIndex = 0;
+      for (const msg of projected) {
+        if (!byId.has(msg.id)) {
+          if (trimTail) {
+            order.splice(prependIndex, 0, msg.id);
+            prependIndex += 1;
+          } else {
+            order.push(msg.id);
+          }
+        }
+        const existing = previousById.get(msg.id);
+        byId.set(msg.id, existing && sameChatMessage(existing, msg) ? existing : msg);
+        agenticMessageIdsRef.current.add(msg.id);
+      }
+      flush(trimTail);
+    },
+    [flush]
+  );
 
   // Token deltas arrive far faster than the channel projection is cheap to
   // rebuild (the rebuild is O(channel size)). Coalesce delta-triggered
@@ -369,7 +377,8 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
         // agentic ones — a page of only credential/presence events must still
         // move the anchor or pagination stalls on it forever.
         if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
-        if (newestSeqRef.current === null || raw.id > newestSeqRef.current) newestSeqRef.current = raw.id;
+        if (newestSeqRef.current === null || raw.id > newestSeqRef.current)
+          newestSeqRef.current = raw.id;
 
         const payload = raw.payload as Record<string, unknown> | undefined;
         if (!payload) continue;
@@ -381,19 +390,27 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
               pubsubId: raw.id,
               senderId: raw.senderId,
               ts: raw.ts,
-              senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
+              senderMetadata: raw.senderMetadata as
+                | { name?: string; type?: string; handle?: string }
+                | undefined,
               payload,
             })
           );
           continue;
         }
         if (raw.type === AGENTIC_EVENT_PAYLOAD_KIND && payload) {
-          rememberAttachments(attachmentsByMessageIdRef.current, payload as unknown as AgenticEvent, raw.attachments as WireAttachment[] | undefined);
+          rememberAttachments(
+            attachmentsByMessageIdRef.current,
+            payload as unknown as AgenticEvent,
+            raw.attachments as WireAttachment[] | undefined
+          );
           const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
             pubsubId: raw.id,
             senderId: raw.senderId,
             ts: raw.ts,
-            senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
+            senderMetadata: raw.senderMetadata as
+              | { name?: string; type?: string; handle?: string }
+              | undefined,
             payload: payload as unknown as AgenticEvent,
           });
           channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
@@ -408,49 +425,75 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     }
   }, [loadingMore, rebuildFromChannelState]);
 
-  const backfillAfterLocalPublish = useCallback(async (pubsubId: number | undefined) => {
-    const c = clientRef.current;
-    if (!c || pubsubId === undefined) return;
-    const cursor = newestSeqRef.current ?? 0;
-    if (cursor >= pubsubId) return;
-    try {
-      const result = await c.getReplayAfter(cursor);
-      for (const raw of result.logEvents) {
-        const payload = raw.payload as Record<string, unknown> | undefined;
-        if (raw.type === CREDENTIAL_CONNECT_PAYLOAD_KIND && payload) {
-          channelStateRef.current = reduceChannelView(
-            channelStateRef.current,
-            credentialConnectWireToEnvelope(c.channelId, {
-              pubsubId: raw.id,
-              senderId: raw.senderId,
-              ts: raw.ts,
-              senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
-              payload,
-            })
-          );
-          continue;
+  const backfillAfterLocalPublish = useCallback(
+    async (pubsubId: number | undefined) => {
+      const c = clientRef.current;
+      if (!c || pubsubId === undefined) return;
+      const cursor = newestSeqRef.current ?? 0;
+      if (cursor >= pubsubId) return;
+      try {
+        for await (const result of iterateChannelReplayAfterPages(
+          (request) => c.getReplayAfter(request),
+          { after: cursor, throughSeq: pubsubId }
+        )) {
+          for (const raw of result.logEvents) {
+            const payload = raw.payload as Record<string, unknown> | undefined;
+            if (raw.type === CREDENTIAL_CONNECT_PAYLOAD_KIND && payload) {
+              channelStateRef.current = reduceChannelView(
+                channelStateRef.current,
+                credentialConnectWireToEnvelope(c.channelId, {
+                  pubsubId: raw.id,
+                  senderId: raw.senderId,
+                  ts: raw.ts,
+                  senderMetadata: raw.senderMetadata as
+                    | { name?: string; type?: string; handle?: string }
+                    | undefined,
+                  payload,
+                })
+              );
+              continue;
+            }
+            if (raw.type === AGENTIC_EVENT_PAYLOAD_KIND && payload) {
+              rememberAttachments(
+                attachmentsByMessageIdRef.current,
+                payload as unknown as AgenticEvent,
+                raw.attachments as WireAttachment[] | undefined
+              );
+              const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
+                pubsubId: raw.id,
+                senderId: raw.senderId,
+                ts: raw.ts,
+                senderMetadata: raw.senderMetadata as
+                  | { name?: string; type?: string; handle?: string }
+                  | undefined,
+                payload: payload as unknown as AgenticEvent,
+              });
+              channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
+              if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
+              if (newestSeqRef.current === null || raw.id > newestSeqRef.current)
+                newestSeqRef.current = raw.id;
+            }
+          }
         }
-        if (raw.type === AGENTIC_EVENT_PAYLOAD_KIND && payload) {
-          rememberAttachments(attachmentsByMessageIdRef.current, payload as unknown as AgenticEvent, raw.attachments as WireAttachment[] | undefined);
-          const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
-            pubsubId: raw.id,
-            senderId: raw.senderId,
-            ts: raw.ts,
-            senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
-            payload: payload as unknown as AgenticEvent,
-          });
-          channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
-          if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
-          if (newestSeqRef.current === null || raw.id > newestSeqRef.current) newestSeqRef.current = raw.id;
-        }
+        rebuildFromChannelState();
+      } catch (err) {
+        console.error("[useChannelMessages] backfillAfterLocalPublish failed:", err);
       }
-      rebuildFromChannelState();
-    } catch (err) {
-      console.error("[useChannelMessages] backfillAfterLocalPublish failed:", err);
-    }
-  }, [rebuildFromChannelState]);
+    },
+    [rebuildFromChannelState]
+  );
 
-  return { messages, actionBar, messageTypes, hasMoreHistory, loadingMore, hasOpenTurn, loadEarlierMessages, backfillAfterLocalPublish, replaySettled };
+  return {
+    messages,
+    actionBar,
+    messageTypes,
+    hasMoreHistory,
+    loadingMore,
+    hasOpenTurn,
+    loadEarlierMessages,
+    backfillAfterLocalPublish,
+    replaySettled,
+  };
 }
 
 type WireAttachment = {
@@ -473,11 +516,12 @@ function rememberAttachments(
 }
 
 function wireAttachmentToAttachment(attachment: WireAttachment): Attachment {
-  const data = typeof attachment.data === "string"
-    ? base64ToUint8Array(attachment.data)
-    : attachment.data instanceof Uint8Array
-      ? attachment.data
-      : new Uint8Array();
+  const data =
+    typeof attachment.data === "string"
+      ? base64ToUint8Array(attachment.data)
+      : attachment.data instanceof Uint8Array
+        ? attachment.data
+        : new Uint8Array();
   return {
     id: attachment.id ?? "",
     data,
@@ -521,10 +565,20 @@ function sameChatMessage(a: ChatMessage, b: ChatMessage): boolean {
   }
   if (JSON.stringify(a.receipts ?? null) !== JSON.stringify(b.receipts ?? null)) return false;
   if (JSON.stringify(a.mentions ?? []) !== JSON.stringify(b.mentions ?? [])) return false;
-  if (JSON.stringify(attachmentSignatures(a.attachments)) !== JSON.stringify(attachmentSignatures(b.attachments))) return false;
-  if (a.invocation !== b.invocation && JSON.stringify(a.invocation) !== JSON.stringify(b.invocation)) return false;
-  if (a.approval !== b.approval && JSON.stringify(a.approval) !== JSON.stringify(b.approval)) return false;
-  if (a.inlineUi !== b.inlineUi && JSON.stringify(a.inlineUi) !== JSON.stringify(b.inlineUi)) return false;
+  if (
+    JSON.stringify(attachmentSignatures(a.attachments)) !==
+    JSON.stringify(attachmentSignatures(b.attachments))
+  )
+    return false;
+  if (
+    a.invocation !== b.invocation &&
+    JSON.stringify(a.invocation) !== JSON.stringify(b.invocation)
+  )
+    return false;
+  if (a.approval !== b.approval && JSON.stringify(a.approval) !== JSON.stringify(b.approval))
+    return false;
+  if (a.inlineUi !== b.inlineUi && JSON.stringify(a.inlineUi) !== JSON.stringify(b.inlineUi))
+    return false;
   if (a.custom !== b.custom) {
     if (!a.custom || !b.custom) return false;
     if (
@@ -542,18 +596,20 @@ function sameChatMessage(a: ChatMessage, b: ChatMessage): boolean {
 }
 
 function messageTypeDefinitionsSignature(definitions: MessageTypeDefinition[]): string {
-  return JSON.stringify(definitions.map((definition) => ({
-    typeId: definition.typeId,
-    displayMode: definition.displayMode,
-    source: definition.source,
-    imports: definition.imports,
-    stateSchema: definition.stateSchema,
-    updateSchema: definition.updateSchema,
-    registeredBy: definition.registeredBy,
-    updatedAtSeq: definition.updatedAtSeq,
-    clearedAtSeq: definition.clearedAtSeq,
-    cleared: definition.cleared,
-  })));
+  return JSON.stringify(
+    definitions.map((definition) => ({
+      typeId: definition.typeId,
+      displayMode: definition.displayMode,
+      source: definition.source,
+      imports: definition.imports,
+      stateSchema: definition.stateSchema,
+      updateSchema: definition.updateSchema,
+      registeredBy: definition.registeredBy,
+      updatedAtSeq: definition.updatedAtSeq,
+      clearedAtSeq: definition.clearedAtSeq,
+      cleared: definition.cleared,
+    }))
+  );
 }
 
 function credentialConnectWireToEnvelope(
@@ -593,7 +649,7 @@ function pubsubAgenticEventToEnvelope(
     ts?: number;
     senderMetadata?: { name?: string; type?: string; handle?: string };
     payload: AgenticEvent;
-  },
+  }
 ): ChannelEnvelope<AgenticEvent> {
   const participantId = wire.senderId ?? wire.payload.actor.id;
   const metadata = wire.senderMetadata;

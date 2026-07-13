@@ -40,7 +40,7 @@ describe("ConnectionManager", () => {
       expect(config.rpc!.call).toHaveBeenCalledWith(CHANNEL_TARGET, "subscribe", [
         "panel:panel-1",
         expect.objectContaining({
-          replayMessageLimit: 10_000,
+          replayMessageLimit: 50,
         }),
       ]);
     });
@@ -53,7 +53,7 @@ describe("ConnectionManager", () => {
     ]);
   });
 
-  it("honors an explicit replay message limit", async () => {
+  it("bounds an explicit replay message limit to the canonical page maximum", async () => {
     const config = { ...createConfig(), replayMessageLimit: 1234 };
     const manager = new ConnectionManager({ config, metadata, callbacks: {} });
 
@@ -62,7 +62,7 @@ describe("ConnectionManager", () => {
       expect(config.rpc.call).toHaveBeenCalledWith(CHANNEL_TARGET, "subscribe", [
         "panel:panel-1",
         expect.objectContaining({
-          replayMessageLimit: 1234,
+          replayMessageLimit: 500,
         }),
       ]);
     });

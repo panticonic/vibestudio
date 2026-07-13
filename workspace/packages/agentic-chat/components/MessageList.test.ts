@@ -398,8 +398,6 @@ describe("MessageList typing indicators (roster-based)", () => {
           approvalLevel: { value: 1 },
           respondPolicy: { value: "mentioned" },
           respondFrom: { value: ["user-1"] },
-          maxModelCallsPerTurn: { value: 3.8 },
-          modelStreamIdleTimeoutMs: { value: 12_000 },
         };
       }
       return { ok: true };
@@ -450,8 +448,6 @@ describe("MessageList typing indicators (roster-based)", () => {
         approvalLevel: 1,
         respondPolicy: "mentioned",
         respondFrom: ["user-1"],
-        maxModelCallsPerTurn: 3,
-        modelStreamIdleTimeoutMs: 12_000,
       },
     });
   });

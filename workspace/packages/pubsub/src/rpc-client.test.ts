@@ -240,7 +240,7 @@ describe("connectViaRpc", () => {
         expect.objectContaining({
           __participantSessionId: expect.any(String),
           replay: true,
-          replayMessageLimit: 1000,
+          replayMessageLimit: 500,
         }),
       ]);
 

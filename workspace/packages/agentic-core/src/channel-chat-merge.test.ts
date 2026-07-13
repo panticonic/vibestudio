@@ -831,10 +831,10 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
-  it("projects model-call cap diagnostics with a specific title and code", () => {
-    const messageId = brandId<MessageId>("diag-max-model-calls");
+  it("projects exhausted model retries with a specific title and code", () => {
+    const messageId = brandId<MessageId>("diag-model-retries");
     const detail =
-      "Configured maxModelCallsPerTurn reached for t:chan-1:env-1: 96 model call(s) have already run, and the configured limit is 96.";
+      "Model retry limit reached for t:chan-1:env-1: 3 consecutive model failures occurred.";
     const completed: AgenticEvent<"message.completed"> = {
       kind: "message.completed",
       actor: agent,
@@ -844,15 +844,14 @@ describe("chatMessagesFromChannelView", () => {
         role: "assistant",
         blocks: [
           {
-            blockId: brandId<BlockId>("diag-max-model-calls:block:0"),
+            blockId: brandId<BlockId>("diag-model-retries:block:0"),
             type: "diagnostic",
             content: detail,
             metadata: {
-              code: "max_model_calls_per_turn",
+              code: "model_retry_limit_exceeded",
               severity: "error",
-              configKey: "maxModelCallsPerTurn",
-              limit: 96,
-              modelCallCount: 96,
+              limit: 3,
+              consecutiveModelFailureCount: 3,
               turnId: "t:chan-1:env-1",
             },
           },
@@ -869,13 +868,13 @@ describe("chatMessagesFromChannelView", () => {
 
     expect(chatMessagesFromChannelView(state)).toEqual([
       expect.objectContaining({
-        id: "diagnostic:diag-max-model-calls",
+        id: "diagnostic:diag-model-retries",
         content: detail,
         contentType: "diagnostic",
         diagnostic: expect.objectContaining({
-          code: "max_model_calls_per_turn",
+          code: "model_retry_limit_exceeded",
           severity: "error",
-          title: "Model call limit reached",
+          title: "Model retry limit reached",
         }),
         error: detail,
       }),

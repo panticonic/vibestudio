@@ -1,5 +1,6 @@
 export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentApprovalLevel = 0 | 1 | 2;
+export type AgentFallbackScope = "unattended" | "all-turns";
 export type AgentRespondPolicy =
   | "all"
   | "mentioned"
@@ -28,15 +29,19 @@ export interface AgentConfig {
   model?: string;
   /** Effort level for the model. */
   thinkingLevel?: AgentThinkingLevel;
+  /** Optional model used for one journaled failover attempt. */
+  fallbackModel?: string;
+  /** Effort used only by the fallback request. */
+  fallbackThinkingLevel?: AgentThinkingLevel;
+  /** Model failure codes that may activate the fallback. */
+  fallbackOn?: string[];
+  /** Whether failover is limited to background turns or also covers user turns. */
+  fallbackScope?: AgentFallbackScope;
   /** 0=manual, 1=auto-safe, 2=full-auto. */
   approvalLevel?: AgentApprovalLevel;
   /** Chattiness: who the agent responds to. */
   respondPolicy?: AgentRespondPolicy;
   respondFrom?: string[];
-  /** Optional cap for model rounds in one turn. Null/undefined means unlimited. */
-  maxModelCallsPerTurn?: number | null;
-  /** Idle window (ms) before a stalled model stream is abandoned. */
-  modelStreamIdleTimeoutMs?: number | null;
 }
 
 /**
@@ -46,11 +51,13 @@ export interface AgentConfig {
 export const AGENT_SETTING_KEYS = [
   "model",
   "thinkingLevel",
+  "fallbackModel",
+  "fallbackThinkingLevel",
+  "fallbackOn",
+  "fallbackScope",
   "approvalLevel",
   "respondPolicy",
   "respondFrom",
-  "maxModelCallsPerTurn",
-  "modelStreamIdleTimeoutMs",
 ] as const satisfies ReadonlyArray<keyof AgentConfig>;
 export type AgentSettingKey = (typeof AGENT_SETTING_KEYS)[number];
 

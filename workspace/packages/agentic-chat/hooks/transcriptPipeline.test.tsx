@@ -43,7 +43,14 @@ describe("headless transcript pipeline", () => {
     });
 
     let latest: UseChannelMessagesResult | undefined;
-    render(<Probe client={panel} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={panel}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await panel.ready();
     await agent.ready();
@@ -55,7 +62,7 @@ describe("headless transcript pipeline", () => {
 
     await waitFor(() => {
       expect(latest!.messages.map((message) => message.content)).toContain(
-        "The user just opened this workspace for the first time",
+        "The user just opened this workspace for the first time"
       );
     });
 
@@ -67,19 +74,21 @@ describe("headless transcript pipeline", () => {
         expect.arrayContaining([
           "The user just opened this workspace for the first time",
           "Welcome to Vibestudio.",
-        ]),
+        ])
       );
     });
 
-    const stored = await harness.gad.call<any[]>("listChannelEnvelopes", {
-      channelId: harness.channelId,
-      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-    });
-    expect(stored.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)).toEqual(
+    const stored = (
+      await harness.gad.call<any>("readChannelEnvelopes", {
+        channelId: harness.channelId,
+        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      })
+    ).items;
+    expect(stored.map((envelope: any) => envelope.payload.payload.blocks?.[0]?.content)).toEqual(
       expect.arrayContaining([
         "The user just opened this workspace for the first time",
         "Welcome to Vibestudio.",
-      ]),
+      ])
     );
 
     panel.close();
@@ -102,50 +111,67 @@ describe("headless transcript pipeline", () => {
     });
 
     let latest: UseChannelMessagesResult | undefined;
-    render(<Probe client={panel} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={panel}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await panel.ready();
     await agent.ready();
 
-    await agent.publish(AGENTIC_EVENT_PAYLOAD_KIND, agenticPublication(
-      invocationStarted("call-eval", "eval", { code: "read('skills/onboarding/SKILL.md')" }),
-    ));
+    await agent.publish(
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticPublication(
+        invocationStarted("call-eval", "eval", { code: "read('skills/onboarding/SKILL.md')" })
+      )
+    );
 
     await waitFor(() => {
-      expect(latest!.messages).toContainEqual(expect.objectContaining({
-        id: "invocation:call-eval",
-        contentType: "invocation",
-        complete: false,
-        invocation: expect.objectContaining({
-          id: "call-eval",
-          name: "eval",
-          arguments: { code: "read('skills/onboarding/SKILL.md')" },
-          execution: expect.objectContaining({ status: "pending" }),
-        }),
-      }));
+      expect(latest!.messages).toContainEqual(
+        expect.objectContaining({
+          id: "invocation:call-eval",
+          contentType: "invocation",
+          complete: false,
+          invocation: expect.objectContaining({
+            id: "call-eval",
+            name: "eval",
+            arguments: { code: "read('skills/onboarding/SKILL.md')" },
+            execution: expect.objectContaining({ status: "pending" }),
+          }),
+        })
+      );
     });
 
-    await agent.publish(AGENTIC_EVENT_PAYLOAD_KIND, agenticPublication(
-      invocationCompleted("call-eval", {
-        toolCallId: "call-eval",
-        toolName: "eval",
-        details: { input: { code: "read('skills/onboarding/SKILL.md')" } },
-        content: [{ type: "text", text: "docs" }],
-      }),
-    ));
+    await agent.publish(
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticPublication(
+        invocationCompleted("call-eval", {
+          toolCallId: "call-eval",
+          toolName: "eval",
+          details: { input: { code: "read('skills/onboarding/SKILL.md')" } },
+          content: [{ type: "text", text: "docs" }],
+        })
+      )
+    );
 
     await waitFor(() => {
-      expect(latest!.messages).toContainEqual(expect.objectContaining({
-        id: "invocation:call-eval",
-        contentType: "invocation",
-        complete: true,
-        invocation: expect.objectContaining({
-          id: "call-eval",
-          name: "eval",
-          arguments: { code: "read('skills/onboarding/SKILL.md')" },
-          execution: expect.objectContaining({ status: "complete" }),
-        }),
-      }));
+      expect(latest!.messages).toContainEqual(
+        expect.objectContaining({
+          id: "invocation:call-eval",
+          contentType: "invocation",
+          complete: true,
+          invocation: expect.objectContaining({
+            id: "call-eval",
+            name: "eval",
+            arguments: { code: "read('skills/onboarding/SKILL.md')" },
+            execution: expect.objectContaining({ status: "complete" }),
+          }),
+        })
+      );
     });
 
     panel.close();
@@ -162,7 +188,14 @@ describe("headless transcript pipeline", () => {
     });
 
     let latest: UseChannelMessagesResult | undefined;
-    render(<Probe client={panel} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={panel}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await panel.ready();
 
@@ -180,24 +213,26 @@ describe("headless transcript pipeline", () => {
     });
 
     await waitFor(() => {
-      expect(latest!.messages).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          id: "assistant-from-gad",
-          content: "This message came from GAD publication.",
-          complete: true,
-        }),
-        expect.objectContaining({
-          id: "invocation:call-title",
-          contentType: "invocation",
-          complete: true,
-          invocation: expect.objectContaining({
-            id: "call-title",
-            name: "set_title",
-            arguments: { title: "Welcome" },
-            execution: expect.objectContaining({ status: "complete" }),
+      expect(latest!.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "assistant-from-gad",
+            content: "This message came from GAD publication.",
+            complete: true,
           }),
-        }),
-      ]));
+          expect.objectContaining({
+            id: "invocation:call-title",
+            contentType: "invocation",
+            complete: true,
+            invocation: expect.objectContaining({
+              id: "call-title",
+              name: "set_title",
+              arguments: { title: "Welcome" },
+              execution: expect.objectContaining({ status: "complete" }),
+            }),
+          }),
+        ])
+      );
     });
 
     panel.close();

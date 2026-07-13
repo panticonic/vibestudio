@@ -32,6 +32,7 @@ export * from "./types.js";
 export type { PubSubClient } from "./client.js";
 export { connectViaRpc } from "./rpc-client.js";
 export type { RpcConnectOptions } from "./rpc-client.js";
+export { iterateChannelReplayAfterPages, type ChannelReplayPageReader } from "./channel-replay.js";
 
 // Content type constants
 export * from "./content-types.js";

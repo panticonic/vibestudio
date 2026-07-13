@@ -19,8 +19,6 @@ describe("toSubscriptionConfig", () => {
       approvalLevel: 2,
       respondPolicy: "all",
       respondFrom: ["@a"],
-      maxModelCallsPerTurn: 5,
-      modelStreamIdleTimeoutMs: 1000,
       // presentation + worker extras must survive:
       handle: "bot",
       name: "Bot",

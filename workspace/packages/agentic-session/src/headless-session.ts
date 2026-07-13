@@ -53,17 +53,29 @@ import {
 } from "@workspace/agentic-protocol";
 import { z } from "zod";
 import {
+  destroyHeadlessAgentContext,
   getRecommendedChannelConfig,
   retireHeadlessAgent,
   subscribeHeadlessAgent,
   unsubscribeHeadlessAgent,
 } from "./channel.js";
+import { HeadlessTurnObserver, type HeadlessTurnSnapshot } from "./turn-observer.js";
 
 // ===========================================================================
 // Types
 // ===========================================================================
 
 export interface SessionSnapshot {
+  /** Durable channel that carried this headless conversation. */
+  channelId: string | null;
+  /** Runtime entity created for the subscribed agent. */
+  agentEntityId: string | null;
+  /** Runtime relay target for the subscribed agent. */
+  agentTargetId: string | null;
+  /** Context used by the subscribed agent (isolated unless explicitly inherited). */
+  agentContextId: string | null;
+  /** Whether this session created and owns the complete agent context lifecycle tree. */
+  ownsAgentContext: boolean;
   messages: readonly ChatMessage[];
   invocations: Array<{
     id: string;
@@ -83,6 +95,9 @@ export interface SessionSnapshot {
   duration: number;
   /** The report title set via the agent's `set_title` tool (null until set). */
   title: string | null;
+  /** Durable provider/model requests and aggregate usage captured from the agent journal. */
+  modelExecutionEvidence?: unknown;
+  modelExecutionEvidenceError?: string;
 }
 
 export interface HeadlessSessionConfig {
@@ -116,7 +131,9 @@ export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
 
 export interface HeadlessSessionCloseOptions {
   /**
-   * Await remote agent unsubscribe/retire cleanup. Disable for harnesses that
+   * Await remote agent unsubscribe/lifecycle cleanup. Isolated sessions destroy
+   * their complete context tree; sessions attached to a caller-owned context
+   * retire only their agent entity. Disable awaiting for harnesses that
    * must release local waiters even when the remote agent/channel is wedged.
    * Best-effort cleanup is still started and records asynchronous failures on
    * this session when they arrive.
@@ -172,20 +189,6 @@ interface MessageListener {
   (msg: ChatMessage): void;
 }
 
-function agentFailureMessageReason(msg: ChatMessage, clientId: string): string | null {
-  if (msg.senderId === clientId || !msg.complete || msg.pending) return null;
-  const error = (msg as { error?: unknown }).error;
-  if (typeof error !== "string" || error.trim().length === 0) return null;
-  if (
-    msg.contentType === "invocation" ||
-    msg.contentType === "thinking" ||
-    msg.contentType === "typing"
-  ) {
-    return null;
-  }
-  return error.trim();
-}
-
 export class HeadlessSession {
   private _connection: ConnectionManager;
   private _client: PubSubClient<ChatParticipantMetadata> | null = null;
@@ -195,6 +198,8 @@ export class HeadlessSession {
   private _config: HeadlessSessionConfig;
   private _agentEntityId: string | null = null;
   private _agentTargetId: string | null = null;
+  private _agentContextId: string | null = null;
+  private _ownsAgentContext = false;
   private _agentRpcCall: HeadlessWithAgentConfig["rpcCall"] | null = null;
 
   // Channel message state (derived from persisted + live channel messages)
@@ -207,6 +212,8 @@ export class HeadlessSession {
   private _cleanupErrors: SessionCleanupError[] = [];
   private _dirtyRepoWarnings = new Map<string, DirtyRepoDetails>();
   private _registeredMethodNames: string[] = [];
+  private _modelExecutionEvidence: unknown;
+  private _modelExecutionEvidenceError: string | undefined;
   private _disposed = false;
   private _consumeAbort: AbortController | null = null;
   /**
@@ -312,6 +319,8 @@ export class HeadlessSession {
       });
       session._agentEntityId = subscription.entityId;
       session._agentTargetId = subscription.targetId;
+      session._agentContextId = subscription.contextId;
+      session._ownsAgentContext = !config.contextId;
       session._agentRpcCall = config.rpcCall;
     } catch (err) {
       session.disconnect();
@@ -383,7 +392,7 @@ export class HeadlessSession {
 
   private async publishSyntheticPanelUiEvent(
     event: AgenticEvent<"ui.inline_rendered" | "ui.action_bar.updated">,
-    idempotencyKey: string,
+    idempotencyKey: string
   ): Promise<number | undefined> {
     const client = this._client;
     if (!client) return undefined;
@@ -431,7 +440,7 @@ export class HeadlessSession {
             payload: eventPayload,
             createdAt: new Date().toISOString(),
           },
-          `synthetic-ui:inline:${id}`,
+          `synthetic-ui:inline:${id}`
         );
         return { ok: true, id };
       },
@@ -468,7 +477,7 @@ export class HeadlessSession {
               },
               createdAt: new Date().toISOString(),
             },
-            `synthetic-ui:action-bar:clear:${crypto.randomUUID()}`,
+            `synthetic-ui:action-bar:clear:${crypto.randomUUID()}`
           );
           return { ok: true, cleared: true };
         }
@@ -494,7 +503,7 @@ export class HeadlessSession {
             payload: eventPayload,
             createdAt: new Date().toISOString(),
           },
-          `synthetic-ui:action-bar:${id}`,
+          `synthetic-ui:action-bar:${id}`
         );
         return { ok: true, id };
       },
@@ -514,7 +523,11 @@ export class HeadlessSession {
       this._debugEvents.push({ ...payload, ts });
 
       // Dirty repo warnings
-      if (payload.debugType === "lifecycle" && payload.event === "warning" && payload.reason === "dirty-repo") {
+      if (
+        payload.debugType === "lifecycle" &&
+        payload.event === "warning" &&
+        payload.reason === "dirty-repo"
+      ) {
         const details = payload.details as DirtyRepoDetails | undefined;
         if (details) {
           this._dirtyRepoWarnings.set(payload.handle, details);
@@ -529,7 +542,11 @@ export class HeadlessSession {
 
   async connect(
     channelId: string,
-    options?: { channelConfig?: ChannelConfig; contextId?: string; methods?: Record<string, MethodDefinition> },
+    options?: {
+      channelConfig?: ChannelConfig;
+      contextId?: string;
+      methods?: Record<string, MethodDefinition>;
+    }
   ): Promise<void> {
     const methods = options?.methods ?? this.buildDefaultMethods();
     this._registeredMethodNames = Object.keys(methods).sort();
@@ -555,7 +572,10 @@ export class HeadlessSession {
   private async consumeChannelMessages(signal: AbortSignal): Promise<void> {
     if (!this._client) return;
     try {
-      for await (const event of this._client.events({ includeReplay: true, includeSignals: false })) {
+      for await (const event of this._client.events({
+        includeReplay: true,
+        includeSignals: false,
+      })) {
         if (signal.aborted) break;
 
         const wire = event as unknown as {
@@ -568,13 +588,16 @@ export class HeadlessSession {
         };
 
         if (wire.type === AGENTIC_EVENT_PAYLOAD_KIND && wire.payload) {
-          this._channelView = reduceChannelView(this._channelView, this.pubsubAgenticEventToEnvelope({
-            pubsubId: wire.pubsubId,
-            senderId: wire.senderId,
-            senderMetadata: wire.senderMetadata,
-            ts: wire.ts,
-            payload: wire.payload,
-          }));
+          this._channelView = reduceChannelView(
+            this._channelView,
+            this.pubsubAgenticEventToEnvelope({
+              pubsubId: wire.pubsubId,
+              senderId: wire.senderId,
+              senderMetadata: wire.senderMetadata,
+              ts: wire.ts,
+              payload: wire.payload,
+            })
+          );
           this._chatMessages.clear();
           this._chatMessageOrder = [];
           for (const msg of chatMessagesFromChannelView(this._channelView)) {
@@ -627,7 +650,10 @@ export class HeadlessSession {
     };
   }
 
-  async send(text: string, options?: { attachments?: AttachmentInput[]; idempotencyKey?: string }): Promise<string> {
+  async send(
+    text: string,
+    options?: { attachments?: AttachmentInput[]; idempotencyKey?: string }
+  ): Promise<string> {
     if (!this._client) throw new Error("Not connected");
     const result = await this._client.send(text, options);
     return result.messageId;
@@ -649,10 +675,37 @@ export class HeadlessSession {
     return unwrapChatMethodResult(result);
   }
 
-  async callMethodResult(participantId: string, method: string, args: unknown): Promise<ChatMethodResult> {
+  async callMethodResult(
+    participantId: string,
+    method: string,
+    args: unknown
+  ): Promise<ChatMethodResult> {
     if (!this._client) throw new Error("Not connected");
     const handle = this._client.callMethod(participantId, method, args);
     return (handle as { result: Promise<ChatMethodResult> }).result;
+  }
+
+  /**
+   * Capture durable proof of the model calls this agent actually executed.
+   * Unlike creation config or live settings, this reads journaled
+   * message.started/message.completed descriptors and usage.
+   */
+  async captureModelExecutionEvidence(): Promise<unknown> {
+    const targetId = this._agentTargetId;
+    if (!targetId) throw new Error("No subscribed agent is available for model execution evidence");
+    const channelId = this._channelId;
+    if (!channelId) throw new Error("No channel is available for model execution evidence");
+    try {
+      const evidence = this._agentRpcCall
+        ? await this._agentRpcCall(targetId, "getModelExecutionEvidence", [channelId])
+        : await this.callMethod(targetId, "getModelExecutionEvidence", {});
+      this._modelExecutionEvidence = evidence;
+      this._modelExecutionEvidenceError = undefined;
+      return evidence;
+    } catch (error) {
+      this._modelExecutionEvidenceError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
   }
 
   async loadEarlierMessages(): Promise<void> {
@@ -687,8 +740,15 @@ export class HeadlessSession {
   }
 
   async close(opts: HeadlessSessionCloseOptions = {}): Promise<void> {
+    if (this._agentTargetId && this._client && this._modelExecutionEvidence === undefined) {
+      await this.captureModelExecutionEvidence().catch((error) => {
+        console.warn("[HeadlessSession] model execution evidence capture failed:", error);
+      });
+    }
     const entityId = this._agentEntityId;
     const targetId = this._agentTargetId;
+    const contextId = this._agentContextId;
+    const ownsContext = this._ownsAgentContext;
     const channelId = this._channelId;
     const rpcCall = this._agentRpcCall;
     this._agentEntityId = null;
@@ -701,25 +761,39 @@ export class HeadlessSession {
         this.recordCleanupError("unsubscribeHeadlessAgent", err);
       });
     };
-    const retire = async () => {
-      if (!entityId || !rpcCall) return;
+    const release = async () => {
+      if (!rpcCall) return;
+      if (ownsContext && contextId) {
+        try {
+          await destroyHeadlessAgentContext({ rpcCall, contextId });
+          return;
+        } catch (err) {
+          this.recordCleanupError("destroyHeadlessAgentContext", err);
+          // Context teardown can fail before it reaches the root entity. Retire
+          // that entity as a best-effort fallback while preserving the original
+          // cleanup diagnostic for the caller.
+        }
+      }
+      if (!entityId) return;
       await retireHeadlessAgent({ rpcCall, entityId }).catch((err) => {
         this.recordCleanupError("retireHeadlessAgent", err);
       });
     };
 
+    // An owned context is the lifecycle unit: recursively destroying it retires
+    // the root agent and descendants together. Calling into that same agent to
+    // unsubscribe first creates an unnecessary dependency on a possibly-wedged
+    // actor and can prevent the authoritative context teardown from starting.
+    // Shared-context sessions cannot destroy their caller's context, so start
+    // unsubscribe and entity retirement together and observe both results.
+    const cleanupRemote = () =>
+      ownsContext && contextId ? release() : Promise.all([unsubscribe(), release()]).then(() => {});
+    this.dispose();
     if (opts.waitForRemoteCleanup === false) {
-      this.dispose();
-      void (async () => {
-        await unsubscribe();
-        await retire();
-      })();
+      void cleanupRemote();
       return;
     }
-
-    await unsubscribe();
-    this.dispose();
-    await retire();
+    await cleanupRemote();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
@@ -752,6 +826,22 @@ export class HeadlessSession {
 
   get channelId(): string | null {
     return this._channelId;
+  }
+
+  get agentEntityId(): string | null {
+    return this._agentEntityId;
+  }
+
+  get agentTargetId(): string | null {
+    return this._agentTargetId;
+  }
+
+  get agentContextId(): string | null {
+    return this._agentContextId;
+  }
+
+  get ownsAgentContext(): boolean {
+    return this._ownsAgentContext;
   }
 
   /** The report title set via the agent's `set_title` tool (null until set). */
@@ -804,6 +894,11 @@ export class HeadlessSession {
           : undefined,
       }));
     return {
+      channelId: this._channelId,
+      agentEntityId: this._agentEntityId,
+      agentTargetId: this._agentTargetId,
+      agentContextId: this._agentContextId,
+      ownsAgentContext: this._ownsAgentContext,
       messages: this.messages,
       invocations,
       debugEvents: this._debugEvents,
@@ -813,6 +908,12 @@ export class HeadlessSession {
       connected: this._connection.connected,
       duration: now - this._createdAt,
       title: this._title,
+      ...(this._modelExecutionEvidence !== undefined
+        ? { modelExecutionEvidence: this._modelExecutionEvidence }
+        : {}),
+      ...(this._modelExecutionEvidenceError
+        ? { modelExecutionEvidenceError: this._modelExecutionEvidenceError }
+        : {}),
     };
   }
 
@@ -828,87 +929,36 @@ export class HeadlessSession {
    * Wait for a message from an agent (any non-self participant).
    */
   waitForAgentMessage(opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<ChatMessage> {
-    const isAgentMessage = (msg: ChatMessage): boolean =>
-      msg.senderId !== this._clientId &&
-      msg.kind === "message" &&
-      !!msg.complete &&
-      !msg.pending &&
-      msg.contentType !== "thinking" &&
-      msg.contentType !== "typing" &&
-      msg.contentType !== "invocation";
-
-    const baselineMessages = this.messages;
-    const alreadyPresent = [...baselineMessages].reverse().find(isAgentMessage);
-    const baselineCount = baselineMessages.length;
-
-    return new Promise<ChatMessage>((resolve, reject) => {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
-        if (timeout !== undefined) clearTimeout(timeout);
-        opts?.signal?.removeEventListener("abort", onAbort);
-        this._messageListeners.delete(listener);
-      };
-      const onAbort = () => {
-        cleanup();
-        reject(new Error("waitForAgentMessage aborted"));
-      };
-      if (opts?.signal?.aborted) {
-        onAbort();
-        return;
-      }
-      opts?.signal?.addEventListener("abort", onAbort, { once: true });
-      if (opts?.timeoutMs !== undefined) {
-        timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error(`Timed out waiting for agent message after ${opts.timeoutMs}ms`));
-        }, opts.timeoutMs);
-      }
-
-      const listener: MessageListener = () => {
-        const current = this.messages;
-        if (current.length <= baselineCount) return;
-        for (let i = current.length - 1; i >= baselineCount; i--) {
-          const msg = current[i]!;
-          const failureReason = agentFailureMessageReason(msg, this._clientId);
-          if (failureReason) {
-            cleanup();
-            reject(new Error(`Agent failed: ${failureReason}`));
-            return;
-          }
-          if (isAgentMessage(msg) && msg !== alreadyPresent) {
-            cleanup();
-            resolve(msg);
-            return;
-          }
-        }
-      };
-      this._messageListeners.add(listener);
-    });
+    return this.waitForTurn("response", opts);
   }
 
   /**
    * Wait for the agent to become idle (no new messages for `debounce` ms).
    */
-  waitForIdle(opts?: { debounce?: number; timeoutMs?: number; signal?: AbortSignal }): Promise<ChatMessage> {
+  waitForIdle(opts?: {
+    debounce?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<ChatMessage> {
+    return this.waitForTurn("settled", opts);
+  }
+
+  private turnSnapshot(): HeadlessTurnSnapshot {
+    return { messages: this.messages, channelView: this._channelView };
+  }
+
+  private waitForTurn(
+    completion: "response" | "settled",
+    opts?: { debounce?: number; timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<ChatMessage> {
+    const observer = new HeadlessTurnObserver(this._clientId, this.turnSnapshot());
     const debounceMs = opts?.debounce ?? 3_000;
-
-    const isAgentMessage = (msg: ChatMessage): boolean =>
-      msg.senderId !== this._clientId &&
-      msg.kind === "message" &&
-      !!msg.complete &&
-      !msg.pending &&
-      msg.contentType !== "thinking" &&
-      msg.contentType !== "typing" &&
-      msg.contentType !== "invocation";
-
-    const baselineMessages = this.messages;
-    const alreadyPresent = [...baselineMessages].reverse().find(isAgentMessage);
-    const baselineCount = baselineMessages.length;
+    const label = completion === "response" ? "agent message" : "idle";
 
     return new Promise<ChatMessage>((resolve, reject) => {
-      let lastMatch: ChatMessage | undefined;
       let debounceTimer: ReturnType<typeof setTimeout> | undefined;
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let finished = false;
 
       const cleanup = () => {
         if (debounceTimer !== undefined) clearTimeout(debounceTimer);
@@ -916,10 +966,49 @@ export class HeadlessSession {
         opts?.signal?.removeEventListener("abort", onAbort);
         this._messageListeners.delete(listener);
       };
-      const onAbort = () => {
+      const succeed = (message: ChatMessage) => {
+        if (finished) return;
+        finished = true;
         cleanup();
-        reject(new Error("waitForIdle aborted"));
+        resolve(message);
       };
+      const fail = (reason: string) => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        reject(new Error(`Agent failed: ${reason}`));
+      };
+      const evaluate = () => {
+        if (finished) return;
+        const observation = observer.observe(this.turnSnapshot());
+        if (observation.terminal?.kind === "failed") {
+          fail(observation.terminal.reason);
+          return;
+        }
+        if (completion === "response" && observation.response) {
+          succeed(observation.response);
+          return;
+        }
+        if (completion === "settled" && observation.terminal?.kind === "succeeded") {
+          if (debounceTimer === undefined) {
+            debounceTimer = setTimeout(() => {
+              debounceTimer = undefined;
+              const settled = observer.observe(this.turnSnapshot()).terminal;
+              if (settled?.kind === "failed") fail(settled.reason);
+              else if (settled?.kind === "succeeded") succeed(settled.message);
+            }, debounceMs);
+          }
+        }
+      };
+      const listener: MessageListener = () => evaluate();
+      const onAbort = () => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        reject(new Error(`waitFor${completion === "response" ? "AgentMessage" : "Idle"} aborted`));
+      };
+
+      this._messageListeners.add(listener);
       if (opts?.signal?.aborted) {
         onAbort();
         return;
@@ -927,54 +1016,21 @@ export class HeadlessSession {
       opts?.signal?.addEventListener("abort", onAbort, { once: true });
       if (opts?.timeoutMs !== undefined) {
         timeout = setTimeout(() => {
+          if (finished) return;
+          finished = true;
           cleanup();
-          reject(new Error(`Timed out waiting for idle after ${opts.timeoutMs}ms`));
+          reject(new Error(`Timed out waiting for ${label} after ${opts.timeoutMs}ms`));
         }, opts.timeoutMs);
       }
-
-      const scheduleResolve = () => {
-        if (!lastMatch) return;
-        if (debounceTimer !== undefined) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          // Don't resolve while there are incomplete (streaming) messages
-          if (this._hasIncomplete || this.hasOpenAgentTurn()) {
-            scheduleResolve();
-            return;
-          }
-          cleanup();
-          resolve(lastMatch!);
-        }, debounceMs);
-      };
-
-      const listener: MessageListener = () => {
-        const current = this.messages;
-        if (current.length <= baselineCount) return;
-        for (let i = current.length - 1; i >= baselineCount; i--) {
-          const msg = current[i]!;
-          const failureReason = agentFailureMessageReason(msg, this._clientId);
-          if (failureReason) {
-            cleanup();
-            reject(new Error(`Agent failed: ${failureReason}`));
-            return;
-          }
-          if (isAgentMessage(msg) && msg !== alreadyPresent) {
-            lastMatch = msg;
-            scheduleResolve();
-            return;
-          }
-        }
-      };
-      this._messageListeners.add(listener);
+      // Close the race between the baseline snapshot and listener registration.
+      evaluate();
     });
   }
 
-  private hasOpenAgentTurn(): boolean {
-    return Object.values(this._channelView.turns).some(
-      (turn) => turn.status === "open" && turn.actor.kind === "agent"
-    );
-  }
-
-  async sendAndWait(text: string, opts?: { debounce?: number; timeoutMs?: number; signal?: AbortSignal }): Promise<ChatMessage> {
+  async sendAndWait(
+    text: string,
+    opts?: { debounce?: number; timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<ChatMessage> {
     const wait = this.waitForIdle(opts);
     await this.send(text);
     return wait;

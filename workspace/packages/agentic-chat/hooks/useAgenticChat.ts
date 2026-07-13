@@ -439,6 +439,9 @@ export function useAgenticChat({
       getMessageTypes: () => {
         return core.clientRef.current!.getMessageTypes();
       },
+      replayEnvelope: (envelopeId: string) => {
+        return core.clientRef.current!.getEnvelope(envelopeId);
+      },
       callMethod: async (
         pid: string,
         method: string,

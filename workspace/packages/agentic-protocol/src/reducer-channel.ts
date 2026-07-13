@@ -471,12 +471,12 @@ export function reduceChannelView(
     const payload = event.payload as Record<string, unknown>;
     const details = (payload["details"] ?? {}) as Record<string, unknown>;
     const sysKind = String(payload["kind"] ?? details["kind"] ?? "");
-    if (sysKind === "model.local_fallback_continued") {
+    if (sysKind === "model.fallback_continued" || sysKind === "model.local_fallback_continued") {
       const causality = (event.causality ?? {}) as Record<string, unknown>;
       const summary =
         typeof payload["summary"] === "string" && payload["summary"].trim()
           ? payload["summary"].trim()
-          : "continued on local fallback";
+          : "continued on fallback model";
       const detail =
         typeof details["summary"] === "string" && details["summary"].trim()
           ? details["summary"].trim()

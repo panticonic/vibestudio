@@ -98,6 +98,23 @@ export async function retireHeadlessAgent(opts: {
   await retireAgentEntity({ call: opts.rpcCall } as AgentLaunchRpc, opts.entityId);
 }
 
+/**
+ * Release an isolated headless launch as one lifecycle unit.
+ *
+ * Headless agents may create child-agent and tool contexts. Retiring only the
+ * root entity leaves those descendants (and their durable storage/VCS state)
+ * behind, so an isolated launch must be reclaimed through the context API.
+ * Callers that supplied a shared context must use `retireHeadlessAgent` instead.
+ */
+export async function destroyHeadlessAgentContext(opts: {
+  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+  contextId: string;
+}): Promise<void> {
+  await opts.rpcCall("main", "runtime.destroyContext", [
+    { contextId: opts.contextId, recursive: true },
+  ]);
+}
+
 export async function unsubscribeHeadlessAgent(opts: {
   rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
   targetId: string;

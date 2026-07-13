@@ -17,6 +17,7 @@ import type {
   PubSubMessage,
   LeaveReason,
   ChannelReplayEnvelope,
+  ChannelReplayAfterRequest,
   ServerLogEvent,
   BootstrapSnapshot,
   MessageTypeDefinition,
@@ -25,6 +26,7 @@ import type {
   ChannelInvite,
   ChannelPresenceEntry,
 } from "./types.js";
+import { DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT } from "./types.js";
 import type { RpcChannelMessage } from "./protocol-wire.js";
 import { PubSubError } from "./types.js";
 import type {
@@ -64,6 +66,7 @@ import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
 import type { PubSubClient } from "./client.js";
 import type { RecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import { iterateChannelReplayAfterPages } from "./channel-replay.js";
 
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 /** Wire attachment shape — base64 data string, not Uint8Array. */
@@ -198,6 +201,18 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   const callChannel = async <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
     rpc.call<R>(await getDoTarget(), method, args);
 
+  async function forEachReplayAfterPage(
+    request: ChannelReplayAfterRequest,
+    visit: (page: ChannelReplayEnvelope) => void | Promise<void>
+  ): Promise<void> {
+    for await (const page of iterateChannelReplayAfterPages(
+      (pageRequest) => callChannel<ChannelReplayEnvelope>("getReplayAfter", pageRequest),
+      request
+    )) {
+      await visit(page);
+    }
+  }
+
   const hydrateStoredTransportValue = async (value: unknown): Promise<unknown> =>
     hydrateStoredValueRefs(value, {
       getText: async (digest) => {
@@ -301,7 +316,9 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // Replay buffering
   let bufferingReplay = replayMode !== "skip";
   let replayComplete = false;
+  let replayCatchupPromise: Promise<void> | null = null;
   const replayEvents: IncomingEvent[] = [];
+  const replayLiveBuffer: ClientIngressMessage[] = [];
   const replayMessageKeys = new Set<string>();
   const MAX_REPLAY_MESSAGE_KEYS = 2000;
 
@@ -723,42 +740,70 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     }
   }
 
-  function ingestReplayEnvelope(envelope: ChannelReplayEnvelope, _source: "stream" | "ack"): void {
+  async function ingestReplayEnvelope(
+    envelope: ChannelReplayEnvelope,
+    _source: "stream" | "ack"
+  ): Promise<void> {
     if (replayComplete) return;
-    if (replayMode !== "skip") {
-      for (const event of envelope.logEvents) {
-        handleServerMessage(eventToClientIngress(event, "replay"));
-      }
-      for (const snapshot of envelope.snapshots) {
-        applyRosterSnapshot(snapshot);
-      }
-    } else {
-      // Skip drops user-facing replay, but still settle in-flight method calls
-      // from replayed invocation.* lifecycle events.
-      for (const event of envelope.logEvents) {
-        if (isInvocationLifecycleEvent(event)) {
-          handleServerMessage(eventToClientIngress(event, "replay"));
+    if (replayCatchupPromise) return replayCatchupPromise;
+    replayCatchupPromise = (async () => {
+      const ingestPage = (page: ChannelReplayEnvelope) => {
+        if (replayMode !== "skip") {
+          for (const event of page.logEvents) {
+            handleServerMessage(eventToClientIngress(event, "replay"));
+          }
+          for (const snapshot of page.snapshots) applyRosterSnapshot(snapshot);
+        } else {
+          // Skip drops user-facing replay, but still settles in-flight method
+          // calls from replayed invocation lifecycle events.
+          for (const event of page.logEvents) {
+            if (isInvocationLifecycleEvent(event)) {
+              handleServerMessage(eventToClientIngress(event, "replay"));
+            }
+          }
         }
+      };
+
+      ingestPage(envelope);
+      let terminalPage = envelope;
+      if (envelope.mode === "after" && envelope.ready.hasMoreAfter) {
+        const after = envelope.ready.replayToId;
+        const throughSeq = envelope.ready.snapshotLastSeq;
+        if (after === undefined || throughSeq === undefined) {
+          throw new Error("subscription replay claims more history without a stable cursor");
+        }
+        await forEachReplayAfterPage({ after, throughSeq }, (page) => {
+          terminalPage = page;
+          ingestPage(page);
+        });
       }
+
+      handleServerMessage({
+        stream: "control",
+        controlType: "ready",
+        contextId: terminalPage.ready.contextId ?? envelope.ready.contextId,
+        channelConfig: terminalPage.ready.channelConfig ?? envelope.ready.channelConfig,
+        totalCount: terminalPage.ready.totalCount,
+        envelopeCount: terminalPage.ready.envelopeCount,
+        firstEnvelopeSeq: terminalPage.ready.firstEnvelopeSeq,
+        hasMoreBefore: envelope.ready.hasMoreBefore,
+      });
+      streamedReplayLogEvents = [];
+      streamedReplaySnapshots = [];
+      const buffered = replayLiveBuffer.splice(0);
+      for (const message of buffered) handleServerMessage(message);
+    })();
+    try {
+      await replayCatchupPromise;
+    } finally {
+      replayCatchupPromise = null;
     }
-    handleServerMessage({
-      stream: "control",
-      controlType: "ready",
-      contextId: envelope.ready.contextId,
-      channelConfig: envelope.ready.channelConfig,
-      totalCount: envelope.ready.totalCount,
-      envelopeCount: envelope.ready.envelopeCount,
-      firstEnvelopeSeq: envelope.ready.firstEnvelopeSeq,
-      hasMoreBefore: envelope.ready.hasMoreBefore,
-    });
-    streamedReplayLogEvents = [];
-    streamedReplaySnapshots = [];
   }
 
-  function applySubscribeAckFallback(result: SubscribeResult | undefined): void {
+  async function applySubscribeAckFallback(result: SubscribeResult | undefined): Promise<void> {
     if (result?.participantId) pid = result.participantId;
     if (!result?.envelope || replayComplete) return;
-    ingestReplayEnvelope(result.envelope, "ack");
+    await ingestReplayEnvelope(result.envelope, "ack");
   }
 
   /** True for the durable method-lifecycle events the channel emits. */
@@ -1233,7 +1278,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   let lastSeenSeq: number | undefined = opts.sinceId;
   let repairingGap = false;
   const gapBuffer: ClientIngressMessage[] = [];
-  const MAX_GAP_SIZE = 500;
 
   // Register event listener for channel messages
   const removeEventListener = rpc.on("channel:message", (event: { payload: unknown }) => {
@@ -1244,7 +1288,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       const raw = data.message;
       if (raw.kind === "control" && raw.type === "ready" && raw.ready) {
         if (!replayComplete) {
-          ingestReplayEnvelope(
+          void ingestReplayEnvelope(
             {
               mode: opts.sinceId && opts.sinceId > 0 ? "after" : "initial",
               logEvents: streamedReplayLogEvents,
@@ -1252,7 +1296,14 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
               ready: raw.ready,
             },
             "stream"
-          );
+          ).catch((error) => {
+            const failure =
+              error instanceof PubSubError
+                ? error
+                : new PubSubError(error instanceof Error ? error.message : String(error), "server");
+            rejectReady(failure);
+            handleError(failure);
+          });
         } else {
           handleServerMessage({
             stream: "control",
@@ -1307,6 +1358,14 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
             : null;
       if (!msg) return;
 
+      // The first bounded replay page establishes a stable watermark. Live
+      // appends that arrive while continuation pages are loading are released
+      // only after that snapshot is complete.
+      if (!replayComplete && msg.stream === "log" && msg.phase === "live") {
+        replayLiveBuffer.push(msg);
+        return;
+      }
+
       // Buffer events that arrive during gap repair — process them after the gap is filled
       if (repairingGap) {
         gapBuffer.push(msg);
@@ -1316,33 +1375,27 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       // Phase 2C: Gap detection for persisted messages
       if (msg.id !== undefined && msg.id > 0 && lastSeenSeq !== undefined) {
         if (msg.id > lastSeenSeq + 1) {
-          const gap = msg.id - lastSeenSeq - 1;
-          if (gap <= MAX_GAP_SIZE) {
-            repairingGap = true;
-            callChannel<ChannelReplayEnvelope>("getReplayAfter", lastSeenSeq)
-              .then((envelope) => {
-                for (const evt of envelope.logEvents) {
-                  if (evt.id !== undefined && lastSeenSeq !== undefined && evt.id <= lastSeenSeq)
-                    continue;
-                  handleServerMessage(eventToClientIngress(evt, "live"));
-                }
-              })
-              .catch((err) => {
-                console.warn("[RpcPubSubClient] Gap repair failed:", err);
-              })
-              .finally(() => {
-                repairingGap = false;
-                // Process the triggering message, then any buffered events
-                handleServerMessage(msg);
-                const buffered = gapBuffer.splice(0);
-                for (const bufferedMsg of buffered) {
-                  handleServerMessage(bufferedMsg);
-                }
-              });
-            return;
-          } else {
-            console.warn(`[RpcPubSubClient] Gap too large (${gap} events), skipping repair`);
-          }
+          repairingGap = true;
+          const repairAfter = lastSeenSeq;
+          forEachReplayAfterPage({ after: repairAfter, throughSeq: msg.id - 1 }, (envelope) => {
+            for (const evt of envelope.logEvents) {
+              if (evt.id !== undefined && lastSeenSeq !== undefined && evt.id <= lastSeenSeq) {
+                continue;
+              }
+              handleServerMessage(eventToClientIngress(evt, "live"));
+            }
+          })
+            .catch((err) => {
+              console.warn("[RpcPubSubClient] Gap repair failed:", err);
+            })
+            .finally(() => {
+              repairingGap = false;
+              // Process the triggering message, then any buffered events.
+              handleServerMessage(msg);
+              const buffered = gapBuffer.splice(0);
+              for (const bufferedMsg of buffered) handleServerMessage(bufferedMsg);
+            });
+          return;
         }
       }
       if (msg.id !== undefined && msg.id > 0) {
@@ -1362,7 +1415,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     contextId: opts.contextId,
     channelConfig: opts.channelConfig ? opts.channelConfig : undefined,
     replay: replayMode !== "skip",
-    replayMessageLimit: opts.replayMessageLimit ?? 1000,
+    replayMessageLimit: opts.replayMessageLimit ?? DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT,
     sinceId: opts.sinceId,
   };
   if (methodAdvertisements) subscribeMetadata["methods"] = methodAdvertisements;
@@ -1398,6 +1451,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       rosterOpIds.clear();
       replayMessageKeys.clear();
       replayEvents.length = 0;
+      replayLiveBuffer.length = 0;
+      replayCatchupPromise = null;
       bufferingReplay = replayMode !== "skip";
       replayComplete = false;
       // Re-subscribe with sinceId for catch-up replay
@@ -1407,7 +1462,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
         deliveryId,
         resubMeta
       );
-      applySubscribeAckFallback(result);
+      await applySubscribeAckFallback(result);
       // In-flight method calls are recovered from replayed invocation.* events
       // (handleInvocationLifecycle), not a settled-results read-back.
       consecutiveTouchFailures = 0;
@@ -1449,8 +1504,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // result also carries the same ordered initial replay as a fallback so losing
   // the ready event does not let ready resolve ahead of replay delivery.
   callChannel<SubscribeResult | undefined>("subscribe", deliveryId, subscribeMetadata)
-    .then((result) => {
-      applySubscribeAckFallback(result);
+    .then(async (result) => {
+      await applySubscribeAckFallback(result);
       subscribeAckResolve?.();
       subscribeAckResolve = null;
       subscribeAckReject = null;
@@ -1885,6 +1940,10 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     return callChannel<MessageTypeDefinition[]>("getMessageTypes");
   }
 
+  async function getEnvelope(envelopeId: string): Promise<unknown | null> {
+    return callChannel<unknown | null>("getEnvelope", envelopeId);
+  }
+
   async function getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
     return callChannel<MessageTypeDefinition | null>("getMessageType", typeId);
   }
@@ -2002,6 +2061,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     abortExecutingMethod,
     getMessageTypes,
     getMessageType,
+    getEnvelope,
     registerMessageType,
     clearMessageType,
     publishCustomMessage,
@@ -2077,8 +2137,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     async getReplayBefore(beforeSeq: number, limit = 100) {
       return callChannel<ChannelReplayEnvelope>("getReplayBefore", beforeSeq, limit);
     },
-    async getReplayAfter(sinceId: number) {
-      return callChannel<ChannelReplayEnvelope>("getReplayAfter", sinceId);
+    async getReplayAfter(request: ChannelReplayAfterRequest) {
+      return callChannel<ChannelReplayEnvelope>("getReplayAfter", request);
     },
   };
 }

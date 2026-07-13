@@ -17,7 +17,7 @@ import { useChannelMessages, type UseChannelMessagesResult } from "./useChannelM
 function messageCompleted(
   id: string,
   content: string,
-  createdAt = "2026-05-21T08:00:00.000Z",
+  createdAt = "2026-05-21T08:00:00.000Z"
 ): AgenticEvent<"message.completed"> {
   return {
     kind: "message.completed",
@@ -35,7 +35,7 @@ function messageCompleted(
 
 function messageTypeRegistered(
   typeId: string,
-  createdAt = "2026-05-21T08:00:00.000Z",
+  createdAt = "2026-05-21T08:00:00.000Z"
 ): AgenticEvent<"messageType.registered"> {
   return {
     kind: "messageType.registered",
@@ -53,7 +53,7 @@ function messageTypeRegistered(
 function messageReceived(
   id: string,
   actorId: string,
-  createdAt = "2026-05-21T08:00:10.000Z",
+  createdAt = "2026-05-21T08:00:10.000Z"
 ): AgenticEvent<"message.received"> {
   return {
     kind: "message.received",
@@ -67,7 +67,7 @@ function messageReceived(
 function messageRead(
   id: string,
   actorId: string,
-  createdAt = "2026-05-21T08:00:20.000Z",
+  createdAt = "2026-05-21T08:00:20.000Z"
 ): AgenticEvent<"message.read"> {
   return {
     kind: "message.read",
@@ -81,7 +81,7 @@ function messageRead(
 function messageRetracted(
   id: string,
   actorId: string,
-  createdAt = "2026-05-21T08:00:30.000Z",
+  createdAt = "2026-05-21T08:00:30.000Z"
 ): AgenticEvent<"message.retracted"> {
   return {
     kind: "message.retracted",
@@ -95,7 +95,7 @@ function messageRetracted(
 function messageDelta(
   id: string,
   text: string,
-  createdAt = "2026-05-21T08:00:00.000Z",
+  createdAt = "2026-05-21T08:00:00.000Z"
 ): AgenticEvent<"message.delta"> {
   return {
     kind: "message.delta",
@@ -209,8 +209,8 @@ describe("useChannelMessages", () => {
   it("backfills a locally published envelope through replay instead of optimistic transcript state", async () => {
     let latest: UseChannelMessagesResult | undefined;
     const initialPrompt = messageCompleted("initial-prompt", "Read the docs first");
-    const getReplayAfter = vi.fn(async (cursor: number) => {
-      expect(cursor).toBe(0);
+    const getReplayAfter = vi.fn(async (request: { after: number; throughSeq?: number }) => {
+      expect(request).toEqual({ after: 0, throughSeq: 1 });
       return {
         mode: "after" as const,
         logEvents: [rawReplayEvent(1, initialPrompt)],
@@ -220,7 +220,14 @@ describe("useChannelMessages", () => {
     });
     const client = createClient([], { getReplayAfter });
 
-    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await act(async () => {
       await latest!.backfillAfterLocalPublish(1);
@@ -251,12 +258,19 @@ describe("useChannelMessages", () => {
         ready: { totalCount: 2, envelopeCount: 2, hasMoreBefore: false },
       };
     });
-    const client = createClient(
-      [pubsubAgenticEvent(10, current)],
-      { hasMoreBefore: true, getReplayBefore },
-    );
+    const client = createClient([pubsubAgenticEvent(10, current)], {
+      hasMoreBefore: true,
+      getReplayBefore,
+    });
 
-    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await waitFor(() => {
       expect(latest!.messages.map((message) => message.id)).toEqual(["current"]);
@@ -283,11 +297,20 @@ describe("useChannelMessages", () => {
       events: vi.fn(async function* () {
         yield pubsubAgenticEvent(1, registryEvent) as IncomingEvent;
         yield pubsubAgenticEvent(2, firstMessage) as IncomingEvent;
-        yield await new Promise<IncomingEvent>((resolve) => { resumeEvents = resolve; });
+        yield await new Promise<IncomingEvent>((resolve) => {
+          resumeEvents = resolve;
+        });
       }),
     });
 
-    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await waitFor(() => {
       expect(latest!.messages.map((message) => message.id)).toEqual(["msg-1"]);
@@ -313,7 +336,14 @@ describe("useChannelMessages", () => {
     const read = messageRead("m1", "agent:writer");
     const client = createClient([], { events: vi.fn(() => stream.iterator) });
 
-    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await act(async () => {
       stream.push(livePubsubAgenticEvent(1, completed) as IncomingEvent);
@@ -348,7 +378,14 @@ describe("useChannelMessages", () => {
     const retracted = messageRetracted("m2", "panel:user");
     const client = createClient([], { events: vi.fn(() => stream.iterator) });
 
-    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
     await act(async () => {
       stream.push(livePubsubAgenticEvent(1, completed) as IncomingEvent);
     });
@@ -379,14 +416,23 @@ describe("useChannelMessages", () => {
       },
     ]);
 
-    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
 
     await waitFor(() => {
-      expect(latest!.messages).toContainEqual(expect.objectContaining({
-        id: "msg-stream",
-        content: "hello",
-        complete: false,
-      }));
+      expect(latest!.messages).toContainEqual(
+        expect.objectContaining({
+          id: "msg-stream",
+          content: "hello",
+          complete: false,
+        })
+      );
     });
   });
 });

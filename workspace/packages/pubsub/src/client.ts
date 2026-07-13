@@ -13,6 +13,7 @@ import type {
   Attachment,
   ChannelConfig,
   ChannelReplayEnvelope,
+  ChannelReplayAfterRequest,
   MessageTypeDefinition,
   RegisterMessageTypeInput,
   ChannelMember,
@@ -106,8 +107,11 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
   /** Get older channel envelopes before a sequence. */
   getReplayBefore(beforeSeq: number, limit?: number): Promise<ChannelReplayEnvelope>;
 
-  /** Get durable log rows after a sequence ID. */
-  getReplayAfter(sinceId: number): Promise<ChannelReplayEnvelope>;
+  /** Get one bounded durable-log page after a sequence ID. */
+  getReplayAfter(request: ChannelReplayAfterRequest): Promise<ChannelReplayEnvelope>;
+
+  /** Look up one durable channel envelope by its stable id. */
+  getEnvelope(envelopeId: string): Promise<unknown | null>;
 
   /** Fetch registered custom message types for this channel. */
   getMessageTypes(): Promise<MessageTypeDefinition[]>;

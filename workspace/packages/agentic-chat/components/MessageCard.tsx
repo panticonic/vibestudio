@@ -160,27 +160,6 @@ export function agentConfigFromSettings(
     const respondFrom = respondFromValue.filter((item): item is string => typeof item === "string");
     if (respondFrom.length > 0) config.respondFrom = respondFrom;
   }
-  const maxModelCallsPerTurn = settingValue(record["maxModelCallsPerTurn"]);
-  if (
-    maxModelCallsPerTurn === null ||
-    (typeof maxModelCallsPerTurn === "number" &&
-      Number.isFinite(maxModelCallsPerTurn) &&
-      maxModelCallsPerTurn > 0)
-  ) {
-    config.maxModelCallsPerTurn =
-      typeof maxModelCallsPerTurn === "number"
-        ? Math.floor(maxModelCallsPerTurn)
-        : maxModelCallsPerTurn;
-  }
-  const modelStreamIdleTimeoutMs = settingValue(record["modelStreamIdleTimeoutMs"]);
-  if (
-    modelStreamIdleTimeoutMs === null ||
-    (typeof modelStreamIdleTimeoutMs === "number" &&
-      Number.isFinite(modelStreamIdleTimeoutMs) &&
-      modelStreamIdleTimeoutMs > 0)
-  ) {
-    config.modelStreamIdleTimeoutMs = modelStreamIdleTimeoutMs;
-  }
   return config;
 }
 
@@ -236,9 +215,9 @@ export const MessageCard = React.memo(function MessageCard({
   const [resumeScheduleState, setResumeScheduleState] = useState<
     "idle" | "scheduling" | "scheduled" | "failed"
   >("idle");
-  const [retryLocalState, setRetryLocalState] = useState<"idle" | "switching" | "ready" | "sent" | "failed">(
-    "idle"
-  );
+  const [retryLocalState, setRetryLocalState] = useState<
+    "idle" | "switching" | "ready" | "sent" | "failed"
+  >("idle");
   const [cleanStartState, setCleanStartState] = useState<
     "idle" | "starting" | "started" | "failed"
   >("idle");
@@ -574,7 +553,11 @@ export const MessageCard = React.memo(function MessageCard({
                     size="1"
                     variant="soft"
                     color={retryLocalState === "failed" ? "red" : "blue"}
-                    disabled={retryLocalState === "switching" || retryLocalState === "ready" || retryLocalState === "sent"}
+                    disabled={
+                      retryLocalState === "switching" ||
+                      retryLocalState === "ready" ||
+                      retryLocalState === "sent"
+                    }
                     onClick={handleRetryWithLocalModel}
                     title="Switch this agent to the local fallback model and prepare a retry"
                   >
@@ -585,9 +568,9 @@ export const MessageCard = React.memo(function MessageCard({
                         ? "Ready — press Send"
                         : retryLocalState === "sent"
                           ? "Retry sent"
-                        : retryLocalState === "failed"
-                          ? "Retry local failed"
-                          : "Retry with local model"}
+                          : retryLocalState === "failed"
+                            ? "Retry local failed"
+                            : "Retry with local model"}
                   </Button>
                 </Flex>
               )}
@@ -900,14 +883,29 @@ export const MessageCard = React.memo(function MessageCard({
             <>
               <Box
                 className="message-content"
-                style={!isStreaming && msg.content.length > 6_000 && !longContentExpanded
-                  ? { maxHeight: "28rem", overflow: "hidden", maskImage: "linear-gradient(to bottom, black 85%, transparent)" }
-                  : undefined}
+                style={
+                  !isStreaming && msg.content.length > 6_000 && !longContentExpanded
+                    ? {
+                        maxHeight: "28rem",
+                        overflow: "hidden",
+                        maskImage: "linear-gradient(to bottom, black 85%, transparent)",
+                      }
+                    : undefined
+                }
               >
-                <MessageContent content={msg.content} isStreaming={isStreaming} mdxActions={mdxActions} />
+                <MessageContent
+                  content={msg.content}
+                  isStreaming={isStreaming}
+                  mdxActions={mdxActions}
+                />
               </Box>
               {!isStreaming && msg.content.length > 6_000 ? (
-                <Button size="1" variant="ghost" color="gray" onClick={() => setLongContentExpanded((expanded) => !expanded)}>
+                <Button
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  onClick={() => setLongContentExpanded((expanded) => !expanded)}
+                >
                   {longContentExpanded ? "Show less" : "Show full message"}
                 </Button>
               ) : null}

@@ -24,7 +24,12 @@ import {
   type UserlandApprovalChoice,
 } from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
-import type { BootstrapSnapshot, ChannelInvite, ParticipantSnapshot } from "@workspace/pubsub";
+import type {
+  BootstrapSnapshot,
+  ChannelInvite,
+  ChannelReplayAfterRequest,
+  ParticipantSnapshot,
+} from "@workspace/pubsub";
 import type {
   DeleteChannelInviteInput,
   DeleteChannelMembershipInput,
@@ -489,16 +494,16 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DROP TABLE IF EXISTS fork_ops`);
     this.sql.exec(`DROP TABLE IF EXISTS lineage_subscribers`);
     this.sql.exec(`DROP TABLE IF EXISTS invite_index_ops`);
-    // v112 is an intentional pre-release schema cut: projection operations now
-    // carry a required monotonic revision. Older journal rows are not migrated
-    // or retained.
+    // The v112+ pre-release schema line is an intentional cut: projection
+    // operations carry a required monotonic revision. Older journal rows are
+    // not migrated or retained.
     this.sql.exec(`DROP TABLE IF EXISTS channel_members`);
     // Channel-side registry cache deleted for good — GAD's
     // channel_message_types projection is the only copy.
     this.sql.exec(`DROP TABLE IF EXISTS message_types`);
     // Retained last-seen has no schema change and remains the sole bounded
     // channel-presence record. All membership rows are recreated in the clean
-    // v112 shape; this pre-release cut intentionally carries no compatibility
+    // current shape; this pre-release cut intentionally carries no compatibility
     // bridge for the removed acknowledgement column or unversioned mutations.
     this.createTables();
   }
@@ -758,7 +763,12 @@ export class PubSubChannel extends DurableObjectBase {
   /** Session ownership is part of every public liveness/release operation. The
    * participant check prevents cross-user attribution; the delivery-id check
    * prevents one device of the same user from controlling another device. */
-  private assertParticipantSession(participantId: string, sessionId: string, method: string): void {
+  private assertParticipantSession(
+    participantId: string,
+    sessionId: string,
+    method: string,
+    options?: { allowMissing?: boolean }
+  ): boolean {
     this.assertParticipantCaller(participantId, method);
     if (typeof sessionId !== "string" || sessionId.length === 0) {
       throw new Error(`${method}: sessionId is required`);
@@ -771,11 +781,15 @@ export class PubSubChannel extends DurableObjectBase {
         sessionId
       )
       .toArray()[0];
-    if (!row) throw new Error(`${method}: session does not belong to participant ${participantId}`);
+    if (!row) {
+      if (options?.allowMissing) return false;
+      throw new Error(`${method}: session does not belong to participant ${participantId}`);
+    }
     const callerDeliveryId = this.callerDeliveryId();
     if (callerDeliveryId && row["delivery_id"] !== callerDeliveryId) {
       throw new Error(`${method}: session is owned by a different client endpoint`);
     }
+    return true;
   }
 
   private participantSessionCount(participantId: string): number {
@@ -1268,7 +1282,7 @@ export class PubSubChannel extends DurableObjectBase {
     const mode = wantsReplay && sinceId && sinceId > 0 ? "after" : "initial";
     const envelope =
       mode === "after"
-        ? await this.channelLog.replayAfter(sinceId!, this.currentReplayContext())
+        ? await this.channelLog.replayAfter({ after: sinceId! }, this.currentReplayContext())
         : await this.channelLog.replayInitial(
             wantsReplay ? (replayMessageLimit ?? REPLAY_LIMIT) : 0,
             this.currentReplayContext()
@@ -1394,7 +1408,14 @@ export class PubSubChannel extends DurableObjectBase {
    * another device or the whole canonical human identity. */
   @rpc({ callers: ["panel", "do", "shell", "agent"] })
   async unsubscribe(participantId: string, sessionId: string): Promise<void> {
-    this.assertParticipantSession(participantId, sessionId, "unsubscribe");
+    // DELETE-like cleanup is idempotent. The stale-session alarm and a
+    // graceful client close can race; if the alarm already released this exact
+    // caller-owned session, cleanup is complete. Caller identity is still
+    // checked before allowing the missing row, so this does not permit one
+    // participant to probe or evict another.
+    if (!this.assertParticipantSession(participantId, sessionId, "unsubscribe", {
+      allowMissing: true,
+    })) return;
     await this.unsubscribeParticipant(participantId, "graceful", sessionId);
   }
 
@@ -1697,8 +1718,16 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
-  async getReplayAfter(sinceId: number) {
-    return this.channelLog.replayAfter(sinceId, this.currentReplayContext());
+  async getReplayAfter(request: ChannelReplayAfterRequest) {
+    return this.channelLog.replayAfter(request, this.currentReplayContext());
+  }
+
+  /** Return one durable envelope by its stable envelope id, or null when that
+   * id belongs to another log (for example a VCS commit id). This is a pure,
+   * lineage-aware lookup used by panels, agents, and diagnostic evals. */
+  @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
+  async getEnvelope(envelopeId: string): Promise<ChannelEvent | null> {
+    return this.channelLog.getEventByEnvelopeId(envelopeId);
   }
 
   /** Send a non-durable signal message. */
@@ -2267,7 +2296,7 @@ export class PubSubChannel extends DurableObjectBase {
         : null;
     const after =
       lastId != null
-        ? await this.channelLog.replayAfter(lastId, this.currentReplayContext())
+        ? await this.channelLog.replayAfter({ after: lastId }, this.currentReplayContext())
         : null;
     return {
       rows,

@@ -25,9 +25,9 @@ HeadlessSession.createWithAgent(config: HeadlessWithAgentConfig): Promise<Headle
 
 ```typescript
 interface HeadlessSessionConfig {
-  config: ConnectionConfig;             // { clientId, rpc }, where rpc is the full portable RpcClient
-  metadata?: ChatParticipantMetadata;   // defaults to { name: "Headless Client", type: "headless", handle: "headless" }
-  sandbox?: SandboxConfig;              // optional; only backs local chat-sandbox helpers (callMethod, etc.) — NOT the agent's eval
+  config: ConnectionConfig; // { clientId, rpc }, where rpc is the full portable RpcClient
+  metadata?: ChatParticipantMetadata; // defaults to { name: "Headless Client", type: "headless", handle: "headless" }
+  sandbox?: SandboxConfig; // optional; only backs local chat-sandbox helpers (callMethod, etc.) — NOT the agent's eval
 }
 ```
 
@@ -51,16 +51,19 @@ Extends `HeadlessSessionConfig` with:
 ```typescript
 interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
   rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
-  source: string;           // worker source (e.g., "workers/agent-worker")
-  className: string;        // DO class (e.g., "AiChatWorker")
-  objectKey?: string;       // auto-generated if omitted
+  source: string; // worker source (e.g., "workers/agent-worker")
+  className: string; // DO class (e.g., "AiChatWorker")
+  objectKey?: string; // auto-generated if omitted
   contextId: string;
-  channelId?: string;       // auto-generated if omitted
+  channelId?: string; // auto-generated if omitted
   channelConfig?: ChannelConfig;
-  methods?: Record<string, MethodDefinition>;  // merged with the default set_title method
+  methods?: Record<string, MethodDefinition>; // merged with the default set_title method
   /**
-   * Pi-native pass-through subscription config. Common keys: model,
-   * thinkingLevel, approvalLevel, systemPrompt, systemPromptMode.
+   * Agent creation + channel presentation config. Common behavior keys:
+   * model, thinkingLevel, fallbackModel, fallbackThinkingLevel, fallbackOn,
+   * fallbackScope, approvalLevel. Presentation keys include systemPrompt and
+   * systemPromptMode. Behavior is persisted on the agent and stripped from the
+   * channel subscription.
    */
   extraConfig?: AgentSubscriptionConfig;
 }
@@ -75,37 +78,37 @@ To customize the agent's system prompt for a session, pass `systemPrompt` and
 
 ### Lifecycle
 
-| Method | Description |
-|--------|-------------|
-| `connect(channelId, options?)` | Connect to a PubSub channel. Options: `channelConfig`, `contextId`, `methods` |
-| `disconnect()` | Abort the message consumer and disconnect the client |
-| `dispose()` | Sync best-effort teardown (disconnect + clear listeners) |
-| `close(opts?)` | Async teardown: unsubscribe + retire the agent subscribed by `createWithAgent`, then dispose. Pass `{ waitForRemoteCleanup: false }` to detach local state immediately while remote cleanup continues best-effort. |
-| `[Symbol.asyncDispose]()` | Supports `await using session = ...` (calls `close()`) |
+| Method                         | Description                                                                                                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `connect(channelId, options?)` | Connect to a PubSub channel. Options: `channelConfig`, `contextId`, `methods`                                                                                                                                      |
+| `disconnect()`                 | Abort the message consumer and disconnect the client                                                                                                                                                               |
+| `dispose()`                    | Sync best-effort teardown (disconnect + clear listeners)                                                                                                                                                           |
+| `close(opts?)`                 | Async teardown: unsubscribe + retire the agent subscribed by `createWithAgent`, then dispose. Pass `{ waitForRemoteCleanup: false }` to detach local state immediately while remote cleanup continues best-effort. |
+| `[Symbol.asyncDispose]()`      | Supports `await using session = ...` (calls `close()`)                                                                                                                                                             |
 
 ### Communication
 
-| Method | Description |
-|--------|-------------|
-| `send(text, options?)` | Publish a user message. Options: `attachments`, `idempotencyKey`. Returns `messageId` |
-| `interrupt(agentId)` | Interrupt an agent (sends a `pause` method call) |
-| `callMethod(participantId, method, args)` | Call a method on another participant and return the unwrapped provider payload |
-| `callMethodResult(participantId, method, args)` | Call a method and return the full `ChatMethodResult` envelope |
-| `loadEarlierMessages()` | No-op — channel replay already delivers the full persisted history |
+| Method                                          | Description                                                                           |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `send(text, options?)`                          | Publish a user message. Options: `attachments`, `idempotencyKey`. Returns `messageId` |
+| `interrupt(agentId)`                            | Interrupt an agent (sends a `pause` method call)                                      |
+| `callMethod(participantId, method, args)`       | Call a method on another participant and return the unwrapped provider payload        |
+| `callMethodResult(participantId, method, args)` | Call a method and return the full `ChatMethodResult` envelope                         |
+| `loadEarlierMessages()`                         | No-op — channel replay already delivers the full persisted history                    |
 
 ### State (read-only)
 
-| Getter | Type |
-|--------|------|
-| `messages` | `readonly ChatMessage[]` |
-| `participants` | `Record<string, Participant<ChatParticipantMetadata>>` |
+| Getter            | Type                                                            |
+| ----------------- | --------------------------------------------------------------- |
+| `messages`        | `readonly ChatMessage[]`                                        |
+| `participants`    | `Record<string, Participant<ChatParticipantMetadata>>`          |
 | `allParticipants` | Same (headless sessions don't track separate historical roster) |
-| `connected` | `boolean` |
-| `status` | `string` |
-| `channelId` | `string \| null` |
-| `isStreaming` | `boolean` (any message still incomplete) |
-| `debugEvents` | `readonly (AgentDebugPayload & { ts: number })[]` |
-| `client` | `PubSubClient \| null` (escape hatch) |
+| `connected`       | `boolean`                                                       |
+| `status`          | `string`                                                        |
+| `channelId`       | `string \| null`                                                |
+| `isStreaming`     | `boolean` (any message still incomplete)                        |
+| `debugEvents`     | `readonly (AgentDebugPayload & { ts: number })[]`               |
+| `client`          | `PubSubClient \| null` (escape hatch)                           |
 
 Invocation/tool-call diagnostics are exposed through `messages`: entries with
 `contentType: "invocation"` have a parsed `message.invocation` payload with
@@ -131,13 +134,17 @@ onMessage(listener: (latest: ChatMessage) => void): () => void
 
 ### Headless-Specific Helpers
 
-| Method | Description |
-|--------|-------------|
-| `waitForAgentMessage(opts?)` | Resolve with the next complete agent message. Options: `timeoutMs`, `signal`. Rejects on an agent failure message |
-| `waitForIdle(opts?)` | Resolve once the agent settles (no new messages for `debounce` ms and no open agent turn). Options: `debounce` (default 3000), `timeoutMs`, `signal` |
-| `sendAndWait(text, opts?)` | `send(text)` then `waitForIdle(opts)` |
-| `getRecommendedChannelConfig()` | Returns `{ approvalLevel: 2 }` (full-auto) |
-| `snapshot()` | Diagnostic snapshot: messages, invocations, debugEvents, cleanupErrors, participants, localMethodNames, connected, duration |
+| Method                          | Description                                                                                                                                                                                                                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waitForAgentMessage(opts?)`    | Resolve with the next complete agent response. A failed model attempt remains pending while its durable agent turn is open, so model fallback can continue; rejection occurs only when the turn closes without recovery. Options: `timeoutMs`, `signal`                     |
+| `waitForIdle(opts?)`            | Resolve once the durable agent turn closes successfully and remains settled for `debounce` ms. A closed turn without a response, or with nonterminal foreground state, rejects immediately; background subagent work does not keep the parent turn open or reset settlement. Options: `debounce` (default 3000), `timeoutMs`, `signal` |
+| `sendAndWait(text, opts?)`      | `send(text)` then `waitForIdle(opts)`                                                                                                                                                                                                                                       |
+| `getRecommendedChannelConfig()` | Returns `{ approvalLevel: 2 }` (full-auto)                                                                                                                                                                                                                                  |
+| `snapshot()`                    | Diagnostic snapshot: channel/agent/context provenance, messages, invocations, debugEvents, cleanupErrors, participants, localMethodNames, connected, duration                                                                                                               |
+
+The provenance fields are `channelId`, `agentEntityId`, `agentTargetId`, and
+`agentContextId`. They remain available after `close()` so a harness can join a
+completed result back to its durable channel and agent trajectory.
 
 ---
 
@@ -166,14 +173,17 @@ subscribeHeadlessAgent(opts: SubscribeHeadlessAgentOptions): Promise<HeadlessAge
 ```typescript
 interface SubscribeHeadlessAgentOptions {
   rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
-  source: string;        // e.g., "workers/agent-worker"
-  className: string;     // e.g., "AiChatWorker"
+  source: string; // e.g., "workers/agent-worker"
+  className: string; // e.g., "AiChatWorker"
   objectKey: string;
   channelId: string;
   contextId: string;
   /**
-   * Pi-native pass-through subscription config. Common keys: model,
-   * thinkingLevel, approvalLevel, systemPrompt, systemPromptMode.
+   * Agent creation + channel presentation config. Common behavior keys:
+   * model, thinkingLevel, fallbackModel, fallbackThinkingLevel, fallbackOn,
+   * fallbackScope, approvalLevel. Presentation keys include systemPrompt and
+   * systemPromptMode. Behavior is persisted on the agent and stripped from the
+   * channel subscription.
    */
   extraConfig?: AgentSubscriptionConfig;
 }
@@ -181,8 +191,8 @@ interface SubscribeHeadlessAgentOptions {
 interface HeadlessAgentSubscription {
   ok: boolean;
   participantId?: string;
-  entityId: string;   // pass to retireHeadlessAgent
-  targetId: string;   // pass to unsubscribeHeadlessAgent
+  entityId: string; // pass to retireHeadlessAgent
+  targetId: string; // pass to unsubscribeHeadlessAgent
 }
 ```
 

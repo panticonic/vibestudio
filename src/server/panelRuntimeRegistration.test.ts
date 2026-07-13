@@ -71,24 +71,21 @@ describe("panelHostCommandAssignmentError", () => {
 });
 
 describe("snapshotBrowserPanelFromCdpBridge", () => {
-  it("serves browser panel snapshots through the host accessibility command", async () => {
-    const nodes = [
-      { role: { value: "RootWebArea" }, name: { value: "Example" } },
-      { role: { value: "button" }, name: { value: "Submit" } },
-    ];
+  it("serves browser panel snapshots through the bounded host DOM command", async () => {
+    const dom = { kind: "synth", text: "Example\nSubmit", structure: { tag: "body" } };
     const cdpBridge = {
       isTargetRegistered: () => true,
-      sendHostCommand: vi.fn(async () => nodes),
+      sendHostCommand: vi.fn(async () => dom),
     };
 
     const snapshot = await snapshotBrowserPanelFromCdpBridge(cdpBridge, "browser-slot");
 
     expect(snapshot).toEqual({
-      kind: "ax",
-      text: "RootWebArea: Example\nbutton: Submit",
-      structure: nodes,
+      kind: "synth",
+      text: "Example\nSubmit",
+      structure: { tag: "body" },
     });
-    expect(cdpBridge.sendHostCommand).toHaveBeenCalledWith("browser-slot", "accessibilityTree", []);
+    expect(cdpBridge.sendHostCommand).toHaveBeenCalledWith("browser-slot", "domSnapshot", []);
   });
 
   it("does not auto-load browser targets for snapshots", async () => {
@@ -215,6 +212,23 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
       structure: [{ role: { value: "heading" }, name: { value: "Target" } }],
     });
     expect(callTarget).toHaveBeenCalledWith(slot.current_entity_id, "_agent.snapshot");
+    expect(cdpBridge.sendHostCommand).toHaveBeenCalledWith(slot.slot_id, "accessibilityTree", []);
+  });
+
+  it("falls back to the hosted DOM tree when a panel has no in-process agent tree API", async () => {
+    const callTarget = vi.fn(async () => {
+      throw new Error('Method "_agent.tree" is not exposed by this endpoint');
+    });
+    const { bridge, cdpBridge, slot } = await createSinglePanelBridge({ callTarget });
+
+    await expect(
+      bridge({
+        callerId: "server",
+        callerKind: "server",
+        method: "callAgent",
+        args: [slot.slot_id, "_agent.tree", []],
+      })
+    ).resolves.toEqual([{ role: { value: "heading" }, name: { value: "Target" } }]);
     expect(cdpBridge.sendHostCommand).toHaveBeenCalledWith(slot.slot_id, "accessibilityTree", []);
   });
 });

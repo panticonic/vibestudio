@@ -24,6 +24,7 @@ import {
   messageDisplayText,
   participantRefSchema,
   principalRefSchema,
+  publicActorRef,
   trajectoryEventSchema,
   userVisibleTrajectoryProjection,
   type AgenticEvent,
@@ -116,6 +117,36 @@ describe("@workspace/agentic-protocol schemas", () => {
     expect(principalRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");
     expect(participantRefSchema.safeParse({ kind: "do", id: "do:agent" }).success).toBe(false);
     expect(participantRefSchema.parse({ kind: "panel", id: "panel:user" }).kind).toBe("panel");
+  });
+
+  it("keeps actor extensions inside metadata instead of accepting undeclared wire fields", () => {
+    expect(
+      actorRefSchema.safeParse({ kind: "agent", id: "agent-1", privateAccountId: "hidden" }).success
+    ).toBe(false);
+    expect(
+      actorRefSchema.safeParse({
+        kind: "agent",
+        id: "agent-1",
+        metadata: { accountId: "public-account" },
+      }).success
+    ).toBe(true);
+  });
+
+  it("removes private account identity from public actor projections", () => {
+    const actor = actorRefSchema.parse({
+      kind: "agent",
+      id: "agent-1",
+      metadata: {
+        executionMode: "headless",
+        accountSubject: { userId: "usr_private" },
+      },
+    });
+
+    expect(publicActorRef(actor)).toEqual({
+      kind: "agent",
+      id: "agent-1",
+      metadata: { executionMode: "headless" },
+    });
   });
 
   it("accepts human vocabulary events without turnId", () => {
@@ -241,11 +272,17 @@ describe("@workspace/agentic-protocol schemas", () => {
     // Valid shapes pass.
     expect(
       agenticEventSchema.safeParse(
-        completed({ blockId: brandId<BlockId>("b0"), type: "invocation", invocationId: brandId<InvocationId>("call-1") })
+        completed({
+          blockId: brandId<BlockId>("b0"),
+          type: "invocation",
+          invocationId: brandId<InvocationId>("call-1"),
+        })
       ).success
     ).toBe(true);
     expect(
-      agenticEventSchema.safeParse(completed({ blockId: brandId<BlockId>("b0"), type: "text", content: "hi" })).success
+      agenticEventSchema.safeParse(
+        completed({ blockId: brandId<BlockId>("b0"), type: "text", content: "hi" })
+      ).success
     ).toBe(true);
 
     // An invocation block without an invocationId is rejected.
@@ -959,7 +996,12 @@ describe("@workspace/agentic-protocol reducers", () => {
       actor: agent,
       turnId: brandId<TurnId>("turn-1"),
       causality: { messageId: brandId<MessageId>("msg-stream") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, blockId: brandId<BlockId>(blockId), type, text },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        blockId: brandId<BlockId>(blockId),
+        type,
+        text,
+      },
       createdAt: "2026-05-20T12:00:01.000Z",
     });
 
@@ -1454,17 +1496,17 @@ describe("@workspace/agentic-protocol message delivery events", () => {
 
   it("accepts received/read/edited/retracted events", () => {
     expect(agenticEventSchema.parse(receipt("message.received")).kind).toBe("message.received");
-    expect(agenticEventSchema.parse(receipt("message.read", agentParticipant, { turnId: "t-1" })).kind).toBe(
-      "message.read"
-    );
+    expect(
+      agenticEventSchema.parse(receipt("message.read", agentParticipant, { turnId: "t-1" })).kind
+    ).toBe("message.read");
     expect(agenticEventSchema.parse(edited()).kind).toBe("message.edited");
     expect(agenticEventSchema.parse(retracted()).kind).toBe("message.retracted");
   });
 
   it("rejects message delivery events without a messageId", () => {
-    expect(agenticEventSchema.safeParse({ ...receipt("message.read"), causality: undefined }).success).toBe(
-      false
-    );
+    expect(
+      agenticEventSchema.safeParse({ ...receipt("message.read"), causality: undefined }).success
+    ).toBe(false);
   });
 
   it("rejects edited events without blocks", () => {
@@ -1494,7 +1536,11 @@ describe("@workspace/agentic-protocol message delivery events", () => {
   });
 
   it("projects completed → received → read into per-participant receipts", () => {
-    const state = [sent(), receipt("message.received"), receipt("message.read", agentParticipant, { turnId: "t-9" })]
+    const state = [
+      sent(),
+      receipt("message.received"),
+      receipt("message.read", agentParticipant, { turnId: "t-9" }),
+    ]
       .map((event, index) => envelope(event, index + 1))
       .reduce(reduceChannelView, createInitialChannelViewState());
     const message = state.messages[target];
@@ -1511,11 +1557,12 @@ describe("@workspace/agentic-protocol message delivery events", () => {
         to: [{ kind: "participant", participantId: "participant-agent-1" }],
       },
     });
-    const state = [withTo].map((event, index) => envelope(event, index + 1)).reduce(
-      reduceChannelView,
-      createInitialChannelViewState()
-    );
-    expect(state.messages[target]?.to).toEqual([{ kind: "participant", participantId: "participant-agent-1" }]);
+    const state = [withTo]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    expect(state.messages[target]?.to).toEqual([
+      { kind: "participant", participantId: "participant-agent-1" },
+    ]);
     expect(state.intendedRecipientsByMessage[target]).toContain("participant-agent-1");
   });
 
@@ -1538,7 +1585,11 @@ describe("@workspace/agentic-protocol message delivery events", () => {
   });
 
   it("ignores edit/retract from a non-author", () => {
-    const state = [sent(), edited(agentParticipant, agentParticipant), retracted(agentParticipant, agentParticipant)]
+    const state = [
+      sent(),
+      edited(agentParticipant, agentParticipant),
+      retracted(agentParticipant, agentParticipant),
+    ]
       .map((event, index) => envelope(event, index + 1))
       .reduce(reduceChannelView, createInitialChannelViewState());
     expect(messageDisplayText(state.messages[target]?.blocks)).toBe("hello");

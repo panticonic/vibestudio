@@ -333,6 +333,11 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:nav-a", "panel", "panel:slot-a", "usr_alice");
     await instance.unsubscribe("user:usr_alice", "session-a");
     expect(sql.exec(`SELECT id FROM participants`).toArray()).toHaveLength(0);
+    // A concurrent stale-session alarm may have won the same cleanup race.
+    // Repeating the caller-owned unsubscribe remains a successful no-op.
+    await expect(
+      instance.unsubscribe("user:usr_alice", "session-a")
+    ).resolves.toBeUndefined();
     await expect(instance.getChannelPresence()).resolves.toMatchObject({
       entries: [
         {
@@ -916,7 +921,7 @@ describe("PubSubChannel", () => {
       { idempotencyKey: "large-publish" }
     );
 
-    const replay = await instance.getReplayAfter(1);
+    const replay = await instance.getReplayAfter({ after: 1 });
     const event = replay.logEvents.find((item) => item.type === AGENTIC_EVENT_PAYLOAD_KIND);
     const payload = ((event?.payload as { payload?: unknown })?.payload ?? {}) as Record<
       string,
@@ -942,7 +947,7 @@ describe("PubSubChannel", () => {
       agenticEvent("message.completed")
     );
 
-    const afterOne = await instance.getReplayAfter(1);
+    const afterOne = await instance.getReplayAfter({ after: 1 });
     expect(afterOne.logEvents.map((event) => event.id)).toEqual([2, 3]);
     expect(afterOne.ready).toMatchObject({
       totalCount: 3,
@@ -954,6 +959,25 @@ describe("PubSubChannel", () => {
     expect(beforeThree.mode).toBe("before");
     expect(beforeThree.logEvents.map((event) => event.id)).toEqual([2]);
     expect(beforeThree.ready.hasMoreBefore).toBe(true);
+  });
+
+  it("looks up a durable envelope by its stable id", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:user", "panel");
+
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent("message.completed"),
+      { idempotencyKey: "lookup-one" }
+    );
+
+    await expect(instance.getEnvelope("ik:lookup-one")).resolves.toMatchObject({
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      senderId: "panel:user",
+    });
+    await expect(instance.getEnvelope("missing-envelope")).resolves.toBeNull();
   });
 
   it("delivers live envelopes to RPC subscribers", async () => {
@@ -1240,7 +1264,7 @@ describe("PubSubChannel", () => {
       { invocationId: "debug-invocation", transportCallId: "debug-call" }
     );
 
-    const replay = await instance.getReplayAfter(0);
+    const replay = await instance.getReplayAfter({ after: 0 });
     const events = replay.logEvents
       .filter((event) => event.type === AGENTIC_EVENT_PAYLOAD_KIND)
       .map((event) => event.payload);
@@ -1418,7 +1442,7 @@ describe("PubSubChannel", () => {
         .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_envelopes'`)
         .toArray()
     ).toEqual([]);
-    const replay = await instance.getReplayAfter(1);
+    const replay = await instance.getReplayAfter({ after: 1 });
     expect(
       replay.logEvents.map((event) => ({
         id: event.id,
@@ -1461,7 +1485,7 @@ describe("PubSubChannel", () => {
     });
     await fork.instance.postClone("channel-parent", 3, "ctx-forked");
 
-    const replay = await fork.instance.getReplayAfter(0);
+    const replay = await fork.instance.getReplayAfter({ after: 0 });
     // No-copy fork: the child sees the parent prefix verbatim, including the
     // presence envelope, with the original sequence numbers.
     expect(replay.logEvents.map((event) => event.id)).toEqual([1, 2, 3]);
@@ -1482,7 +1506,7 @@ describe("PubSubChannel", () => {
       ...agenticEvent("message.completed"),
       causality: { messageId: "msg-fork" },
     });
-    const afterForkAppend = await fork.instance.getReplayAfter(3);
+    const afterForkAppend = await fork.instance.getReplayAfter({ after: 3 });
     expect(afterForkAppend.logEvents.map((event) => event.id)).toEqual([4]);
   });
 
@@ -2602,7 +2626,7 @@ describe("PubSubChannel", () => {
       .toArray();
     expect(pending).toHaveLength(0);
 
-    const events = (await instance.getReplayAfter(0)).logEvents.map(
+    const events = (await instance.getReplayAfter({ after: 0 })).logEvents.map(
       (event) => event.payload as { kind?: string; payload?: unknown }
     );
     expect(events).toEqual(
@@ -2660,7 +2684,7 @@ describe("PubSubChannel", () => {
     );
 
     expect(result.id).toBeTypeOf("number");
-    const events = (await instance.getReplayAfter(0)).logEvents.map(
+    const events = (await instance.getReplayAfter({ after: 0 })).logEvents.map(
       (event) => event.payload as { kind?: string; payload?: unknown }
     );
     expect(events).toEqual(
@@ -3394,7 +3418,7 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
   // Envelopes appended past the fork point (2). The seed is the only event
   // appendSeed writes.
   async function tailAfterFork(child: Awaited<ReturnType<typeof createGadBackedChannel>>) {
-    const replay = await child.instance.getReplayAfter(2);
+    const replay = await child.instance.getReplayAfter({ after: 2 });
     return replay.logEvents;
   }
 

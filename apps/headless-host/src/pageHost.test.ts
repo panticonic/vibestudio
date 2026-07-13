@@ -58,6 +58,46 @@ function harness(data: string) {
   return { host, send };
 }
 
+function lifecycleHarness(navigateResult: { errorText?: string } = {}) {
+  const owners = new Map<string, string>();
+  let eventHandler: ((event: { method: string; params: unknown; sessionId?: string }) => void) | null =
+    null;
+  const send = vi.fn(async (method: string) => {
+    if (method === "Target.createBrowserContext") return { browserContextId: "browser-context-1" };
+    if (method === "Target.createTarget") return { targetId: "target-1" };
+    if (method === "Target.attachToTarget") return { sessionId: "mgmt-1" };
+    if (method === "Page.navigate") return navigateResult;
+    return {};
+  });
+  const cdp = {
+    onEvent: vi.fn(
+      (handler: (event: { method: string; params: unknown; sessionId?: string }) => void) => {
+        eventHandler = handler;
+      }
+    ),
+    send,
+    claimSession: vi.fn((sessionId: string, owner: string) => owners.set(sessionId, owner)),
+    releaseSession: vi.fn((sessionId: string) => owners.delete(sessionId)),
+    releaseSlotSessions: vi.fn(),
+    ownerOf: vi.fn((sessionId?: string) => (sessionId ? owners.get(sessionId) : undefined)),
+  };
+  const host = new PageHost(cdp as never, new ConsoleHistoryStore());
+  const input = {
+    slotId: "panel-1",
+    contextId: "context-1",
+    panelUrl: "https://example.com",
+    panelInit: {},
+    tabId: 1,
+  };
+  return {
+    host,
+    input,
+    send,
+    fireDocumentReady: () =>
+      eventHandler?.({ method: "Page.domContentEventFired", params: {}, sessionId: "mgmt-1" }),
+  };
+}
+
 describe("PageHost.captureScreenshot", () => {
   it("captures PNG through the management session and returns exact dimensions", async () => {
     const data = png(800, 600);
@@ -89,5 +129,88 @@ describe("PageHost.captureScreenshot", () => {
       { format: "jpeg", quality: 60 },
       "mgmt-1"
     );
+  });
+});
+
+describe("PageHost navigation readiness", () => {
+  it("waits for the CDP document event without imposing a wall-clock deadline", async () => {
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    let settled = false;
+    const loading = host.loadPanel(input).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1"));
+    expect(settled).toBe(false);
+
+    fireDocumentReady();
+    await expect(loading).resolves.toBeUndefined();
+  });
+
+  it("rejects immediately on a concrete navigation error and cleans up the target", async () => {
+    const { host, input, send } = lifecycleHarness({ errorText: "net::ERR_NAME_NOT_RESOLVED" });
+
+    await expect(host.loadPanel(input)).rejects.toThrow(
+      "panel navigation failed: net::ERR_NAME_NOT_RESOLVED"
+    );
+    expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
+  });
+
+  it("rejects an outstanding readiness wait when the panel is unloaded", async () => {
+    const { host, input, send } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1"));
+
+    await host.unloadPanel(input.slotId);
+    await expect(loading).rejects.toThrow("unloaded before document readiness");
+  });
+});
+
+describe("PageHost.domSnapshot", () => {
+  it("requires and returns explicit global observation bounds", async () => {
+    const limits = {
+      textChars: 32768,
+      textNodes: 2000,
+      structureNodes: 500,
+      depth: 8,
+      childrenPerNode: 50,
+      leafTextChars: 160,
+    };
+    const send = vi.fn(async (_method: string, params: { expression?: string }) => ({
+      result: {
+        value: {
+          kind: "synth",
+          text: "bounded text",
+          structure: { tag: "body" },
+          truncated: true,
+          limits,
+          observed: { textNodes: 2000, structureNodes: 500 },
+        },
+      },
+      expression: params?.expression,
+    }));
+    const cdp = { onEvent: vi.fn(), send };
+    const host = new PageHost(cdp as never, new ConsoleHistoryStore());
+    const pages = (host as unknown as { pages: Map<string, unknown> }).pages;
+    pages.set("panel-1", {
+      slotId: "panel-1",
+      contextId: "context-1",
+      targetId: "target-1",
+      mgmtSessionId: "mgmt-1",
+      relaySessionId: null,
+      panelUrl: "https://example.com",
+      lastUsedAt: 0,
+    });
+
+    await expect(host.domSnapshot("panel-1")).resolves.toEqual({
+      kind: "synth",
+      text: "bounded text",
+      structure: { tag: "body" },
+      truncated: true,
+      limits,
+      observed: { textNodes: 2000, structureNodes: 500 },
+    });
+    const expression = (send.mock.calls[0]?.[1] as { expression?: string }).expression ?? "";
+    expect(expression).toContain("structureNodes: 500");
+    expect(expression).not.toContain("innerText");
   });
 });

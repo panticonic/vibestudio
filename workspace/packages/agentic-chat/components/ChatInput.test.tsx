@@ -181,8 +181,6 @@ describe("ChatInput /model command", () => {
       approvalLevel: 1,
       respondPolicy: "from-participants",
       respondFrom: ["user-1"],
-      maxModelCallsPerTurn: 3,
-      modelStreamIdleTimeoutMs: 12_000,
     }));
     const modelCatalog = {
       providers: [],
@@ -226,8 +224,6 @@ describe("ChatInput /model command", () => {
       approvalLevel: 1,
       respondPolicy: "from-participants",
       respondFrom: ["user-1"],
-      maxModelCallsPerTurn: 3,
-      modelStreamIdleTimeoutMs: 12_000,
     });
     expect(onInputChange).toHaveBeenCalledWith("");
   });
