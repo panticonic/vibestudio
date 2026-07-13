@@ -283,6 +283,42 @@ describe("PanelHttpServer build cache", () => {
     expect(getBuild).toHaveBeenCalledWith("panels/my-app", "state:abc123");
   });
 
+  it("serves a light-first building page with a dark appearance override", async () => {
+    const server = new PanelHttpServer();
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(
+        () => new Promise<import("./buildV2/buildStore.js").BuildResult>(() => undefined)
+      ),
+    });
+
+    const response = await handlePanelRequest(server, "/panels/my-app/bundle.js");
+    const body = String(response.body);
+
+    expect(response.statusCodeWritten).toBe(202);
+    expect(body).toContain("--page-bg: radial-gradient(circle at top, #fffbeb");
+    expect(body).toContain("@media (prefers-color-scheme: dark)");
+    expect(body).toContain("--mark-filter: brightness(0) saturate(100%)");
+  });
+
+  it("serves a theme-adaptive build error page", async () => {
+    const server = new PanelHttpServer();
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(async () => {
+        throw new Error("broken build");
+      }),
+    });
+
+    const response = await handlePanelRequest(server, "/panels/my-app/");
+    const body = String(response.body);
+
+    expect(response.statusCodeWritten).toBe(500);
+    expect(body).toContain("--error-bg: #fff1f2");
+    expect(body).toContain("@media (prefers-color-scheme: dark)");
+    expect(body).toContain("broken build");
+  });
+
   it("does not serve a main entry artifact for a referer-less ref-pinned asset path", async () => {
     const server = new PanelHttpServer();
     const mainBuild = {

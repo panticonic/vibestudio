@@ -570,14 +570,37 @@ export class PanelHttpServer {
   <title>Building — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
-    h1 { color: #f8fafc; font-size: 1.5rem; }
-    p { color: #9ca3af; line-height: 1.6; }
-    code { color: #facc15; }
-    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
-    .spinner { width: 24px; height: 24px; border: 3px solid #303a4f; border-top: 3px solid #f59e0b;
+    :root {
+      color-scheme: light dark;
+      --page-bg: radial-gradient(circle at top, #fffbeb 0%, #f8fafc 58%);
+      --heading: #111827;
+      --muted: #64748b;
+      --accent: #b45309;
+      --spinner-track: #e2e8f0;
+      --mark-filter: brightness(0) saturate(100%);
+      --mark-shadow: drop-shadow(0 18px 24px rgba(15, 23, 42, 0.12));
+    }
+    html { min-height: 100%; background: var(--page-bg); }
+    body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
+    h1 { color: var(--heading); font-size: 1.5rem; }
+    p { color: var(--muted); line-height: 1.6; }
+    code { color: var(--accent); }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; filter: var(--mark-filter); }
+    .spinner { width: 24px; height: 24px; border: 3px solid var(--spinner-track); border-top-color: #f59e0b;
                border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1rem auto; }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page-bg: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%);
+        --heading: #f8fafc;
+        --muted: #9ca3af;
+        --accent: #facc15;
+        --spinner-track: #303a4f;
+        --mark-filter: none;
+        --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
+      }
+    }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
   <meta http-equiv="refresh" content="2">
@@ -610,14 +633,40 @@ export class PanelHttpServer {
   <title>Build Error — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
-    h1 { color: #f8fafc; font-size: 1.5rem; }
-    p { color: #9ca3af; line-height: 1.6; }
-    code { color: #facc15; }
-    pre { background: #101318; border: 1px solid #303a4f; padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: #fecaca; }
-    a { color: #f59e0b; }
-    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    :root {
+      color-scheme: light dark;
+      --page-bg: radial-gradient(circle at top, #fff7ed 0%, #f8fafc 58%);
+      --heading: #111827;
+      --muted: #64748b;
+      --accent: #b45309;
+      --error-bg: #fff1f2;
+      --error-border: #fecdd3;
+      --error-text: #b91c1c;
+      --mark-filter: brightness(0) saturate(100%);
+      --mark-shadow: drop-shadow(0 18px 24px rgba(15, 23, 42, 0.12));
+    }
+    html { min-height: 100%; background: var(--page-bg); }
+    body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
+    h1 { color: var(--heading); font-size: 1.5rem; }
+    p { color: var(--muted); line-height: 1.6; }
+    code { color: var(--accent); }
+    pre { background: var(--error-bg); border: 1px solid var(--error-border); padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: var(--error-text); }
+    a { color: var(--accent); }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; filter: var(--mark-filter); }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page-bg: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%);
+        --heading: #f8fafc;
+        --muted: #9ca3af;
+        --accent: #f59e0b;
+        --error-bg: #101318;
+        --error-border: #303a4f;
+        --error-text: #fecaca;
+        --mark-filter: none;
+        --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
+      }
+    }
   </style>
 </head>
 <body>
