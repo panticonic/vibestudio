@@ -354,9 +354,21 @@ interface NativePeerConnectionCtor {
 
 interface NodeDatachannelModule {
   PeerConnection: NativePeerConnectionCtor;
+  cleanup?: () => void;
 }
 
 let cachedModule: NodeDatachannelModule | null = null;
+
+/**
+ * Tear down libdatachannel's process-global callback/runtime state before the
+ * Electron Node environment exits. Closing individual peers is not sufficient:
+ * the addon otherwise tries to release N-API callback handles during teardown.
+ */
+export function cleanupNodeDatachannel(): void {
+  const mod = cachedModule;
+  cachedModule = null;
+  mod?.cleanup?.();
+}
 
 /**
  * Load the native addon lazily and fail loud if absent. The `require` is reached
@@ -443,7 +455,8 @@ class WrappedDataChannel implements RtcDataChannelLike {
   }
 
   send(data: Uint8Array): void {
-    this.dc.sendMessageBinary(toNodeBuffer(data));
+    const sent = this.dc.sendMessageBinary(toNodeBuffer(data));
+    if (!sent) throw new Error(`data channel '${this.label}' rejected ${data.byteLength} bytes`);
   }
 
   close(): void {
