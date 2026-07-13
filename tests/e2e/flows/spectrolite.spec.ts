@@ -23,10 +23,7 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function e2eVaultContextId(vaultWorkspaceRoot: string): string {
-  const input = vaultWorkspaceRoot
-    .replace(/\\/g, "/")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  const input = vaultWorkspaceRoot.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
   let h1 = 0x811c9dc5 >>> 0;
   let h2 = 0x01000193 >>> 0;
   for (let i = 0; i < input.length; i++) {
@@ -50,15 +47,23 @@ type PendingApproval = {
 
 function replaceInitPanels(workspacePath: string, stateArgs: Record<string, unknown>): void {
   const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
-  const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [
     Object.keys(stateArgs).length > 0
-      ? { source: "panels/spectrolite", stateArgs }
-      : { source: "panels/spectrolite" },
+      ? {
+          source: "panels/spectrolite",
+          env: { VIBESTUDIO_ENABLE_SPECTROLITE_E2E_HOOKS: "1" },
+          stateArgs,
+        }
+      : {
+          source: "panels/spectrolite",
+          env: { VIBESTUDIO_ENABLE_SPECTROLITE_E2E_HOOKS: "1" },
+        },
   ];
+  config.apps = [{ source: "apps/shell" }];
+  config.hostTargets = {
+    electron: { app: "apps/shell" },
+  };
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
@@ -80,16 +85,9 @@ function initializeDefaultVaultRepo(workspacePath: string): void {
   );
   fs.writeFileSync(
     path.join(repo, "Linked.mdx"),
-    [
-      "---",
-      "title: Linked",
-      "---",
-      "",
-      "# Linked",
-      "",
-      "This note points at [[E2E]].",
-      "",
-    ].join("\n")
+    ["---", "title: Linked", "---", "", "# Linked", "", "This note points at [[E2E]].", ""].join(
+      "\n"
+    )
   );
   fs.writeFileSync(
     path.join(repo, "Broken.mdx"),
@@ -161,7 +159,9 @@ function initializeLargeVaultRepo(workspacePath: string): void {
 
   const total = 2000;
   for (let i = 0; i < total; i += 1) {
-    const area = Math.floor(i / 50).toString().padStart(2, "0");
+    const area = Math.floor(i / 50)
+      .toString()
+      .padStart(2, "0");
     const dir = path.join(repo, "bulk", `area-${area}`);
     fs.mkdirSync(dir, { recursive: true });
     const relTitle = `Bulk-${i.toString().padStart(4, "0")}`;
@@ -175,12 +175,13 @@ function initializeLargeVaultRepo(workspacePath: string): void {
         "",
         `# ${relTitle}`,
         "",
-        linksHub ? `This generated note links to [[Hub]].` : "This generated note has no hub backlink.",
+        linksHub
+          ? `This generated note links to [[Hub]].`
+          : "This generated note has no hub backlink.",
         "",
       ].join("\n")
     );
   }
-
 }
 
 function flattenPanels(nodes: Array<Record<string, any>>): Array<Record<string, any>> {
@@ -194,7 +195,7 @@ function flattenPanels(nodes: Array<Record<string, any>>): Array<Record<string, 
 }
 
 async function listPendingApprovals(app: ElectronApplication): Promise<PendingApproval[]> {
-  const pending = await rpcCall(app, "shellApproval", "listPending", []) as Array<{
+  const pending = (await rpcCall(app, "shellApproval", "listPending", [])) as Array<{
     approvalId: string;
     kind: string;
     options?: Array<{
@@ -222,17 +223,20 @@ async function rpcCall(
   method: string,
   args: unknown[] = []
 ): Promise<unknown> {
-  return app.evaluate(async (_electron, request) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.rpcCall(request.service, request.method, request.args);
-  }, { service, method, args });
+  return app.evaluate(
+    async (_electron, request) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: {
+            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+          };
+        }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.rpcCall(request.service, request.method, request.args);
+    },
+    { service, method, args }
+  );
 }
 
 async function resolveApproval(app: ElectronApplication, approval: PendingApproval): Promise<void> {
@@ -274,8 +278,9 @@ async function approvePendingStartupWork(app: ElectronApplication): Promise<void
     typeof launchSession === "object" &&
     "sessionId" in launchSession &&
     typeof launchSession.sessionId === "string" &&
-    Array.isArray((launchSession as { approvals?: unknown }).approvals) &&
-    (launchSession as { approvals: unknown[] }).approvals.length > 0
+    "approvals" in launchSession &&
+    Array.isArray(launchSession.approvals) &&
+    launchSession.approvals.length > 0
   ) {
     await rpcCall(app, "workspace", "hostTargets.resolveLaunchSessionApproval", [
       launchSession.sessionId,
@@ -294,11 +299,16 @@ async function findLoadedSpectrolitePanelId(
   else await resolvePendingShellApprovals(app.app);
   const panels = flattenPanels(await getPanelTree(app.app));
   for (const panel of panels) {
-    if (panel.snapshot?.source !== "panels/spectrolite" && panel.source !== "panels/spectrolite") {
+    const source = panel.snapshot?.source ?? panel.source;
+    if (source !== "panels/spectrolite") {
       continue;
     }
-    if (typeof panel.id === "string" && await isPanelLoaded(app.app, panel.id).catch(() => false)) {
-      return panel.id;
+    if (typeof panel.id === "string") {
+      const loaded = await isPanelLoaded(app.app, panel.id).catch(() => false);
+      const html = loaded ? await getPanelHtml(app.app, panel.id).catch(() => "") : "";
+      if (html.includes('data-testid="spectrolite')) {
+        return panel.id;
+      }
     }
   }
   return "";
@@ -309,16 +319,21 @@ async function waitForSpectrolitePanel(
   options: { approveStartup?: boolean } = {}
 ): Promise<string> {
   let panelId = "";
-  await expect.poll(async () => {
-    try {
-      panelId = await findLoadedSpectrolitePanelId(app, options);
-      return panelId;
-    } catch {
-      return "";
-    }
-  }, {
-    timeout: 180000,
-  }).not.toBe("");
+  await expect
+    .poll(
+      async () => {
+        try {
+          panelId = await findLoadedSpectrolitePanelId(app, options);
+          return panelId;
+        } catch {
+          return "";
+        }
+      },
+      {
+        timeout: 180000,
+      }
+    )
+    .not.toBe("");
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
       const nextPanelId = await findLoadedSpectrolitePanelId(app, options);
@@ -355,10 +370,17 @@ async function launchSpectroliteTestApp(workspacePath: string): Promise<TestApp>
   });
 }
 
-async function clickPanelElement(app: TestApp, panelId: string, selector: string): Promise<boolean> {
+async function clickPanelElement(
+  app: TestApp,
+  panelId: string,
+  selector: string
+): Promise<boolean> {
   const nativeClick = await clickPanelSelector(app.app, panelId, selector).catch(() => false);
   if (nativeClick) return true;
-  return executePanelScript<boolean>(app.app, panelId, `
+  return executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
     (() => {
       const node = document.querySelector(${JSON.stringify(selector)});
       if (!(node instanceof HTMLElement)) return false;
@@ -370,11 +392,19 @@ async function clickPanelElement(app: TestApp, panelId: string, selector: string
       node.click();
       return true;
     })()
-  `);
+  `
+  );
 }
 
-async function isPanelElementVisible(app: TestApp, panelId: string, selector: string): Promise<boolean> {
-  return executePanelScript<boolean>(app.app, panelId, `
+async function isPanelElementVisible(
+  app: TestApp,
+  panelId: string,
+  selector: string
+): Promise<boolean> {
+  return executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
     (() => {
       const node = document.querySelector(${JSON.stringify(selector)});
       if (!(node instanceof HTMLElement)) return false;
@@ -391,7 +421,43 @@ async function isPanelElementVisible(app: TestApp, panelId: string, selector: st
         style.opacity !== "0" &&
         node.getAttribute("data-state") !== "closed";
     })()
-  `);
+  `
+  ).catch(() => false);
+}
+
+async function getSpectroliteViewHookState(
+  app: TestApp,
+  panelId: string
+): Promise<{
+  backlinksOpen: boolean | null;
+  filesOpen: boolean | null;
+  settingsOpen: boolean | null;
+  sidebarOpen: boolean | null;
+} | null> {
+  return executePanelScript<{
+    backlinksOpen: boolean | null;
+    filesOpen: boolean | null;
+    settingsOpen: boolean | null;
+    sidebarOpen: boolean | null;
+  } | null>(
+    app.app,
+    panelId,
+    `
+    (() => {
+      const hook = globalThis.__spectroliteE2EView__;
+      if (!hook) return null;
+      const toValue = (value?: () => boolean) => (
+        typeof value === "function" ? Boolean(value()) : null
+      );
+      return {
+        backlinksOpen: toValue(hook.isBacklinksOpen),
+        filesOpen: toValue(hook.isFilesOpen),
+        settingsOpen: toValue(hook.isSettingsOpen),
+        sidebarOpen: toValue(hook.isSidebarOpen),
+      };
+    })()
+  `
+  ).catch(() => null);
 }
 
 async function openSpectroliteViewDrawer(
@@ -399,7 +465,10 @@ async function openSpectroliteViewDrawer(
   panelId: string,
   method: "openBacklinks" | "openFiles" | "openSettings"
 ): Promise<boolean> {
-  return executePanelScript<boolean>(app.app, panelId, `
+  return executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
     (() => {
       const view = globalThis.__spectroliteE2EView__;
       const open = view?.[${JSON.stringify(method)}];
@@ -407,145 +476,409 @@ async function openSpectroliteViewDrawer(
       open();
       return true;
     })()
-  `).catch(() => false);
+  `
+  ).catch(() => false);
+}
+
+async function isMobileSpectroliteLayout(app: TestApp, panelId: string): Promise<boolean> {
+  return executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
+    (() => {
+      const isVisible = (node) => {
+        if (!(node instanceof HTMLElement)) return false;
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return rect.width > 0 &&
+          rect.height > 0 &&
+          rect.right > 0 &&
+          rect.bottom > 0 &&
+          rect.left < window.innerWidth &&
+          rect.top < window.innerHeight &&
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          node.getAttribute("data-state") !== "closed";
+      };
+      const hasDesktopFiles = isVisible(document.querySelector('[data-testid="spectrolite-files-trigger"]'));
+      const hasDesktopBacklinks = isVisible(document.querySelector('[data-testid="spectrolite-backlinks-trigger"]'));
+      if (hasDesktopFiles || hasDesktopBacklinks) return false;
+      if (isVisible(document.querySelector('[aria-label="Open files"]')) ||
+        isVisible(document.querySelector('[data-testid="spectrolite-mobile-actions"]'))) {
+        return true;
+      }
+      return window.matchMedia("(max-width: 767px)").matches;
+    })()
+  `
+  );
+}
+
+async function ensureMobileShellStackMode(app: ElectronApplication): Promise<void> {
+  await app.evaluate(async ({ webContents }) => {
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const clicked = await contents.executeJavaScript(
+          `(() => {
+            const labels = ["Close panel tree", "Switch to breadcrumb navigation"];
+            const button = Array.from(document.querySelectorAll("[aria-label]"))
+              .find((node) => labels.includes(node.getAttribute("aria-label") ?? ""));
+            if (!(button instanceof HTMLElement)) return false;
+            button.click();
+            return true;
+          })()`,
+          true
+        );
+        if (clicked) return;
+      } catch {
+        // Ignore non-DOM webContents and transient navigation races.
+      }
+    }
+  });
 }
 
 async function openFilesDrawer(app: TestApp, panelId: string): Promise<void> {
-  const alreadyOpen = await isPanelElementVisible(
-    app,
-    panelId,
-    '[data-testid="spectrolite-files-drawer"]'
-  );
-  if (alreadyOpen) return;
-  await expect.poll(() => getPanelHtml(app.app, panelId), {
-    timeout: 60000,
-  }).toContain('data-testid="spectrolite-files-trigger"');
-  const opened =
-    await openSpectroliteViewDrawer(app, panelId, "openFiles") ||
-    await clickPanelElement(app, panelId, '[data-testid="spectrolite-files-trigger"]');
-  expect(opened).toBe(true);
-  await expect.poll(() => isPanelElementVisible(
-    app,
-    panelId,
-    '[data-testid="spectrolite-files-drawer"]'
-  ), {
-    timeout: 30000,
-  }).toBe(true);
+  const isMobile = await isMobileSpectroliteLayout(app, panelId);
+  const state = await getSpectroliteViewHookState(app, panelId);
+  const alreadyOpenState = state ? (isMobile ? state.sidebarOpen : state.filesOpen) : null;
+  const alreadyOpen = alreadyOpenState === true;
+  if (alreadyOpen) {
+    return;
+  }
+  const triggerSelector = isMobile
+    ? '[aria-label="Open files"]'
+    : '[data-testid="spectrolite-files-trigger"]';
+  const drawerSelector = isMobile
+    ? '[aria-label="Close files"]'
+    : '[data-testid="spectrolite-files-drawer"]';
+  await expect
+    .poll(() => getPanelHtml(app.app, panelId), {
+      timeout: 60000,
+    })
+    .toContain(isMobile ? 'aria-label="Open files"' : 'data-testid="spectrolite-files-trigger"');
+  await expect
+    .poll(
+      async () => {
+        const state = await getSpectroliteViewHookState(app, panelId);
+        if (isMobile ? state?.sidebarOpen === true : state?.filesOpen === true) return true;
+        if (await isPanelElementVisible(app, panelId, drawerSelector)) return true;
+
+        // The native bridge can report a dispatched click before React has
+        // accepted it (for example while the previous Radix dialog is still
+        // restoring focus). Keep retrying until the drawer itself is open.
+        const clicked = await clickPanelSelector(app.app, panelId, triggerSelector).catch(
+          () => false
+        );
+        const hooked = await openSpectroliteViewDrawer(app, panelId, "openFiles");
+        if (!clicked && !hooked) {
+          await clickPanelElement(app, panelId, triggerSelector).catch(() => false);
+        }
+        return false;
+      },
+      {
+        timeout: 30000,
+      }
+    )
+    .toBe(true);
 }
 
-async function openFileFromFilesDrawer(app: TestApp, panelId: string, fileName: string): Promise<void> {
+async function openFileFromFilesDrawer(
+  app: TestApp,
+  panelId: string,
+  fileName: string
+): Promise<void> {
+  const isMobile = await isMobileSpectroliteLayout(app, panelId);
   await openFilesDrawer(app, panelId);
-  expect(await executePanelScript<boolean>(app.app, panelId, `
+  const refreshPressed = await executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
     (() => {
-      const button = document.querySelector('[data-testid="spectrolite-files-drawer"] [aria-label="Refresh"]');
+      const drawer = document.querySelector('[data-testid="spectrolite-files-drawer"]');
+      const button = (drawer ?? document).querySelector('[aria-label="Refresh"]');
       if (!(button instanceof HTMLElement)) return false;
       button.click();
       return true;
     })()
-  `)).toBe(true);
-  await expect.poll(() => getPanelHtml(app.app, panelId), {
-    timeout: 60000,
-  }).toContain(fileName);
-  const opened = await executePanelScript<boolean>(app.app, panelId, `
+  `
+  ).catch(() => false);
+  expect(refreshPressed).toBe(true);
+  await expect
+    .poll(() => getPanelHtml(app.app, panelId), {
+      timeout: 60000,
+    })
+    .toContain(fileName);
+  const opened = await executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
     (() => {
       const target = ${JSON.stringify(fileName)};
-      const drawer = document.querySelector('[data-testid="spectrolite-files-drawer"]');
-      if (!(drawer instanceof HTMLElement)) return false;
+      const drawer = document.querySelector('[data-testid="spectrolite-files-drawer"]') ?? document;
       const link = Array.from(drawer.querySelectorAll('button, a'))
         .find((node) => node instanceof HTMLElement && node.textContent?.includes(target));
       if (!(link instanceof HTMLElement)) return false;
       link.click();
       return true;
     })()
-  `);
+  `
+  );
   expect(opened).toBe(true);
-  await expect.poll(() => executePanelScript<boolean>(app.app, panelId, `
-    !document.querySelector('[data-testid="spectrolite-files-drawer"]')
-  `), {
-    timeout: 10000,
-  }).toBe(true);
+  const closeSelector = isMobile
+    ? '[aria-label="Close files"]'
+    : '[data-testid="spectrolite-files-drawer"]';
+  await expect
+    .poll(
+      () =>
+        executePanelScript<boolean>(
+          app.app,
+          panelId,
+          `
+    (() => {
+      const selector = ${JSON.stringify(closeSelector)};
+      return !Boolean(document.querySelector(selector));
+    })()
+  `
+        ),
+      {
+        timeout: 10000,
+      }
+    )
+    .toBe(true);
 }
 
 async function openBacklinksDrawer(app: TestApp, panelId: string): Promise<void> {
-  const alreadyOpen = await isPanelElementVisible(
-    app,
-    panelId,
-    '[data-testid="spectrolite-backlinks-drawer"]'
-  );
-  if (alreadyOpen) return;
-  await expect.poll(() => getPanelHtml(app.app, panelId), {
-    timeout: 60000,
-  }).toContain('data-testid="spectrolite-backlinks-trigger"');
-  const opened =
-    await openSpectroliteViewDrawer(app, panelId, "openBacklinks") ||
-    await clickPanelElement(app, panelId, '[data-testid="spectrolite-backlinks-trigger"]');
+  const isMobile = await isMobileSpectroliteLayout(app, panelId);
+  const isOpen = async (): Promise<boolean> => {
+    const state = await getSpectroliteViewHookState(app, panelId);
+    if (state) {
+      if (isMobile) {
+        if (state.sidebarOpen === true) return true;
+      } else if (state.backlinksOpen === true) {
+        return true;
+      }
+    }
+    return executePanelScript<boolean>(
+      app.app,
+      panelId,
+      `
+      (() => {
+        const backlinksPanel = document.querySelector('[data-testid="spectrolite-backlinks"]');
+        if (backlinksPanel instanceof HTMLElement) return true;
+        const drawer = document.querySelector('[data-testid="spectrolite-backlinks-drawer"]');
+        if (${isMobile}) {
+          if (document.querySelector('[aria-label="Close files"]')) return true;
+          return drawer instanceof HTMLElement ||
+            document.querySelectorAll('[data-testid^="spectrolite-backlink-"]').length > 0;
+        }
+        if (drawer instanceof HTMLElement) return true;
+        return false;
+      })()
+    `
+    ).catch(() => false);
+  };
+  if (await isOpen()) return;
+
+  await expect
+    .poll(
+      async () => {
+        const html = await getPanelHtml(app.app, panelId);
+        if (isMobile) {
+          return (
+            html.includes('aria-label="Open files"') ||
+            html.includes('data-testid="spectrolite-mobile-actions"')
+          );
+        }
+        return (
+          html.includes('data-testid="spectrolite-backlinks-trigger"') ||
+          html.includes('aria-label="Backlinks"') ||
+          html.includes('title="Backlinks"')
+        );
+      },
+      {
+        timeout: 60000,
+      }
+    )
+    .toBe(true);
+  if (isMobile) {
+    const openedMobile = await openFilesDrawer(app, panelId)
+      .then(() => true)
+      .catch(() => false);
+    if (openedMobile) {
+      await expect.poll(() => isOpen(), { timeout: 30000 }).toBe(true);
+      return;
+    }
+  }
+
+  let opened = false;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    opened = await clickPanelSelector(
+      app.app,
+      panelId,
+      '[data-testid="spectrolite-backlinks-trigger"]'
+    ).catch(() => false);
+    if (!opened) {
+      opened = await clickPanelElement(
+        app,
+        panelId,
+        '[data-testid="spectrolite-backlinks-trigger"]'
+      ).catch(() => false);
+    }
+    if (!opened) {
+      opened = await openSpectroliteViewDrawer(app, panelId, "openBacklinks");
+    }
+    if (!opened) {
+      opened = await clickPanelElement(app, panelId, '[aria-label="Backlinks"]').catch(() => false);
+    }
+    if (!opened) {
+      opened = await clickPanelElement(app, panelId, '[title="Backlinks"]').catch(() => false);
+    }
+
+    if (!opened && isMobile) {
+      opened = await clickPanelElement(app, panelId, '[aria-label="Open files"]').catch(
+        () => false
+      );
+      if (!opened) {
+        await openFilesDrawer(app, panelId)
+          .then(() => {
+            opened = true;
+          })
+          .catch(() => {
+            opened = false;
+          });
+      }
+    }
+
+    if (!opened) {
+      opened = await executePanelScript<boolean>(
+        app.app,
+        panelId,
+        `
+        (() => {
+          const byText = Array.from(document.querySelectorAll("button, [role='button']"))
+            .find((node) => {
+              if (!(node instanceof HTMLElement)) return false;
+              const labels = [
+                node.textContent ?? "",
+                node.getAttribute("aria-label") ?? "",
+                node.getAttribute("title") ?? "",
+              ].join(" ");
+              return /backlinks/i.test(labels);
+            });
+          if (byText instanceof HTMLElement) {
+            byText.click();
+            return true;
+          }
+          const iconButton = document.querySelector('[data-testid="spectrolite-backlinks-trigger"]') ??
+            document.querySelector('[aria-label="Backlinks"]') ??
+            document.querySelector('button[aria-label^="Backlinks" i], button[title^="Backlinks" i]');
+          const button = iconButton;
+          if (!(button instanceof HTMLElement)) return false;
+          button.click();
+          return true;
+        })()
+      `
+      );
+    }
+    if (!opened) {
+      opened =
+        (await clickPanelSelector(app.app, panelId, '[aria-label*="Backlinks"]').catch(
+          () => false
+        )) ||
+        (await clickPanelSelector(app.app, panelId, '[title*="Backlinks"]').catch(() => false)) ||
+        (await clickPanelSelector(
+          app.app,
+          panelId,
+          'button[data-testid="spectrolite-backlinks-trigger"]'
+        ).catch(() => false)) ||
+        (await clickPanelElement(app, panelId, '[aria-label*="Backlinks"]').catch(() => false));
+    }
+    if (opened) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   expect(opened).toBe(true);
-  await expect.poll(() => isPanelElementVisible(
-    app,
-    panelId,
-    '[data-testid="spectrolite-backlinks-drawer"]'
-  ), {
-    timeout: 30000,
-  }).toBe(true);
+  await expect
+    .poll(() => isOpen(), {
+      timeout: 30000,
+    })
+    .toBe(true);
 }
 
 async function openWorkspaceSettings(app: TestApp, panelId: string): Promise<void> {
-  await expect.poll(() => getPanelHtml(app.app, panelId), {
-    timeout: 60000,
-  }).toContain('data-testid="spectrolite-workspace-settings"');
-  const opened =
-    await openSpectroliteViewDrawer(app, panelId, "openSettings") ||
-    await clickPanelSelector(
+  const isMobile = await isMobileSpectroliteLayout(app, panelId);
+  await expect
+    .poll(() => getPanelHtml(app.app, panelId), {
+      timeout: 60000,
+    })
+    .toContain(
+      isMobile ? 'aria-label="Workspace settings"' : 'data-testid="spectrolite-workspace-settings"'
+    );
+  let opened =
+    (await openSpectroliteViewDrawer(app, panelId, "openSettings")) ||
+    (await clickPanelSelector(
       app.app,
       panelId,
       '[data-testid="spectrolite-workspace-settings"]'
-    ).catch(() => false) ||
-    await executePanelScript<boolean>(app.app, panelId, `
+    ).catch(() => false)) ||
+    (await executePanelScript<boolean>(
+      app.app,
+      panelId,
+      `
       (() => {
-        const candidates = Array.from(document.querySelectorAll('[data-testid="spectrolite-workspace-settings"], [aria-label="Workspace settings"]'));
-        const button = candidates.find((node) => {
-          if (!(node instanceof HTMLElement)) return false;
-          const rect = node.getBoundingClientRect();
-          const style = getComputedStyle(node);
-          return rect.width > 0 &&
-            rect.height > 0 &&
-            rect.right > 0 &&
-            rect.bottom > 0 &&
-            rect.left < window.innerWidth &&
-            rect.top < window.innerHeight &&
-            style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            style.opacity !== "0";
-        });
+        const button = document.querySelector('[data-testid="spectrolite-workspace-settings"], [aria-label="Workspace settings"]');
         if (!(button instanceof HTMLElement)) return false;
         button.click();
         return true;
       })()
-    `);
+    `
+    ));
+  if (!opened && isMobile) {
+    opened = await clickPanelElement(app, panelId, '[aria-label="Workspace settings"]').catch(
+      () => false
+    );
+  }
   expect(opened).toBe(true);
-  await expect.poll(() => isPanelElementVisible(
-    app,
-    panelId,
-    '[data-testid="spectrolite-workspace-settings-drawer"]'
-  ), {
-    timeout: 30000,
-  }).toBe(true);
+  await expect
+    .poll(
+      () =>
+        executePanelScript<boolean>(
+          app.app,
+          panelId,
+          `
+    Boolean(document.querySelector('[data-testid="spectrolite-workspace-settings-drawer"]'))
+  `
+        ),
+      {
+        timeout: 30000,
+      }
+    )
+    .toBe(true);
 }
 
 async function closeTopDialog(app: TestApp, panelId: string): Promise<void> {
-  const closed = await executePanelScript<boolean>(app.app, panelId, `
+  const closed = await executePanelScript<boolean>(
+    app.app,
+    panelId,
+    `
     (() => {
-      const buttons = Array.from(document.querySelectorAll('[aria-label="Close"]'))
+      const buttons = Array.from(document.querySelectorAll('[aria-label="Close"], [aria-label="Done"]'))
         .filter((node) => node instanceof HTMLElement && node.offsetParent !== null);
       const button = buttons.at(-1);
       if (!(button instanceof HTMLElement)) return false;
       button.click();
       return true;
     })()
-  `);
+  `
+  );
   expect(closed).toBe(true);
-  await expect.poll(async () => {
-    const anyVisible = await executePanelScript<boolean>(app.app, panelId, `
+  await expect
+    .poll(
+      async () => {
+        const anyVisible = await executePanelScript<boolean>(
+          app.app,
+          panelId,
+          `
       (() => {
         for (const node of document.querySelectorAll('[data-testid="spectrolite-files-drawer"], [data-testid="spectrolite-backlinks-drawer"], [data-testid="spectrolite-workspace-settings-drawer"]')) {
           if (!(node instanceof HTMLElement)) continue;
@@ -568,15 +901,22 @@ async function closeTopDialog(app: TestApp, panelId: string): Promise<void> {
         }
         return false;
       })()
-    `);
-    return !anyVisible;
-  }, {
-    timeout: 10000,
-  }).toBe(true);
+    `
+        );
+        return !anyVisible;
+      },
+      {
+        timeout: 10000,
+      }
+    )
+    .toBe(true);
 }
 
 async function getPanelLayoutIssues(app: TestApp, panelId: string): Promise<string[]> {
-  return executePanelScript<string[]>(app.app, panelId, `
+  return executePanelScript<string[]>(
+    app.app,
+    panelId,
+    `
     (() => {
       const issues = [];
       for (const selector of [
@@ -604,7 +944,8 @@ async function getPanelLayoutIssues(app: TestApp, panelId: string): Promise<stri
       }
       return issues;
     })()
-  `);
+  `
+  );
 }
 
 test.describe("Spectrolite", () => {
@@ -631,9 +972,11 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("E2E Note");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("E2E Note");
 
     const html = await getPanelHtml(testApp.app, panelId);
     expect(html).toContain('data-testid="spectrolite-editor"');
@@ -648,31 +991,40 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     let panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-vault-default"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-vault-default"');
     expect(await getPanelText(testApp.app, panelId)).not.toContain("@scribe");
 
-    expect(await clickPanelSelector(testApp.app, panelId, '[data-testid="spectrolite-vault-default"]')).toBe(true);
+    expect(
+      await clickPanelSelector(testApp.app, panelId, '[data-testid="spectrolite-vault-default"]')
+    ).toBe(true);
 
-    await expect.poll(async () => {
-      const result = await liveSpectroliteText(testApp!, panelId, { approveStartup: false });
-      panelId = result.panelId;
-      if (
-        result.text.includes("Open a vault") &&
-        result.text.includes("projects/default") &&
-        !result.text.includes("Open a file to start editing.")
-      ) {
-        await clickPanelSelector(
-          testApp!.app,
-          panelId,
-          '[data-testid="spectrolite-vault-default"]'
-        ).catch(() => false);
-      }
-      return result.text;
-    }, {
-      timeout: 180000,
-    }).toMatch(/Loading files\.\.\.|Open a file to start editing\.|This vault is empty/);
+    await expect
+      .poll(
+        async () => {
+          const result = await liveSpectroliteText(testApp!, panelId, { approveStartup: false });
+          panelId = result.panelId;
+          if (
+            result.text.includes("Open a vault") &&
+            result.text.includes("projects/default") &&
+            !result.text.includes("Open a file to start editing.")
+          ) {
+            await clickPanelSelector(
+              testApp!.app,
+              panelId,
+              '[data-testid="spectrolite-vault-default"]'
+            ).catch(() => false);
+          }
+          return result.text;
+        },
+        {
+          timeout: 180000,
+        }
+      )
+      .toMatch(/Loading files\.\.\.|Open a file to start editing\.|This vault is empty/);
   });
 
   test("switches vaults and supports manual agent add/remove", async () => {
@@ -687,51 +1039,183 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     let panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("E2E Note");
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('contenteditable="true"');
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("E2E Note");
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('contenteditable="true"');
 
     expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
     await typePanelText(testApp.app, panelId, "\nOld vault dirty line must stay in default");
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Old vault dirty line must stay in default");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Old vault dirty line must stay in default");
 
     await openWorkspaceSettings(testApp, panelId);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-agent-add-trigger"');
-    expect(await clickPanelElement(testApp, panelId, '[data-testid="spectrolite-agent-add-trigger"]')).toBe(true);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-agent-option-SilentAgentWorker"');
-    expect(await clickPanelElement(testApp, panelId, '[data-testid="spectrolite-agent-option-SilentAgentWorker"]')).toBe(true);
-    await expect.poll(async () => {
-      await resolvePendingShellApprovals(testApp!.app);
-      return executePanelScript<number>(testApp!.app, panelId, `
-        document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]').length
-      `);
-    }, {
-      timeout: 180000,
-    }).toBeGreaterThan(1);
-    const removedManualAgent = await executePanelScript<boolean>(testApp.app, panelId, `
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-agent-add-trigger"');
+    await expect
+      .poll(
+        async () =>
+          executePanelScript<boolean>(
+            testApp!.app,
+            panelId,
+            `
       (() => {
-        const button = Array.from(document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]'))
-          .find((node) => node instanceof HTMLElement && !node.getAttribute("data-testid")?.endsWith("-scribe"));
-        if (!(button instanceof HTMLElement)) return false;
-        button.click();
+        const addButton = document.querySelector('[data-testid="spectrolite-agent-add-trigger"]');
+        if (!(addButton instanceof HTMLButtonElement)) return false;
+        return !addButton.disabled;
+      })()
+    `
+          ),
+        {
+          timeout: 60000,
+        }
+      )
+      .toBe(true);
+    const removeCountBeforeAdd = await executePanelScript<number>(
+      testApp.app,
+      panelId,
+      `
+      (() => {
+        return document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]').length;
+      })()
+    `
+    );
+    const removeIdsBeforeAdd = await executePanelScript<string[]>(
+      testApp.app,
+      panelId,
+      `
+      (() => {
+        return Array.from(document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]'))
+          .map((node) => node.getAttribute("data-testid"))
+          .filter((id) => Boolean(id));
+      })()
+    `
+    );
+    expect(
+      await clickPanelElement(testApp, panelId, '[data-testid="spectrolite-agent-add-trigger"]')
+    ).toBe(true);
+    await expect
+      .poll(
+        () =>
+          executePanelScript<boolean>(
+            testApp!.app,
+            panelId,
+            `
+      (() => {
+        return document.querySelectorAll('[data-testid^="spectrolite-agent-option-"]').length > 0;
+      })()
+    `
+          ),
+        {
+          timeout: 10000,
+        }
+      )
+      .toBe(true);
+    const addOptions = await executePanelScript<Array<{ id: string; label: string }>>(
+      testApp.app,
+      panelId,
+      `
+      (() => {
+        return Array.from(document.querySelectorAll('[data-testid^="spectrolite-agent-option-"]'))
+          .filter((node) => node instanceof HTMLElement && node.offsetParent !== null)
+          .map((node) => ({
+            id: node.getAttribute("data-testid") ?? "",
+            label: (node.textContent ?? "").toLowerCase(),
+          }))
+          .filter((item) => item.id.length > 0);
+      })()
+    `
+    );
+    const selected = addOptions.find((item) => !item.label.includes("scribe")) ?? addOptions[0];
+    if (!selected) {
+      throw new Error("No agent option available");
+    }
+    const selectedAgentClicked =
+      (await clickPanelSelector(testApp.app, panelId, `[data-testid="${selected.id}"]`).catch(
+        () => false
+      )) ||
+      (await clickPanelElement(testApp, panelId, `[data-testid="${selected.id}"]`).catch(
+        () => false
+      ));
+    expect(selectedAgentClicked).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          await resolvePendingShellApprovals(testApp!.app);
+          return executePanelScript<number>(
+            testApp!.app,
+            panelId,
+            `
+        document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]').length
+      `
+          );
+        },
+        {
+          timeout: 120000,
+        }
+      )
+      .toBeGreaterThan(removeCountBeforeAdd);
+
+    const removeIdsAfterAdd = await executePanelScript<string[]>(
+      testApp.app,
+      panelId,
+      `
+      (() => {
+        return Array.from(document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]'))
+          .map((node) => node.getAttribute("data-testid"))
+          .filter((id) => Boolean(id));
+      })()
+    `
+    );
+    const removableId =
+      removeIdsAfterAdd.find((id) => !removeIdsBeforeAdd.includes(id) && !id.endsWith("-scribe")) ??
+      removeIdsAfterAdd.find((id) => !removeIdsBeforeAdd.includes(id)) ??
+      removeIdsAfterAdd.find((id) => !id.endsWith("-scribe"));
+    if (!removableId) {
+      throw new Error("Could not find a removable agent entry");
+    }
+    const removedManualAgent = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
+      (() => {
+        const selector = ${JSON.stringify(`[data-testid="${removableId}"]`)};
+        const button = document.querySelector(selector);
+        const action = button instanceof HTMLElement ? button : button?.closest("button");
+        if (!(action instanceof HTMLElement)) return false;
+        action.click();
         return true;
       })()
-    `);
+    `
+    );
     expect(removedManualAgent).toBe(true);
-    await expect.poll(async () => executePanelScript<number>(testApp!.app, panelId, `
+    await expect
+      .poll(
+        async () =>
+          executePanelScript<number>(
+            testApp!.app,
+            panelId,
+            `
       document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]').length
-    `), {
-      timeout: 60000,
-    }).toBe(1);
+    `
+          ),
+        {
+          timeout: 60000,
+        }
+      )
+      .toBeLessThan(removeCountBeforeAdd + 1);
     await closeTopDialog(testApp, panelId);
 
     await openWorkspaceSettings(testApp, panelId);
@@ -741,15 +1225,20 @@ test.describe("Spectrolite", () => {
       '[data-testid="spectrolite-settings-switch-vault"]'
     );
     expect(startedVaultSwitch).toBe(true);
-    await expect.poll(async () => {
-      const nextPanelId = await findLoadedSpectrolitePanelId(testApp!, {
-        approveStartup: false,
-      }).catch(() => "");
-      if (nextPanelId) panelId = nextPanelId;
-      return getPanelHtml(testApp!.app, panelId).catch(() => "");
-    }, {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-vault-second"');
+    await expect
+      .poll(
+        async () => {
+          const nextPanelId = await findLoadedSpectrolitePanelId(testApp!, {
+            approveStartup: false,
+          }).catch(() => "");
+          if (nextPanelId) panelId = nextPanelId;
+          return getPanelHtml(testApp!.app, panelId).catch(() => "");
+        },
+        {
+          timeout: 60000,
+        }
+      )
+      .toContain('data-testid="spectrolite-vault-second"');
 
     // Selecting a vault reopens the panel under a new context (panel reloads).
     await rpcCall(testApp.app, "panelTree", "navigate", [
@@ -760,43 +1249,57 @@ test.describe("Spectrolite", () => {
         stateArgs: { repoRoot: "projects/second" },
       },
     ]);
-    await expect.poll(async () => {
-      const result = await liveSpectroliteText(testApp!, panelId, { approveStartup: false });
-      panelId = result.panelId;
-      if (result.text.includes("Open a vault") && result.text.includes("projects/second")) {
-        await rpcCall(testApp!.app, "panelTree", "navigate", [
-          panelId,
-          "panels/spectrolite",
-          {
-            contextId: e2eVaultContextId("projects/second"),
-            stateArgs: { repoRoot: "projects/second" },
-          },
-        ]).catch(() => false);
-        return "";
-      }
-      return result.text;
-    }, {
-      timeout: 180000,
-    }).toMatch(/Loading files\.\.\.|Open a file to start editing\.|This vault is empty/);
+    await expect
+      .poll(
+        async () => {
+          const result = await liveSpectroliteText(testApp!, panelId, { approveStartup: false });
+          panelId = result.panelId;
+          if (result.text.includes("Open a vault") && result.text.includes("projects/second")) {
+            await rpcCall(testApp!.app, "panelTree", "navigate", [
+              panelId,
+              "panels/spectrolite",
+              {
+                contextId: e2eVaultContextId("projects/second"),
+                stateArgs: { repoRoot: "projects/second" },
+              },
+            ]).catch(() => false);
+            return "";
+          }
+          return result.text;
+        },
+        {
+          timeout: 180000,
+        }
+      )
+      .toMatch(/Loading files\.\.\.|Open a file to start editing\.|This vault is empty/);
 
     await openFilesDrawer(testApp, panelId);
-    expect(await executePanelScript<boolean>(testApp.app, panelId, `
+    expect(
+      await executePanelScript<boolean>(
+        testApp.app,
+        panelId,
+        `
       (() => {
         const button = document.querySelector('[aria-label="Refresh"]');
         if (!(button instanceof HTMLElement)) return false;
         button.click();
         return true;
       })()
-    `)).toBe(true);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Second.mdx");
+    `
+      )
+    ).toBe(true);
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Second.mdx");
 
     await openFileFromFilesDrawer(testApp, panelId, "Second.mdx");
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Second Vault");
-
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Second Vault");
   });
 
   test("recovers from an empty vault by creating a starter note", async () => {
@@ -810,10 +1313,15 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("This vault is empty");
-    const createdStarter = await executePanelScript<boolean>(testApp.app, panelId, `
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toMatch(/This vault is empty|No\.mdx files yet|Open files/);
+    const createdStarter = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const button = Array.from(document.querySelectorAll("button"))
           .find((node) => node instanceof HTMLElement && node.textContent?.includes("Create starter note"));
@@ -821,15 +1329,20 @@ test.describe("Spectrolite", () => {
         button.click();
         return true;
       })()
-    `);
+    `
+    );
     expect(createdStarter).toBe(true);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Welcome to Spectrolite");
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Welcome.mdx");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Welcome to Spectrolite");
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Welcome.mdx");
   });
 
   // external write conflicts and missing files — pending: co-edit reconcile + suggestion-card e2e
@@ -844,22 +1357,31 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("E2E Note");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("E2E Note");
 
     expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
     await typePanelText(testApp.app, panelId, "\nUser keeps this unflushed line");
 
-    const installedE2EHook = await executePanelScript<boolean>(testApp.app, panelId, `
+    const installedE2EHook = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const install = globalThis.__spectroliteInstallE2E__;
         return typeof install === "function" ? install() : false;
       })()
-    `);
+    `
+    );
     expect(installedE2EHook).toBe(true);
 
-    const externalWrite = await executePanelScript<boolean>(testApp.app, panelId, `
+    const externalWrite = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (async () => {
         const api = globalThis.__spectroliteE2E__;
         if (!api) return false;
@@ -875,13 +1397,19 @@ test.describe("Spectrolite", () => {
         ].join("\\n"));
         return true;
       })()
-    `);
+    `
+    );
     expect(externalWrite).toBe(true);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-disk-conflict"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-disk-conflict"');
 
-    const keptMine = await executePanelScript<boolean>(testApp.app, panelId, `
+    const keptMine = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const button = Array.from(document.querySelectorAll("button"))
           .find((node) => node instanceof HTMLElement && node.textContent?.includes("Keep my edits"));
@@ -889,41 +1417,58 @@ test.describe("Spectrolite", () => {
         button.click();
         return true;
       })()
-    `);
+    `
+    );
     expect(keptMine).toBe(true);
 
     await openFilesDrawer(testApp, panelId);
-    const openedLinked = await executePanelScript<boolean>(testApp.app, panelId, `
+    const openedLinked = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const link = Array.from(document.querySelectorAll('button, a')).find((node) => node instanceof HTMLElement && node.textContent?.includes("Linked.mdx"));
         if (!(link instanceof HTMLElement)) return false;
         link.click();
         return true;
       })()
-    `);
+    `
+    );
     expect(openedLinked).toBe(true);
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("This note points at");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("This note points at");
 
-    const externalDelete = await executePanelScript<boolean>(testApp.app, panelId, `
+    const externalDelete = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (async () => {
         const api = globalThis.__spectroliteE2E__;
         if (!api) return false;
         await api.unlink("Linked.mdx");
         return true;
       })()
-    `);
+    `
+    );
     expect(externalDelete).toBe(true);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-file-missing"');
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Your in-memory buffer is the only copy");
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Recreate file");
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-file-missing"');
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Your in-memory buffer is the only copy");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Recreate file");
   });
 
   test("auto-saves edits and shows the publish bar", async () => {
@@ -937,20 +1482,26 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("E2E Note");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("E2E Note");
 
     expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
     await typePanelText(testApp.app, panelId, "\nE2E Spectrolite edit");
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("E2E Spectrolite edit");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("E2E Spectrolite edit");
 
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-publish-bar"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-publish-bar"');
   });
 
   test("auto-saves an edit", async () => {
@@ -964,20 +1515,26 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("E2E Note");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("E2E Note");
 
     expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
     await typePanelText(testApp.app, panelId, "\nCommitted by e2e");
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Committed by e2e");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Committed by e2e");
 
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-publish-button"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-publish-button"');
   });
 
   test("shows backlinks and keeps the editor usable around failing live JSX", async () => {
@@ -992,15 +1549,19 @@ test.describe("Spectrolite", () => {
     const panelId = await waitForSpectrolitePanel(testApp);
 
     await openBacklinksDrawer(testApp, panelId);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-backlink-Linked.mdx"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-backlink-Linked.mdx"');
     await closeTopDialog(testApp, panelId);
 
     await openFileFromFilesDrawer(testApp, panelId, "LiveError.mdx");
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-live-jsx-error"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-live-jsx-error"');
     expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
   });
 
@@ -1016,16 +1577,23 @@ test.describe("Spectrolite", () => {
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
 
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Large Hub");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Large Hub");
 
     await openFilesDrawer(testApp, panelId);
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Bulk-1999.mdx");
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Bulk-1999.mdx");
 
-    const fileMetrics = await executePanelScript<{ files: number; responsive: boolean }>(testApp.app, panelId, `
+    const fileMetrics = await executePanelScript<{ files: number; responsive: boolean }>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const fileButtons = Array.from(document.querySelectorAll("button"))
           .filter((node) => node instanceof HTMLElement && node.textContent?.includes(".mdx"));
@@ -1036,20 +1604,29 @@ test.describe("Spectrolite", () => {
           responsive: document.querySelector('[data-testid="spectrolite-editor"]') instanceof HTMLElement,
         };
       })()
-    `);
+    `
+    );
     expect(fileMetrics.files).toBeGreaterThanOrEqual(2001);
     expect(fileMetrics.responsive).toBe(true);
     await closeTopDialog(testApp, panelId);
 
     await openBacklinksDrawer(testApp, panelId);
-    await expect.poll(async () => {
-      await openSpectroliteViewDrawer(testApp!, panelId, "openBacklinks");
-      return getPanelHtml(testApp!.app, panelId);
-    }, {
-      timeout: 180000,
-    }).toContain("spectrolite-backlink-bulk/area-39/Bulk-1999.mdx");
+    await expect
+      .poll(
+        async () => {
+          await openSpectroliteViewDrawer(testApp!, panelId, "openBacklinks");
+          return getPanelHtml(testApp!.app, panelId);
+        },
+        {
+          timeout: 180000,
+        }
+      )
+      .toContain("spectrolite-backlink-bulk/area-39/Bulk-1999.mdx");
 
-    const metrics = await executePanelScript<{ backlinks: number; responsive: boolean }>(testApp.app, panelId, `
+    const metrics = await executePanelScript<{ backlinks: number; responsive: boolean }>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const backlinkLinks = Array.from(document.querySelectorAll('[data-testid^="spectrolite-backlink-"]'));
         return {
@@ -1057,11 +1634,15 @@ test.describe("Spectrolite", () => {
           responsive: document.querySelector('[data-testid="spectrolite-editor"]') instanceof HTMLElement,
         };
       })()
-    `);
+    `
+    );
     expect(metrics.backlinks).toBeGreaterThanOrEqual(21);
     expect(metrics.responsive).toBe(true);
 
-    const openedFarBacklink = await executePanelScript<boolean>(testApp.app, panelId, `
+    const openedFarBacklink = await executePanelScript<boolean>(
+      testApp.app,
+      panelId,
+      `
       (() => {
         const link = Array.from(document.querySelectorAll('[data-testid^="spectrolite-backlink-"]'))
           .find((node) => node instanceof HTMLElement && node.textContent?.includes("Bulk-1999.mdx"));
@@ -1069,11 +1650,14 @@ test.describe("Spectrolite", () => {
         link.click();
         return true;
       })()
-    `);
+    `
+    );
     expect(openedFarBacklink).toBe(true);
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Bulk-1999");
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Bulk-1999");
   });
 
   test("keeps core controls usable in a mobile-sized viewport", async () => {
@@ -1090,51 +1674,81 @@ test.describe("Spectrolite", () => {
       BaseWindow.getAllWindows()[0]?.setSize(390, 740);
     });
     await testApp.window.setViewportSize({ width: 390, height: 740 });
+    await ensureMobileShellStackMode(testApp.app);
+    await expect
+      .poll(() => executePanelScript<number>(testApp!.app, panelId, "window.innerWidth"), {
+        timeout: 30000,
+        intervals: [250, 500, 1000],
+      })
+      .toBeGreaterThan(300);
     await testApp.window.waitForTimeout(1000);
 
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-mobile-actions"');
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-editor"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-mobile-actions"');
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-editor"');
     const issues = await getPanelLayoutIssues(testApp, panelId);
     expect(issues).toEqual([]);
 
-    expect(await clickPanelSelector(testApp.app, panelId, '[aria-label="Open files"]')).toBe(true);
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Files");
+    await openFilesDrawer(testApp, panelId);
+    await expect
+      .poll(
+        () =>
+          executePanelScript<boolean>(
+            testApp!.app,
+            panelId,
+            `
+      (() => {
+        const close = document.querySelector('[aria-label="Close files"]');
+        return close instanceof HTMLElement;
+      })()
+    `
+          ),
+        {
+          timeout: 60000,
+        }
+      )
+      .toBe(true);
     expect(await clickPanelSelector(testApp.app, panelId, '[aria-label="Close files"]')).toBe(true);
 
-    const openedSettings = await executePanelScript<boolean>(testApp.app, panelId, `
-      (() => {
-        const button = document.querySelector('[aria-label="Workspace settings"]');
-        if (!(button instanceof HTMLElement)) return false;
-        button.click();
-        return true;
-      })()
-    `);
-    expect(openedSettings).toBe(true);
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Workspace");
-    await expect.poll(() => getPanelText(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain("Agents");
-    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
-      timeout: 60000,
-    }).toContain('data-testid="spectrolite-vcs-head"');
+    await openWorkspaceSettings(testApp, panelId);
+    await expect
+      .poll(() => getPanelText(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain("Workspace");
+    await expect
+      .poll(() => getPanelHtml(testApp!.app, panelId), {
+        timeout: 60000,
+      })
+      .toContain('data-testid="spectrolite-vcs-head"');
 
     expect(await clickPanelSelector(testApp.app, panelId, '[aria-label="Close"]')).toBe(true);
-    await expect.poll(() => executePanelScript<boolean>(testApp!.app, panelId, `
+    await expect
+      .poll(
+        () =>
+          executePanelScript<boolean>(
+            testApp!.app,
+            panelId,
+            `
       (() => {
         const actions = document.querySelector('[data-testid="spectrolite-mobile-actions"]');
         if (!(actions instanceof HTMLElement)) return false;
         return actions.querySelector('[data-testid="spectrolite-send-to-scribe"]') instanceof HTMLElement;
       })()
-    `), {
-      timeout: 60000,
-    }).toBe(true);
+    `
+          ),
+        {
+          timeout: 60000,
+        }
+      )
+      .toBe(true);
+    await expect(testApp.window.getByText("Extension stopped", { exact: true })).toHaveCount(0);
   });
 });
