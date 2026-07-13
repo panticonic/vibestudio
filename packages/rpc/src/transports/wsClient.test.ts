@@ -1,5 +1,6 @@
 import { wsClientTransport } from "./wsClient.js";
 import type { WsLike } from "../protocol/wsAdapter.js";
+import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 
 class FakeSocket implements WsLike {
   readyState = 0;
@@ -23,11 +24,12 @@ class FakeSocket implements WsLike {
     this.onopen?.();
   }
 
-  authenticate(): void {
+  authenticate(contractVersion: number = RPC_CONTRACT_VERSION): void {
     this.onmessage?.({
       data: JSON.stringify({
         success: true,
         type: "ws:auth-result",
+        contractVersion,
       }),
     });
   }
@@ -89,6 +91,35 @@ describe("wsClientTransport", () => {
 
     await expect(promise).resolves.toBeUndefined();
     expect(settled).toBe(true);
+  });
+
+  it("declares the RPC contract version in its authentication handshake", async () => {
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await Promise.resolve();
+    sockets[0]?.open();
+
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toMatchObject({
+      type: "ws:auth",
+      contractVersion: RPC_CONTRACT_VERSION,
+    });
+
+    sockets[0]?.authenticate();
+    await connected;
+  });
+
+  it("rejects a server with a mismatched RPC contract", async () => {
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    const rejected = expect(connected).rejects.toThrow(
+      `RPC contract mismatch: server ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`
+    );
+    await Promise.resolve();
+    sockets[0]?.open();
+    sockets[0]?.authenticate(RPC_CONTRACT_VERSION + 1);
+
+    await rejected;
+    expect(transport.status?.()).toBe("disconnected");
   });
 
   it("does not reconnect after a terminal invalid-token close by default", async () => {
@@ -160,6 +191,7 @@ describe("wsClientTransport", () => {
         targetId: "do:notes:Bucket:key",
         requestId: "req-123",
         error: "Target not reachable: do:notes:Bucket:key",
+        errorKind: "transport",
         errorCode: "TARGET_NOT_REACHABLE",
       }),
     });
@@ -171,6 +203,7 @@ describe("wsClientTransport", () => {
           type: "response",
           requestId: "req-123",
           error: "Target not reachable: do:notes:Bucket:key",
+          errorKind: "transport",
           errorCode: "TARGET_NOT_REACHABLE",
         },
       },
@@ -194,6 +227,7 @@ describe("wsClientTransport", () => {
         targetId: "panel:gone",
         event: "ping",
         error: "Target not reachable: panel:gone",
+        errorKind: "transport",
         errorCode: "TARGET_NOT_REACHABLE",
       }),
     });

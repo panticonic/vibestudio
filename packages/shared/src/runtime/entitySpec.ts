@@ -6,7 +6,7 @@
  * write-once; lifecycle (status, retiredAt, cleanupComplete, error) is mutable.
  */
 
-import { WORKSPACE_SOURCE_DIRS } from "../workspace/sourceDirs.js";
+import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 
 export type EntityKind = "panel" | "app" | "worker" | "do" | "session" | "shell" | "server";
 

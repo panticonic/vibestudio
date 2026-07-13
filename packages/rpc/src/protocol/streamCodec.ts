@@ -1,3 +1,6 @@
+import type { RpcErrorKind } from "../types.js";
+import { RemoteRpcError } from "../errors.js";
+
 export const FRAME_HEAD = 0x01 as const;
 export const FRAME_DATA = 0x02 as const;
 export const FRAME_END = 0x03 as const;
@@ -24,6 +27,7 @@ export interface ErrorFramePayload {
   status: number;
   message: string;
   code?: string;
+  errorKind: RpcErrorKind;
 }
 
 const textEncoder = new TextEncoder();
@@ -374,10 +378,9 @@ export async function decodeFramedStream(
       try {
         parsed = parseErrorFrame(payload);
       } catch {
-        parsed = { status: 502, message: "Streaming RPC error" };
+        parsed = { status: 502, message: "Streaming RPC error", errorKind: "protocol" };
       }
-      const error = new Error(parsed.message) as Error & { code?: string };
-      error.code = parsed.code;
+      const error = new RemoteRpcError(parsed.message, parsed.errorKind, parsed.code);
       if (headSeen) errorBody(error);
       else rejectHead(error);
     }

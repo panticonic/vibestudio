@@ -1,7 +1,7 @@
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
-import { docsMethods } from "@vibestudio/shared/serviceSchemas/docs";
-import { runtimeMethods } from "@vibestudio/shared/serviceSchemas/runtime";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { docsMethods } from "@vibestudio/service-schemas/docs";
+import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { loadCliCredentials, saveCliCredentials, type CliCredentials } from "../credentialStore.js";
 import { pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";

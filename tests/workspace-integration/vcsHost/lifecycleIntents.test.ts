@@ -30,8 +30,8 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, logIdForRepo, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
-import type { RefGateBatch } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
+import type { RefGateBatch } from "../../../src/server/services/protectedRefStore.js";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
@@ -57,7 +57,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
   let vcs: WorkspaceVcs;
   let gad: TestGad;
   let caller: GadCaller;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
   let gateHook: (batch: RefGateBatch) => Promise<void>;
 
   const sql = () =>
@@ -79,7 +79,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       logId: logIdForRepo(repoPath),
       head,
     });
-  const repoPaths = async () => (await vcs.discoverRepos()).map((r) => r.repoPath);
+  const repoPaths = async () => (await vcs.repositories.discover()).map((r) => r.repoPath);
 
   beforeEach(async () => {
     gateHook = async () => {};
@@ -98,7 +98,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     caller = callerFor(gad);
-    refs = createRefService({
+    refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: (batch) => gateHook(batch),
     });
@@ -117,7 +117,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       gateContext: () => ({ kind: "caller", caller: CALLER }),
       worktree: {
         project: (repoPath, head, stateHash) => vcs.projectWorktree(repoPath, head, stateHash),
-        dependentRepos: (repoPath) => vcs.deleteDependents(repoPath),
+        dependentRepos: (repoPath) => vcs.repositories.deletionDependents(repoPath),
       },
     });
     await vcs.attachGad(caller);
@@ -261,7 +261,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       expect((await worktreeHead("packages/foo", VCS_MAIN_HEAD))?.stateHash).toBe(ref);
       expect(lifecycleIntents()).toHaveLength(0);
       // Disk tail finished: the file is back in the workspace view.
-      const view = await vcs.workspaceView();
+      const view = await vcs.repositories.workspaceView();
       expect(await vcs.readFile(view.stateHash, "packages/foo/index.ts")).not.toBeNull();
     });
 

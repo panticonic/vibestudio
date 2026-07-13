@@ -8,6 +8,7 @@ import type { WsClientMessage, WsServerMessage } from "../protocol/wsProtocol.js
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
 import type { WsLike, WsTransportAdapter } from "../protocol/wsAdapter.js";
 import { TERMINAL_CLOSE_CODES } from "../protocol/closeCodes.js";
+import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 
 export interface WsClientTransportConfig {
   selfId: string;
@@ -139,6 +140,18 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
           void handleAuthFailure(msg.error);
           return;
         }
+        if (msg.contractVersion !== RPC_CONTRACT_VERSION) {
+          const error = new Error(
+            `RPC contract mismatch: server ${String(msg.contractVersion)} (want ${RPC_CONTRACT_VERSION})`
+          );
+          closed = true;
+          firstConnectReject?.(error);
+          firstConnectResolve = null;
+          firstConnectReject = null;
+          setStatus("disconnected");
+          socket?.close(4005, "Incompatible RPC contract");
+          return;
+        }
         const previousBootId = lastSeenBootId;
         const nextBootId = msg.serverBootId ?? null;
         const isReconnect = hasConnectedBefore;
@@ -197,6 +210,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
           type: "response",
           requestId: msg.requestId,
           error: msg.error,
+          errorKind: msg.errorKind,
           ...(msg.errorCode ? { errorCode: msg.errorCode } : {}),
         };
         const envelope: RpcEnvelope = {
@@ -261,6 +275,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       nextSocket.send(
         JSON.stringify({
           type: "ws:auth",
+          contractVersion: RPC_CONTRACT_VERSION,
           token,
           connectionId,
           ...config.getAuthMessageFields?.(),

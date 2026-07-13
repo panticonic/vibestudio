@@ -11,6 +11,7 @@ import { randomUUID } from "crypto";
 import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
   createRpcClient,
+  rpcErrorKindOf,
   envelopeFromMessage,
   responseEnvelopeFor,
   stampEnvelopeCaller,
@@ -21,7 +22,6 @@ import {
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
-  type RpcStreamRequest,
 } from "@vibestudio/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
@@ -36,7 +36,6 @@ import {
   FRAME_DATA,
   FRAME_END,
   FRAME_ERROR,
-  FRAME_HEAD,
   parseEndFrame,
 } from "@vibestudio/rpc/protocol/streamCodec";
 import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
@@ -48,15 +47,14 @@ import {
   authenticatedCallerOf,
   parseServiceMethod,
   createVerifiedCaller,
-  isDeferredResult,
   ServiceDispatcher,
   type CallerKind,
   type ServiceContext,
   type VerifiedCodeIdentity,
-  type WsClientInfo,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { UserSubject } from "@vibestudio/shared/users/types";
+import type { UserSubject } from "@vibestudio/identity/types";
+import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import { DeferralRegistry } from "./services/deferralRegistry.js";
 import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -66,8 +64,16 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
+import { ConnectionRegistry, type WsClientState } from "./rpcServer/connectionRegistry.js";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
+import {
+  HttpRpcHandler,
+  resolveRpcMaxBodyBytes,
+  type HttpRpcAdmission,
+} from "./rpcServer/httpRpcHandler.js";
+import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 
 const log = createDevLogger("RpcServer");
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
@@ -96,25 +102,6 @@ function parseDOTarget(targetId: string): { source: string; className: string; o
 
 /** The server's identity stamped onto response envelopes it returns over /rpc. */
 const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
-
-/**
- * Resolves the host-verified account `subject` for an authenticated caller
- * (WP0 §5.2/§5.5). Hub-backed in production — it reads the shared identity DB to
- * map `shell:<deviceId>` → owning user (`deviceAuthStore.userFor`), an
- * `agent:<id>` binding → its spawner (`AgentBinding.userId`), a
- * `panel:`/`do:`/`worker:` principal → its lineage owner
- * (`resolveUserSubject(entityCache, …)`, §6), and the local-console bootstrap
- * principals (`electron-main`/`headless-host`) → the machine root under the
- * trusted-console rule (§5.4) — and fakeable in tests. Returns null when no
- * account can be attributed to the caller.
- */
-export interface UserSubjectSource {
-  resolve(
-    callerId: string,
-    callerKind: CallerKind,
-    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
-  ): UserSubject | null;
-}
 
 /**
  * The in-process `server` principal's synthetic subject (WP0 §5.4). It is NOT a
@@ -174,23 +161,6 @@ function envelopeTransportFromWsServer(transport: WsServerTransportInternal): En
       });
     },
   };
-}
-
-/** Server-side state for a connected WS client */
-export interface WsClientState extends WsClientInfo {
-  ws: WebSocket;
-  authenticatedAt: number;
-  /**
-   * Owning user (WP4 §2.1) — a denormalized, non-null mirror of
-   * `caller.subject.userId`, stamped once at connection admission so the hot
-   * presence/routing paths (`ConnectionRegistry.usersByUserId`) don't re-walk
-   * `subject` on every read and a missing subject is caught at construction.
-   */
-  userId: string;
-  authorizedBy?: string;
-  clientLabel?: string;
-  clientSessionId?: string;
-  clientPlatform?: ClientPlatform;
 }
 
 interface PendingToolCall {
@@ -282,241 +252,6 @@ type RelayErrorCode =
   | "TARGET_NOT_REACHABLE"
   | "UNKNOWN_TARGET_KIND";
 
-class ConnectionRegistry {
-  private clients = new Map<WebSocket, WsClientState>();
-  private callerConnections = new Map<string, Map<string, WsClientState>>();
-  private bridges = new Map<string, Map<string, RpcClient>>();
-  private transports = new Map<string, Map<string, WsServerTransportInternal>>();
-  /**
-   * Reverse index userId → concrete live connections (WP4 §2.3). The same
-   * shared runtime principal can have independently authorized connections for
-   * different users, so indexing only callerIds would cross-attribute presence.
-   */
-  private usersByUserId = new Map<string, Set<WsClientState>>();
-  private connectionsChangedListeners = new Set<() => void>();
-
-  getBySocket(ws: WebSocket): WsClientState | undefined {
-    return this.clients.get(ws);
-  }
-
-  getConnection(callerId: string, connectionId: string): WsClientState | undefined {
-    const client = this.callerConnections.get(callerId)?.get(connectionId);
-    return client?.ws.readyState === WebSocket.OPEN ? client : undefined;
-  }
-
-  isActiveClient(client: WsClientState): boolean {
-    return (
-      this.callerConnections.get(client.caller.runtime.id)?.get(client.connectionId) === client
-    );
-  }
-
-  getCallerConnections(callerId: string): WsClientState[] {
-    return [...(this.callerConnections.get(callerId)?.values() ?? [])].filter(
-      (client) => client.ws.readyState === WebSocket.OPEN
-    );
-  }
-
-  pickPrimary(callerId: string): WsClientState | undefined {
-    return this.getCallerConnections(callerId).sort(
-      (a, b) =>
-        a.authenticatedAt - b.authenticatedAt || a.connectionId.localeCompare(b.connectionId)
-    )[0];
-  }
-
-  addClient(client: WsClientState): void {
-    let callerClients = this.callerConnections.get(client.caller.runtime.id);
-    if (!callerClients) {
-      callerClients = new Map();
-      this.callerConnections.set(client.caller.runtime.id, callerClients);
-    }
-    const replaced = callerClients.get(client.connectionId);
-    if (replaced && replaced !== client) {
-      this.removeClient(replaced);
-      callerClients = this.callerConnections.get(client.caller.runtime.id) ?? new Map();
-      this.callerConnections.set(client.caller.runtime.id, callerClients);
-    }
-    this.clients.set(client.ws, client);
-    callerClients.set(client.connectionId, client);
-    let userClients = this.usersByUserId.get(client.userId);
-    if (!userClients) {
-      userClients = new Set();
-      this.usersByUserId.set(client.userId, userClients);
-    }
-    userClients.add(client);
-    this.emitConnectionsChanged();
-  }
-
-  removeClient(client: WsClientState): boolean {
-    const current = this.callerConnections.get(client.caller.runtime.id)?.get(client.connectionId);
-    const removedActive = current === client;
-    if (removedActive) {
-      const callerClients = this.callerConnections.get(client.caller.runtime.id);
-      callerClients?.delete(client.connectionId);
-      if (callerClients?.size === 0) {
-        this.callerConnections.delete(client.caller.runtime.id);
-      }
-      const userClients = this.usersByUserId.get(client.userId);
-      userClients?.delete(client);
-      if (userClients?.size === 0) this.usersByUserId.delete(client.userId);
-      this.removeBridge(client.caller.runtime.id, client.connectionId);
-    }
-    this.clients.delete(client.ws);
-    if (removedActive) this.emitConnectionsChanged();
-    return removedActive;
-  }
-
-  /**
-   * userIds with ≥1 OPEN connection to this workspace child (WP4 §2.3/§5) — a
-   * pure transport fact consumed by WP8 presence. No channel/roster concept.
-   */
-  listUsersWithLiveConnections(): string[] {
-    return [...this.usersByUserId.keys()].filter((userId) => this.isUserOnline(userId));
-  }
-
-  isUserOnline(userId: string): boolean {
-    return this.getUserConnections(userId).length > 0;
-  }
-
-  /** All active OPEN connections authorized for `userId`. */
-  getUserConnections(userId: string): WsClientState[] {
-    return [...(this.usersByUserId.get(userId) ?? [])].filter(
-      (client) => client.ws.readyState === WebSocket.OPEN && this.isActiveClient(client)
-    );
-  }
-
-  /**
-   * Change signal for WP8 presence (WP4 §5): fired from `addClient`/`removeClient`
-   * and — via {@link notifyConnectionsChanged} — from session expiry, so
-   * `workspacePresence` can recompute without polling. WP4 owns the hook; WP8
-   * owns the service/event.
-   */
-  onConnectionsChanged(listener: () => void): () => void {
-    this.connectionsChangedListeners.add(listener);
-    return () => this.connectionsChangedListeners.delete(listener);
-  }
-
-  /** Fire the change signal from outside the registry (e.g. session-TTL expiry). */
-  notifyConnectionsChanged(): void {
-    this.emitConnectionsChanged();
-  }
-
-  private emitConnectionsChanged(): void {
-    for (const listener of this.connectionsChangedListeners) {
-      try {
-        listener();
-      } catch (err) {
-        log.warn(`connections-changed listener failed: ${(err as Error).message}`);
-      }
-    }
-  }
-
-  setBridge(
-    callerId: string,
-    connectionId: string,
-    bridge: RpcClient,
-    transport: WsServerTransportInternal
-  ): void {
-    let bridges = this.bridges.get(callerId);
-    if (!bridges) {
-      bridges = new Map();
-      this.bridges.set(callerId, bridges);
-    }
-    bridges.set(connectionId, bridge);
-
-    let transports = this.transports.get(callerId);
-    if (!transports) {
-      transports = new Map();
-      this.transports.set(callerId, transports);
-    }
-    transports.set(connectionId, transport);
-  }
-
-  getBridge(callerId: string, connectionId: string): RpcClient | undefined {
-    return this.bridges.get(callerId)?.get(connectionId);
-  }
-
-  getPrimaryBridge(callerId: string): RpcClient | undefined {
-    const primary = this.pickPrimary(callerId);
-    return primary ? this.getBridge(callerId, primary.connectionId) : undefined;
-  }
-
-  getTransport(callerId: string, connectionId: string): WsServerTransportInternal | undefined {
-    return this.transports.get(callerId)?.get(connectionId);
-  }
-
-  removeBridge(callerId: string, connectionId: string): void {
-    const transports = this.transports.get(callerId);
-    const transport = transports?.get(connectionId);
-    if (transport) {
-      transport.close();
-      transports?.delete(connectionId);
-      if (transports?.size === 0) this.transports.delete(callerId);
-    }
-
-    const bridges = this.bridges.get(callerId);
-    bridges?.delete(connectionId);
-    if (bridges?.size === 0) this.bridges.delete(callerId);
-  }
-
-  closeConnection(callerId: string, connectionId: string, code: number, reason: string): void {
-    this.callerConnections.get(callerId)?.get(connectionId)?.ws.close(code, reason);
-  }
-
-  countByKinds(kinds: ReadonlySet<CallerKind>): number {
-    let count = 0;
-    for (const callerClients of this.callerConnections.values()) {
-      for (const client of callerClients.values()) {
-        if (kinds.has(client.caller.runtime.kind) && client.ws.readyState === WebSocket.OPEN) {
-          count++;
-        }
-      }
-    }
-    return count;
-  }
-
-  forEachControlPlane(fn: (client: WsClientState) => void): void {
-    for (const callerClients of this.callerConnections.values()) {
-      for (const client of callerClients.values()) {
-        if (
-          (client.caller.runtime.kind === "server" || client.caller.runtime.kind === "shell") &&
-          client.ws.readyState === WebSocket.OPEN
-        ) {
-          fn(client);
-        }
-      }
-    }
-  }
-
-  closeAll(code: number, reason: string): void {
-    for (const transports of this.transports.values()) {
-      for (const transport of transports.values()) {
-        transport.close();
-      }
-    }
-    for (const ws of this.clients.keys()) {
-      ws.close(code, reason);
-    }
-    this.clients.clear();
-    this.callerConnections.clear();
-    this.usersByUserId.clear();
-    this.bridges.clear();
-    this.transports.clear();
-    this.emitConnectionsChanged();
-  }
-}
-
-const DEFAULT_RPC_MAX_BODY_BYTES = 256 * 1024 * 1024;
-
-/** Max HTTP RPC body size; VIBESTUDIO_RPC_MAX_BODY_BYTES overrides (0 = uncapped). */
-function resolveRpcMaxBodyBytes(): number {
-  const raw = process.env["VIBESTUDIO_RPC_MAX_BODY_BYTES"];
-  if (raw !== undefined) {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
-  }
-  return DEFAULT_RPC_MAX_BODY_BYTES;
-}
-
 function getErrorCode(error: unknown): string | undefined {
   return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
 }
@@ -586,7 +321,11 @@ export class RpcServer {
       ),
     logger: console,
   });
-  private connections = new ConnectionRegistry();
+  private connections = new ConnectionRegistry({
+    onConnectionsChangedListenerError: (error) => {
+      log.warn(`connections-changed listener failed: ${(error as Error).message}`);
+    },
+  });
   private pendingToolCalls = new Map<string, PendingToolCall>();
   private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastDisconnectAt = new Map<string, number>();
@@ -621,6 +360,8 @@ export class RpcServer {
     }
   >();
   private sessions: SessionRegistry;
+  private readonly httpRpc: HttpRpcHandler;
+  private readonly streamingRelay: StreamingRelay;
 
   private readonly bootId = randomUUID();
   private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
@@ -731,7 +472,7 @@ export class RpcServer {
              * stamped onto the connection's VerifiedCaller. Host-verified — never
              * from client input.
              */
-            agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
+            agentBinding?: import("@vibestudio/identity/types").AgentBinding;
             /** Host-verified account subject for the redeemed credential. */
             subject?: UserSubject;
           }
@@ -740,13 +481,42 @@ export class RpcServer {
             callerId: string;
             callerKind: CallerKind;
             deviceCredential?: { deviceId: string; refreshToken: string };
-            agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
+            agentBinding?: import("@vibestudio/identity/types").AgentBinding;
             subject?: UserSubject;
           } | null>;
       uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
   ) {
     this.dispatcher = deps.dispatcher;
+    this.streamingRelay = new StreamingRelay({
+      dispatcher: deps.dispatcher,
+      egressProxy: deps.egressProxy,
+      authenticateHttp: (req) => this.authenticateHttpRequest(req),
+      verifiedCaller: (caller) =>
+        this.verifiedCallerFor(caller.callerId, caller.callerKind, caller.agentBinding),
+      authorizeRelay: (callerId, callerKind, targetId, method) =>
+        this.checkRelayAuth(callerId, callerKind, targetId, method),
+      createHttpContext: (caller, extras) =>
+        this.serviceContextFor(caller.callerId, caller.callerKind, extras, caller.agentBinding),
+      createWsContext: (client, request, extras) =>
+        this.serviceContextForRpcMessage(client, request, extras),
+      sendWs: (client, message) => this.sendToWs(client.ws, message),
+    });
+    this.httpRpc = new HttpRpcHandler({
+      maxBodyBytes: resolveRpcMaxBodyBytes(process.env["VIBESTUDIO_RPC_MAX_BODY_BYTES"]),
+      authenticate: (req) => this.authenticateHttpRequest(req),
+      handleStreamingRequest: (req, res) => this.streamingRelay.handleHttpRequest(req, res),
+      handleRequest: (caller, envelope, message) =>
+        this.handleEnvelopeRequest(
+          caller.callerId,
+          caller.callerKind,
+          caller.agentBinding,
+          envelope,
+          message
+        ),
+      handleEvent: (caller, envelope, message) =>
+        this.handleEnvelopeEvent(caller.callerId, caller.callerKind, envelope, message),
+    });
     this.uploadPreopenLimits = {
       maxPendingStreams: resolvePositiveLimit(
         deps.uploadPreopenLimits?.maxPendingStreams,
@@ -779,7 +549,7 @@ export class RpcServer {
   private verifiedCallerFor(
     callerId: string,
     callerKind: CallerKind,
-    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding,
+    agentBinding?: import("@vibestudio/identity/types").AgentBinding,
     subject?: UserSubject
   ): VerifiedCaller {
     const code =
@@ -807,7 +577,7 @@ export class RpcServer {
   private resolveSubject(
     callerId: string,
     callerKind: CallerKind,
-    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+    agentBinding?: import("@vibestudio/identity/types").AgentBinding
   ): UserSubject | null {
     if (callerKind === "server") return SYSTEM_SUBJECT;
     if (callerKind === "extension") {
@@ -820,7 +590,7 @@ export class RpcServer {
   private isWorkspaceMember(
     callerId: string,
     callerKind: CallerKind,
-    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+    agentBinding?: import("@vibestudio/identity/types").AgentBinding
   ): boolean {
     if (!this.deps.membershipGate) return true;
     return this.deps.membershipGate(
@@ -832,7 +602,7 @@ export class RpcServer {
     callerId: string,
     callerKind: CallerKind,
     extras: Omit<ServiceContext, "caller"> = {},
-    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+    agentBinding?: import("@vibestudio/identity/types").AgentBinding
   ): ServiceContext {
     return {
       caller: this.verifiedCallerFor(callerId, callerKind, agentBinding),
@@ -1038,6 +808,18 @@ export class RpcServer {
         return;
       }
 
+      if (msg.contractVersion !== RPC_CONTRACT_VERSION) {
+        const result: WsServerMessage = {
+          type: "ws:auth-result",
+          success: false,
+          contractVersion: RPC_CONTRACT_VERSION,
+          error: `Incompatible RPC contract: peer ${String(msg.contractVersion)}; server requires ${RPC_CONTRACT_VERSION}`,
+        };
+        ws.send(JSON.stringify(result));
+        ws.close(4005, "Incompatible RPC contract");
+        return;
+      }
+
       void this.handleAuth(
         ws,
         msg.token,
@@ -1101,7 +883,7 @@ export class RpcServer {
       null;
     let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
     let deviceCredential: { deviceId: string; refreshToken: string } | undefined;
-    let agentBinding: import("@vibestudio/shared/serviceDispatcher").AgentBinding | undefined;
+    let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
     // Host-verified subject for a device/agent credential redeemed over the pipe
     // (§5.1/§5.3). Absent for the caller-token path (§5.2), where
     // `verifiedCallerFor` resolves it from the caller id via `userSubjectSource`.
@@ -1130,7 +912,7 @@ export class RpcServer {
         callerId: string;
         callerKind: CallerKind;
         deviceCredential?: { deviceId: string; refreshToken: string };
-        agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
+        agentBinding?: import("@vibestudio/identity/types").AgentBinding;
         subject?: UserSubject;
       } | null = null;
       if (this.deps.redeemPairingCredential) {
@@ -1350,6 +1132,7 @@ export class RpcServer {
     const authResult: WsServerMessage = {
       type: "ws:auth-result",
       success: true,
+      contractVersion: RPC_CONTRACT_VERSION,
       callerId,
       callerKind,
       connectionId,
@@ -1578,36 +1361,17 @@ export class RpcServer {
     }
   }
 
-  /**
-   * In-flight streaming WS RPC handlers. Keyed by
-   * `${callerId}\0${connectionId}\0${requestId}` — NOT by
-   * `requestId` alone — because two clients can reuse the same
-   * `requestId` and we'd otherwise let one cancel the other's
-   * stream. The triple uniquely identifies a stream within the
-   * server.
-   */
-  private wsStreamAborts = new Map<string, AbortController>();
-
-  private wsStreamKey(callerId: string, connectionId: string, requestId: string): string {
-    return `${callerId}\x00${connectionId}\x00${requestId}`;
-  }
-
   private async handleRpc(
     client: WsClientState,
     message: RpcMessage,
     envelope: RpcEnvelope
   ): Promise<void> {
     if (message.type === "stream-request") {
-      await this.handleWsStreamRequest(client, message, envelope);
+      await this.streamingRelay.handleWsRequest(client, message, envelope);
       return;
     }
     if (message.type === "stream-cancel") {
-      // Look up by the full {callerId, connectionId, requestId}
-      // triple — a peer can only cancel streams it owns.
-      const controller = this.wsStreamAborts.get(
-        this.wsStreamKey(client.caller.runtime.id, client.connectionId, message.requestId)
-      );
-      if (controller) controller.abort();
+      this.streamingRelay.cancel(client, message.requestId);
       return;
     }
     if (message.type === "stream-frame") {
@@ -1627,6 +1391,7 @@ export class RpcServer {
           type: "response",
           requestId: request.requestId,
           error: `Invalid method format: "${request.method}". Expected "service.method"`,
+          errorKind: "protocol",
         }),
       });
       return;
@@ -1643,6 +1408,7 @@ export class RpcServer {
           type: "response",
           requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
+          errorKind: rpcErrorKindOf(error, "access"),
         }),
       });
       return;
@@ -1676,6 +1442,7 @@ export class RpcServer {
           type: "response",
           requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
+          errorKind: rpcErrorKindOf(error, "internal"),
           ...(errorCode ? { errorCode } : {}),
         }),
       });
@@ -1813,6 +1580,7 @@ export class RpcServer {
                 type: "response",
                 requestId,
                 error: err instanceof Error ? err.message : String(err),
+                errorKind: rpcErrorKindOf(err, "transport"),
                 ...(errorCode ? { errorCode } : {}),
               }
             ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
@@ -1868,6 +1636,7 @@ export class RpcServer {
           type: "response",
           requestId: message.requestId,
           error: errorMessage,
+          errorKind: rpcErrorKindOf(err, "transport"),
           ...(errorCode ? { errorCode } : {}),
         }),
       });
@@ -1882,7 +1651,12 @@ export class RpcServer {
           requestId: message.requestId,
           fromId: targetId,
           frameType: FRAME_ERROR,
-          payload: JSON.stringify({ status: 403, message: errorMessage, code: errorCode }),
+          payload: JSON.stringify({
+            status: 403,
+            message: errorMessage,
+            code: errorCode,
+            errorKind: rpcErrorKindOf(err, "transport"),
+          }),
         }),
       });
       return;
@@ -1895,6 +1669,7 @@ export class RpcServer {
         targetId,
         requestId: message.requestId,
         error: errorMessage,
+        errorKind: rpcErrorKindOf(err, "transport"),
         errorCode,
       });
       this.sendToWs(client.ws, {
@@ -1902,6 +1677,7 @@ export class RpcServer {
         targetId,
         requestId: message.requestId,
         error: errorMessage,
+        errorKind: rpcErrorKindOf(err, "transport"),
         ...(errorCode ? { errorCode } : {}),
       });
       return;
@@ -1923,6 +1699,7 @@ export class RpcServer {
         targetId,
         event: eventMessage.event,
         error: errorMessage,
+        errorKind: rpcErrorKindOf(err, "transport"),
         ...(errorCode ? { errorCode } : {}),
       });
     }
@@ -1950,6 +1727,7 @@ export class RpcServer {
         type: "response",
         requestId: message.requestId,
         error: errorMessage,
+        errorKind: "protocol",
         ...(errorCode ? { errorCode } : {}),
       });
     }
@@ -1959,6 +1737,7 @@ export class RpcServer {
       targetId: "server",
       requestId: message.requestId,
       error: errorMessage,
+      errorKind: "protocol",
       ...(errorCode ? { errorCode } : {}),
     });
   }
@@ -2002,16 +1781,7 @@ export class RpcServer {
     const removedActive = this.connections.removeClient(client);
     const wasReplaced = !removedActive;
 
-    // Abort any in-flight streaming RPCs owned by this connection.
-    // Without this, the upstream fetch keeps draining bytes that
-    // nobody can read — `sendToWs` would silently drop the frames.
-    const streamKeyPrefix = this.wsStreamKey(callerId, client.connectionId, "");
-    for (const [key, controller] of this.wsStreamAborts) {
-      if (key.startsWith(streamKeyPrefix)) {
-        controller.abort();
-        this.wsStreamAborts.delete(key);
-      }
-    }
+    this.streamingRelay.abortConnection(callerId, client.connectionId);
 
     if (!wasReplaced && callerKind === "panel") {
       this.deps.runtimeCoordinator?.markDisconnected(callerId, client.connectionId);
@@ -2179,6 +1949,7 @@ export class RpcServer {
             targetId: callee.targetId,
             requestId,
             error: `Target ${callee.targetId} did not reconnect within grace window`,
+            errorKind: "transport",
             errorCode: "RECONNECT_GRACE_EXPIRED",
           });
         },
@@ -2231,85 +2002,27 @@ export class RpcServer {
   // HTTP POST /rpc endpoint
   // ===========================================================================
 
-  private async handleHttpRequest(
-    req: import("http").IncomingMessage,
-    res: import("http").ServerResponse
-  ): Promise<void> {
-    // Streaming proxy-fetch endpoint — separate route because it uses
-    // chunked transfer with a binary frame format, not the JSON
-    // request/response of the regular RPC.
-    if (req.method === "POST" && req.url === "/rpc/stream") {
-      await this.handleStreamingProxyFetch(req, res);
-      return;
-    }
-
-    // Only handle POST /rpc
-    if (req.method !== "POST" || req.url !== "/rpc") {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
-
-    // Read body, bounded. The cap is deliberately generous (large file writes
-    // ride this path) but finite, so a runaway or malicious client can't
-    // buffer unbounded memory server-side. Override via
-    // VIBESTUDIO_RPC_MAX_BODY_BYTES (0 disables the cap).
-    const maxBodyBytes = resolveRpcMaxBodyBytes();
-    const chunks: Buffer[] = [];
-    let bodyBytes = 0;
-    for await (const chunk of req) {
-      bodyBytes += (chunk as Buffer).length;
-      if (maxBodyBytes > 0 && bodyBytes > maxBodyBytes) {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: `RPC body exceeds ${maxBodyBytes} bytes (set VIBESTUDIO_RPC_MAX_BODY_BYTES to raise)`,
-          })
-        );
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk as Buffer);
-    }
-
-    let body: Record<string, unknown>;
-    try {
-      body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
-    } catch {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid JSON body" }));
-      return;
-    }
-
-    // Auth: validate Bearer token
+  private authenticateHttpRequest(req: import("http").IncomingMessage): HttpRpcAdmission {
     const authHeader = req.headers["authorization"];
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (!token) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Missing authorization" }));
-      return;
+      return { ok: false, status: 401, body: { error: "Missing authorization" } };
     }
 
     if (this.deps.tokenManager.validateAdminToken(token)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: ADMIN_RPC_AUTH_ERROR,
-        })
-      );
-      return;
+      return { ok: false, status: 401, body: { error: ADMIN_RPC_AUTH_ERROR } };
     }
 
     const entry = this.deps.tokenManager.validateToken(token);
     if (!entry) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid token" }));
-      return;
+      return { ok: false, status: 401, body: { error: "Invalid token" } };
     }
     if (entry.callerKind === "shell" && entry.callerId === "shell") {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: 'callerId:"shell" cannot authenticate over HTTP RPC' }));
-      return;
+      return {
+        ok: false,
+        status: 403,
+        body: { error: 'callerId:"shell" cannot authenticate over HTTP RPC' },
+      };
     }
     let callerKind = entry.callerKind;
     let callerId: string;
@@ -2322,89 +2035,29 @@ export class RpcServer {
       if (callerId !== entry.callerId) {
         callerKind = this.callerKindForRuntimePrincipal(callerId);
       }
-    } catch (err) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-      return;
+    } catch (error) {
+      return {
+        ok: false,
+        status: 403,
+        body: { error: error instanceof Error ? error.message : String(error) },
+      };
     }
     const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
     if (!this.isWorkspaceMember(callerId, callerKind, httpAgentBinding)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not a member of this workspace", code: "EACCES" }));
-      return;
+      return {
+        ok: false,
+        status: 403,
+        body: { error: "Not a member of this workspace", code: "EACCES" },
+      };
     }
-
-    // The body is an `RpcEnvelope`; `from`/`delivery.caller` are self-reported
-    // and NOT trusted — the authenticated (callerId, callerKind) above are the
-    // authority. We dispatch `envelope.message` and reply with a response
-    // envelope, mirroring the WS `ws:route` path.
-    const envelope = body as unknown as RpcEnvelope;
-    const message = envelope.message;
-    if (!message || typeof message !== "object" || typeof message.type !== "string") {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Expected an RpcEnvelope body with a message" }));
-      return;
-    }
-
-    if (message.type === "event") {
-      try {
-        await this.handleEnvelopeEvent(callerId, callerKind, envelope, message);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({}));
-      } catch (err) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-      }
-      return;
-    }
-
-    if (message.type !== "request") {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: `Unsupported /rpc message type: ${message.type}` }));
-      return;
-    }
-
-    const requestId = message.requestId;
-    try {
-      const result = await this.handleEnvelopeRequest(
+    return {
+      ok: true,
+      caller: {
         callerId,
         callerKind,
-        httpAgentBinding,
-        envelope,
-        message
-      );
-      res.writeHead(200, { "Content-Type": "application/json" });
-      if (isDeferredResult(result)) {
-        // Handler parked the call; ack now and deliver later via onDeferredResult.
-        res.end(JSON.stringify({ deferred: true, requestId: result.requestId }));
-      } else {
-        res.end(
-          JSON.stringify(
-            responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-              type: "response",
-              requestId,
-              result,
-            })
-          )
-        );
-      }
-    } catch (err) {
-      const errMessage = err instanceof Error ? err.message : String(err);
-      const errorCode = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-      const errorStack = err instanceof Error ? err.stack : undefined;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify(
-          responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-            type: "response",
-            requestId,
-            error: errMessage,
-            ...(errorCode ? { errorCode } : {}),
-            ...(errorStack ? { errorStack } : {}),
-          })
-        )
-      );
-    }
+        ...(httpAgentBinding ? { agentBinding: httpAgentBinding } : {}),
+      },
+    };
   }
 
   /**
@@ -2415,7 +2068,7 @@ export class RpcServer {
   private async handleEnvelopeRequest(
     callerId: string,
     callerKind: CallerKind,
-    agentBinding: import("@vibestudio/shared/serviceDispatcher").AgentBinding | undefined,
+    agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined,
     envelope: RpcEnvelope,
     message: RpcRequest
   ): Promise<unknown> {
@@ -2499,710 +2152,6 @@ export class RpcServer {
     const auth = this.checkRelayAuth(callerId, callerKind, targetId);
     if (!auth.ok) throw new Error(auth.reason);
     await this.relayEvent(callerId, callerKind, targetId, message.event, message.payload);
-  }
-
-  /**
-   * `POST /rpc/stream` — service RPC with a streaming Response body.
-   *
-   * `credentials.proxyFetch` keeps its egress-proxy fast path so policy failures can still return
-   * normal HTTP statuses before any frame is emitted. Other service methods dispatch through the
-   * normal service-policy layer and must return a `Response`.
-   */
-  /**
-   * Pre-flight validation for streaming proxy fetch — runs the
-   * method allow-list, egress-proxy availability check, and param
-   * presence/decoding. Callable BEFORE the transport commits to a
-   * response (so HTTP can return a real 400/503 status code, not a
-   * 200-with-error-frame). Returns either a ready-to-execute call
-   * descriptor or a rejection with status + error message.
-   */
-  private validateStreamingProxyFetch(request: {
-    method: string;
-    callerKind: CallerKind;
-    args: unknown[];
-    readOnly?: boolean;
-  }):
-    | {
-        ok: true;
-        egress: Pick<import("./services/egressProxy.js").EgressProxy, "forwardProxyFetchStream">;
-        proxyParams: {
-          url: string;
-          method: string;
-          headers?: Record<string, string>;
-          body?: string | Uint8Array;
-          credentialId?: string;
-        };
-      }
-    | { ok: false; status: number; error: string } {
-    if (request.method !== "credentials.proxyFetch") {
-      return {
-        ok: false,
-        status: 400,
-        error: `Method '${request.method}' is not exposed on the streaming endpoint. Only 'credentials.proxyFetch' is allowed.`,
-      };
-    }
-    const egress = this.deps.egressProxy;
-    if (!egress) {
-      return { ok: false, status: 503, error: "Streaming proxy fetch is unavailable" };
-    }
-    // Run the same service-policy check as `POST /rpc` /
-    // non-streaming WS RPC. Without this the streaming endpoints
-    // would silently allow caller-kinds that the regular path
-    // denies. Service+method parse never fails here since the
-    // method allow-list above already rejected anything other than
-    // `credentials.proxyFetch`.
-    try {
-      checkServiceAccess("credentials", request.callerKind, this.dispatcher, "proxyFetch");
-    } catch (err) {
-      return {
-        ok: false,
-        status: 403,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-    if (request.readOnly) {
-      const methodDef = this.dispatcher.getMethodSchema?.("credentials", "proxyFetch");
-      const sensitivity = methodDef?.access?.sensitivity;
-      if (sensitivity !== "read") {
-        return {
-          ok: false,
-          status: 403,
-          error:
-            `Blocked in read-only mode: 'credentials.proxyFetch' is not declared read-only ` +
-            `(sensitivity ${sensitivity ?? "unknown"}). A read-only caller may only invoke ` +
-            `methods declaring access.sensitivity === "read".`,
-        };
-      }
-    }
-    const params = (request.args?.[0] ?? {}) as {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-      body?: string;
-      bodyBase64?: string;
-      credentialId?: string;
-    };
-    if (!params.url || !params.method) {
-      return { ok: false, status: 400, error: "Missing required params: url and method" };
-    }
-    const upstreamBody: string | Uint8Array | undefined =
-      params.bodyBase64 !== undefined
-        ? new Uint8Array(Buffer.from(params.bodyBase64, "base64"))
-        : params.body;
-    return {
-      ok: true,
-      egress,
-      proxyParams: {
-        url: params.url,
-        method: params.method,
-        headers: params.headers,
-        body: upstreamBody,
-        credentialId: params.credentialId,
-      },
-    };
-  }
-
-  private async handleStreamingProxyFetch(
-    req: import("http").IncomingMessage,
-    res: import("http").ServerResponse
-  ): Promise<void> {
-    // Auth — same flow as `POST /rpc`.
-    const authHeader = req.headers["authorization"];
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Missing authorization" }));
-      return;
-    }
-    if (this.deps.tokenManager.validateAdminToken(token)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: ADMIN_RPC_AUTH_ERROR,
-        })
-      );
-      return;
-    }
-    const entry = this.deps.tokenManager.validateToken(token);
-    if (!entry) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid token" }));
-      return;
-    }
-    if (entry.callerKind === "shell" && entry.callerId === "shell") {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: 'callerId:"shell" cannot authenticate over HTTP RPC' }));
-      return;
-    }
-    let callerKind = entry.callerKind;
-    let callerId: string;
-    try {
-      callerId = resolveHttpRuntimeCaller(
-        entry.callerId,
-        callerKind,
-        req.headers[RPC_RUNTIME_ID_HEADER]
-      );
-      if (callerId !== entry.callerId) {
-        callerKind = this.callerKindForRuntimePrincipal(callerId);
-      }
-    } catch (err) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-      return;
-    }
-    const httpAgentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
-    if (!this.isWorkspaceMember(callerId, callerKind, httpAgentBinding)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not a member of this workspace", code: "EACCES" }));
-      return;
-    }
-
-    // Read request body (capped).
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const MAX_REQUEST_BODY = 16 * 1024 * 1024;
-    for await (const chunk of req) {
-      const buf = chunk as Buffer;
-      total += buf.byteLength;
-      if (total > MAX_REQUEST_BODY) {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Request body too large for streaming proxy fetch" }));
-        return;
-      }
-      chunks.push(buf);
-    }
-    let body: Record<string, unknown>;
-    try {
-      body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
-    } catch {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid JSON body" }));
-      return;
-    }
-
-    // Envelope-native: the streaming request rides an RpcEnvelope whose message
-    // is a `stream-request` carrying method/args; the target is the envelope's.
-    const streamEnvelope = body as unknown as RpcEnvelope;
-    const streamMessage = streamEnvelope.message as RpcStreamRequest | undefined;
-    const method = streamMessage?.method;
-    const args = streamMessage?.args ?? [];
-    const targetId = streamEnvelope.target;
-    const idempotencyKey = streamEnvelope.delivery?.idempotencyKey;
-    const readOnly = streamEnvelope.delivery?.readOnly === true;
-    const agentBinding = httpAgentBinding;
-    const effectiveCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
-
-    if (!method) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Missing method" }));
-      return;
-    }
-
-    if (targetId && targetId !== "main") {
-      const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
-      if (!auth.ok) {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: auth.reason, errorCode: "EACCES" }));
-        return;
-      }
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({ error: "HTTP RPC streaming currently supports targetId 'main' only" })
-      );
-      return;
-    }
-
-    if (method !== "credentials.proxyFetch") {
-      const parsed = parseServiceMethod(method);
-      if (!parsed) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: `Invalid method format: "${method}"` }));
-        return;
-      }
-      try {
-        checkServiceAccess(parsed.service, callerKind, this.dispatcher, parsed.method);
-      } catch (err) {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-        return;
-      }
-
-      let response: Response;
-      try {
-        const ctx = this.serviceContextFor(
-          callerId,
-          callerKind,
-          {
-            ...(streamMessage?.requestId ? { requestId: streamMessage.requestId } : {}),
-            ...(idempotencyKey ? { idempotencyKey } : {}),
-            ...(readOnly ? { readOnly: true } : {}),
-          },
-          agentBinding
-        );
-        const result = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
-        if (!(result instanceof Response)) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({ error: `Streaming service ${method} did not return a Response` })
-          );
-          return;
-        }
-        response = result;
-      } catch (err) {
-        const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-        res.writeHead(200, {
-          "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
-          "Cache-Control": "no-store",
-          "X-Accel-Buffering": "no",
-        });
-        const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
-        await this.writeHttpStreamBytes(
-          res,
-          codec.encodeErrorFrame({
-            status: 502,
-            message: err instanceof Error ? err.message : String(err),
-            code: typeof code === "string" ? code : undefined,
-          })
-        ).catch(() => {});
-        res.end();
-        return;
-      }
-
-      res.writeHead(200, {
-        "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
-        "Cache-Control": "no-store",
-        "X-Accel-Buffering": "no",
-      });
-      try {
-        await this.pipeResponseToHttpFrames(response, res);
-      } finally {
-        res.end();
-      }
-      return;
-    }
-
-    // Run validation BEFORE committing to a 200 response, so policy
-    // failures (wrong method, no egress proxy, missing params,
-    // policy violation) come back as proper HTTP error statuses.
-    const check = this.validateStreamingProxyFetch({
-      method,
-      callerKind,
-      args,
-      readOnly,
-    });
-    if (!check.ok) {
-      res.writeHead(check.status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: check.error }));
-      return;
-    }
-
-    // Cancellation: HTTP transport close = caller went away.
-    const abortController = new AbortController();
-    req.on("close", () => abortController.abort());
-    res.on("close", () => abortController.abort());
-
-    const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
-    // HTTP encodes frames as raw binary on the chunked response —
-    // no base64 overhead since the response IS a binary stream.
-    const emitFrame = async (
-      frame: import("./services/egressProxy.js").StreamFrame
-    ): Promise<void> => {
-      if (frame.kind === "head") {
-        await this.writeHttpStreamBytes(
-          res,
-          codec.encodeHeadFrame({
-            status: frame.status,
-            statusText: frame.statusText,
-            headerPairs: frame.headerPairs,
-            finalUrl: frame.finalUrl,
-          })
-        );
-      } else if (frame.kind === "chunk") {
-        await this.writeHttpStreamBytes(res, codec.encodeDataFrame(frame.bytes));
-      } else if (frame.kind === "end") {
-        await this.writeHttpStreamBytes(res, codec.encodeEndFrame({ bytesIn: frame.bytesIn }));
-      } else if (frame.kind === "error") {
-        await this.writeHttpStreamBytes(
-          res,
-          codec.encodeErrorFrame({
-            status: frame.status,
-            message: frame.message,
-            code: frame.code,
-          })
-        );
-      }
-    };
-
-    // Headers go out before the first frame.
-    res.writeHead(200, {
-      "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
-      "Cache-Control": "no-store",
-      "X-Accel-Buffering": "no",
-    });
-
-    try {
-      await check.egress.forwardProxyFetchStream(
-        { caller: effectiveCaller, ...check.proxyParams },
-        emitFrame,
-        abortController.signal
-      );
-    } catch (err) {
-      try {
-        const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-        await emitFrame({
-          kind: "error",
-          status: 502,
-          message: err instanceof Error ? err.message : String(err),
-          code: typeof code === "string" ? code : undefined,
-        });
-      } catch {
-        // Best-effort — connection may already be torn down.
-      }
-    } finally {
-      res.end();
-    }
-  }
-
-  private writeHttpStreamBytes(
-    res: import("http").ServerResponse,
-    bytes: Uint8Array
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const ok = res.write(bytes, (err) => {
-        if (err) reject(err);
-      });
-      if (ok) resolve();
-      else res.once("drain", () => resolve());
-    });
-  }
-
-  private async pipeResponseToHttpFrames(
-    response: Response,
-    res: import("http").ServerResponse
-  ): Promise<void> {
-    const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
-    await this.writeHttpStreamBytes(
-      res,
-      codec.encodeHeadFrame({
-        status: response.status,
-        statusText: response.statusText,
-        headerPairs: Array.from(response.headers.entries()),
-        finalUrl: response.url,
-      })
-    );
-    let bytesIn = 0;
-    if (response.body) {
-      const reader = response.body.getReader();
-      try {
-        while (true) {
-          const next = await reader.read();
-          if (next.done) break;
-          bytesIn += next.value.byteLength;
-          await this.writeHttpStreamBytes(res, codec.encodeDataFrame(next.value));
-        }
-      } catch (err) {
-        const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-        await this.writeHttpStreamBytes(
-          res,
-          codec.encodeErrorFrame({
-            status: 502,
-            message: err instanceof Error ? err.message : String(err),
-            code: typeof code === "string" ? code : undefined,
-          })
-        );
-        return;
-      } finally {
-        reader.releaseLock();
-      }
-    }
-    await this.writeHttpStreamBytes(res, codec.encodeEndFrame({ bytesIn }));
-  }
-
-  /**
-   * Handle a WS-delivered `stream-request`. This mirrors the HTTP
-   * `/rpc/stream` route's policy: generic `service.method` requests go
-   * through service policy checks and must return a `Response`, while
-   * `credentials.proxyFetch` keeps its dedicated egress validation and
-   * forwarding path. Frames are wrapped in the `ws:rpc` envelope because
-   * WS is the panel/shell transport.
-   */
-  private async handleWsStreamRequest(
-    client: WsClientState,
-    request: import("@vibestudio/rpc").RpcStreamRequest,
-    envelope: RpcEnvelope
-  ): Promise<void> {
-    const idempotencyKey = envelope.delivery.idempotencyKey;
-    const readOnly = envelope.delivery.readOnly === true;
-    const sendFrame = (frameType: number, payload: string): void => {
-      this.sendToWs(client.ws, {
-        type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "stream-frame",
-          requestId: request.requestId,
-          fromId: "main",
-          frameType,
-          payload,
-        }),
-      });
-    };
-
-    // Binary stream surface (plan §2.3): the WebRTC session shim exposes
-    // `sendStreamFrame(requestId, type, rawBytes)` — frames go straight onto
-    // the bulk channel with no base64/JSON round trip, and the returned promise
-    // (the pipe's bounded queue) is the end-to-end backpressure signal the
-    // producer loop awaits. Duck-typed once per request; plain WS lacks it and
-    // keeps the base64-JSON `ws:rpc` wire unchanged.
-    const shimWs = client.ws as unknown as {
-      sendStreamFrame?: (
-        requestId: string,
-        frameType: StreamFrameType,
-        payload: Uint8Array
-      ) => Promise<void> | false;
-      takeInboundBody?: (requestId: string) => ReadableStream<Uint8Array> | undefined;
-    };
-    const sendBinaryFrame =
-      typeof shimWs.sendStreamFrame === "function" ? shimWs.sendStreamFrame.bind(shimWs) : null;
-    // Upload path (plan §1.6): the WebRTC shim assembles a declared request
-    // body from inbound bulk frames; take it (single consumption) and thread it
-    // into the service call. Plain WS has no body surface — undefined.
-    const inboundBody =
-      typeof shimWs.takeInboundBody === "function"
-        ? shimWs.takeInboundBody(request.requestId)
-        : undefined;
-    const utf8Json = (value: unknown): Uint8Array =>
-      new TextEncoder().encode(JSON.stringify(value));
-
-    const emitFrame = (
-      frame: import("./services/egressProxy.js").StreamFrame
-    ): Promise<void> | void => {
-      if (sendBinaryFrame) {
-        let written: Promise<void> | false;
-        if (frame.kind === "head") {
-          written = sendBinaryFrame(
-            request.requestId,
-            FRAME_HEAD,
-            utf8Json({
-              status: frame.status,
-              statusText: frame.statusText,
-              headerPairs: frame.headerPairs,
-              finalUrl: frame.finalUrl,
-            })
-          );
-        } else if (frame.kind === "chunk") {
-          written = sendBinaryFrame(request.requestId, FRAME_DATA, frame.bytes);
-        } else if (frame.kind === "end") {
-          written = sendBinaryFrame(
-            request.requestId,
-            FRAME_END,
-            utf8Json({ bytesIn: frame.bytesIn })
-          );
-        } else {
-          written = sendBinaryFrame(
-            request.requestId,
-            FRAME_ERROR,
-            utf8Json({ status: frame.status, message: frame.message, code: frame.code })
-          );
-        }
-        // false = no registered streamId (client cancelled / session closed).
-        return written === false ? undefined : written;
-      }
-      // Plain WS encodes DATA frames as base64 in JSON (the `ws:rpc`
-      // envelope is JSON-serialized). The HTTP endpoint avoids this
-      // overhead by writing raw bytes to the chunked response.
-      if (frame.kind === "head") {
-        sendFrame(
-          FRAME_HEAD,
-          JSON.stringify({
-            status: frame.status,
-            statusText: frame.statusText,
-            headerPairs: frame.headerPairs,
-            finalUrl: frame.finalUrl,
-          })
-        );
-      } else if (frame.kind === "chunk") {
-        // Buffer's native base64 encoder — the previous byte-by-byte
-        // String.fromCharCode + btoa version built an O(n) intermediate
-        // string one character at a time, dominating CPU on large bodies.
-        sendFrame(FRAME_DATA, Buffer.from(frame.bytes).toString("base64"));
-      } else if (frame.kind === "end") {
-        sendFrame(FRAME_END, JSON.stringify({ bytesIn: frame.bytesIn }));
-      } else if (frame.kind === "error") {
-        sendFrame(
-          FRAME_ERROR,
-          JSON.stringify({
-            status: frame.status,
-            message: frame.message,
-            code: frame.code,
-          })
-        );
-      }
-    };
-
-    const parsed = parseServiceMethod(request.method);
-    if (parsed && request.method !== "credentials.proxyFetch") {
-      // Plan §2.4: register the abort BEFORE dispatch, exactly like the
-      // proxyFetch branch below, so a client `stream-cancel` (or the
-      // connection closing) stops the server reading/encoding the body.
-      const abortController = new AbortController();
-      const streamKey = this.wsStreamKey(
-        client.caller.runtime.id,
-        client.connectionId,
-        request.requestId
-      );
-      this.wsStreamAborts.set(streamKey, abortController);
-      try {
-        checkServiceAccess(
-          parsed.service,
-          client.caller.runtime.kind,
-          this.dispatcher,
-          parsed.method
-        );
-        const ctx = this.serviceContextForRpcMessage(client, request, {
-          ...(request.requestId ? { requestId: request.requestId } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-          ...(readOnly ? { readOnly: true } : {}),
-          ...(inboundBody ? { body: inboundBody } : {}),
-        });
-        const result = await this.dispatcher.dispatch(
-          ctx,
-          parsed.service,
-          parsed.method,
-          request.args
-        );
-        if (!(result instanceof Response)) {
-          await emitFrame({
-            kind: "error",
-            status: 500,
-            message: `Streaming service ${request.method} did not return a Response`,
-          });
-          return;
-        }
-        await this.pipeResponseToWsFrames(result, emitFrame, abortController.signal);
-      } catch (err) {
-        try {
-          await emitFrame({
-            kind: "error",
-            status: 502,
-            message: err instanceof Error ? err.message : String(err),
-            code: err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined,
-          });
-        } catch {
-          // Best-effort — client may already be gone.
-        }
-      } finally {
-        this.wsStreamAborts.delete(streamKey);
-      }
-      return;
-    }
-
-    // WS has no separate-status-code path — pre-flight failures
-    // become ERROR frames just like in-flight failures. The client's
-    // `stream` promise rejects with the error message either way.
-    const check = this.validateStreamingProxyFetch({
-      method: request.method,
-      callerKind: client.caller.runtime.kind,
-      args: request.args,
-      readOnly,
-    });
-    if (!check.ok) {
-      await emitFrame({ kind: "error", status: check.status, message: check.error });
-      return;
-    }
-    // Upload path (§1.6): a declared bodyStreamId supersedes args-carried
-    // bodies. Declaring BOTH is ambiguous — fail loud, never pick silently.
-    if (inboundBody && check.proxyParams.body !== undefined) {
-      await emitFrame({
-        kind: "error",
-        status: 400,
-        message:
-          "proxyFetch request declared both a streamed body (bodyStreamId) and an args body — send exactly one",
-      });
-      return;
-    }
-
-    const abortController = new AbortController();
-    const streamKey = this.wsStreamKey(
-      client.caller.runtime.id,
-      client.connectionId,
-      request.requestId
-    );
-    this.wsStreamAborts.set(streamKey, abortController);
-
-    try {
-      await check.egress.forwardProxyFetchStream(
-        {
-          caller: client.caller,
-          ...check.proxyParams,
-          ...(inboundBody ? { body: inboundBody } : {}),
-        },
-        emitFrame,
-        abortController.signal
-      );
-    } catch (err) {
-      try {
-        const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
-        await emitFrame({
-          kind: "error",
-          status: 502,
-          message: err instanceof Error ? err.message : String(err),
-          code: typeof code === "string" ? code : undefined,
-        });
-      } catch {
-        // Best-effort — client may already be gone.
-      }
-    } finally {
-      this.wsStreamAborts.delete(streamKey);
-    }
-  }
-
-  /**
-   * Pump a service `Response` body into stream frames. Each `emitFrame` is
-   * AWAITED — on the binary bulk path its promise settles only when the pipe
-   * accepted+sent the frame, so the read loop suspends and the pipe's bounded
-   * queue is the end-to-end backpressure (plan §2.3). `signal` (plan §2.4) is
-   * the client's stream-cancel: it cancels the body reader (stopping the
-   * service's producer via ReadableStream cancellation) and fails the pump so
-   * no `end` frame masquerades as completion.
-   */
-  private async pipeResponseToWsFrames(
-    response: Response,
-    emitFrame: (frame: import("./services/egressProxy.js").StreamFrame) => Promise<void> | void,
-    signal?: AbortSignal
-  ): Promise<void> {
-    const throwIfAborted = (): void => {
-      if (signal?.aborted) throw new Error("Streaming RPC cancelled by client");
-    };
-    throwIfAborted();
-    await emitFrame({
-      kind: "head",
-      status: response.status,
-      statusText: response.statusText,
-      headerPairs: Array.from(response.headers.entries()),
-      finalUrl: response.url,
-    });
-    let bytesIn = 0;
-    if (response.body) {
-      const reader = response.body.getReader();
-      // Cancel the reader the moment the abort fires — a pending `read()` on a
-      // stalled producer resolves immediately instead of hanging until the next
-      // chunk, and cancellation propagates to the body's underlying source.
-      const onAbort = (): void => void reader.cancel().catch(() => {});
-      signal?.addEventListener("abort", onAbort, { once: true });
-      try {
-        while (true) {
-          throwIfAborted();
-          const next = await reader.read();
-          if (next.done) break;
-          bytesIn += next.value.byteLength;
-          await emitFrame({ kind: "chunk", bytes: next.value });
-        }
-        throwIfAborted();
-      } finally {
-        signal?.removeEventListener("abort", onAbort);
-        reader.releaseLock();
-      }
-    }
-    await emitFrame({ kind: "end", bytesIn });
   }
 
   // ===========================================================================
@@ -3884,6 +2833,7 @@ export class RpcServer {
         type: "response",
         requestId: message.requestId,
         error: "WebRTC session is not open",
+        errorKind: "transport",
         errorCode: "SESSION_NOT_OPEN",
       };
       writeControlFrame({
@@ -4265,6 +3215,7 @@ export class RpcServer {
           this.handleConnection(shim as unknown as WebSocket);
           shim.deliverInbound({
             type: "ws:auth",
+            contractVersion: RPC_CONTRACT_VERSION,
             token: frame.token,
             connectionId: frame.connectionId,
             clientLabel: frame.clientLabel,
@@ -4381,7 +3332,7 @@ export class RpcServer {
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse
   ): Promise<void> {
-    await this.handleHttpRequest(req, res);
+    await this.httpRpc.handle(req, res);
   }
 
   /** Shut down the server */

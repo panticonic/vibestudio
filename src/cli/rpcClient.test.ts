@@ -57,7 +57,13 @@ function rpcError(error: string, errorCode?: string): string {
     target: CREDS.deviceId,
     delivery: { caller: { callerId: "server", callerKind: "server" } },
     provenance: [{ callerId: "server", callerKind: "server" }],
-    message: { type: "response", requestId: "test-request", error, errorCode },
+    message: {
+      type: "response",
+      requestId: "test-request",
+      error,
+      errorKind: "application",
+      errorCode,
+    },
   });
 }
 
@@ -215,6 +221,7 @@ describe("rpcClient", () => {
     await expect(client.call("fs.readFile", ["/missing"])).rejects.toMatchObject({
       name: "RpcError",
       message: "boom",
+      errorKind: "application",
       errorCode: "ENOENT",
     });
   });

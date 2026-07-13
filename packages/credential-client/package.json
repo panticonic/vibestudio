@@ -3,20 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
     }
   },
   "scripts": {
-    "build": "tsc --project tsconfig.build.json"
+    "build": "tsc --project tsconfig.build.json",
+    "test": "cd ../.. && vitest run packages/credential-client/src"
   },
   "dependencies": {
-    "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/shared": "workspace:*"
+    "@vibestudio/env-paths": "workspace:*",
+    "@vibestudio/rpc": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

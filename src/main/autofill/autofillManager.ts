@@ -9,12 +9,13 @@
  */
 
 import { ipcMain } from "electron";
-import { autofillMethods } from "@vibestudio/shared/serviceSchemas/autofill";
+import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import type { WebContents } from "electron";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "../viewManager.js";
-import type { StoredPassword } from "@vibestudio/browser-data";
+import type { BrowserDataClient, StoredPassword } from "@vibestudio/browser-data";
 import {
   AUTOFILL_WORLD_ID,
   getContentScript,
@@ -29,28 +30,19 @@ import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("Autofill");
 
-/** Narrow interface for the password store — avoids deep import */
-interface PasswordStoreLike {
-  getAll(): Promise<StoredPassword[]> | StoredPassword[];
-  getForOrigin(origin: string): Promise<StoredPassword[]> | StoredPassword[];
-  updateLastUsed(id: number): Promise<void> | void;
-  update(
-    id: number,
-    partial: Partial<{ username: string; password: string; actionUrl: string; realm: string }>
-  ): Promise<void> | void;
-  add(password: {
-    url: string;
-    username: string;
-    password: string;
-    actionUrl?: string;
-    realm?: string;
-  }): Promise<number> | number;
-  addNeverSave(origin: string): Promise<void> | void;
-  isNeverSave(origin: string): Promise<boolean> | boolean;
-  delete(id: number): Promise<void> | void;
-  listNeverSaveOrigins(): Promise<string[]> | string[];
-  removeNeverSave(origin: string): Promise<void> | void;
-}
+type PasswordStoreLike = Pick<
+  BrowserDataClient,
+  | "getPasswords"
+  | "getPasswordForSite"
+  | "updatePasswordLastUsed"
+  | "updatePassword"
+  | "addPassword"
+  | "addNeverSavePassword"
+  | "isNeverSavePassword"
+  | "deletePassword"
+  | "getNeverSavePasswordOrigins"
+  | "removeNeverSavePassword"
+>;
 
 interface FieldInfo {
   type: "login" | "username-only";
@@ -354,35 +346,29 @@ export class AutofillManager {
       description: "Password autofill management",
       policy: { allowed: ["shell"] },
       methods: autofillMethods,
-      handler: async (_ctx, method, args) => {
-        switch (method) {
-          case "confirmSave": {
-            const [panelId, action] = args as [string, "save" | "never" | "dismiss"];
-            await this.handleConfirmSave(panelId, action);
-            return;
-          }
-          case "listSavedPasswords": {
-            const rows = await this.passwordStore.getAll();
-            return rows.map((row) => ({
-              id: row.id,
-              origin: row.origin_url,
-              username: row.username,
-            }));
-          }
-          case "deleteSavedPassword": {
-            await this.passwordStore.delete(args[0] as number);
-            return;
-          }
-          case "listNeverSaveOrigins":
-            return await this.passwordStore.listNeverSaveOrigins();
-          case "removeNeverSaveOrigin": {
-            await this.passwordStore.removeNeverSave(args[0] as string);
-            return;
-          }
-          default:
-            throw new Error(`Unknown autofill method: ${method}`);
-        }
-      },
+      handler: defineServiceHandler("autofill", autofillMethods, {
+        confirmSave: async (_ctx, [panelId, action]) => {
+          await this.handleConfirmSave(panelId, action);
+          return;
+        },
+        listSavedPasswords: async () => {
+          const rows = await this.passwordStore.getPasswords();
+          return rows.map((row) => ({
+            id: row.id,
+            origin: row.origin_url,
+            username: row.username,
+          }));
+        },
+        deleteSavedPassword: async (_ctx, [id]) => {
+          await this.passwordStore.deletePassword(id);
+          return;
+        },
+        listNeverSaveOrigins: async () => await this.passwordStore.getNeverSavePasswordOrigins(),
+        removeNeverSaveOrigin: async (_ctx, [origin]) => {
+          await this.passwordStore.removeNeverSavePassword(origin);
+          return;
+        },
+      }),
     };
   }
 
@@ -586,7 +572,7 @@ export class AutofillManager {
 
     try {
       await this.executeInActiveFrame(wc, state, script);
-      await this.passwordStore.updateLastUsed(credential.id);
+      await this.passwordStore.updatePasswordLastUsed(credential.id);
       log.verbose(` Filled credential for ${credential.origin_url}`);
     } catch (err) {
       log.verbose(` Fill failed: ${err}`);
@@ -727,7 +713,7 @@ export class AutofillManager {
     if (!state || !state.hasPendingSnapshot) return;
 
     // Permanently suppressed
-    if (await this.passwordStore.isNeverSave(state.origin)) return;
+    if (await this.passwordStore.isNeverSavePassword(state.origin)) return;
 
     // Suppress if user recently dismissed save for this origin
     if (state.dismissedAt && Date.now() - state.dismissedAt < 10 * 60 * 1000) return;
@@ -781,7 +767,7 @@ export class AutofillManager {
     if (existing) {
       if (existing.password === snapshot.password) {
         // Same credentials — silently update last used, clean up
-        await this.passwordStore.updateLastUsed(existing.id);
+        await this.passwordStore.updatePasswordLastUsed(existing.id);
         state.hasPendingSnapshot = false;
         state.signalCounts = { strong: 0, medium: 0, weak: 0 };
         this.cleanupWebRequest(wcId, state);
@@ -931,11 +917,11 @@ export class AutofillManager {
 
     if (action === "save") {
       if (pending.isUpdate && pending.existingId !== undefined) {
-        await this.passwordStore.update(pending.existingId, {
+        await this.passwordStore.updatePassword(pending.existingId, {
           password: pending.password,
         });
       } else {
-        await this.passwordStore.add({
+        await this.passwordStore.addPassword({
           url: pending.origin,
           username: pending.username,
           password: pending.password,
@@ -946,7 +932,7 @@ export class AutofillManager {
       this.eventService.emit("browser-data-changed", { dataType: "passwords" });
     } else if (action === "never") {
       // Permanently suppress saves for this origin
-      await this.passwordStore.addNeverSave(pending.origin);
+      await this.passwordStore.addNeverSavePassword(pending.origin);
     } else if (action === "dismiss") {
       // Temporarily suppress for 10 minutes
       for (const state of this.panelState.values()) {
@@ -975,7 +961,7 @@ export class AutofillManager {
   // ===========================================================================
 
   private async refreshCredentialsForOrigin(origin: string): Promise<void> {
-    const freshCredentials = await this.passwordStore.getForOrigin(origin);
+    const freshCredentials = await this.passwordStore.getPasswordForSite(origin);
     for (const state of this.panelState.values()) {
       if (state.origin === origin) {
         state.credentials = freshCredentials;

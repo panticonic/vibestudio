@@ -23,8 +23,8 @@ import {
   isLaunchSessionEventForTarget,
 } from "@vibestudio/shared/hostTargetLaunchGate";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
-import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
 import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 

@@ -2,7 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AlarmDriver } from "./alarmDriver.js";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DODispatch } from "../doDispatch.js";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 
 type Alarm = { source: string; className: string; objectKey: string; wakeAt: number };
 

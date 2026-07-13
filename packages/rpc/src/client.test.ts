@@ -2,6 +2,7 @@ import { createRpcClient, defineContract } from "./client.js";
 import { createInProcessNetwork, inProcessTransport } from "./transports/inProcess.js";
 import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
+import { RpcBoundaryError } from "./errors.js";
 
 /**
  * A fake transport whose status + recovery signals can be driven by the test,
@@ -88,6 +89,38 @@ describe("createRpcClient", () => {
 
     await expect(rpc.call("self", "add", [2, 5])).resolves.toBe(7);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("preserves structured error categories across unary and streaming calls", async () => {
+    const network = createInProcessNetwork();
+    const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
+    const b = createRpcClient({ selfId: "b", transport: inProcessTransport("b", network) });
+
+    b.expose("deny", () => {
+      throw new RpcBoundaryError("not allowed", "access", "EACCES");
+    });
+    b.exposeStreaming("deny-stream", async (_request, sink) => {
+      await sink({
+        kind: "error",
+        status: 403,
+        message: "not allowed",
+        code: "EACCES",
+        errorKind: "access",
+      });
+    });
+
+    await expect(a.call("b", "deny", [])).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      message: "not allowed",
+      errorKind: "access",
+      code: "EACCES",
+    });
+    await expect(a.stream("b", "deny-stream", [])).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      message: "not allowed",
+      errorKind: "access",
+      code: "EACCES",
+    });
   });
 
   it("passes caller, origin, args, and provenance-scoped req.rpc through a chain", async () => {

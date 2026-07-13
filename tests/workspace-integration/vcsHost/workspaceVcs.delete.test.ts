@@ -9,8 +9,8 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, logIdForRepo, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
-import type { RefGateBatch } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
+import type { RefGateBatch } from "../../../src/server/services/protectedRefStore.js";
 import { createMainRefAdvanceGate } from "../../../src/server/services/mainAdvanceApproval.js";
 import type { RepoDeletionApprovalCandidate } from "../../../src/server/services/mainAdvanceApproval.js";
 import type { StateAdvancedEvent } from "../../../src/server/buildV2/stateTrigger.js";
@@ -41,13 +41,13 @@ const CALLER = { runtime: { kind: "app", id: "cli" } } as unknown as VerifiedCal
  * composed workspace view. This is the explicit, approval-gated counterpart to
  * `snapshotDir`'s deliberate refusal to INFER deletions from a missing dir.
  */
-describe("WorkspaceVcs — whole-repo deletion", () => {
+describe("GadWorkspaceDO — whole-repo deletion", () => {
   let root: string;
   let workspaceRoot: string;
   let vcs: WorkspaceVcs;
   let gad: TestGad;
   let caller: GadCaller;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
   // Delete/restore approval now flows through the ref gate (classification of
   // null-next / previously-deleted-recreate entries). Tests default to a no-op
   // gate; the denial cases swap in a throwing hook.
@@ -71,7 +71,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     // content store over this test's blob dir (production uses blobstore.* RPC).
 
     caller = callerFor(gad);
-    refs = createRefService({
+    refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: (batch) => gateHook(batch),
     });
@@ -95,10 +95,10 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     attachLocalHostBridges(gad.instance, {
       blobsDir: path.join(root, "blobs"),
       refs,
-      gateContext: () => ({ kind: "caller", caller: CALLER }),
+      gateContext: () => ({ kind: "caller" }),
       worktree: {
         project: (repoPath, head, stateHash) => vcs.projectWorktree(repoPath, head, stateHash),
-        dependentRepos: (repoPath) => vcs.deleteDependents(repoPath),
+        dependentRepos: (repoPath) => vcs.repositories.deletionDependents(repoPath),
       },
     });
     await vcs.attachGad(caller); // bootstraps per-repo mains from disk
@@ -107,12 +107,41 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     await fsp.rm(root, { recursive: true, force: true });
   });
 
-  const repoPaths = async () => (await vcs.discoverRepos()).map((r) => r.repoPath);
+  const repoPaths = async () => (await vcs.repositories.discover()).map((r) => r.repoPath);
   const worktreeHead = (repoPath: string, head: string) =>
     caller.call<{ stateHash: string } | null>("resolveWorktreeHead", {
       logId: logIdForRepo(repoPath),
       head,
     });
+  const lifecycleDo = () =>
+    gad.instance as unknown as {
+      vcsDeleteRepo(input: {
+        repoPath: string;
+        actor: { id: string; kind: string };
+        force?: boolean;
+      }): Promise<{
+        repoPath: string;
+        archived: boolean;
+        archiveHead: string | null;
+        removedPaths: string[];
+        dependents: string[];
+        stateHash: string;
+      }>;
+      vcsRestoreRepo(input: { repoPath: string; actor: { id: string; kind: string } }): Promise<{
+        repoPath: string;
+        restored: boolean;
+        fromArchiveHead: string | null;
+        restoredPaths: string[];
+        stateHash: string;
+      }>;
+    };
+  const deleteRepo = (input: {
+    repoPath: string;
+    actor: { id: string; kind: string };
+    force?: boolean;
+  }) => lifecycleDo().vcsDeleteRepo(input);
+  const restoreRepo = (input: { repoPath: string; actor: { id: string; kind: string } }) =>
+    lifecycleDo().vcsRestoreRepo(input);
   // Fork a repo onto a context head (what an agent's context does): a working
   // edit folded into a deliberate commit, which is what creates the ctx head.
   async function forkCtx(ctxId: string, repoPath: string, file: string, body: string) {
@@ -132,7 +161,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     const events: StateAdvancedEvent[] = [];
     const off = vcs.onStateAdvanced((e) => events.push(e));
 
-    const result = await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    const result = await deleteRepo({ repoPath: "packages/foo", actor: USER });
     off();
 
     // Archived (recoverable) + reported the removed path.
@@ -144,7 +173,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     expect(await repoPaths()).not.toContain("packages/foo");
     expect(await repoPaths()).toContain("packages/bar");
     expect(await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo")).toBeNull();
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect(await vcs.readFile(view.stateHash, "packages/foo/index.ts")).toBeNull();
     expect(await vcs.readFile(view.stateHash, "packages/bar/index.ts")).not.toBeNull();
 
@@ -174,9 +203,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     };
 
     try {
-      await expect(
-        vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
-      ).rejects.toThrow(/archive unavailable/);
+      await expect(deleteRepo({ repoPath: "packages/foo", actor: USER })).rejects.toThrow(
+        /archive unavailable/
+      );
     } finally {
       instance.archiveRepoMain = originalArchive;
     }
@@ -195,7 +224,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       stateHash: expect.stringMatching(/^state:/),
     });
 
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
 
     // The main ref is REMOVED (a null-next CAS). The host keeps no movement log
     // (Phase 5: semantics-free CAS); delete/restore classification is DO-owned.
@@ -204,13 +233,13 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     expect(refs.readMain("packages/bar")).not.toBeNull();
 
     // Restore re-adopts the archived head onto a freshly re-created main ref.
-    await vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await restoreRepo({ repoPath: "packages/foo", actor: USER });
     const restored = refs.readMain("packages/foo");
     expect(restored?.stateHash).toBe(await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo"));
   });
 
   it("lets a fresh repo at the same path start clean (no inherited history)", async () => {
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
 
     // Re-create the repo on disk with new content and re-seed its main.
     await fsp.mkdir(path.join(workspaceRoot, "packages/foo"), { recursive: true });
@@ -224,7 +253,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     // The new main's log is fresh — a single seed commit, not the old lineage.
     const log = await gad.instance.vcsLog("packages/foo", 50, VCS_MAIN_HEAD);
     expect(log.length).toBe(1);
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
       kind: "text",
       text: expect.stringContaining("reborn"),
@@ -239,9 +268,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       seen.push(batch);
       throw new Error("denied by user");
     };
-    await expect(
-      vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
-    ).rejects.toThrow(/denied by user/);
+    await expect(deleteRepo({ repoPath: "packages/foo", actor: USER })).rejects.toThrow(
+      /denied by user/
+    );
 
     // The gate saw exactly one delete-shaped entry (next: null) for the target —
     // the removal is classified from the CAS shape, not an operation label.
@@ -256,18 +285,16 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   });
 
   it("refuses to delete the meta repo and unknown repos", async () => {
-    await expect(vcs.deleteRepo({ repoPath: "meta", actor: USER, caller: CALLER })).rejects.toThrow(
-      /meta/
+    await expect(deleteRepo({ repoPath: "meta", actor: USER })).rejects.toThrow(/meta/);
+    await expect(deleteRepo({ repoPath: "packages/ghost", actor: USER })).rejects.toThrow(
+      /no committed `main`/
     );
-    await expect(
-      vcs.deleteRepo({ repoPath: "packages/ghost", actor: USER, caller: CALLER })
-    ).rejects.toThrow(/no committed `main`/);
   });
 
   it("refuses to resurrect a deleted repo via a stale context's push", async () => {
     // An agent forked the repo onto its context head BEFORE the deletion.
     await forkCtx("agent-1", "packages/foo", "index.ts", "export const x = 99;\n");
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
 
     // The stale context still carries its ctx head; a push must NOT recreate main.
     await expect(
@@ -288,7 +315,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     await forkCtx("agent-1", "packages/foo", "index.ts", "export const x = 2;\n");
     await forkCtx("agent-1", "packages/newbie", "index.ts", "export const n = 1;\n");
     // The existing repo is deleted out from under the context.
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
 
     const status = await vcs.contextStatus("agent-1");
     // The deleted repo is flagged so the agent sees it BEFORE a push fails.
@@ -303,17 +330,17 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   });
 
   it("restores a deleted repo from its archive, re-adding it to global state", async () => {
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
     expect(await repoPaths()).not.toContain("packages/foo");
 
-    const result = await vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    const result = await restoreRepo({ repoPath: "packages/foo", actor: USER });
     expect(result.restored).toBe(true);
     expect(result.fromArchiveHead).toBeTruthy();
     expect(result.restoredPaths).toContain("packages/foo/index.ts");
 
     // Back in global state with its original content + working tree.
     expect(await repoPaths()).toContain("packages/foo");
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
       kind: "text",
       text: expect.stringContaining("x = 1"),
@@ -327,7 +354,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   });
 
   it("fails to restore when a different repo was slotted in at the path", async () => {
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
     // A DIFFERENT repo is created at the same path after the deletion.
     await fsp.mkdir(path.join(workspaceRoot, "packages/foo"), { recursive: true });
     await fsp.writeFile(
@@ -336,11 +363,11 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     );
     await vcs.ensureRepoLogsFromDisk();
 
-    await expect(
-      vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
-    ).rejects.toThrow(/already occupies that path/);
+    await expect(restoreRepo({ repoPath: "packages/foo", actor: USER })).rejects.toThrow(
+      /already occupies that path/
+    );
     // The occupant is untouched.
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
       kind: "text",
       text: expect.stringContaining("usurper"),
@@ -350,13 +377,13 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   it("fails to restore a path with no archived history", async () => {
     // A path that never existed: no live main (passes the occupancy guard) and
     // nothing archived to recover.
-    await expect(
-      vcs.restoreRepo({ repoPath: "packages/ghost", actor: USER, caller: CALLER })
-    ).rejects.toThrow(/no archived history/);
+    await expect(restoreRepo({ repoPath: "packages/ghost", actor: USER })).rejects.toThrow(
+      /no archived history/
+    );
   });
 
   it("classifies the restore at the ref gate and aborts on denial", async () => {
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
     // The re-creating updateMains is a restore-shaped entry (expectedOld null on
     // a previously-deleted repo); a gate denial throws before the ref is created.
     const seen: RefGateBatch[] = [];
@@ -364,9 +391,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       seen.push(batch);
       throw new Error("restore denied");
     };
-    await expect(
-      vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
-    ).rejects.toThrow(/restore denied/);
+    await expect(restoreRepo({ repoPath: "packages/foo", actor: USER })).rejects.toThrow(
+      /restore denied/
+    );
     // The gate saw a restore-shaped entry: null old (a new ref) with a non-null
     // next on a previously-deleted repo. Restore classification is DO-owned; the
     // host CAS only sees the null-old create shape.
@@ -400,15 +427,15 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
         },
       },
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
-      workspaceViewWithReposAt: (overrides) => vcs.workspaceViewWithReposAt(overrides),
+      workspaceViewWithReposAt: (overrides) => vcs.repositories.workspaceViewWithReposAt(overrides),
       computeDeleteDependents: async (repoPath) => {
         dependentsCalls += 1;
-        return vcs.deleteDependents(repoPath);
+        return vcs.repositories.deletionDependents(repoPath);
       },
     });
     gateHook = (batch) => realGate(batch);
 
-    await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await deleteRepo({ repoPath: "packages/foo", actor: USER });
     // Exactly one severe deletion prompt, carrying host-computed file count and
     // the (host-computed, empty here) dependents list. No advance prompt.
     expect(deletions).toHaveLength(1);
@@ -416,7 +443,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     expect(dependentsCalls).toBe(1);
     expect(advances).toHaveLength(0);
 
-    await vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    await restoreRepo({ repoPath: "packages/foo", actor: USER });
     // Restore raised a plain add-repo advance prompt (the re-created ref's tree,
     // all files added) — NOT a second deletion prompt.
     expect(advances).toHaveLength(1);
@@ -426,7 +453,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   });
 
   it("keeps an archived (deleted) lineage's content in the owner-derived GC live set", async () => {
-    const del = await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    const del = await deleteRepo({ repoPath: "packages/foo", actor: USER });
     const archivedState = (await worktreeHead("packages/foo", del.archiveHead!))!.stateHash;
     const files = await vcs.worktrees.listStateFiles(archivedState);
     expect(files.length).toBeGreaterThan(0);
@@ -439,13 +466,12 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       expect(gc.liveBlobDigests).toContain(f.content_hash);
     }
     // And it stays restorable after a mark pass.
-    const restored = await vcs.restoreRepo({
+    const restored = await restoreRepo({
       repoPath: "packages/foo",
       actor: USER,
-      caller: CALLER,
     });
     expect(restored.restored).toBe(true);
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
       kind: "text",
       text: expect.stringContaining("x = 1"),

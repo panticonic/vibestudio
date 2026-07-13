@@ -1,0 +1,15 @@
+{
+  "name": "@vibestudio/sqlite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/sqlite/src"
+  }
+}

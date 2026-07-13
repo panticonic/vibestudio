@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Process spawning abstraction (Electron utilityProcess / Node.js child_process)",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -13,7 +16,8 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
-    "dev": "tsc --project tsconfig.build.json --watch"
+    "dev": "tsc --project tsconfig.build.json --watch",
+    "test": "cd ../.. && vitest run packages/process-adapter/src"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

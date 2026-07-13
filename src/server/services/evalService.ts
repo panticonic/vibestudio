@@ -1,7 +1,9 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { evalMethods } from "@vibestudio/shared/serviceSchemas/eval";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { evalMethods, type EvalRunArgs } from "@vibestudio/service-schemas/eval";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import type { DODispatch } from "../doDispatch.js";
+import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -33,7 +35,7 @@ function parseDoRef(
  * poll backstop surfaces it — so this is fire-and-forget.
  */
 async function pushEvalComplete(
-  doDispatch: DODispatch,
+  doDispatch: HeldDoDispatcher,
   agentRef: string | undefined,
   channelId: string | undefined,
   runId: string,
@@ -55,7 +57,7 @@ async function pushEvalComplete(
 }
 
 async function runHeldAndDeliver(
-  doDispatch: DODispatch,
+  doDispatch: HeldDoDispatcher,
   evalDoRef: { source: string; className: string; objectKey: string },
   runId: string,
   agentRef: string | undefined,
@@ -129,7 +131,7 @@ interface EvalParentMeta {
  */
 export function createEvalService(deps: {
   /** Generic DO dispatcher — used to invoke `run`/`reset` on the per-owner EvalDO. */
-  doDispatch: DODispatch;
+  doDispatch: HeldDoDispatcher;
   /**
    * The single owner of WorkspaceDO entity state. Eval registers the EvalDO
    * entity via `store.activate`, which pairs the durable write with the server
@@ -308,85 +310,82 @@ export function createEvalService(deps: {
     }
   }
 
+  type EvalRoute = { ownerId?: string; contextId?: string; subKey?: string };
+
+  async function resolveOwnerForCaller(
+    ctx: ServiceContext,
+    requested: EvalRoute
+  ): Promise<EvalOwner> {
+    return await resolveOwner(
+      ctx.caller.runtime.kind,
+      ctx.caller.runtime.id,
+      requested,
+      ctx.caller.agentBinding
+    );
+  }
+
+  async function evalDoRefFor(
+    ctx: ServiceContext,
+    route: EvalRoute
+  ): Promise<{ source: string; className: string; objectKey: string }> {
+    const owner = await resolveOwnerForCaller(ctx, route);
+    const { objectKey } = await ensureEvalDO(
+      owner,
+      route.subKey ?? "default",
+      ctx.caller.subject?.userId
+    );
+    return { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+  }
+
+  async function prepareRun(
+    ctx: ServiceContext,
+    runArgs: EvalRunArgs
+  ): Promise<{
+    evalDoRef: { source: string; className: string; objectKey: string };
+    assembledArgs: Record<string, unknown>;
+    agentRef: string | undefined;
+  }> {
+    assertRunSource(runArgs);
+    const ownerId = ctx.caller.runtime.id;
+    const owner = await resolveOwnerForCaller(ctx, runArgs);
+    const { objectKey } = await ensureEvalDO(
+      owner,
+      runArgs.subKey ?? "default",
+      ctx.caller.subject?.userId
+    );
+    const isAgent = ctx.caller.runtime.kind === "do" && Boolean(runArgs.channelId);
+    const chatBinding = isAgent ? { channelId: runArgs.channelId, agentRef: ownerId } : {};
+    const parent = (await resolveParentPanel(ownerId)) ?? undefined;
+    return {
+      evalDoRef: { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+      assembledArgs: {
+        code: runArgs.code,
+        path: runArgs.path,
+        sourcePath: runArgs.sourcePath,
+        reset: runArgs.reset,
+        syntax: runArgs.syntax,
+        imports: runArgs.imports,
+        contextId: owner.contextId,
+        gatewayToken: mintGatewayToken(objectKey),
+        parent,
+        timeoutMs: runArgs.timeoutMs,
+        readOnly: runArgs.readOnly,
+        ...chatBinding,
+      },
+      agentRef: isAgent ? ownerId : undefined,
+    };
+  }
+
   return {
     name: "eval",
     description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
     policy: { allowed: ["panel", "app", "worker", "do", "extension", "shell", "server", "agent"] },
     methods: evalMethods,
-    handler: async (ctx, method, args) => {
-      const ownerId = ctx.caller.runtime.id;
-      // Bind resolveOwner to this connection's verified caller — including the
-      // host-verified agent entity binding (plan §6.4), which the EvalDO trusts
-      // over any client-supplied owner/context.
-      const resolveOwnerForCaller = (requested: { ownerId?: string; contextId?: string }) =>
-        resolveOwner(ctx.caller.runtime.kind, ownerId, requested, ctx.caller.agentBinding);
-
-      type EvalRunArgs = {
-        ownerId?: string;
-        contextId?: string;
-        subKey?: string;
-        channelId?: string;
-        code?: string;
-        path?: string;
-        sourcePath?: string;
-        reset?: boolean;
-        syntax?: "javascript" | "typescript" | "jsx" | "tsx";
-        imports?: Record<string, string>;
-        runId?: string;
-        timeoutMs?: number;
-        readOnly?: boolean;
-      };
-
-      // Resolve owner/objectKey + assemble the server-authoritative run args (gatewayToken, parent,
-      // chat binding). Shared by `run` (held) and `startRun` (async).
-      const prepareRun = async (
-        runArgs: EvalRunArgs
-      ): Promise<{
-        evalDoRef: { source: string; className: string; objectKey: string };
-        assembledArgs: Record<string, unknown>;
-        agentRef: string | undefined;
-      }> => {
-        assertRunSource(runArgs);
-        const owner = await resolveOwnerForCaller({
-          ownerId: runArgs.ownerId,
-          contextId: runArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          runArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        // Give the sandbox a `chat` binding ONLY when an agent DO supplies a channelId — the EvalDO
-        // forwards every chat op back to this agent (agentRef = the verified caller). CLI/panel
-        // callers (non-"do") get no chat.
-        const isAgent = ctx.caller.runtime.kind === "do" && Boolean(runArgs.channelId);
-        const chatBinding = isAgent ? { channelId: runArgs.channelId, agentRef: ownerId } : {};
-        // The eval's portable `parent` = the verified caller's nearest panel ancestor. Server-side.
-        const parent = (await resolveParentPanel(ownerId)) ?? undefined;
-        return {
-          evalDoRef: { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
-          assembledArgs: {
-            code: runArgs.code,
-            path: runArgs.path,
-            sourcePath: runArgs.sourcePath,
-            reset: runArgs.reset,
-            syntax: runArgs.syntax,
-            imports: runArgs.imports,
-            contextId: owner.contextId,
-            gatewayToken: mintGatewayToken(objectKey),
-            parent,
-            timeoutMs: runArgs.timeoutMs,
-            readOnly: runArgs.readOnly,
-            ...chatBinding,
-          },
-          agentRef: isAgent ? ownerId : undefined,
-        };
-      };
-
-      if (method === "run") {
+    handler: defineServiceHandler("eval", evalMethods, {
+      run: async (ctx, [runArgs]) => {
         // Held synchronous run for connection-holding callers (panels over WS, CLI). The EvalDO
         // runs in a held handler; the caller holds its own leg. One request, one result.
-        const { evalDoRef, assembledArgs } = await prepareRun((args[0] ?? {}) as EvalRunArgs);
+        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs);
         const activityId = `eval:held:${randomUUID()}`;
         deps.activity?.begin(activityId);
         try {
@@ -394,19 +393,21 @@ export function createEvalService(deps: {
         } finally {
           deps.activity?.end(activityId);
         }
-      }
-
-      if (method === "startRun") {
+      },
+      startRun: async (ctx, [runArgs]) => {
         // Async run for a caller that can't hold a connection (an agent). Insert the row (so getRun
         // works immediately), kick off the held execution + completion push on a background Node
         // task, and return the runId at once.
-        const runArgs = (args[0] ?? {}) as EvalRunArgs;
         const runId = runArgs.runId ?? randomUUID();
-        const { evalDoRef, assembledArgs, agentRef } = await prepareRun(runArgs);
-        const { status } = (await deps.doDispatch.dispatch(evalDoRef, "startRun", {
+        const { evalDoRef, assembledArgs, agentRef } = await prepareRun(ctx, runArgs);
+        const started = await deps.doDispatch.dispatch(evalDoRef, "startRun", {
           ...assembledArgs,
           runId,
-        })) as { runId: string; status: string };
+        });
+        const status =
+          started && typeof started === "object" && "status" in started
+            ? String(started.status)
+            : "unknown";
         // Kick the held execution ONLY for a FRESH (pending) row. A deferRedrive re-issue of an
         // already-`running`/`done` run must NOT spawn a second held executeRun (idempotent startRun
         // returns the existing status). A stuck `pending` (held task died pre-dispatch) is re-kicked.
@@ -421,141 +422,29 @@ export function createEvalService(deps: {
           ).finally(() => deps.activity?.end(`eval:${runId}`));
         }
         return { runId };
-      }
-
-      if (method === "getRun") {
-        const getArgs = (args[0] ?? {}) as {
-          ownerId?: string;
-          contextId?: string;
-          subKey?: string;
-          runId: string;
-        };
-        const owner = await resolveOwnerForCaller({
-          ownerId: getArgs.ownerId,
-          contextId: getArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          getArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        return deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
-          "getRun",
-          getArgs.runId
-        );
-      }
-      if (method === "readScopeTextPage") {
-        const pageArgs = (args[0] ?? {}) as {
-          ownerId?: string;
-          contextId?: string;
-          subKey?: string;
-          key: string;
-          offset: number;
-          limit: number;
-        };
-        const owner = await resolveOwnerForCaller({
-          ownerId: pageArgs.ownerId,
-          contextId: pageArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          pageArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        return deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+      },
+      getRun: async (ctx, [getArgs]) =>
+        deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs), "getRun", getArgs.runId),
+      readScopeTextPage: async (ctx, [pageArgs]) =>
+        deps.doDispatch.dispatch(
+          await evalDoRefFor(ctx, pageArgs),
           "readScopeTextPage",
           pageArgs.key,
           pageArgs.offset,
           pageArgs.limit
-        );
-      }
-      if (method === "deleteScopeValue") {
-        const deleteArgs = (args[0] ?? {}) as {
-          ownerId?: string;
-          contextId?: string;
-          subKey?: string;
-          key: string;
-        };
-        const owner = await resolveOwnerForCaller({
-          ownerId: deleteArgs.ownerId,
-          contextId: deleteArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          deleteArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        return deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+        ),
+      deleteScopeValue: async (ctx, [deleteArgs]) =>
+        deps.doDispatch.dispatch(
+          await evalDoRefFor(ctx, deleteArgs),
           "deleteScopeValue",
           deleteArgs.key
-        );
-      }
-      if (method === "reset") {
-        const resetArgs = (args[0] ?? {}) as {
-          ownerId?: string;
-          contextId?: string;
-          subKey?: string;
-        };
-        const owner = await resolveOwnerForCaller({
-          ownerId: resetArgs.ownerId,
-          contextId: resetArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          resetArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        return deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
-          "reset"
-        );
-      }
-      if (method === "cancel") {
-        const cancelArgs = (args[0] ?? {}) as {
-          ownerId?: string;
-          contextId?: string;
-          subKey?: string;
-          runId: string;
-        };
-        const owner = await resolveOwnerForCaller({
-          ownerId: cancelArgs.ownerId,
-          contextId: cancelArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          cancelArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        return deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
-          "cancel",
-          cancelArgs.runId
-        );
-      }
-      if (method === "forceReset") {
-        const forceArgs = (args[0] ?? {}) as {
-          ownerId?: string;
-          contextId?: string;
-          subKey?: string;
-        };
-        const owner = await resolveOwnerForCaller({
-          ownerId: forceArgs.ownerId,
-          contextId: forceArgs.contextId,
-        });
-        const { objectKey } = await ensureEvalDO(
-          owner,
-          forceArgs.subKey ?? "default",
-          ctx.caller.subject?.userId
-        );
-        return deps.doDispatch.dispatch(
-          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
-          "forceReset"
-        );
-      }
-      throw new Error(`eval: unknown method ${method}`);
-    },
+        ),
+      reset: async (ctx, [resetArgs = {}]) =>
+        deps.doDispatch.dispatch(await evalDoRefFor(ctx, resetArgs), "reset"),
+      cancel: async (ctx, [cancelArgs]) =>
+        deps.doDispatch.dispatch(await evalDoRefFor(ctx, cancelArgs), "cancel", cancelArgs.runId),
+      forceReset: async (ctx, [forceArgs = {}]) =>
+        deps.doDispatch.dispatch(await evalDoRefFor(ctx, forceArgs), "forceReset"),
+    }),
   };
 }

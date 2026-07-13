@@ -32,7 +32,11 @@ describe("workspace config source", () => {
     const readFile = vi.fn(async () => textFile(MANIFEST));
     const ensureFresh = vi.fn(async () => ({ stateHash: "state:disk" }));
     const workspaceView = vi.fn(async () => ({ stateHash: "state:protected" }));
-    const vcs: StartupWorkspaceConfigVcsReader = { readFile, ensureFresh, workspaceView };
+    const vcs: StartupWorkspaceConfigVcsReader = {
+      readFile,
+      ensureFresh,
+      repositories: { workspaceView },
+    };
 
     const result = await readStartupWorkspaceConfig(
       vcs,
@@ -51,7 +55,11 @@ describe("workspace config source", () => {
     const readFile = vi.fn(async () => textFile(MANIFEST));
     const ensureFresh = vi.fn(async () => ({ stateHash: "state:disk" }));
     const workspaceView = vi.fn(async () => ({ stateHash: "state:protected" }));
-    const vcs: StartupWorkspaceConfigVcsReader = { readFile, ensureFresh, workspaceView };
+    const vcs: StartupWorkspaceConfigVcsReader = {
+      readFile,
+      ensureFresh,
+      repositories: { workspaceView },
+    };
 
     const result = await readStartupWorkspaceConfig(vcs, { listMains: () => [] }, WORKSPACE_PATH);
 

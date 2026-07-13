@@ -2,12 +2,19 @@
   "name": "@vibestudio/git",
   "version": "0.1.0",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./formatting": {
+      "types": "./dist/formatting.d.ts",
+      "default": "./dist/formatting.js"
     }
   },
   "files": [
@@ -15,7 +22,8 @@
   ],
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
-    "dev": "tsc --project tsconfig.build.json --watch"
+    "dev": "tsc --project tsconfig.build.json --watch",
+    "test": "cd ../.. && vitest run packages/git/src"
   },
   "dependencies": {
     "@vibestudio/types": "workspace:*",

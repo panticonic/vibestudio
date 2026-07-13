@@ -1,0 +1,26 @@
+{
+  "name": "@vibestudio/shell-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/shell-core/src"
+  },
+  "dependencies": {
+    "@vibestudio/dev-log": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/workspace-contracts": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "vitest": "^3.2.4"
+  }
+}

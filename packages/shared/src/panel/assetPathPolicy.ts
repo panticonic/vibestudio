@@ -2,7 +2,7 @@
  * Panel-origin gateway path policy — the allowlist of gateway paths reachable
  * from the panel/loopback origin.
  *
- * The panel-asset façades (desktop `src/main/panelAssetFacade.ts`, mobile
+ * The panel-asset façades (Node `src/node/panelAssets/panelAssetFacade.ts`, mobile
  * `workspace/apps/mobile/src/services/panelAssetFacade.ts`) and the panel
  * runtime's `gatewayFetch` all tunnel webview-originated requests to the
  * server's `gateway.fetch` RPC (`src/server/services/gatewayFetchService.ts`),

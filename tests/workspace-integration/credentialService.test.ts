@@ -26,8 +26,8 @@ import type {
   ManagedCredentialSummary,
   CredentialUseGrant,
   StoredCredentialSummary,
-} from "../../packages/shared/src/credentials/types.js";
-import type { ClientConfigRecord } from "../../packages/shared/src/credentials/clientConfigStore.js";
+} from "@vibestudio/credential-client/types";
+import type { ClientConfigRecord } from "@vibestudio/credential-client/clientConfigStore";
 import { createCredentialService } from "../../src/server/services/credentialService.js";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { DEFERRED_RESULT, isDeferredResult } from "@vibestudio/shared/serviceDispatcher";

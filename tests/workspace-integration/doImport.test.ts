@@ -3,7 +3,7 @@
  * §6 "Git import", §8-P4; kills Motivation finding 2 structurally).
  *
  * Drives the REAL git-bridge core (`GitBridge`) against the REAL gad-store DO
- * with in-process host bridges (RefService + content store over a blob dir),
+ * with in-process host bridges (ProtectedRefStore + content store over a blob dir),
  * mirroring the doVcsPush harness. Exercises the full new flow end-to-end:
  *
  *   git checkout on disk → bridge scans + mirrors + ingests onto a NON-MAIN
@@ -29,7 +29,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { GitBridge, type BridgeHost } from "../../workspace/extensions/git-bridge/bridge.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../src/server/services/protectedRefStore.js";
 import {
   ensureLayout,
   getBytes,
@@ -62,7 +62,7 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
   let repoDir: string;
   let gad: TestGad;
   let doi: GadWorkspaceDO;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
   let gateCalls: Array<{ entries: unknown[]; gateContext: unknown }>;
   let buildValidateCalls: number;
   let bridge: GitBridge;
@@ -78,7 +78,7 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
     doi = gad.instance;
     gateCalls = [];
     buildValidateCalls = 0;
-    refs = createRefService({
+    refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       // The main-advance approval gate. A git import advances a repo's main, so
       // it flows through here exactly like a push — recorded for assertions.

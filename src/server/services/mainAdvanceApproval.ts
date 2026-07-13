@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { stateLayout } from "../stateLayout.js";
 import {
   unitChangeSessionGrantKey,
   type UnitMetaChangeApprovalProvider,
@@ -15,7 +16,7 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
-import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./refService.js";
+import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./protectedRefStore.js";
 
 const WORKSPACE_REPO_WRITE_CAPABILITY = "workspace-repo-write";
 // Deliberately DISTINCT from the write capability: a generic
@@ -82,7 +83,7 @@ export type RefAdvanceGateContext =
     };
 
 /**
- * The RefService gate for protected `main` refs — THE single approval path for
+ * The ProtectedRefStore gate for protected `main` refs — THE single approval path for
  * every main advance (step 6 of docs/blob-addressed-cleanly.md). It computes
  * the AUTHORITATIVE diff itself from the CAS'd trees (`expectedOld` → `next`)
  * via the content store; callers may propose summaries, but the prompt's
@@ -382,7 +383,7 @@ export class FileMetaApprovalGrantStore implements MetaApprovalGrantStore {
   private grants = new Map<string, number>();
 
   constructor(opts: { statePath: string }) {
-    this.filePath = path.join(opts.statePath, "units", "meta-approval-grants.json");
+    this.filePath = stateLayout(opts.statePath).units.metaApprovalGrantsFile;
     this.load();
   }
 

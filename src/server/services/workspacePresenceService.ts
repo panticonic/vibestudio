@@ -26,14 +26,13 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext, CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import type { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import {
-  workspacePresenceMethods,
-  type WorkspacePresenceEntry,
-} from "@vibestudio/shared/serviceSchemas/workspacePresence";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { IdentityDb } from "@vibestudio/identity/identityDb";
+import type { WorkspacePresenceEntry } from "@vibestudio/shared/workspacePresence";
+import { workspacePresenceMethods } from "@vibestudio/service-schemas/workspacePresence";
 
-export type { WorkspacePresenceEntry } from "@vibestudio/shared/serviceSchemas/workspacePresence";
+export type { WorkspacePresenceEntry } from "@vibestudio/shared/workspacePresence";
 
 /**
  * The synthetic in-process principal (WP0 §5.4). It carries `userId: "system"`
@@ -234,14 +233,9 @@ export function createWorkspacePresenceService(
     // for a mutually-trusting team, not a security gate.
     policy: { allowed: ["server", "shell", "app", "panel"] },
     methods: workspacePresenceMethods,
-    handler: async (_ctx: ServiceContext, method: string) => {
-      switch (method) {
-        case "list":
-          return list();
-        default:
-          throw new Error(`Unknown workspacePresence method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("workspacePresence", workspacePresenceMethods, {
+      list: () => list(),
+    }),
   };
 
   return { definition, list, dispose: () => unsubscribe() };

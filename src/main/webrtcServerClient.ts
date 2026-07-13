@@ -37,7 +37,7 @@ import type {
   PeerConnectionProvider,
   RtcCandidateType,
 } from "@vibestudio/rpc/transports/webrtcPeer";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { authMethods } from "@vibestudio/service-schemas/auth";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type {
@@ -342,7 +342,7 @@ async function buildNativePipe(): Promise<{
   provider: PeerConnectionProvider;
   webSocketImpl: unknown;
 }> {
-  const { createNodeDatachannelProvider } = await import("./webrtc/nodeDatachannelPeer.js");
+  const { createNodeDatachannelProvider } = await import("../node/webrtc/nodeDatachannelPeer.js");
   const { default: WS } = (await import("ws")) as unknown as {
     default: new (url: string) => unknown;
   };

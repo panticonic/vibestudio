@@ -2,7 +2,7 @@ import {
   HubWorkspaceEntrySchema,
   HubWorkspaceRouteSchema,
   hubControlMethods,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import {
   createTypedServiceClient,
   type TypedServiceClient,

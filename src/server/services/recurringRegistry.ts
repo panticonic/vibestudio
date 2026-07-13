@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { parseWorkspaceConfigContentWithId } from "@vibestudio/shared/workspace/configParser";
+import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 import type {
   WorkspaceHeartbeatDecl,
   WorkspaceRecurringDecl,
-} from "@vibestudio/shared/workspace/types";
+} from "@vibestudio/workspace-contracts/types";
 import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { UnitMetaChangeApprovalProvider } from "@vibestudio/unit-host";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { RecurringJobRow } from "../internalDOs/workspaceDO.js";
 
@@ -164,7 +164,7 @@ export function declToJobRow(decl: WorkspaceRecurringDecl, now: number): Recurri
 // ── registry service ─────────────────────────────────────────────────────────
 
 export interface RecurringRegistryDeps {
-  doDispatch: DODispatch;
+  doDispatch: DoDispatcher;
   workspaceId: string;
   /** Read the current `recurring:` declarations (from the loaded config). */
   loadRecurring: () => WorkspaceRecurringDecl[];
@@ -349,7 +349,7 @@ export class RecurringRegistry {
 }
 
 export interface HeartbeatDeclarationRegistryDeps {
-  doDispatch: DODispatch;
+  doDispatch: DoDispatcher;
   workspaceId: string;
   loadHeartbeats: () => WorkspaceHeartbeatDecl[];
 }

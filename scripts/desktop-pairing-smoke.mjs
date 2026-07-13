@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end desktop pairing smoke over WebRTC. Uses the deployed hosted
 // signaling service by default, starts the normal `vibestudio remote serve` hub,
-// mints a workspace invite through `remote invite`, then launches
+// consumes the fresh desktop root invite from the strict ready-file contract, then launches
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
@@ -31,8 +31,9 @@ import {
   createConnectDeepLink,
   parseConnectLink,
   parseSignalingEndpoint,
-} from "./cli/lib/connect-utils.mjs";
-import { createRemoteServeArgs, mintRemoteInvite } from "./cli/lib/smoke-remote-server.mjs";
+} from "./cli/lib/connect-grammar.generated.mjs";
+import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import { createRemoteServeArgs, requireRootInvite } from "./cli/lib/smoke-remote-server.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
@@ -129,8 +130,8 @@ Runner options:
   --help                    Show this help message.
 
 By default the smoke starts the normal remote-serve hub without a signaling
-override, mints an invite with remote invite --workspace default, verifies that
-the invite uses ${DEFAULT_SIGNAL_URL}, and pairs through the deployed service.
+override, consumes its fresh desktop root invite from the ready file, verifies
+that the invite uses ${DEFAULT_SIGNAL_URL}, and pairs through the deployed service.
 Use --local-signaling for an offline Miniflare run.
 
 Requires the native node-datachannel module: run \`pnpm rebuild node-datachannel\`
@@ -209,7 +210,7 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs) {
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
-      return JSON.parse(content);
+      return parseHubReadyPayload(JSON.parse(content));
     } catch {
       await sleep(250);
     }
@@ -362,7 +363,10 @@ async function waitForDesktopShell(app, timeoutMs) {
     }
 
     if (snapshots.some((snapshot) => snapshot.hasLaunchGateApproval)) {
-      const clicked = await clickDesktopButton(app, /^(Trust and (start|connect)|Approve and (start|connect))$/i);
+      const clicked = await clickDesktopButton(
+        app,
+        /^(Trust and (start|connect)|Approve and (start|connect))$/i
+      );
       if (clicked) {
         clickedApprovals += 1;
         console.log("[desktop-smoke] Approved desktop workspace app launch gate");
@@ -521,11 +525,11 @@ async function waitForRenderedPanel(app, timeoutMs) {
             true
           );
           if (
-            dom.hasHostChrome
-            || dom.hasLaunchGateApproval
-            || dom.readyState !== "complete"
-            || dom.childCount < 4
-            || dom.text.length < 12
+            dom.hasHostChrome ||
+            dom.hasLaunchGateApproval ||
+            dom.readyState !== "complete" ||
+            dom.childCount < 4 ||
+            dom.text.length < 12
           ) {
             continue;
           }
@@ -579,8 +583,7 @@ async function waitForRenderedPanel(app, timeoutMs) {
     });
 
     const rendered = latest.find(
-      (entry) =>
-        entry.uniqueBuckets >= 8 && entry.dominantRatio < 0.995 && entry.lumaStdDev >= 3
+      (entry) => entry.uniqueBuckets >= 8 && entry.dominantRatio < 0.995 && entry.lumaStdDev >= 3
     );
     if (rendered) return rendered;
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -744,14 +747,8 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now())
     );
 
-    // 3. Follow the deployed flow: ask the loopback hub to start/select the
-    // workspace and mint the child answerer's WebRTC invite.
-    const invite = await mintRemoteInvite({
-      repoRoot,
-      env: serverEnv,
-      port: ready.gatewayPort,
-      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
-    });
+    // 3. Follow the deployed first-device flow through the strict ready-file handoff.
+    const invite = requireRootInvite(ready, "desktop");
     const loggedLink = invite.pairUrl;
     const deepLink = buildConnectDeepLinkFromLog(loggedLink);
     const parsed = parseConnectLink(deepLink);

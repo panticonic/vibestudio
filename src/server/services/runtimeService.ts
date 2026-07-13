@@ -12,11 +12,12 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   runtimeMethods,
   type ClonedEntity,
   type CloneContextResult,
-} from "@vibestudio/shared/serviceSchemas/runtime";
+} from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
@@ -1050,81 +1051,32 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     description: "Runtime entity creation and retirement",
     policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
     methods: runtimeMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "createEntity": {
-          const [spec] = args as [RuntimeEntityCreateSpec];
-          return await createEntity(ctx.caller, spec);
-        }
-        case "retireEntity": {
-          const [{ id, removeContext }] = args as [{ id: string; removeContext?: boolean }];
-          await retireEntity(ctx.caller, id, removeContext);
-          return;
-        }
-        case "listEntities": {
-          const [{ kind } = {}] = args as [{ kind?: string }?];
-          return await listEntities(kind);
-        }
-        case "resolveContext": {
-          const [id] = args as [string];
-          return await resolveContext(id);
-        }
-        case "createContext": {
-          const [{ contextId }] = args as [{ contextId?: string }];
-          return await createContext(ctx.caller, { contextId });
-        }
-        case "cloneContext": {
-          const [cloneArgs] = args as [
-            {
-              sourceContextId: string;
-              include?: string[];
-              recursive?: boolean;
-              targetKey?: string;
-            },
-          ];
-          return await cloneContext(ctx.caller, cloneArgs);
-        }
-        case "destroyContext": {
-          const [{ contextId, recursive }] = args as [{ contextId: string; recursive?: boolean }];
-          await destroyContext(ctx.caller, { contextId, recursive });
-          return;
-        }
-        case "listOwnedContexts": {
-          const [listArgs] = args as [{ contextId: string; kind?: ContextEdgeKind }];
-          return await listOwnedContexts(listArgs);
-        }
-        case "recordContextEdge": {
-          const [edgeArgs] = args as [
-            {
-              contextId: string;
-              ownerContextId: string;
-              kind: ContextEdgeKind;
-              ownerEntityId?: string;
-            },
-          ];
-          await recordContextEdge(ctx.caller, edgeArgs);
-          return;
-        }
-        case "createSubagentContext": {
-          const [subArgs] = args as [
-            { parentContextId: string; ownerEntityId: string; targetKey: string },
-          ];
-          return await createSubagentContext(ctx.caller, subArgs);
-        }
-        case "setTitle": {
-          // Access is enforced by the per-method policy on `runtimeMethods.setTitle`
-          // (allowed: panel/app/worker/do), checked by the dispatcher before this
-          // handler runs. We deliberately do NOT re-gate caller kind here — declared
-          // policy == enforced, with a single source of truth (no handler-side narrowing).
-          const [title, options] = args as [string | null, { explicit?: boolean } | undefined];
-          await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {
-            explicit: options?.explicit === true,
-          });
-          return;
-        }
-        default:
-          throw new Error(`Unknown runtime method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("runtime", runtimeMethods, {
+      createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
+      retireEntity: async (ctx, [{ id, removeContext }]) => {
+        await retireEntity(ctx.caller, id, removeContext);
+      },
+      listEntities: (_ctx, [input]) => listEntities(input?.kind),
+      resolveContext: (_ctx, [id]) => resolveContext(id),
+      createContext: (ctx, [{ contextId }]) => createContext(ctx.caller, { contextId }),
+      cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),
+      destroyContext: async (ctx, [{ contextId, recursive }]) => {
+        await destroyContext(ctx.caller, { contextId, recursive });
+      },
+      listOwnedContexts: (_ctx, [listArgs]) => listOwnedContexts(listArgs),
+      recordContextEdge: async (ctx, [edgeArgs]) => {
+        await recordContextEdge(ctx.caller, edgeArgs);
+      },
+      createSubagentContext: (ctx, [subArgs]) => createSubagentContext(ctx.caller, subArgs),
+      setTitle: async (ctx, [title, options]) => {
+        // Access is enforced by the per-method policy on `runtimeMethods.setTitle`
+        // (allowed: panel/app/worker/do), checked by the dispatcher before this
+        // handler runs. We deliberately do NOT re-gate caller kind here — declared
+        // policy == enforced, with a single source of truth (no handler-side narrowing).
+        await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {
+          explicit: options?.explicit === true,
+        });
+      },
+    }),
   };
 }

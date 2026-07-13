@@ -15,7 +15,7 @@ import type {
   BuildMetadata,
 } from "./buildV2/buildStore.js";
 import type { CdpBridge } from "./cdpBridge.js";
-import { CONFIG_LOADER_JS } from "./configLoader.js";
+import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("PanelHttpServer");
@@ -516,7 +516,7 @@ export class PanelHttpServer {
         "Content-Type": "application/javascript; charset=utf-8",
         "Cache-Control": "no-store",
       });
-      res.end(CONFIG_LOADER_JS);
+      res.end(PANEL_BOOTSTRAP_SCRIPT);
       return true;
     }
     if (pathname === "/__transport.js") {

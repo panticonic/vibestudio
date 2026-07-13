@@ -45,8 +45,8 @@ import {
   parseConnectLink,
 } from "@vibestudio/shared/connect";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
-import { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import { UserStore } from "@vibestudio/shared/users/userStore";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
 import { createRpcClient } from "@vibestudio/rpc";
 import {
   createPairedConnection,
@@ -54,11 +54,11 @@ import {
   type PairedConnection,
 } from "@vibestudio/rpc/transports/pairedConnection";
 import { RpcServer } from "../src/server/rpcServer.js";
-import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
+import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
-import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
-import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
+import { createNodeDatachannelProvider } from "../src/node/webrtc/nodeDatachannelPeer.js";
+import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
 
 const RUN = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

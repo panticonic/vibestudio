@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Vibestudio extension host, registry, and child runtime",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "custom-bundle"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,15 +19,18 @@
     }
   },
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "cd ../.. && vitest run packages/extension-host/src"
   },
   "dependencies": {
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/process-adapter": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/unit-host": "workspace:*",
+    "@vibestudio/workspace": "workspace:*",
     "yaml": "^2.8.1",
     "zod": "^3.24.1"
   },

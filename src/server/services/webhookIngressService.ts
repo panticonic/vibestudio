@@ -1,13 +1,14 @@
 import * as crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import {
   createWebhookIngressSubscriptionSchema as createSubscriptionSchema,
   rotateWebhookIngressSecretSchema as rotateSecretSchema,
   webhookIngressMethods,
-} from "@vibestudio/shared/serviceSchemas/webhookIngress";
+} from "@vibestudio/service-schemas/webhookIngress";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -28,7 +29,7 @@ import {
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
-import type { DODispatch } from "../doDispatch.js";
+import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 
 /**
  * Skew tolerance for the relay envelope timestamp. Generous fail-loud backstop:
@@ -95,7 +96,7 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
 
   constructor(
     private readonly rpc?: RpcCallerLike,
-    private readonly doDispatch?: Pick<DODispatch, "dispatch">
+    private readonly doDispatch?: DoDispatcher
   ) {
     if (!rpc && !doDispatch) {
       throw new Error("DOWebhookIngressStore requires an RPC relay or direct server DO dispatch");
@@ -150,7 +151,7 @@ export interface WebhookIngressServiceDeps {
   store?: WebhookIngressStore;
   rpc?: RpcCallerLike;
   /** Server-internal path for the infrastructure-owned WebhookStoreDO. */
-  doDispatch?: Pick<DODispatch, "dispatch">;
+  doDispatch?: DoDispatcher;
   now?: () => number;
   /**
    * Resolve a trusted internal runtime (currently an owner-scoped EvalDO) to
@@ -588,23 +589,12 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     description: "Generic public webhook ingress subscriptions",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
     methods: webhookIngressMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "createSubscription":
-          return createSubscription(ctx, args[0] as CreateWebhookIngressSubscriptionRequest);
-        case "listSubscriptions":
-          return listSubscriptions(
-            ctx,
-            (args[0] as { includeRevoked?: boolean } | undefined) ?? {}
-          );
-        case "revokeSubscription":
-          return revokeSubscription(ctx, (args[0] as { subscriptionId: string }).subscriptionId);
-        case "rotateSecret":
-          return rotateSecret(ctx, args[0] as RotateWebhookIngressSecretRequest);
-        default:
-          throw new Error(`Unknown webhookIngress method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("webhookIngress", webhookIngressMethods, {
+      createSubscription: (ctx, [input]) => createSubscription(ctx, input),
+      listSubscriptions: (ctx, [input]) => listSubscriptions(ctx, input ?? {}),
+      revokeSubscription: (ctx, [{ subscriptionId }]) => revokeSubscription(ctx, subscriptionId),
+      rotateSecret: (ctx, [input]) => rotateSecret(ctx, input),
+    }),
   };
 
   return {

@@ -13,7 +13,7 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
+import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 
 const __filename = fileURLToPath(import.meta.url);

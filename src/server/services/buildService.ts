@@ -1,7 +1,8 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { buildMethods } from "@vibestudio/shared/serviceSchemas/build";
-import { BUILDABLE_UNIT_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
-import type { BuildSystemV2, BuildUnitOptions } from "../buildV2/index.js";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { buildMethods } from "@vibestudio/service-schemas/build";
+import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import type { BuildSystemV2 } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
 
@@ -17,152 +18,132 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
     policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
     methods: buildMethods,
-    handler: async (_ctx, method, args) => {
-      const bs = deps.buildSystem;
-      switch (method) {
-        case "getBuild": {
-          const options = args[2] as BuildUnitOptions | undefined;
-          return options?.library
-            ? bs.getBuild(args[0] as string, args[1] as string | undefined, {
-                ...options,
-                library: true,
-              })
-            : bs.getBuild(args[0] as string, args[1] as string | undefined, {
-                ...options,
-                library: false,
-              });
-        }
-        case "getBuildNpm":
-          return bs.getBuildNpm(
-            args[0] as string,
-            args[1] as string,
-            args[2] as string[] | undefined
-          );
-        case "getBuildMetadata": {
-          const key = args[0] as string;
-          const build = bs.getBuildByKey(key);
-          if (!build) return null;
-          const diagnostics =
-            diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
-          return diagnostics && diagnostics.length > 0
-            ? { ...build.metadata, diagnostics }
-            : build.metadata;
-        }
-        case "validate":
-          return bs.validate(
-            args[0] as { viewHash: string; repoPaths: string[]; baseViewHash?: string }
-          );
-        case "getBuildReport":
-          return bs.getBuildReport(args[0] as string, args[1] as string | undefined);
-        case "getEffectiveVersion":
-          return bs.getEffectiveVersion(args[0] as string);
-        case "inspectBuildProvenance": {
-          const source = args[0] as string;
-          const graph = bs.getGraph();
-          const exactNode =
-            graph.tryGet(source) ??
-            graph
-              .allNodes()
-              .find((candidate) => candidate.relativePath === source || candidate.path === source);
-          const basenameMatches = exactNode
-            ? []
-            : graph
-                .allNodes()
-                .filter((candidate) => candidate.relativePath.split("/").slice(-1)[0] === source);
-          const node = exactNode ?? (basenameMatches.length === 1 ? basenameMatches[0] : undefined);
-          if (!node && basenameMatches.length > 1) {
-            return {
-              source,
-              found: false,
-              ambiguous: true,
-              workspaceRoot: bs.getWorkspaceRoot(),
-              candidates: basenameMatches.map((candidate) => ({
-                name: candidate.name,
-                kind: candidate.kind,
-                relativePath: candidate.relativePath,
-              })),
-            };
-          }
-          if (!node) {
-            return {
-              source,
-              found: false,
-              workspaceRoot: bs.getWorkspaceRoot(),
-            };
-          }
-          const effectiveVersion = bs.getEffectiveVersion(node.name);
-          const buildKeys = effectiveVersion
-            ? {
-                sourcemap: computeBuildKey(node.name, effectiveVersion, true),
-                production: computeBuildKey(node.name, effectiveVersion, false),
-              }
-            : { sourcemap: null, production: null };
-          const cachedBuilds = Object.fromEntries(
-            Object.entries(buildKeys).map(([kind, key]) => {
-              const build = key ? bs.getBuildByKey(key) : null;
-              return [
-                kind,
-                {
-                  key,
-                  cached: !!build,
-                  artifactCount: build?.artifacts.length ?? 0,
-                  metadata: build?.metadata ?? null,
-                },
-              ];
+    handler: defineServiceHandler("build", buildMethods, {
+      getBuild: (_ctx, [unit, ref, options]) => {
+        const bs = deps.buildSystem;
+        return options?.library
+          ? bs.getBuild(unit, ref, {
+              ...options,
+              library: true,
             })
-          );
+          : bs.getBuild(unit, ref, {
+              ...options,
+              library: false,
+            });
+      },
+      getBuildNpm: (_ctx, [specifier, version, externals]) =>
+        deps.buildSystem.getBuildNpm(specifier, version, externals),
+      getBuildMetadata: (_ctx, [key]) => {
+        const bs = deps.buildSystem;
+        const build = bs.getBuildByKey(key);
+        if (!build) return null;
+        const diagnostics =
+          diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
+        return diagnostics && diagnostics.length > 0
+          ? { ...build.metadata, diagnostics }
+          : build.metadata;
+      },
+      validate: (_ctx, [input]) => deps.buildSystem.validate(input),
+      getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
+      getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
+      inspectBuildProvenance: (_ctx, [source]) => {
+        const bs = deps.buildSystem;
+        const graph = bs.getGraph();
+        const exactNode =
+          graph.tryGet(source) ??
+          graph
+            .allNodes()
+            .find((candidate) => candidate.relativePath === source || candidate.path === source);
+        const basenameMatches = exactNode
+          ? []
+          : graph
+              .allNodes()
+              .filter((candidate) => candidate.relativePath.split("/").slice(-1)[0] === source);
+        const node = exactNode ?? (basenameMatches.length === 1 ? basenameMatches[0] : undefined);
+        if (!node && basenameMatches.length > 1) {
           return {
             source,
-            found: true,
+            found: false,
+            ambiguous: true,
             workspaceRoot: bs.getWorkspaceRoot(),
-            unit: {
-              name: node.name,
-              kind: node.kind,
-              relativePath: node.relativePath,
-              path: node.path,
-            },
-            effectiveVersion,
-            buildKeys,
-            cachedBuilds,
-            recentBuildEvents: bs.listRecentBuildEvents(node.name),
-            diagnostics: bs.getUnitDiagnostics?.(node.name) ?? undefined,
+            candidates: basenameMatches.map((candidate) => ({
+              name: candidate.name,
+              kind: candidate.kind,
+              relativePath: candidate.relativePath,
+            })),
           };
         }
-        case "listRecentBuildEvents":
-          return bs.listRecentBuildEvents(args[0] as string | undefined);
-        case "doctorExtension":
-          return bs.doctorExtension(args[0] as string);
-        case "recompute":
-          return bs.recompute();
-        case "gc":
-          return bs.gc(args[0] as string[]);
-        case "getAboutPages":
-          return bs.getAboutPages();
-        case "hasUnit":
-          return bs.hasUnit(args[0] as string);
-        case "getPanelMetadata": {
-          const node = bs.getGraph().tryGet(args[0] as string);
-          if (!node || node.kind !== "panel") return null;
+        if (!node) {
           return {
-            source: node.relativePath,
-            title: node.manifest.title ?? node.name,
-            description: node.manifest.description,
-            hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
+            source,
+            found: false,
+            workspaceRoot: bs.getWorkspaceRoot(),
           };
         }
-        case "listSkills":
-          return bs
-            .getGraph()
-            .allNodes()
-            .filter((n) => n.name.startsWith(SKILLS_PACKAGE_SCOPE))
-            .map((n) => ({
-              name: n.name,
-              path: n.relativePath,
-              description: n.manifest.description,
-            }));
-        default:
-          throw new Error(`Unknown build method: ${method}`);
-      }
-    },
+        const effectiveVersion = bs.getEffectiveVersion(node.name);
+        const buildKeys = effectiveVersion
+          ? {
+              sourcemap: computeBuildKey(node.name, effectiveVersion, true),
+              production: computeBuildKey(node.name, effectiveVersion, false),
+            }
+          : { sourcemap: null, production: null };
+        const cachedBuilds = Object.fromEntries(
+          Object.entries(buildKeys).map(([kind, key]) => {
+            const build = key ? bs.getBuildByKey(key) : null;
+            return [
+              kind,
+              {
+                key,
+                cached: !!build,
+                artifactCount: build?.artifacts.length ?? 0,
+                metadata: build?.metadata ?? null,
+              },
+            ];
+          })
+        );
+        return {
+          source,
+          found: true,
+          workspaceRoot: bs.getWorkspaceRoot(),
+          unit: {
+            name: node.name,
+            kind: node.kind,
+            relativePath: node.relativePath,
+            path: node.path,
+          },
+          effectiveVersion,
+          buildKeys,
+          cachedBuilds,
+          recentBuildEvents: bs.listRecentBuildEvents(node.name),
+          diagnostics: bs.getUnitDiagnostics?.(node.name) ?? undefined,
+        };
+      },
+      listRecentBuildEvents: (_ctx, [unit]) => deps.buildSystem.listRecentBuildEvents(unit),
+      doctorExtension: (_ctx, [source]) => deps.buildSystem.doctorExtension(source),
+      recompute: () => deps.buildSystem.recompute(),
+      gc: (_ctx, [activeUnits]) => deps.buildSystem.gc(activeUnits),
+      getAboutPages: () => deps.buildSystem.getAboutPages(),
+      hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
+      getPanelMetadata: (_ctx, [unit]) => {
+        const node = deps.buildSystem.getGraph().tryGet(unit);
+        if (!node || node.kind !== "panel") return null;
+        return {
+          source: node.relativePath,
+          title: node.manifest.title ?? node.name,
+          description: node.manifest.description,
+          hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
+        };
+      },
+      listSkills: () =>
+        deps.buildSystem
+          .getGraph()
+          .allNodes()
+          .filter((n) => n.name.startsWith(SKILLS_PACKAGE_SCOPE))
+          .map((n) => ({
+            name: n.name,
+            path: n.relativePath,
+            description: n.manifest.description,
+          })),
+    }),
   };
 }

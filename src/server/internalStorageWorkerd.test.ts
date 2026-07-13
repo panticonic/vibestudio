@@ -13,6 +13,10 @@ import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import {
+  buildWorkerdPrograms,
+  type WorkerdProgramSources,
+} from "../../scripts/build-workerd-programs.mjs";
 
 // Resolve @workspace/* and @vibestudio/* imports to source via the
 // workspace/tsconfig.json path map (same source of truth vitest.config.ts
@@ -56,19 +60,25 @@ const workspaceAliasPlugin: esbuild.Plugin = {
   },
 };
 
+let compiledWorkerdPrograms: WorkerdProgramSources;
+
 beforeAll(async () => {
   mkdirSync("dist", { recursive: true });
-  await esbuild.build({
-    entryPoints: ["src/server/internalDOs/index.ts"],
-    bundle: true,
-    platform: "browser",
-    target: "es2022",
-    format: "esm",
-    outfile: "dist/internal-do.bundle.mjs",
-    conditions: ["worker", "browser"],
-    external: ["node:*", "electron"],
-    logLevel: "silent",
-  });
+  const [, programs] = await Promise.all([
+    esbuild.build({
+      entryPoints: ["src/server/internalDOs/index.ts"],
+      bundle: true,
+      platform: "browser",
+      target: "es2022",
+      format: "esm",
+      outfile: "dist/internal-do.bundle.mjs",
+      conditions: ["worker", "browser"],
+      external: ["node:*", "electron"],
+      logLevel: "silent",
+    }),
+    buildWorkerdPrograms({ write: false }),
+  ]);
+  compiledWorkerdPrograms = programs;
 });
 
 // Loader gateway servers started by harnesses; closed in afterEach. Userland
@@ -107,12 +117,14 @@ async function createWorkerdHarness(
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
+    workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
     getProxyPort: () => 9,
     getSharedEgressPort: () => Promise.resolve(10),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
+    egressSecret: "internal-storage-egress-secret",
     getWorkerdGatewayToken: () => "internal-test-workerd-gateway-token",
     ...managerOverrides,
   } satisfies WorkerdManagerDeps);

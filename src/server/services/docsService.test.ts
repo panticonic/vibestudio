@@ -7,7 +7,7 @@ import type {
   CallerKind,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
-import type { CatalogEntry, CatalogHit } from "@vibestudio/shared/serviceSchemas/docs";
+import type { CatalogEntry, CatalogHit } from "@vibestudio/service-schemas/docs";
 import { createDocsService } from "./docsService.js";
 
 const blobstore: ServiceDefinition = {

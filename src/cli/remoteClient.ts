@@ -10,7 +10,7 @@ import {
   hubControlMethods,
   type HubPairingInvite,
   type HubWorkspaceRoute,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import type { CliStoredPairing } from "./credentialStore.js";
 import { AuthError, UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";

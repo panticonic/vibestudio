@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import os from "node:os";
 import net from "node:net";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
-import { DEFAULT_SIGNAL_URL, resolveSignalingUrl } from "./lib/connect-utils.mjs";
+import { DEFAULT_SIGNAL_URL, resolveSignalingUrl } from "./lib/connect-grammar.generated.mjs";
+import { cliCredentialPath, workspaceIdentityPath } from "./lib/config-paths.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -81,10 +81,7 @@ export function pairedSignalingUrl(credentialFile = cliCredentialFile()) {
 }
 
 function cliCredentialFile() {
-  const configRoot = process.env.XDG_CONFIG_HOME
-    ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
-    : path.join(os.homedir(), ".config", "vibestudio");
-  return path.join(configRoot, "cli-credentials.json");
+  return cliCredentialPath();
 }
 
 export function check(condition, name, ok, fail, meta = {}) {
@@ -96,12 +93,7 @@ export function skip(name, message, meta = {}) {
 }
 
 export function identityDefaultPath(workspace = "default") {
-  // Workspace answerers own their identities beneath the hub's managed
-  // workspace directory. Honor XDG_CONFIG_HOME exactly as env-paths does.
-  const configRoot = process.env.XDG_CONFIG_HOME
-    ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
-    : path.join(os.homedir(), ".config", "vibestudio");
-  return path.join(configRoot, "workspaces", workspace, "state", "webrtc", "identity.pem");
+  return workspaceIdentityPath(workspace);
 }
 
 export function inspectIdentity(identityPath) {

@@ -6,6 +6,7 @@ import {
   SESSION_OPEN,
   SESSION_OPEN_RESULT,
   SESSION_PROTOCOL_VERSION,
+  RPC_CONTRACT_VERSION,
   SESSION_RPC,
   decodeControlFrame,
   encodeControlFrame,
@@ -74,6 +75,7 @@ describe("session control frame codec", () => {
     const frame: SessionControlFrame = {
       t: SESSION_HELLO,
       proto: SESSION_PROTOCOL_VERSION,
+      contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -87,8 +89,10 @@ describe("session control frame codec", () => {
     }
   });
 
-  it("decodes a minimal hello (proto + maxMsg only)", () => {
-    const decoded = decodeControlFrame(JSON.stringify({ t: "hello", proto: 2, maxMsg: 16_384 }));
+  it("decodes a minimal hello with transport and RPC contract versions", () => {
+    const decoded = decodeControlFrame(
+      JSON.stringify({ t: "hello", proto: 2, contractVersion: 1, maxMsg: 16_384 })
+    );
     expect(isSessionHello(decoded)).toBe(true);
   });
 
@@ -111,11 +115,15 @@ describe("session control frame codec", () => {
       expect(() => decodeControlFrame("{not json")).toThrow();
     });
     it("rejects a hello missing its negotiation numbers", () => {
-      expect(() => decodeControlFrame(JSON.stringify({ t: "hello" }))).toThrow(/proto\/maxMsg/);
-      expect(() => decodeControlFrame(JSON.stringify({ t: "hello", proto: "2", maxMsg: 1 }))).toThrow(
-        /proto\/maxMsg/,
+      expect(() => decodeControlFrame(JSON.stringify({ t: "hello" }))).toThrow(
+        /proto\/contractVersion\/maxMsg/
       );
-      expect(() => decodeControlFrame(JSON.stringify({ t: "hello", proto: 2 }))).toThrow(/proto\/maxMsg/);
+      expect(() => decodeControlFrame(JSON.stringify({ t: "hello", proto: "2", maxMsg: 1 }))).toThrow(
+        /proto\/contractVersion\/maxMsg/,
+      );
+      expect(() => decodeControlFrame(JSON.stringify({ t: "hello", proto: 2 }))).toThrow(
+        /proto\/contractVersion\/maxMsg/
+      );
     });
   });
 });

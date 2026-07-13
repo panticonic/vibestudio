@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Vibestudio extension authoring types",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -15,6 +18,7 @@
     "build": "tsc --project tsconfig.build.json"
   },
   "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/unit-host": "workspace:*"
   },

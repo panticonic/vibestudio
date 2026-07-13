@@ -9,7 +9,8 @@ import {
   ServiceError,
   parseServiceMethod,
 } from "@vibestudio/shared/serviceDispatcher";
-import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
+import { RemoteRpcError, RpcBoundaryError } from "@vibestudio/rpc";
 import type { ServiceContext, ServiceHandler } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
@@ -77,6 +78,50 @@ describe("ServiceDispatcher", () => {
       expect(serviceError.message).toContain("boom");
     }
   });
+
+  const boundaryCause = new Error("policy source");
+
+  it.each([
+    {
+      label: "RpcBoundaryError",
+      error: new RpcBoundaryError("permission denied", "access", "EACCES", boundaryCause),
+      errorKind: "access" as const,
+      code: "EACCES",
+      sourceCause: boundaryCause,
+    },
+    {
+      label: "RemoteRpcError",
+      error: new RemoteRpcError("upstream unavailable", "transport", "ECONNRESET"),
+      errorKind: "transport" as const,
+      code: "ECONNRESET",
+      sourceCause: undefined,
+    },
+  ])(
+    "preserves $label provenance when wrapping it",
+    async ({ error, errorKind, code, sourceCause }) => {
+      const sd = new ServiceDispatcher();
+      sd.registerService(
+        makeService("fail", async () => {
+          throw error;
+        })
+      );
+      sd.markInitialized();
+
+      const rejected = await sd.dispatch(ctx, "fail", "run", []).catch((caught) => caught);
+
+      expect(rejected).toBeInstanceOf(ServiceError);
+      expect(rejected).toMatchObject({
+        service: "fail",
+        method: "run",
+        errorKind,
+        code,
+        cause: error,
+      });
+      if (sourceCause) {
+        expect((error as Error & { cause?: unknown }).cause).toBe(sourceCause);
+      }
+    }
+  );
 
   it("registerService warns on overwrite", async () => {
     const sd = new ServiceDispatcher();

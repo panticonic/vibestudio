@@ -187,7 +187,7 @@ export const RULES = [
       "client hubUrl/nested hub credentials are deleted — store one global device credential plus selected child reach",
     includeTests: false,
     files:
-      /^(?:src\/cli\/|src\/main\/services\/(?:remoteCred|deviceCredential)|packages\/shared\/src\/serviceSchemas\/remoteCred|workspace\/apps\/mobile\/src\/)/,
+      /^(?:src\/cli\/|src\/main\/services\/(?:remoteCred|deviceCredential)|packages\/service-schemas\/src\/remoteCred|workspace\/apps\/mobile\/src\/)/,
   },
 ];
 
@@ -216,7 +216,7 @@ export const ALLOWLIST = [
   },
   {
     rule: "single-user-assertion",
-    file: "packages/shared/src/workspace/types.ts",
+    file: "packages/workspace-contracts/src/types.ts",
     substring: "Replaces the single-user",
     reason: "comment describing the retired machine-global lastWorkspaceTarget",
   },

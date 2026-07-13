@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
 // Mocks must be set up before the startupMode module is imported, so we
 // resetModules + re-import in each test.
@@ -24,7 +25,7 @@ const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
   isEphemeral: false,
 }));
 
-vi.mock("@vibestudio/shared/workspace/loader", () => ({
+vi.mock("@vibestudio/workspace/loader", () => ({
   resolveWorkspaceName: () => mockResolveWorkspaceName(),
   consumeDesktopAutoApproveOnce: () => mockConsumeDesktopAutoApproveOnce(),
   resolveOrCreateWorkspace: () => {
@@ -32,7 +33,7 @@ vi.mock("@vibestudio/shared/workspace/loader", () => ({
   },
 }));
 
-vi.mock("@vibestudio/shared/workspace/startup", () => ({
+vi.mock("@vibestudio/workspace/startup", () => ({
   resolveLocalWorkspaceStartup: (opts: unknown) => mockResolveLocalWorkspaceStartup(opts),
 }));
 
@@ -154,7 +155,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(
       mod.workspaceRelaunchArgs("default", [
         "--foo",
-        mod.DEV_WEBRTC_REMOTE_ARG,
+        DEV_WEBRTC_REMOTE_ARG,
         "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
         "vibestudio://panel?v=1&source=about%2Fserver-logs",
       ])

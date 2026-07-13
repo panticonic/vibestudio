@@ -19,13 +19,13 @@ import {
   PAIRING_PROTOCOL_VERSION,
 } from "@vibestudio/shared/connect";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
-import { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import { UserStore } from "@vibestudio/shared/users/userStore";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
 import { RpcServer } from "../src/server/rpcServer.js";
-import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
+import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
-import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
+import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
 
 const execFileAsync = promisify(execFile);
 const RUN_WEBRTC_E2E = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";

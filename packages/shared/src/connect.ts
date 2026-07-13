@@ -10,7 +10,7 @@ export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 export const PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 /** DTLS SHA-256 fingerprint after stripping colons: 32 bytes = 64 hex chars. */
 const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
-const CONNECT_PARAMETER_KEYS = new Set(["room", "fp", "code", "sig", "v", "ice", "srv"]);
+const CONNECT_PARAMETER_KEYS = new Set(["room", "fp", "code", "sig", "v", "ice", "srv", "exp"]);
 /**
  * Current room-per-invite pairing protocol. Parsers require this exact version.
  */
@@ -283,14 +283,18 @@ export function parseConnectLink(raw: string): ConnectLink {
   };
 }
 
-export function resolveSignalingUrl(options: {
-  flag?: string | null;
-  env?: Record<string, string | undefined>;
-  envKeys?: readonly string[];
-  defaultUrl?: string;
-}): SignalingResolution {
+export function resolveSignalingUrl(
+  options: {
+    flag?: string | null;
+    env?: Record<string, string | undefined>;
+    envKeys?: readonly string[];
+    defaultUrl?: string;
+  } = {}
+): SignalingResolution {
   const envKeys = options.envKeys ?? ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
-  const env = options.env ?? {};
+  const env =
+    options.env ??
+    (typeof process === "undefined" ? {} : (process.env as Record<string, string | undefined>));
   const candidates: Array<{ value: string | null | undefined; source: SignalingResolutionSource }> =
     [
       { value: options.flag, source: "flag" },

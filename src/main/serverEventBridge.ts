@@ -3,12 +3,12 @@ import { isValidEventName, type EventName } from "@vibestudio/shared/events";
 import type { PanelTreeSnapshot } from "@vibestudio/shared/types";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import { credentialsMethods } from "@vibestudio/shared/serviceSchemas/credentials";
+import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   HubWorkspaceRouteSchema,
   type HubWorkspaceRoute,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";

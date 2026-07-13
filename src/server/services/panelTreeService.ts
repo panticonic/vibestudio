@@ -1,8 +1,9 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { UserSubject } from "@vibestudio/shared/users/types";
+import type { UserSubject } from "@vibestudio/identity/types";
 import type { PanelAccessOperation } from "@vibestudio/shared/panelAccessPolicy";
-import { panelTreeMethods } from "@vibestudio/shared/serviceSchemas/panelTree";
+import { panelTreeMethods } from "@vibestudio/service-schemas/panelTree";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
@@ -150,6 +151,63 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     }
   }
 
+  async function dispatch(
+    ctx: ServiceContext,
+    method: keyof typeof panelTreeMethods & string,
+    args: unknown[]
+  ): Promise<unknown> {
+    assertAllowedAgentMethod(method, args);
+    await validatePanelSourceBeforeMutation(method, args);
+    const op = operationFor(method, args);
+    if (op) {
+      const target =
+        method === "create"
+          ? await targetForCreate(ctx, args)
+          : await targetFor(
+              ctx,
+              method === "movePanel"
+                ? (args[0] as { panelId: string }).panelId
+                : (args[0] as string)
+            );
+      // Context-changing ops gate on their DESTINATION context, not the
+      // panel's current one. `navigate` carries it in options; `navigateHistory`
+      // moves into a stored history entry whose context can be foreign+existing,
+      // so peek it (non-mutating) before the gate.
+      if (method === "navigate") {
+        const navContextId = (args[2] as { contextId?: string } | undefined)?.contextId;
+        if (typeof navContextId === "string" && navContextId.length > 0) {
+          target.requestedContextId = navContextId;
+        }
+      } else if (method === "navigateHistory") {
+        const destContextId = (await bridge(ctx, "historyTargetContext", args)) as string | null;
+        if (typeof destContextId === "string" && destContextId.length > 0) {
+          target.requestedContextId = destContextId;
+        }
+      }
+      const permission = await requirePanelAccessPermission(deps, ctx, op, target);
+      if (!permission.allowed) {
+        throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
+      }
+    }
+    if (method === "expandIds") {
+      const panelIds = Array.isArray(args[0]) ? (args[0] as string[]) : [];
+      for (const panelId of panelIds) {
+        const target = await targetFor(ctx, panelId);
+        const permission = await requirePanelAccessPermission(
+          deps,
+          ctx,
+          "updatePanelState",
+          target
+        );
+        if (!permission.allowed) {
+          throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
+        }
+      }
+    }
+
+    return bridge(ctx, method, args);
+  }
+
   return {
     name: "panelTree",
     description: "Server-mediated panel tree handles and control operations",
@@ -158,91 +216,36 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     // scoped by resource grants unless they hold the chrome capability.
     policy: { allowed: ["panel", "worker", "do", "shell", "server", "app"] },
     methods: panelTreeMethods,
-    handler: async (ctx, method, args) => {
-      assertAllowedAgentMethod(method, args);
-      await validatePanelSourceBeforeMutation(method, args);
-      const op = operationFor(method, args);
-      if (op) {
-        const target =
-          method === "create"
-            ? await targetForCreate(ctx, args)
-            : await targetFor(
-                ctx,
-                method === "movePanel"
-                  ? (args[0] as { panelId: string }).panelId
-                  : (args[0] as string)
-              );
-        // Context-changing ops gate on their DESTINATION context, not the
-        // panel's current one. `navigate` carries it in options; `navigateHistory`
-        // moves into a stored history entry whose context can be foreign+existing,
-        // so peek it (non-mutating) before the gate.
-        if (method === "navigate") {
-          const navContextId = (args[2] as { contextId?: string } | undefined)?.contextId;
-          if (typeof navContextId === "string" && navContextId.length > 0) {
-            target.requestedContextId = navContextId;
-          }
-        } else if (method === "navigateHistory") {
-          const destContextId = (await bridge(ctx, "historyTargetContext", args)) as string | null;
-          if (typeof destContextId === "string" && destContextId.length > 0) {
-            target.requestedContextId = destContextId;
-          }
-        }
-        const permission = await requirePanelAccessPermission(deps, ctx, op, target);
-        if (!permission.allowed) {
-          throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
-        }
-      }
-      if (method === "expandIds") {
-        const panelIds = Array.isArray(args[0]) ? (args[0] as string[]) : [];
-        for (const panelId of panelIds) {
-          const target = await targetFor(ctx, panelId);
-          const permission = await requirePanelAccessPermission(
-            deps,
-            ctx,
-            "updatePanelState",
-            target
-          );
-          if (!permission.allowed) {
-            throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
-          }
-        }
-      }
-
-      switch (method) {
-        case "ensureLoaded":
-          return bridge(ctx, "ensureLoaded", args);
-        case "focus":
-        case "list":
-        case "roots":
-        case "getTreeSnapshot":
-        case "getFocusedPanelId":
-        case "create":
-        case "getRuntimeLease":
-        case "getStateArgs":
-        case "setStateArgs":
-        case "reload":
-        case "close":
-        case "archive":
-        case "archiveOwnedRoots":
-        case "unload":
-        case "movePanel":
-        case "navigate":
-        case "navigateHistory":
-        case "takeOver":
-        case "openDevTools":
-        case "rebuildPanel":
-        case "rebuildAndReload":
-        case "updatePanelState":
-        case "snapshot":
-        case "callAgent":
-        case "metadata":
-        case "getCollapsedIds":
-        case "setCollapsed":
-        case "expandIds":
-          return bridge(ctx, method, args);
-        default:
-          throw new Error(`Unknown panelTree method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("panelTree", panelTreeMethods, {
+      ensureLoaded: (ctx, args) => dispatch(ctx, "ensureLoaded", args),
+      focus: (ctx, args) => dispatch(ctx, "focus", args),
+      list: (ctx, args) => dispatch(ctx, "list", args),
+      roots: (ctx, args) => dispatch(ctx, "roots", args),
+      getTreeSnapshot: (ctx, args) => dispatch(ctx, "getTreeSnapshot", args),
+      getFocusedPanelId: (ctx, args) => dispatch(ctx, "getFocusedPanelId", args),
+      create: (ctx, args) => dispatch(ctx, "create", args),
+      getRuntimeLease: (ctx, args) => dispatch(ctx, "getRuntimeLease", args),
+      getStateArgs: (ctx, args) => dispatch(ctx, "getStateArgs", args),
+      setStateArgs: (ctx, args) => dispatch(ctx, "setStateArgs", args),
+      reload: (ctx, args) => dispatch(ctx, "reload", args),
+      close: (ctx, args) => dispatch(ctx, "close", args),
+      archive: (ctx, args) => dispatch(ctx, "archive", args),
+      archiveOwnedRoots: (ctx, args) => dispatch(ctx, "archiveOwnedRoots", args),
+      unload: (ctx, args) => dispatch(ctx, "unload", args),
+      movePanel: (ctx, args) => dispatch(ctx, "movePanel", args),
+      navigate: (ctx, args) => dispatch(ctx, "navigate", args),
+      navigateHistory: (ctx, args) => dispatch(ctx, "navigateHistory", args),
+      takeOver: (ctx, args) => dispatch(ctx, "takeOver", args),
+      openDevTools: (ctx, args) => dispatch(ctx, "openDevTools", args),
+      rebuildPanel: (ctx, args) => dispatch(ctx, "rebuildPanel", args),
+      rebuildAndReload: (ctx, args) => dispatch(ctx, "rebuildAndReload", args),
+      updatePanelState: (ctx, args) => dispatch(ctx, "updatePanelState", args),
+      snapshot: (ctx, args) => dispatch(ctx, "snapshot", args),
+      callAgent: (ctx, args) => dispatch(ctx, "callAgent", args),
+      metadata: (ctx, args) => dispatch(ctx, "metadata", args),
+      getCollapsedIds: (ctx, args) => dispatch(ctx, "getCollapsedIds", args),
+      setCollapsed: (ctx, args) => dispatch(ctx, "setCollapsed", args),
+      expandIds: (ctx, args) => dispatch(ctx, "expandIds", args),
+    }),
   };
 }

@@ -1,5 +1,5 @@
-import { ConnectionInfoResponseSchema } from "@vibestudio/shared/serviceSchemas/auth";
-import { HubWorkspaceRouteSchema } from "@vibestudio/shared/serviceSchemas/hubControl";
+import { ConnectionInfoResponseSchema } from "@vibestudio/service-schemas/auth";
+import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { WebRtcConnection } from "./connect.js";
 import type { ShellCredential, ShellPairing } from "./storedCredential.js";
 

@@ -99,16 +99,16 @@ function getPanelState(manager: AutofillManager, wcId: number): TestPanelState {
 
 function createMockPasswordStore() {
   return {
-    getAll: vi.fn().mockReturnValue([]),
-    getForOrigin: vi.fn().mockReturnValue([]),
-    updateLastUsed: vi.fn(),
-    update: vi.fn(),
-    add: vi.fn().mockReturnValue(1),
-    addNeverSave: vi.fn(),
-    isNeverSave: vi.fn().mockReturnValue(false),
-    delete: vi.fn(),
-    listNeverSaveOrigins: vi.fn().mockReturnValue([]),
-    removeNeverSave: vi.fn(),
+    getPasswords: vi.fn().mockReturnValue([]),
+    getPasswordForSite: vi.fn().mockReturnValue([]),
+    updatePasswordLastUsed: vi.fn(),
+    updatePassword: vi.fn(),
+    addPassword: vi.fn().mockReturnValue(1),
+    addNeverSavePassword: vi.fn(),
+    isNeverSavePassword: vi.fn().mockReturnValue(false),
+    deletePassword: vi.fn(),
+    getNeverSavePasswordOrigins: vi.fn().mockReturnValue([]),
+    removeNeverSavePassword: vi.fn(),
   };
 }
 
@@ -252,7 +252,7 @@ describe("AutofillManager", () => {
         "save",
       ]);
 
-      expect(passwordStore.add).toHaveBeenCalledWith({
+      expect(passwordStore.addPassword).toHaveBeenCalledWith({
         url: "https://example.com",
         username: "alice",
         password: "secret",
@@ -276,7 +276,7 @@ describe("AutofillManager", () => {
         "save",
       ]);
 
-      expect(passwordStore.update).toHaveBeenCalledWith(42, { password: "newpass" });
+      expect(passwordStore.updatePassword).toHaveBeenCalledWith(42, { password: "newpass" });
     });
 
     it("'never' action persists to password store", async () => {
@@ -295,8 +295,8 @@ describe("AutofillManager", () => {
         "never",
       ]);
 
-      expect(passwordStore.addNeverSave).toHaveBeenCalledWith("https://example.com");
-      expect(passwordStore.add).not.toHaveBeenCalled();
+      expect(passwordStore.addNeverSavePassword).toHaveBeenCalledWith("https://example.com");
+      expect(passwordStore.addPassword).not.toHaveBeenCalled();
     });
 
     it("'dismiss' action sets temporary suppression without persisting", async () => {
@@ -305,7 +305,7 @@ describe("AutofillManager", () => {
 
       // Attach a webContents so panelState exists
       const wc = createMockWebContents(1);
-      passwordStore.getForOrigin.mockReturnValue([]);
+      passwordStore.getPasswordForSite.mockReturnValue([]);
       manager.attachToWebContents(1, wc);
 
       // Set origin on the state
@@ -324,7 +324,7 @@ describe("AutofillManager", () => {
         "dismiss",
       ]);
 
-      expect(passwordStore.addNeverSave).not.toHaveBeenCalled();
+      expect(passwordStore.addNeverSavePassword).not.toHaveBeenCalled();
       expect(state.dismissedAt).toBeGreaterThan(0);
     });
 
@@ -419,7 +419,7 @@ describe("AutofillManager", () => {
       manager.attachToWebContents(1, wc);
 
       setupWithSnapshot(manager, 1);
-      passwordStore.isNeverSave.mockReturnValue(true);
+      passwordStore.isNeverSavePassword.mockReturnValue(true);
 
       const triggerSpy = vi.spyOn(testManager(manager), "triggerSave").mockResolvedValue(undefined);
       await testManager(manager).addSignal(1, "strong");
@@ -474,7 +474,7 @@ describe("AutofillManager", () => {
       const wc = createMockWebContents(1);
       const existingCred = makeCredential(1, "alice", "same-pass");
 
-      passwordStore.getForOrigin.mockReturnValue([existingCred]);
+      passwordStore.getPasswordForSite.mockReturnValue([existingCred]);
       viewManager.getWebContents.mockReturnValue(wc);
 
       manager.attachToWebContents(1, wc);
@@ -494,7 +494,7 @@ describe("AutofillManager", () => {
 
       await testManager(manager).triggerSave(1, false);
 
-      expect(passwordStore.updateLastUsed).toHaveBeenCalledWith(1);
+      expect(passwordStore.updatePasswordLastUsed).toHaveBeenCalledWith(1);
       expect(eventService.emit).not.toHaveBeenCalled();
     });
 
@@ -534,7 +534,7 @@ describe("AutofillManager", () => {
       const { manager, passwordStore, eventService, viewManager } = createManager();
       const wc = createMockWebContents(1);
 
-      passwordStore.getForOrigin.mockReturnValue([]);
+      passwordStore.getPasswordForSite.mockReturnValue([]);
       viewManager.getWebContents.mockReturnValue(wc);
 
       manager.attachToWebContents(1, wc);
@@ -560,7 +560,7 @@ describe("AutofillManager", () => {
       const { manager, passwordStore, eventService, viewManager } = createManager();
       const wc = createMockWebContents(1);
 
-      passwordStore.getForOrigin.mockReturnValue([]);
+      passwordStore.getPasswordForSite.mockReturnValue([]);
       viewManager.getWebContents.mockReturnValue(wc);
 
       manager.attachToWebContents(1, wc);

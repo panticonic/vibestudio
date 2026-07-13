@@ -5,7 +5,7 @@ import {
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
 } from "@vibestudio/durable";
-import { docsMethods } from "@vibestudio/shared/serviceSchemas/docs";
+import { docsMethods } from "@vibestudio/service-schemas/docs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export class LifecycleProbeDO extends DurableObjectBase {

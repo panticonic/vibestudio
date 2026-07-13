@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { stateLayout } from "./stateLayout.js";
 
 export type RuntimeDiagnosticKind = "panel" | "worker" | "do" | "extension" | "app";
 export type RuntimeDiagnosticLevel = "debug" | "info" | "warn" | "error";
@@ -73,7 +74,7 @@ export class RuntimeDiagnosticsStore {
   private readonly cache = new Map<string, PersistedRuntimeDiagnostics>();
 
   constructor(options: { statePath: string; entryCapacity?: number; errorCapacity?: number }) {
-    this.rootDir = path.join(options.statePath, "runtime-diagnostics");
+    this.rootDir = stateLayout(options.statePath).runtimeDiagnosticsDir;
     this.entryCapacity = options.entryCapacity ?? DEFAULT_ENTRY_CAPACITY;
     this.errorCapacity = options.errorCapacity ?? DEFAULT_ERROR_CAPACITY;
     fs.mkdirSync(this.rootDir, { recursive: true });

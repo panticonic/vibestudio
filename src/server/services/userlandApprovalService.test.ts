@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibestudio/rpc";
 import {
   createVerifiedCaller,
   ServiceAccessError,
@@ -104,10 +103,6 @@ const validRequest = {
 };
 
 describe("userlandApprovalService", () => {
-  it("is routed to the server by default", () => {
-    expect(ELECTRON_LOCAL_SERVICE_NAMES).not.toContain("userlandApproval");
-  });
-
   it("allows panels, workers, DOs, and extensions but rejects shell/server through policy", async () => {
     const { service } = createDeps();
     const dispatcher = new ServiceDispatcher();

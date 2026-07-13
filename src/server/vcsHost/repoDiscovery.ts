@@ -22,7 +22,7 @@ import {
 
 type RepoKind = "build-unit" | "content" | "meta";
 
-interface DiscoveredRepo {
+export interface DiscoveredRepo {
   /** Workspace-relative repo path (e.g. `packages/core`, `projects/vault`, `meta`). */
   repoPath: string;
   kind: RepoKind;

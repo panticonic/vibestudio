@@ -97,6 +97,7 @@ import {
   encodeControlFrame,
 } from "../protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
+import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import type {
   PeerConnectionProvider,
   RtcCandidateType,
@@ -166,6 +167,7 @@ const PIPE_LANE = "__pipe";
 
 export const PIPE_CLOSED_CODE = "PIPE_CLOSED";
 export const FINGERPRINT_MISMATCH_CODE = "DTLS_FINGERPRINT_MISMATCH";
+export const RPC_CONTRACT_MISMATCH_CODE = "RPC_CONTRACT_MISMATCH";
 export const STREAM_RECEIVE_OVERFLOW_CODE = "STREAM_RECEIVE_OVERFLOW";
 /** A logical session is terminally closed (client close / lease revoke / server
  * terminal close) — distinct from an auth failure so callers don't misdiagnose a
@@ -354,6 +356,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   // the new pipe, but leave a still-pending initial connect alone (its caller awaits it).
   let connectResolved = false;
   let closed = false;
+  /** Stable terminal failure retained so every later connect()/ready() observes
+   * the incompatibility that condemned the transport, not a generic close. */
+  let terminalError: Error | null = null;
 
   // --- serialized establish (§3.2) -----------------------------------------
   /** True while an establish attempt is in flight — there is never a second. */
@@ -819,6 +824,15 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       );
       return;
     }
+    if (frame.contractVersion !== RPC_CONTRACT_VERSION) {
+      void hardClose(
+        errorWithCode(
+          `RPC contract mismatch: peer ${frame.contractVersion} (want ${RPC_CONTRACT_VERSION})`,
+          RPC_CONTRACT_MISMATCH_CODE
+        )
+      );
+      return;
+    }
     if (!Number.isFinite(frame.maxMsg) || frame.maxMsg <= 0) {
       onPipeDown(`protocol violation: hello maxMsg ${frame.maxMsg}`);
       return;
@@ -875,6 +889,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       const hello: SessionHelloFrame = {
         t: SESSION_HELLO,
         proto: SESSION_PROTOCOL_VERSION,
+        contractVersion: RPC_CONTRACT_VERSION,
         maxMsg: advertisedMaxMsg,
         ...(options.platform ? { platform: options.platform } : {}),
         keepalive: { ...LOCAL_KEEPALIVE },
@@ -918,6 +933,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   /** Fail everything riding the pipe; status flips to "disconnected" BEFORE any
    * recovery starts (the status contract the shared bootstrap depends on). */
   function failPipe(reason: string): void {
+    const error = errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE);
     setStatus("disconnected");
     stopKeepalive();
     clearHelloTimer();
@@ -942,13 +958,13 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     emitCandidateType(null);
     // Fail loud: reject in-flight streams + server→client bridge calls now; the
     // sessions re-open after recovery (callers retry against a live pipe).
-    inboundMux.closeAll(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
+    inboundMux.closeAll(error);
     for (const [, stream] of activeStreams) {
       stream.offAbort();
-      stream.abortUpload?.(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
+      stream.abortUpload?.(error);
     }
     activeStreams.clear();
-    for (const session of sessions.values()) session.onPipeDown(reason);
+    for (const session of sessions.values()) session.onPipeDown(error);
   }
 
   function clearEstablishDeadline(): void {
@@ -1380,12 +1396,15 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     unrefTimer(nudgeTimer);
   }
 
-  async function hardClose(): Promise<void> {
+  async function hardClose(
+    error: Error = errorWithCode("Transport closed", PIPE_CLOSED_CODE)
+  ): Promise<void> {
     if (closed) return;
     closed = true;
+    terminalError = error;
     // Settle any pending connect promise (initial OR re-armed during recovery) so
     // an awaiting connect()/ready() rejects rather than hanging on a closed pipe.
-    rejectConnect?.(errorWithCode("Transport closed", PIPE_CLOSED_CODE));
+    rejectConnect?.(error);
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -1404,11 +1423,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // Hard close settles every pending at the client layer — a re-drive after
     // this would be wrong, and there is no next pipe anyway (§3.4).
     unflushedRouted.clear();
-    for (const session of all) session.onPipeDown("transport closed");
-    inboundMux.closeAll(errorWithCode("WebRTC transport closed", PIPE_CLOSED_CODE));
+    for (const session of all) session.onPipeDown(error);
+    inboundMux.closeAll(error);
     for (const [, stream] of activeStreams) {
       stream.offAbort();
-      stream.abortUpload?.(errorWithCode("WebRTC transport closed", PIPE_CLOSED_CODE));
+      stream.abortUpload?.(error);
     }
     activeStreams.clear();
     setStatus("disconnected");
@@ -1869,11 +1888,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       }
     }
 
-    onPipeDown(reason: string): void {
+    onPipeDown(error: Error): void {
       this.clearDeadline();
       this.cancelRetry();
       if (this.openPromise && !this.openSettled) {
-        this.openReject?.(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
+        this.openReject?.(error);
       }
       this.openResolve = null;
       this.openReject = null;
@@ -1917,6 +1936,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           type: "response",
           requestId: frame.requestId,
           error: frame.error,
+          errorKind: frame.errorKind,
           errorCode: frame.errorCode,
         },
       };
@@ -2018,7 +2038,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
 
   const transport: WebRtcTransport = {
     async connect(): Promise<void> {
-      if (closed) throw errorWithCode("Transport closed", PIPE_CLOSED_CODE);
+      if (closed) throw terminalError ?? errorWithCode("Transport closed", PIPE_CLOSED_CODE);
       if (status === "connected") return;
       if (connectPromise) return connectPromise;
       connectPromise = new Promise<void>((resolve, reject) => {
@@ -2076,7 +2096,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     openSession(opts: WebRtcSessionOptions): WebRtcSession {
       // Fail loud on a closed transport (bug #8): silently registering a session
       // that can never open leaks it and hangs any ready() awaiter forever.
-      if (closed) throw errorWithCode("Transport closed", PIPE_CLOSED_CODE);
+      if (closed) throw terminalError ?? errorWithCode("Transport closed", PIPE_CLOSED_CODE);
       const session = new SessionImpl(opts);
       // A live duplicate sid is explicitly closed first (§3.3) — the old
       // instance announces its own close while it still owns the map slot.

@@ -1,9 +1,9 @@
 /**
- * forkRepo (history-preserving) against a real gad-store DO. Split out of the
+ * vcsForkRepo (history-preserving) against a real gad-store DO. Split out of the
  * former workspaceVcs.push.test.ts when the host push pipeline was deleted
  * (narrow-host P3): the push scenarios moved to the DO suite
- * (tests/workspace-integration/doVcsPush.test.ts); forkRepo stays a host lifecycle
- * responsibility (P4). Main is seeded via the real edit → commit → push flow,
+ * (tests/workspace-integration/doVcsPush.test.ts). Fork lifecycle is DO-owned
+ * (P4). Main is seeded via the real edit → commit → push flow,
  * now driven through the DO's vcsPush (`pushToMain`).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -17,7 +17,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -32,22 +32,22 @@ function callerFor(gad: TestGad): GadCaller {
   };
 }
 
-const USER = { id: "user", kind: "user" };
+const USER: { id: string; kind: "user" } = { id: "user", kind: "user" };
 const text = (value: string) => ({ kind: "text" as const, text: value });
 
-describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
+describe("GadWorkspaceDO.vcsForkRepo (history-preserving)", () => {
   let root: string;
   let workspaceRoot: string;
   let vcs: WorkspaceVcs;
   let gad: TestGad;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "gadvcs-fork-"));
     workspaceRoot = path.join(root, "workspace");
     await fsp.mkdir(workspaceRoot);
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
-    refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -88,10 +88,13 @@ describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
     await pushToMain(gad, { repoPaths: ["panels/chat"], sourceHead: "ctx:seed", actor: USER });
   }
 
+  const forkRepo = (fromPath: string, toPath: string) =>
+    gad.instance.vcsForkRepo({ fromPath, toPath, actor: USER });
+
   it("forks a repo to a new path, preserving history and rewriting the package name", async () => {
     await seedChat();
 
-    const fork = await vcs.forkRepo("panels/chat", "panels/mychat");
+    const fork = await forkRepo("panels/chat", "panels/mychat");
 
     expect(fork.repoPath).toBe("panels/mychat");
     expect(fork.inherited).toBeGreaterThanOrEqual(1);
@@ -112,14 +115,14 @@ describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
 
   it("rejects forking onto an existing repo", async () => {
     await seedChat();
-    await vcs.forkRepo("panels/chat", "panels/mychat");
-    await expect(vcs.forkRepo("panels/chat", "panels/mychat")).rejects.toThrow(/already exists/);
+    await forkRepo("panels/chat", "panels/mychat");
+    await expect(forkRepo("panels/chat", "panels/mychat")).rejects.toThrow(/already exists/);
   });
 
   it("rejects a taxonomy-invalid destination before creating any destination ref or files", async () => {
     await seedChat();
 
-    await expect(vcs.forkRepo("panels/chat", "packages")).rejects.toThrow(
+    await expect(forkRepo("panels/chat", "packages")).rejects.toThrow(
       /Invalid workspace repo path/
     );
 
@@ -128,6 +131,6 @@ describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
   });
 
   it("rejects forking from a repo with no history", async () => {
-    await expect(vcs.forkRepo("panels/ghost", "panels/clone")).rejects.toThrow(/no history/);
+    await expect(forkRepo("panels/ghost", "panels/clone")).rejects.toThrow(/no history/);
   });
 });

@@ -10,11 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
-import { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import { UserStore } from "@vibestudio/shared/users/userStore";
-import { MembershipStore } from "@vibestudio/shared/users/membership";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
+import { MembershipStore } from "@vibestudio/identity/membership";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
-import { DeviceAuthStore } from "./services/deviceAuthStore.js";
+import { DeviceAuthStore } from "./hostCore/deviceAuthStore.js";
 import {
   applyHubWorkspacePresenceReport,
   buildHubReadyPayload,

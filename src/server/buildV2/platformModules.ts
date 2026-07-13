@@ -13,7 +13,7 @@
  * follows.
  *
  * Related contracts that live elsewhere by necessity:
- *   - `packages/shared/src/workspace/extensionRegistry.ts` — the host-generated
+ *   - `packages/workspace/src/extensionRegistry.ts` — the host-generated
  *     extensions-registry barrel delivered into the runtime SDK package
  *     ({@link RUNTIME_MODULE}). It lives in `@vibestudio/shared` because the
  *     generator is called from the server outside the build system; the sink

@@ -2,11 +2,11 @@ import { AuthError, networkErrorMessage } from "./output.js";
 import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
 import { isWebRtcCredential, type CliStoredPairing } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import type { RpcStreamOptions } from "@vibestudio/rpc";
+import type { RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
 import {
   RefreshAgentResponseSchema,
   RefreshShellResponseSchema,
-} from "@vibestudio/shared/serviceSchemas/auth";
+} from "@vibestudio/service-schemas/auth";
 import type { z } from "zod";
 
 /**
@@ -54,6 +54,21 @@ export type RpcClientCredential =
       Partial<Pick<DeviceCredential, "workspacePairing">>)
   | RawTokenCredential;
 
+/** Shared surface of the persistent WS and WebRTC clients. */
+interface PersistentRpcClient {
+  callTarget<T = unknown>(targetId: string, method: string, args?: unknown[]): Promise<T>;
+  stream(
+    targetId: string,
+    method: string,
+    args?: unknown[],
+    options?: RpcStreamOptions
+  ): Promise<Response>;
+  onEvent(event: string, listener: (payload: unknown, fromId: string) => void): Promise<() => void>;
+  onRecovery(
+    handler: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
+  ): Promise<() => void>;
+}
+
 function isRawTokenCredential(creds: RpcClientCredential): creds is RawTokenCredential {
   return typeof (creds as RawTokenCredential).token === "string";
 }
@@ -73,7 +88,8 @@ export function shellCallerId(deviceId: string): string {
 export class RpcError extends Error {
   constructor(
     message: string,
-    public readonly errorCode?: string
+    public readonly errorCode?: string,
+    public readonly errorKind: RpcErrorKind = "application"
   ) {
     super(message);
     this.name = "RpcError";
@@ -266,10 +282,7 @@ export class RpcClient {
 
   /** Direct service dispatch: `service.method` on the server dispatcher. */
   async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
-    if (this.isWebRtc) {
-      return await this.dispatchWebRtc<T>("main", method, args);
-    }
-    return await this.dispatch<T>("main", method, args);
+    return await this.callTarget<T>("main", method, args);
   }
 
   /** Relay call to a runtime target (worker, DO, panel) by entity/target id. */
@@ -298,13 +311,7 @@ export class RpcClient {
     args: unknown[] = []
   ): Promise<T> {
     this.keepPushOpen = true;
-    if (this.isWebRtc) {
-      const client = await this.ensureWebRtcClient();
-      return targetId === "main"
-        ? await client.call<T>(method, args)
-        : await client.callTarget<T>(targetId, method, args);
-    }
-    const client = await this.ensureWsClient();
+    const client = await this.persistentClient();
     return await client.callTarget<T>(targetId, method, args);
   }
 
@@ -316,12 +323,8 @@ export class RpcClient {
   ): Promise<Response> {
     // Push/stream: WebRTC when the credential is a pairing blob, otherwise the
     // persistent loopback/LAN WebSocket (no more "streaming requires WebRTC").
-    if (this.isWebRtc) {
-      const client = await this.ensureWebRtcClient();
-      return await client.stream(targetId, method, args, options);
-    }
     this.keepPushOpen = true;
-    const client = await this.ensureWsClient();
+    const client = await this.persistentClient();
     return await client.stream(targetId, method, args, options);
   }
 
@@ -330,11 +333,7 @@ export class RpcClient {
     listener: (payload: unknown, fromId: string) => void
   ): Promise<() => void> {
     this.keepPushOpen = true;
-    if (this.isWebRtc) {
-      const client = await this.ensureWebRtcClient();
-      return await client.onEvent(event, listener);
-    }
-    const client = await this.ensureWsClient();
+    const client = await this.persistentClient();
     return await client.onEvent(event, listener);
   }
 
@@ -342,11 +341,7 @@ export class RpcClient {
     handler: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
   ): Promise<() => void> {
     this.keepPushOpen = true;
-    if (this.isWebRtc) {
-      const client = await this.ensureWebRtcClient();
-      return await client.onRecovery(handler);
-    }
-    const client = await this.ensureWsClient();
+    const client = await this.persistentClient();
     return await client.onRecovery(handler);
   }
 
@@ -419,15 +414,29 @@ export class RpcClient {
     }
     // The current HTTP RPC contract is one raw response envelope.
     const message = raw["message"] as
-      | { type?: unknown; result?: unknown; error?: unknown; errorCode?: unknown }
+      | {
+          type?: unknown;
+          result?: unknown;
+          error?: unknown;
+          errorCode?: unknown;
+          errorKind?: unknown;
+        }
       | undefined;
     if (!message || message.type !== "response") {
       throw new RpcError("malformed rpc response (non-envelope or proxy response?)");
     }
     if (typeof message.error === "string") {
+      if (!isRpcErrorKind(message.errorKind)) {
+        throw new RpcError(
+          "malformed rpc error response (missing errorKind)",
+          undefined,
+          "protocol"
+        );
+      }
       throw new RpcError(
         message.error,
-        typeof message.errorCode === "string" ? message.errorCode : undefined
+        typeof message.errorCode === "string" ? message.errorCode : undefined,
+        message.errorKind
       );
     }
     if (!("result" in message)) {
@@ -487,6 +496,11 @@ export class RpcClient {
     return this.webRtcClient;
   }
 
+  /** Select the credential's one persistent push/stream transport. */
+  private persistentClient(): Promise<PersistentRpcClient> {
+    return this.isWebRtc ? this.ensureWebRtcClient() : this.ensureWsClient();
+  }
+
   private ensureWsClient(): Promise<import("./wsClient.js").WsRpcClient> {
     if (!this.wsClient) {
       this.wsClient = import("./wsClient.js")
@@ -515,5 +529,19 @@ function toRpcError(error: unknown): Error {
     typeof (error as { code?: unknown })?.code === "string"
       ? (error as { code?: string }).code
       : undefined;
-  return new RpcError(message, code);
+  const kind = isRpcErrorKind((error as { errorKind?: unknown } | null)?.errorKind)
+    ? (error as { errorKind: RpcErrorKind }).errorKind
+    : "application";
+  return new RpcError(message, code, kind);
+}
+
+function isRpcErrorKind(value: unknown): value is RpcErrorKind {
+  return (
+    value === "access" ||
+    value === "service" ||
+    value === "transport" ||
+    value === "protocol" ||
+    value === "application" ||
+    value === "internal"
+  );
 }

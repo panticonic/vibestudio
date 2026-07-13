@@ -9,19 +9,20 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { IndexablePanel, PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
+import type { PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
 import {
   WORKSPACE_STATE_READ_POLICY as READ_POLICY,
   workspaceStateMethods,
-} from "@vibestudio/shared/serviceSchemas/workspaceState";
-import type { DODispatch } from "../doDispatch.js";
+} from "@vibestudio/service-schemas/workspaceState";
+import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
 export const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
 export interface WorkspaceStateServiceDeps {
-  doDispatch: DODispatch;
+  doDispatch: DoDispatcher;
   workspaceId: string;
   /**
    * Optional hook for mirroring authoritative panel titles into the
@@ -59,158 +60,103 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     description: "Workspace slot/entity state (WorkspaceDO).",
     policy: READ_POLICY,
     methods: workspaceStateMethods,
-    handler: async (_ctx, method, args) => {
-      switch (method) {
-        case "slot.list":
-          return await dispatch<unknown>("slotListOpen", []);
-        case "slot.get": {
-          const [slotId] = args as [string];
-          return await dispatch<unknown>("slotGet", [slotId]);
+    handler: defineServiceHandler("workspace-state", workspaceStateMethods, {
+      "slot.list": () => dispatch<unknown>("slotListOpen", []),
+      "slot.get": (_ctx, [slotId]) => dispatch<unknown>("slotGet", [slotId]),
+      "slot.history": (_ctx, [slotId]) => dispatch<unknown>("slotHistory", [slotId]),
+      "entity.resolveActive": (_ctx, [id]) =>
+        dispatch<EntityRecord | null>("entityResolveActive", [id]),
+      "slot.resolveByEntity": (_ctx, [entityId]) =>
+        dispatch<string | null>("slotResolveByEntity", [entityId]),
+      "slot.create": async (ctx, [input]) => {
+        await dispatch<undefined>("slotCreate", [
+          { ...input, ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}) },
+        ]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.appendHistory": async (_ctx, [slotId, entry]) => {
+        const result = await dispatch<number>("slotAppendHistory", [slotId, entry]);
+        deps.onSlotStateChanged?.();
+        return result;
+      },
+      "slot.setCurrent": async (_ctx, [slotId, entryKey]) => {
+        await dispatch<undefined>("slotSetCurrent", [slotId, entryKey]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.updateCurrentStateArgs": async (_ctx, [slotId, stateArgs]) => {
+        await dispatch<undefined>("slotUpdateCurrentStateArgs", [slotId, stateArgs]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.replaceHistory": async (_ctx, [slotId, entries, cursor]) => {
+        await dispatch<undefined>("slotReplaceHistory", [slotId, entries, cursor]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.setParent": async (_ctx, [slotId, parentSlotId]) => {
+        await dispatch<undefined>("slotSetParent", [slotId, parentSlotId]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.setPosition": async (_ctx, [slotId, positionId]) => {
+        await dispatch<undefined>("slotSetPosition", [slotId, positionId]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.move": async (ctx, [slotId, parentSlotId, positionId]) => {
+        // Ownership attribution comes from the verified caller, never a
+        // caller-supplied fourth wire argument.
+        const ownerUserId = ctx.caller.subject?.userId;
+        await dispatch<undefined>("slotMove", [slotId, parentSlotId, positionId, ownerUserId]);
+        deps.onSlotStateChanged?.();
+      },
+      "slot.close": async (_ctx, [slotId]) => {
+        await dispatch<undefined>("slotClose", [slotId]);
+        deps.onSlotStateChanged?.();
+      },
+      "panel.search": (_ctx, [query, limit]) =>
+        dispatch<PanelSearchResult[]>("panelSearch", [query, limit]),
+      "panel.index": async (_ctx, [input]) => {
+        // The DO returns the slot's current entity id when it stamped a
+        // title onto entities.display_title — we pass that on (rather than
+        // the slot id) so cache mirrors stay keyed correctly.
+        const entityId = await dispatch<string | null>("panelIndex", [input]);
+        if (entityId && input?.title) {
+          deps.onPanelTitleChanged?.(entityId, input.title);
         }
-        case "slot.history": {
-          const [slotId] = args as [string];
-          return await dispatch<unknown>("slotHistory", [slotId]);
+      },
+      "panel.updateTitle": async (_ctx, [slotId, title]) => {
+        const entityId = await dispatch<string | null>("panelUpdateTitle", [slotId, title]);
+        if (entityId) {
+          deps.onPanelTitleChanged?.(entityId, title);
         }
-        case "entity.resolveActive": {
-          const [id] = args as [string];
-          return await dispatch<EntityRecord | null>("entityResolveActive", [id]);
+      },
+      "panel.incrementAccess": async (_ctx, [entityId]) => {
+        await dispatch<undefined>("panelIncrementAccess", [entityId]);
+      },
+      "panel.rebuildIndex": async () => {
+        await dispatch<undefined>("panelRebuildIndex", []);
+      },
+      lifecycleLeaseUpsert: async (_ctx, [input]) => {
+        await dispatch<undefined>("lifecycleLeaseUpsert", [input]);
+      },
+      lifecycleLeaseClear: async (_ctx, [input]) => {
+        await dispatch<undefined>("lifecycleLeaseClear", [input]);
+      },
+      alarmSet: async (_ctx, [input]) => {
+        await dispatch<undefined>("alarmSet", [input]);
+        deps.onAlarmChanged?.();
+      },
+      alarmClear: async (_ctx, [input]) => {
+        await dispatch<undefined>("alarmClear", [input]);
+        deps.onAlarmChanged?.();
+      },
+      heartbeatRegister: async (_ctx, [input]) => {
+        await dispatch<undefined>("heartbeatRegister", [input]);
+        if (isHeartbeatCodeOwnedRegistration(input)) {
+          deps.onHeartbeatRegistryChanged?.();
         }
-        case "slot.resolveByEntity": {
-          const [entityId] = args as [string];
-          return await dispatch<string | null>("slotResolveByEntity", [entityId]);
-        }
-        case "slot.create": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("slotCreate", [input]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.appendHistory": {
-          const [slotId, entry] = args as [string, unknown];
-          const result = await dispatch<number>("slotAppendHistory", [slotId, entry]);
-          deps.onSlotStateChanged?.();
-          return result;
-        }
-        case "slot.setCurrent": {
-          const [slotId, entryKey] = args as [string, string];
-          await dispatch<undefined>("slotSetCurrent", [slotId, entryKey]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.updateCurrentStateArgs": {
-          const [slotId, stateArgs] = args as [string, unknown];
-          await dispatch<undefined>("slotUpdateCurrentStateArgs", [slotId, stateArgs]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.replaceHistory": {
-          const [slotId, entries, cursor] = args as [string, unknown[], number];
-          await dispatch<undefined>("slotReplaceHistory", [slotId, entries, cursor]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.setParent": {
-          const [slotId, parentSlotId] = args as [string, string | null];
-          await dispatch<undefined>("slotSetParent", [slotId, parentSlotId]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.setPosition": {
-          const [slotId, positionId] = args as [string, string];
-          await dispatch<undefined>("slotSetPosition", [slotId, positionId]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.move": {
-          // 4th arg (ownerUserId) is optional — the acting mover's subject for
-          // the WP3 §10.1 subtree re-own; forwarded when present.
-          const [slotId, parentSlotId, positionId, ownerUserId] = args as [
-            string,
-            string | null,
-            string,
-            string | undefined,
-          ];
-          await dispatch<undefined>("slotMove", [slotId, parentSlotId, positionId, ownerUserId]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "slot.close": {
-          const [slotId] = args as [string];
-          await dispatch<undefined>("slotClose", [slotId]);
-          deps.onSlotStateChanged?.();
-          return;
-        }
-        case "panel.search": {
-          const [query, limit] = args as [string, number | undefined];
-          return await dispatch<PanelSearchResult[]>("panelSearch", [query, limit]);
-        }
-        case "panel.index": {
-          const [input] = args as [IndexablePanel];
-          // The DO returns the slot's current entity id when it stamped a
-          // title onto entities.display_title — we pass that on (rather than
-          // the slot id) so cache mirrors stay keyed correctly.
-          const entityId = await dispatch<string | null>("panelIndex", [input]);
-          if (entityId && input?.title) {
-            deps.onPanelTitleChanged?.(entityId, input.title);
-          }
-          return;
-        }
-        case "panel.updateTitle": {
-          const [slotId, title] = args as [string, string];
-          const entityId = await dispatch<string | null>("panelUpdateTitle", [slotId, title]);
-          if (entityId) {
-            deps.onPanelTitleChanged?.(entityId, title);
-          }
-          return;
-        }
-        case "panel.incrementAccess": {
-          const [entityId] = args as [string];
-          await dispatch<undefined>("panelIncrementAccess", [entityId]);
-          return;
-        }
-        case "panel.rebuildIndex": {
-          await dispatch<undefined>("panelRebuildIndex", []);
-          return;
-        }
-        case "lifecycleLeaseUpsert": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("lifecycleLeaseUpsert", [input]);
-          return;
-        }
-        case "lifecycleLeaseClear": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("lifecycleLeaseClear", [input]);
-          return;
-        }
-        case "alarmSet": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("alarmSet", [input]);
-          deps.onAlarmChanged?.();
-          return;
-        }
-        case "alarmClear": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("alarmClear", [input]);
-          deps.onAlarmChanged?.();
-          return;
-        }
-        case "heartbeatRegister": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("heartbeatRegister", [input]);
-          if (isHeartbeatCodeOwnedRegistration(input)) {
-            deps.onHeartbeatRegistryChanged?.();
-          }
-          return;
-        }
-        case "heartbeatRemove": {
-          const [input] = args as [unknown];
-          await dispatch<undefined>("heartbeatRemove", [input]);
-          return;
-        }
-        default:
-          throw new Error(`Unknown workspace-state method: ${method}`);
-      }
-    },
+      },
+      heartbeatRemove: async (_ctx, [input]) => {
+        await dispatch<undefined>("heartbeatRemove", [input]);
+      },
+    }),
   };
 }
 

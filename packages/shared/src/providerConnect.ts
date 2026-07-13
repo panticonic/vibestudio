@@ -7,8 +7,8 @@ import type {
   ConnectCredentialRequest,
   CredentialFlowSpec,
   OAuthLoopbackRedirectStrategy,
-} from "./credentials/types.js";
-import type { CredentialInjection } from "./credentials/urlAudience.js";
+} from "@vibestudio/credential-client/types";
+import type { CredentialInjection } from "@vibestudio/credential-client/urlAudience";
 
 export interface ProviderConnectPreset {
   providerId: string;

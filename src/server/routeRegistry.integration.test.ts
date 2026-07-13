@@ -126,19 +126,19 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("rewrites userland DO routes to /_u/{packedKey}/{path} (UniversalDO facet host)", async () => {
-    const { SingletonRegistry } = await import("@vibestudio/shared/workspace/singletonRegistry");
+    const { SingletonRegistry } = await import("@vibestudio/workspace/singletonRegistry");
     const { encodeUniversalKey } = await import("./doDispatch.js");
     const singletons = new SingletonRegistry([
-      { source: "workers/hello-test", className: "HelloDO", key: "singleton" },
+      { source: "workers/route-fixture", className: "RouteFixtureDO", key: "singleton" },
     ]);
     h.registry.registerDoRoutes(
-      "workers/hello-test",
-      "HelloDO",
+      "workers/route-fixture",
+      "RouteFixtureDO",
       [
         {
-          source: "workers/hello-test",
+          source: "workers/route-fixture",
           path: "/callback",
-          durableObject: { className: "HelloDO" },
+          durableObject: { className: "RouteFixtureDO" },
         },
       ],
       singletons
@@ -146,14 +146,14 @@ describe("RouteRegistry × Gateway integration", () => {
 
     const before = h.workerdPaths.length;
     const { status, body } = await fetchText(
-      `http://127.0.0.1:${h.gatewayPort}/_r/w/workers/hello-test/callback?q=1`
+      `http://127.0.0.1:${h.gatewayPort}/_r/w/workers/route-fixture/callback?q=1`
     );
     expect(status).toBe(200);
     expect(h.workerdPaths.length).toBe(before + 1);
     const packed = encodeURIComponent(
       encodeUniversalKey({
-        source: "workers/hello-test",
-        className: "HelloDO",
+        source: "workers/route-fixture",
+        className: "RouteFixtureDO",
         objectKey: "singleton",
       })
     );
@@ -166,7 +166,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("ensures a DO-backed route before proxying the first request", async () => {
-    const { SingletonRegistry } = await import("@vibestudio/shared/workspace/singletonRegistry");
+    const { SingletonRegistry } = await import("@vibestudio/workspace/singletonRegistry");
     const singletons = new SingletonRegistry([
       { source: "workers/lazy-route", className: "LazyDO", key: "lazy-singleton" },
     ]);
@@ -196,7 +196,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("does not proxy a DO-backed route when lazy ensure fails", async () => {
-    const { SingletonRegistry } = await import("@vibestudio/shared/workspace/singletonRegistry");
+    const { SingletonRegistry } = await import("@vibestudio/workspace/singletonRegistry");
     const singletons = new SingletonRegistry([
       { source: "workers/failing-route", className: "FailingDO", key: "failing-singleton" },
     ]);
@@ -252,7 +252,7 @@ describe("RouteRegistry × Gateway integration", () => {
     const before = h.workerdPaths.length;
 
     const { status, body } = await fetchText(
-      `http://127.0.0.1:${h.gatewayPort}/_w/workers/hello-test/HelloDO/singleton/callback`,
+      `http://127.0.0.1:${h.gatewayPort}/_w/workers/route-fixture/RouteFixtureDO/singleton/callback`,
       { headers: { Authorization: `Bearer ${workerToken}` } }
     );
 

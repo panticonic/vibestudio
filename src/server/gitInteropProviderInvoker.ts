@@ -4,7 +4,7 @@ import {
   type GitInteropProviderArgs,
   type GitInteropProviderMethod,
   type GitInteropProviderResult,
-} from "@vibestudio/shared/serviceSchemas/gitInterop";
+} from "@vibestudio/service-schemas/gitInterop";
 
 export interface GitInteropProviderHost {
   invokeProvider(

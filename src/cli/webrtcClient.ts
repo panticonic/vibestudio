@@ -132,7 +132,7 @@ export class WebRtcRpcClient {
     this.releaseConnectionLock = releaseLock;
     try {
       const { createNodeDatachannelProvider } =
-        await import("../main/webrtc/nodeDatachannelPeer.js");
+        await import("../node/webrtc/nodeDatachannelPeer.js");
       const { default: WS } = (await import("ws")) as unknown as {
         default: new (url: string) => unknown;
       };

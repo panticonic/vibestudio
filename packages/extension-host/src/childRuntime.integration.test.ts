@@ -125,6 +125,7 @@ describe("extension child runtime process", () => {
                   JSON.stringify({
                     type: "ws:auth-result",
                     success: true,
+                    contractVersion: 1,
                   } satisfies WsServerMessage)
                 );
                 return;

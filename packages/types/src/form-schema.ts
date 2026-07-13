@@ -4,7 +4,7 @@
  * Type definitions for forms defined via data, with support for
  * conditionality between fields.
  *
- * Runtime functions (evaluateCondition, isFieldVisible, etc.) live in @workspace/core (form-schema only).
+ * Runtime rendering helpers live beside FormRenderer in @workspace/react.
  */
 
 /**

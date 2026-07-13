@@ -8,7 +8,7 @@ import {
   parseScheduleSpec,
   recurringSpecHash,
 } from "./recurringRegistry.js";
-import type { WorkspaceRecurringDecl } from "@vibestudio/shared/workspace/types";
+import type { WorkspaceRecurringDecl } from "@vibestudio/workspace-contracts/types";
 
 const MIN = 60_000;
 const HOUR = 3_600_000;

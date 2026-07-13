@@ -10,8 +10,9 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
-import { worktreeMethods } from "@vibestudio/shared/serviceSchemas/worktree";
+import { worktreeMethods } from "@vibestudio/service-schemas/worktree";
 
 export interface WorktreeServiceDeps {
   /** The pure disk→CAS scan primitive (WorkspaceVcs.scanWorktree). */
@@ -27,7 +28,7 @@ export interface WorktreeServiceDeps {
   /** The pure CAS→disk projection primitive (WorkspaceVcs.projectWorktree). */
   project(repoPath: string, head: string, stateHash: string): Promise<{ stateHash: string }>;
   /** Content-derived build-graph read: repos whose unit imports `repoPath`
-   *  (WorkspaceVcs.deleteDependents). Dumb data — holds no delete semantics. */
+   *  (WorkspaceRepositories.deletionDependents). Dumb data — holds no delete semantics. */
   dependentRepos(repoPath: string): Promise<string[]>;
   /** Single DO allowed to drive the worktree primitive. */
   getVcsWriterIdentity: () => string | null;
@@ -61,18 +62,19 @@ export function createWorktreeService(deps: WorktreeServiceDeps): ServiceDefinit
       "Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).",
     policy: { allowed: ["do", "shell", "server"] },
     methods: worktreeMethods,
-    handler: async (ctx, method, args) => {
-      assertAuthorized(ctx, method);
-      switch (method) {
-        case "scan":
-          return deps.scan(args[0] as string, args[1] as string);
-        case "project":
-          return deps.project(args[0] as string, args[1] as string, args[2] as string);
-        case "dependentRepos":
-          return deps.dependentRepos(args[0] as string);
-        default:
-          throw new Error(`Unknown worktree method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("worktree", worktreeMethods, {
+      scan: (ctx, [repoPath, head]) => {
+        assertAuthorized(ctx, "scan");
+        return deps.scan(repoPath, head);
+      },
+      project: (ctx, [repoPath, head, stateHash]) => {
+        assertAuthorized(ctx, "project");
+        return deps.project(repoPath, head, stateHash);
+      },
+      dependentRepos: (ctx, [repoPath]) => {
+        assertAuthorized(ctx, "dependentRepos");
+        return deps.dependentRepos(repoPath);
+      },
+    }),
   };
 }

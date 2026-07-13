@@ -32,7 +32,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, logIdForRepo, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -70,7 +70,7 @@ describe("WorkspaceVcs working edits (edit → commit → push)", () => {
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     // The in-process test DO has no RPC gateway; give computeMerge a local
     // content store over this test's blob dir (production uses blobstore.* RPC).
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",

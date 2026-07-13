@@ -1,0 +1,26 @@
+{
+  "name": "@vibestudio/identity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./identityDb": "./src/identityDb.ts",
+    "./identitySchema": "./src/identitySchema.ts",
+    "./membership": "./src/membership.ts",
+    "./revocationCleanup": "./src/revocationCleanup.ts",
+    "./types": "./src/types.ts",
+    "./userStore": "./src/userStore.ts",
+    "./userSubjectSource": "./src/userSubjectSource.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/identity/src"
+  },
+  "dependencies": {
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/sqlite": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

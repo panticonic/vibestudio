@@ -1,9 +1,11 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   permissionsMethods,
   type SavedPermissionGrant,
-} from "@vibestudio/shared/serviceSchemas/permissions";
+} from "@vibestudio/service-schemas/permissions";
 import { capabilityGrantId, type CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   userlandApprovalGrantId,
@@ -22,23 +24,26 @@ export function createPermissionsService(deps: {
   userlandGrants: UserlandApprovalGrantStore;
   credentialUseGrants: CredentialUseGrantStoreLike;
 }): ServiceDefinition {
+  const assertCanManagePermissions = (ctx: ServiceContext, method: string): void => {
+    const privileged = ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
+    if (!privileged && ctx.caller.code?.repoPath !== TRUSTED_PAGE) {
+      throw new ServiceError(
+        SERVICE,
+        method,
+        "Only the trusted Permissions page may inspect grants",
+        "EACCES"
+      );
+    }
+  };
+
   return {
     name: SERVICE,
     description: "Trusted review and revocation of durable permission grants",
     policy: { allowed: ["shell", "app", "panel", "server"] },
     methods: permissionsMethods,
-    handler: async (ctx, method, args) => {
-      const privileged =
-        ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
-      if (!privileged && ctx.caller.code?.repoPath !== TRUSTED_PAGE) {
-        throw new ServiceError(
-          SERVICE,
-          method,
-          "Only the trusted Permissions page may inspect grants",
-          "EACCES"
-        );
-      }
-      if (method === "list") {
+    handler: defineServiceHandler(SERVICE, permissionsMethods, {
+      list: (ctx) => {
+        assertCanManagePermissions(ctx, "list");
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listPersistent()
           .map((grant) => ({
@@ -110,11 +115,9 @@ export function createPermissionsService(deps: {
         return [...sessionCapability, ...capability, ...userland, ...credentialUse].sort(
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
         );
-      }
-      if (method === "revoke") {
-        const [{ kind, id }] = args as [
-          { kind: "capability" | "userland" | "credential-use"; id: string },
-        ];
+      },
+      revoke: async (ctx, [{ kind, id }]) => {
+        assertCanManagePermissions(ctx, "revoke");
         const removed =
           kind === "capability"
             ? deps.capabilityGrants.revokePersistent(id) || deps.capabilityGrants.revokeSession(id)
@@ -122,10 +125,8 @@ export function createPermissionsService(deps: {
               ? deps.userlandGrants.revokePersistent(id)
               : await deps.credentialUseGrants.revoke(id);
         if (!removed)
-          throw new ServiceError(SERVICE, method, "Permission grant not found", "ENOENT");
-        return;
-      }
-      throw new ServiceError(SERVICE, method, `Unknown permissions method: ${method}`, "ENOSYS");
-    },
+          throw new ServiceError(SERVICE, "revoke", "Permission grant not found", "ENOENT");
+      },
+    }),
   };
 }

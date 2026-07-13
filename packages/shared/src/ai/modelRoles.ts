@@ -15,7 +15,7 @@ import type {
   ModelRoleValue,
   ModelConfig,
   StandardModelRole,
-} from "../workspace/types.js";
+} from "@vibestudio/workspace-contracts/types";
 
 /**
  * Resolved model specification with provider, model ID, and optional parameters.

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,6 +37,8 @@ import { channelCommands } from "./channelCommands.js";
 import { contextCommands } from "./contextCommands.js";
 import { panelCommands } from "./panelCommands.js";
 import { systemTestCommands } from "./systemTestCommands.js";
+import { remoteHost } from "./remoteHeadlessHost.js";
+import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
 import { runClaudeGroup } from "./claude/index.js";
 import {
   findCommand,
@@ -51,12 +52,10 @@ import {
 } from "./commandTable.js";
 import {
   AuthError,
-  CliError,
   UsageError,
   jsonMode,
   printError,
   printResult,
-  redactCliSecrets,
   setPlainOutput,
 } from "./output.js";
 
@@ -65,9 +64,6 @@ const require = createRequire(import.meta.url);
 const qrcode = require("qrcode-terminal") as {
   generate(value: string, options?: { small?: boolean }): void;
 };
-const NOT_PAIRED_GUIDANCE =
-  'not paired — run `vibestudio remote pair "<pair-link>"` ' +
-  "(ask a paired administrator to run `vibestudio remote pair-device`)";
 
 // ───────────────────────────────────────────────────────────────────────────
 // remote commands
@@ -817,221 +813,6 @@ const terminalCommands: CliCommand[] = [
   },
 ];
 
-function headlessHostEntryPath(): string {
-  const override = process.env["VIBESTUDIO_HEADLESS_HOST_ENTRY"];
-  if (override) return path.resolve(override);
-  // Root builds copy the headless host bundle to dist/headless-host so the
-  // installed CLI can import plain JS. In-repo dev falls back to app dist or
-  // TS source (the CLI runs under tsx in-repo).
-  const bundledEntry = path.join(repoRoot, "dist", "headless-host", "index.js");
-  const appDistEntry = path.join(repoRoot, "apps", "headless-host", "dist", "index.js");
-  const srcEntry = path.join(repoRoot, "apps", "headless-host", "src", "index.ts");
-  return fs.existsSync(bundledEntry)
-    ? bundledEntry
-    : fs.existsSync(appDistEntry)
-      ? appDistEntry
-      : srcEntry;
-}
-
-async function createWebRtcHeadlessHostOverrides(
-  creds: DeviceCredential & {
-    workspacePairing: NonNullable<DeviceCredential["workspacePairing"]>;
-  },
-  opts: { label?: string }
-): Promise<Record<string, unknown>> {
-  const [{ WebRtcRpcClient }, { startPanelAssetFacade }, { RemoteCdpHostBridgeSocket }] =
-    await Promise.all([
-      import("./webrtcClient.js"),
-      import("../main/panelAssetFacade.js"),
-      import(pathToFileURL(headlessHostEntryPath()).href),
-    ]);
-
-  const clientSessionId = `headless-${randomUUID()}`;
-  const label = opts.label ?? "Headless";
-  const token = `refresh:${creds.deviceId}:${creds.refreshToken}`;
-  const client = new WebRtcRpcClient({
-    pairing: creds.workspacePairing,
-    callerId: `shell:${creds.deviceId}`,
-    getToken: () => token,
-    connectionId: clientSessionId,
-    clientLabel: label,
-    logPrefix: "[headless-webrtc]",
-  });
-  await client.ready();
-
-  let facade: Awaited<ReturnType<typeof startPanelAssetFacade>> | null = null;
-  try {
-    const rpc = {
-      call<T = unknown>(
-        targetId: string,
-        method: string,
-        args: unknown[] = [],
-        options?: unknown
-      ): Promise<T> {
-        void options;
-        return targetId === "main"
-          ? client.call<T>(method, args)
-          : client.callTarget<T>(targetId, method, args);
-      },
-      stream(
-        targetId: string,
-        method: string,
-        args: unknown[] = [],
-        options?: Parameters<import("./webrtcClient.js").WebRtcRpcClient["stream"]>[3]
-      ): Promise<Response> {
-        return client.stream(targetId, method, args, options);
-      },
-    };
-    facade = await startPanelAssetFacade(
-      {
-        stream(service, method, args, options) {
-          return client.stream("main", `${service}.${method}`, args, options);
-        },
-      },
-      {
-        stateDir: path.join(
-          os.homedir(),
-          ".local",
-          "state",
-          "vibestudio",
-          "headless-host",
-          "panel-asset-facade"
-        ),
-      }
-    );
-    const activeFacade = facade;
-
-    const eventListeners = new Set<(event: string, payload: unknown) => void>();
-    const recoveryHandlers = new Set<() => void | Promise<void>>();
-    const cleanups: Array<() => void> = [];
-    cleanups.push(
-      await client.onEvent("panel:runtimeLeaseChanged", (payload) => {
-        for (const listener of eventListeners) listener("panel:runtimeLeaseChanged", payload);
-      })
-    );
-    cleanups.push(
-      await client.onRecovery(async () => {
-        for (const handler of recoveryHandlers) await handler();
-      })
-    );
-
-    return {
-      serverUrl: `http://127.0.0.1:${activeFacade.port}`,
-      clientSessionId,
-      connectionFactory: async () => ({
-        rpc,
-        getToken: () => token,
-        onServerEvent(listener: (event: string, payload: unknown) => void) {
-          eventListeners.add(listener);
-        },
-        onResubscribe(handler: () => void | Promise<void>) {
-          recoveryHandlers.add(handler);
-        },
-        async close() {
-          for (const cleanup of cleanups.splice(0)) cleanup();
-          await client.close();
-        },
-      }),
-      bridgeSocketFactory: () =>
-        new RemoteCdpHostBridgeSocket({
-          rpc,
-          hostConnectionId: clientSessionId,
-        }),
-      cleanup: async () => {
-        for (const cleanup of cleanups.splice(0)) cleanup();
-        await activeFacade.close();
-        await client.close();
-      },
-    };
-  } catch (error) {
-    await facade?.close().catch(() => undefined);
-    await client.close().catch(() => undefined);
-    throw error;
-  }
-}
-
-async function remoteHost(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    return await remoteHostImpl(inv);
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-async function remoteHostImpl(inv: ParsedInvocation): Promise<number> {
-  const flagStr = (name: string): string | undefined =>
-    typeof inv.flags[name] === "string" ? (inv.flags[name] as string) : undefined;
-  const flagMin = (name: string, allowZero = false): number | undefined => {
-    const raw = flagStr(name);
-    if (!raw) return undefined;
-    const minutes = Number(raw);
-    if (!Number.isFinite(minutes) || (!allowZero && minutes <= 0) || (allowZero && minutes < 0)) {
-      throw new UsageError(
-        `--${name} must be ${allowZero ? "zero or a positive number" : "a positive number"}`
-      );
-    }
-    return minutes * 60_000;
-  };
-
-  const creds = loadCliCredentials();
-  if (!creds) {
-    console.error(NOT_PAIRED_GUIDANCE);
-    return 3;
-  }
-  if (!isSelectedWorkspaceUrl(creds.url)) {
-    console.error("stored remote credential is not scoped to a workspace");
-    return 3;
-  }
-  const configOverrides: Record<string, unknown> = await createWebRtcHeadlessHostOverrides(creds, {
-    label: flagStr("label"),
-  });
-  const cleanup =
-    typeof configOverrides["cleanup"] === "function"
-      ? (configOverrides["cleanup"] as () => Promise<void>)
-      : null;
-  delete configOverrides["cleanup"];
-
-  const entry = headlessHostEntryPath();
-  const { HeadlessHost, resolveConfig } = (await import(pathToFileURL(entry).href)) as {
-    HeadlessHost: new (config: unknown) => {
-      start(): Promise<void>;
-      stop(reason: string): Promise<void>;
-      done: Promise<void>;
-    };
-    resolveConfig: (overrides: Record<string, unknown>) => unknown;
-  };
-
-  const maxPanelsRaw = flagStr("max-panels");
-  const maxPanels = maxPanelsRaw === undefined ? undefined : Number(maxPanelsRaw);
-  if (maxPanels !== undefined && (!Number.isInteger(maxPanels) || maxPanels <= 0)) {
-    throw new UsageError("--max-panels must be a positive integer");
-  }
-  const config = resolveConfig({
-    ...configOverrides,
-    label: flagStr("label"),
-    maxPanels,
-    idleUnloadMs: flagMin("idle-unload-min"),
-    idleExitMs: flagMin("idle-exit-min", true),
-    chromiumPath: flagStr("chromium-path"),
-    leanBrowser: inv.flags["lean-browser"] === true,
-  });
-  const host = new HeadlessHost(config);
-  process.on("SIGINT", () => void host.stop("SIGINT"));
-  process.on("SIGTERM", () => void host.stop("SIGTERM"));
-  try {
-    await host.start();
-  } catch (error) {
-    await cleanup?.().catch(() => undefined);
-    throw new CliError(
-      `headless host failed to start: ${redactCliSecrets(error instanceof Error ? error.message : String(error))}`
-    );
-  }
-  await host.done;
-  await cleanup?.().catch(() => undefined);
-  return 0;
-}
-
 const mobileCommands: CliCommand[] = [
   scriptCommand("mobile", "pair", "mobile-pair.mjs", "Start the QR/deep-link pairing server", {
     usage: "vibestudio mobile pair [--port 3030]",
@@ -1165,7 +946,7 @@ export async function main(argv: string[]): Promise<number> {
     printGroupHelp(group);
     return 2;
   }
-  if (command.passthrough && command.passthroughHelp && wantsScriptHelp(subArgs)) {
+  if (command.passthrough && command.passthroughHelp && wantsHelp(subArgs)) {
     return await command.run({ positionals: subArgs, flags: {}, flagsMulti: () => [] }, subArgs);
   }
   if (wantsHelp(subArgs)) {
@@ -1191,15 +972,6 @@ export async function main(argv: string[]): Promise<number> {
 
 /** Whether argv requests command help (--help/-h before any `--` separator). */
 function wantsHelp(args: string[]): boolean {
-  for (const arg of args) {
-    if (arg === "--") return false;
-    if (arg === "--help" || arg === "-h") return true;
-  }
-  return false;
-}
-
-/** Whether argv asks a passthrough script for its own richer help. */
-function wantsScriptHelp(args: string[]): boolean {
   for (const arg of args) {
     if (arg === "--") return false;
     if (arg === "--help" || arg === "-h") return true;

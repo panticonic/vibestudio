@@ -16,18 +16,18 @@ import * as fs from "fs";
 import { execFile } from "node:child_process";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
-import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
 import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
-import { accountProfileSchema } from "@vibestudio/shared/serviceSchemas/account";
+import { stateLayout } from "./stateLayout.js";
+import { accountProfileSchema } from "@vibestudio/service-schemas/account";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
 
@@ -307,15 +307,16 @@ if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
 // =============================================================================
 
 async function main() {
-  const { getUserDataPath, setUserDataPath } = await import("@vibestudio/env-paths");
-  const { loadCentralEnv } = await import("@vibestudio/shared/workspace/loader");
+  const { setUserDataPath } = await import("@vibestudio/env-paths");
+  const { loadCentralEnv } = await import("@vibestudio/workspace/loader");
   const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
     await import("@vibestudio/shared/centralAuth");
-  const { resolveLocalWorkspaceStartup } = await import("@vibestudio/shared/workspace/startup");
+  const { resolveLocalWorkspaceStartup } = await import("@vibestudio/workspace/startup");
   const { TokenManager } = await import("@vibestudio/shared/tokenManager");
   const { ServiceDispatcher } = await import("@vibestudio/shared/serviceDispatcher");
-  const { EventService, createEventsServiceDefinition } =
-    await import("@vibestudio/shared/eventsService");
+  const { EventService } = await import("@vibestudio/shared/eventsService");
+  const { createEventsServiceDefinition } =
+    await import("@vibestudio/service-schemas/bindings/eventsServiceDefinition");
   const { getExistingAppNodeModulesRoots } = await import("@vibestudio/shared/runtimePaths");
   const eventService = new EventService();
   const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
@@ -375,7 +376,7 @@ async function main() {
     throw new Error("Workspace runtime requires its authoritative workspace id from the hub");
   }
 
-  let workspace: import("@vibestudio/shared/workspace/types").Workspace;
+  let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
   let workspaceIsEphemeral = false;
   try {
@@ -405,8 +406,9 @@ async function main() {
 
   // Set user data path to workspace state dir for env-paths compatibility
   setUserDataPath(workspace.statePath);
+  const layout = stateLayout(workspace.statePath);
   // Structured host-log persistence next to the spawn-time stdout log.
-  serverLogStore.attachJsonlSink(path.join(workspace.statePath, "logs"));
+  serverLogStore.attachJsonlSink(layout.logsDir);
 
   // Aliases — used throughout service init below
   const workspacePath = workspace.path;
@@ -418,8 +420,7 @@ async function main() {
   // Parse workspace declarations (singletonObjects + services + routes).
   // Validation (every DO-backed service/route has a matching singleton row)
   // runs eagerly here — bad workspaces fail fast at startup with a clear msg.
-  const { buildWorkspaceDeclarations } =
-    await import("@vibestudio/shared/workspace/singletonRegistry");
+  const { buildWorkspaceDeclarations } = await import("@vibestudio/workspace/singletonRegistry");
   const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
   // The gad-store DO backing the userland `vcs` service — the ONE manifest
   // declaration (services[] row + its singletonObjects row) that names the
@@ -432,7 +433,7 @@ async function main() {
     resolveHostTargetRequiredExtensions,
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
-  } = await import("@vibestudio/shared/workspace/configParser");
+  } = await import("@vibestudio/workspace/configParser");
   const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
   const restartBoundManifestChanges = (
     previousConfig: typeof workspaceConfig,
@@ -597,10 +598,10 @@ async function main() {
   // Forward ref: the graceful shutdown fn is defined at the end of main();
   // hostLifecycle.shutdown and the idle-exit monitor call through this.
   let requestShutdown: () => void = () => process.exit(0);
-  const { DeviceAuthStore } = await import("./services/deviceAuthStore.js");
-  const { IdentityDb } = await import("@vibestudio/shared/users/identityDb");
-  const { UserStore } = await import("@vibestudio/shared/users/userStore");
-  const { MembershipStore } = await import("@vibestudio/shared/users/membership");
+  const { DeviceAuthStore } = await import("./hostCore/deviceAuthStore.js");
+  const { IdentityDb } = await import("@vibestudio/identity/identityDb");
+  const { UserStore } = await import("@vibestudio/identity/userStore");
+  const { MembershipStore } = await import("@vibestudio/identity/membership");
   // A workspace runtime is always hub-managed. Identity and membership live in
   // the hub's single database; the child has a query-only handle and no private
   // fallback store or standalone pairing mode.
@@ -613,8 +614,8 @@ async function main() {
     serverIdPath: path.join(path.dirname(identityDbPath), "server-id.json"),
   });
   const { createHubControlClient } = await import("./services/hubControlService.js");
-  const { HubWorkspaceRouteSchema } = await import("@vibestudio/shared/serviceSchemas/hubControl");
-  const { WorkspaceEntrySchema } = await import("@vibestudio/shared/serviceSchemas/workspace");
+  const { HubWorkspaceRouteSchema } = await import("@vibestudio/service-schemas/hubControl");
+  const { WorkspaceEntrySchema } = await import("@vibestudio/service-schemas/workspace");
   const hubControlClient = createHubControlClient({ hubUrl, controlToken: hubControlToken });
   const listWorkspaceMemberUserIds = (): string[] => {
     const explicit = membershipStore
@@ -713,7 +714,7 @@ async function main() {
   // Every shell/panel/app/agent must resolve to a live user and membership is
   // re-evaluated on WebSocket admission and on every stateless HTTP request.
   const membershipEntryGate = (
-    subject: import("@vibestudio/shared/users/types").UserSubject | undefined
+    subject: import("@vibestudio/identity/types").UserSubject | undefined
   ): boolean => {
     if (subject?.userId === SYSTEM_SUBJECT.userId) return true;
     return subject !== undefined && membershipStore.has(subject.userId, entryWorkspaceId);
@@ -731,10 +732,9 @@ async function main() {
   });
   const workerdGatewayToken = randomBytes(32).toString("hex");
   serverLogStore.addSecret(workerdGatewayToken);
-  const { CredentialStore } = await import("../../packages/shared/src/credentials/store.js");
-  const { ClientConfigStore } =
-    await import("../../packages/shared/src/credentials/clientConfigStore.js");
-  const { AuditLog } = await import("../../packages/shared/src/credentials/audit.js");
+  const { CredentialStore } = await import("@vibestudio/credential-client/store");
+  const { ClientConfigStore } = await import("@vibestudio/credential-client/clientConfigStore");
+  const { AuditLog } = await import("@vibestudio/credential-client/audit");
   const { createEgressProxy } = await import("./services/egressProxy.js");
   const { CredentialLifecycle } = await import("./services/credentialLifecycle.js");
   const { CredentialSessionGrantStore } = await import("./services/credentialSessionGrants.js");
@@ -742,7 +742,7 @@ async function main() {
 
   const credentialStore = new CredentialStore();
   const clientConfigStore = new ClientConfigStore();
-  const auditLog = new AuditLog({ logDir: path.join(statePath, "credentials-audit") });
+  const auditLog = new AuditLog({ logDir: layout.credentialsAuditDir });
   const credentialSessionGrantStore = new CredentialSessionGrantStore();
   const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
@@ -878,6 +878,15 @@ async function main() {
   }
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
   const configuredProtocol = "http" as const;
+  // Resolve the advertised gateway before registering workerd: workerd's
+  // back-channel aliases are a real startup input, not a later lexical side effect.
+  const { resolveHostConfig } = await import("@vibestudio/shared/hostConfig");
+  const hostConfig = resolveHostConfig({
+    workerdPort: 0,
+    gatewayPort: requestedGatewayPort ?? 0,
+    host: args.host,
+    bindHost: args.bindHost,
+  });
   let appHostForGateway: import("./appHost.js").AppHost | null = null;
   let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
   type TrustedUnitHostInstance =
@@ -978,13 +987,13 @@ async function main() {
   // Constructed BEFORE WorkspaceVcs (which routes every main read/advance
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
-  const { createRefService } = await import("./services/refService.js");
+  const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
   const { collectTreeReachableDigests } = await import("./services/blobstoreService.js");
   const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
   const vcsInvocationTable = new VcsInvocationTable();
-  let mainRefGate: import("./services/refService.js").RefGate | null = null;
-  const refService = createRefService({
-    statePath: path.join(getUserDataPath(), "refs"),
+  let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
+  const protectedRefStore = createProtectedRefStore({
+    statePath: layout.refsDir,
     gate: async (batch) => {
       if (!mainRefGate) {
         throw new Error("Protected-ref gate not initialized yet (server still starting)");
@@ -995,10 +1004,7 @@ async function main() {
     // be a well-formed tree fully present in the content store — userland can
     // never pin a hash the store cannot expand. Fails closed before any prompt.
     assertTreeComplete: async (stateHash) => {
-      const reachable = await collectTreeReachableDigests(
-        path.join(getUserDataPath(), "blobs"),
-        stateHash
-      );
+      const reachable = await collectTreeReachableDigests(layout.blobsDir, stateHash);
       if (!reachable) {
         throw new Error(
           `updateMains: candidate main ${stateHash} is not fully present in the content store`
@@ -1011,11 +1017,11 @@ async function main() {
   // vibestudio.vcs.v1) once workerd is up (see "vcsAttach" below).
   const { WorkspaceVcs } = await import("./vcsHost/workspaceVcs.js");
   const workspaceVcs = new WorkspaceVcs({
-    blobsDir: path.join(getUserDataPath(), "blobs"),
+    blobsDir: layout.blobsDir,
     workspaceRoot: workspacePath,
-    contextsRoot: path.join(statePath, ".contexts"),
-    buildSourcesRoot: path.join(getUserDataPath(), "build-sources"),
-    refs: refService,
+    contextsRoot: layout.contextsDir,
+    buildSourcesRoot: layout.buildSourcesDir,
+    refs: protectedRefStore,
     // Per-context marker bookkeeping (§6.2): stamp the workspace id and the
     // loopback HTTP(S) server base URL into `.vibestudio-context.json` at folder
     // materialization. `getServerUrl` is a getter because the gateway port is
@@ -1036,8 +1042,8 @@ async function main() {
     // exported source dir to that checkout. Off in production ephemeral
     // workspaces, which have no source dir. Computed just above this block.
     extractMainToSource: devTemplateMirrorDir !== null,
-    // On-behalf-of attribution for chrome merge-to-main (register row 12): the
-    // host mints an invocation record and threads it to the DO's `vcsMerge`.
+    // On-behalf-of attribution for the narrow host-authored metadata publish:
+    // the host mints an invocation record and threads it to the writer DO.
     vcsInvocations: vcsInvocationTable,
     getVcsWriterIdentity: () => {
       const binding = resolveVcsStoreBinding(workspaceDecls);
@@ -1068,7 +1074,7 @@ async function main() {
   // GAD branch forks of the workspace main head, materialized from the CAS.
   const { ContextFolderManager } = await import("@vibestudio/shared/contextFolderManager");
   const contextFolderManager = new ContextFolderManager({
-    contextsRoot: path.join(statePath, ".contexts"),
+    contextsRoot: layout.contextsDir,
     materialize: (contextId) => workspaceVcs.ensureContextFolder(contextId),
   });
 
@@ -1096,9 +1102,9 @@ async function main() {
   };
 
   const { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } =
-    await import("@vibestudio/shared/workspace/remotes");
+    await import("@vibestudio/workspace/remotes");
   const { resolveDeclaredApps, resolveDeclaredExtensions } =
-    await import("@vibestudio/shared/workspace/loader");
+    await import("@vibestudio/workspace/loader");
   const { readStartupWorkspaceConfig, readWorkspaceConfigFromState } =
     await import("./workspaceConfigSource.js");
   const loadWorkspaceConfigFromState = async (
@@ -1107,7 +1113,11 @@ async function main() {
     return readWorkspaceConfigFromState(workspaceVcs, workspacePath, stateHash);
   };
   try {
-    const startupConfig = await readStartupWorkspaceConfig(workspaceVcs, refService, workspacePath);
+    const startupConfig = await readStartupWorkspaceConfig(
+      workspaceVcs,
+      protectedRefStore,
+      workspacePath
+    );
     applyWorkspaceConfigReload(startupConfig.config, { warnRestartBoundChanges: false });
     if (startupConfig.source === "protected-main") {
       console.log(
@@ -1139,7 +1149,7 @@ async function main() {
           extensionHost
             .reconcileDeclared(declared, { trigger })
             .then(() => extensionHost.whenReconciled())
-            .then(() => import("@vibestudio/shared/workspace/extensionRegistry"))
+            .then(() => import("@vibestudio/workspace/extensionRegistry"))
             .then(({ writeExtensionRegistry }) => {
               writeExtensionRegistry(workspacePath);
             });
@@ -1467,8 +1477,8 @@ async function main() {
   const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
     workspacePath,
-    blobsDir: path.join(getUserDataPath(), "blobs"),
-    refs: refService,
+    blobsDir: layout.blobsDir,
+    refs: protectedRefStore,
     vcs: workspaceVcs,
     publishMain: ({ ctx, expectedOld, files, summary, operation }) =>
       workspaceVcs.publishHostMutation({
@@ -1572,7 +1582,7 @@ async function main() {
       gitUpstreamFlushRunning = false;
     }
   };
-  refService.onRefsChanged((changes) => {
+  protectedRefStore.onRefsChanged((changes) => {
     const repos = changes
       .filter((change) => change.stateHash !== null)
       .map((change) => change.repoPath);
@@ -1630,20 +1640,21 @@ async function main() {
     // trees) inside the gate; the meta repo additionally derives its semantic
     // unit-change prompt from the candidate workspace view.
     mainRefGate = createMainRefAdvanceGate({
-      blobsDir: path.join(getUserDataPath(), "blobs"),
+      blobsDir: layout.blobsDir,
       approvalGate: mainAdvanceGate,
       ensureStateMirrored: (stateHash) => workspaceVcs.worktrees.ensureStateMirrored(stateHash),
-      workspaceViewWithReposAt: (overrides) => workspaceVcs.workspaceViewWithReposAt(overrides),
-      computeDeleteDependents: (repoPath) => workspaceVcs.deleteDependents(repoPath),
+      workspaceViewWithReposAt: (overrides) =>
+        workspaceVcs.repositories.workspaceViewWithReposAt(overrides),
+      computeDeleteDependents: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
     });
     // Protected refs exposed to userland (P5b): reads plus a gated
     // compare-and-swap advance. This is how a userland VCS implementation
     // requests `main` advancement — the advance flows through the SAME
     // mainRefGate wired above, with the verified caller as the gate context.
-    const { createRefsService } = await import("./services/refsService.js");
+    const { createRefsRpcService } = await import("./services/refsRpcService.js");
     container.registerRpc(
-      createRefsService({
-        refs: refService,
+      createRefsRpcService({
+        refs: protectedRefStore,
         invocations: vcsInvocationTable,
         // Single-writer identity (§3): the DO backing the workspace `vcs`
         // service declaration, matched by target identity — recomputed per call
@@ -1664,7 +1675,7 @@ async function main() {
         scan: (repoPath, head) => workspaceVcs.scanWorktree(repoPath, head),
         project: (repoPath, head, stateHash) =>
           workspaceVcs.projectWorktree(repoPath, head, stateHash),
-        dependentRepos: (repoPath) => workspaceVcs.deleteDependents(repoPath),
+        dependentRepos: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
         getVcsWriterIdentity: () => {
           const binding = resolveVcsStoreBinding(workspaceDecls);
           return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
@@ -1678,7 +1689,7 @@ async function main() {
     {
       const { createMirrorService } = await import("./services/mirrorService.js");
       const { getBytes: readMirrorBlob } = await import("./services/blobstoreService.js");
-      const mirrorBlobsDir = path.join(getUserDataPath(), "blobs");
+      const mirrorBlobsDir = layout.blobsDir;
       container.registerRpc(
         createMirrorService({
           contextRepoTargets: (contextId) => workspaceVcs.contextRepoTargets(contextId),
@@ -1725,136 +1736,13 @@ async function main() {
       },
     });
   }
-  const runtimeDiagnostics = new RuntimeDiagnosticsStore({ statePath });
-  // Bridge state-triggered build failures (and completions) into the per-unit
-  // diagnostics store so `workspace.units.diagnostics` surfaces build errors
-  // alongside runtime logs. Keyed the same way unitDiagnostics resolves
-  // entities: workers by source path, everything else by package name.
-  container.registerManaged({
-    name: "buildDiagnosticsBridge",
-    dependencies: ["buildSystem"],
-    start: async (resolve) => {
-      const buildSystem = assertPresent(
-        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-      );
-      const kindMap: Record<string, import("./runtimeDiagnosticsStore.js").RuntimeDiagnosticKind> =
-        {
-          panel: "panel",
-          worker: "worker",
-          extension: "extension",
-          app: "app",
-        };
-      return buildSystem.onBuildEvent((event) => {
-        if (event.type === "build-started") return;
-        const node = buildSystem.getGraph().tryGet(event.name);
-        const kind = kindMap[node?.kind ?? ""] ?? "worker";
-        const entityId = node?.kind === "worker" ? (node.relativePath ?? event.name) : event.name;
-        runtimeDiagnostics.record({
-          workspaceId: workspace.config.id,
-          entityId,
-          kind,
-          level: event.type === "build-error" ? "error" : "info",
-          message:
-            event.type === "build-error"
-              ? `Build failed: ${event.error ?? "unknown error"}`
-              : `Build complete (${event.buildKey ?? "no key"})`,
-          source: "lifecycle",
-          fields: {
-            buildEvent: event.type,
-            ...(event.buildKey ? { buildKey: event.buildKey } : {}),
-            ...(event.trigger
-              ? { head: event.trigger.head, stateHash: event.trigger.stateHash }
-              : {}),
-          },
-        });
-      });
-    },
-    stop: async (unsubscribe: () => void) => {
-      unsubscribe?.();
-    },
+  const { wireRuntimeObservability } = await import("./bootstrap/runtimeObservability.js");
+  const runtimeDiagnostics = wireRuntimeObservability({
+    container,
+    statePath,
+    workspaceId: workspace.config.id,
+    eventService,
   });
-  {
-    const { createWorkerLogService } = await import("./services/workerLogService.js");
-    container.registerRpc(
-      createWorkerLogService({
-        onLog: (entry) => {
-          if (!entry.source) return;
-          runtimeDiagnostics.record({
-            workspaceId: workspace.config.id,
-            entityId: entry.callerId,
-            kind: entry.callerId.startsWith("do:") ? "do" : "worker",
-            timestamp: entry.timestamp,
-            level: entry.level === "warn" ? "warn" : entry.level,
-            message: entry.message,
-            source: "console",
-            fields: entry.source ? { source: entry.source } : undefined,
-          });
-          runtimeDiagnostics.record({
-            workspaceId: workspace.config.id,
-            entityId: entry.source,
-            kind: "worker",
-            timestamp: entry.timestamp,
-            level: entry.level === "warn" ? "warn" : entry.level,
-            message: entry.message,
-            source: "console",
-            fields: { callerId: entry.callerId },
-          });
-          eventService.emit("workspace:unit-log", {
-            workspaceId: workspace.config.id,
-            unitName: entry.source,
-            kind: "worker",
-            timestamp: entry.timestamp,
-            level: entry.level,
-            message: entry.message,
-            source: "console",
-          } satisfies import("./services/workspaceService.js").WorkspaceUnitLogRecord);
-        },
-      })
-    );
-  }
-  {
-    const { createPanelLogService } = await import("./services/panelLogService.js");
-    container.registerRpc(
-      createPanelLogService({
-        onRecords: (records) => {
-          const buildSystem = container.has("buildSystem")
-            ? container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-            : null;
-          for (const entry of records) {
-            // Diagnostics for panels are keyed by package name (matching
-            // unitDiagnostics' entity resolution); fall back to the source
-            // path when the unit isn't in the graph.
-            const node = buildSystem
-              ?.getGraph()
-              .allNodes()
-              .find((candidate) => candidate.relativePath === entry.unitSource);
-            const entityId = node?.name ?? entry.unitSource;
-            runtimeDiagnostics.record({
-              workspaceId: workspace.config.id,
-              entityId,
-              kind: "panel",
-              timestamp: entry.timestamp,
-              level: entry.level,
-              message: entry.message,
-              source: entry.source,
-              fields: { panelId: entry.panelId, ...entry.fields },
-              url: entry.url,
-              line: entry.line,
-            });
-            eventService.emit("workspace:unit-log", {
-              workspaceId: workspace.config.id,
-              unitName: entityId,
-              kind: "panel",
-              timestamp: entry.timestamp,
-              level: entry.level,
-              message: entry.message,
-              source: entry.source === "lifecycle" ? "console" : entry.source,
-            });
-          }
-        },
-      })
-    );
-  }
   container.registerRpc(
     createEventsServiceDefinition(eventService, {
       snapshots: {
@@ -2026,144 +1914,29 @@ async function main() {
     : undefined;
 
   // ── Credential service ──
-  {
-    const { createCredentialService } = await import("./services/credentialService.js");
-    const { serviceWithHttpRoutes } = await import("./serviceWithHttpRoutes.js");
-    // Server→shell capture roundtrip over the RPC plane: emit a
-    // credential:capture-request event to the attached shell, await its
-    // credentials.completeCapture. Fails fast when no shell is attached.
-    const { createCredentialCaptureBridge } = await import("./services/credentialCaptureBridge.js");
-    const captureBridge = createCredentialCaptureBridge({
-      eventService,
-      hasConnectedShell: () => (rpcServerForGateway?.countConnectedClients(["shell"]) ?? 0) > 0,
-    });
-    const captureSessionCredential = <T extends Record<string, unknown>>(
-      payload: Record<string, unknown>,
-      signal?: AbortSignal
-    ): Promise<T> => captureBridge.captureSessionCredential<T>(payload, signal);
-    const credentialService = createCredentialService({
-      completeCapture: (captureId, response) => captureBridge.completeCapture(captureId, response),
-      credentialStore,
-      clientConfigStore,
-      auditLog,
-      eventService,
-      relayOAuthRegistrar,
-      connectionLookup: {
-        getAuthorizingShell: (principalId: string) =>
-          rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
-      },
-      egressProxy,
-      disposableGitHttp: disposableGitRemotes,
-      approvalQueue,
-      sessionGrantStore: credentialSessionGrantStore,
-      credentialUseGrantStore,
-      credentialLifecycle,
-      hasAppCapability: (callerId, capability) =>
-        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-      runtimeInspector: {
-        listActiveEntities: () => entityCache.listActive(),
-        resolvePanelSlotByEntity: async (entityId: string) =>
-          (await dispatcher.dispatch(
-            { caller: createVerifiedCaller("server", "server") },
-            "workspace-state",
-            "slot.resolveByEntity",
-            [entityId]
-          )) as string | null,
-        listPanels: async () =>
-          (await dispatcher.dispatch(
-            { caller: createVerifiedCaller("server", "server") },
-            "panelTree",
-            "list",
-            [null]
-          )) as Array<{
-            panelId: string;
-            title?: string;
-            source?: string;
-            kind?: "workspace" | "browser";
-            parentId?: string | null;
-            contextId?: string;
-            runtimeEntityId?: string | null;
-            effectiveVersion?: string | null;
-          }>,
-      },
-      sessionCredentialCapture: {
-        captureCookies: async (params) => {
-          const response = await captureSessionCredential<{
-            cookieHeader?: string;
-            cookieSession?: {
-              origins?: unknown;
-              cookies?: unknown;
-            };
-            expiresAt?: number;
-            accountIdentity?: Record<string, string>;
-          }>(
-            {
-              kind: "cookies",
-              signInUrl: params.signInUrl,
-              origins: params.origins,
-              cookieNames: params.cookieNames,
-              completionUrlPattern: params.completionUrlPattern,
-              maxTtlSeconds: params.maxTtlSeconds,
-              browser: params.browser,
-            },
-            params.signal
-          );
-          if (!response.cookieHeader) {
-            throw new Error("Session credential capture returned no cookies");
-          }
-          return {
-            cookieHeader: response.cookieHeader,
-            cookieSession: response.cookieSession as never,
-            expiresAt: response.expiresAt,
-            accountIdentity: response.accountIdentity,
-          };
-        },
-        captureSamlSession: async (params) => {
-          const response = await captureSessionCredential<{
-            cookieHeader?: string;
-            cookieSession?: {
-              origins?: unknown;
-              cookies?: unknown;
-            };
-            assertion?: string;
-            expiresAt?: number;
-            accountIdentity?: Record<string, string>;
-          }>(
-            {
-              kind: "saml",
-              signInUrl: params.signInUrl,
-              spAudience: params.spAudience,
-              cookieNames: params.cookieNames,
-              assertion: params.assertion,
-              completionUrlPattern: params.completionUrlPattern,
-              maxTtlSeconds: params.maxTtlSeconds,
-              browser: params.browser,
-            },
-            params.signal
-          );
-          return {
-            cookieHeader: response.cookieHeader,
-            cookieSession: response.cookieSession as never,
-            assertion: response.assertion,
-            expiresAt: response.expiresAt,
-            accountIdentity: response.accountIdentity,
-          };
-        },
-      },
-    }) as ReturnType<typeof createCredentialService> & {
-      routes?: import("./routeRegistry.js").ServiceRouteDecl[];
-    };
-    relayServices.credential = credentialService;
-    container.registerManaged(
-      serviceWithHttpRoutes(
-        {
-          definition: credentialService,
-          routes: credentialService.routes,
-        },
-        routeRegistry
-      )
-    );
-  }
+  const { wireCredentialService } = await import("./bootstrap/credentials.js");
+  relayServices.credential = wireCredentialService({
+    container,
+    routeRegistry,
+    eventService,
+    entityCache,
+    dispatcher,
+    credentialStore,
+    clientConfigStore,
+    auditLog,
+    relayOAuthRegistrar,
+    egressProxy,
+    disposableGitHttp: disposableGitRemotes,
+    approvalQueue,
+    sessionGrantStore: credentialSessionGrantStore,
+    credentialUseGrantStore,
+    credentialLifecycle,
+    hasConnectedShell: () => (rpcServerForGateway?.countConnectedClients(["shell"]) ?? 0) > 0,
+    getAuthorizingShell: (principalId) =>
+      rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
+    hasAppCapability: (callerId, capability) =>
+      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+  });
 
   // ── serverLog service (host log inspection + live tail) ──
   {
@@ -2501,15 +2274,12 @@ async function main() {
   > | null = null;
   let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
   const { RoutedRoomStore, replaceRoutedRoom, routedRoomKey } =
-    await import("./services/routedRoomStore.js");
+    await import("./hostCore/routedRoomStore.js");
   const { PairingActivationStore } = await import("./services/pairingActivationStore.js");
   const routedRoomStore = new RoutedRoomStore(
-    process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"] ??
-      path.join(statePath, "webrtc", "routes.json")
+    process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"] ?? layout.webrtc.routesFile
   );
-  const pairingActivationStore = new PairingActivationStore(
-    path.join(statePath, "webrtc", "pairing-activations.json")
-  );
+  const pairingActivationStore = new PairingActivationStore(layout.webrtc.pairingActivationsFile);
   pairingActivationStore.removeExpired(Date.now());
   const routedRooms = new Map<string, string>();
   const routedRoomExpiryTimers = new Map<string, NodeJS.Timeout>();
@@ -2758,7 +2528,7 @@ async function main() {
           res.writeHead(status, { "Content-Type": "application/json" });
           res.end(JSON.stringify(payload));
         };
-        let input: import("@vibestudio/shared/users/revocationCleanup").RevokedUserCleanupRequest;
+        let input: import("@vibestudio/identity/revocationCleanup").RevokedUserCleanupRequest;
         try {
           const chunks: Buffer[] = [];
           for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -2766,7 +2536,7 @@ async function main() {
             ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
             : {};
           const { RevokedUserCleanupRequestSchema } =
-            await import("@vibestudio/shared/users/revocationCleanup");
+            await import("@vibestudio/identity/revocationCleanup");
           input = RevokedUserCleanupRequestSchema.parse(body);
         } catch (error) {
           respond(400, {
@@ -2846,7 +2616,7 @@ async function main() {
           return identityDb.getDevice(key.slice(key.indexOf(":") + 1))?.userId === userId;
         });
         const { RevokedUserCleanupResultSchema } =
-          await import("@vibestudio/shared/users/revocationCleanup");
+          await import("@vibestudio/identity/revocationCleanup");
         respond(
           200,
           RevokedUserCleanupResultSchema.parse({
@@ -2972,7 +2742,7 @@ async function main() {
             }
           }
           const room = randomUUID();
-          let route: import("./services/routedRoomStore.js").RoutedRoomRecord;
+          let route: import("./hostCore/routedRoomStore.js").RoutedRoomRecord;
           if (deviceId) {
             if (!canonicalDevicePurpose) throw new Error("Device route has no canonical purpose");
             route = { kind: "device", purpose: canonicalDevicePurpose, deviceId, room };
@@ -3305,7 +3075,7 @@ async function main() {
       return;
     }
     const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-    const workspaceDORef: import("./doDispatch.js").DORef = {
+    const workspaceDORef: import("@vibestudio/shared/doDispatcher").DORef = {
       source: INTERNAL_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: workspace.config.id,
@@ -3465,297 +3235,41 @@ async function main() {
     });
   }
 
-  // WorkerdManager — manages workerd process and worker instances
-  //
-  // Workers POST back through the gateway. The gateway starts before
-  // container.startAll(), so this URL is stable by the time workerd boots.
-  // Live worker → VerifiedCaller registry for attributed egress through the
-  // shared listener. Populated by WorkerdManager on worker create/destroy.
-  const egressCallers = new Map<
-    string,
-    import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
-  >();
-  {
-    let workerdManagerInstance: import("./workerdManager.js").WorkerdManager | null = null;
-    let buildSystemForWorkerd: import("./buildV2/index.js").BuildSystemV2 | null = null;
-    container.registerManaged({
-      name: "workerdManager",
-      dependencies: ["buildSystem", "fsService"],
-      async start(resolve) {
-        const { WorkerdManager } = await import("./workerdManager.js");
-        buildSystemForWorkerd = assertPresent(
-          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-        );
-        const fsServiceInst = assertPresent(
-          resolve<import("@vibestudio/shared/fsService").FsService>("fsService")
-        );
+  const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
+  wireWorkerdCore({
+    container,
+    tokenManager,
+    workspacePath,
+    statePath,
+    workspaceId: workspace.config.id,
+    workspaceDeclarations: workspaceDecls,
+    routeRegistry,
+    entityCache,
+    egressProxy,
+    gatewayToken: workerdGatewayToken,
+    gateway: {
+      getPort: () => gatewayPortResolved,
+      protocol: configuredProtocol,
+      externalHost: hostConfig.externalHost,
+      configuredAliases: process.env["VIBESTUDIO_GATEWAY_ALIASES"],
+    },
+    getInternalDoEnv: internalDoProviderEnv,
+    runtimeDiagnostics,
+    eventService,
+    onManagerStarted: (manager) => {
+      workerdManagerForGateway = manager;
+    },
+  });
 
-        workerdManagerInstance = new WorkerdManager({
-          tokenManager,
-          fsService: fsServiceInst,
-          getServerUrl: () => {
-            if (!gatewayPortResolved) {
-              throw new Error("Gateway port not finalized before workerd startup");
-            }
-            return `http://127.0.0.1:${gatewayPortResolved}`;
-          },
-          getServerAliasUrls: () => {
-            if (!gatewayPortResolved) return [];
-            const aliases = new Set<string>();
-            const configuredAliases = process.env["VIBESTUDIO_GATEWAY_ALIASES"];
-            if (configuredAliases) {
-              for (const alias of parseGatewayAliases(configuredAliases)) {
-                aliases.add(alias);
-              }
-            }
-            aliases.add(
-              `${configuredProtocol}://${hostConfig.externalHost}:${gatewayPortResolved}`
-            );
-            return [...aliases];
-          },
-          bindRuntimeImage: (unitPath, ref) =>
-            assertPresent(buildSystemForWorkerd).bindRuntimeImage(unitPath, ref),
-          getBuildByKey: (key) => assertPresent(buildSystemForWorkerd).getBuildByKey(key),
-          workspacePath,
-          statePath,
-          routeRegistry,
-          getManifestRoutes: (source) => workspaceDecls.routes.filter((r) => r.source === source),
-          getManifestDoClasses: (source) => {
-            const node = assertPresent(buildSystemForWorkerd)
-              .getGraph()
-              .allNodes()
-              .find((n) => n.kind === "worker" && n.relativePath === source);
-            return node?.manifest.durable?.classes ?? [];
-          },
-          singletonRegistry: workspaceDecls.singletons,
-          getProxyPort: (caller) => egressProxy.startForCaller(caller),
-          getSharedEgressPort: () =>
-            egressProxy.startShared(assertPresent(workerdManagerInstance).getEgressSecret()),
-          registerEgressCaller: (callerId, caller) => egressCallers.set(callerId, caller),
-          unregisterEgressCaller: (callerId) => egressCallers.delete(callerId),
-          getWorkerdGatewayToken: () => workerdGatewayToken,
-          // Manifest-declared wiring: the DO backing the userland `vcs`
-          // service (vibestudio.vcs.v1) stays main-bound during bootstrap — the
-          // host's provenance follower records into it, so it must never be
-          // rebound to a synthetic ctx-head scope. Internal DO classes receive
-          // their provider identities as env bindings.
-          getBootstrapMainBoundDos: () => {
-            const binding = resolveVcsStoreBinding(workspaceDecls);
-            return binding ? [{ source: binding.source, className: binding.className }] : [];
-          },
-          getInternalDoEnv: internalDoProviderEnv,
-          recordLifecycleEvent: (event) => {
-            runtimeDiagnostics.record({
-              workspaceId: workspace.config.id,
-              entityId: event.source,
-              kind: "worker",
-              level: event.level,
-              message: event.message,
-              source: "lifecycle",
-              fields: { callerId: event.callerId, ...event.fields },
-            });
-            eventService.emit("workspace:unit-log", {
-              workspaceId: workspace.config.id,
-              unitName: event.source,
-              kind: "worker",
-              timestamp: Date.now(),
-              level: event.level,
-              message: event.message,
-              source: "console",
-            } satisfies import("./services/workspaceService.js").WorkspaceUnitLogRecord);
-          },
-        });
-        workerdManagerForGateway = workerdManagerInstance;
-        // Resolve attributed egress (shared listener) → live worker VerifiedCaller.
-        egressProxy.setCallerResolver((callerId) => egressCallers.get(callerId) ?? null);
-
-        // Wire source rebuilds to restart workers.
-        //
-        // Always pass an explicit array (possibly empty) so onSourceRebuilt
-        // can reconcile removals: if a manifest edit DROPS a DO class, the
-        // array reflects that absence and the stale DO service gets torn
-        // down. Passing `undefined` would leave stale services bound forever.
-        buildSystemForWorkerd.onPushBuild((source, trigger, buildKey) => {
-          const head = trigger?.head ?? "main";
-          if (head !== "main") {
-            workerdManagerInstance
-              ?.onSourceRebuilt(source, null, trigger, buildKey)
-              .catch((err) => {
-                console.error(
-                  `[WorkerdManager] Failed to handle rebuilt source ${source}@${head}:`,
-                  err
-                );
-              });
-            return;
-          }
-
-          const node = buildSystemForWorkerd
-            ?.getGraph()
-            .allNodes()
-            .find((n) => n.relativePath === source);
-          const manifest = node?.manifest as Record<string, unknown> | undefined;
-          const durable = manifest?.["durable"] as
-            | { classes?: Array<{ className: string }> }
-            | undefined;
-          const doClasses = durable?.classes ?? [];
-
-          workerdManagerInstance
-            ?.onSourceRebuilt(source, doClasses, trigger, buildKey)
-            .catch((err) => {
-              console.error(`[WorkerdManager] Failed to handle rebuilt source ${source}:`, err);
-            });
-        });
-
-        // Start static internal DO services before readiness, then publish
-        // manifest-declared userland DO route metadata. Userland DO code is
-        // still built lazily on first resolve/request by the gateway's
-        // ensureDORoute hook, so declared routes exist at readiness without
-        // turning background build prewarm into startup latency.
-        {
-          const { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } =
-            await import("./internalDOs/internalDoLoader.js");
-          const internalDoClasses = INTERNAL_DO_CLASSES.map((className) => ({
-            source: INTERNAL_DO_SOURCE,
-            className,
-          }));
-          if (internalDoClasses.length > 0) {
-            console.log(
-              `[WorkerdManager] Pre-registering internal DO classes:`,
-              internalDoClasses.map((c) => `${c.source}:${c.className}`).join(", ")
-            );
-            await workerdManagerInstance.registerAllDOClasses(internalDoClasses);
-          }
-
-          if (workspaceDecls.routes.some((route) => route.durableObject)) {
-            const graph = buildSystemForWorkerd.getGraph();
-            for (const node of graph.allNodes()) {
-              if (node.kind !== "worker") continue;
-              if (!node.manifest.durable) continue;
-              for (const cls of node.manifest.durable.classes) {
-                try {
-                  const sourceRoutes = workspaceDecls.routes.filter(
-                    (route) => route.source === node.relativePath
-                  );
-                  routeRegistry.registerDoRoutes(
-                    node.relativePath,
-                    cls.className,
-                    sourceRoutes,
-                    workspaceDecls.singletons
-                  );
-                } catch (err) {
-                  console.warn(
-                    `[WorkerdManager] Failed to register DO routes for ${node.relativePath}:${cls.className}:`,
-                    err instanceof Error ? err.message : err
-                  );
-                }
-              }
-            }
-          }
-        }
-
-        return workerdManagerInstance;
-      },
-      async stop(instance: import("./workerdManager.js").WorkerdManager | null) {
-        await instance?.shutdown();
-      },
-      // No RPC service: workerd's only userland-facing methods were the DO-storage
-      // primitives cloneDO/destroyDO, now closed off. They live on as plain
-      // WorkerdManager methods that the runtime service calls server-internally
-      // (cloneContext/destroyContext), behind the context-boundary gate.
-    });
-  }
-
-  {
-    container.registerManaged({
-      name: "doDispatch",
-      dependencies: ["workerdManager"],
-      async start(resolve) {
-        const { DODispatch } = await import("./doDispatch.js");
-        const workerdManager = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
-        );
-        const doDispatch = new DODispatch();
-        doDispatch.setTokenManager(tokenManager);
-        doDispatch.setGetWorkerdGatewayToken(() => workerdGatewayToken);
-        doDispatch.setGetWorkerdUrl(() => {
-          const port = workerdManager.getPort();
-          if (!port) throw new Error("workerd not running");
-          return `http://127.0.0.1:${port}`;
-        });
-        doDispatch.setGetDispatchSecret(() => workerdManager.getDispatchSecret());
-        doDispatch.setEnsureDO((source, className, objectKey) => {
-          const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
-          const record = entityCache.resolveActive(targetId);
-          return workerdManager.ensureDO(source, className, objectKey, {
-            contextId: record?.contextId,
-          });
-        });
-        return doDispatch;
-      },
-    });
-  }
-
-  {
-    // Attach the workspace vcs to the DO backing the manifest-declared
-    // userland `vcs` service (meta/vibestudio.yml services[] row for protocol
-    // vibestudio.vcs.v1, resolved with its singletonObjects row — the SAME
-    // declaration userland dispatch resolves): ingest the bootstrap local
-    // state (same state hash — no EV churn) and enable durable commits,
-    // context forks, and the builds provenance log. No such service ⇒ the
-    // durable store stays disabled with a loud diagnostic — the host never
-    // falls back to a hardcoded worker name.
-    container.registerManaged({
-      name: "vcsAttach",
-      dependencies: ["doDispatch", "workerdManager"],
-      async start(resolve) {
-        const binding = resolveVcsStoreBinding(workspaceDecls);
-        if (!binding) {
-          console.error(
-            "[Vcs] meta/vibestudio.yml declares no singleton-DO-backed `vcs` service " +
-              "(protocol vibestudio.vcs.v1 with a matching singletonObjects row) — durable VCS " +
-              "store disabled (no durable commits, context forks, or builds provenance)"
-          );
-          return workspaceVcs;
-        }
-        const { source, className } = binding;
-        const doDispatch = assertPresent(
-          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
-        );
-        const workerdManagerInst = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
-        );
-        const gadRef = {
-          source,
-          className,
-          objectKey: binding.objectKey,
-          buildRef: "main",
-        };
-        // Entity record first: the DO's callbacks into the server (setTitle,
-        // console bridge) resolve their principal through the entity cache.
-        await activateDurableObjectEntity(doDispatch, workerdManagerInst, {
-          ...gadRef,
-          ownerUserId: SYSTEM_SUBJECT.userId,
-        });
-        // attachGad bootstraps per-repo logs from disk (snapshot each on-disk
-        // repo subtree into `vcs:repo:<path>` at `main` if missing) AND seeds
-        // every repo main into the protected-ref store (idempotent set-if-
-        // absent on every startup).
-        await workspaceVcs.attachGad({
-          call: <T>(
-            method: string,
-            input: unknown,
-            opts?: { invocationToken?: string }
-          ): Promise<T> =>
-            (opts?.invocationToken
-              ? doDispatch.dispatchOnBehalf(gadRef, method, [input], opts.invocationToken)
-              : doDispatch.dispatch(gadRef, method, input)) as Promise<T>,
-        });
-        workspaceVcs.enableMemoryIndexing({ startupBarrier: startupBackgroundWorkComplete });
-        console.log(`[Vcs] Attached to VCS store DO (${source}:${className})`);
-        return workspaceVcs;
-      },
-    });
-  }
+  const { wireVcsDurability } = await import("./bootstrap/vcsDurability.js");
+  wireVcsDurability({
+    container,
+    workspaceDeclarations: workspaceDecls,
+    workspaceVcs,
+    startupBarrier: startupBackgroundWorkComplete,
+    systemOwnerUserId: SYSTEM_SUBJECT.userId,
+    activateDurableObject: activateDurableObjectEntity,
+  });
 
   {
     container.registerManaged({
@@ -3774,28 +3288,6 @@ async function main() {
         return driver;
       },
       async stop(instance: import("./services/lifecycleDriver.js").LifecycleDriver | null) {
-        instance?.stop();
-      },
-    });
-  }
-
-  {
-    container.registerManaged({
-      name: "vcsGcScheduler",
-      dependencies: ["vcsAttach"],
-      async start(resolve) {
-        const { VcsGcScheduler } = await import("./services/vcsGcScheduler.js");
-        const attachedVcs = assertPresent(
-          resolve<import("./vcsHost/workspaceVcs.js").WorkspaceVcs>("vcsAttach")
-        );
-        const scheduler = new VcsGcScheduler({
-          workspaceVcs: attachedVcs,
-          startupBarrier: startupBackgroundWorkComplete,
-        });
-        scheduler.start();
-        return scheduler;
-      },
-      async stop(instance: import("./services/vcsGcScheduler.js").VcsGcScheduler | null) {
         instance?.stop();
       },
     });
@@ -3872,15 +3364,6 @@ async function main() {
   // Panel services, workspace info, PanelHttpServer, FS RPC
   // (extracted to panelRuntimeRegistration.ts)
   // ===========================================================================
-
-  // Resolve host configuration from CLI args / env vars
-  const { resolveHostConfig } = await import("@vibestudio/shared/hostConfig");
-  const hostConfig = resolveHostConfig({
-    workerdPort: 0, // ports filled later
-    gatewayPort: requestedGatewayPort ?? 0,
-    host: args.host,
-    bindHost: args.bindHost,
-  });
 
   const { registerPanelServices } = await import("./panelRuntimeRegistration.js");
   // Set once the container constructs the manager (registered before
@@ -4029,7 +3512,7 @@ async function main() {
         appHost?.registry.get(name) ||
         appHost?.registry.list().some((entry) => entry.source.repo === name)
       ) {
-        await appHost.restartApp(name);
+        await appHost.terminal.restart(name);
         return;
       }
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
@@ -4401,8 +3884,10 @@ async function main() {
   await registerPanelServices(commonDeps);
 
   {
-    const { panelRuntimeSurface } = await import("@vibestudio/shared/runtimeSurface.panel");
-    const { workerRuntimeSurface } = await import("@vibestudio/shared/runtimeSurface.worker");
+    const { panelRuntimeSurface } =
+      await import("@vibestudio/service-schemas/runtime/runtimeSurface.panel");
+    const { workerRuntimeSurface } =
+      await import("@vibestudio/service-schemas/runtime/runtimeSurface.worker");
     // Agent-facing capability catalog (caller-aware discovery) — the single
     // introspection surface; it absorbed the former `meta` service
     // (listServices/describeService now live on `docs`).
@@ -4490,11 +3975,11 @@ async function main() {
           ensureMobileAppReady: (source) =>
             hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing(source),
           getMobileAppBootstrap: async (source) =>
-            appHostForGateway?.getReactNativeBootstrap(source) ?? null,
+            appHostForGateway?.reactNative.getBootstrap(source) ?? null,
           registerMobileAppPrincipal: (deviceId, source) =>
-            appHostForGateway?.registerReactNativeAppPrincipal(deviceId, source) ?? null,
+            appHostForGateway?.reactNative.registerPrincipal(deviceId, source) ?? null,
           retireMobileAppPrincipal: (deviceId) => {
-            appHostForGateway?.retireReactNativeAppPrincipal(deviceId);
+            appHostForGateway?.reactNative.retirePrincipal(deviceId);
           },
           resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
         }),
@@ -4502,7 +3987,7 @@ async function main() {
       )
     );
 
-    const blobsDir = path.join(getUserDataPath(), "blobs");
+    const blobsDir = layout.blobsDir;
     container.registerManaged(
       serviceWithHttpRoutes(createBlobstoreService({ blobsDir }), routeRegistry)
     );
@@ -4699,9 +4184,9 @@ async function main() {
   if (rpcServerForGateway) {
     try {
       const { startWebRtcIngress } = await import("./webrtcIngress.js");
-      const { ensurePersistentCert } = await import("../main/webrtc/cert.js");
+      const { ensurePersistentCert } = await import("../node/webrtc/cert.js");
       const { assertNodeDatachannelAvailable } =
-        await import("../main/webrtc/nodeDatachannelPeer.js");
+        await import("../node/webrtc/nodeDatachannelPeer.js");
       assertNodeDatachannelAvailable();
       const pathMod = await import("node:path");
       const certDir = pathMod.join(appRoot, ".vibestudio", "webrtc");
@@ -4784,7 +4269,7 @@ async function main() {
   // (see plan §6 singleton reconciliation, §9 restart revival, §11 GC safety)
   // ===========================================================================
   const doDispatchForBootstrap = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-  const workspaceDORefForBootstrap: import("./doDispatch.js").DORef = {
+  const workspaceDORefForBootstrap: import("@vibestudio/shared/doDispatcher").DORef = {
     source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
     className: "WorkspaceDO",
     objectKey: workspace.config.id,
@@ -4981,7 +4466,7 @@ async function main() {
 
   {
     // Write admin token to a well-known file for scripting
-    const tokenFilePath = path.join(statePath, "admin-token");
+    const tokenFilePath = layout.adminTokenFile;
     try {
       fs.writeFileSync(tokenFilePath, adminToken, { mode: 0o600 });
     } catch (err) {
@@ -5148,23 +4633,6 @@ function formatManifestValue(value: unknown): string {
   if (value === undefined || value === null || value === "") return "<unset>";
   if (typeof value === "string") return JSON.stringify(value);
   return JSON.stringify(value);
-}
-
-function parseGatewayAliases(value: string): string[] {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (Array.isArray(parsed)) {
-      return parsed.filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0
-      );
-    }
-  } catch {
-    // Fall through to comma-separated env syntax.
-  }
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 
 main().catch((err) => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VcsGcScheduler } from "./vcsGcScheduler.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { WorkspaceVcsMemory } from "../vcsHost/workspaceVcsMemory.js";
 
 describe("VcsGcScheduler", () => {
   beforeEach(() => {
@@ -20,10 +21,9 @@ describe("VcsGcScheduler", () => {
     sweptTreeObjects: 0,
   });
 
-  type SchedulerVcs = Pick<
-    WorkspaceVcs,
-    "attached" | "runGc" | "reindexKnownRepos" | "pruneProvenanceSoftState"
-  >;
+  type SchedulerVcs = Pick<WorkspaceVcs, "attached" | "runGc" | "pruneProvenanceSoftState"> & {
+    memory: Pick<WorkspaceVcsMemory, "reindexKnownRepositories">;
+  };
 
   it("runs GC + reindex + soft-state prune after the initial delay and then periodically", async () => {
     const runGc = vi.fn(gcResult);
@@ -33,7 +33,7 @@ describe("VcsGcScheduler", () => {
       workspaceVcs: {
         attached: true,
         runGc,
-        reindexKnownRepos,
+        memory: { reindexKnownRepositories: reindexKnownRepos },
         pruneProvenanceSoftState,
       } as SchedulerVcs,
       initialDelayMs: 25,
@@ -67,7 +67,7 @@ describe("VcsGcScheduler", () => {
       workspaceVcs: {
         attached: true,
         runGc,
-        reindexKnownRepos: vi.fn(async () => {}),
+        memory: { reindexKnownRepositories: vi.fn(async () => {}) },
         pruneProvenanceSoftState: vi.fn(async () => {}),
       } as SchedulerVcs,
       startupBarrier,
@@ -98,7 +98,7 @@ describe("VcsGcScheduler", () => {
       workspaceVcs: {
         attached: true,
         runGc,
-        reindexKnownRepos,
+        memory: { reindexKnownRepositories: reindexKnownRepos },
         pruneProvenanceSoftState,
       } as SchedulerVcs,
       initialDelayMs: 5,
@@ -126,7 +126,7 @@ describe("VcsGcScheduler", () => {
           return attached;
         },
         runGc,
-        reindexKnownRepos,
+        memory: { reindexKnownRepositories: reindexKnownRepos },
         pruneProvenanceSoftState,
       } as SchedulerVcs,
       initialDelayMs: 10,

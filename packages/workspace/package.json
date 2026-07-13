@@ -1,0 +1,33 @@
+{
+  "name": "@vibestudio/workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./configParser": "./src/configParser.ts",
+    "./extensionRegistry": "./src/extensionRegistry.ts",
+    "./loader": "./src/loader.ts",
+    "./pathPolicy": "./src/pathPolicy.ts",
+    "./remotes": "./src/remotes.ts",
+    "./singletonRegistry": "./src/singletonRegistry.ts",
+    "./startup": "./src/startup.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/workspace/src"
+  },
+  "dependencies": {
+    "@vibestudio/dev-log": "workspace:*",
+    "@vibestudio/env-paths": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/workspace-contracts": "workspace:*",
+    "dotenv": "^16.4.5",
+    "yaml": "^2.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

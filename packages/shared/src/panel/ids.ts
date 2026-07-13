@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 /** Stable workspace/tree handle for a panel slot. This is what shell UI uses. */
@@ -50,3 +52,13 @@ export function isPanelSlotId(value: string): value is PanelSlotId {
 export function isPanelEntityId(value: string): value is PanelEntityId {
   return value.startsWith(PANEL_ENTITY_PREFIX);
 }
+
+/** Wire boundary for the stable panel-tree identifier space. */
+export const PanelSlotIdSchema = z.string().refine(isPanelSlotId, {
+  message: `Expected a panel slot id beginning with "${PANEL_SLOT_PREFIX}"`,
+});
+
+/** Wire boundary for the live panel runtime identifier space. */
+export const PanelEntityIdSchema = z.string().refine(isPanelEntityId, {
+  message: `Expected a panel entity id beginning with "${PANEL_ENTITY_PREFIX}"`,
+});

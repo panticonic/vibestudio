@@ -12,7 +12,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.80.6':
-    hash: 40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5
+    hash: 9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c
     path: workspace/packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
 
 importers:
@@ -30,7 +30,7 @@ importers:
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-ai':
         specifier: 0.80.6
-        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@ghostery/adblocker':
         specifier: ^2.13.4
         version: 2.13.4
@@ -40,6 +40,9 @@ importers:
       '@npmcli/arborist':
         specifier: ^7.4.0
         version: 7.5.4
+      '@puppeteer/browsers':
+        specifier: ^2.6.1
+        version: 2.13.2
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.0.0)
@@ -82,24 +85,39 @@ importers:
       '@vibestudio/git':
         specifier: workspace:*
         version: link:packages/git
-      '@vibestudio/port-utils':
+      '@vibestudio/identity':
         specifier: workspace:*
-        version: link:packages/port-utils
+        version: link:packages/identity
       '@vibestudio/process-adapter':
         specifier: workspace:*
         version: link:packages/process-adapter
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:packages/shell-core
+      '@vibestudio/sqlite':
+        specifier: workspace:*
+        version: link:packages/sqlite
       '@vibestudio/typecheck':
         specifier: workspace:*
         version: link:packages/typecheck
       '@vibestudio/types':
         specifier: workspace:*
         version: link:packages/types
+      '@vibestudio/workspace':
+        specifier: workspace:*
+        version: link:packages/workspace
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:packages/workspace-contracts
       '@xterm/addon-clipboard':
         specifier: ^0.2.0
         version: 0.2.0
@@ -136,6 +154,9 @@ importers:
       ajv:
         specifier: ^8.17.1
         version: 8.17.1
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
@@ -148,6 +169,9 @@ importers:
       esbuild:
         specifier: ^0.27.0
         version: 0.27.2
+      esbuild-svelte:
+        specifier: ^0.9.4
+        version: 0.9.4(esbuild@0.27.2)(svelte@5.55.0)
       firebase-admin:
         specifier: ^12.7.0
         version: 12.7.0(encoding@0.1.13)
@@ -181,12 +205,21 @@ importers:
       react:
         specifier: 19.0.0
         version: 19.0.0
+      react-devtools-core:
+        specifier: ^6.1.5
+        version: 6.1.5
       react-dom:
         specifier: 19.0.0
         version: 19.0.0(react@19.0.0)
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
       sucrase:
         specifier: ^3.35.1
         version: 3.35.1
+      svelte:
+        specifier: ^5.55.0
+        version: 5.55.0
       tldts:
         specifier: ^7.0.19
         version: 7.0.21
@@ -245,9 +278,6 @@ importers:
       '@vitest/browser':
         specifier: 3.2.4
         version: 3.2.4(playwright@1.58.1)(vite@7.3.1(@types/node@24.10.9)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2))(vitest@3.2.4)
-      buffer:
-        specifier: ^6.0.3
-        version: 6.0.3
       electron:
         specifier: ^39.2.5
         version: 39.4.0
@@ -257,9 +287,6 @@ importers:
       electron-updater:
         specifier: ^6.3.9
         version: 6.7.3
-      esbuild-svelte:
-        specifier: ^0.9.4
-        version: 0.9.4(esbuild@0.27.2)(svelte@5.55.0)
       eslint:
         specifier: ^9.39.1
         version: 9.39.2
@@ -272,12 +299,6 @@ importers:
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
-      sql.js:
-        specifier: ^1.14.0
-        version: 1.14.1
-      svelte:
-        specifier: ^5.55.0
-        version: 5.55.0
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -302,6 +323,9 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../packages/shell-core
       ws:
         specifier: ^8.18.0
         version: 8.19.0
@@ -360,9 +384,18 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../packages/shell-core
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../../packages/workspace-contracts
       jotai:
         specifier: ^2.15.1
         version: 2.17.0(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.0.0)
@@ -487,6 +520,9 @@ importers:
 
   packages/browser-data:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
@@ -506,12 +542,12 @@ importers:
 
   packages/credential-client:
     dependencies:
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -550,6 +586,9 @@ importers:
 
   packages/extension:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
@@ -575,12 +614,18 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
       '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:../unit-host
+      '@vibestudio/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       yaml:
         specifier: ^2.8.1
         version: 2.8.2
@@ -617,6 +662,18 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/identity:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/sqlite':
+        specifier: workspace:*
+        version: link:../sqlite
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   packages/mobile-webrtc:
     dependencies:
       '@react-native-community/netinfo':
@@ -625,6 +682,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
@@ -638,15 +698,6 @@ importers:
         specifier: ^3.3.3
         version: 3.3.3
     devDependencies:
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  packages/port-utils:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.10.9
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -670,23 +721,86 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/service-schemas:
+    dependencies:
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
+      '@vibestudio/identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../shell-core
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   packages/shared:
     dependencies:
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../dev-log
       '@vibestudio/env-paths':
         specifier: workspace:*
         version: link:../env-paths
+      '@vibestudio/identity':
+        specifier: workspace:*
+        version: link:../identity
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/sqlite':
+        specifier: workspace:*
+        version: link:../sqlite
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+
+  packages/shell-core:
+    dependencies:
+      '@vibestudio/dev-log':
+        specifier: workspace:*
+        version: link:../dev-log
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  packages/sqlite: {}
 
   packages/typecheck:
     dependencies:
@@ -708,6 +822,44 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/workspace:
+    dependencies:
+      '@vibestudio/dev-log':
+        specifier: workspace:*
+        version: link:../dev-log
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.6.1
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  packages/workspace-contracts:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
 packages:
 
@@ -9919,7 +10071,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -12460,9 +12612,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

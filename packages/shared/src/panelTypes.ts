@@ -6,8 +6,8 @@ export type {
   Panel,
   PanelSnapshot,
   PackageManifest,
-  ChildSpec,
 } from "./types.js";
+export type { ChildSpec } from "@vibestudio/types";
 
 import type { PackageManifest } from "./types.js";
 

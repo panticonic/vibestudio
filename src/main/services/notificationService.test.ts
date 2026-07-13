@@ -3,7 +3,7 @@ import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serv
 import { createNotificationService } from "./notificationService.js";
 
 function createHarness(capabilities: string[] = []) {
-  const eventService = { emit: vi.fn() };
+  const eventService = { emit: vi.fn(), emitToUser: vi.fn(() => true) };
   const viewManager = {
     getViewInfo: vi.fn(() => ({
       type: "app",
@@ -98,6 +98,22 @@ describe("createNotificationService", () => {
           }),
         ],
       })
+    );
+  });
+
+  it("implements the server-only user inbox signal declared by the schema", async () => {
+    const { service, eventService } = createHarness([]);
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("server", "server") }, "signalUserInbox", [
+        "usr_alice",
+      ])
+    ).resolves.toBe(true);
+
+    expect(eventService.emitToUser).toHaveBeenCalledWith(
+      "usr_alice",
+      "user-notifications-changed",
+      { changedAt: expect.any(Number) }
     );
   });
 });

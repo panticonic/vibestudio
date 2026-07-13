@@ -20,7 +20,7 @@ import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/de
 import {
   HubReadyPayloadSchema,
   type HubReadyPayload,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 import {
   loadDeviceCredentialByServerId,

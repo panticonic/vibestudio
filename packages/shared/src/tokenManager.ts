@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "crypto";
-import type { AgentBinding, CallerKind } from "./serviceDispatcher.js";
+import type { AgentBinding } from "@vibestudio/identity/types";
+import type { CallerKind } from "./serviceDispatcher.js";
 
 export interface TokenEntry {
   callerId: string;

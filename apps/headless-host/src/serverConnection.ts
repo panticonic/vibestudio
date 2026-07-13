@@ -7,7 +7,7 @@
 import { WebSocket } from "ws";
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
-import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
+import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";

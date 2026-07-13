@@ -12,7 +12,7 @@
  * It also applies early `stateArgs:updated` events the host pushes over the
  * bridge before the panel bundle's runtime is up.
  *
- * Timing: configLoader runs as a blocking <script> and sets the panel globals
+ * Timing: the panel bootstrap script runs as a blocking <script> and sets the panel globals
  * before dynamically loading this script. Host preload/injection may already
  * have exposed `__vibestudioShell`; otherwise we synthesize it here before the
  * panel bundle starts.

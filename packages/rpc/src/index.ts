@@ -40,10 +40,11 @@ export type {
   StreamingMethodHandler,
   StreamingMethodFrame,
   ParentPortEnvelope,
-  ElectronLocalServiceName,
+  RpcErrorKind,
 } from "./types.js";
+export { RemoteRpcError, RpcBoundaryError, rpcErrorKindOf } from "./errors.js";
 
-export { isParentPortEnvelope, ELECTRON_LOCAL_SERVICE_NAMES } from "./types.js";
+export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";
 export {

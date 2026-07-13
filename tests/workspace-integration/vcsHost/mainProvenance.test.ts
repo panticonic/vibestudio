@@ -35,7 +35,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, logIdForRepo, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService, type RefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore, type ProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 
 const USER = { id: "user", kind: "user" };
 const FOO = "packages/foo";
@@ -58,7 +58,7 @@ describe("main provenance — DO-owned push lineage + fail-closed drift", () => 
   let refsPath: string;
   let vcs: WorkspaceVcs;
   let gad: TestGad;
-  let refs: RefService;
+  let refs: ProtectedRefStore;
 
   const doInstance = () =>
     gad.instance as unknown as {
@@ -133,7 +133,7 @@ describe("main provenance — DO-owned push lineage + fail-closed drift", () => 
     refsPath = path.join(root, "refs");
     await fsp.mkdir(workspaceRoot);
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
-    refs = createRefService({ statePath: refsPath, gate: async () => {} });
+    refs = createProtectedRefStore({ statePath: refsPath, gate: async () => {} });
     // The in-process test DO has no RPC gateway: give it a local content-store /
     // ref / build bridge (production uses blobstore.*/refs.*/build.* RPC). The
     // build validator is an all-pass no-op, as in the other push suites.

@@ -22,9 +22,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import type { Workspace, WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalDetailFormat, ApprovalPrincipal } from "@vibestudio/shared/approvals";
 import type {
   HostTarget,
@@ -35,9 +36,9 @@ import type {
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import type { UserRole } from "@vibestudio/shared/users/types";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
-import type { HubWorkspaceRoute } from "@vibestudio/shared/serviceSchemas/hubControl";
+import type { UserRole } from "@vibestudio/identity/types";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
 import type {
   WorkspaceAppVersions,
   WorkspaceHeartbeatSelector,
@@ -48,7 +49,7 @@ import type {
   WorkspaceUnitDiagnostics,
   WorkspaceUnitLogRecord,
   WorkspaceUnitStatus,
-} from "@vibestudio/shared/serviceSchemas/workspace";
+} from "@vibestudio/service-schemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
@@ -68,7 +69,7 @@ export type {
   WorkspaceUnitDiagnostics,
   WorkspaceUnitLogRecord,
   WorkspaceUnitStatus,
-} from "@vibestudio/shared/serviceSchemas/workspace";
+} from "@vibestudio/service-schemas/workspace";
 
 export type { SkillEntry } from "../vcsHost/workspaceSkills.js";
 
@@ -523,431 +524,342 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"],
     },
     methods: workspaceMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        // -----------------------------------------------------------------
-        // Reads
-        // -----------------------------------------------------------------
+    handler: defineServiceHandler("workspace", workspaceMethods, {
+      // -----------------------------------------------------------------
+      // Reads
+      // -----------------------------------------------------------------
 
-        case "getInfo":
+      getInfo: () => ({
+        path: workspace.path,
+        statePath: workspace.statePath,
+        contextsPath: workspace.contextsPath,
+        config: deps.getConfig(),
+      }),
+
+      list: (ctx) => deps.workspaceCatalog.list(actorUserId(ctx)),
+
+      getActive: () => activeWorkspaceName(),
+
+      getActiveEntry: async (ctx) => {
+        const active = activeWorkspaceName();
+        const entries = await deps.workspaceCatalog.list(actorUserId(ctx));
+        const listedEntry = entries.find(
+          (entry) => isWorkspaceEntry(entry) && entry.name === active
+        );
+        if (!listedEntry) {
+          throw new ServiceError(
+            "workspace",
+            "getActiveEntry",
+            `The active workspace is missing from the hub catalog: ${active}`,
+            "ENOENT"
+          );
+        }
+        return listedEntry;
+      },
+
+      getConfig: () => deps.getConfig(),
+
+      // -----------------------------------------------------------------
+      // Writes
+      // -----------------------------------------------------------------
+
+      create: async (ctx, [name, opts]) => {
+        requireWorkspaceAdminRole(deps, ctx, "create");
+        await requireWorkspaceApproval(deps, ctx, "create", {
+          target: name,
+          title: "Create workspace?",
+          summary: "This panel or worker wants to create a new workspace.",
+          details: opts?.forkFrom ? [{ label: "Fork from", value: opts.forkFrom }] : undefined,
+        });
+        return deps.workspaceCatalog.create(actorUserId(ctx), name, opts);
+      },
+
+      delete: async (ctx, [name]) => {
+        if (name === deps.getConfig().id) {
+          throw new Error("Cannot delete the currently running workspace");
+        }
+        requireWorkspaceAdminRole(deps, ctx, "delete");
+        await requireWorkspaceApproval(deps, ctx, "delete", {
+          target: name,
+          title: "Delete workspace?",
+          summary: "This panel or worker wants to permanently delete a workspace.",
+          warning: "This removes the workspace directory and cannot be undone.",
+        });
+        await deps.workspaceCatalog.delete(actorUserId(ctx), name);
+      },
+
+      select: async (ctx, [name]) => {
+        if (ctx.caller.runtime.kind !== "shell" || !ctx.caller.runtime.id.startsWith("shell:")) {
+          throw new ServiceError(
+            "workspace",
+            "select",
+            "Workspace switching requires an authenticated device shell",
+            "EACCES"
+          );
+        }
+        const deviceId = ctx.caller.runtime.id.slice("shell:".length);
+        const route = await deps.workspaceCatalog.select(actorUserId(ctx), deviceId, name);
+        // Signal any attached desktop shell to relaunch into the new
+        // workspace. Exact control/workspace reaches are included so the
+        // desktop can durably persist them before relaunching.
+        deps.eventService?.emit("workspace:relaunch-requested", { name, route });
+      },
+
+      setInitPanels: async (ctx, [initPanels]) => {
+        await requireWorkspaceApproval(deps, ctx, "setInitPanels", {
+          target: deps.getConfig().id,
+          title: "Change initial workspace panels?",
+          summary: "This panel or worker wants to change the panels opened for this workspace.",
+          details: [{ label: "Init panels", value: describeJson(initPanels), format: "markdown" }],
+        });
+        await deps.setConfigField("initPanels", initPanels, ctx);
+      },
+
+      setConfigField: async (ctx, [key, value]) => {
+        await requireWorkspaceApproval(deps, ctx, "setConfigField", {
+          target: key,
+          title: "Change workspace config?",
+          summary: "This panel or worker wants to write a field in meta/vibestudio.yml.",
+          warning: "Changing workspace config can affect how the workspace starts and runs.",
+          details: [
+            { label: "Config key", value: key },
+            { label: "New value", value: describeJson(value), format: "markdown" },
+          ],
+        });
+        await deps.setConfigField(key, value, ctx);
+      },
+
+      // -----------------------------------------------------------------
+      // Agent resource loading (filesystem reads from the workspace tree)
+      // -----------------------------------------------------------------
+
+      getAgentsMd: async () => {
+        // Read the workspace-level AGENTS.md from meta/. Missing file is not
+        // an error — an empty string lets the agent resource loader fall back.
+        const filePath = path.join(workspace.path, "meta", "AGENTS.md");
+        try {
+          return await fs.readFile(filePath, "utf-8");
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+          throw err;
+        }
+      },
+
+      listSkills: () => listWorkspaceSkillEntries(workspace.path),
+
+      readSkill: async (_ctx, [nameOrPath]) => {
+        const skillMdPath = await resolveSkillMdPath(workspace.path, nameOrPath);
+        return fs.readFile(skillMdPath, "utf-8");
+      },
+
+      sourceTree: () => {
+        if (!deps.treeScanner) throw new Error("Workspace source tree is unavailable");
+        return deps.treeScanner.getSourceTree();
+      },
+
+      ensureContextFolder: async (ctx, [contextId]) => {
+        if (!deps.ensureContextFolder) {
+          throw new ServiceError(
+            "workspace",
+            "ensureContextFolder",
+            "Context folder materialization is unavailable",
+            "ENOENT"
+          );
+        }
+        await requireEnsureContextFolderAccess(deps, ctx, contextId);
+        return deps.ensureContextFolder(contextId);
+      },
+
+      findUnitForPath: async (_ctx, [pathInput]) => {
+        if (!deps.treeScanner) throw new Error("Workspace source tree is unavailable");
+        const inputPath = normalizeWorkspaceRelativePath(pathInput);
+        const tree = await deps.treeScanner.getSourceTree();
+        const units = [...collectWorkspaceUnitPaths(tree.children as WorkspaceTreeNode[])].sort(
+          (a, b) => b.length - a.length
+        );
+        const unitPath = units.find(
+          (unit) => inputPath === unit || inputPath.startsWith(`${unit}/`)
+        );
+        if (!unitPath) return null;
+        return {
+          unitPath,
+          relativePath: inputPath === unitPath ? "" : inputPath.slice(unitPath.length + 1),
+        };
+      },
+
+      "units.list": () => (deps.listUnits ? deps.listUnits() : []),
+
+      "units.inspector": async (_ctx, [name]) => {
+        const rows = deps.listUnits ? await deps.listUnits() : [];
+        const row = rows.find((unit) => unit.name === name || unit.source === name);
+        const url = row?.inspectorUrl ?? null;
+        return url ? { url } : null;
+      },
+
+      "units.restart": async (ctx, [name]) => {
+        if (!deps.restartUnit) throw new Error("Workspace unit restart not available");
+        await deps.restartUnit(ctx, name);
+      },
+
+      "units.logs": (_ctx, [name, opts]) => {
+        if (!deps.listUnitLogs) return [];
+        return deps.listUnitLogs(name, opts);
+      },
+
+      "units.diagnostics": async (_ctx, [name, opts]) => {
+        if (!deps.unitDiagnostics) {
+          const logs = deps.listUnitLogs ? await deps.listUnitLogs(name, opts) : [];
           return {
-            path: workspace.path,
-            statePath: workspace.statePath,
-            contextsPath: workspace.contextsPath,
-            config: deps.getConfig(),
+            unit: null,
+            logs,
+            errors: logs.filter((entry) => entry.level === "error"),
+            builds: [],
+            dropped: { entries: 0, errors: 0 },
+            capacity: { entries: 0, errors: 0 },
           };
+        }
+        return deps.unitDiagnostics(name, opts);
+      },
 
-        case "list":
-          return await deps.workspaceCatalog.list(actorUserId(ctx));
+      "units.versions": (_ctx, [name]) => {
+        if (!deps.listAppVersions) return { current: null, previous: [], retentionLimit: 0 };
+        return deps.listAppVersions(name);
+      },
 
-        case "getActive":
-          return activeWorkspaceName();
+      "units.rollback": async (ctx, [name, opts]) => {
+        if (!deps.rollbackAppVersion) throw new Error("App rollback is not available");
+        await requireAppUnitManagementAccess(deps, ctx, "units.rollback", name);
+        return deps.rollbackAppVersion(name, opts?.buildKey);
+      },
 
-        case "getActiveEntry": {
-          const active = activeWorkspaceName();
-          const entries = await deps.workspaceCatalog.list(actorUserId(ctx));
-          const listedEntry = entries.find(
-            (entry) => isWorkspaceEntry(entry) && entry.name === active
+      "units.bakeAppDist": async (ctx, [sourceOrName, opts]) => {
+        if (!isTrustedWorkspaceCaller(ctx, deps)) {
+          throw new ServiceError(
+            "workspace",
+            "units.bakeAppDist",
+            `workspace.units.bakeAppDist is not accessible to ${ctx.caller.runtime.kind} callers`,
+            "EACCES"
           );
-          if (!listedEntry) {
-            throw new ServiceError(
-              "workspace",
-              "getActiveEntry",
-              `The active workspace is missing from the hub catalog: ${active}`,
-              "ENOENT"
-            );
-          }
-          return listedEntry;
         }
-
-        case "getConfig":
-          return deps.getConfig();
-
-        // -----------------------------------------------------------------
-        // Writes
-        // -----------------------------------------------------------------
-
-        case "create": {
-          const [name, opts] = args as [string, { forkFrom?: string } | undefined];
-          requireWorkspaceAdminRole(deps, ctx, "create");
-          await requireWorkspaceApproval(deps, ctx, "create", {
-            target: name,
-            title: "Create workspace?",
-            summary: "This panel or worker wants to create a new workspace.",
-            details: opts?.forkFrom ? [{ label: "Fork from", value: opts.forkFrom }] : undefined,
-          });
-          return await deps.workspaceCatalog.create(actorUserId(ctx), name, opts);
+        if (!deps.bakeAppDist) {
+          throw new Error("App dist bake is not available");
         }
+        return deps.bakeAppDist(sourceOrName, opts);
+      },
 
-        case "delete": {
-          const [name] = args as [string];
-          if (name === deps.getConfig().id) {
-            throw new Error("Cannot delete the currently running workspace");
-          }
-          requireWorkspaceAdminRole(deps, ctx, "delete");
-          await requireWorkspaceApproval(deps, ctx, "delete", {
-            target: name,
-            title: "Delete workspace?",
-            summary: "This panel or worker wants to permanently delete a workspace.",
-            warning: "This removes the workspace directory and cannot be undone.",
-          });
-          await deps.workspaceCatalog.delete(actorUserId(ctx), name);
-          return;
-        }
+      "recurring.list": () => (deps.listRecurringJobs ? deps.listRecurringJobs() : []),
 
-        case "select": {
-          const [name] = args as [string];
-          if (ctx.caller.runtime.kind !== "shell" || !ctx.caller.runtime.id.startsWith("shell:")) {
-            throw new ServiceError(
-              "workspace",
-              "select",
-              "Workspace switching requires an authenticated device shell",
-              "EACCES"
-            );
-          }
-          const deviceId = ctx.caller.runtime.id.slice("shell:".length);
-          const route = await deps.workspaceCatalog.select(actorUserId(ctx), deviceId, name);
-          // Signal any attached desktop shell to relaunch into the new
-          // workspace. Exact control/workspace reaches are included so the
-          // desktop can durably persist them before relaunching.
-          deps.eventService?.emit("workspace:relaunch-requested", { name, route });
-          return;
-        }
+      "heartbeats.list": () => (deps.listHeartbeats ? deps.listHeartbeats() : []),
 
-        case "setInitPanels": {
-          const [initPanels] = args as [
-            Array<{ source: string; stateArgs?: Record<string, unknown> }>,
-          ];
-          await requireWorkspaceApproval(deps, ctx, "setInitPanels", {
-            target: deps.getConfig().id,
-            title: "Change initial workspace panels?",
-            summary: "This panel or worker wants to change the panels opened for this workspace.",
-            details: [
-              { label: "Init panels", value: describeJson(initPanels), format: "markdown" },
-            ],
-          });
-          await deps.setConfigField("initPanels", initPanels, ctx);
-          return;
-        }
-
-        case "setConfigField": {
-          const [key, value] = args as [string, unknown];
-          await requireWorkspaceApproval(deps, ctx, "setConfigField", {
-            target: key,
-            title: "Change workspace config?",
-            summary: "This panel or worker wants to write a field in meta/vibestudio.yml.",
-            warning: "Changing workspace config can affect how the workspace starts and runs.",
-            details: [
-              { label: "Config key", value: key },
-              { label: "New value", value: describeJson(value), format: "markdown" },
-            ],
-          });
-          await deps.setConfigField(key, value, ctx);
-          return;
-        }
-
-        // -----------------------------------------------------------------
-        // Agent resource loading (filesystem reads from the workspace tree)
-        // -----------------------------------------------------------------
-
-        case "getAgentsMd": {
-          // Read the workspace-level AGENTS.md from meta/. Missing file is not
-          // an error — an empty string lets the agent resource loader fall back.
-          const filePath = path.join(workspace.path, "meta", "AGENTS.md");
-          try {
-            return await fs.readFile(filePath, "utf-8");
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
-            throw err;
-          }
-        }
-
-        case "listSkills": {
-          return await listWorkspaceSkillEntries(workspace.path);
-        }
-
-        case "readSkill": {
-          const [nameOrPath] = args as [string];
-          const skillMdPath = await resolveSkillMdPath(workspace.path, nameOrPath);
-          return await fs.readFile(skillMdPath, "utf-8");
-        }
-
-        case "sourceTree": {
-          if (!deps.treeScanner) throw new Error("Workspace source tree is unavailable");
-          return deps.treeScanner.getSourceTree();
-        }
-
-        case "ensureContextFolder": {
-          if (!deps.ensureContextFolder) {
-            throw new ServiceError(
-              "workspace",
-              method,
-              "Context folder materialization is unavailable",
-              "ENOENT"
-            );
-          }
-          const [contextId] = args as [string];
-          await requireEnsureContextFolderAccess(deps, ctx, contextId);
-          return await deps.ensureContextFolder(contextId);
-        }
-
-        case "findUnitForPath": {
-          if (!deps.treeScanner) throw new Error("Workspace source tree is unavailable");
-          const inputPath = normalizeWorkspaceRelativePath(args[0] as string);
-          const tree = await deps.treeScanner.getSourceTree();
-          const units = [...collectWorkspaceUnitPaths(tree.children as WorkspaceTreeNode[])].sort(
-            (a, b) => b.length - a.length
+      "heartbeats.runNow": (_ctx, [name]) => {
+        if (!deps.runHeartbeatNow) {
+          throw new ServiceError(
+            "workspace",
+            "heartbeats.runNow",
+            "Heartbeat controls are unavailable",
+            "ENOENT"
           );
-          const unitPath = units.find(
-            (unit) => inputPath === unit || inputPath.startsWith(`${unit}/`)
+        }
+        return deps.runHeartbeatNow(name);
+      },
+
+      "heartbeats.pause": (_ctx, [name]) => {
+        if (!deps.pauseHeartbeat) {
+          throw new ServiceError(
+            "workspace",
+            "heartbeats.pause",
+            "Heartbeat controls are unavailable",
+            "ENOENT"
           );
-          if (!unitPath) return null;
+        }
+        return deps.pauseHeartbeat(name);
+      },
+
+      "heartbeats.resume": (_ctx, [name]) => {
+        if (!deps.resumeHeartbeat) {
+          throw new ServiceError(
+            "workspace",
+            "heartbeats.resume",
+            "Heartbeat controls are unavailable",
+            "ENOENT"
+          );
+        }
+        return deps.resumeHeartbeat(name);
+      },
+
+      "hostTargets.list": (_ctx, [target]) => {
+        if (!deps.listHostTargetCandidates) return [];
+        return deps.listHostTargetCandidates(target);
+      },
+
+      "hostTargets.getSelection": (_ctx, [target]) => {
+        if (!deps.getHostTargetSelection) {
           return {
-            unitPath,
-            relativePath: inputPath === unitPath ? "" : inputPath.slice(unitPath.length + 1),
+            selection: null,
+            valid: false,
+            reason: "Host target selection is unavailable",
           };
         }
+        return deps.getHostTargetSelection(target);
+      },
 
-        case "units.list":
-          return deps.listUnits ? await deps.listUnits() : [];
+      "hostTargets.setSelection": (_ctx, [target, input]) => {
+        if (!deps.setHostTargetSelection) throw new Error("Host target selection is unavailable");
+        return deps.setHostTargetSelection(target, input);
+      },
 
-        case "units.inspector": {
-          const [name] = args as [string];
-          const rows = deps.listUnits ? await deps.listUnits() : [];
-          const row = rows.find((unit) => unit.name === name || unit.source === name);
-          const url = row?.inspectorUrl ?? null;
-          return url ? { url } : null;
+      "hostTargets.clearSelection": (_ctx, [target]) => {
+        if (!deps.clearHostTargetSelection) return;
+        return deps.clearHostTargetSelection(target);
+      },
+
+      "hostTargets.versions": (_ctx, [target, sourceOrName]) => {
+        if (!deps.listHostTargetVersions) {
+          return { current: null, previous: [], retentionLimit: 0 };
         }
+        return deps.listHostTargetVersions(target, sourceOrName);
+      },
 
-        case "units.restart": {
-          if (!deps.restartUnit) throw new Error("Workspace unit restart not available");
-          const [name] = args as [string];
-          await deps.restartUnit(ctx, name);
-          return;
+      "hostTargets.preparePinnedRef": (_ctx, [target, sourceOrName, ref]) => {
+        if (!deps.prepareHostTargetPinnedRef) {
+          throw new Error("Pinned ref preparation is unavailable");
         }
+        return deps.prepareHostTargetPinnedRef(target, sourceOrName, ref);
+      },
 
-        case "units.logs": {
-          if (!deps.listUnitLogs) return [];
-          const [name, opts] = args as [
-            string,
-            (
-              | {
-                  since?: number;
-                  sinceSeq?: number;
-                  level?: WorkspaceUnitLogRecord["level"];
-                  limit?: number;
-                }
-              | undefined
-            ),
-          ];
-          return await deps.listUnitLogs(name, opts);
+      "hostTargets.launch": (_ctx, [target]) => {
+        if (!deps.launchHostTarget) {
+          return {
+            status: "unavailable",
+            launched: false,
+            target,
+            reason: "Host target launch is unavailable",
+            details: [],
+          } satisfies HostTargetLaunchResult;
         }
+        return deps.launchHostTarget(target);
+      },
 
-        case "units.diagnostics": {
-          if (!deps.unitDiagnostics) {
-            const [name, opts] = args as [
-              string,
-              (
-                | {
-                    since?: number;
-                    sinceSeq?: number;
-                    level?: WorkspaceUnitLogRecord["level"];
-                    limit?: number;
-                  }
-                | undefined
-              ),
-            ];
-            const logs = deps.listUnitLogs ? await deps.listUnitLogs(name, opts) : [];
-            return {
-              unit: null,
-              logs,
-              errors: logs.filter((entry) => entry.level === "error"),
-              builds: [],
-              dropped: { entries: 0, errors: 0 },
-              capacity: { entries: 0, errors: 0 },
-            };
-          }
-          const [name, opts] = args as [
-            string,
-            (
-              | {
-                  since?: number;
-                  sinceSeq?: number;
-                  level?: WorkspaceUnitLogRecord["level"];
-                  limit?: number;
-                  errorLimit?: number;
-                }
-              | undefined
-            ),
-          ];
-          return await deps.unitDiagnostics(name, opts);
+      "hostTargets.beginLaunch": (_ctx, [target]) => {
+        if (!deps.beginHostTargetLaunch) {
+          throw new Error("Host target launch sessions are unavailable");
         }
+        return deps.beginHostTargetLaunch(target);
+      },
 
-        case "units.versions": {
-          if (!deps.listAppVersions) return { current: null, previous: [], retentionLimit: 0 };
-          const [name] = args as [string];
-          return await deps.listAppVersions(name);
+      "hostTargets.getLaunchSession": async (_ctx, [sessionId]) =>
+        (await deps.getHostTargetLaunchSession?.(sessionId)) ?? null,
+
+      "hostTargets.resolveLaunchSessionApproval": (_ctx, [sessionId, decision]) => {
+        if (!deps.resolveHostTargetLaunchSessionApproval) {
+          throw new Error("Host target launch sessions are unavailable");
         }
+        return deps.resolveHostTargetLaunchSessionApproval(sessionId, decision);
+      },
 
-        case "units.rollback": {
-          if (!deps.rollbackAppVersion) throw new Error("App rollback is not available");
-          const [name, opts] = args as [string, { buildKey?: string } | undefined];
-          await requireAppUnitManagementAccess(deps, ctx, method, name);
-          return await deps.rollbackAppVersion(name, opts?.buildKey);
-        }
-
-        case "units.bakeAppDist": {
-          if (!isTrustedWorkspaceCaller(ctx, deps)) {
-            throw new ServiceError(
-              "workspace",
-              method,
-              `workspace.${method} is not accessible to ${ctx.caller.runtime.kind} callers`,
-              "EACCES"
-            );
-          }
-          if (!deps.bakeAppDist) {
-            throw new Error("App dist bake is not available");
-          }
-          const [sourceOrName, opts] = args as [string, { outDir?: string } | undefined];
-          return await deps.bakeAppDist(sourceOrName, opts);
-        }
-
-        case "recurring.list":
-          return deps.listRecurringJobs ? await deps.listRecurringJobs() : [];
-
-        case "heartbeats.list":
-          return deps.listHeartbeats ? await deps.listHeartbeats() : [];
-
-        case "heartbeats.runNow": {
-          const [name] = args as [string];
-          if (!deps.runHeartbeatNow) {
-            throw new ServiceError(
-              "workspace",
-              method,
-              "Heartbeat controls are unavailable",
-              "ENOENT"
-            );
-          }
-          return deps.runHeartbeatNow(name);
-        }
-
-        case "heartbeats.pause": {
-          const [name] = args as [string];
-          if (!deps.pauseHeartbeat) {
-            throw new ServiceError(
-              "workspace",
-              method,
-              "Heartbeat controls are unavailable",
-              "ENOENT"
-            );
-          }
-          return deps.pauseHeartbeat(name);
-        }
-
-        case "heartbeats.resume": {
-          const [name] = args as [string];
-          if (!deps.resumeHeartbeat) {
-            throw new ServiceError(
-              "workspace",
-              method,
-              "Heartbeat controls are unavailable",
-              "ENOENT"
-            );
-          }
-          return deps.resumeHeartbeat(name);
-        }
-
-        case "hostTargets.list": {
-          if (!deps.listHostTargetCandidates) return [];
-          const [target] = args as [HostTarget];
-          return await deps.listHostTargetCandidates(target);
-        }
-
-        case "hostTargets.getSelection": {
-          if (!deps.getHostTargetSelection) {
-            return {
-              selection: null,
-              valid: false,
-              reason: "Host target selection is unavailable",
-            };
-          }
-          const [target] = args as [HostTarget];
-          return await deps.getHostTargetSelection(target);
-        }
-
-        case "hostTargets.setSelection": {
-          if (!deps.setHostTargetSelection) throw new Error("Host target selection is unavailable");
-          const [target, input] = args as [HostTarget, HostTargetSelectionInput];
-          return await deps.setHostTargetSelection(target, input);
-        }
-
-        case "hostTargets.clearSelection": {
-          if (!deps.clearHostTargetSelection) return;
-          const [target] = args as [HostTarget];
-          return await deps.clearHostTargetSelection(target);
-        }
-
-        case "hostTargets.versions": {
-          if (!deps.listHostTargetVersions) {
-            return { current: null, previous: [], retentionLimit: 0 };
-          }
-          const [target, sourceOrName] = args as [HostTarget, string];
-          return await deps.listHostTargetVersions(target, sourceOrName);
-        }
-
-        case "hostTargets.preparePinnedRef": {
-          if (!deps.prepareHostTargetPinnedRef) {
-            throw new Error("Pinned ref preparation is unavailable");
-          }
-          const [target, sourceOrName, ref] = args as [HostTarget, string, string];
-          return await deps.prepareHostTargetPinnedRef(target, sourceOrName, ref);
-        }
-
-        case "hostTargets.launch": {
-          if (!deps.launchHostTarget) {
-            const [target] = args as [HostTarget];
-            return {
-              status: "unavailable",
-              launched: false,
-              target,
-              reason: "Host target launch is unavailable",
-              details: [],
-            } satisfies HostTargetLaunchResult;
-          }
-          const [target] = args as [HostTarget];
-          return await deps.launchHostTarget(target);
-        }
-
-        case "hostTargets.beginLaunch": {
-          const [target] = args as [HostTarget];
-          if (!deps.beginHostTargetLaunch) {
-            throw new Error("Host target launch sessions are unavailable");
-          }
-          return await deps.beginHostTargetLaunch(target);
-        }
-
-        case "hostTargets.getLaunchSession": {
-          const [sessionId] = args as [string];
-          return (await deps.getHostTargetLaunchSession?.(sessionId)) ?? null;
-        }
-
-        case "hostTargets.resolveLaunchSessionApproval": {
-          const [sessionId, decision] = args as [string, "once" | "deny"];
-          if (!deps.resolveHostTargetLaunchSessionApproval) {
-            throw new Error("Host target launch sessions are unavailable");
-          }
-          return await deps.resolveHostTargetLaunchSessionApproval(sessionId, decision);
-        }
-
-        case "hostTargets.cancelLaunchSession": {
-          const [sessionId] = args as [string];
-          await deps.cancelHostTargetLaunchSession?.(sessionId);
-          return;
-        }
-
-        default:
-          throw new Error(`Unknown workspace method: ${method}`);
-      }
-    },
+      "hostTargets.cancelLaunchSession": async (_ctx, [sessionId]) => {
+        await deps.cancelHostTargetLaunchSession?.(sessionId);
+      },
+    }),
   };
 }

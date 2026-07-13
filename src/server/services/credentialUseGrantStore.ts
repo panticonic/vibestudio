@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CredentialUseGrant } from "../../../packages/shared/src/credentials/types.js";
-import { writeJsonFileAtomic } from "./atomicFile.js";
+import { stateLayout } from "../stateLayout.js";
+import type { CredentialUseGrant } from "@vibestudio/credential-client/types";
+import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
 
 export interface StoredCredentialUseGrant extends CredentialUseGrant {
   credentialId: string;
@@ -20,7 +21,7 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
   private grants: StoredCredentialUseGrant[] = [];
 
   constructor(opts: { statePath: string }) {
-    this.filePath = path.join(opts.statePath, "credential-use-grants.json");
+    this.filePath = stateLayout(opts.statePath).credentialUseGrantsFile;
   }
 
   list(credentialId: string): CredentialUseGrant[] {

@@ -347,7 +347,7 @@ describe("vcsService", () => {
     it("composes a buildable workspace state from a repo state", async () => {
       const workspaceViewWithRepoAt = vi.fn(async () => "state:workspace");
       const service = createVcsService({
-        workspaceVcs: { workspaceViewWithRepoAt } as never,
+        workspaceVcs: { repositories: { workspaceViewWithRepoAt } } as never,
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
@@ -363,7 +363,7 @@ describe("vcsService", () => {
     it("rejects non-state refs when composing a workspace state", async () => {
       const workspaceViewWithRepoAt = vi.fn();
       const service = createVcsService({
-        workspaceVcs: { workspaceViewWithRepoAt } as never,
+        workspaceVcs: { repositories: { workspaceViewWithRepoAt } } as never,
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 

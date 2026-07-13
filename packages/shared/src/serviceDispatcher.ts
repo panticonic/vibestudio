@@ -12,8 +12,8 @@ import type { MethodSchema } from "./typedServiceClient.js";
 import type { ServicePolicy } from "./servicePolicy.js";
 import { checkServiceAccess } from "./servicePolicy.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
-import type { UserSubject } from "./users/types.js";
+import { rpcErrorKindOf, type AuthenticatedCaller } from "@vibestudio/rpc";
+import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
 export type { CallerKind } from "./principalKinds.js";
 
 /**
@@ -26,22 +26,22 @@ export type { CallerKind } from "./principalKinds.js";
  * This function pads short arrays to the expected tuple length and replaces
  * trailing `null` with `undefined` so Zod's `.optional()` accepts them.
  */
-function normalizeArgs(args: unknown[], schema: z.ZodType): unknown[] {
-  if (schema instanceof z.ZodUnion) {
+export function normalizeServiceArgs(args: unknown[], schema: z.ZodType): unknown[] {
+  if (schemaKind(schema) === z.ZodFirstPartyTypeKind.ZodUnion) {
     // Many service methods model overloads as unions of tuples, e.g.
     // context-bound `fs.readFile(path, encoding?)` vs explicit-context
     // `fs.readFile(contextId, path, encoding?)`.
     if (schema.safeParse(args).success) return args;
 
-    const options = schema._def.options as z.ZodType[];
+    const options = (schema._def as z.ZodTypeDef & { options: z.ZodType[] }).options;
     for (const option of options) {
-      const normalized = normalizeArgs(args, option);
+      const normalized = normalizeServiceArgs(args, option);
       if (option.safeParse(normalized).success) return normalized;
     }
     return args;
   }
 
-  if (!(schema instanceof z.ZodTuple)) return args;
+  if (schemaKind(schema) !== z.ZodFirstPartyTypeKind.ZodTuple) return args;
 
   const items = (schema as z.ZodTuple)._def.items as z.ZodType[];
   // Single pass: pad short arrays to the tuple length (missing trailing args
@@ -151,8 +151,14 @@ function normalizeReturnForSchema(result: unknown, schema: z.ZodType): unknown {
   // JSON and DO HTTP boundaries cannot carry `undefined`; void method returns
   // commonly round-trip as `null`. Treat that as the wire representation of
   // logical void while still validating every non-void return strictly.
-  if (result === null && schema instanceof z.ZodVoid) return undefined;
+  if (result === null && schemaKind(schema) === z.ZodFirstPartyTypeKind.ZodVoid) return undefined;
   return result;
+}
+
+/** Schema packages can carry a distinct Zod module instance at runtime, so
+ * constructor identity (`instanceof`) is not a valid cross-package kind check. */
+function schemaKind(schema: z.ZodType): z.ZodFirstPartyTypeKind | undefined {
+  return (schema._def as z.ZodTypeDef & { typeName?: z.ZodFirstPartyTypeKind }).typeName;
 }
 
 export interface VerifiedCodeIdentity {
@@ -172,18 +178,6 @@ export interface VerifiedCodeIdentity {
  * after the host-verified `callerContextId` precedent). Services read
  * `ctx.caller.agentBinding` to enforce scope without trusting client-supplied ids.
  */
-export interface AgentBinding {
-  entityId: string;
-  contextId: string;
-  channelId: string;
-  agentId: string;
-  /**
-   * The user whose lineage spawned the agent (WP0 §3.3) — stamped from the
-   * agent credential at auth time. Attribution/routing only, never authority.
-   */
-  userId: string;
-}
-
 export interface VerifiedCaller {
   runtime: {
     /** Concrete runtime principal, e.g. a panel id or do:source:Class:objectKey. */
@@ -235,7 +229,7 @@ export function authenticatedCallerOf(caller: VerifiedCaller): AuthenticatedCall
 
 /**
  * WebSocket client state exposed to service handlers.
- * The full WsClientState in src/server/rpcServer.ts extends this with the
+ * The full WsClientState in src/server/rpcServer/connectionRegistry.ts extends this with the
  * concrete WebSocket type. Here `ws` is typed as `unknown` so shared code
  * doesn't depend on the ws package -- server-side consumers cast as needed.
  */
@@ -357,12 +351,22 @@ export class ServiceError extends Error {
   public readonly method: string;
   /** Preserved error code from the original error (e.g. "ENOENT") */
   public readonly code?: string;
+  /** Stable wire category preserved by RPC transports. */
+  public readonly errorKind: import("@vibestudio/rpc").RpcErrorKind;
 
-  constructor(service: string, method: string, message: string, code?: string, cause?: unknown) {
+  constructor(
+    service: string,
+    method: string,
+    message: string,
+    code?: string,
+    cause?: unknown,
+    errorKind: import("@vibestudio/rpc").RpcErrorKind = "service"
+  ) {
     super(`[${service}.${method}] ${message}`);
     this.service = service;
     this.method = method;
     this.code = code;
+    this.errorKind = errorKind;
     this.name = "ServiceError";
     if (cause instanceof Error) {
       (this as Error & { cause?: unknown }).cause = cause;
@@ -384,7 +388,9 @@ export class ServiceAccessError extends ServiceError {
       service,
       method,
       message ?? `Service '${service}.${method}' is not accessible to ${callerKind} callers`,
-      "EACCES"
+      "EACCES",
+      undefined,
+      "access"
     );
     this.name = "ServiceAccessError";
   }
@@ -476,7 +482,7 @@ export class ServiceDispatcher {
         // (JSON serialization of undefined). Pad short arrays to match the
         // tuple length and replace null with undefined so Zod's .optional()
         // accepts them.
-        const normalized = normalizeArgs(args, methodDef.args);
+        const normalized = normalizeServiceArgs(args, methodDef.args);
         const parsed = methodDef.args.safeParse(normalized);
         if (!parsed.success) {
           const reason = formatArgsValidationError(parsed.error);
@@ -535,7 +541,8 @@ export class ServiceDispatcher {
         method,
         error instanceof Error ? error.message : String(error),
         error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-        error
+        error,
+        rpcErrorKindOf(error, "service")
       );
     }
   }
@@ -545,6 +552,13 @@ export class ServiceDispatcher {
    */
   hasService(service: string): boolean {
     return this.handlers.has(service);
+  }
+
+  /** Resolve host-vs-session routing from the registered service definition. */
+  routesToHost(service: string, callerKind: CallerKind): boolean {
+    if (!this.handlers.has(service)) return false;
+    if (callerKind !== "shell" && callerKind !== "app" && callerKind !== "panel") return false;
+    return this.definitions.get(service)?.hostRouting?.[callerKind] !== "session";
   }
 
   /**

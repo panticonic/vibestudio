@@ -12,8 +12,8 @@
  *
  * Entry points:
  *  - {@link project}: materialize a (repoPath, head) at a state (the follower
- *    step after edit/commit/merge/push/restore advances). Only `ctx:*` heads
- *    have a checkout — under `{contextsRoot}/{contextId}`.
+ *    step for context edit/commit/merge and lifecycle restore/fork effects).
+ *    Only `ctx:*` heads have a checkout — under `{contextsRoot}/{contextId}`.
  *  - {@link exportMainToSource}: the write-only dev extraction bridge — project a
  *    repo's new `main` state OUT to the source dir (`workspaceRoot/{repoPath}`)
  *    on a main advance. NOT a checkout: `main` stays a pure ref for all context

@@ -12,6 +12,7 @@ import type { SignalingClient } from "./webrtcSignaling.js";
 import { createControlDefragmenter, frameControlMessage } from "./controlFraming.js";
 import { createBulkDemux, decodeBulkMessage, encodeBulkMessage } from "../protocol/bulkMux.js";
 import { FRAME_DATA, FRAME_HEAD } from "../protocol/streamCodec.js";
+import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -221,6 +222,7 @@ function offererHello(over: Record<string, unknown> = {}): Record<string, unknow
   return {
     t: "hello",
     proto: 2,
+    contractVersion: 1,
     maxMsg: 256 * 1024,
     platform: "desktop",
     keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -324,6 +326,7 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(frames[0]).toEqual({
       t: "hello",
       proto: 2,
+      contractVersion: 1,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -475,6 +478,25 @@ describe("WebRTC answerer pipe (v2)", () => {
     peer.channels.get(1)!.open();
     deliverControl(peer.channels.get(0)!, offererHello({ proto: 1 }));
     expect(h.downs).toEqual(["protocol violation: hello proto 1 (want 2)"]);
+    await h.pipe.close();
+  });
+
+  it("drops the pipe on an RPC contract mismatch", async () => {
+    const h = makeHarness();
+    void h.pipe.connect().catch(() => {});
+    await tick();
+    h.signals[0]!.deliverOffer();
+    await tick();
+    const peer = h.peers[0]!;
+    peer.channels.get(0)!.open();
+    peer.channels.get(1)!.open();
+    deliverControl(
+      peer.channels.get(0)!,
+      offererHello({ contractVersion: RPC_CONTRACT_VERSION + 1 })
+    );
+    expect(h.downs).toEqual([
+      `RPC contract mismatch: peer ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`,
+    ]);
     await h.pipe.close();
   });
 

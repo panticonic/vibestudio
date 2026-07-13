@@ -15,12 +15,10 @@
 // Run AFTER `pnpm build`:  node scripts/build-npm-packages.mjs
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { createRequire } from "node:module";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
@@ -28,21 +26,9 @@ const VERSION = rootPkg.version;
 const PUBLIC_APP_PACKAGE_NAME = "@panticonic/vibestudio";
 const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 
-// Host-provided build deps that live in root devDependencies (browser polyfills
-// and alternative panel compilers) — needed to build the default template's
-// panels/workers at runtime.
-const HOST_BUILD_DEV_DEPS = ["buffer", "sql.js", "svelte", "esbuild-svelte"];
-
-// Runtime/build deps not present in root.dependencies: the headless-host Chromium
-// downloader, and react-devtools-core (pulled by `ink`, which the terminal
-// workers bundle — hoisted via react-native in the dev monorepo). The npm CLI,
-// esbuild, workerd, ws, zod, arborist, pi-ai are already root dependencies and
-// come in via the root.dependencies mirror.
-const SERVER_EXTRA_DEPS = ["@puppeteer/browsers", "react-devtools-core"];
-
 // Workspace source dirs staged into the packaged template (the initial
 // workspace a fresh install ships with). This is a subset of the canonical
-// WORKSPACE_SOURCE_DIRS from @vibestudio/shared/workspace/sourceDirs — `projects/`
+// WORKSPACE_SOURCE_DIRS from @vibestudio/workspace-contracts/sourceDirs — `projects/`
 // is runtime-only content created per user and starts empty, so it is not
 // shipped. A drift guard (tests/workspaceTemplateDirs.drift.test.ts) asserts
 // this list stays in sync with the shared taxonomy. This module can't import
@@ -244,6 +230,8 @@ export function assertPassthroughScriptsStaged(root) {
     "scripts/cli/remote-doctor.mjs",
     "scripts/cli/lib/server-entry.mjs",
     "scripts/cli/lib/pair-server.mjs",
+    "scripts/cli/lib/connect-grammar.generated.mjs",
+    "scripts/cli/lib/config-paths.mjs",
     "scripts/cli/lib/smoke-remote-server.mjs",
   ];
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
@@ -400,38 +388,22 @@ function copyFile(rel, dest) {
   fs.copyFileSync(path.join(repoRoot, rel), dest);
 }
 
-function resolveVersion(name) {
-  // Read the installed package.json directly — require.resolve fails for packages
-  // whose `exports` map doesn't expose ./package.json.
-  const direct = path.join(repoRoot, "node_modules", ...name.split("/"), "package.json");
-  if (fs.existsSync(direct)) return `^${readJson(direct).version}`;
-  return rootPkg.dependencies?.[name] ?? rootPkg.devDependencies?.[name] ?? null;
-}
-
 // The dependency surface a host package needs to build the default template at
-// runtime: all public root.dependencies + the build-relevant root devDeps +
-// headless extras. The vendored @vibestudio packages are NOT listed here — they
-// ship under vendor/ and are copied into node_modules by the postinstall. The
-// server omits electron; the app includes it. (Building panels needs the full
-// host dep surface, so the headless server is really "app minus electron".)
-function computeHostDependencies({ electron }) {
+// runtime is the root's declared runtime dependency surface. The vendored
+// @vibestudio packages are NOT listed here — they ship under vendor/ and are
+// copied into node_modules by the postinstall. Electron is the sole exception:
+// it is a development tool in the monorepo and a runtime dependency of the
+// published desktop app. The headless server is therefore "app minus electron".
+export function computeHostDependencies({ electron }) {
   const deps = {};
   for (const [name, range] of Object.entries(rootPkg.dependencies ?? {})) {
     if (typeof range === "string" && range.startsWith("workspace:")) continue;
     deps[name] = range;
   }
-  for (const name of HOST_BUILD_DEV_DEPS) {
-    const v = rootPkg.devDependencies?.[name];
-    if (v) deps[name] = v;
-  }
-  for (const name of SERVER_EXTRA_DEPS) {
-    if (deps[name]) continue;
-    const v = resolveVersion(name);
-    if (v) deps[name] = v;
-    else console.warn(`  ⚠ could not resolve a version for ${name}`);
-  }
   if (electron) {
-    deps["electron"] = rootPkg.devDependencies?.electron ?? resolveVersion("electron");
+    const electronVersion = rootPkg.devDependencies?.electron;
+    if (!electronVersion) throw new Error("Root devDependencies must declare electron");
+    deps["electron"] = electronVersion;
   }
   return deps;
 }

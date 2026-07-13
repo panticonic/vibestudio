@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import { UserStore } from "@vibestudio/shared/users/userStore";
-import { createAccountService, updateAccountProfile } from "./accountService.js";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
+import { createAccountService } from "./accountService.js";
+import { updateAccountProfile } from "../hostCore/accountProfile.js";
 
 function makeStores() {
   const identityDb = new IdentityDb({ path: ":memory:", readOnly: false });

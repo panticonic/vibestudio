@@ -6,8 +6,8 @@
  * (incl. a fresh single-use auth.grantConnection token — never cache it).
  */
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import { PanelManager } from "@vibestudio/shared/shell/panelManager";
-import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shared/shell/panelManager";
+import { PanelManager } from "@vibestudio/shell-core/panelManager";
+import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shell-core/panelManager";
 import { asPanelSlotId, type PanelSlotId } from "@vibestudio/shared/panel/ids";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
 import type { PanelRuntimeAcquireResult } from "@vibestudio/shared/panel/panelLease";
@@ -22,7 +22,7 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@vibestudio/shared/shell/workspaceStateClient";
+} from "@vibestudio/shell-core/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,

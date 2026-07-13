@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import type { WsClientState } from "./rpcServer.js";
+import type { WsClientState } from "./rpcServer/connectionRegistry.js";
 import {
   createVerifiedCaller,
   type CallerKind,
@@ -25,6 +25,7 @@ import {
   SESSION_NOT_OPEN_CLOSE_CODE,
   type SessionControlFrame,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 
 function makeRecord(
@@ -754,7 +755,7 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer();
     server.setWorkerdUrl("http://127.0.0.1:8787");
     server.setWorkerInstanceResolver((targetId) =>
-      targetId === "worker:workers/hello:key-with-source" ? "key-with-source" : null
+      targetId === "worker:workers/runtime-fixture:key-with-source" ? "key-with-source" : null
     );
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -769,7 +770,7 @@ describe("RpcServer relay behavior", () => {
       testServer(server).relayCall(
         "panel:nav-a",
         "panel",
-        "worker:workers/hello:key-with-source",
+        "worker:workers/runtime-fixture:key-with-source",
         "probe",
         []
       )
@@ -782,11 +783,11 @@ describe("RpcServer relay behavior", () => {
       testServer(server).relayCall(
         "panel:nav-a",
         "panel",
-        "worker:workers/hello:retired",
+        "worker:workers/runtime-fixture:retired",
         "probe",
         []
       )
-    ).rejects.toThrow("Worker not found: worker:workers/hello:retired");
+    ).rejects.toThrow("Worker not found: worker:workers/runtime-fixture:retired");
   });
 
   it("allows authenticated panels to relay to panel, DO, and worker targets", () => {
@@ -1381,6 +1382,7 @@ describe("RpcServer relay behavior", () => {
     expect(JSON.parse(ws1.send.mock.calls[0]![0])).toMatchObject({
       type: "ws:auth-result",
       success: true,
+      contractVersion: RPC_CONTRACT_VERSION,
       connectionId: "conn-1",
       serverBootId: expect.any(String),
     });
@@ -2162,6 +2164,31 @@ describe("RpcServer caller identity", () => {
     expect(testServer(server).connections.getCallerConnections("shell")).toHaveLength(0);
   });
 
+  it("rejects a mismatched RPC contract before authenticating the socket", () => {
+    const { server, tokenManager } = createServer();
+    const token = tokenManager.createToken("electron-main", "shell");
+    const ws = createTestWs();
+    testServer(server).handleConnection(ws);
+
+    ws.emitMessage({
+      type: "ws:auth",
+      contractVersion: RPC_CONTRACT_VERSION + 1,
+      token,
+      connectionId: "mismatched-contract",
+    });
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "ws:auth-result",
+        success: false,
+        contractVersion: RPC_CONTRACT_VERSION,
+        error: `Incompatible RPC contract: peer ${RPC_CONTRACT_VERSION + 1}; server requires ${RPC_CONTRACT_VERSION}`,
+      })
+    );
+    expect(ws.close).toHaveBeenCalledWith(4005, "Incompatible RPC contract");
+    expect(testServer(server).connections.getCallerConnections("electron-main")).toHaveLength(0);
+  });
+
   it("does not admit a socket that closes while pairing redemption is in flight", async () => {
     let resolvePairing!: (value: {
       callerId: string;
@@ -2183,7 +2210,12 @@ describe("RpcServer caller identity", () => {
     const ws = createTestWs();
     testServer(server).handleConnection(ws);
 
-    ws.emitMessage({ type: "ws:auth", token: "pairing-code", connectionId: "pairing-conn" });
+    ws.emitMessage({
+      type: "ws:auth",
+      contractVersion: 1,
+      token: "pairing-code",
+      connectionId: "pairing-conn",
+    });
     ws.emitClose();
     resolvePairing({
       callerId: "shell:dev_delayed",
@@ -2213,7 +2245,12 @@ describe("RpcServer caller identity", () => {
     const ws = createTestWs();
     testServer(server).handleConnection(ws);
 
-    ws.emitMessage({ type: "ws:auth", token, connectionId: "failed-admission" });
+    ws.emitMessage({
+      type: "ws:auth",
+      contractVersion: 1,
+      token,
+      connectionId: "failed-admission",
+    });
     await flushAsync();
 
     expect(server.getPrincipalConnections("electron-main")).toHaveLength(0);

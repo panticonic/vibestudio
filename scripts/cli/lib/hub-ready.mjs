@@ -2,7 +2,7 @@ import {
   normalizeFingerprint,
   parseConnectLink,
   parseSignalingEndpoint,
-} from "./connect-utils.mjs";
+} from "./connect-grammar.generated.mjs";
 
 const READY_KEYS = new Set([
   "mode",

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 

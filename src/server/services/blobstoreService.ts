@@ -8,11 +8,12 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   BLOBSTORE_READ_POLICY as READ_POLICY,
   DIGEST_RE,
   blobstoreMethods,
-} from "@vibestudio/shared/serviceSchemas/blobstore";
+} from "@vibestudio/service-schemas/blobstore";
 import {
   decodeStateNode,
   decodeTreeNode,
@@ -1115,98 +1116,47 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
     description: "Per-workspace content-addressable blob storage",
     policy: READ_POLICY,
     methods: blobstoreMethods,
-    handler: async (_ctx, method, args) => {
-      switch (method) {
-        case "has":
-          return pathExists(blobPath(deps.blobsDir, args[0] as string));
-        case "stat":
-          return statBlob(deps.blobsDir, args[0] as string);
-        case "putText":
-          return putBytes(deps.blobsDir, Buffer.from(args[0] as string, "utf8"));
-        case "getText": {
-          const bytes = await getBytes(deps.blobsDir, args[0] as string);
-          return bytes ? bytes.toString("utf8") : null;
+    handler: defineServiceHandler("blobstore", blobstoreMethods, {
+      has: (_ctx, [hash]) => pathExists(blobPath(deps.blobsDir, hash)),
+      stat: (_ctx, [hash]) => statBlob(deps.blobsDir, hash),
+      putText: (_ctx, [text]) => putBytes(deps.blobsDir, Buffer.from(text, "utf8")),
+      getText: async (_ctx, [hash]) => {
+        const bytes = await getBytes(deps.blobsDir, hash);
+        return bytes ? bytes.toString("utf8") : null;
+      },
+      getRange: async (_ctx, [hash, start, end]) => {
+        const bytes = await getByteRange(deps.blobsDir, hash, start, end);
+        return bytes ? bytes.toString("utf8") : null;
+      },
+      getRangeBytes: async (_ctx, [hash, start, end]) => {
+        const bytes = await getByteRange(deps.blobsDir, hash, start, end);
+        return bytes ? { bytesBase64: bytes.toString("base64") } : null;
+      },
+      grep: (_ctx, [hash, query, options]) => grepBlob(deps.blobsDir, hash, query, options ?? {}),
+      putBase64: (_ctx, [content]) => putBytes(deps.blobsDir, Buffer.from(content, "base64")),
+      getBase64: async (_ctx, [hash]) => {
+        const bytes = await getBytes(deps.blobsDir, hash);
+        return bytes ? bytes.toString("base64") : null;
+      },
+      putTree: (_ctx, [entries, options]) => putTree(deps.blobsDir, entries, options),
+      getTree: (_ctx, [hash]) => getTree(deps.blobsDir, hash),
+      listTree: (_ctx, [hash, options]) => listTree(deps.blobsDir, hash, options),
+      readFileAtTree: (_ctx, [hash, filePath]) => readFileAtTree(deps.blobsDir, hash, filePath),
+      diffTrees: (_ctx, [leftHash, rightHash]) => diffTrees(deps.blobsDir, leftHash, rightHash),
+      materializeTree: (_ctx, [hash, outDir, options]) =>
+        materializeTree(deps.blobsDir, hash, outDir, options),
+      delete: async (_ctx, [hash]) => {
+        const filePath = blobPath(deps.blobsDir, hash);
+        try {
+          await fsp.unlink(filePath);
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
         }
-        case "getRange": {
-          const bytes = await getByteRange(
-            deps.blobsDir,
-            args[0] as string,
-            args[1] as number,
-            args[2] as number
-          );
-          return bytes ? bytes.toString("utf8") : null;
-        }
-        case "getRangeBytes": {
-          const bytes = await getByteRange(
-            deps.blobsDir,
-            args[0] as string,
-            args[1] as number,
-            args[2] as number
-          );
-          return bytes ? { bytesBase64: bytes.toString("base64") } : null;
-        }
-        case "grep": {
-          return grepBlob(
-            deps.blobsDir,
-            args[0] as string,
-            args[1] as string,
-            (args[2] as {
-              caseInsensitive?: boolean;
-              contextLines?: number;
-              maxMatches?: number;
-            }) ?? {}
-          );
-        }
-        case "putBase64":
-          return putBytes(deps.blobsDir, Buffer.from(args[0] as string, "base64"));
-        case "getBase64": {
-          const bytes = await getBytes(deps.blobsDir, args[0] as string);
-          return bytes ? bytes.toString("base64") : null;
-        }
-        case "putTree":
-          return putTree(
-            deps.blobsDir,
-            args[0] as ManifestHashEntry[],
-            args[1] as { root?: boolean } | undefined
-          );
-        case "getTree":
-          return getTree(deps.blobsDir, args[0] as string);
-        case "listTree":
-          return listTree(
-            deps.blobsDir,
-            args[0] as string,
-            args[1] as { prefix?: string; limit?: number } | undefined
-          );
-        case "readFileAtTree":
-          return readFileAtTree(deps.blobsDir, args[0] as string, args[1] as string);
-        case "diffTrees":
-          return diffTrees(deps.blobsDir, args[0] as string, args[1] as string);
-        case "materializeTree":
-          return materializeTree(
-            deps.blobsDir,
-            args[0] as string,
-            args[1] as string,
-            args[2] as { link?: boolean } | undefined
-          );
-        case "delete": {
-          const filePath = blobPath(deps.blobsDir, args[0] as string);
-          try {
-            await fsp.unlink(filePath);
-            return true;
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-            throw error;
-          }
-        }
-        case "list":
-          return listBlobs(
-            deps.blobsDir,
-            args[0] as { prefix?: string; limit?: number } | undefined
-          );
-        default:
-          throw new Error(`Unknown blobstore method '${method}'`);
-      }
-    },
+      },
+      list: (_ctx, [options]) => listBlobs(deps.blobsDir, options),
+    }),
   };
 
   const routes: ServiceRouteDecl[] = [

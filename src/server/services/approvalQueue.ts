@@ -36,8 +36,8 @@ import type {
   AccountIdentity,
   CredentialInjection,
   UrlAudience,
-} from "@vibestudio/shared/credentials/types";
-import type { UserSubject } from "@vibestudio/shared/users/types";
+} from "@vibestudio/credential-client/types";
+import type { UserSubject } from "@vibestudio/identity/types";
 import type {
   ApprovalProvenanceKind,
   ApprovalRequestedBy,

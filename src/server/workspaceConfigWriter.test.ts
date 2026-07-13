@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { setDeclaredRemoteInConfig } from "@vibestudio/shared/workspace/remotes";
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
-import { createRefService } from "./services/refService.js";
+import { setDeclaredRemoteInConfig } from "@vibestudio/workspace/remotes";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { createProtectedRefStore } from "./services/protectedRefStore.js";
 import {
   collectTreeReachableDigests,
   ensureLayout,
@@ -25,7 +25,7 @@ describe("workspaceConfigWriter", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-config-writer-"));
     const blobsDir = path.join(root, "blobs");
     ensureLayout(blobsDir);
-    const refs = createRefService({
+    const refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: async () => undefined,
       assertTreeComplete: async (stateHash) => {
@@ -36,7 +36,7 @@ describe("workspaceConfigWriter", () => {
     });
     const protectedContent = YAML.stringify({
       id: "test",
-      unknownTopLevel: { keep: true },
+      defaultRepo: "panels/old",
       git: {
         remotes: {
           projects: {
@@ -47,7 +47,7 @@ describe("workspaceConfigWriter", () => {
         },
       },
     });
-    const staleProjectedContent = YAML.stringify({ id: "test", unknownTopLevel: "stale" });
+    const staleProjectedContent = YAML.stringify({ id: "test", defaultRepo: "panels/stale" });
     const protectedDigest = (await putBytes(blobsDir, Buffer.from(protectedContent, "utf8")))
       .digest;
     const staleDigest = (await putBytes(blobsDir, Buffer.from(staleProjectedContent, "utf8")))
@@ -125,7 +125,7 @@ describe("workspaceConfigWriter", () => {
     const updatedFile = await readFileAtTree(blobsDir, updated!.stateHash, "vibestudio.yml");
     const updatedBytes = await getBytes(blobsDir, updatedFile!.contentHash);
     const parsed = YAML.parse(updatedBytes!.toString("utf8")) as Record<string, unknown>;
-    expect(parsed["unknownTopLevel"]).toEqual({ keep: true });
+    expect(parsed["defaultRepo"]).toBe("panels/old");
     expect(parsed["git"]).toEqual({
       remotes: {
         projects: {
@@ -141,7 +141,7 @@ describe("workspaceConfigWriter", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-config-writer-race-"));
     const blobsDir = path.join(root, "blobs");
     ensureLayout(blobsDir);
-    const refs = createRefService({
+    const refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: async () => undefined,
       assertTreeComplete: async (stateHash) => {

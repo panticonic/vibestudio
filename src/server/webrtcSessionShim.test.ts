@@ -55,7 +55,12 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const h = harness();
     const got: string[] = [];
     h.shim.on("message", (data) => got.push((data as Buffer).toString()));
-    const auth: WsClientMessage = { type: "ws:auth", token: "grant", connectionId: "c1" };
+    const auth: WsClientMessage = {
+      type: "ws:auth",
+      contractVersion: 1,
+      token: "grant",
+      connectionId: "c1",
+    };
     h.shim.deliverInbound(auth);
     expect(JSON.parse(got[0]!)).toMatchObject({
       type: "ws:auth",
@@ -69,6 +74,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const result: WsServerMessage = {
       type: "ws:auth-result",
       success: true,
+      contractVersion: 1,
       callerId: "panel:c1",
       callerKind: "panel",
       connectionId: "c1",
@@ -121,6 +127,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
         targetId: "do:x",
         requestId: "r2",
         error: "gone",
+        errorKind: "transport",
         errorCode: "TARGET_NOT_REACHABLE",
       } satisfies WsServerMessage)
     );
@@ -193,7 +200,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
     const handler = (): void => void got.push(1);
     h.shim.on("message", handler);
     h.shim.off("message", handler);
-    h.shim.deliverInbound({ type: "ws:auth", token: "t" });
+    h.shim.deliverInbound({ type: "ws:auth", contractVersion: 1, token: "t" });
     expect(got).toHaveLength(0);
   });
 });

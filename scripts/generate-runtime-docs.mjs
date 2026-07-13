@@ -9,7 +9,10 @@ import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
-const gadCatalogPath = path.join(repoRoot, "packages/shared/src/generated/gadRuntimeCatalog.json");
+const gadCatalogPath = path.join(
+  repoRoot,
+  "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json"
+);
 
 /**
  * Load a runtime-surface manifest by bundling it with esbuild (which resolves
@@ -133,7 +136,7 @@ async function updateGadRuntimeCatalog(checkOnly) {
   if (checkOnly) {
     if (next !== current) {
       throw new Error(
-        "packages/shared/src/generated/gadRuntimeCatalog.json is out of date. " +
+        "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json is out of date. " +
           "Run: pnpm run generate:runtime-docs"
       );
     }
@@ -149,14 +152,13 @@ const checkOnly = process.argv.includes("--check");
 
 await updateGadRuntimeCatalog(checkOnly);
 
-// The authoritative surfaces live in @vibestudio/shared; the workspace runtime
-// files are re-export shims this loader cannot evaluate.
+// The authoritative schema-derived surfaces live in @vibestudio/service-schemas.
 const panelSurface = loadRuntimeSurface(
-  "packages/shared/src/runtimeSurface.panel.ts",
+  "packages/service-schemas/src/runtime/runtimeSurface.panel.ts",
   "panelRuntimeSurface"
 );
 const workerSurface = loadRuntimeSurface(
-  "packages/shared/src/runtimeSurface.worker.ts",
+  "packages/service-schemas/src/runtime/runtimeSurface.worker.ts",
   "workerRuntimeSurface"
 );
 

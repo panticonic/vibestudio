@@ -1,7 +1,8 @@
 import z from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { AuditLog } from "@vibestudio/shared/credentials/audit";
-import type { AuditEntry, CredentialAuditEvent } from "@vibestudio/shared/credentials/types";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { AuditLog } from "@vibestudio/credential-client/audit";
+import type { AuditEntry, CredentialAuditEvent } from "@vibestudio/credential-client/types";
 
 const auditQuerySchema = z.object({
   filter: z
@@ -67,30 +68,27 @@ function sanitizeAuditEvent(entry: CredentialAuditEvent): CredentialAuditEvent {
 }
 
 export function createAuditService(auditLog: AuditLog): ServiceDefinition {
+  const methods = {
+    query: {
+      args: z.tuple([auditQuerySchema.optional()]),
+    },
+  };
   return {
     name: "audit",
     description: "Audit log query access",
     policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
-    methods: {
-      query: {
-        args: z.tuple([auditQuerySchema.optional()]),
+    methods,
+    handler: defineServiceHandler("audit", methods, {
+      query: async (_ctx, [query]) => {
+        const entries = await auditLog.query(query as AuditQuery | undefined);
+        // Defense-in-depth: sanitise on read even if the writer (e.g.
+        // a stale egressProxy) recorded a raw URL. The append-time
+        // sanitisation must be wired in `egressProxy.ts` (Agent 5's
+        // territory) by routing URL fields through `sanitizeUrlForAudit`
+        // before calling `auditLog.append`.
+        return entries.map(sanitizeAuditEvent);
       },
-    },
-    handler: async (_ctx, method, args) => {
-      switch (method) {
-        case "query": {
-          const entries = await auditLog.query(args[0] as AuditQuery | undefined);
-          // Defense-in-depth: sanitise on read even if the writer (e.g.
-          // a stale egressProxy) recorded a raw URL. The append-time
-          // sanitisation must be wired in `egressProxy.ts` (Agent 5's
-          // territory) by routing URL fields through `sanitizeUrlForAudit`
-          // before calling `auditLog.append`.
-          return entries.map(sanitizeAuditEvent);
-        }
-        default:
-          throw new Error(`Unknown audit method: ${method}`);
-      }
-    },
+    }),
   };
 }
 

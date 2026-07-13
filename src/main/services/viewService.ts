@@ -1,8 +1,9 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { viewMethods } from "@vibestudio/shared/serviceSchemas/view";
+import { viewMethods } from "@vibestudio/service-schemas/view";
 import type { ViewManager } from "../viewManager.js";
 import { assertHttpUrl } from "../utils.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./appCapabilities.js";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 
 export function createViewService(deps: { getViewManager: () => ViewManager }): ServiceDefinition {
   /**
@@ -58,270 +59,225 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
     description: "View bounds, visibility, theme CSS",
     policy: { allowed: ["shell", "app"] },
     methods: viewMethods,
-    handler: async (ctx, method, args) => {
-      const vm = deps.getViewManager();
-
-      switch (method) {
-        case "setBounds": {
-          const [viewId, bounds] = args as [
-            string,
-            { x: number; y: number; width: number; height: number },
-          ];
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            viewId,
-            "setBounds"
+    handler: defineServiceHandler("view", viewMethods, {
+      setBounds: (ctx, [viewId, bounds]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          viewId,
+          "setBounds"
+        );
+        vm.setViewBounds(viewId, bounds);
+        return;
+      },
+      setVisible: (ctx, [viewId, visible]) => {
+        const vm = deps.getViewManager();
+        const targetInfo = vm.getViewInfo(viewId);
+        if (
+          ctx.caller.runtime.kind === "app" &&
+          ctx.caller.runtime.id !== viewId &&
+          targetInfo?.type === "panel"
+        ) {
+          throw new Error(
+            `view.setVisible: hosted apps must place panel views with native panel slots`
           );
-          vm.setViewBounds(viewId, bounds);
-          return;
         }
-        case "setVisible": {
-          const [viewId, visible] = args as [string, boolean];
-          const targetInfo = vm.getViewInfo(viewId);
-          if (
-            ctx.caller.runtime.kind === "app" &&
-            ctx.caller.runtime.id !== viewId &&
-            targetInfo?.type === "panel"
-          ) {
-            throw new Error(
-              `view.setVisible: hosted apps must place panel views with native panel slots`
-            );
-          }
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            viewId,
-            "setVisible"
-          );
-          vm.setViewVisible(viewId, visible);
-          return;
-        }
-        case "forwardMouseClick": {
-          const [viewId, point] = args as [string, { x: number; y: number }];
-          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "forwardMouseClick");
-          return vm.forwardMouseClick(viewId, point);
-        }
-        case "setThemeCss": {
-          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setThemeCss");
-          const css = args[0] as string;
-          vm.setThemeCss(css);
-          return;
-        }
-        case "bindNativePanelSlot": {
-          assertNativePanelSlotHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "bindNativePanelSlot"
-          );
-          const [request] = args as [
-            {
-              nativeSlotId: string;
-              panelId: string;
-              bounds: { x: number; y: number; width: number; height: number };
-              focused?: boolean;
-            },
-          ];
-          vm.bindPanelSlot(ctx.caller.runtime.id, request);
-          return { status: "bound" };
-        }
-        case "updateNativePanelSlot": {
-          assertNativePanelSlotHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "updateNativePanelSlot"
-          );
-          const [request] = args as [
-            {
-              nativeSlotId: string;
-              bounds?: { x: number; y: number; width: number; height: number };
-              focused?: boolean;
-            },
-          ];
-          return vm.updatePanelSlot(ctx.caller.runtime.id, request);
-        }
-        case "clearNativePanelSlot": {
-          assertNativePanelSlotHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "clearNativePanelSlot"
-          );
-          const [request] = args as [{ nativeSlotId: string }];
-          vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId);
-          return;
-        }
-        case "setHostedShellReady": {
-          assertNativePanelSlotHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "setHostedShellReady"
-          );
-          const [request] = args as [{ ready: boolean }];
-          vm.setHostedShellReady(ctx.caller.runtime.id, request.ready);
-          return;
-        }
-        case "setShellOverlay": {
-          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setShellOverlay");
-          const active = args[0] as boolean;
-          vm.setShellOverlayActive(active);
-          return;
-        }
-        case "showNativeShellOverlay": {
-          assertViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "showNativeShellOverlay"
-          );
-          const [options] = args as [
-            {
-              id: string;
-              rows: import("../shellOverlayView.js").ShellOverlayRow[];
-              empty: string;
-              bounds: { x: number; y: number; width: number; height: number };
-              focus?: boolean;
-            },
-          ];
-          vm.showNativeShellOverlay(options);
-          return;
-        }
-        case "updateNativeShellOverlay": {
-          assertViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "updateNativeShellOverlay"
-          );
-          const [options] = args as [
-            {
-              id?: string;
-              rows?: import("../shellOverlayView.js").ShellOverlayRow[];
-              empty?: string;
-              bounds?: { x: number; y: number; width: number; height: number };
-              focus?: boolean;
-            },
-          ];
-          vm.updateNativeShellOverlay(options);
-          return;
-        }
-        case "hideNativeShellOverlay": {
-          assertViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "hideNativeShellOverlay"
-          );
-          vm.hideNativeShellOverlay(args[0] as string | undefined);
-          return;
-        }
-        case "showContentOverlay": {
-          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "showContentOverlay");
-          const [options] = args as [
-            import("../shellContentOverlayView.js").ContentOverlayShowOptions,
-          ];
-          vm.showContentOverlay(options);
-          return;
-        }
-        case "updateContentOverlay": {
-          assertViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "updateContentOverlay"
-          );
-          const [options] = args as [
-            import("../shellContentOverlayView.js").ContentOverlayUpdateOptions,
-          ];
-          vm.updateContentOverlay(options);
-          return;
-        }
-        case "hideContentOverlay": {
-          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "hideContentOverlay");
-          vm.hideContentOverlay();
-          return;
-        }
-        case "browserNavigate": {
-          const [browserId, url] = args as [string, string];
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            browserId,
-            "browserNavigate"
-          );
-          assertHttpUrl(url);
-          await vm.navigateView(browserId, url);
-          return;
-        }
-        case "browserGoBack": {
-          const browserId = args[0] as string;
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            browserId,
-            "browserGoBack"
-          );
-          vm.getWebContents(browserId)?.navigationHistory.goBack();
-          return;
-        }
-        case "browserGoForward": {
-          const browserId = args[0] as string;
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            browserId,
-            "browserGoForward"
-          );
-          vm.getWebContents(browserId)?.navigationHistory.goForward();
-          return;
-        }
-        case "browserReload": {
-          const browserId = args[0] as string;
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            browserId,
-            "browserReload"
-          );
-          vm.reload(browserId);
-          return;
-        }
-        case "browserForceReload": {
-          const browserId = args[0] as string;
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            browserId,
-            "browserForceReload"
-          );
-          vm.forceReload(browserId);
-          return;
-        }
-        case "browserStop": {
-          const browserId = args[0] as string;
-          assertOwnsOrViewHost(
-            vm,
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            browserId,
-            "browserStop"
-          );
-          vm.stop(browserId);
-          return;
-        }
-        default:
-          throw new Error(`Unknown view method: ${method}`);
-      }
-    },
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          viewId,
+          "setVisible"
+        );
+        vm.setViewVisible(viewId, visible);
+        return;
+      },
+      forwardMouseClick: (ctx, [viewId, point]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "forwardMouseClick");
+        return vm.forwardMouseClick(viewId, point);
+      },
+      setThemeCss: (ctx, [css]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setThemeCss");
+        vm.setThemeCss(css);
+        return;
+      },
+      bindNativePanelSlot: (ctx, [request]) => {
+        const vm = deps.getViewManager();
+        assertNativePanelSlotHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "bindNativePanelSlot"
+        );
+        vm.bindPanelSlot(ctx.caller.runtime.id, request);
+        return { status: "bound" };
+      },
+      updateNativePanelSlot: (ctx, [request]) => {
+        const vm = deps.getViewManager();
+        assertNativePanelSlotHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "updateNativePanelSlot"
+        );
+        return vm.updatePanelSlot(ctx.caller.runtime.id, request);
+      },
+      clearNativePanelSlot: (ctx, [request]) => {
+        const vm = deps.getViewManager();
+        assertNativePanelSlotHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "clearNativePanelSlot"
+        );
+        vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId);
+        return;
+      },
+      setHostedShellReady: (ctx, [request]) => {
+        const vm = deps.getViewManager();
+        assertNativePanelSlotHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "setHostedShellReady"
+        );
+        vm.setHostedShellReady(ctx.caller.runtime.id, request.ready);
+        return;
+      },
+      setShellOverlay: (ctx, [active]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setShellOverlay");
+        vm.setShellOverlayActive(active);
+        return;
+      },
+      showNativeShellOverlay: (ctx, [options]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "showNativeShellOverlay"
+        );
+        vm.showNativeShellOverlay(options);
+        return;
+      },
+      updateNativeShellOverlay: (ctx, [options]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "updateNativeShellOverlay"
+        );
+        vm.updateNativeShellOverlay(options);
+        return;
+      },
+      hideNativeShellOverlay: (ctx, [id]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          "hideNativeShellOverlay"
+        );
+        vm.hideNativeShellOverlay(id);
+        return;
+      },
+      showContentOverlay: (ctx, [options]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "showContentOverlay");
+        vm.showContentOverlay(options);
+        return;
+      },
+      updateContentOverlay: (ctx, [options]) => {
+        const vm = deps.getViewManager();
+        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "updateContentOverlay");
+        vm.updateContentOverlay(options);
+        return;
+      },
+      hideContentOverlay: (ctx) => {
+        const vm = deps.getViewManager();
+        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "hideContentOverlay");
+        vm.hideContentOverlay();
+        return;
+      },
+      browserNavigate: async (ctx, [browserId, url]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          browserId,
+          "browserNavigate"
+        );
+        assertHttpUrl(url);
+        await vm.navigateView(browserId, url);
+        return;
+      },
+      browserGoBack: (ctx, [browserId]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          browserId,
+          "browserGoBack"
+        );
+        vm.getWebContents(browserId)?.navigationHistory.goBack();
+        return;
+      },
+      browserGoForward: (ctx, [browserId]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          browserId,
+          "browserGoForward"
+        );
+        vm.getWebContents(browserId)?.navigationHistory.goForward();
+        return;
+      },
+      browserReload: (ctx, [browserId]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          browserId,
+          "browserReload"
+        );
+        vm.reload(browserId);
+        return;
+      },
+      browserForceReload: (ctx, [browserId]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          browserId,
+          "browserForceReload"
+        );
+        vm.forceReload(browserId);
+        return;
+      },
+      browserStop: (ctx, [browserId]) => {
+        const vm = deps.getViewManager();
+        assertOwnsOrViewHost(
+          vm,
+          ctx.caller.runtime.id,
+          ctx.caller.runtime.kind,
+          browserId,
+          "browserStop"
+        );
+        vm.stop(browserId);
+        return;
+      },
+    }),
   };
 }

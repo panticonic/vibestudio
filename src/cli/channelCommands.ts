@@ -19,7 +19,7 @@ import type {
   ChannelRosterEntry,
   ChannelSendResult,
   ChannelSummary,
-} from "@vibestudio/shared/serviceSchemas/channel";
+} from "@vibestudio/service-schemas/channel";
 import {
   JSON_FLAG,
   type CliCommand,

@@ -78,7 +78,7 @@ describe("typed service client guard", () => {
         [
           "--input-type=module",
           "--eval",
-          "await import('@vibestudio/shared/serviceSchemas/extensions');",
+          "await import('@vibestudio/service-schemas/extensions');",
         ],
         { cwd: repoRoot, stdio: "pipe" }
       )

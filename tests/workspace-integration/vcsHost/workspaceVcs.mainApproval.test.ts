@@ -1,6 +1,6 @@
 /**
  * Main-advance approval rides the PROTECTED-REF gate now: every `main` advance
- * is a RefService compare-and-swap whose injected gate runs the approval
+ * is a ProtectedRefStore compare-and-swap whose injected gate runs the approval
  * machinery (docs/blob-addressed-cleanly.md step 6). These tests verify:
  *   - reads of a repo's main never block on a parked push approval (main reads
  *     resolve from the ref store, not the head locks);
@@ -26,10 +26,10 @@ import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
 import {
-  createRefService,
+  createProtectedRefStore,
   type RefGateBatch,
   type RefGate,
-} from "../../../src/server/services/refService.js";
+} from "../../../src/server/services/protectedRefStore.js";
 import {
   createMainAdvanceApprovalGate,
   createMainRefAdvanceGate,
@@ -108,7 +108,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
     // content store over this test's blob dir (production uses blobstore.* RPC).
     refGate = async () => {};
     gateInputs = [];
-    const refs = createRefService({
+    const refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: async (input) => {
         gateInputs.push(input);
@@ -117,7 +117,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
     });
     // In-process pushes flow through the DO's `vcsPush` → `refs.updateMains`.
     // Production attaches the caller gate context at the host RPC layer
-    // (refsService.ts); supply the equivalent here so the approval gate runs on
+    // (refsRpcService.ts); supply the equivalent here so the approval gate runs on
     // every advance (mirrors a tokened, caller-driven push).
     attachLocalHostBridges(gad.instance, {
       blobsDir: path.join(root, "blobs"),
@@ -238,7 +238,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
         approveRepoDeletion: async () => {},
       },
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
-      workspaceViewWithReposAt: (overrides) => vcs.workspaceViewWithReposAt(overrides),
+      workspaceViewWithReposAt: (overrides) => vcs.repositories.workspaceViewWithReposAt(overrides),
     });
 
     gateInputs.length = 0;
@@ -280,7 +280,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
         approveRepoDeletion: async () => {},
       },
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
-      workspaceViewWithReposAt: (overrides) => vcs.workspaceViewWithReposAt(overrides),
+      workspaceViewWithReposAt: (overrides) => vcs.repositories.workspaceViewWithReposAt(overrides),
     });
 
     const ctxHead = vcsContextHead("ctx-diff");
@@ -314,7 +314,9 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
   });
 
   it("the meta repo still derives its semantic unit-change prompt from the candidate view", async () => {
-    await seedMain("meta", [{ kind: "create", path: "vibestudio.yml", content: text("name: test\n") }]);
+    await seedMain("meta", [
+      { kind: "create", path: "vibestudio.yml", content: text("name: test\n") },
+    ]);
 
     const provider: UnitMetaChangeApprovalProvider<UnitBatchEntry> = {
       metaChangeApprovalForCommit: vi.fn(async () => ({
@@ -346,7 +348,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
       blobsDir: path.join(root, "blobs"),
       approvalGate,
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
-      workspaceViewWithReposAt: (overrides) => vcs.workspaceViewWithReposAt(overrides),
+      workspaceViewWithReposAt: (overrides) => vcs.repositories.workspaceViewWithReposAt(overrides),
     });
 
     const ctxHead = vcsContextHead("ctx-meta");

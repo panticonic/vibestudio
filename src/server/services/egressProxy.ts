@@ -11,7 +11,7 @@ import type {
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
-import type { AuditLog } from "../../../packages/shared/src/credentials/audit.js";
+import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type {
   AuditEntry,
   Credential,
@@ -19,13 +19,13 @@ import type {
   CredentialBindingUse,
   CredentialGrantAction,
   CredentialUseGrant,
-} from "../../../packages/shared/src/credentials/types.js";
+} from "@vibestudio/credential-client/types";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
   renderCredentialBasicAuthValue,
   renderCredentialHeaderValue,
-} from "../../../packages/shared/src/credentials/urlAudience.js";
+} from "@vibestudio/credential-client/urlAudience";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import {
   CredentialSessionGrantStore,
@@ -150,7 +150,13 @@ export type StreamFrame =
     }
   | { kind: "chunk"; bytes: Uint8Array }
   | { kind: "end"; bytesIn: number }
-  | { kind: "error"; status: number; message: string; code?: string };
+  | {
+      kind: "error";
+      status: number;
+      message: string;
+      code?: string;
+      errorKind: import("@vibestudio/rpc").RpcErrorKind;
+    };
 
 interface CircuitState {
   failures: number;
@@ -534,6 +540,7 @@ export class EgressProxy {
               status: 502,
               message: err instanceof Error ? err.message : String(err),
               code: typeof code === "string" ? code : undefined,
+              errorKind: "transport",
             });
           } catch {
             // Best-effort — connection may already be torn down.

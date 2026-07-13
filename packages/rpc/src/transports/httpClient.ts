@@ -207,6 +207,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
                     type: "response",
                     requestId,
                     error: `Handler timed out after ${timeoutMs}ms`,
+                    errorKind: "transport",
                     errorCode: "RESPOND_TIMEOUT",
                   },
                 });

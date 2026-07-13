@@ -4,7 +4,7 @@ import {
   type ServiceContext,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
-import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
+import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
@@ -177,7 +177,7 @@ describe("IpcDispatcher", () => {
     const call = vi.fn();
     const callAs = vi.fn();
     const onServerRpcResult = vi.fn();
-    const panelHandler = vi.fn(async () => ({ revision: 4, rootPanels: [] }));
+    const panelHandler = vi.fn(async () => ({ revision: 4, forest: [] }));
     makeDispatcher({
       resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
       call,
@@ -235,7 +235,7 @@ describe("IpcDispatcher", () => {
       expectSentRpcMessage(shellWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-paneltree",
-        result: { revision: 4, rootPanels: [] },
+        result: { revision: 4, forest: [] },
       });
     });
   });
@@ -377,6 +377,7 @@ describe("IpcDispatcher", () => {
         type: "response",
         requestId: "req-fs-denied",
         error: "fs.readFile requires app capability 'fs-read'",
+        errorKind: "access",
       });
     });
     expect(authorizeAppServerCall).toHaveBeenCalledWith("@workspace-apps/shell", "fs", "readFile", [
@@ -480,8 +481,10 @@ describe("IpcDispatcher", () => {
       }),
       configureDispatcher: (dispatcher) => {
         dispatcher.registerService({
-          name: "app",
-          description: "test app service",
+          // Deliberately not a well-known name: registration itself determines
+          // that the service is Electron-local.
+          name: "electron-test",
+          description: "test Electron-local service",
           policy: { allowed: ["app"] },
           methods: {},
           handler: async (ctx) => {
@@ -498,7 +501,7 @@ describe("IpcDispatcher", () => {
         type: "request",
         requestId: "req-local",
         fromId: "@workspace-apps/shell",
-        method: "app.getInfo",
+        method: "electron-test.getInfo",
         args: [],
       } satisfies RpcMessage) as never
     );

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { WebSocket } from "ws";
-import { RpcServer, type UserSubjectSource } from "./rpcServer.js";
+import { RpcServer } from "./rpcServer.js";
+import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import { Gateway } from "./gateway.js";
 import type {
   ServiceDispatcher,
@@ -10,7 +11,7 @@ import type {
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { EntityCache } from "../../packages/shared/src/runtime/entityCache.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
-import type { UserSubject } from "../../packages/shared/src/users/types.js";
+import type { UserSubject } from "../../packages/identity/src/types.js";
 
 function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
   return {
@@ -1207,7 +1208,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         });
         expect(res.status).toBe(200);
         const { decodeFramedResponseToStreaming } =
-          await import("../../packages/shared/src/credentials/streamFraming.js");
+          await import("@vibestudio/credential-client/streamFraming");
         const decoded = await decodeFramedResponseToStreaming(res.body!, "");
         expect(decoded.status).toBe(201);
         expect(decoded.headers.get("content-type")).toContain("text/plain");
@@ -1305,7 +1306,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         const buf = new Uint8Array(await res.arrayBuffer());
 
         const { FrameDecoder, FRAME_HEAD, FRAME_DATA, FRAME_END, parseHeadFrame, parseEndFrame } =
-          await import("../../packages/shared/src/credentials/streamFraming.js");
+          await import("@vibestudio/credential-client/streamFraming");
 
         const frames: Array<{ type: number; payload: Uint8Array }> = [];
         const decoder = new FrameDecoder((type, payload) => {
@@ -1385,7 +1386,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         });
         expect(res.status).toBe(200);
         const { FrameDecoder, FRAME_ERROR, parseErrorFrame } =
-          await import("../../packages/shared/src/credentials/streamFraming.js");
+          await import("@vibestudio/credential-client/streamFraming");
         const frames: Array<{ type: number; payload: Uint8Array }> = [];
         const decoder = new FrameDecoder((type, payload) => {
           frames.push({ type, payload });

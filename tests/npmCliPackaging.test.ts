@@ -25,6 +25,8 @@ describe("npm CLI packaging", () => {
       "scripts/cli/lib/server-entry.mjs",
       "scripts/cli/lib/pair-server.mjs",
       "scripts/cli/lib/smoke-remote-server.mjs",
+      "scripts/cli/lib/connect-grammar.generated.mjs",
+      "scripts/cli/lib/config-paths.mjs",
     ]) {
       const target = path.join(root, relative);
       mkdirSync(path.dirname(target), { recursive: true });

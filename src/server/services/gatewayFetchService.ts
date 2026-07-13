@@ -44,6 +44,7 @@
 
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
 import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibestudio/shared/panel/assetHeaders";
@@ -79,6 +80,21 @@ const fetchDescriptorSchema = z
 
 const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
 
+const gatewayFetchMethods = {
+  fetch: {
+    description:
+      "Loopback-fetch a panel asset from the server's own gateway and stream the " +
+      "Response back over the pipe's bulk channel (a streaming method). A request " +
+      "body streams IN over the same channel (stream-open bodyStreamId → ctx.body).",
+    args: z.tuple([fetchDescriptorSchema]),
+    // Streaming method: the handler returns a Response whose body is chunked
+    // over the bulk channel by handleWsStreamRequest. Node callers use `.stream`
+    // (Response); RN callers use `.streamReadable` (the raw ReadableStream).
+    returns: z.instanceof(Response),
+    access: { sensitivity: "read" as const },
+  },
+};
+
 function trustedMobileBootstrapTarget(
   ctx: Parameters<NonNullable<ServiceDefinition["handler"]>>[0],
   descriptor: GatewayFetchDescriptor
@@ -111,102 +127,86 @@ export function createGatewayFetchService(deps: {
     // same gateway-relative assets. The only management-route exception is the
     // exact mobile native bootstrap POST, and only for trusted shell/app callers.
     policy: { allowed: ["shell", "app", "panel", "worker", "do"] },
-    methods: {
-      fetch: {
-        description:
-          "Loopback-fetch a panel asset from the server's own gateway and stream the " +
-          "Response back over the pipe's bulk channel (a streaming method). A request " +
-          "body streams IN over the same channel (stream-open bodyStreamId → ctx.body).",
-        args: z.tuple([fetchDescriptorSchema]),
-        // Streaming method: the handler returns a Response whose body is chunked
-        // over the bulk channel by handleWsStreamRequest. Node callers use `.stream`
-        // (Response); RN callers use `.streamReadable` (the raw ReadableStream).
-        returns: z.instanceof(Response),
-        access: { sensitivity: "read" },
-      },
-    },
-    handler: async (ctx, method, args) => {
-      if (method !== "fetch") {
-        throw new ServiceError(serviceName, method, `Unknown gateway method: ${method}`, "ENOSYS");
-      }
+    methods: gatewayFetchMethods,
+    handler: defineServiceHandler(serviceName, gatewayFetchMethods, {
+      fetch: async (ctx, [descriptor]) => {
+        const trustedTarget = trustedMobileBootstrapTarget(ctx, descriptor);
 
-      const descriptor = args[0] as GatewayFetchDescriptor;
-      const trustedTarget = trustedMobileBootstrapTarget(ctx, descriptor);
+        // AUTHORITATIVE panel-origin path allowlist (defense in depth — see
+        // assetPathPolicy). This service is reachable from the panel/loopback
+        // origin, and the gateway namespace it proxies into includes management
+        // routes (`/_r/s/*` auth/workspace/webhook, `/rpc`). Panels hold no
+        // privileged bearer today, so downstream auth would reject them — but the
+        // panel origin must never be able to ADDRESS those routes at all, even if
+        // a downstream route's auth regresses. Only panel assets, `/_r/w/` worker
+        // routes, and `/_a/` app artifacts pass. The check also normalizes the
+        // path exactly like `fetch()` will (dot segments, backslash host escapes
+        // like "/\evil.example"), and the normalized `decision.target` — not the
+        // raw input — is what gets fetched, so check and fetch cannot diverge.
+        // Native mobile shell/app bootstrap is intentionally not a panel-origin
+        // asset fetch: it redeems the already paired device credential for the
+        // approved React Native app manifest. Keep that hole exact, method-bound,
+        // and principal-bound; every other path still uses the panel policy.
+        let target = trustedTarget;
+        if (!target) {
+          const decision = checkPanelGatewayPath(descriptor.path);
+          if (!decision.allowed) {
+            throw new ServiceError(
+              serviceName,
+              "fetch",
+              `gateway.fetch rejected: ${decision.reason}`,
+              decision.denied === "policy" ? "EACCES" : "EINVAL"
+            );
+          }
+          target = decision.target;
+        }
 
-      // AUTHORITATIVE panel-origin path allowlist (defense in depth — see
-      // assetPathPolicy). This service is reachable from the panel/loopback
-      // origin, and the gateway namespace it proxies into includes management
-      // routes (`/_r/s/*` auth/workspace/webhook, `/rpc`). Panels hold no
-      // privileged bearer today, so downstream auth would reject them — but the
-      // panel origin must never be able to ADDRESS those routes at all, even if
-      // a downstream route's auth regresses. Only panel assets, `/_r/w/` worker
-      // routes, and `/_a/` app artifacts pass. The check also normalizes the
-      // path exactly like `fetch()` will (dot segments, backslash host escapes
-      // like "/\evil.example"), and the normalized `decision.target` — not the
-      // raw input — is what gets fetched, so check and fetch cannot diverge.
-      // Native mobile shell/app bootstrap is intentionally not a panel-origin
-      // asset fetch: it redeems the already paired device credential for the
-      // approved React Native app manifest. Keep that hole exact, method-bound,
-      // and principal-bound; every other path still uses the panel policy.
-      let target = trustedTarget;
-      if (!target) {
-        const decision = checkPanelGatewayPath(descriptor.path);
-        if (!decision.allowed) {
+        if (!target) {
           throw new ServiceError(
             serviceName,
-            method,
-            `gateway.fetch rejected: ${decision.reason}`,
-            decision.denied === "policy" ? "EACCES" : "EINVAL"
+            "fetch",
+            "gateway.fetch rejected: no gateway target resolved",
+            "EINVAL"
           );
         }
-        target = decision.target;
-      }
 
-      if (!target) {
-        throw new ServiceError(
-          serviceName,
-          method,
-          "gateway.fetch rejected: no gateway target resolved",
-          "EINVAL"
-        );
-      }
+        const port = deps.getGatewayPort();
+        const url = `http://127.0.0.1:${port}${target}`;
 
-      const port = deps.getGatewayPort();
-      const url = `http://127.0.0.1:${port}${target}`;
+        // STREAMING both ways (via the pipe's stream path, handleWsStreamRequest):
+        // the response body rides the bulk channel chunked under the data-channel
+        // message-size limit, and the request body (ctx.body, plan §1.6) streams in
+        // from the same channel. A buffered base64 body in either direction would
+        // exceed that limit for real payloads (MB).
+        const response = await fetch(url, {
+          method: descriptor.method ?? "GET",
+          headers: descriptor.headers,
+          ...(ctx.body
+            ? // undici requires half-duplex to be declared for stream bodies.
+              { body: ctx.body, duplex: "half" }
+            : {}),
+        } as RequestInit);
 
-      // STREAMING both ways (via the pipe's stream path, handleWsStreamRequest):
-      // the response body rides the bulk channel chunked under the data-channel
-      // message-size limit, and the request body (ctx.body, plan §1.6) streams in
-      // from the same channel. A buffered base64 body in either direction would
-      // exceed that limit for real payloads (MB).
-      const response = await fetch(url, {
-        method: descriptor.method ?? "GET",
-        headers: descriptor.headers,
-        ...(ctx.body
-          ? // undici requires half-duplex to be declared for stream bodies.
-            { body: ctx.body, duplex: "half" }
-          : {}),
-      } as RequestInit);
+        const hasRangeSemantics =
+          hasRangeRequestHeader(descriptor.headers) ||
+          response.status === 206 ||
+          response.headers.has("content-range");
+        if (descriptor.gzip && response.ok && response.body && !hasRangeSemantics) {
+          // Compress on the wire (see schema). The body is re-streamed through a gzip
+          // transform; the caller decompresses. Drop content-length — the recompressed
+          // length differs and the stream carries no length anyway.
+          const headers = new Headers(response.headers);
+          headers.set(GZIP_MARKER_HEADER, "1");
+          headers.delete("content-length");
+          return new Response(response.body.pipeThrough(new CompressionStream("gzip")), {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+          });
+        }
 
-      const hasRangeSemantics =
-        hasRangeRequestHeader(descriptor.headers) ||
-        response.status === 206 ||
-        response.headers.has("content-range");
-      if (descriptor.gzip && response.ok && response.body && !hasRangeSemantics) {
-        // Compress on the wire (see schema). The body is re-streamed through a gzip
-        // transform; the caller decompresses. Drop content-length — the recompressed
-        // length differs and the stream carries no length anyway.
-        const headers = new Headers(response.headers);
-        headers.set(GZIP_MARKER_HEADER, "1");
-        headers.delete("content-length");
-        return new Response(response.body.pipeThrough(new CompressionStream("gzip")), {
-          status: response.status,
-          statusText: response.statusText,
-          headers,
-        });
-      }
-
-      return response;
-    },
+        return response;
+      },
+    }),
   };
 }

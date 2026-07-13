@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { workspaceAppPackageName } from "@vibestudio/shared/workspace/configParser";
+import { workspaceAppPackageName } from "@vibestudio/workspace/configParser";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 import { approvalViewModels, targetLabel } from "@vibestudio/shared/bootstrapLaunchGate";
@@ -211,7 +211,7 @@ export class HostTargetLaunchCoordinator {
       return readiness;
     }
 
-    const readiness = await appHost.ensureReactNativeReady(source, { waitForApproval: false });
+    const readiness = await appHost.reactNative.ensureReady(source, { waitForApproval: false });
     if (readiness.ready) {
       this.reportLaunchActivity("react-native", "settled");
       return readiness;

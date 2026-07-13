@@ -1,9 +1,9 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ViewManager } from "../viewManager.js";
-import type { PaletteCommand } from "@vibestudio/shared/types";
-import { paletteMethods } from "@vibestudio/shared/serviceSchemas/palette";
+import { paletteMethods } from "@vibestudio/service-schemas/palette";
 import { requireChromeCaller } from "./appCapabilities.js";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 
 /**
  * The app-level command-palette bridge. A leaf panel (`panel` caller — or a
@@ -30,37 +30,26 @@ export function createPaletteService(deps: {
     description: "App-level command palette contributions",
     policy: { allowed: ["shell", "app", "panel"] },
     methods: paletteMethods,
-    handler: async (ctx, method, args) => {
-      const orchestrator = deps.panelOrchestrator;
-
-      switch (method) {
-        case "register": {
-          orchestrator.registerPaletteCommands(ctx.caller.runtime.id, args[0] as PaletteCommand[]);
-          return;
-        }
-
-        case "unregister": {
-          orchestrator.unregisterPaletteCommands(ctx.caller.runtime.id);
-          return;
-        }
-
-        case "list": {
-          // Aggregation/dispatch is chrome's job; a panel must not enumerate
-          // or dispatch into other panels.
-          requireChromeCaller(ctx, deps.getViewManager(), "palette.list");
-          return orchestrator.listPaletteCommands();
-        }
-
-        case "run": {
-          requireChromeCaller(ctx, deps.getViewManager(), "palette.run");
-          const [panelId, commandId] = args as [string, string];
-          orchestrator.runPaletteCommand(panelId, commandId);
-          return;
-        }
-
-        default:
-          throw new Error(`Unknown palette method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("palette", paletteMethods, {
+      register: (ctx, [commands]) => {
+        deps.panelOrchestrator.registerPaletteCommands(ctx.caller.runtime.id, commands);
+        return;
+      },
+      unregister: (ctx) => {
+        deps.panelOrchestrator.unregisterPaletteCommands(ctx.caller.runtime.id);
+        return;
+      },
+      list: (ctx) => {
+        // Aggregation/dispatch is chrome's job; a panel must not enumerate
+        // or dispatch into other panels.
+        requireChromeCaller(ctx, deps.getViewManager(), "palette.list");
+        return deps.panelOrchestrator.listPaletteCommands();
+      },
+      run: (ctx, [panelId, commandId]) => {
+        requireChromeCaller(ctx, deps.getViewManager(), "palette.run");
+        deps.panelOrchestrator.runPaletteCommand(panelId, commandId);
+        return;
+      },
+    }),
   };
 }

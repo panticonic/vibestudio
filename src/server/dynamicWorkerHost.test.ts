@@ -16,11 +16,21 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import {
+  buildWorkerdPrograms,
+  type WorkerdProgramSources,
+} from "../../scripts/build-workerd-programs.mjs";
+
+let compiledWorkerdPrograms: WorkerdProgramSources;
+
+beforeAll(async () => {
+  compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
+});
 
 const WORKER_BUNDLE = `export default {
   async fetch(request, env) {
@@ -115,12 +125,14 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
       buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
     }),
     getBuildByKey: () => currentBuild.value,
+    workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-")),
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(egressPort),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
+    egressSecret: "dynamic-worker-host-egress-secret",
     getWorkerdGatewayToken: () => "test-gateway-token",
     workerdStartupReadyTimeoutMs: 15_000,
   };

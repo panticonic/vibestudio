@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   authMethods,
   RefreshAgentResponseSchema,
   RefreshShellResponseSchema,
-} from "@vibestudio/shared/serviceSchemas/auth";
+} from "@vibestudio/service-schemas/auth";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
@@ -15,15 +16,15 @@ import {
   AGENT_TOKEN_PATTERN,
   type DeviceAuthStore,
   type IssuedDeviceCredential,
-} from "./deviceAuthStore.js";
+} from "../hostCore/deviceAuthStore.js";
 import {
   DEVICE_ID_PATTERN,
   DEVICE_REFRESH_TOKEN_PATTERN,
 } from "@vibestudio/shared/deviceCredentials";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { User } from "@vibestudio/shared/users/types";
+import type { User } from "@vibestudio/identity/types";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
-import type { AuditLog } from "@vibestudio/shared/credentials/audit";
+import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
@@ -32,10 +33,10 @@ import {
   connectionInfoResponse,
   shellCallerId,
   type AuthConnectionInfo,
-} from "./auth/model.js";
-import { refreshPrincipalGrantResponse } from "./auth/principalGrants.js";
-import { sendAuthError } from "./auth/httpErrors.js";
-import { authError, authErrorCode } from "./auth/errors.js";
+} from "../hostCore/auth/model.js";
+import { refreshPrincipalGrantResponse } from "../hostCore/auth/principalGrants.js";
+import { sendAuthError } from "../hostCore/auth/httpErrors.js";
+import { authError, authErrorCode } from "../hostCore/auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
 
 export const RefreshShellBodySchema = z
@@ -340,16 +341,43 @@ export function createAuthService(deps: {
       // deny (no role can be affirmed).
       roleOf: deps.roleOf,
     });
+
+  async function resolveAgentCredentialTarget(
+    methodName: string,
+    entityId: string
+  ): Promise<EntityRecord> {
+    if (!deps.resolveRuntimeEntity) {
+      throw new Error(`auth.${methodName} requires runtime entity resolution`);
+    }
+    const record = await deps.resolveRuntimeEntity(entityId);
+    if (!record || record.status !== "active") {
+      throw new Error(`auth.${methodName} target entity is not active: ${entityId}`);
+    }
+    if (record.kind !== "session") {
+      throw new Error(`auth.${methodName} target entity must be a session`);
+    }
+    return record;
+  }
+
+  function assertAgentCredentialOwner(
+    methodName: string,
+    callerId: string,
+    record: EntityRecord
+  ): void {
+    if (record.parentId !== callerId && record.id !== callerId) {
+      throw new Error(`auth.${methodName} caller does not own target entity ${record.id}`);
+    }
+  }
+
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
     policy: { allowed: ["server", "shell"] },
     methods: authMethods,
-    handler: async (ctx, method, args) => {
-      if (method === "grantConnection") {
+    handler: defineServiceHandler("auth", authMethods, {
+      grantConnection: (ctx, [principalId]) => {
         capabilityAuthorizer.require(ctx.caller, "panel-hosting");
         if (!deps.connectionGrants) throw new Error("Connection grants are not configured");
-        const principalId = args[0] as string;
         // Boundary defense at the RPC ingress: a slot id ("panel:tree/…") names a
         // tree position, not a connectable principal. Reject it loudly here so a
         // slot/entity mix-up by ANY caller fails at the grant rather than minting a
@@ -362,49 +390,14 @@ export function createAuthService(deps: {
           );
         }
         return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id);
-      }
-      if (method === "getConnectionInfo") {
-        return {
-          ...connectionInfoResponse(deps),
-          callerKind: ctx.caller.runtime.kind,
-          ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
-        };
-      }
-      async function resolveAgentCredentialTarget(
-        methodName: string,
-        entityId: string
-      ): Promise<EntityRecord> {
-        if (!deps.resolveRuntimeEntity) {
-          throw new Error(`auth.${methodName} requires runtime entity resolution`);
-        }
-        const record = await deps.resolveRuntimeEntity(entityId);
-        if (!record || record.status !== "active") {
-          throw new Error(`auth.${methodName} target entity is not active: ${entityId}`);
-        }
-        if (record.kind !== "session") {
-          throw new Error(`auth.${methodName} target entity must be a session`);
-        }
-        return record;
-      }
-
-      function assertAgentCredentialOwner(
-        methodName: string,
-        callerId: string,
-        record: EntityRecord
-      ): void {
-        if (record.parentId !== callerId && record.id !== callerId) {
-          throw new Error(`auth.${methodName} caller does not own target entity ${record.id}`);
-        }
-      }
-
-      if (method === "mintAgentCredential") {
+      },
+      getConnectionInfo: (ctx) => ({
+        ...connectionInfoResponse(deps),
+        callerKind: ctx.caller.runtime.kind,
+        ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
+      }),
+      mintAgentCredential: async (ctx, [input]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
-        const input = args[0] as {
-          entityId: string;
-          channelId: string;
-          ttlMs?: number;
-          scopes?: string[];
-        };
         const record = await resolveAgentCredentialTarget("mintAgentCredential", input.entityId);
         if (ctx.caller.runtime.kind !== "server") {
           assertAgentCredentialOwner("mintAgentCredential", ctx.caller.runtime.id, record);
@@ -416,10 +409,9 @@ export function createAuthService(deps: {
           // subject-less server/bootstrap spawn attributes to `system` (§5.4).
           userId: ctx.caller.subject?.userId ?? SYSTEM_USER_ID,
         });
-      }
-      if (method === "revokeAgentCredential") {
+      },
+      revokeAgentCredential: async (ctx, [agentId]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
-        const agentId = args[0] as string;
         const existing = deps.deviceAuthStore.getAgentCredential(agentId);
         if (!existing) return { revoked: false };
         if (existing.revokedAt) return { revoked: false };
@@ -433,9 +425,8 @@ export function createAuthService(deps: {
         const revoked = await deps.agentCredentialWriter.revoke(agentId);
         if (revoked) deps.tokenManager.revokeToken(agentCallerId(existing.entityId));
         return { revoked };
-      }
-      throw new Error(`Unknown auth method: ${method}`);
-    },
+      },
+    }),
   };
 
   const routes: ServiceRouteDecl[] = [

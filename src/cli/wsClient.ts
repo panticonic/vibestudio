@@ -22,7 +22,7 @@ import {
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
+import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 
 export interface WsClientConfig {

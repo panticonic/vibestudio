@@ -60,6 +60,7 @@ async function startRpcHarness() {
             JSON.stringify({
               type: "ws:auth-result",
               success,
+              ...(success ? { contractVersion: 1 } : {}),
               callerId,
               callerKind,
               connectionId: "conn",
@@ -124,6 +125,7 @@ async function startRpcHarness() {
           type: "response",
           requestId,
           error: `unexpected ${callerKind}:${method}`,
+          errorKind: "application",
         });
       });
     });

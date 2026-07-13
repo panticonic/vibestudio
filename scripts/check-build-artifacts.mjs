@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 
@@ -9,11 +10,12 @@ const contracts = [
     path: "dist/main.cjs",
     runtime: "Electron main",
     format: "cjs",
-    mustContain: ["require(\"electron\")"],
+    mustContain: ['require("electron")'],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
-        reason: "CJS Electron main should have native require, not esbuild's ESM dynamic require fallback.",
+        reason:
+          "CJS Electron main should have native require, not esbuild's ESM dynamic require fallback.",
       },
     ],
   },
@@ -21,7 +23,7 @@ const contracts = [
     path: "dist/server-electron.cjs",
     runtime: "Electron utilityProcess",
     format: "cjs",
-    mustContain: ["\"use strict\""],
+    mustContain: ['"use strict"'],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
@@ -33,10 +35,7 @@ const contracts = [
     path: "dist/server.mjs",
     runtime: "standalone Node server",
     format: "esm",
-    mustContain: [
-      "import { createRequire as __createRequire } from \"module\";",
-      "const require = __createRequire(import.meta.url);",
-    ],
+    mustContain: [SERVER_ESM_BANNER],
   },
   {
     path: "dist/internal-do.bundle.mjs",
@@ -44,11 +43,11 @@ const contracts = [
     format: "esm",
     forbidden: [
       {
-        pattern: "__require(\"process\")",
+        pattern: '__require("process")',
         reason: "workerd/browser bundles cannot depend on Node's process module.",
       },
       {
-        pattern: "require(\"process\")",
+        pattern: 'require("process")',
         reason: "workerd/browser bundles cannot depend on Node's process module.",
       },
       {
@@ -63,11 +62,11 @@ const contracts = [
     format: "iife",
     forbidden: [
       {
-        pattern: "__require(\"process\")",
+        pattern: '__require("process")',
         reason: "browser bundles cannot depend on Node's process module.",
       },
       {
-        pattern: "require(\"process\")",
+        pattern: 'require("process")',
         reason: "browser bundles cannot depend on Node's process module.",
       },
       {
@@ -81,7 +80,7 @@ const contracts = [
     runtime: "Node ESM package",
     format: "esm",
     mustContain: [
-      "import { createRequire as __createRequire } from \"node:module\";",
+      'import { createRequire as __createRequire } from "node:module";',
       "const require = __createRequire(import.meta.url);",
     ],
   },
@@ -90,16 +89,16 @@ const contracts = [
     runtime: "Node forked extension child runtime",
     format: "esm",
     mustContain: [
-      "import { createRequire as __createRequire } from \"node:module\";",
+      'import { createRequire as __createRequire } from "node:module";',
       "const require = __createRequire(import.meta.url);",
     ],
     forbidden: [
       {
-        pattern: "from \"electron\"",
+        pattern: 'from "electron"',
         reason: "the forked extension child runtime must stay independent of Electron.",
       },
       {
-        pattern: "require(\"electron\")",
+        pattern: 'require("electron")',
         reason: "the forked extension child runtime must stay independent of Electron.",
       },
     ],
@@ -108,7 +107,7 @@ const contracts = [
     path: "packages/process-adapter/dist/index.js",
     runtime: "Node ESM package",
     format: "esm",
-    mustContain: ["createRequire(path.join(process.cwd(), \"package.json\"))"],
+    mustContain: ['createRequire(path.join(process.cwd(), "package.json"))'],
   },
 ];
 
@@ -136,7 +135,7 @@ function checkContract(contract) {
   for (const expected of contract.mustContain ?? []) {
     if (!source.includes(expected)) {
       throw new Error(
-        `${contract.path} (${contract.runtime}) is missing expected text: ${expected}`,
+        `${contract.path} (${contract.runtime}) is missing expected text: ${expected}`
       );
     }
   }
@@ -163,4 +162,6 @@ for (const smoke of importSmokes) {
   await runImportSmoke(smoke);
 }
 
-console.log(`[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes passed.`);
+console.log(
+  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes passed.`
+);

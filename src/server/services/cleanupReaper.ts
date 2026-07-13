@@ -8,10 +8,10 @@
  */
 
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 
 export interface CleanupReaperDeps {
-  doDispatch: DODispatch;
+  doDispatch: DoDispatcher;
   workspaceDORef: DORef;
   onRetire: (record: EntityRecord) => Promise<void>;
   intervalMs?: number;

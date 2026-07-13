@@ -1,38 +1,6 @@
 import { defineConfig } from "vitest/config";
 import path from "path";
-import { readFileSync } from "fs";
-import type { Alias } from "vite";
-
-// Read workspace tsconfig paths and convert to vitest aliases.
-// This is the single source of truth for resolving workspace/vibestudio
-// package imports to source .ts files — no dist needed.
-const workspaceTsconfig = JSON.parse(
-  readFileSync(path.resolve(__dirname, "workspace/tsconfig.json"), "utf-8")
-);
-const tsconfigPaths: Record<string, string[]> = workspaceTsconfig.compilerOptions?.paths ?? {};
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-const sourceAliases: Alias[] = [];
-// Sort by specificity (longer paths first) so subpath exports match before bare imports
-for (const [importPath, [sourcePath]] of Object.entries(tsconfigPaths).sort(
-  (a, b) => b[0].length - a[0].length
-)) {
-  if (!sourcePath) continue;
-
-  if (importPath.includes("*") && sourcePath.includes("*")) {
-    const find = new RegExp(`^${escapeRegex(importPath).replace("\\*", "(.+)")}$`);
-    const replacement = path.resolve(__dirname, sourcePath).replace("*", "$1");
-    sourceAliases.push({ find, replacement });
-  } else {
-    sourceAliases.push({
-      find: importPath,
-      replacement: path.resolve(__dirname, sourcePath),
-    });
-  }
-}
+import { workspaceSourceAliases } from "./vitest.sourceAliases";
 
 export default defineConfig({
   resolve: {
@@ -57,7 +25,7 @@ export default defineConfig({
         find: /^react-native$/,
         replacement: path.resolve(__dirname, "tests/stubs/reactNative.ts"),
       },
-      ...sourceAliases,
+      ...workspaceSourceAliases(__dirname),
       // Resolve workspace panel dependencies from the hoisted node_modules
       // (version-agnostic — the versioned .pnpm store paths go stale on
       // every dependency bump). Needed for tests in workspace/panels/ which

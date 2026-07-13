@@ -12,8 +12,9 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { mirrorMethods, MIRROR_POLICY } from "@vibestudio/shared/serviceSchemas/mirror";
+import { mirrorMethods, MIRROR_POLICY } from "@vibestudio/service-schemas/mirror";
 
 export interface MirrorServiceDeps {
   /** Per-repo content-addressed targets for a context (no disk projection). */
@@ -63,63 +64,57 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
       "Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.",
     policy: MIRROR_POLICY,
     methods: mirrorMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "targets": {
-          const { contextId } = args[0] as { contextId: string };
-          const scopedContextId = contextIdForTargets(ctx, contextId);
-          const targets = await deps.contextRepoTargets(scopedContextId);
-          if (ctx.caller.runtime.kind === "agent") {
-            for (const target of targets) {
-              authorizedAgentStates.set(target.stateHash, scopedContextId);
-            }
+    handler: defineServiceHandler("mirror", mirrorMethods, {
+      targets: async (ctx, [{ contextId }]) => {
+        const scopedContextId = contextIdForTargets(ctx, contextId);
+        const targets = await deps.contextRepoTargets(scopedContextId);
+        if (ctx.caller.runtime.kind === "agent") {
+          for (const target of targets) {
+            authorizedAgentStates.set(target.stateHash, scopedContextId);
           }
-          return targets;
         }
-        case "objects": {
-          const input = args[0] as { stateHash: string; paths?: string[]; cursor?: string };
-          authorizeObjects(ctx, input.stateHash);
-          let files = await deps.listStateFiles(input.stateHash);
-          files.sort((a, b) => a.path.localeCompare(b.path));
-          if (input.paths && input.paths.length > 0) {
-            const want = new Set(input.paths);
-            files = files.filter((f) => want.has(f.path));
-          }
-          const start = input.cursor ? Number.parseInt(input.cursor, 10) : 0;
-          const from = Number.isFinite(start) && start >= 0 ? start : 0;
+        return targets;
+      },
+      objects: async (ctx, [input]) => {
+        authorizeObjects(ctx, input.stateHash);
+        let files = await deps.listStateFiles(input.stateHash);
+        files.sort((a, b) => a.path.localeCompare(b.path));
+        if (input.paths && input.paths.length > 0) {
+          const want = new Set(input.paths);
+          files = files.filter((f) => want.has(f.path));
+        }
+        const start = input.cursor ? Number.parseInt(input.cursor, 10) : 0;
+        const from = Number.isFinite(start) && start >= 0 ? start : 0;
 
-          const page: Array<{ path: string; mode: number; content: string; size: number }> = [];
-          let bytes = 0;
-          let index = from;
-          for (; index < files.length; index++) {
-            const file = files[index];
-            if (!file) {
-              throw new Error(`mirror.objects file index ${index} is unexpectedly absent`);
-            }
-            // Always include at least one file per page so a single oversized
-            // file still transfers (as its own page).
-            if (page.length > 0 && bytes >= MAX_PAGE_BYTES) break;
-            if (page.length >= MAX_PAGE_FILES) break;
-            const buf = await deps.readBlob(file.contentHash);
-            if (!buf) {
-              throw new Error(
-                `mirror.objects missing blob ${file.contentHash} for ${file.path} in state ${input.stateHash}`
-              );
-            }
-            page.push({
-              path: file.path,
-              mode: file.mode,
-              content: buf.toString("base64"),
-              size: buf.length,
-            });
-            bytes += buf.length;
+        const page: Array<{ path: string; mode: number; content: string; size: number }> = [];
+        let bytes = 0;
+        let index = from;
+        for (; index < files.length; index++) {
+          const file = files[index];
+          if (!file) {
+            throw new Error(`mirror.objects file index ${index} is unexpectedly absent`);
           }
-          const next = index < files.length ? String(index) : undefined;
-          return { files: page, ...(next ? { next } : {}) };
+          // Always include at least one file per page so a single oversized
+          // file still transfers (as its own page).
+          if (page.length > 0 && bytes >= MAX_PAGE_BYTES) break;
+          if (page.length >= MAX_PAGE_FILES) break;
+          const buf = await deps.readBlob(file.contentHash);
+          if (!buf) {
+            throw new Error(
+              `mirror.objects missing blob ${file.contentHash} for ${file.path} in state ${input.stateHash}`
+            );
+          }
+          page.push({
+            path: file.path,
+            mode: file.mode,
+            content: buf.toString("base64"),
+            size: buf.length,
+          });
+          bytes += buf.length;
         }
-        default:
-          throw new Error(`Unknown mirror method: ${method}`);
-      }
-    },
+        const next = index < files.length ? String(index) : undefined;
+        return { files: page, ...(next ? { next } : {}) };
+      },
+    }),
   };
 }

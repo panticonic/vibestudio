@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import {
   ServiceError,
   type ServiceContext,
@@ -13,7 +14,7 @@ import {
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { EventName } from "@vibestudio/shared/events";
 import type { NotificationPayload } from "@vibestudio/shared/events";
-import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
@@ -24,7 +25,7 @@ import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/share
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredExtensions,
-} from "@vibestudio/shared/workspace/configParser";
+} from "@vibestudio/workspace/configParser";
 import {
   UnitManifestError,
   extensionUnitManifestDescriptor,
@@ -559,60 +560,32 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       description: "Installed extension management and invocation",
       policy: { allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"] },
       methods: extensionsMethods,
-      handler: (ctx, method, args) => this.handle(ctx, method, args),
+      handler: defineServiceHandler("extensions", extensionsMethods, {
+        invoke: (ctx, [name, method, args]) => this.invoke(ctx, name, method, args),
+        invokeProvider: (ctx, [provider, method, args]) => {
+          this.assertPublicProviderInvocationAllowed(provider, method);
+          return this.invokeProvider(ctx, provider, method, args);
+        },
+        invokeStream: (ctx, [name, method, args]) => this.invokeStream(ctx, name, method, args),
+        streamingMethods: (_ctx, [name]) => this.streamingMethodsFor(name),
+        list: () =>
+          this.registry.list().map((entry) => ({
+            ...entry,
+            shortName:
+              entry.source.repo.split("/").filter(Boolean).at(-1) ??
+              entry.name.split("/").filter(Boolean).at(-1) ??
+              entry.name,
+          })),
+        on: (ctx, [name, event]) => this.subscribe(ctx, name, event),
+        ready: (ctx, [ready]) => this.readyFromExtension(ctx, ready),
+        emit: (ctx, [event, payload]) => this.emitFromExtension(ctx, event, payload),
+        fetchRequestBodyChunk: (ctx, [streamId]) => this.fetchRequestBodyChunk(ctx, streamId),
+        fetchRequestBodyClose: (ctx, [streamId]) => this.fetchRequestBodyClose(ctx, streamId),
+        health: (ctx, [state, details]) => this.healthFromExtension(ctx, state, details),
+        log: (ctx, [level, message, fields]) => this.logFromExtension(ctx, level, message, fields),
+        reload: (ctx, [name]) => this.reload(ctx, name),
+      }),
     };
-  }
-
-  private async handle(ctx: ServiceContext, method: string, args: unknown[]): Promise<unknown> {
-    switch (method) {
-      case "invoke": {
-        return this.invoke(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
-      }
-      case "invokeProvider": {
-        this.assertPublicProviderInvocationAllowed(args[0] as string, args[1] as string);
-        return this.invokeProvider(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
-      }
-      case "invokeStream":
-        return this.invokeStream(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
-      case "streamingMethods":
-        return this.streamingMethodsFor(args[0] as string);
-      case "list":
-        return this.registry.list().map((entry) => ({
-          ...entry,
-          shortName:
-            entry.source.repo.split("/").filter(Boolean).at(-1) ??
-            entry.name.split("/").filter(Boolean).at(-1) ??
-            entry.name,
-        }));
-      case "on":
-        return this.subscribe(ctx, args[0] as string, args[1] as string);
-      case "ready":
-        return this.readyFromExtension(ctx, args[0] as ExtensionReadyState);
-      case "emit":
-        return this.emitFromExtension(ctx, args[0] as string, args[1]);
-      case "fetchRequestBodyChunk":
-        return this.fetchRequestBodyChunk(ctx, args[0] as string);
-      case "fetchRequestBodyClose":
-        return this.fetchRequestBodyClose(ctx, args[0] as string);
-      case "health":
-        return this.healthFromExtension(ctx, args[0] as ExtensionHealth["state"], args[1]);
-      case "log":
-        return this.logFromExtension(
-          ctx,
-          args[0] as UnitLogRecord["level"],
-          args[1] as string,
-          args[2] as Record<string, unknown> | undefined
-        );
-      case "reload":
-        return this.reload(ctx, args[0] as string);
-      default:
-        throw new ServiceError(
-          "extensions",
-          method,
-          `Unknown extensions method: ${method}`,
-          "ENOSYS"
-        );
-    }
   }
 
   async invoke(

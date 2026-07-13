@@ -12,12 +12,22 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import {
+  buildWorkerdPrograms,
+  type WorkerdProgramSources,
+} from "../../scripts/build-workerd-programs.mjs";
+
+let compiledWorkerdPrograms: WorkerdProgramSources;
+
+beforeAll(async () => {
+  compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
+});
 
 const COUNTER_DO = `import { DurableObject } from "cloudflare:workers";
 export class CounterDO extends DurableObject {
@@ -122,12 +132,14 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       );
       return entry?.[1] ?? null;
     },
+    workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(59999),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
+    egressSecret: "universal-do-host-egress-secret",
     getWorkerdGatewayToken: () => "udo-gateway-token",
     workerdStartupReadyTimeoutMs: 15_000,
   };

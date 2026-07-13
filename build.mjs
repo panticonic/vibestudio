@@ -2,8 +2,15 @@ import * as esbuild from "esbuild";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
-import { createRequire } from "module";
+import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
+import { SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
+import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
+import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
+import {
+  computeHostBuildFingerprint,
+  writeHostBuildFingerprint,
+} from "./scripts/host-build-fingerprint.mjs";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -131,14 +138,7 @@ const serverConfig = {
   minify: !isDev,
   logOverride,
   banner: {
-    js: `#!/usr/bin/env node
-import { createRequire as __createRequire } from "module";
-import { fileURLToPath as __fileURLToPath } from "url";
-import { dirname as __pathDirname } from "path";
-const require = __createRequire(import.meta.url);
-const __filename = __fileURLToPath(import.meta.url);
-const __dirname = __pathDirname(__filename);
-`.trim(),
+    js: SERVER_ESM_BANNER,
   },
 };
 
@@ -176,109 +176,31 @@ const __injected_dirname__ = typeof __dirname !== 'undefined' ? __dirname : (typ
   },
 };
 
-const bootstrapPreloadConfig = {
-  entryPoints: ["src/preload/bootstrapPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/bootstrapPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
+function createPreloadConfig(name) {
+  return {
+    entryPoints: [`src/preload/${name}.ts`],
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    format: "cjs",
+    outfile: `dist/${name}.cjs`,
+    external: ["electron"],
+    sourcemap: isDev,
+    minify: !isDev,
+    logOverride,
+  };
+}
 
-const panelPreloadConfig = {
-  entryPoints: ["src/preload/panelPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/panelPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
-const appPreloadConfig = {
-  entryPoints: ["src/preload/appPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/appPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
-const browserPreloadConfig = {
-  entryPoints: ["src/preload/browserPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/browserPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
-const autofillPreloadConfig = {
-  entryPoints: ["src/preload/autofillPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/autofillPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
-const autofillOverlayPreloadConfig = {
-  entryPoints: ["src/preload/autofillOverlayPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/autofillOverlayPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
-const shellOverlayPreloadConfig = {
-  entryPoints: ["src/preload/shellOverlayPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/shellOverlayPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
-const contentOverlayPreloadConfig = {
-  entryPoints: ["src/preload/contentOverlayPreload.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "cjs",
-  outfile: "dist/contentOverlayPreload.cjs",
-  external: ["electron"],
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
+const preloadConfigs = [
+  "bootstrapPreload",
+  "panelPreload",
+  "appPreload",
+  "browserPreload",
+  "autofillPreload",
+  "autofillOverlayPreload",
+  "shellOverlayPreload",
+  "contentOverlayPreload",
+].map(createPreloadConfig);
 
 // Browser transport IIFE — used by PanelHttpServer to inject into panel HTML.
 // Reuses createWsTransport from the preload, compiled for the browser.
@@ -313,47 +235,7 @@ const internalDoBundleConfig = {
 const bootstrapExternalsPlugin = {
   name: "bootstrap-externals",
   setup(build) {
-    // Hardcoded set of Node builtin module names (covers all common ones)
-    const builtins = new Set([
-      "assert",
-      "buffer",
-      "child_process",
-      "cluster",
-      "console",
-      "constants",
-      "crypto",
-      "dgram",
-      "dns",
-      "domain",
-      "events",
-      "fs",
-      "fs/promises",
-      "http",
-      "http2",
-      "https",
-      "module",
-      "net",
-      "os",
-      "path",
-      "perf_hooks",
-      "process",
-      "punycode",
-      "querystring",
-      "readline",
-      "repl",
-      "stream",
-      "string_decoder",
-      "sys",
-      "timers",
-      "tls",
-      "tty",
-      "url",
-      "util",
-      "v8",
-      "vm",
-      "worker_threads",
-      "zlib",
-    ]);
+    const builtins = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
 
     // Mark electron as external
     build.onResolve({ filter: /^electron$/ }, (args) => ({
@@ -544,10 +426,12 @@ async function buildDependencyWorkers() {
  * Defines explicit dependencies between build steps to ensure correct ordering
  */
 async function build() {
-  let contexts = [];
-
   try {
     fs.mkdirSync("dist", { recursive: true });
+
+    // Raw-node support scripts import this generated, dependency-free artifact.
+    // Rebuild it from the canonical TypeScript grammar before packaging.
+    await generateConnectGrammar();
 
     // ========================================================================
     // STEP 0.75: Build @vibestudio/* infrastructure packages
@@ -574,28 +458,39 @@ async function build() {
     // ========================================================================
     // STEP 2: Build main application
     // ========================================================================
-    // These can run in parallel as they don't depend on each other
+    // These can run in parallel as they don't depend on each other.
     // Dependencies: buildWorkspacePackages
     // Required by: None (final outputs)
-    await esbuild.build(mainConfig);
-    await esbuild.build(bootstrapPreloadConfig);
-    await esbuild.build(panelPreloadConfig);
-    await esbuild.build(appPreloadConfig);
-    await esbuild.build(browserPreloadConfig);
-    await esbuild.build(autofillPreloadConfig);
-    await esbuild.build(autofillOverlayPreloadConfig);
-    await esbuild.build(shellOverlayPreloadConfig);
-    await esbuild.build(contentOverlayPreloadConfig);
-    await esbuild.build(browserTransportConfig);
-    await esbuild.build(internalDoBundleConfig);
-    // Read the internal-DO bundle output and inline it as a string into the
-    // server builds via `define`. This eliminates the runtime file lookup
-    // performed by `internalDoLoader.ts` — the bundle ships embedded in the
-    // server output instead of as a sibling file. Falls back to the file
-    // lookup if the define is absent (test/dev paths run from source).
+    // Clean stale renderer/bootstrap artifacts before the parallel ESM builds.
+    for (const artifact of [
+      "dist/renderer.js",
+      "dist/renderer.css",
+      "dist/preload.cjs",
+      "dist/preload.cjs.map",
+    ]) {
+      fs.rmSync(artifact, { force: true });
+    }
+    fs.rmSync("dist/renderer", { recursive: true, force: true });
+    fs.rmSync("dist/bootstrap", { recursive: true, force: true });
+
+    const workerdProgramsPromise = buildWorkerdPrograms({ minify: !isDev, logOverride });
+    await Promise.all([
+      esbuild.build(mainConfig),
+      ...preloadConfigs.map((config) => esbuild.build(config)),
+      esbuild.build(browserTransportConfig),
+      esbuild.build(internalDoBundleConfig),
+      esbuild.build(bootstrapConfig),
+      esbuild.build(clientConfig),
+      buildDependencyWorkers(),
+      workerdProgramsPromise,
+    ]);
+    const workerdPrograms = await workerdProgramsPromise;
+    // Inline the build-compiled internal DO and workerd host programs into both
+    // server artifacts. Source-mode execution reads the same emitted files.
     const internalDoBundleContent = fs.readFileSync("dist/internal-do.bundle.mjs", "utf8");
     const internalDoBundleDefine = {
       "globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
+      "globalThis.__VIBESTUDIO_WORKERD_PROGRAMS__": JSON.stringify(workerdPrograms),
     };
     const serverElectronWithBundle = {
       ...serverElectronConfig,
@@ -605,26 +500,8 @@ async function build() {
       ...serverConfig,
       define: { ...(serverConfig.define ?? {}), ...internalDoBundleDefine },
     };
-    // Clean stale renderer/bootstrap artifacts before ESM build.
-    try {
-      fs.unlinkSync("dist/renderer.js");
-    } catch {}
-    try {
-      fs.unlinkSync("dist/renderer.css");
-    } catch {}
-    try {
-      fs.unlinkSync("dist/preload.cjs");
-    } catch {}
-    try {
-      fs.unlinkSync("dist/preload.cjs.map");
-    } catch {}
-    fs.rmSync("dist/renderer", { recursive: true, force: true });
-    fs.rmSync("dist/bootstrap", { recursive: true, force: true });
-    await esbuild.build(bootstrapConfig);
-    await esbuild.build(serverElectronWithBundle);
-    await esbuild.build(serverWithBundle);
-    await esbuild.build(clientConfig);
-    await buildDependencyWorkers();
+    // Both server bundles consume the internal-DO output captured above.
+    await Promise.all([esbuild.build(serverElectronWithBundle), esbuild.build(serverWithBundle)]);
 
     // ========================================================================
     // STEP 3: Copy static assets
@@ -635,11 +512,13 @@ async function build() {
 
     await checkBuildArtifacts();
 
+    // Smoke suites reuse a build only when every conservative host-build input
+    // (including the build mode) still has the same content.
+    writeHostBuildFingerprint(computeHostBuildFingerprint());
+
     console.log("Build successful!");
   } catch (error) {
     console.error("Build failed:", error);
-    // Cleanup contexts on error
-    await Promise.all(contexts.map((ctx) => ctx.dispose()));
     process.exit(1);
   }
 }
@@ -670,6 +549,7 @@ async function buildSourceServerPrerequisites() {
     // an older wire protocol even when packages/rpc/dist is current.
     await esbuild.build(browserTransportConfig);
     await esbuild.build(internalDoBundleConfig);
+    await buildWorkerdPrograms({ minify: !isDev, logOverride });
     console.log("Source server prerequisites built successfully!");
   } catch (error) {
     console.error("Source server prerequisite build failed:", error);

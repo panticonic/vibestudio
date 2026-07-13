@@ -8,8 +8,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import type { WorkspaceNode, WorkspaceTree } from "@vibestudio/shared/types";
-import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
-import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
+import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
 import { readWorkspaceSkillEntry } from "./workspaceSkills.js";
 

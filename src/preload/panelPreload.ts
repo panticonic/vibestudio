@@ -66,6 +66,7 @@ const vibestudioShell = {
   // (e.g., browser-data, autofill) via IPC instead of going through the server.
   serviceCall: (method: string, ...args: unknown[]) =>
     ipcRenderer.invoke("vibestudio:serviceCall", method, args),
+  isLocalService: (service: string) => ipcRenderer.invoke("vibestudio:isLocalService", service),
 
   // Event subscription (Electron→panel push: theme, focus, child-created)
   // Returns a numeric subscription ID; call removeEventListener(id) to unsubscribe.

@@ -1,5 +1,6 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { WorkspaceVcsMemory } from "../vcsHost/workspaceVcsMemory.js";
 
 const log = createDevLogger("VcsGcScheduler");
 
@@ -10,10 +11,9 @@ export const DEFAULT_VCS_GC_INITIAL_DELAY_MS = 60_000;
 /** The maintenance surface the hourly scheduler drives: blob GC plus the two
  *  provenance-adjacent passes (the U5 post-replay reindex kick and the DO's
  *  soft-state prune). */
-type SchedulerVcs = Pick<
-  WorkspaceVcs,
-  "attached" | "runGc" | "reindexKnownRepos" | "pruneProvenanceSoftState"
->;
+type SchedulerVcs = Pick<WorkspaceVcs, "attached" | "runGc" | "pruneProvenanceSoftState"> & {
+  memory: Pick<WorkspaceVcsMemory, "reindexKnownRepositories">;
+};
 
 export interface VcsGcSchedulerDeps {
   workspaceVcs: SchedulerVcs;
@@ -82,7 +82,7 @@ export class VcsGcScheduler {
       // Periodic file-index kick — closes the post-replay `memidx:` wipe window
       // (U5); the per-repo marker fast-path keeps already-indexed repos cheap.
       try {
-        await this.workspaceVcs.reindexKnownRepos();
+        await this.workspaceVcs.memory.reindexKnownRepositories();
       } catch (err) {
         ok = false;
         this.logger.warn("[VcsGcScheduler] reindex kick failed:", err);

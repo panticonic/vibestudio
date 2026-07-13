@@ -33,7 +33,10 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead, logIdForRepo } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService, type RefService } from "../../../src/server/services/refService.js";
+import {
+  createProtectedRefStore,
+  type ProtectedRefStore,
+} from "../../../src/server/services/protectedRefStore.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -73,7 +76,10 @@ describe("WorkspaceVcs merge", () => {
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     // The in-process test DO has no RPC gateway; give computeMerge a local
     // content store over this test's blob dir (production uses blobstore.* RPC).
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => {},
+    });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -288,7 +294,9 @@ describe("WorkspaceVcs merge", () => {
       REPO_LOG,
       "main"
     );
-    expect(gad.instance.resolveWorktreeHead({ logId: REPO_LOG, head: "main" })!.stateHash).toBe(seed);
+    expect(gad.instance.resolveWorktreeHead({ logId: REPO_LOG, head: "main" })!.stateHash).toBe(
+      seed
+    );
 
     const result = await vcs.mergeHeads(CTX_HEAD, VCS_MAIN_HEAD, { actor: AGENT, repoPath: REPO });
     expect(result.status).toBe("merged");
@@ -305,13 +313,18 @@ describe("WorkspaceVcs merge", () => {
     // push path does) so the source read sees a lockstep mirror. Stub the
     // intent-completion once so advanceMain lands the ref but leaves the mirror
     // behind + a covering intent parked.
-    await seedMain([{ kind: "create", path: "shared.txt", content: text("line1\nline2\nline3\n") }]);
+    await seedMain([
+      { kind: "create", path: "shared.txt", content: text("line1\nline2\nline3\n") },
+    ]);
     await commitCtx(
       [{ kind: "write", path: "shared.txt", content: text("line1\nline2\nctx3\n") }],
       "ctx side"
     );
     const completeSpy = vi
-      .spyOn(gad.instance as unknown as { completePublishIntent: () => void }, "completePublishIntent")
+      .spyOn(
+        gad.instance as unknown as { completePublishIntent: () => void },
+        "completePublishIntent"
+      )
       .mockImplementationOnce(() => {});
     await advanceMain(
       [{ kind: "write", path: "shared.txt", content: text("MAIN1\nline2\nline3\n") }],
@@ -657,7 +670,7 @@ describe("WorkspaceVcs gc", () => {
   let workspaceRoot: string;
   let vcs: WorkspaceVcs;
   let gad: TestGad;
-  let refs: RefService;
+  let refs: ProtectedRefStore;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "gadvcs-gc-"));
@@ -666,7 +679,7 @@ describe("WorkspaceVcs gc", () => {
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     // The in-process test DO has no RPC gateway; give computeMerge a local
     // content store over this test's blob dir (production uses blobstore.* RPC).
-    refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -843,7 +856,7 @@ describe("WorkspaceVcs memory (WS4)", () => {
   let workspaceRoot: string;
   let vcs: WorkspaceVcs;
   let gad: TestGad;
-  let refs: RefService;
+  let refs: ProtectedRefStore;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "gadvcs-mem-"));
@@ -852,7 +865,7 @@ describe("WorkspaceVcs memory (WS4)", () => {
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     // The in-process test DO has no RPC gateway; give computeMerge a local
     // content store over this test's blob dir (production uses blobstore.* RPC).
-    refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -908,9 +921,9 @@ describe("WorkspaceVcs memory (WS4)", () => {
       "design v1",
       "notes1"
     );
-    await vcs.indexRepoFiles(repoPath);
+    await vcs.memory.indexRepository(repoPath);
 
-    const hit = (await vcs.recallMemory({ query: "subsumes" })) as {
+    const hit = (await vcs.memory.recall({ query: "subsumes" })) as {
       results: Array<{ kind: string; path: string | null; snippet: string }>;
     };
     expect(hit.results).toHaveLength(1);
@@ -926,10 +939,10 @@ describe("WorkspaceVcs memory (WS4)", () => {
       "design v2",
       "notes2"
     );
-    await vcs.indexRepoFiles(repoPath);
-    const gone = (await vcs.recallMemory({ query: "subsumes" })) as { results: unknown[] };
+    await vcs.memory.indexRepository(repoPath);
+    const gone = (await vcs.memory.recall({ query: "subsumes" })) as { results: unknown[] };
     expect(gone.results).toHaveLength(0);
-    const fresh = (await vcs.recallMemory({ query: "renamed" })) as { results: unknown[] };
+    const fresh = (await vcs.memory.recall({ query: "renamed" })) as { results: unknown[] };
     expect(fresh.results).toHaveLength(1);
   });
 

@@ -4,7 +4,7 @@ import {
   isCodeIdentityCallerKind,
   type CodeIdentityCallerKind,
 } from "@vibestudio/shared/principalKinds";
-import type { UserSubject } from "@vibestudio/shared/users/types";
+import type { UserSubject } from "@vibestudio/identity/types";
 
 export interface ResolvedCodeIdentity {
   callerId: string;

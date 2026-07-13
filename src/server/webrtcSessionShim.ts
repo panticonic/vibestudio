@@ -405,6 +405,7 @@ export class SessionWebSocketShim {
           targetId: msg.targetId,
           requestId: msg.requestId,
           error: msg.error,
+          errorKind: msg.errorKind,
           errorCode: msg.errorCode,
         });
         return;
@@ -415,6 +416,7 @@ export class SessionWebSocketShim {
           targetId: msg.targetId,
           event: msg.event,
           error: msg.error,
+          errorKind: msg.errorKind,
           errorCode: msg.errorCode,
         });
         return;

@@ -13,8 +13,9 @@ import {
   DEFAULT_SIGNAL_URL,
   parseConnectLink,
   parseSignalingEndpoint,
-} from "./cli/lib/connect-utils.mjs";
-import { createRemoteServeArgs, mintRemoteInvite } from "./cli/lib/smoke-remote-server.mjs";
+} from "./cli/lib/connect-grammar.generated.mjs";
+import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import { createRemoteServeArgs, requireRootInvite } from "./cli/lib/smoke-remote-server.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -136,7 +137,7 @@ async function waitForReadyFile(readyFile, child, deadlineMs) {
       throw new Error(`remote serve exited before readiness (code ${child.exitCode})`);
     }
     try {
-      return JSON.parse(await fsp.readFile(readyFile, "utf8"));
+      return parseHubReadyPayload(JSON.parse(await fsp.readFile(readyFile, "utf8")));
     } catch {
       await sleep(250);
     }
@@ -250,14 +251,10 @@ async function main() {
     });
     children.push(server);
     const ready = await waitForReadyFile(readyFile, server, deadlineMs);
-    const invite = await mintRemoteInvite({
-      repoRoot,
-      env: serverEnv,
-      port: ready.gatewayPort,
-      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
-    });
+    const invite = requireRootInvite(ready, "desktop");
     const pairing = parseConnectLink(invite.pairUrl);
-    if (pairing.kind !== "ok") throw new Error(`remote invite was invalid: ${pairing.reason}`);
+    if (pairing.kind !== "ok")
+      throw new Error(`desktop root invite was invalid: ${pairing.reason}`);
     if (!options.localSignaling && !options.signalUrl && pairing.sig !== DEFAULT_SIGNAL_URL) {
       throw new Error(
         `remote serve did not use hosted signaling (expected ${DEFAULT_SIGNAL_URL}, got ${pairing.sig})`

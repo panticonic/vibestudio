@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServicePolicy } from "@vibestudio/shared/servicePolicy";
 
 export interface ActivePanelRecord {
@@ -45,27 +46,24 @@ export function createPresenceService(deps: { presence: PresenceTracker }): Serv
   const readPolicy: ServicePolicy = {
     allowed: ["server", "shell", "app", "panel", "worker", "do", "extension", "agent"],
   };
+  const methods = {
+    markPanelActive: { args: z.tuple([z.string()]) },
+    markPanelsOwned: { args: z.tuple([z.array(z.string())]) },
+    getPanelActiveOwner: { args: z.tuple([z.string()]), policy: readPolicy },
+  };
   return {
     name: "presence",
     description: "Active shell/panel ownership",
     policy: { allowed: ["server", "shell"] },
-    methods: {
-      markPanelActive: { args: z.tuple([z.string()]) },
-      markPanelsOwned: { args: z.tuple([z.array(z.string())]) },
-      getPanelActiveOwner: { args: z.tuple([z.string()]), policy: readPolicy },
-    },
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "markPanelActive":
-          return deps.presence.markPanelActive(args[0] as string, ctx.caller.runtime.id);
-        case "markPanelsOwned":
-          deps.presence.markPanelsOwned(args[0] as string[], ctx.caller.runtime.id);
-          return;
-        case "getPanelActiveOwner":
-          return deps.presence.getPanelActiveOwner(args[0] as string);
-        default:
-          throw new Error(`Unknown presence method: ${method}`);
-      }
-    },
+    methods,
+    handler: defineServiceHandler("presence", methods, {
+      markPanelActive: (ctx, [panelId]) =>
+        deps.presence.markPanelActive(panelId, ctx.caller.runtime.id),
+      markPanelsOwned: (ctx, [panelIds]) => {
+        deps.presence.markPanelsOwned(panelIds, ctx.caller.runtime.id);
+        return;
+      },
+      getPanelActiveOwner: (_ctx, [panelId]) => deps.presence.getPanelActiveOwner(panelId),
+    }),
   };
 }

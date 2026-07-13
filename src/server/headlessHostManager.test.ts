@@ -3,7 +3,27 @@ import type { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import { HeadlessHostManager } from "./headlessHostManager.js";
+import { HeadlessHostManager, resolveHeadlessHostEntryPath } from "./headlessHostManager.js";
+
+describe("resolveHeadlessHostEntryPath", () => {
+  it("uses the single app-root build contract", () => {
+    expect(
+      resolveHeadlessHostEntryPath(
+        { VIBESTUDIO_APP_ROOT: "/opt/vibestudio" },
+        "/unrelated-working-directory"
+      )
+    ).toBe("/opt/vibestudio/dist/headless-host/main.js");
+  });
+
+  it("allows an explicit entry override for tests and operators", () => {
+    expect(
+      resolveHeadlessHostEntryPath(
+        { VIBESTUDIO_HEADLESS_HOST_ENTRY: "./fixtures/headless.js" },
+        "/repo"
+      )
+    ).toBe("/repo/fixtures/headless.js");
+  });
+});
 
 /**
  * Always-on headless host: startKeepAlive spawns one at boot and re-spawns it

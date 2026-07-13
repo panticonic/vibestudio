@@ -1,8 +1,8 @@
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
-import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
-import type { GitInteropClient } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export interface Disposable {

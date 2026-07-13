@@ -1,13 +1,13 @@
 import YAML from "yaml";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
-import { parseWorkspaceConfigContent } from "@vibestudio/shared/workspace/loader";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { parseWorkspaceConfigContent } from "@vibestudio/workspace/loader";
 import { mirrorWorktreeTree, putBytes } from "./services/blobstoreService.js";
 import {
   isRefConflictError,
-  type RefService,
+  type ProtectedRefStore,
   type MainRefOperation,
-} from "./services/refService.js";
+} from "./services/protectedRefStore.js";
 
 const META_REPO_PATH = "meta";
 const WORKSPACE_CONFIG_FILE = "vibestudio.yml";
@@ -43,7 +43,7 @@ export interface WorkspaceConfigMutationResult {
 export function createWorkspaceConfigMainWriter(deps: {
   workspacePath: string;
   blobsDir: string;
-  refs: Pick<RefService, "readMain">;
+  refs: Pick<ProtectedRefStore, "readMain">;
   vcs: WorkspaceConfigVcs;
   /** Publish through the GAD writer DO so protected refs and recorded main
    * provenance advance atomically under a durable write-ahead intent. */

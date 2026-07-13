@@ -17,7 +17,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead, logIdForRepo } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -39,7 +39,7 @@ const text = (t: string) => ({ kind: "text" as const, text: t });
 describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
   let root: string;
   let gad: TestGad;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
 
   const doInstance = () =>
     gad.instance as unknown as {
@@ -67,7 +67,7 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "gadvcs-attach-heal-"));
     await fsp.mkdir(path.join(root, "workspace"));
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
-    refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs: () => refs });
   });
   afterEach(async () => {

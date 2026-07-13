@@ -27,7 +27,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -138,7 +138,10 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
 
     // content store over this test's blob dir (production uses blobstore.* RPC).
 
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => {},
+    });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -179,7 +182,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     // main moves past it). This suite pins content-store ⇄ reference hash
     // byte-identity across a real edit→commit→push, so it asserts against the
     // ref-composed main union where the push is actually visible.
-    const before = await vcs.workspaceView();
+    const before = await vcs.repositories.workspaceView();
     const hashesBefore = await vcs.unitHashes(before.stateHash, UNIT_PATHS);
 
     // Advance panels/chat through the real flow (main only advances via push).
@@ -200,7 +203,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     });
     expect(pushed.status).toBe("pushed");
 
-    const after = await vcs.workspaceView();
+    const after = await vcs.repositories.workspaceView();
     expect(after.stateHash).not.toBe(before.stateHash);
 
     const fromStore = await vcs.unitHashes(after.stateHash, UNIT_PATHS);

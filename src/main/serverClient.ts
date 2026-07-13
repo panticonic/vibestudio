@@ -13,8 +13,8 @@ import {
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
-import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { authMethods } from "@vibestudio/service-schemas/auth";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";

@@ -7,7 +7,7 @@ import {
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
-} from "@vibestudio/shared/workspace/singletonRegistry";
+} from "@vibestudio/workspace/singletonRegistry";
 import { createWorkerService } from "./workerService.js";
 
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };

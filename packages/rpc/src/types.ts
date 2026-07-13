@@ -63,6 +63,15 @@ export interface RpcResponseSuccess {
   result: unknown;
 }
 
+/** Stable error category for caller control flow across every RPC transport. */
+export type RpcErrorKind =
+  | "access"
+  | "service"
+  | "transport"
+  | "protocol"
+  | "application"
+  | "internal";
+
 /**
  * RPC response message (error case).
  */
@@ -70,6 +79,7 @@ export interface RpcResponseError {
   type: "response";
   requestId: string;
   error: string;
+  errorKind: RpcErrorKind;
   /** Original error code (e.g. "ENOENT", "EACCES") preserved across the RPC boundary */
   errorCode?: string;
   /** Original stack, when available. Intended for diagnostics, not control flow. */
@@ -110,7 +120,7 @@ export interface RpcStreamRequest {
 
 /**
  * One frame of a streaming RPC response. `frameType` is one of the
- * codes from `@vibestudio/shared/credentials/streamFraming`
+ * codes from `@vibestudio/credential-client/streamFraming`
  * (0x01 HEAD, 0x02 DATA, 0x03 END, 0x04 ERROR). DATA payloads are
  * base64-encoded so binary content survives JSON-over-WS / IPC
  * transport. HEAD/END/ERROR payloads are JSON strings.
@@ -257,7 +267,13 @@ export type StreamingMethodFrame =
     }
   | { kind: "chunk"; bytes: Uint8Array }
   | { kind: "end"; bytesIn: number }
-  | { kind: "error"; status: number; message: string; code?: string };
+  | {
+      kind: "error";
+      status: number;
+      message: string;
+      code?: string;
+      errorKind: RpcErrorKind;
+    };
 
 export type StreamingMethodHandler = (
   args: unknown[],
@@ -529,33 +545,6 @@ export interface RpcClient {
   ready(): Promise<void>;
   onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;
 }
-
-// =============================================================================
-// Electron-Local Service Names — routing exceptions
-// =============================================================================
-
-/**
- * Services that are owned by Electron main instead of the Vibestudio server.
- *
- * Unknown service names intentionally default to the server path. This keeps
- * userland and workerd-backed services callable without touching a central RPC
- * routing list every time a new server service is introduced.
- */
-export const ELECTRON_LOCAL_SERVICE_NAMES = [
-  "adblock",
-  "app",
-  "browser-session-sync",
-  "events",
-  "menu",
-  "notification",
-  "palette",
-  "panel",
-  "remoteCred",
-  "settings",
-  "view",
-] as const;
-
-export type ElectronLocalServiceName = (typeof ELECTRON_LOCAL_SERVICE_NAMES)[number];
 
 // =============================================================================
 // IPC Envelope Types

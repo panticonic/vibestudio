@@ -15,22 +15,15 @@
  */
 
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
+import type {
+  AlarmDoDispatcher,
+  DORef,
+  HeldDoDispatcher,
+  LifecycleDoDispatcher,
+} from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { HELD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
-
-// ---------------------------------------------------------------------------
-// DORef — source-scoped Durable Object identity
-// ---------------------------------------------------------------------------
-
-export interface DORef {
-  /** Workspace-relative path, e.g. "workers/agent-worker" */
-  source: string;
-  /** DO class name, scoped to source, e.g. "AiChatWorker" */
-  className: string;
-  /** Stable instance identifier, e.g. "ch-123" */
-  objectKey: string;
-}
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -205,7 +198,7 @@ export interface VerifyInstanceTokenResult {
  *     the caller attribution (overwriting any value provided in `args`).
  *
  * Wave-2 status (audit 4.8): the receiver inside workerd is the
- * auto-generated router worker (see `WorkerdManager.generateRouterCode`).
+ * build-compiled router worker (see `src/server/workerdPrograms/router.ts`).
  * The generated router requires `X-Vibestudio-Dispatch-Secret` for every
  * `/_w/` DO dispatch. `DODispatch` supplies it for server-originated calls,
  * and the gateway supplies it only after route-registry auth/rewrites for
@@ -247,7 +240,7 @@ export function verifyInstanceTokenEnvelope(
 // DODispatch — generic HTTP POST dispatch to DOs
 // ---------------------------------------------------------------------------
 
-export class DODispatch {
+export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, LifecycleDoDispatcher {
   private ensureDOFn:
     | ((source: string, className: string, objectKey: string) => Promise<void>)
     | null = null;

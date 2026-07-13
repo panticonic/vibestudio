@@ -23,7 +23,7 @@
  */
 
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import type { DODispatch } from "./doDispatch.js";
+import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord, EntitySource } from "@vibestudio/shared/runtime/entitySpec";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
@@ -56,7 +56,7 @@ export interface EntityActivateInput {
 }
 
 export interface WorkspaceEntityStoreDeps {
-  doDispatch: DODispatch;
+  doDispatch: DoDispatcher;
   workspaceId: string;
   entityCache: EntityCache;
 }

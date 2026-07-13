@@ -1,8 +1,15 @@
 # Vibestudio Mobile
 
-The mobile app is a React Native shell for pairing with a Vibestudio server,
-rendering panels, and handling approval prompts in-app or through FCM/APNs push
-notifications.
+This directory contains the shipped native host: the Android/iOS projects,
+first-pairing and recovery bootstrap, Metro boundary, native modules, signing,
+and release packaging. It is trusted host code and changes only with a native
+app release.
+
+The hot-updatable React Native product UI lives separately in
+[`workspace/apps/mobile`](../../workspace/apps/mobile/README.md). The server
+builds that workspace app from content-addressed workspace state and streams it
+through this native host after pairing. Keep product screens and workspace
+services there; keep OS integration and recovery code here.
 
 ## Pairing And Install
 

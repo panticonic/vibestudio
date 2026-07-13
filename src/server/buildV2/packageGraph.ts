@@ -2,7 +2,7 @@
  * Package Graph — DAG discovery from workspace package.json files.
  *
  * Scans the buildable-unit directories declared by BUILDABLE_UNIT_DIRS in
- * @vibestudio/shared/workspace/sourceDirs (packages, panels, apps, about, workers,
+ * @vibestudio/workspace-contracts/sourceDirs (packages, panels, apps, about, workers,
  * extensions, skills, templates) and builds an adjacency-list DAG of internal
  * dependencies. Detects cycles, produces topological ordering.
  */
@@ -13,7 +13,7 @@ import type { PackageManifest } from "@vibestudio/shared/types";
 import {
   BUILDABLE_UNIT_DIRS,
   WORKSPACE_PACKAGE_SCOPES,
-} from "@vibestudio/shared/workspace/sourceDirs";
+} from "@vibestudio/workspace-contracts/sourceDirs";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,7 +26,7 @@ export interface GraphNode {
   path: string;
   /** Workspace-relative path (e.g., "packages/core", "panels/chat") */
   relativePath: string;
-  /** Package name from package.json (e.g., "@workspace/core") */
+  /** Package name from package.json (e.g., "@workspace/lib-a") */
   name: string;
   /** Unit kind */
   kind: "package" | "panel" | "worker" | "extension" | "app" | "template";

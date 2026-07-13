@@ -16,12 +16,11 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { workerLogMethods } from "@vibestudio/shared/serviceSchemas/workerLog";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { workerLogMethods } from "@vibestudio/service-schemas/workerLog";
 import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("workerLog");
-
-type Level = "log" | "info" | "warn" | "error";
 
 export interface WorkerLogRecord {
   /** Worker source path (e.g. "workers/example-store"). May be null if unparseable. */
@@ -31,10 +30,6 @@ export interface WorkerLogRecord {
   timestamp: number;
   level: "debug" | "info" | "warn" | "error";
   message: string;
-}
-
-interface WorkerLogFields {
-  source?: string;
 }
 
 export interface WorkerLogServiceDeps {
@@ -73,32 +68,32 @@ export function createWorkerLogService(deps: WorkerLogServiceDeps = {}): Service
       "Forward DO console output to the server terminal and the workspace-unit log stream",
     policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
     methods: workerLogMethods,
-    handler: async (ctx, method, args) => {
-      if (method !== "write") throw new Error(`Unknown method: ${method}`);
-      const [level, message, fields] = args as [Level, string, WorkerLogFields | undefined];
-      const prefix = `[${ctx.caller.runtime.id}]`;
-      const normalizedLevel: WorkerLogRecord["level"] = level === "log" ? "info" : level;
-      switch (level) {
-        case "error":
-          log.error(`${prefix} ${message}`);
-          break;
-        case "warn":
-          log.warn(`${prefix} ${message}`);
-          break;
-        case "info":
-        case "log":
-        default:
-          log.info(`${prefix} ${message}`);
-          break;
-      }
-      deps.onLog?.({
-        source: fields?.source ?? workerSourceFromCallerId(ctx.caller.runtime.id),
-        callerId: ctx.caller.runtime.id,
-        timestamp: Date.now(),
-        level: normalizedLevel,
-        message,
-      });
-      return undefined;
-    },
+    handler: defineServiceHandler("workerLog", workerLogMethods, {
+      write: (ctx, [level, message, fields]) => {
+        const prefix = `[${ctx.caller.runtime.id}]`;
+        const normalizedLevel: WorkerLogRecord["level"] = level === "log" ? "info" : level;
+        switch (level) {
+          case "error":
+            log.error(`${prefix} ${message}`);
+            break;
+          case "warn":
+            log.warn(`${prefix} ${message}`);
+            break;
+          case "info":
+          case "log":
+          default:
+            log.info(`${prefix} ${message}`);
+            break;
+        }
+        deps.onLog?.({
+          source: fields?.source ?? workerSourceFromCallerId(ctx.caller.runtime.id),
+          callerId: ctx.caller.runtime.id,
+          timestamp: Date.now(),
+          level: normalizedLevel,
+          message,
+        });
+        return undefined;
+      },
+    }),
   };
 }

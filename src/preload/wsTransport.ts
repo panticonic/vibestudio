@@ -6,7 +6,7 @@ import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import { TERMINAL_CLOSE_CODES } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type { WsLike } from "@vibestudio/rpc/protocol/wsAdapter";
-import type { RecoveryKind } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type { RecoveryKind } from "@vibestudio/shell-core/recoveryCoordinator";
 
 type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 

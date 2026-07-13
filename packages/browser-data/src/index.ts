@@ -63,8 +63,21 @@ export {
 export { BrowserDataError } from "./errors.js";
 export type { BrowserDataErrorCode } from "./errors.js";
 
-export { createBrowserDataRpcClient } from "./client/browserDataRpcClient.js";
-export type { BrowserDataClient } from "./client/browserDataRpcClient.js";
+export { createBrowserDataClient } from "./client/browserDataClient.js";
+export type {
+  AutocompleteDebugResult,
+  AutocompleteDebugSuggestion,
+  AutofillFieldSummary,
+  BrowserDataClient,
+  CookieDomainSummary,
+  DomainReadiness,
+  HistoryDomainSummary,
+  ImportRun,
+  PasswordOriginSummary,
+  PreviewDiffSample,
+  PreviewTypeResult,
+  ProfileImportState,
+} from "./client/browserDataClient.js";
 export { BROWSER_DATA_SCHEMA } from "./storage/index.js";
 export type {
   StoredBookmark,

@@ -1,16 +1,18 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   HubWorkspaceRouteSchema,
   hubControlMethods,
   type HubWorkspaceRoute,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import type { ViewManager } from "../viewManager.js";
 import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
-import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred";
+import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
-import { PAIR_CONFIRMED_ARG } from "../startupMode.js";
+import { PAIR_CONFIRMED_ARG } from "../startupInvocation.js";
 import {
   createConnectDeepLink,
   normalizeFingerprint,
@@ -134,99 +136,101 @@ export function createRemoteCredService(deps: {
     if (!client?.isConnected()) throw new Error("Not connected to a Vibestudio server");
     return client;
   };
+  const requireRemoteCredCaller = (ctx: ServiceContext, method: string): void => {
+    if (ctx.caller.runtime.kind !== "app") return;
+    if (!deps.getViewManager) {
+      throw new Error(`remoteCred.${method} app capability unavailable`);
+    }
+    requireChromeAppCallerOrHost(ctx, deps.getViewManager(), `remoteCred.${method}`);
+  };
 
   return {
     name: "remoteCred",
     description: "Manage this desktop's encrypted WebRTC device pairing",
     policy: { allowed: ["shell", "app"] },
     methods: remoteCredMethods,
-    handler: async (ctx, method, args) => {
-      if (ctx.caller.runtime.kind === "app") {
-        if (!deps.getViewManager) {
-          throw new Error(`remoteCred.${method} app capability unavailable`);
+    handler: defineServiceHandler("remoteCred", remoteCredMethods, {
+      getCurrent: (ctx) => {
+        requireRemoteCredCaller(ctx, "getCurrent");
+        const stored = loadStoredRemotePairingFromStore();
+        const client = deps.getServerClient?.() ?? null;
+        return {
+          connected: client?.isConnected() ?? false,
+          configured: stored !== null,
+          isActive:
+            stored !== null &&
+            deps.getConnectionMode?.() === "remote" &&
+            (client?.isConnected() ?? false),
+          bootstrap: stored ? "device" : "none",
+          deviceId: stored?.deviceId,
+          workspaceName: stored?.workspaceName,
+        };
+      },
+      pair: (ctx, [{ link, label }]) => {
+        requireRemoteCredCaller(ctx, "pair");
+        const parsed = parseConnectLink(link);
+        if (parsed.kind === "error") {
+          return { ok: false, error: "invalid-link", message: parsed.reason };
         }
-        requireChromeAppCallerOrHost(ctx, deps.getViewManager(), `remoteCred.${method}`);
-      }
-
-      switch (method) {
-        case "getCurrent": {
-          const stored = loadStoredRemotePairingFromStore();
-          const client = deps.getServerClient?.() ?? null;
-          return {
-            connected: client?.isConnected() ?? false,
-            configured: stored !== null,
-            isActive:
-              stored !== null &&
-              deps.getConnectionMode?.() === "remote" &&
-              (client?.isConnected() ?? false),
-            bootstrap: stored ? "device" : "none",
-            deviceId: stored?.deviceId,
-            workspaceName: stored?.workspaceName,
-          };
+        const { kind: _kind, ...pairing } = parsed;
+        const deepLink = createConnectDeepLink(pairing);
+        const relaunchArgs = process.argv
+          .slice(1)
+          .filter(
+            (arg) =>
+              !arg.startsWith("vibestudio://") &&
+              !arg.startsWith("https://vibestudio.app/pair") &&
+              !arg.startsWith(PAIR_LABEL_ARG_PREFIX)
+          );
+        relaunchArgs.push(deepLink);
+        // This link came from an explicit in-app Save/Switch action, so the
+        // trust confirmation already happened. External deep links omit it.
+        relaunchArgs.push(PAIR_CONFIRMED_ARG);
+        if (typeof label === "string" && label.trim()) {
+          relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
         }
-        case "pair": {
-          const { link, label } = args[0] as { link: string; label?: string };
-          const parsed = parseConnectLink(link);
-          if (parsed.kind === "error") {
-            return { ok: false, error: "invalid-link", message: parsed.reason };
-          }
-          const { kind: _kind, ...pairing } = parsed;
-          const deepLink = createConnectDeepLink(pairing);
-          const relaunchArgs = process.argv
-            .slice(1)
-            .filter(
-              (arg) =>
-                !arg.startsWith("vibestudio://") &&
-                !arg.startsWith("https://vibestudio.app/pair") &&
-                !arg.startsWith(PAIR_LABEL_ARG_PREFIX)
-            );
-          relaunchArgs.push(deepLink);
-          // This link came from an explicit in-app Save/Switch action, so the
-          // trust confirmation already happened. External deep links omit it.
-          relaunchArgs.push(PAIR_CONFIRMED_ARG);
-          if (typeof label === "string" && label.trim()) {
-            relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
-          }
-          relaunchApp({ args: relaunchArgs });
-          return { ok: true };
-        }
-        case "pairDevice": {
-          const client = hubControlClientFor(requireLiveClient());
-          return await client.pairDevice(
-            args[0] as { workspace?: string; ttlMs?: number } | undefined
+        relaunchApp({ args: relaunchArgs });
+        return { ok: true };
+      },
+      pairDevice: async (ctx, [options]) => {
+        requireRemoteCredCaller(ctx, "pairDevice");
+        const client = hubControlClientFor(requireLiveClient());
+        return await client.pairDevice(options);
+      },
+      listDevices: async (ctx) => {
+        requireRemoteCredCaller(ctx, "listDevices");
+        const response = await hubControlClientFor(requireLiveClient()).listDevices();
+        return response.devices;
+      },
+      revokeDevice: async (ctx, [deviceId]) => {
+        requireRemoteCredCaller(ctx, "revokeDevice");
+        const stored = loadStoredRemotePairingFromStore();
+        const result = await hubControlClientFor(requireLiveClient()).revokeDevice(deviceId);
+        const currentDevice = result.revoked && stored?.deviceId === deviceId;
+        if (currentDevice) clearStoredRemotePairingInStore();
+        return { ...result, currentDevice };
+      },
+      reconnectNow: (ctx) => {
+        requireRemoteCredCaller(ctx, "reconnectNow");
+        const client = deps.getServerClient?.() ?? null;
+        if (!client?.nudge) {
+          throw new Error(
+            "Reconnect isn't available for this connection — try relaunching Vibestudio."
           );
         }
-        case "listDevices": {
-          const response = await hubControlClientFor(requireLiveClient()).listDevices();
-          return response.devices;
-        }
-        case "revokeDevice": {
-          const deviceId = args[0] as string;
-          const stored = loadStoredRemotePairingFromStore();
-          const result = await hubControlClientFor(requireLiveClient()).revokeDevice(deviceId);
-          const currentDevice = result.revoked && stored?.deviceId === deviceId;
-          if (currentDevice) clearStoredRemotePairingInStore();
-          return { ...result, currentDevice };
-        }
-        case "reconnectNow": {
-          const client = deps.getServerClient?.() ?? null;
-          if (!client?.nudge) {
-            throw new Error(
-              "Reconnect isn't available for this connection — try relaunching Vibestudio."
-            );
-          }
-          client.nudge();
-          return;
-        }
-        case "clear":
-          clearStoredRemotePairingInStore();
-          return { ok: true };
-        case "relaunch":
-          relaunchApp();
-          return { ok: true };
-        default:
-          throw new Error(`Unknown remoteCred method: ${method}`);
-      }
-    },
+        client.nudge();
+        return;
+      },
+      clear: (ctx) => {
+        requireRemoteCredCaller(ctx, "clear");
+        clearStoredRemotePairingInStore();
+        return { ok: true };
+      },
+      relaunch: (ctx) => {
+        requireRemoteCredCaller(ctx, "relaunch");
+        relaunchApp();
+        return { ok: true };
+      },
+    }),
   };
 }

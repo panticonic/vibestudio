@@ -2,6 +2,9 @@
   "name": "@vibestudio/rpc",
   "version": "0.1.0-b15c87a08b3b",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -32,6 +35,10 @@
     "./protocol/closeCodes": {
       "types": "./dist/protocol/closeCodes.d.ts",
       "default": "./dist/protocol/closeCodes.js"
+    },
+    "./protocol/contractVersion": {
+      "types": "./dist/protocol/contractVersion.d.ts",
+      "default": "./dist/protocol/contractVersion.js"
     },
     "./protocol/sessionNegotiation": {
       "types": "./dist/protocol/sessionNegotiation.d.ts",
@@ -78,8 +85,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "node build.mjs",
-    "dev": "tsc --project tsconfig.build.json --watch"
+    "build": "tsc --project tsconfig.build.json",
+    "dev": "tsc --project tsconfig.build.json --watch",
+    "test": "cd ../.. && vitest run packages/rpc/src"
   },
   "dependencies": {
     "@vibestudio/types": "workspace:*"

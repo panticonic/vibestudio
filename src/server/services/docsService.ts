@@ -8,14 +8,12 @@
  * `isCatalogEntryVisible`, which mirrors the dispatcher's static gate.
  */
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDispatcher, CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
-import {
-  docsMethods,
-  type SerializedServiceDefinition,
-} from "@vibestudio/shared/serviceSchemas/docs";
-import { createCatalogIndex, type CatalogSearchOpts } from "./catalog/catalogIndex.js";
+import { docsMethods, type SerializedServiceDefinition } from "@vibestudio/service-schemas/docs";
+import { createCatalogIndex } from "./catalog/catalogIndex.js";
 import { serializeDef } from "./catalog/serialize.js";
 
 export function createDocsService(deps: {
@@ -53,37 +51,30 @@ export function createDocsService(deps: {
       "Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).",
     policy: { allowed: ["panel", "app", "worker", "do", "extension", "server", "shell", "agent"] },
     methods: docsMethods,
-    handler: async (ctx, method, args) => {
-      const kind = ctx.caller.runtime.kind;
-      switch (method) {
-        case "search":
-          return index.search(String(args[0]), kind, (args[1] as CatalogSearchOpts) ?? undefined);
-        case "describe":
-          return index.get(String(args[0]), kind);
-        case "getSchema": {
-          const entry = index.get(String(args[0]), kind);
-          if (!entry) return null;
-          return {
-            ...(entry.argsSchema ? { argsSchema: entry.argsSchema } : {}),
-            ...(entry.returnsSchema ? { returnsSchema: entry.returnsSchema } : {}),
-          };
-        }
-        case "listSurfaces":
-          return index.listSurfaces(kind);
-        case "listServices":
-          return deps.dispatcher
-            .getServiceDefinitions()
-            .map((def) => serializeForCaller(def, kind))
-            .filter((d) => Object.keys(d.methods).length > 0);
-        case "describeService": {
-          const def = deps.dispatcher
-            .getServiceDefinitions()
-            .find((d) => d.name === String(args[0]));
-          return def ? serializeForCaller(def, kind) : null;
-        }
-        default:
-          throw new Error(`Unknown docs method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("docs", docsMethods, {
+      search: (ctx, [query, opts]) => {
+        const kind = ctx.caller.runtime.kind;
+        return index.search(query, kind, opts ?? undefined);
+      },
+      describe: (ctx, [name]) => index.get(name, ctx.caller.runtime.kind),
+      getSchema: (ctx, [name]) => {
+        const entry = index.get(name, ctx.caller.runtime.kind);
+        if (!entry) return null;
+        return {
+          ...(entry.argsSchema ? { argsSchema: entry.argsSchema } : {}),
+          ...(entry.returnsSchema ? { returnsSchema: entry.returnsSchema } : {}),
+        };
+      },
+      listSurfaces: (ctx) => index.listSurfaces(ctx.caller.runtime.kind),
+      listServices: (ctx) =>
+        deps.dispatcher
+          .getServiceDefinitions()
+          .map((def) => serializeForCaller(def, ctx.caller.runtime.kind))
+          .filter((d) => Object.keys(d.methods).length > 0),
+      describeService: (ctx, [name]) => {
+        const def = deps.dispatcher.getServiceDefinitions().find((d) => d.name === name);
+        return def ? serializeForCaller(def, ctx.caller.runtime.kind) : null;
+      },
+    }),
   };
 }

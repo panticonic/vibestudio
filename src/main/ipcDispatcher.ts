@@ -7,10 +7,11 @@
 
 import { ipcMain, type WebContents } from "electron";
 import {
-  ELECTRON_LOCAL_SERVICE_NAMES,
   createBridgeStreamRelay,
   responseEnvelopeFor,
   stampEnvelopeCaller,
+  rpcErrorKindOf,
+  RpcBoundaryError,
   type BridgeBodyChunk,
   type BridgeStreamOpen,
   type BridgeStreamRelay,
@@ -30,9 +31,6 @@ import type { EventService, Subscriber } from "@vibestudio/shared/eventsService"
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { WebSocket } from "ws";
 import { assertPresent } from "../lintHelpers";
-
-/** Electron-main services that are not owned by the Vibestudio server process. */
-const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
 
@@ -361,6 +359,7 @@ export class IpcDispatcher {
           type: "response",
           requestId: req.requestId,
           error: `Invalid method format: ${req.method}`,
+          errorKind: "protocol",
         });
         return;
       }
@@ -369,7 +368,7 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
-        if (ELECTRON_LOCAL_SERVICES.has(service)) {
+        if (this.deps.dispatcher.routesToHost(service, callerKind)) {
           // Dispatch locally to Electron services. The dispatcher itself
           // enforces policy via checkServiceAccess (single choke-point).
           const ctx = {
@@ -399,7 +398,18 @@ export class IpcDispatcher {
               callOptions
             );
           } else if (callerKind === "app") {
-            this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
+            try {
+              this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
+            } catch (cause) {
+              const message = cause instanceof Error ? cause.message : String(cause);
+              const code = (cause as { code?: unknown } | null)?.code;
+              throw new RpcBoundaryError(
+                message,
+                "access",
+                typeof code === "string" ? code : undefined,
+                cause
+              );
+            }
             result = await callServerAs(
               this.deps.serverClient,
               { callerId, callerKind },
@@ -432,6 +442,7 @@ export class IpcDispatcher {
           type: "response",
           requestId: req.requestId,
           error,
+          errorKind: rpcErrorKindOf(err, "internal"),
           ...(errorCode ? { errorCode } : {}),
         });
       }
@@ -458,6 +469,7 @@ export class IpcDispatcher {
       type: "response",
       requestId: (message as RpcRequest).requestId,
       error,
+      errorKind: "access",
     });
   }
 
@@ -483,6 +495,7 @@ export class IpcDispatcher {
             type: "response",
             requestId: (message as RpcRequest).requestId,
             error: err instanceof Error ? err.message : String(err),
+            errorKind: "transport",
           });
         }
         console.warn(

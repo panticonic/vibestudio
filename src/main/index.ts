@@ -1,7 +1,6 @@
 import {
   app,
   dialog,
-  BaseWindow,
   nativeTheme,
   Notification,
   session,
@@ -19,7 +18,14 @@ import { EventService } from "@vibestudio/shared/eventsService";
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
 import { isDev } from "./utils.js";
-import { cleanupNodeDatachannel } from "./webrtc/nodeDatachannelPeer.js";
+import { SKIP_REMOTE_PAIRING_ARG, parseMainStartupInvocation } from "./startupInvocation.js";
+import {
+  createStartupErrorReport,
+  formatUnknownError,
+  resolveStartupErrorPaths,
+  startupPathDiagnosticEntries,
+} from "./startupDiagnostics.js";
+import { cleanupNodeDatachannel } from "../node/webrtc/nodeDatachannelPeer.js";
 import { maybeNotifyNpmUpdate } from "./updateCheck.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
@@ -48,59 +54,26 @@ import {
 const log = createDevLogger("App");
 const APP_NAME = "Vibestudio";
 const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
-const IS_HEADLESS_HOST =
-  process.env["VIBESTUDIO_HEADLESS_HOST"] === "1" || process.argv.includes("--headless-host");
-const recoveredCrashArgIndex = process.argv.findIndex((arg) =>
-  arg.startsWith("--recovered-local-server-crash=")
-);
-const recoveredLocalServerCrash =
-  recoveredCrashArgIndex >= 0
-    ? (process.argv[recoveredCrashArgIndex]?.split("=")[1] ?? "unknown")
-    : null;
-// Consume the marker so later intentional relaunches do not repeat the notice.
-if (recoveredCrashArgIndex >= 0) process.argv.splice(recoveredCrashArgIndex, 1);
-const crashLoopArgIndex = process.argv.findIndex((arg) =>
-  arg.startsWith("--local-server-crash-loop=")
-);
-const localServerCrashLoopCode =
-  crashLoopArgIndex >= 0 ? (process.argv[crashLoopArgIndex]?.split("=")[1] ?? "unknown") : null;
-if (crashLoopArgIndex >= 0) process.argv.splice(crashLoopArgIndex, 1);
-const crashLoopWorkspaceArgIndex = process.argv.findIndex((arg) =>
-  arg.startsWith("--local-server-crash-workspace=")
-);
-const crashLoopWorkspaceName =
-  crashLoopWorkspaceArgIndex >= 0
-    ? (process.argv[crashLoopWorkspaceArgIndex]?.split("=")[1] ?? null)
-    : null;
-if (crashLoopWorkspaceArgIndex >= 0) process.argv.splice(crashLoopWorkspaceArgIndex, 1);
-if (!recoveredLocalServerCrash && !localServerCrashLoopCode) {
+const startupInvocation = parseMainStartupInvocation(process.argv, process.env);
+// Consume one-shot recovery markers so intentional relaunches do not replay them.
+process.argv = startupInvocation.argv;
+const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost;
+const {
+  recoveredExitCode: recoveredLocalServerCrash,
+  crashLoopExitCode: localServerCrashLoopCode,
+  crashLoopWorkspaceName,
+} = startupInvocation.crashRecovery;
+if (startupInvocation.crashRecovery.shouldClearRelaunchState) {
   delete process.env["VIBESTUDIO_LOCAL_CRASH_RELAUNCH_STATE"];
-}
-
-function formatUnknownError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.stack ?? error.message;
-  }
-  return String(error);
 }
 
 function writeHeadlessStartupError(error: unknown, wsDir?: string): void {
   try {
-    const directory = wsDir ? path.join(wsDir, "state") : app.getPath("userData");
-    fs.mkdirSync(directory, { recursive: true });
-    const logPath = wsDir ? path.join(directory, "logs", "server.log") : undefined;
+    const paths = resolveStartupErrorPaths(app.getPath("userData"), wsDir);
+    fs.mkdirSync(paths.directory, { recursive: true });
     fs.writeFileSync(
-      path.join(directory, "startup-error.json"),
-      JSON.stringify(
-        {
-          failedAt: new Date().toISOString(),
-          message: error instanceof Error ? error.message : String(error),
-          detail: formatUnknownError(error),
-          ...(logPath ? { logPath } : {}),
-        },
-        null,
-        2
-      ),
+      paths.reportPath,
+      JSON.stringify(createStartupErrorReport(error, paths, new Date()), null, 2),
       "utf8"
     );
   } catch (writeError) {
@@ -164,29 +137,21 @@ import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { panelLogMethods } from "@vibestudio/shared/serviceSchemas/panelLog";
-import { corsApprovalMethods } from "@vibestudio/shared/serviceSchemas/corsApproval";
-import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
+import { panelLogMethods } from "@vibestudio/service-schemas/panelLog";
+import { corsApprovalMethods } from "@vibestudio/service-schemas/corsApproval";
+import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelPinStore } from "./panelPinStore.js";
 import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
-import { PanelView } from "./panelView.js";
-import { AppOrchestrator, type AppAvailableEvent } from "./appOrchestrator.js";
+import type { PanelView } from "./panelView.js";
+import type { AppAvailableEvent } from "./appOrchestrator.js";
 import { resolveElectronViewCaller } from "./callerResolution.js";
-import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
-import {
-  setupMenu,
-  setMenuPanelLifecycle,
-  setMenuPanelRegistry,
-  setMenuViewManager,
-  setMenuEventService,
-} from "./menu.js";
-import { getAppRoot, getResourcesPath } from "./paths.js";
-import { loadCentralEnv } from "@vibestudio/shared/workspace/loader";
-import { resolveLocalWorkspaceStartup } from "@vibestudio/shared/workspace/startup";
+import { setMenuPanelLifecycle, setMenuPanelRegistry, setMenuEventService } from "./menu.js";
+import { getAppRoot } from "./paths.js";
+import { loadCentralEnv } from "@vibestudio/workspace/loader";
+import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import {
-  DEV_WEBRTC_REMOTE_ARG,
   resolveStartupMode,
   shouldRequestSingleInstanceLock,
   getPendingUserDataDir,
@@ -206,7 +171,7 @@ import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
-import type { EventName } from "@vibestudio/shared/events";
+import { isValidEventName } from "@vibestudio/shared/events";
 import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibestudio/shared/hostTargetLaunchGate";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
 import { createServerEventBridge, type ServerHostTargetChangeEvent } from "./serverEventBridge.js";
@@ -217,25 +182,22 @@ import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapA
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 
-import { ViewManager } from "./viewManager.js";
 import {
   createVerifiedCaller,
   ServiceDispatcher,
   parseServiceMethod,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
-import { autofillMethods } from "@vibestudio/shared/serviceSchemas/autofill";
+import { autofillMethods } from "@vibestudio/service-schemas/autofill";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
-import { createEventsServiceDefinition } from "@vibestudio/shared/eventsService";
+import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
-import {
-  startMemoryMonitor,
-  setMemoryMonitorViewManager,
-  setMemoryPressureHandler,
-} from "./memoryMonitor.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
 import { assertPresent } from "../lintHelpers";
+import { ApplicationWindowController } from "./applicationWindowController.js";
 
 // =============================================================================
 // Early Diagnostics (enabled via VIBESTUDIO_DEBUG_PATHS=1)
@@ -244,27 +206,21 @@ import { assertPresent } from "../lintHelpers";
 if (process.env["VIBESTUDIO_DEBUG_PATHS"] === "1") {
   console.log("=".repeat(60));
   console.log("[diagnostics] Vibestudio startup diagnostics");
-  console.log("[diagnostics] process.platform:", process.platform);
-  console.log("[diagnostics] process.arch:", process.arch);
-  console.log("[diagnostics] process.cwd():", process.cwd());
-  console.log("[diagnostics] process.execPath:", process.execPath);
-  console.log("[diagnostics] app.getAppPath():", app.getAppPath());
-  console.log("[diagnostics] app.getPath('userData'):", app.getPath("userData"));
-  console.log("[diagnostics] NODE_ENV:", process.env["NODE_ENV"]);
-  console.log("[diagnostics] isDev():", isDev());
-  console.log("[diagnostics] getAppRoot():", getAppRoot());
+  for (const [label, value] of startupPathDiagnosticEntries({
+    platform: process.platform,
+    arch: process.arch,
+    cwd: process.cwd(),
+    execPath: process.execPath,
+    appPath: app.getAppPath(),
+    userDataPath: app.getPath("userData"),
+    nodeEnv: process.env["NODE_ENV"],
+    isDevelopment: isDev(),
+    appRoot: getAppRoot(),
+  })) {
+    console.log(label, value);
+  }
   console.log("=".repeat(60));
 }
-
-// =============================================================================
-// GPU/Compositor Flags (optional, must happen before app ready)
-// =============================================================================
-
-// If WebContentsViews become transparent after extended idle periods (compositor stalls),
-// try enabling these flags. The 3-second keepalive in ViewManager should handle this,
-// but these are a more aggressive fallback if needed.
-// app.commandLine.appendSwitch("disable-renderer-backgrounding");
-// app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 
 // =============================================================================
 // Configuration Initialization
@@ -330,8 +286,6 @@ if (startupMode.kind === "local") {
 let cdpHostProvider: CdpHostProvider | null = null;
 let panelRegistry: PanelRegistry | null = null;
 let panelOrchestrator: PanelOrchestrator | null = null;
-let panelView: PanelView | null = null;
-let appOrchestrator: AppOrchestrator | null = null;
 let pendingReadyElectronLaunch: AppAvailableEvent | null = null;
 let electronHostLaunchTimer: ReturnType<typeof setTimeout> | null = null;
 let electronHostLaunchBlockedByApproval = false;
@@ -378,7 +332,7 @@ const chooserChoice = new Promise<ChooserChoice>((resolve) => {
 });
 
 function shouldAutoPairPendingDevWebRtcLink(): boolean {
-  return isDev() && process.argv.includes(DEV_WEBRTC_REMOTE_ARG);
+  return isDev() && startupInvocation.devWebRtcRemote;
 }
 
 let appliedElectronHostTargetKey: string | null = null;
@@ -388,36 +342,40 @@ let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
 let serverSession: SessionConnection | null = null;
-let mainWindow: BaseWindow | null = null;
 let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
-let viewManager: ViewManager | null = null;
 let approvalAttention: ApprovalAttention | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
 
+const applicationWindow = new ApplicationWindowController({
+  eventService,
+  isHeadlessHost: IS_HEADLESS_HOST,
+  getWindowTitle: () =>
+    startupMode.kind === "pending"
+      ? "Vibestudio - Connect"
+      : IS_HEADLESS_HOST
+        ? `Vibestudio Headless Host — ${workspaceId}`
+        : `Vibestudio — ${workspaceId}`,
+  getApprovalAttention: () => approvalAttention,
+  stopElectronHostTargetLaunchLoop,
+  startElectronHostTargetLaunchLoop,
+  drainPendingReadyElectronLaunch,
+  initializePanelTreeOnce,
+  onWindowClosed: () => {
+    panelTreeInitializationStarted = false;
+    appliedElectronHostTargetKey = null;
+    electronHostLaunchLastStatusKey = null;
+  },
+});
+
 app.on("second-instance", () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.show();
-  mainWindow.focus();
+  applicationWindow.showAndFocus();
 });
 let autofillManager: import("./autofill/autofillManager.js").AutofillManager | null = null;
 const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
-let browserDataStoreForCredentialCapture: {
-  cookies: {
-    getByDomain(domain?: string): Promise<
-      Array<{
-        name: string;
-        value: string;
-        domain: string;
-        path: string;
-        expiration_date: number | null;
-        secure: number;
-        http_only: number;
-        same_site: string;
-      }>
-    >;
-  };
-} | null = null;
+let browserDataStoreForCredentialCapture:
+  | import("@vibestudio/browser-data").BrowserDataClient
+  | null = null;
 
 type AppCapability = import("@vibestudio/shared/unitManifest").AppCapability;
 
@@ -484,7 +442,7 @@ function authorizeAppServerCall(
   // consent surface — NOT from an ordinary adopted app view, which could
   // otherwise enumerate and silently grant/deny another principal's approvals.
   if (service === "shellApproval") {
-    const viewInfo = viewManager?.getViewInfo(callerId);
+    const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
     if (!(viewInfo?.type === "app" && viewInfo.hostChrome)) {
       throw new Error(
         `shellApproval is only available to the host-chrome consent surface, not ${callerId}`
@@ -495,7 +453,7 @@ function authorizeAppServerCall(
   if (service !== "fs") return;
   const required = appFsCapabilitiesForMethod(method, args);
   if (required.length === 0) return;
-  const viewInfo = viewManager?.getViewInfo(callerId);
+  const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
   if (viewInfo?.type !== "app") {
     throw new Error(`fs.${method} requires an active app view for ${callerId}`);
   }
@@ -509,6 +467,7 @@ function authorizeAppServerCall(
 const INCOMING_PAIR_LINK_CAPABILITY: AppCapability = "incoming-pair-links";
 
 function canAccessIncomingPairLinks(webContentsId: number): boolean {
+  const viewManager = applicationWindow.viewManager;
   if (!viewManager) return false;
   const shellContents = viewManager.getShellWebContents();
   if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
@@ -521,6 +480,7 @@ function canAccessIncomingPairLinks(webContentsId: number): boolean {
 }
 
 function sendIncomingPairLink(link: unknown): void {
+  const viewManager = applicationWindow.viewManager;
   if (!viewManager) return;
   const shellContents = viewManager.getShellWebContents();
   if (shellContents && !shellContents.isDestroyed()) {
@@ -543,6 +503,7 @@ function sendIncomingPairLink(link: unknown): void {
 }
 
 function canAccessIncomingPanelLocations(webContentsId: number): boolean {
+  const viewManager = applicationWindow.viewManager;
   if (!viewManager) return false;
   const shellContents = viewManager.getShellWebContents();
   if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
@@ -555,6 +516,7 @@ function canAccessIncomingPanelLocations(webContentsId: number): boolean {
 }
 
 function sendIncomingPanelLocation(location: unknown): void {
+  const viewManager = applicationWindow.viewManager;
   if (!viewManager) return;
   const shellContents = viewManager.getShellWebContents();
   if (shellContents && !shellContents.isDestroyed()) {
@@ -755,6 +717,7 @@ function getHttpOrigin(rawUrl: string): string | null {
 function getWebRequestPanelCallerId(
   details: Electron.OnHeadersReceivedListenerDetails
 ): string | null {
+  const viewManager = applicationWindow.viewManager;
   if (!viewManager) return null;
   const webContentsId = details.webContentsId ?? details.webContents?.id;
   if (typeof webContentsId !== "number") return null;
@@ -875,7 +838,7 @@ async function handleCredentialSessionCaptureRequest(
       if (!browserDataStoreForCredentialCapture) {
         return { error: "external browser cookie import is unavailable" };
       }
-      const imported = await browserDataStoreForCredentialCapture.cookies.getByDomain();
+      const imported = await browserDataStoreForCredentialCapture.getCookies();
       const material = buildImportedCookieHeader(imported, cookieNames, origins);
       if (!material) {
         return {
@@ -899,6 +862,7 @@ async function handleCredentialSessionCaptureRequest(
             : (material.expiresAt ?? maxExpiresAt),
       };
     }
+    const viewManager = applicationWindow.viewManager;
     if (!panelOrchestrator || !viewManager) {
       return { error: "internal browser is unavailable" };
     }
@@ -1100,6 +1064,7 @@ function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
 async function applyReadyElectronLaunchResult(result: unknown): Promise<boolean> {
   const event = readyElectronLaunchEvent(result);
   if (!event) return false;
+  const appOrchestrator = applicationWindow.appOrchestrator;
   if (!appOrchestrator) {
     pendingReadyElectronLaunch = event;
     log.info(
@@ -1246,6 +1211,7 @@ function electronLaunchFromSessionResult(result: unknown): unknown | null {
 }
 
 async function drainPendingReadyElectronLaunch(): Promise<void> {
+  const appOrchestrator = applicationWindow.appOrchestrator;
   if (!pendingReadyElectronLaunch || !appOrchestrator) return;
   const event = pendingReadyElectronLaunch;
   const launchKey = electronHostTargetKey(event);
@@ -1405,7 +1371,7 @@ type BootstrapConnectionState = {
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 function requireBootstrapShellSender(event: Electron.IpcMainInvokeEvent, channel: string): void {
-  const shellContents = viewManager?.getShellWebContents();
+  const shellContents = applicationWindow.viewManager?.getShellWebContents();
   if (!shellContents || shellContents.isDestroyed() || shellContents.id !== event.sender.id) {
     console.warn(`[ipc] Rejecting ${channel} from non-bootstrap sender`);
     throw new Error(`Channel '${channel}' is bootstrap-shell-only`);
@@ -1439,7 +1405,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
       lastLocalWorkspaceName: null,
       isDev: isDev(),
       pendingPairLink,
-      pendingPairConfirmed: process.argv.includes("--pair-confirmed"),
+      pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
       startupError: bootstrapStartupError,
       serverLogPath:
         startupMode.kind === "local"
@@ -1458,7 +1424,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
     lastLocalWorkspaceName: centralData.getLastOpenedWorkspace()?.name ?? null,
     isDev: isDev(),
     pendingPairLink,
-    pendingPairConfirmed: process.argv.includes("--pair-confirmed"),
+    pendingPairConfirmed: startupInvocation.pendingPairConfirmed,
     startupError: bootstrapStartupError,
     serverLogPath:
       startupMode.kind === "local"
@@ -1496,8 +1462,8 @@ function installBootstrapConnectionHandlers(): void {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:choose-connection");
     relaunchApp({
       args: [
-        ...chooseConnectionRelaunchArgs().filter((arg) => arg !== "--skip-remote-pairing"),
-        "--skip-remote-pairing",
+        ...chooseConnectionRelaunchArgs().filter((arg) => arg !== SKIP_REMOTE_PAIRING_ARG),
+        SKIP_REMOTE_PAIRING_ARG,
       ],
     });
   });
@@ -1561,213 +1527,6 @@ function installBootstrapConnectionHandlers(): void {
 }
 
 // =============================================================================
-// Window Creation
-// =============================================================================
-
-function attachWorkspaceWindowServices(): void {
-  if (!viewManager || !panelRegistry || !panelOrchestrator || !serverSession || panelView) return;
-
-  const browserHistoryRecorder = new BrowserHistoryRecorder(serverSession.serverClient);
-  panelView = new PanelView({
-    viewManager,
-    panelRegistry,
-    serverInfo: serverSession.serverInfo,
-    cdpHost: createCdpRegistrationAdapter(),
-    panelOrchestrator,
-    sendPanelEvent: (panelId, event, payload) => {
-      const wc = viewManager?.getWebContents(panelId);
-      if (wc && !wc.isDestroyed()) {
-        wc.send("vibestudio:event", event, payload);
-      }
-    },
-    onPanelLinkError: (_panelId, url, message) => {
-      eventService.emit("notification:show", {
-        id: `panel-link-error:${Date.now()}`,
-        type: "error",
-        title: "Couldn't open link",
-        message: `${message} (${url})`,
-        ttl: 10_000,
-      });
-    },
-    onPanelResponsivenessChanged: (panelId, responsive) => {
-      eventService.emit("panel-responsiveness-changed", { panelId, responsive });
-    },
-    autofillManager: autofillManager ?? undefined,
-    autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
-    panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
-    appPreloadPath: path.join(__dirname, "appPreload.cjs"),
-    browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
-    browserHistoryRecorder,
-  });
-  appOrchestrator = new AppOrchestrator({
-    getPanelView: () => panelView,
-    statePath: serverSession.statePath,
-  });
-  void drainPendingReadyElectronLaunch().catch((error: unknown) => {
-    log.warn(
-      `[apps] Failed to apply held Electron host target: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  });
-  startElectronHostTargetLaunchLoop(serverSession.serverClient);
-  void appOrchestrator
-    .loadBakedApp(path.join(getResourcesPath(), "baked-app"))
-    .then((loaded) => {
-      if (loaded) initializePanelTreeOnce("baked-electron-host");
-    })
-    .catch((error: unknown) => {
-      log.error(
-        `[dist] Failed to load baked app payload: ${error instanceof Error ? error.message : String(error)}`
-      );
-    });
-
-  // Wire autofill overlay to window, z-order changes, and panel switches
-  if (autofillManager && mainWindow && viewManager) {
-    autofillManager.setWindow(mainWindow);
-    viewManager.onViewOrderChanged(() => autofillManager?.onViewOrderChanged());
-    viewManager.onViewHidden((viewId) => autofillManager?.onPanelHidden(viewId));
-  }
-
-  viewManager.onViewCrashed((viewId, reason) => {
-    assertPresent(panelView).handleViewCrashed(viewId, reason);
-  });
-
-  setupTestApi(panelOrchestrator, panelRegistry, panelView);
-}
-
-/**
- * Native window chrome colours, kept in step with the greyed shell chrome — and
- * specifically with the CSS titlebar, which paints `--surface-raised` (Radix
- * slate step-4 in dark, step-3 in light; see TitleBar.tsx + overrides.css). The
- * native caption-button strip uses the same value so it blends into the titlebar
- * with no colour seam, with a legible symbol colour over it.
- */
-function chromeWindowColors(dark: boolean): { background: string; symbol: string } {
-  return dark
-    ? { background: "#272a2d", symbol: "#c7c9ce" }
-    : { background: "#f0f0f3", symbol: "#44474d" };
-}
-
-function createWindow(): void {
-  if (mainWindow && viewManager) {
-    attachWorkspaceWindowServices();
-    return;
-  }
-
-  // Create BaseWindow (no webContents of its own)
-  // Start hidden to avoid layout flash - shown after shell content loads
-  const chrome = chromeWindowColors(nativeTheme.shouldUseDarkColors);
-  mainWindow = new BaseWindow({
-    width: 1200,
-    height: 600,
-    show: false,
-    icon: path.join(__dirname, "assets", "brand", "vibestudio-icon-512.png"),
-    skipTaskbar: IS_HEADLESS_HOST,
-    // Paint the window's native backdrop in the greyed chrome base so any
-    // pre-paint gap shows calm grey rather than a white/black flash.
-    backgroundColor: chrome.background,
-    titleBarStyle: "hidden",
-    ...(process.platform !== "darwin"
-      ? {
-          // Match the 28px CSS title bar (TitleBar.tsx) so the native window
-          // controls align with the dense chrome instead of overhanging it,
-          // and tint the caption-button strip to the greyed chrome.
-          titleBarOverlay: {
-            height: 28,
-            color: chrome.background,
-            symbolColor: chrome.symbol,
-          },
-        }
-      : {}),
-  });
-
-  // Initialize ViewManager with shell view (IPC transport — no WS args needed)
-  viewManager = new ViewManager({
-    window: mainWindow,
-    shellPreload: path.join(__dirname, "bootstrapPreload.cjs"),
-    shellOverlayPreload: path.join(__dirname, "shellOverlayPreload.cjs"),
-    contentOverlayPreload: path.join(__dirname, "contentOverlayPreload.cjs"),
-    shellHtmlPath: path.join(__dirname, "index.html"),
-    shellAdditionalArguments: [],
-    devTools: false,
-    showWindowOnShellLoad: !IS_HEADLESS_HOST,
-    hidePanelViewsUntilHostedShellReady: true,
-  });
-
-  // Set native window title for OS taskbar / window switcher (Alt+Tab / dock)
-  mainWindow.setTitle(
-    startupMode.kind === "pending"
-      ? "Vibestudio - Connect"
-      : IS_HEADLESS_HOST
-        ? `Vibestudio Headless Host — ${workspaceId}`
-        : `Vibestudio — ${workspaceId}`
-  );
-
-  mainWindow.on("focus", () => {
-    app.setBadgeCount(0);
-    approvalAttention?.handleWindowFocus();
-    void approvalAttention?.refresh({ quiet: true });
-  });
-
-  mainWindow.on("closed", () => {
-    stopElectronHostTargetLaunchLoop();
-    mainWindow = null;
-    setMemoryMonitorViewManager(null);
-    viewManager = null;
-    panelView = null; // Clear so getPanelView() returns null until recreated
-    appOrchestrator = null;
-    panelTreeInitializationStarted = false;
-    appliedElectronHostTargetKey = null;
-    electronHostLaunchLastStatusKey = null;
-  });
-
-  attachWorkspaceWindowServices();
-
-  // Periodic memory diagnostics plus a throttled user-visible pressure warning.
-  if (viewManager) setMemoryMonitorViewManager(viewManager);
-  setMemoryPressureHandler((message) => {
-    eventService.emit("notification:show", {
-      id: "memory-pressure",
-      type: "warning",
-      title: "High panel memory use",
-      message,
-      ttl: 12_000,
-    });
-  });
-  startMemoryMonitor();
-
-  // Setup application menu (uses shell webContents for menu events)
-  if (viewManager) setMenuViewManager(viewManager);
-  setMenuEventService(eventService);
-  if (!IS_HEADLESS_HOST)
-    setupMenu(mainWindow, viewManager.getShellWebContents(), {
-      onHistoryBack: () => {
-        if (!panelRegistry || !viewManager) return;
-        const panelId = panelRegistry.getFocusedPanelId();
-        if (!panelId) return;
-        const contents = viewManager.getWebContents(panelId);
-        if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoBack()) {
-          contents.navigationHistory.goBack();
-        }
-      },
-      onHistoryForward: () => {
-        if (!panelRegistry || !viewManager) return;
-        const panelId = panelRegistry.getFocusedPanelId();
-        if (!panelId) return;
-        const contents = viewManager.getWebContents(panelId);
-        if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoForward()) {
-          contents.navigationHistory.goForward();
-        }
-      },
-    });
-
-  if (IS_HEADLESS_HOST) {
-    initializePanelTreeOnce("headless-host-startup");
-  }
-}
-
-// =============================================================================
 // App Lifecycle
 // =============================================================================
 
@@ -1800,14 +1559,12 @@ app.on("ready", async () => {
   onConnectLink((link) => {
     if (IS_HEADLESS_HOST) return;
     sendIncomingPairLink(link);
-    mainWindow?.show();
-    mainWindow?.focus();
+    applicationWindow.showAndFocus();
   });
   onPanelLocation((location) => {
     if (IS_HEADLESS_HOST) return;
     sendIncomingPanelLocation(location);
-    mainWindow?.show();
-    mainWindow?.focus();
+    applicationWindow.showAndFocus();
   });
   // A deep link that failed to parse (e.g. a stale old-format link) used to open
   // the app and do nothing. Surface its actionable message instead so the user
@@ -1815,8 +1572,7 @@ app.on("ready", async () => {
   const surfaceConnectLinkError = (reason: string) => {
     if (IS_HEADLESS_HOST) return;
     log.warn(`[pairing] Ignored an invalid pairing link: ${reason}`);
-    mainWindow?.show();
-    mainWindow?.focus();
+    applicationWindow.showAndFocus();
     if (Notification.isSupported()) {
       new Notification({ title: "Couldn't open that pairing link", body: reason }).show();
     }
@@ -1844,7 +1600,7 @@ app.on("ready", async () => {
   // instead of lingering on a stale "connected". NUDGE ONLY, never a teardown.
   ipcMain.on("vibestudio:shell.network-online", () => nudgeServerLiveness("network online"));
   ipcMain.on("vibestudio:shell.chrome-interactive-focus", (event, active: unknown) => {
-    viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
+    applicationWindow.viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
   });
   installBootstrapConnectionHandlers();
   // npm-channel update notice — no-ops unless launched from a global npm install
@@ -1916,6 +1672,7 @@ app.on("ready", async () => {
     contents: WebContents | null | undefined,
     permission: string
   ): boolean => {
+    const viewManager = applicationWindow.viewManager;
     if (!contents || !viewManager) return false;
     const capability = capabilityForElectronPermission(permission);
     if (!capability) return false;
@@ -1929,6 +1686,7 @@ app.on("ready", async () => {
     contents: WebContents | null | undefined,
     permission: string
   ): boolean => {
+    const viewManager = applicationWindow.viewManager;
     if (!contents || !viewManager) return false;
     const viewId = viewManager.findViewIdByWebContentsId(contents.id);
     const viewInfo = viewId ? viewManager.getViewInfo(viewId) : null;
@@ -1941,6 +1699,7 @@ app.on("ready", async () => {
   const installPermissionHandlers = (targetSession: Session): void => {
     targetSession.setPermissionRequestHandler((contents, permission, callback) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
+        const viewManager = applicationWindow.viewManager;
         const viewId = contents ? viewManager?.findViewIdByWebContentsId(contents.id) : null;
         const viewInfo = viewId ? viewManager?.getViewInfo(viewId) : null;
         // Native fullscreen is a reversible presentation action and is expected
@@ -2078,7 +1837,7 @@ app.on("ready", async () => {
   // dials it over the pipe regardless of the (pending/local) startup mode.
   // `--skip-remote-pairing` (set by the recovery chooser) suppresses auto-dial
   // for one launch so a failed remote connect lands on the chooser, not a re-dial loop.
-  const skipRemotePairingLaunch = process.argv.includes("--skip-remote-pairing");
+  const skipRemotePairingLaunch = startupInvocation.skipRemotePairing;
   const storedRemoteAtLaunch = loadStoredRemotePairing();
   remotePairedAtLaunch = storedRemoteAtLaunch !== null && !skipRemotePairingLaunch;
 
@@ -2110,7 +1869,7 @@ app.on("ready", async () => {
     // relaunching, we apply the choice and fall through to the connected setup
     // below in the SAME process.
     performance.mark("startup:window-created");
-    createWindow();
+    applicationWindow.create();
     const choice = await chooserChoice;
     if (choice.kind === "local") {
       // Resolve (creating if missing) the chosen local workspace in-process and
@@ -2161,9 +1920,9 @@ app.on("ready", async () => {
 
   // Idempotent: the chooser path already created the window; create it here for
   // the returning-device / direct-local startups that skip the chooser.
-  if (!IS_HEADLESS_HOST && !mainWindow) {
+  if (!IS_HEADLESS_HOST && !applicationWindow.isOpen) {
     performance.mark("startup:window-created");
-    createWindow();
+    applicationWindow.create();
   }
 
   const dispatcher = new ServiceDispatcher();
@@ -2199,7 +1958,7 @@ app.on("ready", async () => {
 
   if (!IS_HEADLESS_HOST) {
     approvalAttention = createApprovalAttention({
-      getWindow: () => mainWindow,
+      getWindow: () => applicationWindow.window,
       listPending: async () => {
         const client = serverClientRef;
         if (!client) return null;
@@ -2212,7 +1971,7 @@ app.on("ready", async () => {
   const handleServerEvent = createServerEventBridge({
     eventService,
     getPanelOrchestrator: () => panelOrchestrator,
-    getAppOrchestrator: () => appOrchestrator,
+    getAppOrchestrator: () => applicationWindow.appOrchestrator,
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
@@ -2226,13 +1985,8 @@ app.on("ready", async () => {
       });
     },
     onAttentionRequired: (title, message) => {
-      const focusWindow = () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.show();
-        mainWindow.focus();
-      };
-      mainWindow?.flashFrame(true);
+      const focusWindow = () => applicationWindow.showAndFocus();
+      applicationWindow.requestAttention();
       app.setBadgeCount(1);
       if (Notification.isSupported()) {
         const nativeNotification = new Notification({
@@ -2350,7 +2104,7 @@ app.on("ready", async () => {
           });
           if (status === "disconnected") {
             for (const entry of panelRegistry?.listPanels() ?? []) {
-              const wc = viewManager?.getWebContents(entry.panelId);
+              const wc = applicationWindow.viewManager?.getWebContents(entry.panelId);
               if (wc && !wc.isDestroyed()) {
                 wc.send("vibestudio:event", "runtime:connection-error", {
                   code: 1006,
@@ -2424,9 +2178,7 @@ app.on("ready", async () => {
     performance.mark("startup:server-spawned");
     performance.mark("startup:server-connected");
 
-    if (mainWindow) {
-      mainWindow.setTitle(`Vibestudio — ${workspaceId}`);
-    }
+    applicationWindow.setTitle(`Vibestudio — ${workspaceId}`);
 
     // The shell always spawns its own loopback server (ServerProcessManager
     // manages its lifecycle), so there is no out-of-process server to /healthz-
@@ -2463,8 +2215,9 @@ app.on("ready", async () => {
     new IpcDispatcher({
       dispatcher,
       serverClient: conn.serverClient,
-      getShellWebContents: () => viewManager?.getShellWebContents() ?? null,
+      getShellWebContents: () => applicationWindow.viewManager?.getShellWebContents() ?? null,
       resolveCallerForWebContents: (webContentsId) => {
+        const viewManager = applicationWindow.viewManager;
         if (!viewManager) return null;
         const shellContents = viewManager.getShellWebContents();
         if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
@@ -2476,7 +2229,7 @@ app.on("ready", async () => {
         return resolveElectronViewCaller(callerId, viewInfo);
       },
       getCodeIdentityForCaller: (callerId) => {
-        const viewInfo = viewManager?.getViewInfo(callerId);
+        const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
         if (viewInfo?.type !== "app") return null;
         const identity = viewInfo.appIdentity;
         if (!identity?.source || !identity.effectiveVersion) return null;
@@ -2487,7 +2240,8 @@ app.on("ready", async () => {
           effectiveVersion: identity.effectiveVersion,
         };
       },
-      getWebContentsForCaller: (callerId) => viewManager?.getWebContents(callerId) ?? null,
+      getWebContentsForCaller: (callerId) =>
+        applicationWindow.viewManager?.getWebContents(callerId) ?? null,
       getPanelRuntimeConnection: (panelId) => panelOrchestrator?.getPanelRuntimeConnection(panelId),
       authorizeAppServerCall,
       onServerRpcResult: async ({ service, method, args, result }) => {
@@ -2534,14 +2288,14 @@ app.on("ready", async () => {
       serverClient: conn.serverClient,
       shellCore: shellCore.panelManager,
       cdpHost: createCdpRegistrationAdapter(),
-      getPanelView: () => panelView,
+      getPanelView: () => applicationWindow.panelView,
       panelHttpServer: conn.panelHttpServer,
       externalHost: conn.externalHost,
       protocol: conn.protocol,
       gatewayPort: conn.gatewayPort,
       gatewayBasePath,
       sendPanelEvent: (panelId, event, payload) => {
-        const wc = viewManager?.getWebContents(panelId);
+        const wc = applicationWindow.viewManager?.getWebContents(panelId);
         if (wc && !wc.isDestroyed()) {
           wc.send("vibestudio:event", event, payload);
         }
@@ -2574,7 +2328,7 @@ app.on("ready", async () => {
     const panelLogClient = createTypedServiceClient("panelLog", panelLogMethods, (svc, m, a) =>
       conn.serverClient.call(svc, m, a)
     );
-    const panelLogQueue: import("@vibestudio/shared/serviceSchemas/panelLog").PanelLogRecord[] = [];
+    const panelLogQueue: import("@vibestudio/service-schemas/panelLog").PanelLogRecord[] = [];
     let panelLogFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const flushPanelLog = () => {
       panelLogFlushTimer = null;
@@ -2618,7 +2372,7 @@ app.on("ready", async () => {
       serverUrl: conn.gatewayConfig.serverUrl,
       authToken: () => conn.getCdpAuthToken(),
       hostConnectionId: cdpHostConnectionId,
-      getViewManager: () => viewManager,
+      getViewManager: () => applicationWindow.viewManager,
       socketFactory:
         conn.connectionMode === "remote"
           ? () =>
@@ -2633,6 +2387,7 @@ app.on("ready", async () => {
       forwardDiagnostic: forwardPanelDiagnostic,
       onHostCommand: async (panelId, action, args) => {
         if (action === "openDevTools") {
+          const viewManager = applicationWindow.viewManager;
           if (!viewManager) throw new Error("ViewManager not initialized");
           const mode = args[0] === "right" || args[0] === "bottom" ? args[0] : "detach";
           viewManager.openDevTools(panelId, mode);
@@ -2690,13 +2445,14 @@ app.on("ready", async () => {
     // Autofill manager — password auto-fill for browser panels
     const { AutofillManager } = await import("./autofill/autofillManager.js");
 
-    // Register all Electron-main RPC services via ServiceContainer
-    // PanelView needs viewManager which doesn't exist yet, so we use a lazy wrapper
+    // Register all Electron-main RPC services via ServiceContainer. Window-owned
+    // hosts are resolved from their lifecycle owner when an RPC is invoked.
     const getPanelView = (): PanelView => {
+      const panelView = applicationWindow.panelView;
       if (!panelView) throw new Error("PanelView not initialized yet");
       return panelView;
     };
-    const getViewManager = () => assertPresent(viewManager);
+    const getViewManager = () => assertPresent(applicationWindow.viewManager);
 
     const { createAppService } = await import("./services/appService.js");
     const { createPanelShellService } = await import("./services/panelShellService.js");
@@ -2707,7 +2463,7 @@ app.on("ready", async () => {
     const { createSettingsService } = await import("./services/settingsService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
     // FS and git-local services removed — server owns these via panel service
-    const { createBrowserDataRpcClient } = await import("@vibestudio/browser-data");
+    const { createBrowserDataClient } = await import("@vibestudio/browser-data");
 
     const electronContainer = new ServiceContainer(dispatcher);
 
@@ -2719,7 +2475,7 @@ app.on("ready", async () => {
         panelOrchestrator,
         serverClient: sc,
         getViewManager,
-        getAppOrchestrator: () => appOrchestrator,
+        getAppOrchestrator: () => applicationWindow.appOrchestrator,
         connectionMode: conn.connectionMode,
         remoteHost: undefined,
       })
@@ -2787,12 +2543,12 @@ app.on("ready", async () => {
       electronContainer.registerManaged({
         name: "browser-data-host",
         async start() {
-          const browserDataClient = createBrowserDataRpcClient(sc);
+          const browserDataClient = createBrowserDataClient(sc);
           browserDataStoreForCredentialCapture = browserDataClient;
           autofillManager = new AutofillManager({
-            passwordStore: browserDataClient.passwords,
+            passwordStore: browserDataClient,
             eventService,
-            getViewManager: () => assertPresent(viewManager),
+            getViewManager,
             autofillOverlayPreloadPath: path.join(__dirname, "autofillOverlayPreload.cjs"),
           });
           return browserDataClient;
@@ -2810,28 +2566,38 @@ app.on("ready", async () => {
         createBrowserSessionSyncService({
           eventService,
           serverClient: sc,
-          browserDataClient: createBrowserDataRpcClient(sc),
+          browserDataClient: createBrowserDataClient(sc),
         })
       );
     }
 
     // Register autofill service (uses lazy resolution since autofillManager is created in browser-data start)
+    const invokeAutofill = (
+      ctx: ServiceContext,
+      method: keyof typeof autofillMethods,
+      args: unknown[]
+    ): Promise<unknown> => {
+      if (
+        ctx.caller.runtime.kind === "panel" &&
+        ctx.caller.code?.repoPath !== "about/credentials"
+      ) {
+        throw new Error("Only the trusted Credentials page may manage browser passwords");
+      }
+      if (!autofillManager) throw new Error("Autofill not initialized");
+      return autofillManager.getServiceDefinition().handler(ctx, method, args);
+    };
     electronContainer.registerRpc({
       name: "autofill",
       description: "Password autofill management",
       policy: { allowed: ["shell", "panel"] },
       methods: autofillMethods,
-      handler: async (_ctx, method, args) => {
-        if (
-          _ctx.caller.runtime.kind === "panel" &&
-          _ctx.caller.code?.repoPath !== "about/credentials"
-        ) {
-          throw new Error("Only the trusted Credentials page may manage browser passwords");
-        }
-        if (!autofillManager) throw new Error("Autofill not initialized");
-        const def = autofillManager.getServiceDefinition();
-        return def.handler(_ctx, method, args);
-      },
+      handler: defineServiceHandler("autofill", autofillMethods, {
+        confirmSave: (ctx, args) => invokeAutofill(ctx, "confirmSave", args),
+        listSavedPasswords: (ctx, args) => invokeAutofill(ctx, "listSavedPasswords", args),
+        deleteSavedPassword: (ctx, args) => invokeAutofill(ctx, "deleteSavedPassword", args),
+        listNeverSaveOrigins: (ctx, args) => invokeAutofill(ctx, "listNeverSaveOrigins", args),
+        removeNeverSaveOrigin: (ctx, args) => invokeAutofill(ctx, "removeNeverSaveOrigin", args),
+      }),
     });
     // Events service — local subscription on main's EventService plus a
     // bridge-owned server subscription. Main owns the remote subscription set:
@@ -2852,24 +2618,36 @@ app.on("ready", async () => {
           return true;
         }
         if (caller.runtime.kind !== "app") return false;
-        const viewInfo = viewManager?.getViewInfo(caller.runtime.id) ?? null;
+        const viewInfo = applicationWindow.viewManager?.getViewInfo(caller.runtime.id) ?? null;
         return viewHasAppCapability(caller.runtime.id, viewInfo, "panel-hosting");
       };
       electronContainer.registerRpc({
         ...baseEventsService,
-        handler: async (ctx, method, args) => {
-          const result = await baseEventsService.handler(ctx, method, args);
-          if (!shouldForwardServerEvents(ctx.caller)) return result;
-
-          if (method === "subscribe") {
-            serverEventSubscriptions.add(args[0] as EventName);
-          } else if (method === "unsubscribe") {
-            serverEventSubscriptions.delete(args[0] as EventName);
-          } else if (method === "unsubscribeAll") {
-            serverEventSubscriptions.clear();
-          }
-          return result;
-        },
+        handler: defineServiceHandler("events", eventsMethods, {
+          subscribe: async (ctx, args) => {
+            const result = await baseEventsService.handler(ctx, "subscribe", args);
+            const eventName = args[0];
+            if (shouldForwardServerEvents(ctx.caller) && isValidEventName(eventName)) {
+              serverEventSubscriptions.add(eventName);
+            }
+            return result;
+          },
+          unsubscribe: async (ctx, args) => {
+            const result = await baseEventsService.handler(ctx, "unsubscribe", args);
+            const eventName = args[0];
+            if (shouldForwardServerEvents(ctx.caller) && isValidEventName(eventName)) {
+              serverEventSubscriptions.delete(eventName);
+            }
+            return result;
+          },
+          unsubscribeAll: async (ctx, args) => {
+            const result = await baseEventsService.handler(ctx, "unsubscribeAll", args);
+            if (shouldForwardServerEvents(ctx.caller)) {
+              serverEventSubscriptions.clear();
+            }
+            return result;
+          },
+        }),
       });
     }
 
@@ -2886,7 +2664,7 @@ app.on("ready", async () => {
     // The shell webContents is registered as viewId "shell".
 
     const resolveCallerId = (event: Electron.IpcMainInvokeEvent): string => {
-      if (!viewManager) throw new Error("ViewManager not initialized");
+      const viewManager = getViewManager();
       // Check if it's the shell
       const shellContents = viewManager.getShellWebContents();
       if (shellContents && !shellContents.isDestroyed() && shellContents.id === event.sender.id) {
@@ -2898,7 +2676,6 @@ app.on("ready", async () => {
     };
 
     const tryResolveCallerId = (event: Electron.IpcMainInvokeEvent): string | null => {
-      if (!viewManager) return null;
       try {
         return resolveCallerId(event);
       } catch {
@@ -2916,11 +2693,11 @@ app.on("ready", async () => {
       event: Electron.IpcMainInvokeEvent
     ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
       const callerId = resolveCallerId(event);
-      return resolveElectronViewCaller(callerId, viewManager?.getViewInfo(callerId));
+      return resolveElectronViewCaller(callerId, getViewManager().getViewInfo(callerId));
     };
 
     const codeIdentityForCallerId = (callerId: string) => {
-      const viewInfo = viewManager?.getViewInfo(callerId);
+      const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
       if (viewInfo?.type !== "app") return null;
       const identity = viewInfo.appIdentity;
       if (!identity?.source || !identity.effectiveVersion) return null;
@@ -2952,7 +2729,7 @@ app.on("ready", async () => {
     ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
       const caller = resolveCaller(event);
       if (caller.callerKind !== "app") return caller;
-      const viewInfo = viewManager?.getViewInfo(caller.callerId) ?? null;
+      const viewInfo = applicationWindow.viewManager?.getViewInfo(caller.callerId) ?? null;
       if (viewHasAppCapability(caller.callerId, viewInfo, capability)) {
         return caller;
       }
@@ -2985,8 +2762,7 @@ app.on("ready", async () => {
     // Electron-native
     ipcMain.handle("vibestudio:openDevtools", async (event) => {
       const callerId = resolveCallerId(event);
-      if (!viewManager) throw new Error("ViewManager not initialized");
-      viewManager.openDevTools(callerId);
+      getViewManager().openDevTools(callerId);
     });
     ipcMain.handle("vibestudio:openFolderDialog", async (event, opts?: { title?: string }) => {
       requireShellSender(event, "vibestudio:openFolderDialog");
@@ -3049,16 +2825,26 @@ app.on("ready", async () => {
         args
       );
     });
+    ipcMain.handle("vibestudio:isLocalService", (event, service: unknown) => {
+      const { callerKind } = resolveCaller(event);
+      if (callerKind !== "shell" && callerKind !== "app" && callerKind !== "panel") return false;
+      return typeof service === "string" && dispatcher.routesToHost(service, callerKind);
+    });
 
     // Workspace RPC is now registered; the bootstrap shell may leave its
     // starting state and open the startup approval gate.
     bootstrapWorkspaceRpcReady = true;
-    // createWindow is idempotent: early startup creates the shell, this call
-    // attaches workspace services once the server session is ready.
+    applicationWindow.attachWorkspaceServices({
+      panelRegistry,
+      panelOrchestrator,
+      serverSession: conn,
+      cdpHost: createCdpRegistrationAdapter(),
+      autofillManager,
+    });
     if (IS_HEADLESS_HOST) {
       performance.mark("startup:window-created");
     }
-    void createWindow();
+    applicationWindow.create();
 
     performance.mark("startup:workspace-window-attached");
 
@@ -3125,7 +2911,7 @@ app.on("ready", async () => {
     cleanupNativeWebRtc();
 
     console.error("[App] Startup failed:", formatUnknownError(error));
-    if (!IS_HEADLESS_HOST && mainWindow) {
+    if (!IS_HEADLESS_HOST && applicationWindow.isOpen) {
       const message = error instanceof Error ? error.message : String(error);
       const remoteStartupFailed = remotePairedAtLaunch || pendingRemotePairing !== null;
       bootstrapWorkspaceRpcReady = false;
@@ -3284,10 +3070,10 @@ app.on("will-quit", (event) => {
 
 app.on("activate", () => {
   if (
-    mainWindow === null &&
+    !applicationWindow.isOpen &&
     (serverSession || startupMode.kind === "pending" || bootstrapStartupError)
   ) {
-    void createWindow();
+    applicationWindow.create();
   }
   const focusedPanelId = panelRegistry?.getFocusedPanelId();
   if (focusedPanelId) {
@@ -3301,15 +3087,5 @@ app.on("activate", () => {
 nativeTheme.on("updated", () => {
   const dark = nativeTheme.shouldUseDarkColors;
   eventService.emit("system-theme-changed", dark ? "dark" : "light");
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const chrome = chromeWindowColors(dark);
-    try {
-      mainWindow.setBackgroundColor(chrome.background);
-      if (process.platform !== "darwin") {
-        mainWindow.setTitleBarOverlay({ color: chrome.background, symbolColor: chrome.symbol });
-      }
-    } catch {
-      // Window may be mid-teardown; the next createWindow picks up the colour.
-    }
-  }
+  applicationWindow.repaintChrome(dark);
 });

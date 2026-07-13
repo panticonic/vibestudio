@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   ServiceError,
   type ServiceContext,
@@ -12,9 +13,9 @@ import {
   authorizeCorsSchema,
   corsApprovalMethods,
   type CorsApprovalResult,
-} from "@vibestudio/shared/serviceSchemas/corsApproval";
+} from "@vibestudio/service-schemas/corsApproval";
 
-export type { CorsApprovalResult } from "@vibestudio/shared/serviceSchemas/corsApproval";
+export type { CorsApprovalResult } from "@vibestudio/service-schemas/corsApproval";
 
 const SERVICE_NAME = "corsApproval";
 const CAPABILITY = "cors-response-read";
@@ -93,19 +94,9 @@ export function createCorsApprovalService(deps: {
     description: "Approval-gated CORS response header relaxation",
     policy: { allowed: ["panel", "app", "worker", "do"] },
     methods: corsApprovalMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "authorize":
-          return authorize(ctx, args[0] as z.infer<typeof authorizeCorsSchema>);
-        default:
-          throw new ServiceError(
-            SERVICE_NAME,
-            method,
-            `Unknown corsApproval method: ${method}`,
-            "ENOSYS"
-          );
-      }
-    },
+    handler: defineServiceHandler(SERVICE_NAME, corsApprovalMethods, {
+      authorize: (ctx, [request]) => authorize(ctx, request),
+    }),
   };
 }
 

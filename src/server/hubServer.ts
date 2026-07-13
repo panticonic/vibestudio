@@ -11,7 +11,7 @@ import {
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
   getCentralConfigPaths,
-} from "@vibestudio/shared/workspace/loader";
+} from "@vibestudio/workspace/loader";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager, type TokenEntry } from "@vibestudio/shared/tokenManager";
@@ -35,20 +35,20 @@ import {
   HubReadyPayloadSchema,
   type HubPairingInvite,
   type HubReadyPayload,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import {
   getAdminTokenPath,
   loadPersistedAdminToken,
   savePersistedAdminToken,
 } from "@vibestudio/shared/centralAuth";
-import { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import { UserStore } from "@vibestudio/shared/users/userStore";
-import { MembershipStore } from "@vibestudio/shared/users/membership";
-import { isValidHandle, type User, type UserRole } from "@vibestudio/shared/users/types";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
+import { MembershipStore } from "@vibestudio/identity/membership";
+import { isValidHandle, type User, type UserRole } from "@vibestudio/identity/types";
 import {
   RevokedUserCleanupResultSchema,
   type RevokedUserCleanupResult,
-} from "@vibestudio/shared/users/revocationCleanup";
+} from "@vibestudio/identity/revocationCleanup";
 import { GovernanceLog } from "@vibestudio/shared/governance/governanceLog";
 import { ApprovalRecordSchema } from "@vibestudio/shared/governance/governanceLog";
 import { type MembershipGovernanceRecord } from "@vibestudio/shared/governance/types";
@@ -56,13 +56,13 @@ import {
   DEFAULT_PAIRING_CODE_TTL_MS,
   DeviceAuthStore,
   hashSecret,
-} from "./services/deviceAuthStore.js";
-import { updateAccountProfile } from "./services/accountService.js";
-import { governanceListQuerySchema } from "./services/governanceService.js";
-import { shellCallerId } from "./services/auth/model.js";
-import { authError, authErrorStatus } from "./services/auth/errors.js";
+} from "./hostCore/deviceAuthStore.js";
+import { updateAccountProfile } from "./hostCore/accountProfile.js";
+import { governanceListQuerySchema } from "./hostCore/governanceQuery.js";
+import { shellCallerId } from "./hostCore/auth/model.js";
+import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
-import { RoutedRoomStore, routedRoomStatePath } from "./services/routedRoomStore.js";
+import { RoutedRoomStore, routedRoomStatePath } from "./hostCore/routedRoomStore.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 
 declare const __filename: string;

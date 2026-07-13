@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { printConnectBanner, resolveSignalingUrl } from "./connect-utils.mjs";
+import { resolveSignalingUrl } from "./connect-grammar.generated.mjs";
+import { printConnectBanner } from "./connect-banner.mjs";
 import { parseHubReadyPayload } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 

@@ -3,9 +3,15 @@
   "version": "0.1.0",
   "description": "Neutral Durable Object primitives for Vibestudio host and workspace workers",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./test-utils": "./src/test-utils.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/durable/src"
   },
   "dependencies": {
     "@vibestudio/rpc": "workspace:*"

@@ -1,8 +1,8 @@
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { MembershipStore } from "@vibestudio/shared/users/membership";
-import type { UserStore } from "@vibestudio/shared/users/userStore";
-import type { DeviceAuthStore } from "./deviceAuthStore.js";
+import type { MembershipStore } from "@vibestudio/identity/membership";
+import type { UserStore } from "@vibestudio/identity/userStore";
+import type { DeviceAuthStore } from "../hostCore/deviceAuthStore.js";
 
 /**
  * Build the per-frame identity gate for a workspace child. Authentication is

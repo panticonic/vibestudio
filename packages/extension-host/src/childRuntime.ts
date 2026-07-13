@@ -20,8 +20,9 @@ import {
   type RegistryEntry,
 } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
-import { gitInteropMethods } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 
 import type { ExtensionInvocation } from "./types.js";
 import {
@@ -563,6 +564,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
         ws.send(
           JSON.stringify({
             type: "ws:auth",
+            contractVersion: RPC_CONTRACT_VERSION,
             token,
             connectionId: `extension:${extensionName}`,
           } satisfies WsClientMessage)
@@ -577,6 +579,15 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
       clearTimeout(timeout);
       if (!message.success) {
         reject(new Error(`Extension WebSocket auth failed: ${message.error ?? "unknown error"}`));
+        return;
+      }
+      if (message.contractVersion !== RPC_CONTRACT_VERSION) {
+        reject(
+          new Error(
+            `Extension RPC contract mismatch: server ${String(message.contractVersion)} (want ${RPC_CONTRACT_VERSION})`
+          )
+        );
+        ws.close(4005, "Incompatible RPC contract");
         return;
       }
       resolve();
@@ -609,6 +620,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
           type: "response",
           requestId: message.requestId,
           error: message.error,
+          errorKind: message.errorKind,
           ...(message.errorCode ? { errorCode: message.errorCode } : {}),
         },
       });

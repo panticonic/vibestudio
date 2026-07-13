@@ -1,10 +1,10 @@
 // Shared types used across main, renderer, server, and preload
 
-import type { CreateChildOptions, ChildCreationResult, ChildSpec } from "@vibestudio/types";
+import type { CreateChildOptions } from "@vibestudio/types";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
-export type { CreateChildOptions, ChildCreationResult, ChildSpec, StateArgsSchema, StateArgsValue };
+export type { StateArgsSchema, StateArgsValue };
 
 // =============================================================================
 // Package Manifest

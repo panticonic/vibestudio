@@ -3,7 +3,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createEntityTitleService, type EntityTitleService } from "./entityTitleService.js";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DODispatch } from "../doDispatch.js";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 
 interface FakeDispatch extends DODispatch {
   calls: Array<{ method: string; args: unknown[] }>;

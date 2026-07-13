@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
+import { stateLayout } from "../stateLayout.js";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
-import { writeJsonFileAtomic } from "./atomicFile.js";
+import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
 import type {
   ApprovalPrincipal,
   UserlandApprovalGrantScope,
@@ -32,7 +32,7 @@ export class UserlandApprovalGrantStore {
   private readonly sessionGrants: UserlandApprovalGrant[] = [];
 
   constructor(opts: { statePath: string }) {
-    this.filePath = path.join(opts.statePath, "userland-approval-grants.json");
+    this.filePath = stateLayout(opts.statePath).userlandApprovalGrantsFile;
     this.load();
   }
 

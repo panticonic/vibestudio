@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "TypeScript type checking for Vibestudio panels and workers",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-build"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -13,7 +16,8 @@
   },
   "scripts": {
     "build": "tsc --build tsconfig.build.json --force",
-    "dev": "tsc --project tsconfig.build.json --watch"
+    "dev": "tsc --build tsconfig.build.json --watch",
+    "test": "cd ../.. && vitest run packages/typecheck/src"
   },
   "dependencies": {
     "typescript": "^5.9.3"

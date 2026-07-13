@@ -87,6 +87,17 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }
   });
 
+  it("round-trips a live expiry and rejects an expired invite", () => {
+    const live = createConnectDeepLink({ ...PAIR, exp: Date.now() + 60_000 });
+    expect(parseConnectLink(live)).toMatchObject({ kind: "ok", exp: expect.any(Number) });
+
+    const expired = replaceConnectParam(live, "exp", String(Date.now() - 1));
+    expect(parseConnectLink(expired)).toEqual({
+      kind: "error",
+      reason: "This pairing link has expired — generate a new invite on the server",
+    });
+  });
+
   it("does not rely on URL support for the vibestudio custom scheme (RN/Hermes)", () => {
     // The parser must NOT call new URL() on a vibestudio: link. Simulate a runtime
     // where URL throws for the custom scheme; parsing must still succeed (it only
@@ -229,11 +240,9 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     });
   });
 
-  // The CLI ships a dependency-free Node mirror of this grammar in
-  // scripts/cli/lib/connect-utils.mjs (raw `node`, no workspace deps). It MUST
-  // stay byte-identical in behavior to connect.ts; these tests pin the lockstep.
-  // The mirror is plain JS with no .d.ts, so import it via a runtime URL + cast
-  // (a static specifier would trip TS7016 / implicit-any).
+  // Raw-node CLI scripts consume the generated dependency-free artifact. The
+  // generator check plus these parity assertions ensure it remains exactly the
+  // TypeScript grammar compiled to ESM, never a second hand-maintained parser.
   type ConnectUtilsMirror = {
     createConnectDeepLink: (pairing: ConnectPairing) => string;
     createConnectPairUrl: (pairing: ConnectPairing) => string;
@@ -249,11 +258,14 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }) => unknown;
   };
   const loadMirror = async (): Promise<ConnectUtilsMirror> => {
-    const scriptUrl = new URL("../../../scripts/cli/lib/connect-utils.mjs", import.meta.url);
+    const scriptUrl = new URL(
+      "../../../scripts/cli/lib/connect-grammar.generated.mjs",
+      import.meta.url
+    );
     return (await import(scriptUrl.href)) as ConnectUtilsMirror;
   };
 
-  describe("scripts/cli/lib/connect-utils.mjs parity (new WebRTC grammar)", () => {
+  describe("raw-node generated grammar parity", () => {
     it("mints and round-trips an identical deep link", async () => {
       const mirror = await loadMirror();
       const link = createConnectDeepLink(PAIR);
@@ -265,6 +277,14 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       const withSrv = createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" });
       expect(mirror.createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" })).toBe(withSrv);
       expect(mirror.parseConnectLink(withSrv)).toEqual(parseConnectLink(withSrv));
+      const expiringPair = { ...PAIR, exp: Date.now() + 60_000 };
+      const withExpiry = createConnectDeepLink(expiringPair);
+      expect(mirror.createConnectDeepLink(expiringPair)).toBe(withExpiry);
+      expect(mirror.parseConnectLink(withExpiry)).toEqual(parseConnectLink(withExpiry));
+      expect(mirror.parseConnectLink(withExpiry)).toMatchObject({
+        kind: "ok",
+        exp: expiringPair.exp,
+      });
     });
 
     it("rejects the same malformed links the shared parser rejects", async () => {

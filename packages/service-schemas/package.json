@@ -1,0 +1,27 @@
+{
+  "name": "@vibestudio/service-schemas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./bindings/*": "./src/bindings/*.ts",
+    "./clients/*": "./src/clients/*.ts",
+    "./runtime/*": "./src/runtime/*.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/service-schemas/src"
+  },
+  "dependencies": {
+    "@vibestudio/credential-client": "workspace:*",
+    "@vibestudio/identity": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/workspace-contracts": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

@@ -11,13 +11,22 @@
  * - extension callers: chained caller context (or explicit host-fs capability).
  * - server/shell callers: explicit contextId as the first argument.
  *
+ * This definition deliberately remains a dynamic adapter rather than using
+ * `defineServiceHandler`. Each fs schema accepts two tuple shapes because the
+ * server/shell form prepends a context id, but schema data alone cannot choose
+ * between them: verified caller identity does. FsService first resolves that
+ * identity-dependent scope and consumes the prefix, then applies shared GAD /
+ * materialization routing before operation dispatch. An exhaustive forwarding
+ * table here would neither type the normalized tuples nor remove that dispatch;
+ * it would only duplicate every method name around the real adapter boundary.
+ *
  * `chown` remains deliberately absent. `symlink` is exposed only through the
  * FsService's contained, scratch-only implementation.
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { handleFsCall, type FsService } from "@vibestudio/shared/fsService";
-import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
 
 export function createFsServiceDefinition(getFsService: () => FsService): ServiceDefinition {
   return {

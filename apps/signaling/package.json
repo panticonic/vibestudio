@@ -4,7 +4,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:cloudflare": "tsc --noEmit",
+    "test": "cd ../.. && vitest run apps/signaling/src"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241112.0",

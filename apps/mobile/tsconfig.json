@@ -22,6 +22,9 @@
     "baseUrl": ".",
     "paths": {
       "@vibestudio/shared/*": ["../../packages/shared/src/*"],
+      "@vibestudio/service-schemas/*": ["../../packages/service-schemas/src/*"],
+      "@vibestudio/shell-core/*": ["../../packages/shell-core/src/*"],
+      "@vibestudio/workspace-contracts/*": ["../../packages/workspace-contracts/src/*"],
       "@vibestudio/dev-log": ["../../packages/dev-log/src/index.ts"],
       "@vibestudio/env-paths": ["../../packages/env-paths/src/index.ts"],
       "@vibestudio/browser-data": ["../../packages/browser-data/src/index.ts"],

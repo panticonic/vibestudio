@@ -1,6 +1,6 @@
 import { WebContentsView, ipcMain, type BaseWindow } from "electron";
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { ContentOverlayTheme } from "@vibestudio/shared/serviceSchemas/view";
+import type { ContentOverlayTheme } from "@vibestudio/service-schemas/view";
 
 const log = createDevLogger("ShellContentOverlayView");
 
@@ -28,7 +28,9 @@ export interface ContentOverlayShowOptions {
   surface: string;
   /** Anchor region (the panel viewport rect); the surface floats top-right. */
   bounds: ContentOverlayBounds;
-  props: unknown;
+  /** Opaque surface props. Optional because the wire schema intentionally accepts any value,
+   * including `undefined`, and therefore also accepts an omitted object property. */
+  props?: unknown;
   theme: ContentOverlayTheme;
   focus?: boolean;
 }

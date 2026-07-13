@@ -14,10 +14,10 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { parseWorkspaceConfigContentWithId } from "@vibestudio/shared/workspace/configParser";
-import { buildWorkspaceDeclarations } from "@vibestudio/shared/workspace/singletonRegistry";
+import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import { buildWorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import { VCS_SERVICE_PROTOCOL } from "@vibestudio/shared/userlandServiceRpc";
-import { vcsMethods } from "@vibestudio/shared/serviceSchemas/vcs";
+import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { resolveUserlandService } from "../../src/server/userlandServices.js";
@@ -25,7 +25,7 @@ import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js"
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../src/server/services/protectedRefStore.js";
 
 const REPO = "packages/dispatch-demo";
 const CTX = vcsContextHead("disp");
@@ -113,7 +113,7 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
       const workspaceRoot = path.join(root, "workspace");
       await fsp.mkdir(workspaceRoot);
       gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
-      const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+      const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
       attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
       vcs = new WorkspaceVcs({
         workspaceId: "test-ws",

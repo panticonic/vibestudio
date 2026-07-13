@@ -1,4 +1,4 @@
-import type { CallerKind, RpcEnvelope } from "../types.js";
+import type { CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
 
@@ -10,6 +10,8 @@ export interface ToolExecutionResult {
 
 export interface WsAuthMessage {
   type: "ws:auth";
+  /** End-to-end RPC contract required by the server. */
+  contractVersion: number;
   token: string;
   connectionId?: string;
   clientSessionId?: string;
@@ -36,9 +38,8 @@ export interface WsRouteMessage {
 
 export type WsClientMessage = WsAuthMessage | WsRpcMessage | WsToolResultMessage | WsRouteMessage;
 
-export interface WsAuthResultMessage {
+interface WsAuthResultBase {
   type: "ws:auth-result";
-  success: boolean;
   callerId?: string;
   callerKind?: CallerKind | string;
   connectionId?: string;
@@ -52,6 +53,20 @@ export interface WsAuthResultMessage {
   deviceCredential?: { deviceId: string; refreshToken: string };
   error?: string;
 }
+
+export interface WsAuthSuccessResultMessage extends WsAuthResultBase {
+  success: true;
+  /** Server's end-to-end contract; clients reject missing or mismatched values. */
+  contractVersion: number;
+}
+
+export interface WsAuthFailureResultMessage extends WsAuthResultBase {
+  success: false;
+  /** Included by compatibility failures when the server can identify its contract. */
+  contractVersion?: number;
+}
+
+export type WsAuthResultMessage = WsAuthSuccessResultMessage | WsAuthFailureResultMessage;
 
 export interface WsRpcResponseMessage {
   type: "ws:rpc";
@@ -74,6 +89,7 @@ export interface WsRoutedEventErrorMessage {
   targetId: string;
   event: string;
   error: string;
+  errorKind: RpcErrorKind;
   errorCode?: string;
 }
 
@@ -82,6 +98,7 @@ export interface WsRoutedResponseErrorMessage {
   targetId: string;
   requestId: string;
   error: string;
+  errorKind: RpcErrorKind;
   errorCode?: string;
 }
 

@@ -240,13 +240,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-brand-"));
 try {
   const brandDir = path.join(repoRoot, "build-resources", "brand");
   const linuxDir = path.join(repoRoot, "build-resources", "icons");
-  const workspaceBrandAssetsPackageDir = path.join(
-    repoRoot,
-    "workspace",
-    "packages",
-    "brand-assets",
-    "src"
-  );
+  const workspaceUiAssetsDir = path.join(repoRoot, "workspace", "packages", "ui", "src", "assets");
   const mobileWorkspaceAssets = path.join(repoRoot, "workspace", "apps", "mobile", "src", "assets");
   const mobileHostAssets = path.join(repoRoot, "apps", "mobile", "assets");
   const androidRes = path.join(repoRoot, "apps", "mobile", "android", "app", "src", "main", "res");
@@ -272,7 +266,7 @@ try {
   for (const dir of [
     brandDir,
     linuxDir,
-    workspaceBrandAssetsPackageDir,
+    workspaceUiAssetsDir,
     mobileWorkspaceAssets,
     mobileHostAssets,
     iosIconDir,
@@ -333,28 +327,14 @@ try {
     resizeOpaquePng(darkSource, path.join(linuxDir, `${size}x${size}.png`), size);
   }
 
-  resizeOpaquePng(lightSource, path.join(workspaceBrandAssetsPackageDir, "vibestudio-light.png"), 512);
-  resizeOpaquePng(darkSource, path.join(workspaceBrandAssetsPackageDir, "vibestudio-dark.png"), 512);
+  resizeOpaquePng(lightSource, path.join(workspaceUiAssetsDir, "vibestudio-light.png"), 512);
+  resizeOpaquePng(darkSource, path.join(workspaceUiAssetsDir, "vibestudio-dark.png"), 512);
   transparentMark(
     lightSource,
-    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-on-light.png"),
+    path.join(workspaceUiAssetsDir, "vibestudio-mark-on-light.png"),
     512
   );
-  transparentMark(
-    darkSource,
-    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-on-dark.png"),
-    512
-  );
-  writeText(path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark.svg"), brandMarkSvg());
-  writeText(
-    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-black.svg"),
-    brandMarkSvg("#050506")
-  );
-  writeText(
-    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-white.svg"),
-    brandMarkSvg("#F8FAFC")
-  );
-  writeText(path.join(workspaceBrandAssetsPackageDir, "favicon.svg"), brandTileSvg());
+  transparentMark(darkSource, path.join(workspaceUiAssetsDir, "vibestudio-mark-on-dark.png"), 512);
 
   for (const dir of [mobileWorkspaceAssets, mobileHostAssets]) {
     resizeOpaquePng(lightSource, path.join(dir, "vibestudio-light.png"), 512);

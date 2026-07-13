@@ -45,7 +45,7 @@ function makeSyncService(workspaceConfig: unknown) {
     }),
   } as unknown as ServerClient;
   const browserDataClient = {
-    cookies: { getByDomain: vi.fn(async () => []) },
+    getCookies: vi.fn(async () => []),
   } as unknown as BrowserDataClient;
   const service = createBrowserSessionSyncService({
     eventService,

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { stateLayout } from "../stateLayout.js";
 import type { GitHttpTransportResponse } from "./gitHttpRpc.js";
 
 const DISPOSABLE_GIT_HOST = "vibestudio.local";
@@ -55,7 +56,7 @@ export class DisposableGitRemoteManager {
   private readonly root: string;
 
   constructor(statePath: string) {
-    this.root = path.join(statePath, "disposable-git-remotes");
+    this.root = stateLayout(statePath).disposableGitRemotesDir;
   }
 
   async create(options?: {

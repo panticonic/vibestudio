@@ -7,7 +7,7 @@ import { assertPresent } from "../lintHelpers";
 // These page ids identify workspace-provided units under `about/` that the menu
 // assumes exist. The `navigate-about` payload is a page id (not a source); the
 // shell resolves it to the `about/<page>` unit and creates a privileged panel.
-import { ABOUT_PAGES } from "@vibestudio/shared/workspace/aboutNamespace";
+import { ABOUT_PAGES } from "@vibestudio/workspace-contracts/aboutNamespace";
 
 // Set during initialization — always non-null after startup
 let _menuPanelLifecycle: BridgePanelLifecycle | null = null;
@@ -30,8 +30,8 @@ function emitMenuEvent<E extends EventName>(event: E, payload?: EventPayloads[E]
   return true;
 }
 
-/** Set the view manager for menu operations. Called from index.ts. */
-export function setMenuViewManager(vm: ViewManager): void {
+/** Set or clear the window-owned view manager used by menu operations. */
+export function setMenuViewManager(vm: ViewManager | null): void {
   _menuViewManager = vm;
 }
 

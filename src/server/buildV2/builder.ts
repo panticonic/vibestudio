@@ -24,7 +24,7 @@ import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
-import type { LibraryBuildTarget } from "@vibestudio/shared/serviceSchemas/build";
+import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
 import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,

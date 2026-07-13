@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { stateLayout } from "./stateLayout.js";
 
 export interface RuntimeImageRecord {
   id: string;
@@ -30,7 +31,7 @@ export class RuntimeImageStore {
   private readonly records = new Map<string, RuntimeImageRecord>();
 
   constructor(statePath: string) {
-    this.filePath = path.join(statePath, "runtime-images.json");
+    this.filePath = stateLayout(statePath).runtimeImagesFile;
     this.load();
   }
 

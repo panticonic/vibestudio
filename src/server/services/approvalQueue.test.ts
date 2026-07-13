@@ -183,8 +183,8 @@ describe("approvalQueue", () => {
       operation: {
         kind: "panel",
         verb: "openPanel",
-        object: { type: "panel", label: "Panel", value: "workers/hello" },
-        groupKey: "runtime-open:ctx-1:workers/hello",
+        object: { type: "panel", label: "Panel", value: "workers/runtime-fixture" },
+        groupKey: "runtime-open:ctx-1:workers/runtime-fixture",
       },
     });
     const second = queue.request({
@@ -198,8 +198,8 @@ describe("approvalQueue", () => {
       operation: {
         kind: "worker-lifecycle",
         verb: "spawn",
-        object: { type: "worker-source", label: "Worker", value: "workers/hello" },
-        groupKey: "runtime-open:ctx-1:workers/hello",
+        object: { type: "worker-source", label: "Worker", value: "workers/runtime-fixture" },
+        groupKey: "runtime-open:ctx-1:workers/runtime-fixture",
       },
     });
 

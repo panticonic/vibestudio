@@ -9,7 +9,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 import type { StateAdvancedEvent } from "../../../src/server/buildV2/stateTrigger.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
@@ -57,7 +57,10 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
 
     // content store over this test's blob dir (production uses blobstore.* RPC).
 
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => {},
+    });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -129,7 +132,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     await fsp.writeFile(path.join(coldWorkspaceRoot, "meta/vibestudio.yml"), "name: cold\n");
 
     const coldGad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad-cold-attach" });
-    const coldRefs = createRefService({
+    const coldRefs = createProtectedRefStore({
       statePath: path.join(coldRoot, "refs"),
       gate: async () => {},
     });
@@ -160,7 +163,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
         .map((record) => record.repoPath)
         .sort()
     ).toEqual(["meta", "packages/a", "packages/b"]);
-    const view = await coldVcs.workspaceView();
+    const view = await coldVcs.repositories.workspaceView();
     expect((await coldVcs.readFile(view.stateHash, "packages/a/index.ts"))?.content).toMatchObject({
       kind: "text",
       text: expect.stringContaining("a = 1"),
@@ -209,7 +212,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     expect(event).toBeTruthy();
     expect(event!.changedPaths).toContain("packages/foo/index.ts");
     expect(event!.repoStateHash).toBe(await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo"));
-    expect(event!.stateHash).toBe((await vcs.workspaceView()).stateHash);
+    expect(event!.stateHash).toBe((await vcs.repositories.workspaceView()).stateHash);
     expect(event!.stateHash).not.toBe(event!.repoStateHash);
 
     expect((await vcs.readFile(event!.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
@@ -236,7 +239,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     // CAS, no freshness scan. Out-of-band disk edits to the source dir are NOT
     // adopted (the source dir is write-only + boot seed).
     const fresh = await vcs.ensureFresh();
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect(fresh.stateHash).toBe(view.stateHash);
 
     // A raw disk edit to the source dir does NOT change the main view: no scan
@@ -255,10 +258,10 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     // Discovery is sourced from `refs.listMains()` (composed view), not a disk
     // scan: a brand-new repo whose `main` is created by push shows up with no
     // change to the on-disk source tree.
-    const before = (await vcs.discoverRepos()).map((r) => r.repoPath);
+    const before = (await vcs.repositories.discover()).map((r) => r.repoPath);
     expect(before).not.toContain("packages/added");
     await advanceMain("packages/added", "index.ts", "export const added = 1;\n");
-    const after = (await vcs.discoverRepos()).map((r) => r.repoPath);
+    const after = (await vcs.repositories.discover()).map((r) => r.repoPath);
     expect(after).toContain("packages/added");
   });
 
@@ -266,7 +269,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     const refsPath = path.join(root, "refs");
     // A read-only view over the durable ref store the beforeEach attach seeded.
     const readRefs = () =>
-      createRefService({ statePath: refsPath, gate: async () => {} }).listMains();
+      createProtectedRefStore({ statePath: refsPath, gate: async () => {} }).listMains();
 
     const before = readRefs();
     expect(before.map((record) => record.repoPath).sort()).toEqual([
@@ -279,7 +282,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     expect(before.every((record) => /^(state|manifest):/.test(record.stateHash))).toBe(true);
 
     // Advance one repo through the real push flow, then "restart": a fresh
-    // WorkspaceVcs + fresh RefService over the same durable stores.
+    // WorkspaceVcs + fresh ProtectedRefStore over the same durable stores.
     await advanceMain("packages/foo", "index.ts", "export const x = 2;\n");
     const advancedValue = await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo");
     expect(readRefs().find((record) => record.repoPath === "packages/foo")?.stateHash).toBe(
@@ -292,7 +295,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),
       buildSourcesRoot: path.join(root, "build-sources"),
-      refs: createRefService({ statePath: refsPath, gate: async () => {} }),
+      refs: createProtectedRefStore({ statePath: refsPath, gate: async () => {} }),
     });
     await restarted.attachGad(callerFor(gad));
 
@@ -365,7 +368,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),
       buildSourcesRoot: path.join(root, "build-sources"),
-      refs: createRefService({ statePath: path.join(root, "refs"), gate: async () => {} }),
+      refs: createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} }),
     });
     await restarted.attachGad(callerFor(gad));
     const { dir } = await restarted.ensureContextFolder(ctxId);

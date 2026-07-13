@@ -9,6 +9,7 @@ import {
   type HeadFramePayload,
 } from "../protocol/streamCodec.js";
 import { decodeBulkMessage, encodeBulkMessage } from "../protocol/bulkMux.js";
+import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import {
   decodeControlFrame,
   encodeControlFrame,
@@ -20,6 +21,7 @@ import {
 } from "../protocol/sessionNegotiation.js";
 import {
   FINGERPRINT_MISMATCH_CODE,
+  RPC_CONTRACT_MISMATCH_CODE,
   SESSION_CLOSED_CODE,
   STREAM_RECEIVE_OVERFLOW_CODE,
   createWebRtcTransport,
@@ -409,6 +411,7 @@ class Fabric {
     const hello: SessionHelloFrame = {
       t: "hello",
       proto: 2,
+      contractVersion: 1,
       maxMsg: 256 * 1024,
       platform: "server",
       keepalive: { intervalMs: 15_000, timeoutMs: 45_000 },
@@ -636,6 +639,29 @@ describe("WebRTC transport — pin + hello handshake", () => {
     await connecting;
   });
 
+  it("terminally rejects connect and ready on an RPC contract mismatch", async () => {
+    vi.useFakeTimers();
+    const fabric = new Fabric({
+      hello: { contractVersion: RPC_CONTRACT_VERSION + 1 },
+    });
+    const transport = makeTransport(fabric);
+    const session = transport.openSession({ connectionId: "c1", getToken: () => "g" });
+    const connecting = transport.connect().catch((error) => error);
+    const sessionReady = session.ready!().catch((error) => error);
+    const failure = await connecting;
+
+    expect(failure).toMatchObject({
+      code: RPC_CONTRACT_MISMATCH_CODE,
+      message: `RPC contract mismatch: peer ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`,
+    });
+    await expect(sessionReady).resolves.toBe(failure);
+    await expect(transport.ready()).rejects.toBe(failure);
+    expect(transport.status()).toBe("disconnected");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fabric.createCalls).toBe(1);
+  });
+
   it("drops the pipe on a non-hello first frame", async () => {
     const fabric = new Fabric({ hello: "defer" });
     const transport = makeTransport(fabric);
@@ -741,6 +767,36 @@ describe("WebRTC transport — recovery", () => {
 
     await transport.close(); // stops the reestablish loop + rejects the re-armed promise
     await reconnecting.catch(() => undefined);
+  });
+
+  it("terminally rejects recovery when the peer contract changes and never backs off again", async () => {
+    vi.useFakeTimers();
+    const hello: Partial<Omit<SessionHelloFrame, "t">> = {
+      contractVersion: RPC_CONTRACT_VERSION,
+    };
+    const fabric = new Fabric({ hello });
+    const transport = makeTransport(fabric);
+    await transport.connect();
+    const session = transport.openSession({ connectionId: "c1", getToken: () => "g" });
+    await session.ready!();
+
+    hello.contractVersion = RPC_CONTRACT_VERSION + 1;
+    fabric.currentPeer().fireState("failed");
+    const recovering = transport.ready().catch((error) => error);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const failure = await recovering;
+
+    expect(failure).toMatchObject({
+      code: RPC_CONTRACT_MISMATCH_CODE,
+      message: `RPC contract mismatch: peer ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`,
+    });
+    await expect(transport.connect()).rejects.toBe(failure);
+    await expect(session.ready!()).rejects.toBe(failure);
+    expect(transport.status()).toBe("disconnected");
+    expect(fabric.createCalls).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fabric.createCalls).toBe(2);
   });
 
   it("serializes establish: a down-event mid-establish re-runs recovery once, never concurrently", async () => {

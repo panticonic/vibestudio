@@ -55,8 +55,8 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "and omit ref only when intentionally launching the main build. `env` accepts extra string " +
       "bindings delivered to the worker fetch handler's WorkerEnv; successful creation proves the " +
       "configuration was accepted, not that worker code observed a value. Verify a named non-secret " +
-      "probe through a worker endpoint/RPC; workers/hello provides readNonSecretProbe for the fixed " +
-      "NON_SECRET_PROBE binding. Launchable sources and their real manifest entry points " +
+      "probe implemented by the worker under test through its endpoint/RPC. Launchable sources and " +
+      "their real manifest entry points " +
       "are listed with workers.listSources() (raw: " +
       'rpc.call("main", `workers.listSources`, [])).',
   },

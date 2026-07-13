@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notification";
+import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ViewManager } from "../viewManager.js";
 import { requireAppCapability } from "./appCapabilities.js";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 
 export function createNotificationService(deps: {
   eventService: EventService;
@@ -16,30 +16,39 @@ export function createNotificationService(deps: {
     description: "Host notification surface for workspace apps and panels",
     policy: { allowed: ["shell", "app", "panel"] },
     methods: notificationMethods,
-    handler: async (ctx, method, args) => {
-      if (ctx.caller.runtime.kind === "app") {
-        requireAppCapability(ctx, deps.getViewManager(), "notifications", `notification.${method}`);
-      }
-      switch (method) {
-        case "show": {
-          const [opts] = args as [Omit<NotificationPayload, "id"> & { id?: string }];
-          const id = opts.id ?? `notif-${randomUUID()}`;
-          deps.eventService.emit("notification:show", { ...opts, id });
-          return id;
+    handler: defineServiceHandler("notification", notificationMethods, {
+      show: (ctx, [opts]) => {
+        if (ctx.caller.runtime.kind === "app") {
+          requireAppCapability(ctx, deps.getViewManager(), "notifications", "notification.show");
         }
-        case "dismiss": {
-          deps.eventService.emit("notification:dismiss", { id: args[0] as string });
-          return;
+        const id = opts.id ?? `notif-${randomUUID()}`;
+        deps.eventService.emit("notification:show", { ...opts, id });
+        return id;
+      },
+      dismiss: (ctx, [id]) => {
+        if (ctx.caller.runtime.kind === "app") {
+          requireAppCapability(ctx, deps.getViewManager(), "notifications", "notification.dismiss");
         }
-        case "reportAction": {
-          const [id, actionId] = args as [string, string];
-          deps.eventService.emit("notification:action", { id, actionId });
-          await deps.onAction?.(id, actionId);
-          return;
+        deps.eventService.emit("notification:dismiss", { id });
+        return;
+      },
+      reportAction: async (ctx, [id, actionId]) => {
+        if (ctx.caller.runtime.kind === "app") {
+          requireAppCapability(
+            ctx,
+            deps.getViewManager(),
+            "notifications",
+            "notification.reportAction"
+          );
         }
-        default:
-          throw new Error(`Unknown notification method: ${method}`);
-      }
-    },
+        deps.eventService.emit("notification:action", { id, actionId });
+        await deps.onAction?.(id, actionId);
+        return;
+      },
+      signalUserInbox: (_ctx, [userId]) =>
+        deps.eventService.emitToUser(userId, "user-notifications-changed", {
+          changedAt: Date.now(),
+        }),
+    }),
   };
 }

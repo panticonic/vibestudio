@@ -70,6 +70,7 @@ import {
   type StreamFrameType,
 } from "../protocol/bulkMux.js";
 import { FRAME_DATA, FRAME_END } from "../protocol/streamCodec.js";
+import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import {
   SESSION_HELLO,
   SESSION_PING,
@@ -620,6 +621,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     const hello: SessionHelloFrame = {
       t: SESSION_HELLO,
       proto: SESSION_PROTOCOL_VERSION,
+      contractVersion: RPC_CONTRACT_VERSION,
       maxMsg: localMaxMsg,
       platform: "server",
       keepalive: { ...LOCAL_KEEPALIVE },
@@ -674,6 +676,12 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     }
     if (frame.proto !== SESSION_PROTOCOL_VERSION) {
       pipeDown(`protocol violation: hello proto ${frame.proto} (want ${SESSION_PROTOCOL_VERSION})`);
+      return;
+    }
+    if (frame.contractVersion !== RPC_CONTRACT_VERSION) {
+      pipeDown(
+        `RPC contract mismatch: peer ${frame.contractVersion} (want ${RPC_CONTRACT_VERSION})`
+      );
       return;
     }
     if (!Number.isFinite(frame.maxMsg) || frame.maxMsg <= 0) {

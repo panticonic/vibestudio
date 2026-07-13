@@ -11,7 +11,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { RuntimeSurface, RuntimeSurfaceTarget } from "@vibestudio/shared/runtimeSurface";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
-import type { CatalogEntry } from "@vibestudio/shared/serviceSchemas/docs";
+import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
 
 export interface BuildCatalogDeps {

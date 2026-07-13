@@ -2,7 +2,7 @@
  * End-to-end git upstream (push/pull) coverage for the git-bridge feature.
  *
  * Drives the REAL git-bridge core (`GitBridge`) against the REAL gad-store DO
- * with in-process host bridges (RefService + content store over a blob dir) —
+ * with in-process host bridges (ProtectedRefStore + content store over a blob dir) —
  * the same harness as `doImport.test.ts` — and layers the OUTSIDE-WORLD git
  * interchange on top with the system `git` CLI:
  *
@@ -22,7 +22,7 @@
  * The suite is sequential: one shared fixture (beforeAll), each `it` builds on
  * the prior. gad `main` is advanced between export cycles through the DO's OWN
  * gated single-writer import-publish path (ingest onto the non-main staging head
- * → `vcsImportPublish` → RefService), which is the faithful stand-in for a
+ * → `vcsImportPublish` → ProtectedRefStore), which is the faithful stand-in for a
  * workspace-internal commit: it advances the protected ref WITHOUT moving the
  * git-bridge export marker (only export/import move the marker), so the next
  * export has exactly one new transition to emit.
@@ -41,7 +41,7 @@ import {
   type BridgeHost,
 } from "../../workspace/extensions/git-bridge/bridge.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../src/server/services/protectedRefStore.js";
 import {
   ensureLayout,
   getBytes,
@@ -91,7 +91,7 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
   let repoDir: string;
   let gad: TestGad;
   let doi: GadWorkspaceDO;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
   let bridge: GitBridge;
   const stateMap = new Map<string, string>();
 
@@ -120,7 +120,7 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
    * gated import-publish path — the faithful net effect of a workspace-internal
    * commit. Mirrors blob bytes into the shared content store (so a later export
    * can materialize them), ingests the full tree onto the non-main staging head,
-   * then publishes onto `main` via `vcsImportPublish` (→ RefService). Does NOT
+   * then publishes onto `main` via `vcsImportPublish` (→ ProtectedRefStore). Does NOT
    * touch the git checkout or the git-bridge export marker.
    */
   async function advanceMain(
@@ -171,7 +171,7 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
     doi = gad.instance;
-    refs = createRefService({
+    refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       // A git import/publish advances a repo's main, flowing through this
       // approval gate exactly like a push. Semantics-free here.

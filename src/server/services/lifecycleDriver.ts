@@ -1,5 +1,5 @@
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DORef, LifecycleDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { LifecycleKey, LifecycleOp } from "../internalDOs/workspaceDO.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
@@ -8,7 +8,7 @@ const log = createDevLogger("LifecycleDriver");
 
 export interface LifecycleDriverDeps {
   workerdManager: WorkerdManager;
-  doDispatch: DODispatch;
+  doDispatch: LifecycleDoDispatcher;
   workspaceId: string;
   prepareDeadlineMs?: number;
   concurrency?: number;

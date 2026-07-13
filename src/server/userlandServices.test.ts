@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
-} from "@vibestudio/shared/workspace/singletonRegistry";
+} from "@vibestudio/workspace/singletonRegistry";
 import { resolveUserlandService, resolveVcsStoreBinding } from "./userlandServices.js";
 
 function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {

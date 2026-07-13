@@ -1,19 +1,15 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-
-function defaultIdentityPath(workspace) {
-  const configRoot = process.env.XDG_CONFIG_HOME
-    ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
-    : path.join(os.homedir(), ".config", "vibestudio");
-  return path.join(configRoot, "workspaces", workspace, "state", "webrtc", "identity.pem");
-}
+import { workspaceIdentityPath } from "./lib/config-paths.mjs";
 
 function parseArgs(argv) {
+  let identityExplicit = false;
+  let workspaceExplicit = false;
   const options = {
-    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? defaultIdentityPath(),
+    identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? null,
+    workspace: "default",
     yes: false,
     help: false,
   };
@@ -39,7 +35,7 @@ function parseArgs(argv) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
     throw new Error("--workspace must contain only letters, numbers, hyphens, and underscores");
   }
-  options.identity ??= defaultIdentityPath(options.workspace);
+  options.identity ??= workspaceIdentityPath(options.workspace);
   return options;
 }
 

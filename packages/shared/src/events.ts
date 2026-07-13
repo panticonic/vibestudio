@@ -14,8 +14,8 @@ import type {
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { CallerKind } from "./principalKinds.js";
-import type { VcsHeadAdvance, VcsWorkingAdvance } from "./serviceSchemas/vcs.js";
-import type { WorkspacePresenceEntry } from "./serviceSchemas/workspacePresence.js";
+import type { VcsHeadAdvance, VcsWorkingAdvance } from "./vcsEvents.js";
+import type { WorkspacePresenceEntry } from "./workspacePresence.js";
 import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
 /**

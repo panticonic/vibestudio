@@ -12,7 +12,8 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { hostLifecycleMethods } from "@vibestudio/shared/serviceSchemas/hostLifecycle";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { hostLifecycleMethods } from "@vibestudio/service-schemas/hostLifecycle";
 import type { ActivityRegistry } from "./activityRegistry.js";
 
 export const DEFAULT_IDLE_EXIT_MS = 30 * 60_000;
@@ -26,20 +27,17 @@ export function createHostLifecycleService(deps: {
     description: "Host-process graceful shutdown for attached shells",
     policy: { allowed: ["shell", "server"] },
     methods: hostLifecycleMethods,
-    handler: async (ctx, method) => {
-      switch (method) {
-        case "shutdown":
-          if (ctx.caller.runtime.kind !== "shell" && ctx.caller.runtime.kind !== "server") {
-            throw new Error("hostLifecycle.shutdown is shell-only");
-          }
-          // Defer past the RPC response so the caller sees the ack before the
-          // sockets go down.
-          setTimeout(() => deps.shutdown(), 25);
-          return;
-        default:
-          throw new Error(`Unknown hostLifecycle method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("hostLifecycle", hostLifecycleMethods, {
+      shutdown: (ctx) => {
+        if (ctx.caller.runtime.kind !== "shell" && ctx.caller.runtime.kind !== "server") {
+          throw new Error("hostLifecycle.shutdown is shell-only");
+        }
+        // Defer past the RPC response so the caller sees the ack before the
+        // sockets go down.
+        setTimeout(() => deps.shutdown(), 25);
+        return;
+      },
+    }),
   };
 }
 

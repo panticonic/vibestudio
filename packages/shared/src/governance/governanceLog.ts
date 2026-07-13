@@ -17,7 +17,7 @@ import {
   initializeCanonicalSqliteSchema,
   isTrulyEmptySqliteDatabase,
   type CanonicalSqliteSchema,
-} from "../sqliteSchema.js";
+} from "@vibestudio/sqlite";
 import {
   governanceRecordTimestamp,
   isApprovalProvenanceRecord,

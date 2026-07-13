@@ -24,6 +24,7 @@ import {
 } from "@vibestudio/shared/approvals";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord, RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
@@ -471,72 +472,56 @@ export function createUserlandApprovalService(deps: {
     return { settled: count > 0 };
   }
 
+  const methods = {
+    request: { args: z.tuple([userlandApprovalRequestSchema]) },
+    requestSecretInput: { args: z.tuple([secretInputRequestSchema]) },
+    requestAs: {
+      args: z.tuple([approvalPrincipalSchema, userlandApprovalRequestSchema]),
+      policy: { allowed: ["extension"] },
+    },
+    requestSecretInputAs: {
+      args: z.tuple([approvalPrincipalSchema, secretInputRequestSchema]),
+      policy: { allowed: ["extension"] },
+    },
+    // External-agent relay: bound agent runtimes may be either DOs or workers.
+    requestExternal: {
+      args: z.tuple([externalAgentApprovalRequestSchema]),
+      policy: { allowed: ["do", "worker"] },
+    },
+    settleExternal: {
+      args: z.tuple([externalAgentSettleSchema]),
+      policy: { allowed: ["do", "worker"] },
+    },
+    revoke: { args: z.tuple([userlandApprovalSubjectIdSchema]) },
+    list: { args: z.tuple([]) },
+  } satisfies ServiceDefinition["methods"];
+
   return {
     name: SERVICE_NAME,
     description: "Userland-managed consent approvals",
     policy: { allowed: ["panel", "app", "worker", "do", "extension"] },
-    methods: {
-      request: { args: z.tuple([userlandApprovalRequestSchema]) },
-      requestSecretInput: { args: z.tuple([secretInputRequestSchema]) },
-      requestAs: {
-        args: z.tuple([approvalPrincipalSchema, userlandApprovalRequestSchema]),
-        policy: { allowed: ["extension"] },
+    methods,
+    handler: defineServiceHandler(SERVICE_NAME, methods, {
+      request: (ctx, [requestArg]) => request(ctx, requestArg),
+      requestSecretInput: (ctx, [requestArg]) => requestSecretInput(ctx, requestArg),
+      requestAs: (ctx, [principal, requestArg]) => requestAs(ctx, principal, requestArg),
+      requestSecretInputAs: (ctx, [principal, requestArg]) =>
+        requestSecretInputAs(ctx, principal, requestArg),
+      requestExternal: (ctx, [requestArg]) => requestExternal(ctx, requestArg),
+      settleExternal: (ctx, [settleArg]) => settleExternal(ctx, settleArg),
+      revoke: async (ctx, [rawSubjectId]) => {
+        const principal = await resolvePrincipal(ctx, "revoke");
+        if (!principal) return { kind: "uncallable", reason: "no-user-context" };
+        // Re-parse for transform application — see comment in `request`.
+        const subjectId = userlandApprovalSubjectIdSchema.parse(rawSubjectId);
+        return deps.grantStore.revoke(principal, subjectId, extensionIssuer(ctx));
       },
-      requestSecretInputAs: {
-        args: z.tuple([approvalPrincipalSchema, secretInputRequestSchema]),
-        policy: { allowed: ["extension"] },
+      list: async (ctx) => {
+        const principal = await resolvePrincipal(ctx, "list");
+        if (!principal) return [];
+        return deps.grantStore.list(principal, extensionIssuer(ctx)) as UserlandApprovalGrant[];
       },
-      // External-agent relay: bound agent runtimes may be either DOs or workers.
-      requestExternal: {
-        args: z.tuple([externalAgentApprovalRequestSchema]),
-        policy: { allowed: ["do", "worker"] },
-      },
-      settleExternal: {
-        args: z.tuple([externalAgentSettleSchema]),
-        policy: { allowed: ["do", "worker"] },
-      },
-      revoke: { args: z.tuple([userlandApprovalSubjectIdSchema]) },
-      list: { args: z.tuple([]) },
-    },
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "request":
-          return request(ctx, args[0] as UserlandApprovalRequest);
-        case "requestSecretInput":
-          return requestSecretInput(ctx, args[0] as SecretInputRequest);
-        case "requestAs":
-          return requestAs(ctx, args[0] as ApprovalPrincipal, args[1] as UserlandApprovalRequest);
-        case "requestSecretInputAs":
-          return requestSecretInputAs(
-            ctx,
-            args[0] as ApprovalPrincipal,
-            args[1] as SecretInputRequest
-          );
-        case "requestExternal":
-          return requestExternal(ctx, args[0] as ExternalAgentApprovalRequest);
-        case "settleExternal":
-          return settleExternal(ctx, args[0] as ExternalAgentSettle);
-        case "revoke": {
-          const principal = await resolvePrincipal(ctx, "revoke");
-          if (!principal) return { kind: "uncallable", reason: "no-user-context" };
-          // Re-parse for transform application — see comment in `request`.
-          const subjectId = userlandApprovalSubjectIdSchema.parse(args[0]);
-          return await deps.grantStore.revoke(principal, subjectId, extensionIssuer(ctx));
-        }
-        case "list": {
-          const principal = await resolvePrincipal(ctx, "list");
-          if (!principal) return [];
-          return deps.grantStore.list(principal, extensionIssuer(ctx)) as UserlandApprovalGrant[];
-        }
-        default:
-          throw new ServiceError(
-            SERVICE_NAME,
-            method,
-            `Unknown userlandApproval method: ${method}`,
-            "ENOSYS"
-          );
-      }
-    },
+    }),
   };
 }
 

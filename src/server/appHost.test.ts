@@ -1085,12 +1085,12 @@ describe("AppHost", () => {
 
     host.setHostTargetSelection("react-native", { source: "apps/field-mobile" });
 
-    expect(host.getReactNativeBootstrap()).toMatchObject({
+    expect(host.reactNative.getBootstrap()).toMatchObject({
       appId: "@workspace-apps/field-mobile",
       buildKey: "field-key",
       effectiveVersion: "ev-field",
     });
-    expect(host.registerReactNativeAppPrincipal("device-1")).toBe("app:apps/field-mobile:device-1");
+    expect(host.reactNative.registerPrincipal("device-1")).toBe("app:apps/field-mobile:device-1");
     expect(host.hasAppCapability("app:apps/field-mobile:device-1", "panel-hosting")).toBe(false);
     expect(host.hasAppCapability("app:apps/mobile:device-1", "panel-hosting")).toBe(false);
   });
@@ -1286,7 +1286,7 @@ describe("AppHost", () => {
       capabilities: ["notifications"],
     });
 
-    const callerId = host.registerReactNativeAppPrincipal("device-1");
+    const callerId = host.reactNative.registerPrincipal("device-1");
 
     expect(callerId).toBe("app:apps/mobile:device-1");
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toMatchObject({
@@ -1296,7 +1296,7 @@ describe("AppHost", () => {
       status: "active",
     });
 
-    expect(host.retireReactNativeAppPrincipal("device-1")).toBe(1);
+    expect(host.reactNative.retirePrincipal("device-1")).toBe(1);
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toBeNull();
   });
 
@@ -1322,7 +1322,7 @@ describe("AppHost", () => {
       capabilities: ["notifications"],
     });
 
-    const callerId = host.registerReactNativeAppPrincipal("device-1");
+    const callerId = host.reactNative.registerPrincipal("device-1");
 
     expect(callerId).toBe("app:apps/mobile:device-1");
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toMatchObject({
@@ -1491,28 +1491,23 @@ describe("AppHost", () => {
     await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
     await host.whenSettled();
 
-    const terminalRunner = {
-      isRunningBuild: vi.fn(() => true),
-      start: vi.fn(),
-      stop: vi.fn(),
-      stopAll: vi.fn(),
-      isRunning: vi.fn(() => true),
-    };
-    (host as unknown as { terminalRunner: typeof terminalRunner }).terminalRunner = terminalRunner;
+    const isRunningBuild = vi.spyOn(host.terminal, "isRunningBuild").mockReturnValue(true);
+    const start = vi.spyOn(host.terminal, "start");
+    const stop = vi.spyOn(host.terminal, "stop");
     host.registry.patch(graphNode.name, { status: "running" });
 
     await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
     await host.whenSettled();
-    expect(terminalRunner.stop).not.toHaveBeenCalled();
-    expect(terminalRunner.start).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
 
     await expect(host.launchHostTarget("terminal")).resolves.toMatchObject({
       status: "ready",
       target: "terminal",
       buildKey: "terminal-key",
     });
-    expect(terminalRunner.isRunningBuild).toHaveBeenCalledWith(graphNode.name, "terminal-key");
-    expect(terminalRunner.start).not.toHaveBeenCalled();
+    expect(isRunningBuild).toHaveBeenCalledWith(graphNode.name, "terminal-key");
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("rolls terminal apps back to a retained terminal build", async () => {
@@ -1820,7 +1815,7 @@ describe("AppHost", () => {
         ]),
       })
     );
-    expect(host.getReactNativeBootstrap(graphNode.relativePath)).toMatchObject({
+    expect(host.reactNative.getBootstrap(graphNode.relativePath)).toMatchObject({
       appId: "@workspace-apps/shell",
       buildKey: "rn-app-key",
       capabilities: ["notifications"],
@@ -1953,7 +1948,7 @@ describe("AppHost", () => {
       key === "rn-provider-change-key" ? (providerChangeBuild as never) : null
     );
 
-    const readiness = await host.ensureReactNativeReady(graphNode.relativePath);
+    const readiness = await host.reactNative.ensureReady(graphNode.relativePath);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1987,7 +1982,7 @@ describe("AppHost", () => {
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     host.setDeclared([{ source: graphNode.relativePath, ref: "main" }]);
 
-    const waitingForProvider = await host.ensureReactNativeReady(null, { waitForApproval: false });
+    const waitingForProvider = await host.reactNative.ensureReady(null, { waitForApproval: false });
 
     expect(waitingForProvider).toMatchObject({
       ready: false,
@@ -2062,7 +2057,7 @@ describe("AppHost", () => {
       key === "rn-preflight-key" ? (rnBuild as never) : null
     );
 
-    const readiness = await host.ensureReactNativeReady();
+    const readiness = await host.reactNative.ensureReady();
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(readiness).toMatchObject({
@@ -2199,7 +2194,7 @@ describe("AppHost", () => {
       key === "rn-ready-key" ? (rnBuild as never) : null
     );
 
-    const readiness = await host.ensureReactNativeReady();
+    const readiness = await host.reactNative.ensureReady();
 
     expect(readiness).toMatchObject({
       ready: true,
@@ -2262,7 +2257,7 @@ describe("AppHost", () => {
       key === "rn-delayed-key" ? (rnBuild as never) : null
     );
 
-    const readiness = await host.ensureReactNativeReady();
+    const readiness = await host.reactNative.ensureReady();
 
     expect(readiness).toMatchObject({
       ready: true,
@@ -2317,7 +2312,7 @@ describe("AppHost", () => {
         : null
     );
 
-    expect(host.getReactNativeBootstrap("apps/mobile")).toBeNull();
+    expect(host.reactNative.getBootstrap("apps/mobile")).toBeNull();
   });
 
   it("produces React Native bootstrap for platform-specific mobile builds", async () => {
@@ -2369,7 +2364,7 @@ describe("AppHost", () => {
         : null
     );
 
-    expect(host.getReactNativeBootstrap("apps/mobile")).toMatchObject({
+    expect(host.reactNative.getBootstrap("apps/mobile")).toMatchObject({
       buildKey: "rn-android-only-key",
       artifacts: [
         expect.objectContaining({
@@ -2439,7 +2434,7 @@ describe("AppHost", () => {
         : null
     );
 
-    expect(host.getReactNativeBootstrap("apps/mobile")).toBeNull();
+    expect(host.reactNative.getBootstrap("apps/mobile")).toBeNull();
   });
 
   it("fails closed before activating React Native builds without provider identity", async () => {

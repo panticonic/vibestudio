@@ -1,4 +1,4 @@
-import { WORKSPACE_APP_PACKAGE_SCOPE } from "./workspace/types.js";
+import { WORKSPACE_APP_PACKAGE_SCOPE } from "@vibestudio/workspace-contracts/sourceDirs";
 
 /**
  * Workspace app trust — which workspace apps may render host chrome

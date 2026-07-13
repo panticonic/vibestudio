@@ -20,12 +20,13 @@
  * Host-boundary clean: only host/shared imports, never `workspace/`.
  */
 
-import type { CallerKind, AgentBinding } from "@vibestudio/shared/serviceDispatcher";
+import type { CallerKind } from "@vibestudio/rpc";
+import type { AgentBinding } from "@vibestudio/identity/types";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import type { UserStore } from "@vibestudio/shared/users/userStore";
-import type { UserSubject } from "@vibestudio/shared/users/types";
-import type { UserSubjectSource } from "../rpcServer.js";
-import type { DeviceAuthStore } from "./deviceAuthStore.js";
+import type { UserStore } from "@vibestudio/identity/userStore";
+import type { UserSubject } from "@vibestudio/identity/types";
+import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
+import type { DeviceAuthStore } from "../hostCore/deviceAuthStore.js";
 import { resolveUserSubject } from "./principalIdentity.js";
 
 /**

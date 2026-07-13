@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import type { MirrorObjectsResult, MirrorTarget } from "@vibestudio/shared/serviceSchemas/mirror";
+import type { MirrorObjectsResult, MirrorTarget } from "@vibestudio/service-schemas/mirror";
 import {
   JSON_FLAG,
   type CliCommand,

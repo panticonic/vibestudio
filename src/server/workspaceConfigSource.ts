@@ -1,5 +1,5 @@
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
-import { parseWorkspaceConfigContent } from "@vibestudio/shared/workspace/loader";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { parseWorkspaceConfigContent } from "@vibestudio/workspace/loader";
 
 const WORKSPACE_CONFIG_PATH = "meta/vibestudio.yml";
 
@@ -12,7 +12,7 @@ export interface WorkspaceConfigVcsReader {
 }
 
 export interface StartupWorkspaceConfigVcsReader extends WorkspaceConfigVcsReader {
-  workspaceView(): Promise<{ stateHash: string }>;
+  repositories: { workspaceView(): Promise<{ stateHash: string }> };
   ensureFresh(): Promise<{ stateHash: string }>;
 }
 
@@ -49,7 +49,7 @@ export async function readStartupWorkspaceConfig(
   workspacePath: string
 ): Promise<StartupWorkspaceConfigResult> {
   if (refs.listMains().length > 0) {
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     return {
       source: "protected-main",
       stateHash: view.stateHash,

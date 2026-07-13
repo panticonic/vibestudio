@@ -1,6 +1,6 @@
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import type { UserRole } from "@vibestudio/shared/users/types";
+import type { UserRole } from "@vibestudio/identity/types";
 
 export interface CapabilityTrustDeps {
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;

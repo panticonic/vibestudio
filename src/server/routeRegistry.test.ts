@@ -9,7 +9,7 @@ import {
   type ManifestRouteDecl,
   type ServiceRouteDecl,
 } from "./routeRegistry.js";
-import { SingletonRegistry } from "@vibestudio/shared/workspace/singletonRegistry";
+import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 
 function makeDecl(overrides: Partial<ManifestRouteDecl> = {}): ManifestRouteDecl {
   return { source: "workers/foo", path: "/hello", worker: true, ...overrides };

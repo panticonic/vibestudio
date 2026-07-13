@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
-import type { CatalogEntry } from "@vibestudio/shared/serviceSchemas/docs";
+import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
 
 const demo: ServiceDefinition = {

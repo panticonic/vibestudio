@@ -18,9 +18,7 @@
  *   update the cache eagerly.
  */
 
-import type { DODispatch, DORef } from "../doDispatch.js";
-
-export type { DODispatch, DORef };
+import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 
 export type EntityTitleChangeOrigin = "set" | "set-explicit" | "mirror" | "clear";
 
@@ -78,7 +76,7 @@ export interface EntityTitleServiceOptions {
    * whose setter-side writes start landing in the DO once dispatch comes
    * online.
    */
-  getDoDispatch: () => DODispatch | null | undefined;
+  getDoDispatch: () => DoDispatcher | null | undefined;
   workspaceRef: DORef;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { credentialsMethods } from "../../../packages/shared/src/serviceSchemas/credentials.js";
+import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { serializeGitHttpResponse } from "./gitHttpRpc.js";
 
 describe("serializeGitHttpResponse", () => {

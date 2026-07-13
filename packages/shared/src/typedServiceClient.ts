@@ -2,7 +2,7 @@
  * Typed service client — derives a fully typed call surface from a service's
  * Zod method schema table.
  *
- * Service method tables (`packages/shared/src/serviceSchemas/<service>.ts`)
+ * Service method tables (`packages/service-schemas/src/<service>.ts`)
  * are the single source of truth for a service's wire contract: argument
  * tuples, optional return schemas, and per-method policies. The server
  * attaches handlers to them; clients derive their types from them. Nothing

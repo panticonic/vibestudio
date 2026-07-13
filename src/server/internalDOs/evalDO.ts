@@ -6,13 +6,13 @@ import {
   requireBuildBundleResult,
   type BuildServiceClient,
   type EvalImportLoader,
-} from "@vibestudio/shared/evalImportLoader";
-import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
-import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
-import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
-import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
-import { docsMethods } from "@vibestudio/shared/serviceSchemas/docs";
-import { EVAL_AMBIENT_ONLY } from "@vibestudio/shared/runtimeSurface.eval";
+} from "@vibestudio/service-schemas/clients/evalImportLoader";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
+import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
+import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
+import { docsMethods } from "@vibestudio/service-schemas/docs";
+import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
 import { describeEvalBindingSurface, invalidHelpArgumentResponse } from "./evalSurfaceHelp.js";

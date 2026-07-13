@@ -74,7 +74,7 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(createDesc).toContain("workers.listSources()");
     expect(createDesc).toContain("real manifest entry points");
     expect(createDesc).toContain("not that worker code observed");
-    expect(createDesc).toContain("readNonSecretProbe");
+    expect(createDesc).toContain("implemented by the worker under test");
     expect(createDesc).toContain('rpc.call("main", `workers.listSources`, [])');
     const retireDesc = (out!.methods["retireEntity"] as { description: string }).description;
     expect(retireDesc).toContain("runtime.retireEntity");

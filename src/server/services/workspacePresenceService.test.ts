@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import type { ResolvedUser } from "@vibestudio/shared/users/identityDb";
+import type { ResolvedUser } from "@vibestudio/identity/identityDb";
 import {
   createWorkspacePresenceService,
   type PresenceConnection,

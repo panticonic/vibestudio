@@ -14,9 +14,9 @@ import {
   RefreshPrincipalGrantBodySchema,
   RefreshShellBodySchema,
 } from "./authService.js";
-import { DeviceAuthStore } from "./deviceAuthStore.js";
-import { IdentityDb } from "@vibestudio/shared/users/identityDb";
-import { UserStore } from "@vibestudio/shared/users/userStore";
+import { DeviceAuthStore } from "../hostCore/deviceAuthStore.js";
+import { IdentityDb } from "@vibestudio/identity/identityDb";
+import { UserStore } from "@vibestudio/identity/userStore";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";

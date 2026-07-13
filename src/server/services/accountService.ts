@@ -18,27 +18,13 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   accountMethods,
-  accountProfileUpdateSchema,
   type AccountProfile,
   type AccountProfileUpdate,
-} from "@vibestudio/shared/serviceSchemas/account";
-import type { IdentityDb, ResolvedUser } from "@vibestudio/shared/users/identityDb";
-import type { UserStore } from "@vibestudio/shared/users/userStore";
-import type { User } from "@vibestudio/shared/users/types";
-
-function profileOfUser(user: User): AccountProfile {
-  return {
-    userId: user.id,
-    handle: user.handle,
-    displayName: user.displayName,
-    role: user.role,
-    ...(user.color !== undefined ? { color: user.color } : {}),
-    ...(user.avatarBlob !== undefined ? { avatar: user.avatarBlob } : {}),
-    ...(user.revokedAt !== undefined ? { revoked: true } : {}),
-  };
-}
+} from "@vibestudio/service-schemas/account";
+import type { IdentityDb, ResolvedUser } from "@vibestudio/identity/identityDb";
 
 function profileOfResolved(userId: string, resolved: ResolvedUser): AccountProfile {
   return {
@@ -50,31 +36,6 @@ function profileOfResolved(userId: string, resolved: ResolvedUser): AccountProfi
     ...(resolved.avatarBlob !== undefined ? { avatar: resolved.avatarBlob } : {}),
     ...(resolved.revokedAt !== undefined ? { revoked: true } : {}),
   };
-}
-
-/**
- * The profile WRITE operation (hub-side, WP0 §2). Shared by the in-process
- * `account.updateProfile` handler (pure-local server, writable DB) and the
- * hub's RPC surface (hubServer `account.updateProfile`, wired like
- * `auth.inviteUser`). `UserStore.updateProfile` validates handle changes and
- * applies the complete patch in one SQL statement. Role gating (self, or root
- * for others) is the caller's job — this function implements the operation only.
- */
-export function updateAccountProfile(
-  deps: { userStore: Pick<UserStore, "updateProfile"> },
-  input: AccountProfileUpdate & { userId: string }
-): AccountProfile {
-  const validated = accountProfileUpdateSchema.parse(input);
-  const userId = validated.userId;
-  if (!userId) throw new Error("Account profile updates require a userId");
-  // null → present-with-undefined (clear); absent key → untouched.
-  const patch: Partial<Pick<User, "handle" | "displayName" | "avatarBlob" | "color">> = {
-    ...(validated.handle !== undefined ? { handle: validated.handle } : {}),
-    ...(validated.displayName !== undefined ? { displayName: validated.displayName } : {}),
-    ...("avatar" in validated ? { avatarBlob: validated.avatar ?? undefined } : {}),
-    ...("color" in validated ? { color: validated.color ?? undefined } : {}),
-  };
-  return profileOfUser(deps.userStore.updateProfile(userId, patch));
 }
 
 export function createAccountService(deps: {
@@ -111,50 +72,41 @@ export function createAccountService(deps: {
     // Human-driven surfaces only for the write default; reads widen per-method.
     policy: { allowed: ["server", "shell", "app", "panel"] },
     methods: accountMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "getProfile": {
-          const requested = args[0] as string | undefined;
-          const userId = requested ?? requireSubject(ctx.caller.subject, "getProfile").userId;
-          const resolved = deps.identityDb.resolveUsers([userId]).get(userId);
-          return resolved ? profileOfResolved(userId, resolved) : null;
+    handler: defineServiceHandler("account", accountMethods, {
+      getProfile: (ctx, [requested]) => {
+        const userId = requested ?? requireSubject(ctx.caller.subject, "getProfile").userId;
+        const resolved = deps.identityDb.resolveUsers([userId]).get(userId);
+        return resolved ? profileOfResolved(userId, resolved) : null;
+      },
+      resolveProfiles: (_ctx, [userIds]) => {
+        const profiles: Record<string, AccountProfile> = {};
+        for (const [userId, resolved] of deps.identityDb.resolveUsers(userIds)) {
+          profiles[userId] = profileOfResolved(userId, resolved);
         }
-        case "resolveProfiles": {
-          const userIds = args[0] as string[];
-          const profiles: Record<string, AccountProfile> = {};
-          for (const [userId, resolved] of deps.identityDb.resolveUsers(userIds)) {
-            profiles[userId] = profileOfResolved(userId, resolved);
+        return profiles;
+      },
+      isMember: (_ctx, [userId]) => deps.isWorkspaceMember(userId),
+      listWorkspaceMembers: () => {
+        const userIds = [...new Set(deps.listWorkspaceMemberUserIds())];
+        const resolved = deps.identityDb.resolveUsers(userIds);
+        return userIds.flatMap((userId) => {
+          const user = resolved.get(userId);
+          return user && user.revokedAt === undefined ? [profileOfResolved(userId, user)] : [];
+        });
+      },
+      updateProfile: async (ctx, [input]) => {
+        const subject = requireSubject(ctx.caller.subject, "updateProfile");
+        const targetUserId = input.userId ?? subject.userId;
+        if (targetUserId !== subject.userId) {
+          // Editing someone ELSE's profile is root-only (WP6 §6) — resolve
+          // the caller's CURRENT role live, never a session snapshot.
+          const actor = deps.identityDb.resolveUsers([subject.userId]).get(subject.userId);
+          if (actor?.role !== "root") {
+            throw new Error("Only root may update another user's profile");
           }
-          return profiles;
         }
-        case "isMember": {
-          return deps.isWorkspaceMember(args[0] as string);
-        }
-        case "listWorkspaceMembers": {
-          const userIds = [...new Set(deps.listWorkspaceMemberUserIds())];
-          const resolved = deps.identityDb.resolveUsers(userIds);
-          return userIds.flatMap((userId) => {
-            const user = resolved.get(userId);
-            return user && user.revokedAt === undefined ? [profileOfResolved(userId, user)] : [];
-          });
-        }
-        case "updateProfile": {
-          const input = args[0] as AccountProfileUpdate;
-          const subject = requireSubject(ctx.caller.subject, "updateProfile");
-          const targetUserId = input.userId ?? subject.userId;
-          if (targetUserId !== subject.userId) {
-            // Editing someone ELSE's profile is root-only (WP6 §6) — resolve
-            // the caller's CURRENT role live, never a session snapshot.
-            const actor = deps.identityDb.resolveUsers([subject.userId]).get(subject.userId);
-            if (actor?.role !== "root") {
-              throw new Error("Only root may update another user's profile");
-            }
-          }
-          return await deps.writeProfile(subject, { ...input, userId: targetUserId });
-        }
-        default:
-          throw new Error(`Unknown account method: ${method}`);
-      }
-    },
+        return await deps.writeProfile(subject, { ...input, userId: targetUserId });
+      },
+    }),
   };
 }

@@ -10,6 +10,7 @@
  */
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
 import {
@@ -32,71 +33,65 @@ export interface WorkerdInspectorServiceDeps extends CapabilityPermissionDeps {
 export function createWorkerdInspectorService(
   deps: WorkerdInspectorServiceDeps
 ): ServiceDefinition {
+  const methods = {
+    listTargets: { args: z.tuple([]) },
+    getEndpoint: { args: z.tuple([z.string()]) },
+  };
+
   return {
     name: "workerdInspector",
     description: "Approval-gated workerd V8 inspector access for profiling workers and DOs",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
-    methods: {
-      listTargets: { args: z.tuple([]) },
-      getEndpoint: { args: z.tuple([z.string()]) },
-    },
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "listTargets":
-          return deps.listTargets();
-
-        case "getEndpoint": {
-          const targetPath = args[0] as string;
-          const caller = ctx.caller;
-          if (!isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
-            const permission = await requestCapabilityPermission(deps, {
-              caller,
-              capability: WORKERD_INSPECTOR_CAPABILITY,
-              dedupKey: `workerd-inspector:${caller.runtime.id}`,
-              resource: {
+    methods,
+    handler: defineServiceHandler("workerdInspector", methods, {
+      listTargets: () => deps.listTargets(),
+      getEndpoint: async (ctx, [targetPath]) => {
+        const caller = ctx.caller;
+        if (!isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
+          const permission = await requestCapabilityPermission(deps, {
+            caller,
+            capability: WORKERD_INSPECTOR_CAPABILITY,
+            dedupKey: `workerd-inspector:${caller.runtime.id}`,
+            resource: {
+              type: "workerd-inspector",
+              label: "Workerd inspector target",
+              value: targetPath,
+              // One grant covers all targets for the caller — targets are
+              // ephemeral per-service paths, not meaningful trust boundaries.
+              key: `caller:${caller.runtime.id}`,
+            },
+            operation: {
+              kind: "inspection",
+              verb: "Inspect workerd",
+              object: {
                 type: "workerd-inspector",
-                label: "Workerd inspector target",
+                label: "Target",
                 value: targetPath,
-                // One grant covers all targets for the caller — targets are
-                // ephemeral per-service paths, not meaningful trust boundaries.
-                key: `caller:${caller.runtime.id}`,
               },
-              operation: {
-                kind: "inspection",
-                verb: "Inspect workerd",
-                object: {
-                  type: "workerd-inspector",
-                  label: "Target",
-                  value: targetPath,
-                },
-                groupKey: `workerd-inspector:${caller.runtime.id}`,
-              },
-              title: `Inspect ${targetPath}`,
-              description:
-                `Allow ${caller.runtime.kind} ${caller.runtime.id} to attach the V8 inspector ` +
-                `to workerd (CPU profiles, heap inspection of workers and durable objects).`,
-              details: [
-                { label: "Caller", value: `${caller.runtime.kind} ${caller.runtime.id}` },
-                { label: "Target", value: targetPath },
-              ],
-              deniedReason: "Workerd inspector access denied",
-            });
-            if (!permission.allowed) {
-              throw new Error(permission.reason ?? "Workerd inspector access denied");
-            }
+              groupKey: `workerd-inspector:${caller.runtime.id}`,
+            },
+            title: `Inspect ${targetPath}`,
+            description:
+              `Allow ${caller.runtime.kind} ${caller.runtime.id} to attach the V8 inspector ` +
+              `to workerd (CPU profiles, heap inspection of workers and durable objects).`,
+            details: [
+              { label: "Caller", value: `${caller.runtime.kind} ${caller.runtime.id}` },
+              { label: "Target", value: targetPath },
+            ],
+            deniedReason: "Workerd inspector access denied",
+          });
+          if (!permission.allowed) {
+            throw new Error(permission.reason ?? "Workerd inspector access denied");
           }
-          const endpoint = deps.getEndpoint(targetPath, caller.runtime.id);
-          if (!endpoint) {
-            throw new Error(
-              "Workerd inspector is unavailable (disabled via VIBESTUDIO_DISABLE_WORKERD_INSPECTOR or workerd not running)"
-            );
-          }
-          return endpoint;
         }
-
-        default:
-          throw new Error(`Unknown workerdInspector method: ${method}`);
-      }
-    },
+        const endpoint = deps.getEndpoint(targetPath, caller.runtime.id);
+        if (!endpoint) {
+          throw new Error(
+            "Workerd inspector is unavailable (disabled via VIBESTUDIO_DISABLE_WORKERD_INSPECTOR or workerd not running)"
+          );
+        }
+        return endpoint;
+      },
+    }),
   };
 }

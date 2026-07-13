@@ -5,7 +5,7 @@ import type {
   CredentialBindingUse,
   CredentialInjection,
   UrlAudience,
-} from "./credentials/types.js";
+} from "@vibestudio/credential-client/types";
 import type { ApprovalDecisionId } from "./approvalContract.js";
 
 export type ApprovalDecision = ApprovalDecisionId;

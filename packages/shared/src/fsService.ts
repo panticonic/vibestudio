@@ -25,7 +25,7 @@ import {
   taxonomyRepoForPath,
   type RepoPath,
 } from "./runtime/entitySpec.js";
-import { WORKSPACE_SOURCE_DIRS } from "./workspace/sourceDirs.js";
+import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 
 const log = createDevLogger("FsService");
 const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);

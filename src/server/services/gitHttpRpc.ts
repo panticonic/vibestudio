@@ -1,4 +1,4 @@
-import type { ProxyGitHttpResponse } from "../../../packages/shared/src/credentials/types.js";
+import type { ProxyGitHttpResponse } from "@vibestudio/credential-client/types";
 
 export interface GitHttpTransportResponse {
   url: string;

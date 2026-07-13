@@ -12,15 +12,13 @@
  * the content store (the mirroring invariant, see
  * WorktreeStore.ensureStateMirrored).
  *
- * Crucially, that state is NOT necessarily committed. For `main` — the real
- * on-disk workspace — the buildV2 trigger calls
- * `WorkspaceStateSource.ensureFresh()` (see workspaceVcs.ts), which scans the
- * live working tree and ingests any out-of-band edits into a fresh state
- * *before* the build runs. Net effect: uncommitted working-tree edits ARE
- * built — that's why `pnpm dev` picks up your changes without a commit — they
- * are just snapshotted into an immutable state first. The provider owns
- * checkout caching (per-state dirs hardlinked from the blobstore CAS — a P1
- * cache, deletable at any time).
+ * The state is immutable for the build. After bootstrap,
+ * `WorkspaceStateSource.ensureFresh()` composes the current protected main
+ * refs; it does not scan the source directory or publish uncommitted disk
+ * changes. External edits belong to an active context checkout, where the
+ * gad-store DO adopts them through the semantics-free worktree scan primitive.
+ * The provider owns checkout caching (per-state dirs hardlinked from the
+ * blobstore CAS — a P1 cache, deletable at any time).
  *
  * Tests install a passthrough provider that serves a plain directory.
  */

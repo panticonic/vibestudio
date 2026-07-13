@@ -12,11 +12,7 @@
  */
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
-import type {
-  CatalogEntry,
-  CatalogHit,
-  CatalogSurface,
-} from "@vibestudio/shared/serviceSchemas/docs";
+import type { CatalogEntry, CatalogHit, CatalogSurface } from "@vibestudio/service-schemas/docs";
 import { buildCatalog, isCatalogEntryVisible, type BuildCatalogDeps } from "./buildCatalog.js";
 
 export interface CatalogSearchOpts {

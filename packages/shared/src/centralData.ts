@@ -11,14 +11,14 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
-import { getCentralConfigPaths } from "./workspace/loader.js";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { WorkspaceEntry } from "./types.js";
 import {
   assertCanonicalSqliteSchema,
   initializeCanonicalSqliteSchema,
   isTrulyEmptySqliteDatabase,
-} from "./sqliteSchema.js";
-import { IDENTITY_DATABASE_SCHEMA } from "./users/identitySchema.js";
+} from "@vibestudio/sqlite";
+import { IDENTITY_DATABASE_SCHEMA } from "@vibestudio/identity/identitySchema";
 
 export interface CentralDataManagerOptions {
   databasePath?: string;
@@ -96,7 +96,7 @@ export class CentralDataManager {
   constructor(options: CentralDataManagerOptions = {}) {
     const databasePath =
       options.databasePath ??
-      path.join(getCentralConfigPaths().configDir, "server-auth", "identity.db");
+      path.join(getCentralDataPath(), "server-auth", "identity.db");
     this.now = options.now ?? Date.now;
     fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(databasePath);

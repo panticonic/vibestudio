@@ -20,7 +20,7 @@ import type {
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   UrlAudience,
-} from "@vibestudio/shared/credentials/types";
+} from "./types.js";
 
 export type {
   ClientConfigStatus,
@@ -43,7 +43,7 @@ export type {
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   UrlAudience,
-} from "@vibestudio/shared/credentials/types";
+} from "./types.js";
 
 export interface CredentialClient {
   store(input: StoreUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;

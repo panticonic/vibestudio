@@ -19,7 +19,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -52,7 +52,7 @@ describe("WorkspaceVcs dev extraction (main → source dir)", () => {
     await fsp.writeFile(path.join(workspaceRoot, "meta/vibestudio.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -108,7 +108,7 @@ describe("WorkspaceVcs dev extraction (main → source dir)", () => {
     const gatedOffRoot = path.join(root, "source-off");
     await fsp.mkdir(path.join(gatedOffRoot, "packages/foo"), { recursive: true });
     await fsp.writeFile(path.join(gatedOffRoot, "packages/foo/index.ts"), "export const x = 1;\n");
-    const refs = createRefService({ statePath: path.join(root, "refs-off"), gate: async () => {} });
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs-off"), gate: async () => {} });
     const gadOff = await createTestDO(GadWorkspaceDO, { __objectKey: "gadOff" });
     attachLocalHostBridges(gadOff.instance, { blobsDir: path.join(root, "blobs-off"), refs });
     const vcsOff = new WorkspaceVcs({

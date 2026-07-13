@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { createServerEventBridge } from "./serverEventBridge.js";
-import type { HubWorkspaceRoute } from "@vibestudio/shared/serviceSchemas/hubControl";
+import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
 
 const workspaceRoute: HubWorkspaceRoute = {
   workspace: "other-ws",

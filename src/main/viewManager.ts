@@ -38,6 +38,7 @@ import {
 } from "./shellContentOverlayView.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
+import { CompositorRecovery } from "./compositorRecovery.js";
 
 const log = createDevLogger("ViewManager");
 
@@ -248,17 +249,7 @@ export class ViewManager {
   private viewOrderChangedCallbacks: Array<() => void> = [];
   /** Callbacks invoked when a panel view is hidden */
   private viewHiddenCallbacks: Array<(viewId: string) => void> = [];
-  /** Timer for periodic gentle compositor keepalive */
-  private compositorKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  /** Timer for periodic compositor stall detection via capturePage */
-  private compositorStallDetectorTimer: ReturnType<typeof setTimeout> | null = null;
-  // capturePage is a real GPU readback; back off while probes keep coming
-  // back healthy, reset on focus/stall so recovery stays prompt.
-  private readonly STALL_PROBE_MIN_INTERVAL_MS = 10000;
-  private readonly STALL_PROBE_MAX_INTERVAL_MS = 60000;
-  private stallProbeIntervalMs = 10000;
-  /** Timestamp of last visibility cycle per view, for cooldown to prevent feedback loops */
-  private lastVisibilityCycleTimeByView = new Map<string, number>();
+  private readonly compositorRecovery: CompositorRecovery;
 
   constructor(options: {
     window: BaseWindow;
@@ -306,6 +297,37 @@ export class ViewManager {
       }
     );
     this.shellContentOverlay.setWindow(this.window);
+
+    this.compositorRecovery = new CompositorRecovery(
+      {
+        isWindowDestroyed: () => this.window.isDestroyed(),
+        isWindowVisible: () => this.windowVisible,
+        isWindowFocused: () => this.window.isFocused(),
+        getVisiblePanelId: () => this.visiblePanelId,
+        getActiveSlots: () => Array.from(this.nativePanelSlots.activeSlots.values()),
+        getView: (panelId) => this.views.get(panelId),
+        calculatePanelBounds: () => this.calculatePanelBounds(),
+        ensureSlotLayerOrder: () => {
+          this.ensureSlotLayerOrder();
+        },
+        reconcileNativeLayerOrder: () => this.reconcileNativeLayerOrder(),
+        isShellOverlayActive: () => this.shellOverlayActive,
+        logVerbose: (message) => log.verbose(` ${message}`),
+        logWarning: (message) => console.warn(`[ViewManager] ${message}`),
+        logError: (message, error) => {
+          console.error(
+            `[ViewManager] ${message}:`,
+            error instanceof Error ? error.message : error
+          );
+        },
+      },
+      {
+        keepaliveIntervalMs: 5000,
+        minimumProbeIntervalMs: 10000,
+        maximumProbeIntervalMs: 60000,
+        visibilityCycleCooldownMs: 1000,
+      }
+    );
 
     // Add shell to window and set it to fill
     this.window.contentView.addChildView(this.shellView);
@@ -367,16 +389,9 @@ export class ViewManager {
     // Compositor probes are focus-gated (no GPU readbacks while the user is
     // elsewhere); on refocus, reset the probe backoff and check immediately
     // so a stall that happened in the background recovers right away.
-    this.window.on("focus", () => {
-      this.stallProbeIntervalMs = this.STALL_PROBE_MIN_INTERVAL_MS;
-      this.keepCompositorAlive();
-      void this.detectAndRecoverStall();
-    });
+    this.window.on("focus", () => this.compositorRecovery.handleWindowFocused());
 
-    // Start compositor keepalive to prevent layer painting stalls
-    this.startCompositorKeepalive();
-    // Start stall detector — capturePage probe for aggressive recovery
-    this.startCompositorStallDetector();
+    this.compositorRecovery.start();
   }
 
   private installShellKeyForwarding(contents: WebContents): void {
@@ -791,7 +806,7 @@ export class ViewManager {
     }
 
     this.webContentsIdToViewId.delete(managed.view.webContents.id);
-    this.lastVisibilityCycleTimeByView.delete(id);
+    this.compositorRecovery.forgetView(id);
 
     // View destruction is a normal operation - no need to log
 
@@ -1408,28 +1423,6 @@ export class ViewManager {
     const bounds = this.calculatePanelBounds();
     managed.bounds = bounds;
     this.applyNativePanelVisibility(managed, bounds);
-  }
-
-  /**
-   * Cycle a view's visibility off and on via Electron's raw API to wake a
-   * suspended compositor. Both calls happen synchronously in the same tick,
-   * so no frame renders between them (no visible flicker). We bypass the
-   * managed.visible state tracker intentionally — only the compositor cares.
-   */
-  private cycleCompositorVisibility(managed: ManagedView): void {
-    if (managed.view.webContents.isDestroyed()) return;
-    // Cooldown: skip if called within the last 1000ms.
-    // Breaks forceRepaint() → visibilitychange → forceRepaint() oscillation.
-    const now = Date.now();
-    const lastCycleTime = this.lastVisibilityCycleTimeByView.get(managed.id) ?? 0;
-    if (now - lastCycleTime < 1000) return;
-    this.lastVisibilityCycleTimeByView.set(managed.id, now);
-    managed.view.setVisible(false);
-    // Compositor recovery must not resurrect a native panel above a shell DOM
-    // dialog. The normal overlay-close refresh will restore the active surface.
-    if (!(this.shellOverlayActive && managed.type === "panel")) {
-      managed.view.setVisible(true);
-    }
   }
 
   /**
@@ -2203,8 +2196,7 @@ export class ViewManager {
    * Clean up all views.
    */
   destroy(): void {
-    this.stopCompositorKeepalive();
-    this.stopCompositorStallDetector();
+    this.compositorRecovery.stop();
     this.nativeShellOverlay.destroy();
     this.shellContentOverlay.destroy();
 
@@ -2222,61 +2214,6 @@ export class ViewManager {
     this.viewOrderChangedCallbacks.length = 0;
     this.viewHiddenCallbacks.length = 0;
     this.crashCallbacks.length = 0;
-  }
-
-  // =========================================================================
-  // Compositor Keepalive
-  // =========================================================================
-
-  /**
-   * Start periodic compositor keepalive.
-   * Nudges the visible panel's compositor with invalidate() + a bounds
-   * re-apply every few seconds. This is a gentle keepalive that doesn't
-   * steal focus from input elements (unlike layer re-stacking or visibility
-   * cycling). For full compositor recovery from an active stall, the user
-   * can use the "Refresh Panel Display" menu item or forceRepaint().
-   */
-  private startCompositorKeepalive(intervalMs = 5000): void {
-    this.stopCompositorKeepalive();
-    this.compositorKeepaliveTimer = setInterval(() => {
-      this.keepCompositorAlive();
-    }, intervalMs);
-  }
-
-  /**
-   * Gentle compositor keepalive — invalidate + re-apply bounds.
-   * Avoids re-stacking (removeChildView/addChildView steals focus) and
-   * visibility cycling (setVisible toggle may steal focus).
-   */
-  private keepCompositorAlive(): void {
-    if (this.window.isDestroyed()) return;
-    if (!this.windowVisible) return;
-    // Skip the periodic invalidate while the window is unfocused: forcing
-    // repaints fights OS-level occlusion throttling and burns GPU/battery in
-    // the background. A focus listener nudges the compositor on return.
-    if (!this.window.isFocused()) return;
-
-    const slots = Array.from(this.nativePanelSlots.activeSlots.values());
-    if (slots.length > 0) {
-      this.ensureSlotLayerOrder();
-      for (const slot of slots) {
-        const managed = this.views.get(slot.panelId);
-        if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) continue;
-        managed.bounds = slot.bounds;
-        managed.view.setBounds(slot.bounds);
-        managed.view.webContents.invalidate();
-      }
-      return;
-    }
-
-    const panelId = this.visiblePanelId;
-    if (!panelId) return;
-    const managed = this.views.get(panelId);
-    if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
-    const bounds = this.calculatePanelBounds();
-    managed.bounds = bounds;
-    managed.view.setBounds(bounds);
-    managed.view.webContents.invalidate();
   }
 
   /**
@@ -2306,124 +2243,6 @@ export class ViewManager {
         this.reconcileNativeLayerOrder();
         return true;
       }
-    }
-    return false;
-  }
-
-  /**
-   * Stop the compositor keepalive timer.
-   */
-  private stopCompositorKeepalive(): void {
-    if (this.compositorKeepaliveTimer) {
-      clearInterval(this.compositorKeepaliveTimer);
-      this.compositorKeepaliveTimer = null;
-    }
-  }
-
-  /**
-   * Start periodic compositor stall detection using capturePage().
-   * Unlike rAF probes (which fire in the renderer thread even when the
-   * compositor isn't painting), capturePage() goes through the actual
-   * compositing pipeline. An empty capture on a visible panel means the
-   * compositor surface is gone → stall confirmed → aggressive recovery.
-   * Aggressive recovery (layer re-stack + visibility cycle) is acceptable
-   * here because a blank panel has no focused input to steal focus from.
-   */
-  private startCompositorStallDetector(intervalMs = 10000): void {
-    this.stopCompositorStallDetector();
-    this.stallProbeIntervalMs = Math.max(intervalMs, this.STALL_PROBE_MIN_INTERVAL_MS);
-    const schedule = () => {
-      this.compositorStallDetectorTimer = setTimeout(async () => {
-        await this.detectAndRecoverStall();
-        if (this.compositorStallDetectorTimer === null) return; // stopped mid-probe
-        schedule();
-      }, this.stallProbeIntervalMs);
-    };
-    schedule();
-  }
-
-  private stopCompositorStallDetector(): void {
-    if (this.compositorStallDetectorTimer) {
-      clearTimeout(this.compositorStallDetectorTimer);
-      this.compositorStallDetectorTimer = null;
-    }
-  }
-
-  /**
-   * Detect compositor stall via capturePage and recover aggressively.
-   * Only triggers when the capture is empty (panel is already blank),
-   * so the aggressive recovery won't disrupt user interaction.
-   */
-  private async detectAndRecoverStall(): Promise<void> {
-    if (this.window.isDestroyed()) return;
-    if (!this.windowVisible) return;
-    if (!this.window.isFocused()) return;
-
-    const slots = Array.from(this.nativePanelSlots.activeSlots.values());
-    if (slots.length > 0) {
-      let anyStalled = false;
-      for (const slot of slots) {
-        if (await this.detectAndRecoverPanelSlotStall(slot)) anyStalled = true;
-      }
-      this.adjustStallProbeBackoff(anyStalled);
-      return;
-    }
-
-    const panelId = this.visiblePanelId;
-    if (!panelId) return;
-    const managed = this.views.get(panelId);
-    if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
-    try {
-      const image = await managed.view.webContents.capturePage();
-
-      // Re-check panel is still the visible one after async capture
-      if (this.visiblePanelId !== panelId || !managed.visible) return;
-
-      if (image.isEmpty()) {
-        log.verbose(` Compositor stall detected on ${panelId} (empty capture) — recovering`);
-        // Aggressive recovery: re-attach view + refresh bounds + visibility cycle
-        this.reconcileNativeLayerOrder();
-        const bounds = this.calculatePanelBounds();
-        managed.bounds = bounds;
-        managed.view.setBounds(bounds);
-        managed.view.webContents.invalidate();
-        this.cycleCompositorVisibility(managed);
-        this.adjustStallProbeBackoff(true);
-      } else {
-        this.adjustStallProbeBackoff(false);
-      }
-    } catch {
-      // capturePage failed (webContents navigating, destroyed, etc.) — skip
-    }
-  }
-
-  /** Healthy probes back off toward the max interval; stalls reset to min. */
-  private adjustStallProbeBackoff(stalled: boolean): void {
-    this.stallProbeIntervalMs = stalled
-      ? this.STALL_PROBE_MIN_INTERVAL_MS
-      : Math.min(this.stallProbeIntervalMs * 2, this.STALL_PROBE_MAX_INTERVAL_MS);
-  }
-
-  private async detectAndRecoverPanelSlotStall(slot: NativePanelSlotState): Promise<boolean> {
-    const managed = this.views.get(slot.panelId);
-    if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return false;
-
-    try {
-      const image = await managed.view.webContents.capturePage();
-      if (this.nativePanelSlots.activeSlots.get(slot.nativeSlotId)?.panelId !== slot.panelId) {
-        return false;
-      }
-      if (image.isEmpty()) {
-        log.verbose(` Compositor stall detected on ${slot.panelId} (empty capture) — recovering`);
-        this.reconcileNativeLayerOrder();
-        managed.bounds = slot.bounds;
-        managed.view.setBounds(slot.bounds);
-        managed.view.webContents.invalidate();
-        this.cycleCompositorVisibility(managed);
-        return true;
-      }
-    } catch {
-      // capturePage failed (webContents navigating, destroyed, etc.) — skip
     }
     return false;
   }
@@ -2513,36 +2332,6 @@ export class ViewManager {
    * the content exists but isn't being painted to screen.
    */
   forceRepaint(viewId: string): boolean {
-    const managed = this.views.get(viewId);
-    if (!managed) {
-      console.warn(`[ViewManager] forceRepaint: view not found: ${viewId}`);
-      return false;
-    }
-
-    const contents = managed.view.webContents;
-    if (contents.isDestroyed()) {
-      console.warn(`[ViewManager] forceRepaint: webContents destroyed: ${viewId}`);
-      return false;
-    }
-
-    log.verbose(` Forcing repaint for view: ${viewId}`);
-
-    try {
-      // Invalidate the frame to trigger a repaint (belt-and-suspenders for non-stalled cases)
-      contents.invalidate();
-
-      // Cycle visibility to wake a suspended compositor
-      if (managed.visible) {
-        this.cycleCompositorVisibility(managed);
-      }
-
-      return true;
-    } catch (error) {
-      console.error(
-        `[ViewManager] Failed to force repaint for ${viewId}:`,
-        error instanceof Error ? error.message : error
-      );
-      return false;
-    }
+    return this.compositorRecovery.forceRepaint(viewId);
   }
 }

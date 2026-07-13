@@ -4,7 +4,7 @@ import {
   type FsBinaryEnvelope,
   type FsDirentWire,
   type FsGrepResult,
-} from "@vibestudio/shared/serviceSchemas/fs";
+} from "@vibestudio/service-schemas/fs";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";

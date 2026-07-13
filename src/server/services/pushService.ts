@@ -12,14 +12,15 @@ import * as path from "path";
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { PushApprovalDataPayload } from "@vibestudio/shared/approvalContract";
-import { pushMethods } from "@vibestudio/shared/serviceSchemas/push";
+import { pushMethods } from "@vibestudio/service-schemas/push";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   assertCanonicalSqliteSchema,
   initializeCanonicalSqliteSchema,
   isTrulyEmptySqliteDatabase,
   type CanonicalSqliteSchema,
-} from "@vibestudio/shared/sqliteSchema";
+} from "@vibestudio/sqlite";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 export interface PushRegistration {
@@ -525,65 +526,48 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
     description: "Push notification device registration and delivery",
     policy: { allowed: ["shell", "app", "server"] },
     methods: pushMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "register": {
-          const [opts] = args as [
-            { token: string; platform: "ios" | "android" | "web"; clientId: string },
-          ];
-          // Single source of truth for routing (WP4 §4.2 / INV-3): the owning
-          // user is the HOST-VERIFIED subject on the caller context, never the
-          // client's strict `register` args. Retired client-owned `userId`
-          // fields are rejected at the service-schema boundary.
-          const userId = ctx.caller.subject?.userId;
-          if (!userId) {
-            throw new Error(
-              "push.register requires an attributed caller (no subject on ctx.caller)"
-            );
-          }
-          const registration: PushRegistration = {
-            token: opts.token,
-            platform: opts.platform,
-            clientId: opts.clientId,
-            userId,
-            registeredAt: now(),
-          };
-          store.upsert(registration);
-          console.log(
-            `[PushService] Registered device for client ${opts.clientId} (${opts.platform}) → user ${userId}`
+    handler: defineServiceHandler("push", pushMethods, {
+      register: (ctx, [opts]) => {
+        // Single source of truth for routing (WP4 §4.2 / INV-3): the owning
+        // user is the HOST-VERIFIED subject on the caller context, never the
+        // client's strict `register` args. Retired client-owned `userId`
+        // fields are rejected at the service-schema boundary.
+        const userId = ctx.caller.subject?.userId;
+        if (!userId) {
+          throw new Error("push.register requires an attributed caller (no subject on ctx.caller)");
+        }
+        const registration: PushRegistration = {
+          token: opts.token,
+          platform: opts.platform,
+          clientId: opts.clientId,
+          userId,
+          registeredAt: now(),
+        };
+        store.upsert(registration);
+        console.log(
+          `[PushService] Registered device for client ${opts.clientId} (${opts.platform}) → user ${userId}`
+        );
+        emitRegistrationsChanged();
+        return { registered: true };
+      },
+      unregister: (ctx, [clientId]) => {
+        const userId = ctx.caller.subject?.userId;
+        if (!userId) {
+          throw new Error(
+            "push.unregister requires an attributed caller (no subject on ctx.caller)"
           );
-          emitRegistrationsChanged();
-          return { registered: true };
         }
-
-        case "unregister": {
-          const [clientId] = args as [string];
-          const userId = ctx.caller.subject?.userId;
-          if (!userId) {
-            throw new Error(
-              "push.unregister requires an attributed caller (no subject on ctx.caller)"
-            );
-          }
-          return { unregistered: internal.unregister(userId, clientId) };
+        return { unregistered: internal.unregister(userId, clientId) };
+      },
+      send: (ctx, [opts]) => {
+        const userId = ctx.caller.subject?.userId;
+        if (!userId) {
+          throw new Error("push.send requires an attributed caller (no subject on ctx.caller)");
         }
-
-        case "send": {
-          const [opts] = args as [PushSendOptions];
-          const userId = ctx.caller.subject?.userId;
-          if (!userId) {
-            throw new Error("push.send requires an attributed caller (no subject on ctx.caller)");
-          }
-          return internal.send(userId, opts);
-        }
-
-        case "listRegistrations": {
-          return internal.listRegistrations();
-        }
-
-        default:
-          throw new Error(`Unknown push method: ${method}`);
-      }
-    },
+        return internal.send(userId, opts);
+      },
+      listRegistrations: () => internal.listRegistrations(),
+    }),
   };
 
   return { definition, internal };

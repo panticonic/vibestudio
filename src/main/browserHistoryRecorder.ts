@@ -1,5 +1,5 @@
 import { createDevLogger } from "@vibestudio/dev-log";
-import { createBrowserDataRpcClient, type BrowserDataClient } from "@vibestudio/browser-data";
+import { createBrowserDataClient, type BrowserDataClient } from "@vibestudio/browser-data";
 import {
   canonicalizeBrowserHistoryUrl,
   type BrowserNavigationIntent,
@@ -17,7 +17,7 @@ export class BrowserHistoryRecorder {
   private readonly browserData: BrowserDataClient;
 
   constructor(serverClient: ServerClient) {
-    this.browserData = createBrowserDataRpcClient(serverClient);
+    this.browserData = createBrowserDataClient(serverClient);
   }
 
   markNext(panelId: string, intent: BrowserNavigationIntent): void {
@@ -34,8 +34,8 @@ export class BrowserHistoryRecorder {
     const previous = this.recentRecords.get(key);
     if (previous && now - previous < DUPLICATE_WINDOW_MS) return;
     this.recentRecords.set(key, now);
-    void this.browserData.history
-      .recordVisit({
+    void this.browserData
+      .recordHistoryVisit({
         url,
         title,
         transition,
@@ -52,8 +52,8 @@ export class BrowserHistoryRecorder {
 
   updateTitle(url: string, title: string): void {
     if (!/^https?:\/\//i.test(url) || !title.trim()) return;
-    void this.browserData.history
-      .updateTitle({
+    void this.browserData
+      .updateHistoryTitle({
         url,
         title,
         observedAt: Date.now(),

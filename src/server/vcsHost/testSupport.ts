@@ -9,18 +9,17 @@
 import type { ManifestHashEntry } from "@vibestudio/shared/contentTree/worktreeHash";
 import { collectTreeFiles } from "./worktreeStore.js";
 import { getBytes, getTree, putBytes, putTree } from "../services/blobstoreService.js";
-import type { RefService } from "../services/refService.js";
+import type { ProtectedRefStore } from "../services/protectedRefStore.js";
 import type { RepoBuildReport } from "../buildV2/index.js";
+import type { VcsGadCaller } from "./gadCaller.js";
 
-export interface GadCaller {
-  call<T = unknown>(method: string, input: unknown): Promise<T>;
-}
+export type GadCaller = VcsGadCaller;
 
 /**
  * Advance one or more repos' `main` through the gad-store DO's `vcsPush` — the
  * production push path (host `WorkspaceVcs.push` was deleted in narrow-host P3).
  * In-process test driver: the DO gates via the `buildStore` bridge and the
- * RefService gate (both wired by {@link attachLocalHostBridges}); `mainAdvance`
+ * ProtectedRefStore gate (both wired by {@link attachLocalHostBridges}); `mainAdvance`
  * / `getBuildSystem` no longer exist. Result is the canonical `vcsPushResult`.
  */
 export function pushToMain(
@@ -31,14 +30,17 @@ export function pushToMain(
     message?: string;
     actor?: { id: string; kind: string };
   }
-): Promise<import("@vibestudio/shared/serviceSchemas/vcs").VcsPushResult> {
+): Promise<import("@vibestudio/service-schemas/vcs").VcsPushResult> {
   const instance = gad.instance as {
-    vcsPush: (i: unknown) => Promise<import("@vibestudio/shared/serviceSchemas/vcs").VcsPushResult>;
+    vcsPush: (i: unknown) => Promise<import("@vibestudio/service-schemas/vcs").VcsPushResult>;
   };
   return instance.vcsPush(input);
 }
 
-type RefsLike = Pick<RefService, "readMain" | "listMains" | "updateMains" | "listMainRefLog">;
+type RefsLike = Pick<
+  ProtectedRefStore,
+  "readMain" | "listMains" | "updateMains" | "listMainRefLog"
+>;
 
 /** A stub build validator for the DO push gate — returns per-repo reports.
  *  Defaults to "no required failures" so the gate passes. */
@@ -50,7 +52,7 @@ type BuildValidateLike = (input: {
 
 /** Shadow `contentStore()` / `refsStore()` / `buildStore()` on a test DO
  *  instance with local implementations over the test's blob dir + (optional)
- *  RefService. `refs` may be a thunk so tests that re-create their RefService
+ *  ProtectedRefStore. `refs` may be a thunk so tests that re-create their ProtectedRefStore
  *  (restart simulations) keep the bridge pointed at the CURRENT instance. */
 export function attachLocalHostBridges(
   instance: object,
@@ -60,17 +62,18 @@ export function attachLocalHostBridges(
     /** DO push build gate — omit for a no-op (all-pass) validator. */
     buildValidate?: BuildValidateLike;
     /** Per-`updateMains` gate context. In production the host RPC layer
-     *  (`refsService.ts`) resolves the on-behalf-of token and attaches a
+     *  (`refsRpcService.ts`) resolves the on-behalf-of token and attaches a
      *  `{ kind: "caller", … }` context; in-process tests bypass that layer, so
      *  a suite exercising the approval gate supplies the context here. Omit to
-     *  leave it unset (the RefService fixture's own gate — usually a no-op —
+     *  leave it unset (the ProtectedRefStore fixture's own gate — usually a no-op —
      *  stands in for approval). The host CAS is now semantics-free (Phase 5), so
      *  the context no longer carries an operation. */
     gateContext?: () => unknown;
     /** Disk-projection + build-graph primitives the DO's delete/restore/fork
      *  sagas drive (`worktree.project` / `worktree.dependentRepos`). In
      *  production these are host RPCs; in-process tests wire them to the real
-     *  `WorkspaceVcs.projectWorktree` / `deleteDependents`. Defaults are inert
+     *  `WorkspaceVcs.projectWorktree` / `WorkspaceRepositories.deletionDependents`.
+     *  Defaults are inert
      *  (projection no-op, no dependents) for suites that never delete/restore. */
     worktree?: {
       project?: (
@@ -134,10 +137,10 @@ export function attachLocalHostBridges(
       }));
     },
     // P3/P5: the single-writer group CAS. In-process tests bypass the RPC-layer
-    // token resolution — the RefService's own gate (a no-op in fixtures) stands
+    // token resolution — the ProtectedRefStore's own gate (a no-op in fixtures) stands
     // in for approval, and on-behalf-of is not resolved here (no `writer`/
     // `onBehalfOf`). The DO still passes `operation`/`reason`; forward them so
-    // the RefService records a faithful main-ref log row (§2). Returns
+    // the ProtectedRefStore records a faithful main-ref log row (§2). Returns
     // `{repoPath, stateHash, seq}` per entry.
     async updateMains(input: {
       entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
@@ -146,7 +149,7 @@ export function attachLocalHostBridges(
       invocationToken?: string;
     }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }> {
       const refs = currentRefs();
-      if (!refs) throw new Error("attachLocalHostBridges: no RefService for updateMains");
+      if (!refs) throw new Error("attachLocalHostBridges: no ProtectedRefStore for updateMains");
       const gateContext = opts.gateContext?.();
       return refs.updateMains({
         entries: input.entries,

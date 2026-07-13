@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { LifecycleDriver } from "./lifecycleDriver.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DODispatch } from "../doDispatch.js";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 
 function makeHarness(
   opts: {

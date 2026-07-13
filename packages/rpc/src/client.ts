@@ -29,6 +29,7 @@ import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
+import { RemoteRpcError, rpcErrorKindOf } from "./errors.js";
 
 const FRAME_HEAD = 0x01;
 const FRAME_DATA = 0x02;
@@ -281,8 +282,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     if (pending.timeout) clearTimeout(pending.timeout);
     pending.abortCleanup?.();
     if ("error" in response) {
-      const err = new Error(response.error) as NodeJS.ErrnoException;
-      if (response.errorCode) err.code = response.errorCode;
+      const err = new RemoteRpcError(response.error, response.errorKind, response.errorCode);
       if (response.errorStack) err.stack = response.errorStack;
       pending.reject(err);
       return;
@@ -327,14 +327,13 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       return;
     }
     if (frame.frameType === FRAME_ERROR) {
-      let parsed: { message: string; code?: string };
+      let parsed: { message: string; code?: string; errorKind: import("./types.js").RpcErrorKind };
       try {
         parsed = JSON.parse(frame.payload);
       } catch {
-        parsed = { message: "Streaming RPC error" };
+        parsed = { message: "Streaming RPC error", errorKind: "protocol" };
       }
-      const err = new Error(parsed.message) as Error & { code?: string };
-      err.code = parsed.code;
+      const err = new RemoteRpcError(parsed.message, parsed.errorKind, parsed.code);
       if (entry.headEmitted) {
         entry.bodyClosed = true;
         entry.controller.error(err);
@@ -367,6 +366,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
           type: "response",
           requestId: request.requestId,
           error: `Method "${request.method}" is not exposed by this endpoint`,
+          errorKind: "application",
         })
       ).catch(logResponseSendFailure);
       return;
@@ -389,6 +389,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
             type: "response",
             requestId: request.requestId,
             error: error instanceof Error ? error.message : String(error),
+            errorKind: rpcErrorKindOf(error),
             ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
             ...(error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string"
               ? { errorCode: (error as NodeJS.ErrnoException).code }
@@ -414,6 +415,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
         JSON.stringify({
           status: 404,
           message: `No streaming handler for method "${request.method}"`,
+          errorKind: "application",
         })
       ).catch(() => {});
       return;
@@ -437,7 +439,12 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
         return sendFrame(FRAME_END, JSON.stringify({ bytesIn: frame.bytesIn }));
       return sendFrame(
         FRAME_ERROR,
-        JSON.stringify({ status: frame.status, message: frame.message, code: frame.code })
+        JSON.stringify({
+          status: frame.status,
+          message: frame.message,
+          code: frame.code,
+          errorKind: frame.errorKind,
+        })
       );
     };
     Promise.resolve()
@@ -448,6 +455,7 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
           JSON.stringify({
             status: 502,
             message: error instanceof Error ? error.message : String(error),
+            errorKind: rpcErrorKindOf(error),
           })
         ).catch(() => {})
       )

@@ -18,7 +18,7 @@ import {
   createConnectDeepLink,
   parseConnectLink,
   parseSignalingEndpoint,
-} from "./cli/lib/connect-utils.mjs";
+} from "./cli/lib/connect-grammar.generated.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -380,8 +380,7 @@ async function main() {
     startBackgroundTypeCheck();
   }
 
-  let signalUrl =
-    options.signalUrl ?? process.env["VIBESTUDIO_DEV_WEBRTC_SIGNAL_URL"] ?? null;
+  let signalUrl = options.signalUrl ?? process.env["VIBESTUDIO_DEV_WEBRTC_SIGNAL_URL"] ?? null;
   validateSignalUrl(signalUrl, "VIBESTUDIO_DEV_WEBRTC_SIGNAL_URL");
   if (!signalUrl) {
     const signalPort = options.signalPort ?? (await findFreePort());
@@ -393,9 +392,7 @@ async function main() {
 
   const serverArgs = createServerArgs(options);
   const serverInvocation = createServerInvocation(serverArgs);
-  disposableServerHome = await fsp.mkdtemp(
-    path.join(os.tmpdir(), "vibestudio-dev-webrtc-home-")
-  );
+  disposableServerHome = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-dev-webrtc-home-"));
   const serverXdgConfig = path.join(disposableServerHome, ".config");
   const serverEnv = {
     ...process.env,

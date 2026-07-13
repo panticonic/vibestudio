@@ -1,0 +1,24 @@
+{
+  "name": "@vibestudio/workspace-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./aboutNamespace": "./src/aboutNamespace.ts",
+    "./sourceDirs": "./src/sourceDirs.ts",
+    "./types": "./src/types.ts",
+    "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts"
+  },
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/workspace-contracts/src"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

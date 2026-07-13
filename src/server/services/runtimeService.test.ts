@@ -15,7 +15,8 @@ import {
   type RuntimeEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DODispatch } from "../doDispatch.js";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
 

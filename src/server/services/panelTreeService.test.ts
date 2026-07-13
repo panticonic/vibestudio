@@ -112,7 +112,9 @@ describe("panelTreeService", () => {
       callerId: "panel:requester",
       callerKind: "panel",
       method: "list",
-      args: [null],
+      // Direct handler calls use the same wire normalization as dispatcher
+      // calls: JSON null at a trailing optional position becomes undefined.
+      args: [undefined],
     });
   });
 

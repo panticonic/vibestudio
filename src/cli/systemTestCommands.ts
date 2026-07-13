@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { evalMethods } from "@vibestudio/shared/serviceSchemas/eval";
+import { evalMethods } from "@vibestudio/service-schemas/eval";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { CliError, UsageError, jsonMode, printError, printResult } from "./output.js";
 import {

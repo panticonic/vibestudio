@@ -15,9 +15,10 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { panelLogMethods, type PanelLogRecord } from "@vibestudio/shared/serviceSchemas/panelLog";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { panelLogMethods, type PanelLogRecord } from "@vibestudio/service-schemas/panelLog";
 
-export type { PanelLogRecord } from "@vibestudio/shared/serviceSchemas/panelLog";
+export type { PanelLogRecord } from "@vibestudio/service-schemas/panelLog";
 
 export interface PanelLogServiceDeps {
   onRecords: (records: PanelLogRecord[]) => void;
@@ -29,11 +30,11 @@ export function createPanelLogService(deps: PanelLogServiceDeps): ServiceDefinit
     description: "Forward panel console errors and lifecycle events into unit diagnostics",
     policy: { allowed: ["shell", "server"] },
     methods: panelLogMethods,
-    handler: async (_ctx, method, args) => {
-      if (method !== "append") throw new Error(`Unknown method: ${method}`);
-      const [records] = args as [PanelLogRecord[]];
-      if (records.length > 0) deps.onRecords(records);
-      return undefined;
-    },
+    handler: defineServiceHandler("panelLog", panelLogMethods, {
+      append: (_ctx, [records]) => {
+        if (records.length > 0) deps.onRecords(records);
+        return undefined;
+      },
+    }),
   };
 }

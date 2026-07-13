@@ -194,7 +194,7 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
   it("flags workspace files importing host-private implementation roots", () => {
     const text = [
       `import { RpcServer } from "../../src/server/rpcServer.js";`,
-      `const svc = await import("../../src/server/services/refService.js");`,
+      `const svc = await import("../../src/server/services/protectedRefStore.js");`,
       `const gate = require("../../scripts/check-host-workspace-imports.mjs");`,
     ].join("\n");
     const result = collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT });

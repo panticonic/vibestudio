@@ -16,7 +16,7 @@ import type {
   AuditEntry,
   Credential,
   CredentialUseGrant,
-} from "../../../packages/shared/src/credentials/types.js";
+} from "@vibestudio/credential-client/types";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   EgressProxy,

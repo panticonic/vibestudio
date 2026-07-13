@@ -15,7 +15,6 @@
  */
 
 import { EventEmitter } from "events";
-import { createDevLogger } from "@vibestudio/dev-log";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import * as crypto from "node:crypto";
 import * as fsp from "node:fs/promises";
@@ -28,15 +27,12 @@ import {
   diffTrees,
   getBytes,
   materializeTree,
-  mirrorWorktreeTree,
   pruneUnreferencedTreeObjects,
   readFileAtTree,
   resolveTreePath,
   type TreeDiff,
 } from "../services/blobstoreService.js";
-import { type RefService, type RefChange } from "../services/refService.js";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-
+import { type ProtectedRefStore, type RefChange } from "../services/protectedRefStore.js";
 import type {
   BuildRecord,
   StateAdvancedEvent,
@@ -61,29 +57,16 @@ import {
   vcsContextHead,
   vcsLogActor,
 } from "./paths.js";
-import { WorktreeStore, collectTreeFiles } from "./worktreeStore.js";
-import { discoverRepos } from "./repoDiscovery.js";
+import { WorktreeStore } from "./worktreeStore.js";
+import { discoverRepos, type DiscoveredRepo } from "./repoDiscovery.js";
 import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { DiskProjector } from "./diskProjector.js";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-
-/** Narrow call surface onto the gad-store DO. */
-interface GadCaller {
-  /**
-   * Dispatch a method to the gad-store DO. `opts.invocationToken` (register row
-   * 12) attaches a host-minted on-behalf-of nonce to the dispatch so a
-   * host-driven main advance (chrome merge-to-main) attributes to the
-   * originating principal — the DO echoes it into `refs.updateMains`.
-   */
-  call<T = unknown>(
-    method: string,
-    input: unknown,
-    opts?: { invocationToken?: string }
-  ): Promise<T>;
-}
+import type { VcsGadCaller } from "./gadCaller.js";
+import { WorkspaceRepositories } from "./workspaceRepositories.js";
+import { WorkspaceVcsMemory } from "./workspaceVcsMemory.js";
 
 type SnapshotResult = Awaited<ReturnType<WorktreeStore["snapshotDir"]>>;
-type DiscoveredRepo = ReturnType<typeof discoverRepos>[number];
 
 /**
  * Wire shapes of the gad DO's `computeMerge` (implemented by the userland
@@ -107,8 +90,6 @@ interface MergeComputation {
 const BUILDS_LOG_ID = "builds:workspace";
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const USER_ACTOR = { id: "user", kind: "user" } as const;
-const memoryLog = createDevLogger("VcsMemory");
-
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 interface WorkspaceVcsDeps {
@@ -148,18 +129,16 @@ interface WorkspaceVcsDeps {
    * through its gated group compare-and-swap (`updateMains`); the gad store keeps the
    * commit/provenance chain but is no longer the main-head authority.
    */
-  refs: RefService;
+  refs: ProtectedRefStore;
   /**
-   * Host-side on-behalf-of invocation table (narrow-host-vcs §4). A host-driven
-   * main advance that dispatches to the DO OUTSIDE the token-minting RPC relay —
-   * chrome merge-to-main (register row 12) — mints a record here for the
-   * verified originating caller and threads the token to the DO's `vcsMerge`, so
-   * the advance attributes to that caller instead of the writer DO. Absent in
-   * in-process test fixtures (the merge then attributes to the DO, as before).
+   * Host-side on-behalf-of invocation table (narrow-host-vcs §4). A narrow
+   * host-authored metadata publication dispatches to the writer DO outside the
+   * token-minting RPC relay, so it mints a record here and threads the token to
+   * `vcsPublishHostMutation`. The protected-ref gate can then attribute the
+   * advance to the verified originating caller rather than the writer DO.
    */
   vcsInvocations?: import("../services/vcsInvocationTable.js").VcsInvocationTable;
-  /** The single-writer vcs DO identity, for the `via` field of a minted
-   *  merge-attribution record. */
+  /** The single-writer vcs DO identity for a minted invocation's `via` field. */
   getVcsWriterIdentity?: () => string | null;
 }
 
@@ -325,7 +304,9 @@ interface LocalWorkspaceState {
  */
 export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   readonly worktrees: WorktreeStore;
-  private gadCaller: GadCaller | null = null;
+  readonly repositories: WorkspaceRepositories;
+  readonly memory: WorkspaceVcsMemory;
+  private gadCaller: VcsGadCaller | null = null;
   private readonly emitter = new EventEmitter();
   /** Last known state per head — diff basis for changedPaths. */
   private readonly lastState = new Map<string, string>();
@@ -350,28 +331,45 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly projector: DiskProjector;
 
   constructor(private readonly deps: WorkspaceVcsDeps) {
+    const gadBridge: VcsGadCaller = {
+      call: <T>(method: string, input: unknown, opts?: { invocationToken?: string }) => {
+        if (!this.gadCaller) {
+          return Promise.reject(
+            new Error(`gad store not attached yet (call to ${method} during bootstrap)`)
+          );
+        }
+        return this.gadCaller.call<T>(method, input, opts);
+      },
+    };
     this.worktrees = new WorktreeStore({
       blobsDir: deps.blobsDir,
-      gad: {
-        call: <T>(method: string, input: unknown): Promise<T> => {
-          if (!this.gadCaller) {
-            return Promise.reject(
-              new Error(`gad store not attached yet (call to ${method} during bootstrap)`)
-            );
-          }
-          return this.gadCaller.call<T>(method, input);
-        },
-      },
+      gad: gadBridge,
     });
     this.projector = new DiskProjector({
       worktrees: this.worktrees,
       workspaceRoot: deps.workspaceRoot,
       contextsRoot: deps.contextsRoot,
     });
+    this.repositories = new WorkspaceRepositories({
+      blobsDir: deps.blobsDir,
+      refs: deps.refs,
+      worktrees: this.worktrees,
+      discoverGraph: (stateHash) => this.discoverGraph(stateHash),
+    });
+    this.memory = new WorkspaceVcsMemory({
+      blobsDir: deps.blobsDir,
+      gad: gadBridge,
+      isAttached: () => this.attached,
+      subscribeStateAdvanced: (listener) => this.onStateAdvanced(listener),
+      discoverRepositories: () => this.repositories.discover(),
+      resolveMain: (repoPath) => this.resolveHead(VCS_MAIN_HEAD, repoPath),
+      diffStates: (leftStateHash, rightStateHash) => this.diffStates(leftStateHash, rightStateHash),
+      worktrees: this.worktrees,
+    });
     // Register the SINGLE post-advance reaction on the shared protected-ref
-    // store (narrow-host P3): every successful updateMains — the in-process host
-    // push path AND the DO's refs.updateMains RPC — projects + drives the build
-    // trigger from HERE, exactly once. No operation path re-does these effects.
+    // store (narrow-host P3): every successful updateMains drives source export
+    // (when enabled) plus the build trigger from HERE. No operation path re-does
+    // these effects.
     this.deps.refs.onRefsChanged((changes) => {
       if (this.suppressMainRefReactions > 0) return;
       return this.onMainsUpdated(changes);
@@ -380,11 +378,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   /**
    * Post-advance reaction (narrow-host P3 item 1). Fired once per successful
-   * `refs.updateMains` batch, AFTER the swap committed, for BOTH the host push
-   * path and the DO's RPC advance. For each advanced repo it projects the new
-   * `main` tree to disk and emits the `state-advanced` event the build trigger
-   * consumes (build-baseline promotion is reactive, off exactly this event).
-   * Batches once: the composed workspace view is computed a single time. The
+   * `refs.updateMains` batch, after the swap commits. For each changed repo it
+   * updates the optional one-way dev source export and emits the `state-advanced`
+   * event consumed by the build trigger. `main` remains a pure ref with no
+   * checkout. Batches once: the composed workspace view is computed a single time. The
    * provenance commit identity (`eventId`/`headHash`) is NOT available here —
    * provenance is recorded downstream (gad-owned, eventual), so main-advance
    * events now carry null commit identity. Best-effort per repo: a projection
@@ -394,7 +391,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!this.attached) return;
     let workspaceStateHash: string;
     try {
-      workspaceStateHash = await this.composeRepoStatesLocal(await this.collectRepoMainStates());
+      workspaceStateHash = (await this.repositories.workspaceView()).stateHash;
     } catch (error) {
       console.error("[Vcs] onMainsUpdated: failed to compose workspace view:", error);
       return;
@@ -422,8 +419,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           // drop the state cache, remove the on-disk projection, and emit a
           // workspace-rooted removal advance (the repo diffed old→empty) so the
           // build trigger / tree scanner re-discover without it. The gad-owned
-          // archive of the store lineage happens in the deleteRepo lifecycle
-          // AFTER this ref delete; disk/build effects never wait on it.
+          // lifecycle has already archived the lineage before committing this
+          // ref deletion; this reaction owns only the resulting host effects.
           this.lastState.delete(sk);
           // Dev extraction (§3): drop the repo's subtree from the source dir on a
           // `main` removal, the counterpart of exportMainToSource. Gated — a
@@ -488,7 +485,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * host-computed from disk (or the already-persisted ref store), never sourced
    * from the DO head rows.
    */
-  async attachGad(gad: GadCaller): Promise<void> {
+  async attachGad(gad: VcsGadCaller): Promise<void> {
     this.gadCaller = gad;
     if (this.localMain) {
       this.localMain = null;
@@ -504,7 +501,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   // -------------------------------------------------------------------------
-  // Protected main refs (RefService) — the single main-head authority
+  // Protected main refs (ProtectedRefStore) — the single main-head authority
   // -------------------------------------------------------------------------
 
   /** The authoritative `main` state of a repo, from the protected-ref store. */
@@ -731,7 +728,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async ensureFreshUncoalesced(): Promise<{ stateHash: string }> {
     if (!this.attached) {
       if (this.deps.refs.listMains().length > 0) {
-        const view = await this.workspaceView();
+        const view = await this.repositories.workspaceView();
         this.localMain = null;
         this.lastState.set(VCS_MAIN_HEAD, view.stateHash);
         return view;
@@ -751,7 +748,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // source dir is write-only + boot-seed). "Fresh" is simply the current `main`
     // view — the composed union of every repo's `main`, from refs + CAS. No scan,
     // no commit. Per-entity builds serve `resolveContextView(ctx:{id})` instead.
-    return this.workspaceView();
+    return this.repositories.workspaceView();
   }
 
   /**
@@ -790,7 +787,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async resolveHead(head: string, repoPath?: string): Promise<string | null> {
     if (!repoPath && !this.attached && head === VCS_MAIN_HEAD) {
       if (this.localMain) return this.localMain.stateHash;
-      if (this.deps.refs.listMains().length > 0) return (await this.workspaceView()).stateHash;
+      if (this.deps.refs.listMains().length > 0) {
+        return (await this.repositories.workspaceView()).stateHash;
+      }
       return null;
     }
     if (!repoPath) {
@@ -807,7 +806,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return discoverPackageGraph(sourceRoot);
   }
 
-  private gad(): GadCaller {
+  private gad(): VcsGadCaller {
     if (!this.gadCaller) throw new Error("gad store not attached");
     return this.gadCaller;
   }
@@ -911,13 +910,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const workspaceStateHash =
       input.head === VCS_MAIN_HEAD
         ? (input.workspaceStateHash ??
-          (await this.workspaceViewWithRepoAt(repoPath, input.stateHash)))
+          (await this.repositories.workspaceViewWithRepoAt(repoPath, input.stateHash)))
         : ctxId
           ? await this.resolveContextView(ctxId)
           : input.stateHash;
     const sinceStateHash =
       input.head === VCS_MAIN_HEAD
-        ? await this.workspaceViewWithRepoAt(repoPath, input.previousStateHash)
+        ? await this.repositories.workspaceViewWithRepoAt(repoPath, input.previousStateHash)
         : ctxId
           ? await this.gad()
               .call<{ stateHash: string }>("vcsComposedViewWithRepoAt", {
@@ -1399,31 +1398,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     } finally {
       invocation?.release();
     }
-  }
-
-  /**
-   * Fork a repo's entire `main` history into a NEW repo at `toPath` — a no-copy
-   * lineage fork (`forkLog`): the new repo's `vcs:repo:<toPath>` history descends
-   * from the source, so `log --repo <toPath>` shows the inherited events and
-   * later edits build on that lineage. The `package.json` `name` leaf is rewritten
-   * to the new path so the fork doesn't collide with the source in the build graph
-   * (it is immediately build-valid). Deeper renames (component/class names) are the
-   * caller's job. Errors if the source has no history or the destination exists.
-   */
-  async forkRepo(
-    fromPath: string,
-    toPath: string,
-    actor: { id: string; kind: string } = USER_ACTOR
-  ): Promise<{ repoPath: string; head: string; inherited: number; stateHash: string }> {
-    // Phase 4: the fork SAGA is DO-owned (`vcsForkRepo`) — lineage fork, the
-    // package-rename bootstrap commit, the gated ref creation, and disk
-    // projection all run in the gad-store DO over the host primitives. In-process
-    // shim ONLY for the host integration tests; production routes userland → DO.
-    return this.gad().call("vcsForkRepo", {
-      fromPath: normalizeRepoPathForLog(fromPath),
-      toPath: normalizeRepoPathForLog(toPath),
-      actor,
-    });
   }
 
   // -------------------------------------------------------------------------
@@ -1923,13 +1897,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   // -------------------------------------------------------------------------
-  // Traversal reads (edit/commit graph) moved USERLAND (P5c): the gad-store
-  // DO's `vcs*` read surface (vcsFileHistory / vcsCommitEdits /
-  // vcsCommitAncestors / vcsEditsBy* / vcsLog) is dispatched to directly via
-  // the `vcs` manifest service — no host wrappers remain.
+  // Traversal reads (edit/commit graph) are userland-owned (P5c). The trusted
+  // host VCS service still needs the bounded log query below for its explicit
+  // `log` endpoint and for resolving an omitted revert target.
   // -------------------------------------------------------------------------
 
-  /** Host compatibility route for the same userland commit-log traversal. */
+  /** Bounded commit-log query used by the trusted host VCS service. */
   async readVcsLog(
     repoPath: string,
     limit = 50,
@@ -1961,7 +1934,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!buildSystem) return [];
     const workingView = input.head.startsWith("ctx:")
       ? await this.resolveContextView(input.head.slice("ctx:".length))
-      : (await this.workspaceView()).stateHash;
+      : (await this.repositories.workspaceView()).stateHash;
     return buildSystem.previewBuild(workingView, {
       ...(input.repoPaths ? { repoPaths: input.repoPaths } : {}),
       ...(input.units ? { units: input.units } : {}),
@@ -2049,7 +2022,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const right = await this.resolveContextView(contextId);
     const left =
       against === "main"
-        ? (await this.workspaceView()).stateHash
+        ? (await this.repositories.workspaceView()).stateHash
         : ((await this.contextBaseView(contextId)) ?? EMPTY_STATE_HASH);
     return this.diffStates(left, right);
   }
@@ -2086,58 +2059,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Memory file indexing (WS4) — bytes live in the CAS, so the server feeds
-  // changed file text to the store's FTS index after main-head advances.
-  // -------------------------------------------------------------------------
-
-  private memoryIndexQueue: Promise<void> = Promise.resolve();
-
-  /**
-   * Start incremental per-repo file indexing on a repo's `main`-head advances
-   * (W8). Each repo's index is keyed by its own `memidx:<repoPath>` marker
-   * (rebuilt after cache amnesia). Indexed paths are re-rooted to
-   * workspace-relative so recall returns globally-addressable paths regardless
-   * of which repo owns the file.
-   */
-  enableMemoryIndexing(opts: { startupBarrier?: Promise<void> } = {}): void {
-    if (opts.startupBarrier) {
-      this.memoryIndexQueue = this.memoryIndexQueue
-        .then(() => opts.startupBarrier)
-        .catch((error) => console.warn("[VcsMemory] startup barrier failed:", error));
-    }
-    this.onStateAdvanced((event) => {
-      if (event.head !== VCS_MAIN_HEAD) return;
-      this.memoryIndexQueue = this.memoryIndexQueue
-        .then(() => this.indexRepoFiles(event.repoPath))
-        .catch((error) => console.warn("[VcsMemory] index failed:", error));
-    });
-    // Catch up on whatever happened while the server was down: index each
-    // discovered repo's current main.
-    this.memoryIndexQueue = this.memoryIndexQueue
-      .then(() => this.reindexKnownRepos())
-      .catch((error) => console.warn("[VcsMemory] initial index failed:", error));
-  }
-
-  /**
-   * Re-run the per-repo file index over every discovered repo. The `memidx:`
-   * marker fast-path makes an already-indexed repo a cheap no-op, so the point
-   * is to REBUILD the file leg after the DO's markers were wiped — a
-   * `rebuildTrajectoryProjections` replay clears them but re-indexes only
-   * message/claim rows (file text lives in the host CAS, U5), leaving an
-   * empty-file-recall window until the next per-repo `main` advance. Driven at
-   * attach (catch-up) and hourly by the GC scheduler. Per-repo failures are
-   * logged, never fatal.
-   */
-  async reindexKnownRepos(): Promise<void> {
-    if (!this.attached) return;
-    for (const repo of await this.discoverRepos()) {
-      await this.indexRepoFiles(repo.repoPath).catch((error) =>
-        console.warn(`[VcsMemory] reindex for ${repo.repoPath} failed:`, error)
-      );
-    }
-  }
-
   /**
    * Kick the DO's provenance soft-state prune (C6 `pruneProvenanceSoftState`):
    * age out low-value touches, stale render-log rows, and disposable provenance
@@ -2154,220 +2075,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (isUnknownDoMethodError(error)) return;
       throw error;
     }
-  }
-
-  /** Index a single repo's `main` head into the FTS index (W8). */
-  async indexRepoFiles(repoPath: string): Promise<void> {
-    if (!this.attached) return;
-    const norm = normalizeRepoPathForLog(repoPath);
-    const stateHash = await this.resolveHead(VCS_MAIN_HEAD, norm);
-    if (!stateHash) return;
-    const markerKey = `memidx:${norm}`;
-    const marker = (
-      await this.gad().call<{ value: string | null }>("getMemoryIndexMarker", { key: markerKey })
-    ).value;
-    if (marker === stateHash) return;
-
-    const MAX_INDEXED_FILE_BYTES = 256 * 1024;
-    const reroot = (p: string): string => joinRepoPrefix(norm, p);
-    const files: Array<{ path: string; contentHash: string; text: string }> = [];
-    let removedPaths: string[] = [];
-    const wanted: Array<{ path: string; content_hash: string }> = [];
-    if (marker) {
-      // Content-store diff: the fresh main state may not be recorded in the
-      // gad DO yet (async provenance recorder) but is always mirrored.
-      const diff = await this.diffStates(marker, stateHash);
-      wanted.push(
-        ...diff.added.map((file) => ({ path: file.path, content_hash: file.contentHash })),
-        ...diff.changed.map((file) => ({ path: file.path, content_hash: file.toContentHash }))
-      );
-      removedPaths = diff.removed.map((file) => reroot(file.path));
-    } else {
-      wanted.push(...(await this.worktrees.listStateFiles(stateHash)));
-    }
-    for (const file of wanted) {
-      const bytes = await getBytes(this.deps.blobsDir, file.content_hash);
-      if (!bytes) {
-        // A missing CAS blob is transient (content-bridge lag / GC race): abort
-        // the whole pass WITHOUT advancing the marker, so the next main advance
-        // retries this state. Advancing here would permanently un-index this
-        // file version with no trace (a later diff starts from the advanced
-        // marker and never revisits it).
-        console.warn(
-          `[VcsMemory] index aborted for ${norm}: missing CAS blob ${file.content_hash} ` +
-            `for ${reroot(file.path)}; marker left at prior state, will retry on next advance`
-        );
-        return;
-      }
-      if (bytes.length > MAX_INDEXED_FILE_BYTES) {
-        memoryLog.verbose(
-          `skip ${reroot(file.path)}: over index size cap ` +
-            `(${bytes.length} > ${MAX_INDEXED_FILE_BYTES} bytes)`
-        );
-        continue;
-      }
-      if (bytes.subarray(0, 8192).includes(0)) {
-        memoryLog.verbose(`skip ${reroot(file.path)}: binary content (null byte sniff)`);
-        continue;
-      }
-      files.push({
-        path: reroot(file.path),
-        contentHash: file.content_hash,
-        text: bytes.toString("utf8"),
-      });
-    }
-    if (files.length > 0 || removedPaths.length > 0) {
-      await this.gad().call("indexMemoryFiles", { files, removedPaths });
-    }
-    await this.gad().call("setMemoryIndexMarker", { key: markerKey, value: stateHash });
-  }
-
-  /**
-   * Provenance-carrying memory search (messages, claims, files). `repoPaths`
-   * scopes file results to the selected repos; omit to search across all. The
-   * SCOPING SEMANTICS live in the gad-store DO: the prefix predicate is
-   * pushed into its query so `limit` bounds the already-scoped result set —
-   * this side only normalizes repo paths and dispatches.
-   */
-  async recallMemory(input: {
-    query: string;
-    kinds?: string[];
-    limit?: number;
-    repoPaths?: string[];
-    /** Steering keywords OR-appended to the FTS match in the DO (C6); a bonus
-     *  widening signal, never load-bearing. Threaded through untouched. */
-    recallKeywords?: string[];
-  }): Promise<unknown> {
-    const { repoPaths, ...rest } = input;
-    const prefixes =
-      repoPaths && repoPaths.length > 0 ? repoPaths.map((r) => normalizeRepoPathForLog(r)) : null;
-    return await this.gad().call("recallMemory", {
-      ...rest,
-      ...(prefixes ? { pathPrefixes: prefixes } : {}),
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Workspace view — live union of repo mains (W3)
-  // -------------------------------------------------------------------------
-
-  /**
-   * Enumerate the repo set from the live composed workspace view's file list
-   * (build-unit repos ∪ content-only repos ∪ `meta`). Purely a function of the
-   * tracked paths of every repo's `main`. An empty workspace (no repo mains)
-   * composes to the empty state ⇒ no repos.
-   */
-  async discoverRepos(): Promise<DiscoveredRepo[]> {
-    const repoStates = await this.collectRepoMainStates();
-    if (repoStates.length === 0) return [];
-    const composed = await this.composeRepoStatesLocal(repoStates);
-    const files = await collectTreeFiles(this.deps.blobsDir, composed);
-    if (files === null) throw new Error(`discoverRepos: composed view ${composed} not resolvable`);
-    return discoverRepos(files.map((f) => f.path));
-  }
-
-  /**
-   * Severe, global-state action: permanently remove a repo from the workspace.
-   * Distinct from an edit/snapshot — it does not ADVANCE a repo head, it RETIRES
-   * one. The repo's `main` history is ARCHIVED (moved to a non-`main` archive
-   * head — fully preserved and restorable), the repo is dropped from the composed
-   * workspace view (so build discovery / materialize stop seeing it — the proper
-   * close to the deletion gap that `snapshotDir` deliberately cannot infer), its
-   * on-disk subtree is removed, and a synthetic `main` advance is emitted so the
-   * build trigger / tree scanner re-discover without it. User approval is gated
-   * upstream in the service layer (a dedicated severe per-repo capability); this
-   * performs the already-authorized deletion. Idempotent only insofar as it
-   * throws when the repo has no committed `main`.
-   */
-  /** Workspace-relative paths of repos whose build unit directly depends on
-   *  `repoPath`'s unit, at a workspace state. Empty when `repoPath` is content-
-   *  only (not a build unit) or has no dependents — used to gate deletion. */
-  private async dependentRepoPaths(repoPath: string, atStateHash: string): Promise<string[]> {
-    const graph = await this.discoverGraph(atStateHash);
-    const node = graph.allNodes().find((n) => normalizeRepoPathForLog(n.relativePath) === repoPath);
-    if (!node) return []; // content-only repo (not in the build graph)
-    const deps = new Set<string>();
-    for (const depName of graph.getReverseDeps(node.name)) {
-      const depNode = graph.tryGet(depName);
-      if (depNode) deps.add(normalizeRepoPathForLog(depNode.relativePath));
-    }
-    deps.delete(repoPath);
-    return [...deps].sort();
-  }
-
-  /**
-   * Dependents lookup for the DELETION approval gate (narrow-host-vcs-plan §5):
-   * repos whose build unit imports `repoPath`, resolved against the LIVE
-   * workspace view. Host-computed from the build dependency graph and surfaced
-   * in the severe deletion prompt so the user sees what will break. Best-effort
-   * (a graph/view failure yields no dependents rather than blocking the prompt).
-   */
-  async deleteDependents(repoPath: string): Promise<string[]> {
-    try {
-      const view = await this.workspaceView();
-      return await this.dependentRepoPaths(normalizeRepoPathForLog(repoPath), view.stateHash);
-    } catch {
-      return [];
-    }
-  }
-
-  async deleteRepo(input: {
-    repoPath: string;
-    actor: { id: string; kind: string };
-    caller: VerifiedCaller;
-    force?: boolean;
-  }): Promise<{
-    repoPath: string;
-    archived: boolean;
-    archiveHead: string | null;
-    removedPaths: string[];
-    dependents: string[];
-    stateHash: string;
-  }> {
-    // Phase 4: the delete SAGA is DO-owned (`vcsDeleteRepo`). The severe deletion
-    // prompt still fires HOST-side, classified from the null-next CAS shape (D3);
-    // production attributes it to the originating caller via the relay-minted
-    // token. `caller` is dropped here — this in-process shim exists ONLY for the
-    // host integration tests, which supply the gate caller through the bridge.
-    const repoPath = normalizeRepoPathForLog(input.repoPath);
-    return this.gad().call("vcsDeleteRepo", {
-      repoPath,
-      actor: input.actor,
-      ...(input.force ? { force: true } : {}),
-    });
-  }
-
-  /**
-   * Recover a deleted repo: re-point its `main` at its most recent archive head
-   * (the reverse of {@link deleteRepo}'s archival), re-materialize it on disk and
-   * emit a `main` advance so build/tree re-discover it. FAILS if a live `main`
-   * already exists for the path — i.e. a DIFFERENT repo was created there since
-   * the deletion — rather than clobbering it. Approval is raised ONCE by the ref
-   * gate's restore classification when the re-creating `updateMains` runs (the
-   * host ref log shows the prior delete). Throws when there is nothing archived
-   * to restore.
-   */
-  async restoreRepo(input: {
-    repoPath: string;
-    actor: { id: string; kind: string };
-    caller: VerifiedCaller;
-  }): Promise<{
-    repoPath: string;
-    restored: boolean;
-    fromArchiveHead: string | null;
-    restoredPaths: string[];
-    stateHash: string;
-  }> {
-    // Phase 4: the restore SAGA is DO-owned (`vcsRestoreRepo`) — un-archive, the
-    // gated ref re-creation (an add-repo prompt classified from the CAS shape,
-    // D3), and the write-only source-dir re-export of the restored main. In-process shim ONLY for
-    // the host integration tests (which drive the DO via `this.gad()` and supply
-    // the gate caller through the bridge); production routes userland → DO.
-    const repoPath = normalizeRepoPathForLog(input.repoPath);
-    return this.gad().call("vcsRestoreRepo", {
-      repoPath,
-      actor: input.actor,
-    });
   }
 
   /**
@@ -2481,132 +2188,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
   }
 
-  /**
-   * Every repo's current `main`, from the PROTECTED-REF STORE (the single
-   * main-head authority). Returns `{ repoPath, stateHash }` pairs for
-   * `composeRepoStatesLocal`, sorted by repo path.
-   */
-  private collectRepoMainStates(): Promise<Array<{ repoPath: string; stateHash: string }>> {
-    return Promise.resolve(
-      this.deps.refs
-        .listMains()
-        .filter((record) => record.stateHash !== EMPTY_STATE_HASH)
-        .map((record) => ({ repoPath: record.repoPath, stateHash: record.stateHash }))
-    );
-  }
-
-  /**
-   * Compose repo subtree states into one workspace-rooted view ENTIRELY in
-   * the content store — no gad DO. Byte-identical to the DO's own composition
-   * (both re-root each repo's file listing under its repoPath and hash with
-   * the shared canonical implementation), but works
-   * for states the DO has not (yet) recorded — which is exactly the
-   * freshness-path situation now that provenance recording is asynchronous.
-   * Cached by the (repoPath=state) composition key; compositions are
-   * content-addressed so the cache can never go stale.
-   */
-  private readonly composedViewCache = new Map<string, string>();
-  private async composeRepoStatesLocal(
-    repos: Array<{ repoPath: string; stateHash: string }>
-  ): Promise<string> {
-    if (repos.length === 0) {
-      await mirrorWorktreeTree(this.deps.blobsDir, []);
-      return EMPTY_STATE_HASH;
-    }
-    const key = repos
-      .map((repo) => `${normalizeRepoPathForLog(repo.repoPath)}=${repo.stateHash}`)
-      .sort()
-      .join("\n");
-    const cached = this.composedViewCache.get(key);
-    if (cached) {
-      if (await this.cachedComposedViewIsResolvable(key, cached)) return cached;
-      this.composedViewCache.delete(key);
-    }
-    const files: Array<{ path: string; contentHash: string; mode: number }> = [];
-    for (const repo of repos) {
-      await this.worktrees.ensureStateMirrored(repo.stateHash);
-      const listing = await collectTreeFiles(this.deps.blobsDir, repo.stateHash);
-      if (listing === null) {
-        throw new Error(
-          `composeRepoStatesLocal: repo ${repo.repoPath} state ${repo.stateHash} is not resolvable`
-        );
-      }
-      const prefix = normalizeRepoPathForLog(repo.repoPath);
-      for (const file of listing) {
-        files.push({
-          path: `${prefix}/${file.path}`,
-          contentHash: file.contentHash,
-          mode: file.mode,
-        });
-      }
-    }
-    const { stateHash } = await mirrorWorktreeTree(this.deps.blobsDir, files);
-    if (this.composedViewCache.size >= 128) {
-      const oldest = this.composedViewCache.keys().next().value;
-      if (oldest !== undefined) this.composedViewCache.delete(oldest);
-    }
-    this.composedViewCache.set(key, stateHash);
-    return stateHash;
-  }
-
-  private async cachedComposedViewIsResolvable(key: string, stateHash: string): Promise<boolean> {
-    try {
-      return (await collectTreeReachableDigests(this.deps.blobsDir, stateHash)) !== null;
-    } catch (err) {
-      console.warn(
-        `[WorkspaceVcs] dropping composed workspace cache entry with missing backing tree: ${key}`,
-        err
-      );
-      return false;
-    }
-  }
-
-  /**
-   * The live workspace view: the composed union of every repo's `main` head
-   * state. A workspace-rooted state for whole-tree consumers (build discovery,
-   * materialize, diff, git export). No pins, no lockfile. Composed in the
-   * CONTENT STORE (never the gad DO) so freshness/build consumers work even
-   * while the async provenance recorder is still draining.
-   */
-  async workspaceView(): Promise<{ stateHash: string }> {
-    const repoStates = await this.collectRepoMainStates();
-    // Empty workspace (no repo mains) composes to the empty state — there is no
-    // whole-tree log to fall back to.
-    return { stateHash: await this.composeRepoStatesLocal(repoStates) };
-  }
-
-  /**
-   * The composed workspace view with ONE repo overridden to a candidate state
-   * (or removed when `stateHash` is null): the workspace AS IT WOULD BE if
-   * `repoPath` advanced to that state. Used to give main-advance approval and
-   * push validation the CANDIDATE composed view, so pre-commit checks analyze the
-   * new state rather than the still-current one.
-   */
-  async workspaceViewWithRepoAt(repoPath: string, stateHash: string | null): Promise<string> {
-    return this.workspaceViewWithReposAt([{ repoPath, stateHash }]);
-  }
-
-  /**
-   * The composed workspace view with a BATCH of repos overridden to candidate
-   * states (`stateHash: null` removes the repo): the workspace AS IT WOULD BE
-   * after an atomic {@link RefService.updateMains} batch. The batch form of
-   * {@link workspaceViewWithRepoAt} — used by the reshaped main-advance gate to
-   * compute ONE candidate view (and dedup key) for a whole batch.
-   */
-  async workspaceViewWithReposAt(
-    overrides: Array<{ repoPath: string; stateHash: string | null }>
-  ): Promise<string> {
-    const overrideByNorm = new Map<string, string | null>();
-    for (const o of overrides) overrideByNorm.set(normalizeRepoPathForLog(o.repoPath), o.stateHash);
-    const repos = (await this.collectRepoMainStates()).filter(
-      (r) => !overrideByNorm.has(normalizeRepoPathForLog(r.repoPath))
-    );
-    for (const [norm, stateHash] of overrideByNorm) {
-      if (stateHash) repos.push({ repoPath: norm, stateHash });
-    }
-    return this.composeRepoStatesLocal(repos);
-  }
-
   // -------------------------------------------------------------------------
   // GC (WS3.P5)
   // -------------------------------------------------------------------------
@@ -2696,23 +2277,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       for (const digest of reachable.treeDigests) protectedTreeDigests.add(digest);
     }
 
-    for (const [key, stateHash] of this.composedViewCache) {
-      try {
-        const reachable = await collectTreeReachableDigests(this.deps.blobsDir, stateHash);
-        if (!reachable) {
-          this.composedViewCache.delete(key);
-          continue;
-        }
-        for (const digest of reachable.contentDigests) protectedBlobDigests.add(digest);
-        for (const digest of reachable.treeDigests) protectedTreeDigests.add(digest);
-      } catch (err) {
-        console.warn(
-          `[WorkspaceVcs] dropping composed workspace cache entry during GC root collection: ${key}`,
-          err
-        );
-        this.composedViewCache.delete(key);
-      }
-    }
+    const cachedViewDigests = await this.repositories.collectCachedReachableDigests();
+    for (const digest of cachedViewDigests.contentDigests) protectedBlobDigests.add(digest);
+    for (const digest of cachedViewDigests.treeDigests) protectedTreeDigests.add(digest);
 
     return {
       rootStateHashes: [...rootStateHashes].sort(),

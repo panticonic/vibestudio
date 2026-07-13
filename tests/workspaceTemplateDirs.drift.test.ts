@@ -1,7 +1,7 @@
 /**
  * Drift guard: the packaged-template staging list in the (.mjs, un-importable
  * by TS) build script must stay in sync with the canonical workspace taxonomy
- * in @vibestudio/shared/workspace/sourceDirs.
+ * in @vibestudio/workspace-contracts/sourceDirs.
  *
  * The build script mirrors the dir list because an .mjs script cannot import the
  * TS constant. This test imports the script's exported list and the shared
@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import YAML from "yaml";
 
-import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
+import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import {
   WORKSPACE_TEMPLATE_DIRS,
   WORKSPACE_TEMPLATE_ROOT_FILES,
@@ -77,15 +77,12 @@ describe("packaged workspace template staging drift guard", () => {
     const workspaceTemplate = resources.find(
       (entry) => entry.from === "workspace" && entry.to === "workspace-template"
     );
-    expect(workspaceTemplate?.filter).toEqual(
-      expect.arrayContaining([
-        "package.json",
-        "pnpm-lock.yaml",
-        "pnpm-workspace.yaml",
-        "tsconfig.json",
-        "tsconfig.integration.json",
-        "tsconfig.integration.mobile.json",
-      ])
+    const included = (workspaceTemplate?.filter ?? []).filter((entry) => !entry.startsWith("!"));
+    expect(included.sort()).toEqual(
+      [
+        ...WORKSPACE_TEMPLATE_DIRS.map((dir) => `${dir}/**/*`),
+        ...WORKSPACE_TEMPLATE_ROOT_FILES,
+      ].sort()
     );
 
     for (const dir of WORKSPACE_TEMPLATE_SUPPORT_DIRS) {

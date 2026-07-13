@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
-import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch, type DORef } from "./doDispatch.js";
+import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */

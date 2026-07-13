@@ -5,7 +5,7 @@
  * - Locating the workerd binary
  * - Worker instance lifecycle (create, update, destroy)
  * - Context/token provisioning per instance
- * - Cap'n Proto text config generation with auto-generated router worker
+ * - Cap'n Proto text config generation for build-compiled workerd programs
  * - workerd child process management (start, restart, stop)
  */
 
@@ -15,6 +15,7 @@ import * as fs from "fs";
 import { createRequire } from "module";
 import * as path from "path";
 import * as os from "os";
+import { stateLayout } from "./stateLayout.js";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -24,7 +25,7 @@ import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildSto
 import type { RuntimeImageBinding, StateAdvancedEvent } from "./buildV2/index.js";
 import { validateBuildRef } from "./buildV2/refs.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
-import type { SingletonRegistry } from "@vibestudio/shared/workspace/singletonRegistry";
+import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   getPhysicalPathForAsarPath,
@@ -34,6 +35,7 @@ import { getInternalDOBundle, isInternalDOSource } from "./internalDOs/internalD
 import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
+import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
 
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
@@ -242,6 +244,8 @@ export interface WorkerdManagerDeps {
   getServerAliasUrls?: () => readonly string[];
   bindRuntimeImage: (unitPath: string, ref?: string) => Promise<RuntimeImageBinding>;
   getBuildByKey: (key: string) => BuildResult | null;
+  /** Immutable, build-compiled programs used by the workerd host services. */
+  readonly workerdPrograms: WorkerdProgramSources;
   /** Workspace source root — used for WORKER_SOURCE binding. */
   workspacePath: string;
   /** State directory — used for DO storage (localDisk). */
@@ -266,6 +270,8 @@ export interface WorkerdManagerDeps {
    *  listener can resolve the header id → full caller for attribution. */
   registerEgressCaller: (callerId: string, caller: VerifiedCaller) => void;
   unregisterEgressCaller: (callerId: string) => void;
+  /** Process-owned secret bound into worker hosts and checked by shared egress. */
+  egressSecret: string;
   getWorkerdGatewayToken: () => string;
   /**
    * Manifest-declared DOs that stay bound to the explicit main head during
@@ -377,16 +383,17 @@ export class WorkerdManager {
   private readonly loaderSecret = crypto.randomBytes(32).toString("hex");
   /** Per-process secret the host's EgressGateway stamps on forwarded egress so
    *  the shared egress listener trusts the `X-Vibestudio-Egress-Caller` header. */
-  private readonly egressSecret = crypto.randomBytes(32).toString("hex");
+  private readonly egressSecret: string;
   /** Resolved shared egress listener port (memoized after first start). */
   private sharedEgressPort: number | null = null;
 
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
+    this.egressSecret = deps.egressSecret;
     this.runtimeImages = new RuntimeImageStore(deps.statePath);
     this.configDir = path.join(os.tmpdir(), `vibestudio-workerd-${process.pid}`);
     fs.mkdirSync(this.configDir, { recursive: true });
-    this.bootGenerationFile = path.join(this.deps.statePath, ".boot-generation");
+    this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
     this.bootGeneration = this.readBootGeneration();
   }
 
@@ -1347,7 +1354,7 @@ export class WorkerdManager {
 
       // DO storage: create a disk service and reference it by name
       const diskServiceName = `${doService.serviceName}_disk`;
-      const doStoragePath = path.join(this.deps.statePath, ".databases", "workerd-do");
+      const doStoragePath = stateLayout(this.deps.statePath).databases.workerdDoDir;
       fs.mkdirSync(doStoragePath, { recursive: true });
 
       const networkServiceName = `${doService.serviceName}_network`;
@@ -1422,7 +1429,7 @@ export class WorkerdManager {
       services.push({
         name: "worker-host",
         worker: {
-          modules: [{ name: "host.js", esModule: this.generateWorkerHostCode() }],
+          modules: [{ name: "host.js", esModule: this.deps.workerdPrograms.workerHost }],
           // `experimental` is required for `env.LOADER` (workerLoader) and
           // `ctx.exports`. The host MUST carry it; loaded workers must NOT.
           compatibilityFlags: ["nodejs_compat", "experimental"],
@@ -1452,16 +1459,13 @@ export class WorkerdManager {
       // durable facets, loaded dynamically via `env.LOADER`. A new userland DO
       // class needs no config change and no workerd restart — just `/_docode`.
       // Reuses the worker-host gateway + egress external services.
-      const universalDoStoragePath = path.join(
-        this.deps.statePath,
-        ".databases",
-        "workerd-universal-do"
-      );
+      const universalDoStoragePath = stateLayout(this.deps.statePath).databases
+        .workerdUniversalDoDir;
       fs.mkdirSync(universalDoStoragePath, { recursive: true });
       services.push({
         name: "universal-do",
         worker: {
-          modules: [{ name: "udo.js", esModule: this.generateUniversalDOCode() }],
+          modules: [{ name: "udo.js", esModule: this.deps.workerdPrograms.universalDo }],
           compatibilityFlags: ["nodejs_compat", "experimental"],
           compatibilityDate: "2025-12-01",
           bindings: [
@@ -1489,18 +1493,23 @@ export class WorkerdManager {
           durableObjectNamespace: { className: "UniversalDO", serviceName: "universal-do" },
         },
       ];
+      const doBindingNames: Record<string, string> = {};
 
       // Add DO namespace bindings for the router (durableObjectNamespace, not service).
       // Binding names are source-scoped to match the generated router lookup.
       for (const { className, source, serviceName } of doClassNames) {
         const bindingName = `do_${source.replace(/[^a-zA-Z0-9_]/g, "_")}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+        doBindingNames[`${source}:${className}`] = bindingName;
         routerBindings.push({
           name: bindingName,
           durableObjectNamespace: { className, serviceName },
         });
       }
 
-      const routerCode = this.generateRouterCode(doClassNames);
+      routerBindings.push({
+        name: "WORKERD_DO_BINDINGS",
+        json: JSON.stringify(doBindingNames),
+      });
       routerBindings.push({
         name: "WORKERD_GATEWAY_TOKEN",
         text: this.deps.getWorkerdGatewayToken(),
@@ -1513,7 +1522,7 @@ export class WorkerdManager {
       services.push({
         name: "router",
         worker: {
-          modules: [{ name: "router.js", esModule: routerCode }],
+          modules: [{ name: "router.js", esModule: this.deps.workerdPrograms.router }],
           bindings: routerBindings,
           compatibilityDate: "2024-01-01",
         },
@@ -1522,7 +1531,7 @@ export class WorkerdManager {
 
     // Find a port
     if (!this.port) {
-      const { findServicePort } = await import("@vibestudio/port-utils");
+      const { findServicePort } = await import("./hostCore/portUtils.js");
       this.port = await findServicePort("workerd");
     }
 
@@ -1552,298 +1561,6 @@ export class WorkerdManager {
           ]
         : [],
     };
-  }
-
-  private generateRouterCode(
-    doClassNames: { className: string; source: string; serviceName: string }[] = []
-  ): string {
-    // Build DO lookup map: "source:className" → binding name.
-    // The lookup key combines source + className so same-named classes from different sources
-    // dispatch to different workerd services.
-    const doLookupEntries = doClassNames.map(({ className, source }) => {
-      const bindingName = `do_${source.replace(/[^a-zA-Z0-9_]/g, "_")}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
-      const lookupKey = `${source}:${className}`;
-      return `      ${JSON.stringify(lookupKey)}: env.${bindingName}`;
-    });
-
-    // Generate DO routing block for /_w/{...source}/{className}/{objectKey}/{method...}.
-    // Source paths may have arbitrary depth. The router disambiguates by matching
-    // generated source:className keys rather than assuming a fixed segment count.
-    let doBlock = "";
-    if (doClassNames.length > 0) {
-      doBlock = `
-    // /_w/{...source}/{className}/{objectKey}/{...method} — source-scoped DO routes
-    if (prefix === "_w") {
-      if (parts.length < 5) {
-        return new Response("Usage: /_w/{...source}/{className}/{objectKey}/{method}", { status: 400 });
-      }
-      const doLookup = {
-${doLookupEntries.join(",\n")}
-      };
-      for (let classIndex = 2; classIndex <= parts.length - 3; classIndex++) {
-        const source = parts.slice(1, classIndex).map(decodeURIComponent).join("/");
-        const doClass = decodeURIComponent(parts[classIndex] || "");
-        const objectKey = decodeURIComponent(parts[classIndex + 1] || "");
-        const doRest = parts.slice(classIndex + 2);
-        if (!source || !doClass || !objectKey) continue;
-        const ns = doLookup[source + ":" + doClass];
-        if (!ns) continue;
-        const id = ns.idFromName(objectKey);
-        const stub = ns.get(id);
-        const doUrl = new URL("/" + encodeURIComponent(objectKey) + (doRest.length ? "/" + doRest.join("/") : ""), url.origin);
-        doUrl.search = url.search;
-        return stub.fetch(new Request(doUrl, strippedRequest));
-      }
-      return new Response("DO class not found for route: " + parts.slice(1).join("/"), { status: 404 });
-    }
-`;
-    }
-
-    // /_u/{encodedKey}/{...method} — userland DO via the UniversalDO facet host.
-    // encodedKey already packs source|className|userKey (encoded by doDispatch),
-    // so there is no arbitrary-depth ambiguity here. The host decodes it.
-    const universalBlock = `
-    if (prefix === "_u") {
-      const encodedKey = parts[1] ? decodeURIComponent(parts[1]) : "";
-      if (!encodedKey) return new Response("Usage: /_u/{key}/{method}", { status: 400 });
-      const id = env.UNIVERSAL_DO.idFromName(encodedKey);
-      const stub = env.UNIVERSAL_DO.get(id);
-      const doRest = parts.slice(2);
-      const doUrl = new URL("/" + encodeURIComponent(encodedKey) + (doRest.length ? "/" + doRest.join("/") : ""), url.origin);
-      doUrl.search = url.search;
-      return stub.fetch(new Request(doUrl, strippedRequest));
-    }
-`;
-
-    return `export default {
-  async fetch(request, env) {
-    const expectedAuth = "Bearer " + env.WORKERD_GATEWAY_TOKEN;
-    if (request.headers.get("Authorization") !== expectedAuth) {
-      return new Response("Unauthorized", { status: 401 });
-    }
-    const strippedHeaders = new Headers(request.headers);
-    strippedHeaders.delete("Authorization");
-    for (const name of Array.from(strippedHeaders.keys())) {
-      if (name.toLowerCase().startsWith("x-internal-")) strippedHeaders.delete(name);
-    }
-    const strippedRequest = new Request(request, { headers: strippedHeaders });
-    const url = new URL(request.url);
-    const parts = url.pathname.split("/").filter(Boolean);
-    const prefix = parts[0] || "";
-    if (prefix === "__vibestudio_workerd_ready") {
-      return new Response(null, { status: 204 });
-    }
-    if ((prefix === "_w" || prefix === "_u") && request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET) {
-      return new Response("Forbidden", { status: 403 });
-    }
-${doBlock}${universalBlock}
-    // All non-DO traffic → the static worker host, which loads the named
-    // worker dynamically. The host parses parts[0] as the instance name, so
-    // forward the full path (auth already stripped).
-    return env.WORKER_HOST.fetch(strippedRequest);
-  }
-};
-`;
-  }
-
-  /**
-   * Generate the static `worker-host` module. It loads regular workers
-   * dynamically via `env.LOADER` (Cloudflare Worker Loaders), keyed on
-   * `${name}@${version}` so updates/rebuilds force a fresh isolate without a
-   * workerd restart. It attaches non-forgeable per-load egress identity via the
-   * `ctx.exports.EgressGateway` loopback binding (the dynamic worker never sees
-   * the props), and forwards outbound traffic through the shared attributed
-   * egress listener.
-   *
-   * This code is constant (no per-instance interpolation) — the only thing that
-   * changes per worker is the data served by `/_workercode` + `/_workerversion`.
-   */
-  private generateWorkerHostCode(): string {
-    return `import { WorkerEntrypoint } from "cloudflare:workers";
-
-// Static egress gateway. Identity arrives via non-forgeable per-load props and
-// is stamped onto every outbound subrequest; the dynamic worker cannot forge it
-// (its own ctx.props is empty). Forwards to the shared attributed egress proxy.
-export class EgressGateway extends WorkerEntrypoint {
-  async fetch(request) {
-    const id = (this.ctx.props && this.ctx.props.id) || "";
-    const headers = new Headers(request.headers);
-    headers.set("X-Vibestudio-Egress-Caller", id);
-    headers.set("X-Vibestudio-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
-    return this.env.EGRESS.fetch(new Request(request, { headers }));
-  }
-}
-
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const parts = url.pathname.split("/").filter(Boolean);
-    const name = parts[0] ? decodeURIComponent(parts[0]) : "";
-    if (!name) return new Response("worker-host: missing instance name", { status: 400 });
-
-    const loaderHeaders = { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET };
-
-    // Current loader-cache version (tiny). 404 → no such worker (destroyed or
-    // never created); a stale isolate, if any, is simply never re-addressed.
-    const vres = await env.GATEWAY.fetch(
-      new Request("http://gateway/_workerversion/" + encodeURIComponent(name), { headers: loaderHeaders })
-    );
-    if (vres.status === 404) return new Response("Worker not found: " + name, { status: 404 });
-    if (vres.status === 503) return new Response("worker-host: code warming", { status: 503, headers: { "Retry-After": "1" } });
-    if (!vres.ok) return new Response("worker-host: version lookup failed (" + vres.status + ")", { status: 502 });
-    const version = (await vres.json()).version;
-
-    const stub = env.LOADER.get(name + "@" + version, async () => {
-      const cres = await env.GATEWAY.fetch(
-        new Request("http://gateway/_workercode/" + encodeURIComponent(name), { headers: loaderHeaders })
-      );
-      if (!cres.ok) throw new Error("worker-host: code fetch failed (" + cres.status + ")");
-      const code = await cres.json();
-      return {
-        compatibilityDate: code.compatibilityDate,
-        compatibilityFlags: code.compatibilityFlags,
-        mainModule: code.mainModule,
-        modules: code.modules,
-        env: code.env,
-        globalOutbound: ctx.exports.EgressGateway({ props: { id: code.callerId } }),
-      };
-    });
-
-    // Strip the instance-name prefix so the loaded worker sees /__rpc etc.
-    const rest = "/" + parts.slice(1).join("/");
-    const fwdUrl = new URL(rest, url.origin);
-    fwdUrl.search = url.search;
-    try {
-      return await stub.getEntrypoint().fetch(new Request(fwdUrl, request));
-    } catch (err) {
-      if (String((err && err.message) || err).includes("(503)")) {
-        return new Response("worker-host: code warming", { status: 503, headers: { "Retry-After": "1" } });
-      }
-      throw err;
-    }
-  }
-};
-`;
-  }
-
-  /**
-   * Generate the static `universal-do` module. It hosts ALL userland DO classes
-   * as durable facets: per request it decodes `source|className|userKey` from
-   * the object key, dynamically loads the inner DO class via `env.LOADER`
-   * (keyed `source:className@version` for reload-on-change), runs it as a
-   * `ctx.facets` facet, and forwards the inner DO's existing `fetch` handler.
-   * One host object per `(source,className,userKey)` → one facet → 1:1 identity
-   * (alarms/websockets/storage). Egress is attributed per `source:className`
-   * via the `ctx.exports.EgressGateway` loopback (non-forgeable props).
-   */
-  private generateUniversalDOCode(): string {
-    return `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-
-export class EgressGateway extends WorkerEntrypoint {
-  async fetch(request) {
-    const id = (this.ctx.props && this.ctx.props.id) || "";
-    const headers = new Headers(request.headers);
-    headers.set("X-Vibestudio-Egress-Caller", id);
-    headers.set("X-Vibestudio-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
-    return this.env.EGRESS.fetch(new Request(request, { headers }));
-  }
-}
-
-function decodeKey(encoded) {
-  const p = encoded.split("|");
-  return {
-    source: decodeURIComponent(p[0] || ""),
-    className: decodeURIComponent(p[1] || ""),
-    userKey: decodeURIComponent(p[2] || ""),
-  };
-}
-
-export class UniversalDO extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env; }
-
-  async fetch(request) {
-    const url = new URL(request.url);
-    const parts = url.pathname.split("/").filter(Boolean);
-    const encodedKey = parts[0] ? decodeURIComponent(parts[0]) : "";
-    if (!encodedKey) return new Response("universal-do: missing key", { status: 400 });
-    const { source, className, userKey } = decodeKey(encodedKey);
-    if (!source || !className) return new Response("universal-do: bad key", { status: 400 });
-
-    const ctx = this.ctx;
-    const env = this.env;
-    const identity = source + ":" + className;
-    const loaderHeaders = { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET };
-
-    const vres = await env.GATEWAY.fetch(new Request(
-      "http://gateway/_doversion/" + encodeURIComponent(source) + "/" + encodeURIComponent(className) +
-        "?objectKey=" + encodeURIComponent(userKey),
-      { headers: loaderHeaders }
-    ));
-    if (vres.status === 404) return new Response("DO class not found: " + identity, { status: 404 });
-    if (vres.status === 503) return new Response("universal-do: code warming", { status: 503, headers: { "Retry-After": "1" } });
-    if (!vres.ok) return new Response("universal-do: version lookup failed (" + vres.status + ")", { status: 502 });
-    const version = (await vres.json()).version;
-
-    // Constant facet name (one logical DO per host object → 1:1). Keeping it
-    // constant makes the on-disk facet layout portable across host objects,
-    // which is what lets cloneDO/destroyDO copy/delete facet storage by host
-    // hash. The host object id already encodes (source,className,userKey).
-    const facet = this.ctx.facets.get("do", async () => {
-      // _doversion already incorporates object-specific builds. Do not include
-      // userKey in the loader cache key, or every DO object loads a duplicate
-      // copy of the same module graph.
-      const worker = env.LOADER.get(identity + "@" + version, async () => {
-        const cres = await env.GATEWAY.fetch(new Request(
-          "http://gateway/_docode/" + encodeURIComponent(source) + "/" + encodeURIComponent(className) +
-            "?objectKey=" + encodeURIComponent(userKey),
-          { headers: loaderHeaders }
-        ));
-        if (!cres.ok) throw new Error("universal-do: code fetch failed (" + cres.status + ")");
-        const code = await cres.json();
-        const modules = { ...code.modules };
-        // Decode any base64 wasm modules (e.g. terminal/Ink yoga.wasm) into the
-        // ArrayBuffer module shape the loader expects.
-        if (code.wasmModules) {
-          for (const name of Object.keys(code.wasmModules)) {
-            const bin = atob(code.wasmModules[name]);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            modules[name] = { wasm: bytes.buffer };
-          }
-        }
-        return {
-          compatibilityDate: code.compatibilityDate,
-          compatibilityFlags: code.compatibilityFlags,
-          mainModule: code.mainModule,
-          modules: modules,
-          env: code.env,
-          globalOutbound: ctx.exports.EgressGateway({ props: { id: identity } }),
-        };
-      });
-      return { class: worker.getDurableObjectClass(className) };
-    });
-
-    // Forward to the inner DO's existing fetch handler, which parses its own
-    // objectKey from the first path segment: /{userKey}/{method}.
-    const innerRest = parts.slice(1);
-    const innerUrl = new URL(
-      "/" + encodeURIComponent(userKey) + (innerRest.length ? "/" + innerRest.join("/") : ""),
-      url.origin
-    );
-    innerUrl.search = url.search;
-    try {
-      return await facet.fetch(new Request(innerUrl, request));
-    } catch (err) {
-      if (String((err && err.message) || err).includes("(503)")) {
-        return new Response("universal-do: code warming", { status: 503, headers: { "Retry-After": "1" } });
-      }
-      throw err;
-    }
-  }
-}
-
-export default { fetch() { return new Response("universal-do host"); } };
-`;
   }
 
   // =========================================================================
@@ -2056,7 +1773,7 @@ export default { fetch() { return new Response("universal-do host"); } };
 
     const binary = this.findWorkerdBinary();
     if (!this.inspectorPort && workerdInspectorEnabled()) {
-      const { findServicePort } = await import("@vibestudio/port-utils");
+      const { findServicePort } = await import("./hostCore/portUtils.js");
       this.inspectorPort = await findServicePort("workerdInspector");
     }
     const args = [
@@ -2308,12 +2025,12 @@ export default { fetch() { return new Response("universal-do host"); } };
     // findServicePort skips EADDRINUSE ports, which sidesteps the race where
     // the kernel has not finished releasing our previous bind yet.
     if (this.port) {
-      const { releaseServicePort } = await import("@vibestudio/port-utils");
+      const { releaseServicePort } = await import("./hostCore/portUtils.js");
       releaseServicePort("workerd", this.port);
     }
     this.port = null;
     if (this.inspectorPort) {
-      const { releaseServicePort } = await import("@vibestudio/port-utils");
+      const { releaseServicePort } = await import("./hostCore/portUtils.js");
       releaseServicePort("workerdInspector", this.inspectorPort);
     }
     this.inspectorPort = null;
@@ -2576,9 +2293,7 @@ export default { fetch() { return new Response("universal-do host"); } };
   /** Directory holding the UniversalDO facet storage (per-host-object files). */
   private universalDoStorageDir(): string {
     return path.join(
-      this.deps.statePath,
-      ".databases",
-      "workerd-universal-do",
+      stateLayout(this.deps.statePath).databases.workerdUniversalDoDir,
       UNIVERSAL_DO_UNIQUE_KEY
     );
   }

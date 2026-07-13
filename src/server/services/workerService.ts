@@ -8,9 +8,10 @@
 
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
-import type { WorkspaceDeclarations } from "@vibestudio/shared/workspace/singletonRegistry";
+import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { resolveUserlandService, type ResolvedUserlandService } from "../userlandServices.js";
 import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -46,7 +47,7 @@ type ScopedDeclarations = {
 const WorkerSourceSchema = z
   .object({
     name: z.string().describe("Workspace package name."),
-    source: z.string().describe('Workspace-relative worker source, e.g. "workers/hello".'),
+    source: z.string().describe('Workspace-relative worker source, e.g. "workers/my-worker".'),
     title: z.string().optional().describe("Human-readable worker title, when declared."),
     entry: z
       .string()
@@ -75,113 +76,100 @@ export function createWorkerService(deps: {
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
 
+  const methods = {
+    listSources: {
+      description:
+        "List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers)",
+      args: z.tuple([]),
+      returns: z.array(WorkerSourceSchema),
+    },
+    listServices: {
+      description: "List manifest-declared userland services",
+      args: z.tuple([]),
+    },
+    resolveService: {
+      description: "Resolve a userland service by name or protocol",
+      args: z.tuple([z.string(), z.string().nullable().optional()]),
+    },
+    resolveDurableObject: {
+      description: "Resolve a Durable Object RPC target by source/class/key",
+      args: z.tuple([z.string(), z.string(), z.string()]),
+    },
+  };
+
   return {
     name: "workers",
     description: "Worker discovery and userland service resolution",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
-    methods: {
-      listSources: {
-        description:
-          "List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers)",
-        args: z.tuple([]),
-        returns: z.array(WorkerSourceSchema),
+    methods,
+    handler: defineServiceHandler("workers", methods, {
+      listSources: () => {
+        const graph = buildSystem.getGraph();
+        return graph
+          .allNodes()
+          .filter((n) => n.kind === "worker")
+          .map((n) => ({
+            name: n.name,
+            source: n.relativePath,
+            title: n.manifest.title,
+            entry: n.manifest.entry,
+            classes: n.manifest.durable?.classes ?? [],
+            agent: n.manifest.agent,
+          }));
       },
-      listServices: {
-        description: "List manifest-declared userland services",
-        args: z.tuple([]),
+      listServices: async (ctx) => {
+        const mainRows = listServiceRows(workspaceDecls);
+        const scopedContext = await declarationsForCallerContext(ctx);
+        if (!scopedContext) return mainRows;
+        const seen = serviceQueryKeys(workspaceDecls);
+        return [
+          ...mainRows,
+          ...listServiceRows(scopedContext.decls).filter((row) => {
+            if (seen.has(row.name)) return false;
+            return !row.protocols.some((protocol) => seen.has(protocol));
+          }),
+        ];
       },
-      resolveService: {
-        description: "Resolve a userland service by name or protocol",
-        args: z.tuple([z.string(), z.string().nullable().optional()]),
-      },
-      resolveDurableObject: {
-        description: "Resolve a Durable Object RPC target by source/class/key",
-        args: z.tuple([z.string(), z.string(), z.string()]),
-      },
-    },
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "listSources": {
-          const graph = buildSystem.getGraph();
-          return graph
-            .allNodes()
-            .filter((n) => n.kind === "worker")
-            .map((n) => ({
-              name: n.name,
-              source: n.relativePath,
-              title: n.manifest.title,
-              entry: n.manifest.entry,
-              classes: n.manifest.durable?.classes ?? [],
-              agent: n.manifest.agent,
-            }));
-        }
-
-        case "listServices": {
-          const mainRows = listServiceRows(workspaceDecls);
-          const scopedContext = await declarationsForCallerContext(ctx);
-          if (!scopedContext) return mainRows;
-          const seen = serviceQueryKeys(workspaceDecls);
-          return [
-            ...mainRows,
-            ...listServiceRows(scopedContext.decls).filter((row) => {
-              if (seen.has(row.name)) return false;
-              return !row.protocols.some((protocol) => seen.has(protocol));
-            }),
-          ];
-        }
-
-        case "resolveService": {
-          const scoped = await resolveUserlandServiceForCaller(
-            ctx,
-            args[0] as string,
-            (args[1] as string | null | undefined) ?? undefined
-          );
-          const service = scoped.service;
-          assertUserlandServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
-          if (service.kind === "durable-object") {
-            const singleton = scoped.decls.singletons.find(service.source, service.className);
-            const contextId = singleton?.contextId ?? scoped.contextId;
-            const buildRef = singleton?.contextId
-              ? undefined
-              : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
-            await deps.activateDurableObject?.({
-              source: service.source,
-              className: service.className,
-              objectKey: service.objectKey,
-              ...(contextId ? { contextId } : {}),
-              ...(buildRef ? { buildRef } : {}),
-              ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
-            });
-          }
-          return service;
-        }
-
-        case "resolveDurableObject": {
-          const source = args[0] as string;
-          const className = args[1] as string;
-          const objectKey = args[2] as string;
-          const scoped = await resolveDurableObjectForCaller(ctx, source, className);
-          const targetId = `do:${source}:${className}:${objectKey}`;
-          const singleton = scoped.decls.singletons.find(source, className);
+      resolveService: async (ctx, [query, objectKey]) => {
+        const scoped = await resolveUserlandServiceForCaller(ctx, query, objectKey);
+        const service = scoped.service;
+        assertUserlandServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
+        if (service.kind === "durable-object") {
+          const singleton = scoped.decls.singletons.find(service.source, service.className);
           const contextId = singleton?.contextId ?? scoped.contextId;
           const buildRef = singleton?.contextId
             ? undefined
             : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
           await deps.activateDurableObject?.({
-            source,
-            className,
-            objectKey,
+            source: service.source,
+            className: service.className,
+            objectKey: service.objectKey,
             ...(contextId ? { contextId } : {}),
             ...(buildRef ? { buildRef } : {}),
             ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
           });
-          return { kind: "durable-object", source, className, objectKey, targetId };
         }
-
-        default:
-          throw new Error(`Unknown workers method: ${method}`);
-      }
-    },
+        return service;
+      },
+      resolveDurableObject: async (ctx, [source, className, objectKey]) => {
+        const scoped = await resolveDurableObjectForCaller(ctx, source, className);
+        const targetId = `do:${source}:${className}:${objectKey}`;
+        const singleton = scoped.decls.singletons.find(source, className);
+        const contextId = singleton?.contextId ?? scoped.contextId;
+        const buildRef = singleton?.contextId
+          ? undefined
+          : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
+        await deps.activateDurableObject?.({
+          source,
+          className,
+          objectKey,
+          ...(contextId ? { contextId } : {}),
+          ...(buildRef ? { buildRef } : {}),
+          ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}),
+        });
+        return { kind: "durable-object", source, className, objectKey, targetId };
+      },
+    }),
   };
 
   async function declarationsForCallerContext(

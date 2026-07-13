@@ -3,8 +3,8 @@ import { VCS_SERVICE_PROTOCOL, type DORefParam } from "@vibestudio/shared/userla
 import type {
   WorkspaceDeclarations,
   SingletonRegistry,
-} from "@vibestudio/shared/workspace/singletonRegistry";
-import type { WorkspaceServiceDecl } from "@vibestudio/shared/workspace/types";
+} from "@vibestudio/workspace/singletonRegistry";
+import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 
 export interface UserlandServicePolicy {
   allowed?: CallerKind[];

@@ -12,11 +12,11 @@
  *     intent / publish orchestration)
  *   → REAL refsService.updateMains handler (single-writer policy + on-behalf-of
  *     token resolution against the REAL VcsInvocationTable)
- *   → REAL RefService gated CAS (gateContext observed at the approval gate).
+ *   → REAL ProtectedRefStore gated CAS (gateContext observed at the approval gate).
  *
  * REAL vs STUBBED (see report):
  *   REAL   — VcsInvocationTable (mint/resolve/release), refsService handler
- *            (policy + token resolution + gateContext construction), RefService
+ *            (policy + token resolution + gateContext construction), ProtectedRefStore
  *            (CAS + gate), GadWorkspaceDO push/merge orchestration, the DO base's
  *            read-at-entry invocationToken/callerContextId binding (driven via a
  *            real `__rpc` envelope), the content store, the chrome-trust bypass.
@@ -38,8 +38,8 @@ import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js"
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../src/server/vcsHost/testSupport.js";
-import { createRefService, type RefGateBatch } from "../../src/server/services/refService.js";
-import { createRefsService } from "../../src/server/services/refsService.js";
+import { createProtectedRefStore, type RefGateBatch } from "../../src/server/services/protectedRefStore.js";
+import { createRefsRpcService } from "../../src/server/services/refsRpcService.js";
 import { VcsInvocationTable } from "../../src/server/services/vcsInvocationTable.js";
 import { isAuthorizedChrome } from "../../src/server/services/chromeTrust.js";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -64,9 +64,9 @@ describe("full-gateway attribution (row 11)", () => {
   let root: string;
   let gad: TestGad;
   let vcs: WorkspaceVcs;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
   let invocations: VcsInvocationTable;
-  let refsService: ReturnType<typeof createRefsService>;
+  let refsService: ReturnType<typeof createRefsRpcService>;
   let gateBatches: RefGateBatch[];
 
   /** The REAL refs bridge: the DO's `refsStore().updateMains` routes through the
@@ -108,14 +108,14 @@ describe("full-gateway attribution (row 11)", () => {
     await fsp.mkdir(path.join(root, "workspace"));
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
     gateBatches = [];
-    refs = createRefService({
+    refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: async (batch) => {
         gateBatches.push(batch);
       },
     });
     invocations = new VcsInvocationTable();
-    refsService = createRefsService({
+    refsService = createRefsRpcService({
       refs,
       invocations,
       getVcsWriterIdentity: () => WRITER_ID,

@@ -42,7 +42,7 @@ const webrtcMock = vi.hoisted(() => ({
   readyError: null as Error | null,
 }));
 
-vi.mock("../main/panelAssetFacade.js", () => ({
+vi.mock("../node/panelAssets/panelAssetFacade.js", () => ({
   startPanelAssetFacade: vi.fn(
     async (
       serverClient: { stream: (...args: unknown[]) => Promise<Response> },
@@ -591,11 +591,28 @@ describe("vibestudio CLI", () => {
 
   it("exposes discrete membership and device administration commands", async () => {
     writeCredentials();
-    webrtcMock.handlers.set("hubControl.addWorkspaceMember", () => ({ added: true }));
+    webrtcMock.handlers.set("hubControl.addWorkspaceMember", () => ({
+      userId: "usr_bob",
+      workspaceId: "ws_dev",
+      workspace: "dev",
+      handle: "bob",
+      addedBy: "usr_alice",
+      addedAt: 1,
+    }));
     webrtcMock.handlers.set("hubControl.listWorkspaceMembers", () => ({
       workspace: "dev",
       workspaceId: "ws_dev",
-      members: [{ userId: "usr_bob", handle: "bob", role: "member" }],
+      members: [
+        {
+          userId: "usr_bob",
+          workspaceId: "ws_dev",
+          addedBy: "usr_alice",
+          addedAt: 1,
+          handle: "bob",
+          displayName: "Bob",
+          role: "member",
+        },
+      ],
     }));
     webrtcMock.handlers.set("hubControl.listDevices", () => ({
       serverId: TEST_SERVER_ID,
@@ -660,7 +677,9 @@ describe("vibestudio CLI", () => {
       settled: true,
       launch: {
         status: "ready",
+        launched: true,
         target: "terminal",
+        source: "apps/remote-cli",
         appId: "@workspace-apps/remote-cli",
         buildKey: "build-terminal",
       },

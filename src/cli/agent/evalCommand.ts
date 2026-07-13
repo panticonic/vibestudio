@@ -8,7 +8,7 @@
  * a context-relative file the server reads itself.
  */
 import * as fs from "node:fs";
-import { evalMethods } from "@vibestudio/shared/serviceSchemas/eval";
+import { evalMethods } from "@vibestudio/service-schemas/eval";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import {
   jsonMode,

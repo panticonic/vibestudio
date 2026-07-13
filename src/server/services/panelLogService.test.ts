@@ -48,7 +48,9 @@ describe("panelLogService", () => {
     const onRecords = vi.fn();
     const service = createPanelLogService({ onRecords });
 
-    await expect(service.handler(ctx, "nope", [])).rejects.toThrow("Unknown method: nope");
+    await expect(service.handler(ctx, "nope", [])).rejects.toThrow(
+      "[panelLog.nope] Unknown panelLog method: nope"
+    );
     expect(onRecords).not.toHaveBeenCalled();
   });
 });

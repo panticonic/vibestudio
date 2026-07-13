@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import {
   normalizeFingerprint,
   PAIRING_PROTOCOL_VERSION,
@@ -11,7 +10,7 @@ import {
 } from "@vibestudio/shared/connect";
 import { isDeviceId, isDeviceRefreshToken, isServerId } from "@vibestudio/shared/deviceCredentials";
 import { writeFileAtomicSync } from "../atomicFile.js";
-import { cliConfigRoot } from "./configPaths.js";
+import { cliCredentialPath } from "./configPaths.js";
 
 export type CliStoredPairing = Omit<ConnectPairing, "code" | "v" | "ice"> & {
   v: typeof PAIRING_PROTOCOL_VERSION;
@@ -46,12 +45,7 @@ const CREDENTIAL_KEYS = new Set([
 
 const STORED_PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice", "srv"]);
 
-export function credentialPath(): string {
-  // Honor XDG_CONFIG_HOME so every CLI command and remote doctor agree on the
-  // config dir (otherwise doctor writes to $XDG_CONFIG_HOME while this store
-  // reads ~/.config).
-  return path.join(cliConfigRoot(), "cli-credentials.json");
-}
+export const credentialPath = cliCredentialPath;
 
 export function loadCliCredentials(): CliCredentials | null {
   const p = credentialPath();

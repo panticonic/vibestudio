@@ -73,41 +73,20 @@ export interface HeadlessHostManagerDeps {
   signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
-function defaultEntryPath(): string {
-  const override = process.env["VIBESTUDIO_HEADLESS_HOST_ENTRY"];
-  if (override) return override;
+export function resolveHeadlessHostEntryPath(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd()
+): string {
+  const override = env["VIBESTUDIO_HEADLESS_HOST_ENTRY"];
+  if (override) return path.resolve(cwd, override);
 
-  const baseDirs = new Set<string>();
-  const addDir = (value: unknown): void => {
-    if (typeof value === "string" && value.length > 0) baseDirs.add(path.resolve(value));
-  };
-  addDir(typeof __dirname === "string" ? __dirname : undefined);
-  addDir(
-    typeof require === "function" && typeof require.main?.filename === "string"
-      ? path.dirname(require.main.filename)
-      : undefined
-  );
-  addDir(process.argv[1] ? path.dirname(process.argv[1]) : undefined);
-  addDir(process.cwd());
-
-  const candidates: string[] = [];
-  for (const base of baseDirs) {
-    candidates.push(
-      // Root build copies the bundle here; from dist/server.mjs, base is dist/.
-      path.resolve(base, "headless-host", "main.js"),
-      // Repo root layout after a root build.
-      path.resolve(base, "dist", "headless-host", "main.js"),
-      // Source/dev layout from repo root, dist, or src/server.
-      path.resolve(base, "apps", "headless-host", "dist", "main.js"),
-      path.resolve(base, "..", "apps", "headless-host", "dist", "main.js"),
-      path.resolve(base, "..", "..", "apps", "headless-host", "dist", "main.js")
-    );
-  }
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return path.resolve(process.cwd(), "dist", "headless-host", "main.js");
+  // Root builds, source-server prerequisites, packaged desktop builds, and
+  // staged npm packages all publish the same artifact beneath the app root.
+  // Launchers pin VIBESTUDIO_APP_ROOT for installed packages; source commands
+  // run at the repository root. Missing artifacts fail loud below rather than
+  // silently selecting a stale app-local build.
+  const appRoot = env["VIBESTUDIO_APP_ROOT"] || cwd;
+  return path.resolve(appRoot, "dist", "headless-host", "main.js");
 }
 
 function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | null {
@@ -237,7 +216,7 @@ export class HeadlessHostManager {
   // ── internals ────────────────────────────────────────────────────────────
 
   private async spawnAndWait(timeoutMs?: number): Promise<ClientSession | null> {
-    const entryPath = this.config.entryPath ?? defaultEntryPath();
+    const entryPath = this.config.entryPath ?? resolveHeadlessHostEntryPath();
     if (!fs.existsSync(entryPath) && !this.deps.spawnFn) {
       log.warn(`headless host entry not found at ${entryPath} — build apps/headless-host first`);
       this.recordFailure();

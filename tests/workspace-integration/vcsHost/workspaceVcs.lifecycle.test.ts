@@ -9,7 +9,7 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
 import type { RepoBuildReport } from "../../../src/server/buildV2/index.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
@@ -85,7 +85,7 @@ describe("WorkspaceVcs — full context lifecycle (e2e)", () => {
 
     // content store over this test's blob dir (production uses blobstore.* RPC).
 
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate: async () => {} });
     buildReports = [];
     attachLocalHostBridges(gad.instance, {
       blobsDir: path.join(root, "blobs"),

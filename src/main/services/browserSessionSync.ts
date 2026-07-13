@@ -4,8 +4,8 @@ import type { BrowserDataClient, StoredCookie } from "@vibestudio/browser-data";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
-import { workspaceProviderExtensionPackageName } from "@vibestudio/shared/workspace/configParser";
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import { workspaceProviderExtensionPackageName } from "@vibestudio/workspace/configParser";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ServerClient } from "../serverClient.js";
 
 const log = createDevLogger("BrowserSessionSync");
@@ -22,7 +22,7 @@ export function createBrowserSessionSyncService(deps: {
 
   const syncCookies = async () => {
     try {
-      const cookies = await deps.browserDataClient.cookies.getByDomain();
+      const cookies = await deps.browserDataClient.getCookies();
       const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
       for (const cookie of cookies) {
         await browserSession.cookies.set(toElectronCookie(cookie));

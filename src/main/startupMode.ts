@@ -11,18 +11,14 @@ import * as fs from "fs";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
-import {
-  consumeDesktopAutoApproveOnce,
-  resolveWorkspaceName,
-} from "@vibestudio/shared/workspace/loader";
-import { resolveLocalWorkspaceStartup } from "@vibestudio/shared/workspace/startup";
+import { consumeDesktopAutoApproveOnce, resolveWorkspaceName } from "@vibestudio/workspace/loader";
+import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
+import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
 const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
 export const WORKSPACE_CREATE_IF_MISSING_ARG = "--workspace-create-if-missing";
-export const DEV_WEBRTC_REMOTE_ARG = "--dev-webrtc-remote";
-export const PAIR_CONFIRMED_ARG = "--pair-confirmed";
 /**
  * Marks a local launch as a disposable dev workspace: the workspace dir is deleted on exit
  * (see the will-quit cleanup). Paired with `--workspace <name>` so the same workspace is kept

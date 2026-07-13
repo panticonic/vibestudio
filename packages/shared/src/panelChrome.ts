@@ -1,6 +1,6 @@
 import type { Panel, PanelNavigationState, PanelSnapshot, WorkspaceNode } from "./types.js";
 import { getCurrentSnapshot, getPanelHistoryState, getPanelRef } from "./panel/accessors.js";
-import { isAboutSource } from "./workspace/aboutNamespace.js";
+import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { tryParsePanelLocationLink, type PanelLocation } from "./panelLocation.js";
 
 export type PanelSourceKind = "panel" | "browser";

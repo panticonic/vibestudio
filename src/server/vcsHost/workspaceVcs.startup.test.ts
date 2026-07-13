@@ -9,7 +9,7 @@ import {
   putBytes,
 } from "../services/blobstoreService.js";
 import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
-import { createRefService } from "../services/refService.js";
+import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 const FILE_MODE = 33188;
@@ -43,7 +43,7 @@ describe("WorkspaceVcs startup source authority", () => {
   }
 
   function makeVcs() {
-    const refs = createRefService({
+    const refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: async () => {},
     });

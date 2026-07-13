@@ -24,6 +24,7 @@
       "@vibestudio/browser-data": ["packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
       "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
+      "@vibestudio/credential-client/*": ["packages/credential-client/src/*"],
       "@vibestudio/dev-log": ["packages/dev-log/src/index.ts"],
       "@vibestudio/durable": ["packages/durable/src/index.ts"],
       "@vibestudio/durable/test-utils": ["packages/durable/src/test-utils.ts"],
@@ -32,14 +33,23 @@
       "@vibestudio/extension-host": ["packages/extension-host/src/index.ts"],
       "@vibestudio/extension-host/child-runtime": ["packages/extension-host/src/childRuntime.ts"],
       "@vibestudio/git": ["packages/git/src/index.ts"],
-      "@vibestudio/port-utils": ["packages/port-utils/src/index.ts"],
+      "@vibestudio/git/formatting": ["packages/git/src/formatting.ts"],
+      "@vibestudio/identity/*": ["packages/identity/src/*"],
       "@vibestudio/process-adapter": ["packages/process-adapter/src/index.ts"],
       "@vibestudio/rpc": ["packages/rpc/src/index.ts"],
       "@vibestudio/rpc/*": ["packages/rpc/src/*"],
+      "@vibestudio/service-schemas/bindings/*": ["packages/service-schemas/src/bindings/*"],
+      "@vibestudio/service-schemas/clients/*": ["packages/service-schemas/src/clients/*"],
+      "@vibestudio/service-schemas/runtime/*": ["packages/service-schemas/src/runtime/*"],
+      "@vibestudio/service-schemas/*": ["packages/service-schemas/src/*"],
+      "@vibestudio/shell-core/*": ["packages/shell-core/src/*"],
       "@vibestudio/shared/*": ["packages/shared/src/*"],
+      "@vibestudio/sqlite": ["packages/sqlite/src/index.ts"],
       "@vibestudio/typecheck": ["packages/typecheck/src/index.ts"],
       "@vibestudio/unit-host": ["packages/unit-host/src/index.ts"],
-      "@vibestudio/types": ["packages/types/src/index.ts"]
+      "@vibestudio/types": ["packages/types/src/index.ts"],
+      "@vibestudio/workspace/*": ["packages/workspace/src/*"],
+      "@vibestudio/workspace-contracts/*": ["packages/workspace-contracts/src/*"]
     }
   },
   "include": ["src/**/*", "packages/**/*"],
@@ -48,6 +58,7 @@
     "dist",
     "**/dist",
     "packages/mobile-webrtc",
+    "src/server/workerdPrograms",
     "src/server/services/relaySeam.integration.test.ts"
   ]
 }

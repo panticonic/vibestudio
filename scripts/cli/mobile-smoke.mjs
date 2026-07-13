@@ -18,8 +18,9 @@ import {
   createConnectDeepLink,
   parseConnectLink,
   parseSignalingEndpoint,
-} from "./lib/connect-utils.mjs";
-import { createRemoteServeArgs, mintRemoteInvite } from "./lib/smoke-remote-server.mjs";
+} from "./lib/connect-grammar.generated.mjs";
+import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import { createRemoteServeArgs, requireRootInvite } from "./lib/smoke-remote-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -160,8 +161,8 @@ Runner options:
 
 By default, the smoke delegates APK build/install/reset/launcher startup to
 vibestudio mobile install --reset-app --launch. It then starts the normal
-remote-serve hub without a signaling override, mints an invite with remote invite
---workspace default, verifies that it uses ${DEFAULT_SIGNAL_URL}, and sends a
+remote-serve hub without a signaling override, consumes the fresh mobile root
+invite from the strict ready-file contract, verifies that it uses ${DEFAULT_SIGNAL_URL}, and sends a
 vibestudio://connect intent (carrying the signaling room, the server's DTLS
 fingerprint, and a pairing code) to the launched internal app, confirms the Pair
 screen, then waits for native bundle activation, workspace connection, panel
@@ -381,7 +382,7 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs = 180_000) {
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
-      return JSON.parse(content);
+      return parseHubReadyPayload(JSON.parse(content));
     } catch {
       await sleep(250);
     }
@@ -1182,10 +1183,7 @@ function summarizeLabels(labels) {
 
 async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, options = {}) {
   const agentProbe = createAgentTurnProbe(readyInfo);
-  const visualFallbackAgentProbeMs = Math.min(
-    defaultVisualFallbackAgentProbeMs,
-    agentTimeoutMs
-  );
+  const visualFallbackAgentProbeMs = Math.min(defaultVisualFallbackAgentProbeMs, agentTimeoutMs);
   await ensureDeviceInteractive(device);
   await sleep(2_000);
   if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
@@ -1641,12 +1639,7 @@ async function main() {
       workspaceDir: path.join(serverConfig, "vibestudio", "workspaces", "default", "source"),
     };
 
-    const invite = await mintRemoteInvite({
-      repoRoot,
-      env: serverEnv,
-      port: ready.gatewayPort,
-      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
-    });
+    const invite = requireRootInvite(ready, "mobile");
 
     // Local mode needs adb bridges for its host-only dependencies. Hosted mode
     // intentionally has none: all server traffic must traverse the remote pipe.

@@ -21,10 +21,11 @@ function dedupePaths(paths: string[]): string[] {
 
 export function createRuntimeLayout(appRoot: string): RuntimeLayout {
   const appUnpackedRoot = appRoot.replace(/\.asar$/, ".asar.unpacked");
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const resourcesRoot =
     appRoot.endsWith(".asar")
-      ? typeof process.resourcesPath === "string"
-        ? process.resourcesPath
+      ? typeof resourcesPath === "string"
+        ? resourcesPath
         : path.dirname(appRoot)
       : appRoot;
 

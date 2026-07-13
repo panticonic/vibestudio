@@ -2,7 +2,7 @@
  * P3 — DO-side push/merge orchestration (docs/narrow-host-vcs-plan.md §6/§8).
  *
  * Drives the gad-store DO's `vcsPush` directly against an in-process
- * RefService + content-store bridge (attachLocalHostBridges). Seeds ctx commits
+ * ProtectedRefStore + content-store bridge (attachLocalHostBridges). Seeds ctx commits
  * through the real WorkspaceVcs edit→commit flow, then exercises: happy-path
  * single/multi-repo group atomicity, up-to-date, divergence classification,
  * build-failed no-publish, write-ahead-intent crash→heal with full provenance,
@@ -20,7 +20,7 @@ import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js"
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../src/server/vcsHost/testSupport.js";
-import { createRefService } from "../../src/server/services/refService.js";
+import { createProtectedRefStore } from "../../src/server/services/protectedRefStore.js";
 import type { RepoBuildReport } from "../../src/server/buildV2/index.js";
 
 const USER = { id: "user", kind: "user" };
@@ -55,7 +55,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
   let root: string;
   let gad: TestGad;
   let vcs: WorkspaceVcs;
-  let refs: ReturnType<typeof createRefService>;
+  let refs: ReturnType<typeof createProtectedRefStore>;
   let buildFail = false;
   // Per-test build-gate override (interleaving/mixed-report scenarios). When set
   // it wins over the `buildFail` boolean.
@@ -128,7 +128,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "do-push-"));
     await fsp.mkdir(path.join(root, "workspace"));
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
-    refs = createRefService({
+    refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
       gate: async () => {
         if (gateOverride) await gateOverride();

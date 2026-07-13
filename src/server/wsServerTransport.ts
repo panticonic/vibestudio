@@ -80,6 +80,7 @@ export function createWsServerTransport(
         type: "response",
         requestId,
         error: err.message,
+        errorKind: "transport",
         errorCode: CONNECTION_LOST_CODE,
       });
     }

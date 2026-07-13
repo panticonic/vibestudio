@@ -68,7 +68,7 @@ import {
   diagnosticsForUnit,
   diagnosticsForBuildKey,
 } from "./diagnosticsStore.js";
-import type { LibraryBuildTarget } from "@vibestudio/shared/serviceSchemas/build";
+import type { LibraryBuildTarget } from "@vibestudio/service-schemas/build";
 import {
   StateTransitionTrigger,
   unitsForChangedPaths,
@@ -85,7 +85,7 @@ import {
   ensureExternalDeps,
 } from "./externalDeps.js";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
-import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
+import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
 

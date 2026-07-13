@@ -53,9 +53,25 @@ describe("inbound stream mux → framed Response decode", () => {
     const resp = decodeFramedResponseToStreaming(body, "https://e/");
     mux.push(5, FRAME_HEAD, headPayload(200, "OK", [], "https://e/"));
     // Read side starts; now error it.
-    mux.push(5, FRAME_ERROR, enc.encode(JSON.stringify({ status: 502, message: "upstream boom", code: "EBOOM" })));
+    mux.push(
+      5,
+      FRAME_ERROR,
+      enc.encode(
+        JSON.stringify({
+          status: 502,
+          message: "upstream boom",
+          code: "EBOOM",
+          errorKind: "transport",
+        })
+      )
+    );
     const r = await resp;
-    await expect(r.text()).rejects.toThrow(/upstream boom/);
+    await expect(r.text()).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      message: "upstream boom",
+      code: "EBOOM",
+      errorKind: "transport",
+    });
   });
 
   it("closeAll errors every open stream (pipe loss is loud, not a hang)", async () => {

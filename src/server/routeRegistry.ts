@@ -32,8 +32,8 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import type { Duplex } from "stream";
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { SingletonRegistry } from "@vibestudio/shared/workspace/singletonRegistry";
-import type { WorkspaceRouteDecl } from "@vibestudio/shared/workspace/types";
+import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
+import type { WorkspaceRouteDecl } from "@vibestudio/workspace-contracts/types";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("RouteRegistry");

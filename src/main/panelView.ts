@@ -19,18 +19,18 @@ import {
   getPanelRef,
   updatePanelNavigationState,
 } from "@vibestudio/shared/panelTypes";
-import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition.js";
+import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition";
 import {
   isManagedHost,
   parsePanelUrl,
   type ParsedPanelUrl,
-} from "@vibestudio/shared/shell/urlParsing.js";
+} from "@vibestudio/shell-core/urlParsing";
 import {
   tryParsePanelLocationLink,
   type PanelDisposition,
   type PanelLocation,
-} from "@vibestudio/shared/panelLocation.js";
-import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect.js";
+} from "@vibestudio/shared/panelLocation";
+import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
 import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { PanelNavigationState } from "@vibestudio/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";

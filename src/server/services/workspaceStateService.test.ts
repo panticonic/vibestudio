@@ -116,9 +116,55 @@ describe("workspaceStateService — title mirror hooks", () => {
 });
 
 describe("workspaceStateService — slot-state change hook", () => {
+  it("derives slot.create ownership from the verified caller subject", async () => {
+    const { svc, calls } = makeService({});
+    const ctx = {
+      caller: {
+        runtime: { kind: "shell", id: "shell" },
+        subject: { userId: "user-verified", username: "verified" },
+      },
+    };
+
+    await svc.handler(ctx as never, "slot.create", [
+      { slotId: "s1", parentSlotId: null, positionId: "p1" },
+    ]);
+
+    expect(calls).toContainEqual({
+      method: "slotCreate",
+      args: [
+        {
+          slotId: "s1",
+          parentSlotId: null,
+          positionId: "p1",
+          ownerUserId: "user-verified",
+        },
+      ],
+    });
+  });
+
+  it("derives slot.move ownership from the verified caller subject", async () => {
+    const { svc, calls } = makeService({});
+    const ctx = {
+      caller: {
+        runtime: { kind: "shell", id: "shell" },
+        subject: { userId: "user-verified", username: "verified" },
+      },
+    };
+
+    await svc.handler(ctx as never, "slot.move", ["s1", null, "p1"]);
+
+    expect(calls).toContainEqual({
+      method: "slotMove",
+      args: ["s1", null, "p1", "user-verified"],
+    });
+  });
+
   const mutating: Array<[method: string, args: unknown[]]> = [
-    ["slot.create", [{ slotId: "s1" }]],
-    ["slot.appendHistory", ["s1", { entryKey: "e1" }]],
+    ["slot.create", [{ slotId: "s1", parentSlotId: null, positionId: "p1" }]],
+    [
+      "slot.appendHistory",
+      ["s1", { entryKey: "e1", entityId: "entity-1", source: "panels/test", contextId: "ctx-1" }],
+    ],
     ["slot.setCurrent", ["s1", "e1"]],
     ["slot.updateCurrentStateArgs", ["s1", {}]],
     ["slot.replaceHistory", ["s1", [], 0]],

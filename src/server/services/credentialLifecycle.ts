@@ -1,7 +1,7 @@
-import type { Credential } from "../../../packages/shared/src/credentials/types.js";
-import type { CredentialStore } from "../../../packages/shared/src/credentials/store.js";
-import type { ClientConfigStore } from "../../../packages/shared/src/credentials/clientConfigStore.js";
-import type { OAuthConnectionErrorCode } from "../../../packages/shared/src/credentials/types.js";
+import type { Credential } from "@vibestudio/credential-client/types";
+import type { CredentialStore } from "@vibestudio/credential-client/store";
+import type { ClientConfigStore } from "@vibestudio/credential-client/clientConfigStore";
+import type { OAuthConnectionErrorCode } from "@vibestudio/credential-client/types";
 import { createSign, randomUUID } from "node:crypto";
 
 export class CredentialLifecycleError extends Error {

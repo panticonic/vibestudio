@@ -34,12 +34,12 @@ describe("PackageGraph", () => {
   describe("addNode / get / tryGet / has / allNodes", () => {
     it("stores and retrieves a node by name", () => {
       const graph = new PackageGraph();
-      const node = makeNode("@workspace/core");
+      const node = makeNode("@workspace/lib-a");
       graph.addNode(node);
 
-      expect(graph.has("@workspace/core")).toBe(true);
-      expect(graph.get("@workspace/core")).toBe(node);
-      expect(graph.tryGet("@workspace/core")).toBe(node);
+      expect(graph.has("@workspace/lib-a")).toBe(true);
+      expect(graph.get("@workspace/lib-a")).toBe(node);
+      expect(graph.tryGet("@workspace/lib-a")).toBe(node);
     });
 
     it("get throws for unknown package", () => {
@@ -79,9 +79,9 @@ describe("PackageGraph", () => {
   describe("isInternal", () => {
     it("delegates to has — returns true for added nodes, false otherwise", () => {
       const graph = new PackageGraph();
-      graph.addNode(makeNode("@workspace/core"));
+      graph.addNode(makeNode("@workspace/lib-a"));
 
-      expect(graph.isInternal("@workspace/core")).toBe(true);
+      expect(graph.isInternal("@workspace/lib-a")).toBe(true);
       expect(graph.isInternal("lodash")).toBe(false);
     });
   });

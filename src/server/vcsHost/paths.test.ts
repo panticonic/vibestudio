@@ -18,7 +18,7 @@ describe("normalizeRepoPathForLog", () => {
   });
 
   it("rejects non-canonical aliases that would collide on disk", () => {
-    // These are the aliases refService.validateRepoPath also rejects: they must
+    // These are the aliases protectedRefStore.validateRepoPath also rejects: they must
     // never split into a second identity backing the same projection dir/cache.
     for (const bad of [
       "panels/./chat",

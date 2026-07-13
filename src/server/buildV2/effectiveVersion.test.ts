@@ -46,17 +46,17 @@ describe("effectiveVersion", () => {
   describe("computeEffectiveVersions", () => {
     it("derives EVs bottom-up from injected content hashes", () => {
       const graph = graphOf(
-        node("@workspace/core", "packages/core"),
-        node("@workspace-panels/chat", "panels/chat", ["@workspace/core"], "panel")
+        node("@workspace/lib-a", "packages/lib-a"),
+        node("@workspace-panels/chat", "panels/chat", ["@workspace/lib-a"], "panel")
       );
       const hashes: ContentHashMap = {
-        "@workspace/core": "m1",
+        "@workspace/lib-a": "m1",
         "@workspace-panels/chat": "m2",
       };
       const { evMap } = computeEffectiveVersions(graph, hashes);
-      expect(evMap["@workspace/core"]).toMatch(/^[0-9a-f]{16}$/);
+      expect(evMap["@workspace/lib-a"]).toMatch(/^[0-9a-f]{16}$/);
       expect(evMap["@workspace-panels/chat"]).toMatch(/^[0-9a-f]{16}$/);
-      expect(evMap["@workspace/core"]).not.toBe(evMap["@workspace-panels/chat"]);
+      expect(evMap["@workspace/lib-a"]).not.toBe(evMap["@workspace-panels/chat"]);
     });
 
     it("skips nodes with no content hash (not in the workspace state)", () => {

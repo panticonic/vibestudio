@@ -27,13 +27,14 @@
  * rewrites `delivery.caller` on relayed frames.
  */
 
-import type { AuthenticatedCaller, CallerKind, RpcEnvelope } from "../types.js";
+import type { AuthenticatedCaller, CallerKind, RpcEnvelope, RpcErrorKind } from "../types.js";
 import type { ClientPlatform } from "./wsProtocol.js";
 
 /** v2 = `hello` preamble negotiation (§1.1) + self-describing bulk mux (§1.2).
  * Pre-release: v1 peers are not served — a `hello` with `proto !== 2` is a
  * protocol violation and drops the pipe. */
 export const SESSION_PROTOCOL_VERSION = 2 as const;
+export { RPC_CONTRACT_VERSION } from "./contractVersion.js";
 
 /** Error code stamped when a logical session drops with calls in flight. */
 export const SESSION_CONNECTION_LOST_CODE = "CONNECTION_LOST" as const;
@@ -157,6 +158,7 @@ export interface SessionRoutedResponseErrorFrame {
   targetId: string;
   requestId: string;
   error: string;
+  errorKind: RpcErrorKind;
   errorCode?: string;
 }
 
@@ -166,6 +168,7 @@ export interface SessionRoutedEventErrorFrame {
   targetId: string;
   event: string;
   error: string;
+  errorKind: RpcErrorKind;
   errorCode?: string;
 }
 
@@ -210,6 +213,8 @@ export interface SessionPongFrame {
 export interface SessionHelloFrame {
   t: typeof SESSION_HELLO;
   proto: number;
+  /** End-to-end RPC contract, independent of this transport protocol. */
+  contractVersion: number;
   /** Sender's usable SCTP message size (RN advertises 16 KiB; node ends 256 KiB). */
   maxMsg: number;
   platform?: "desktop" | "mobile" | "server" | "headless";
@@ -277,12 +282,18 @@ export function decodeControlFrame(data: string): SessionControlFrame {
   if (!PIPE_LEVEL_TAGS.has(tag) && typeof (parsed as { sid?: unknown }).sid !== "string") {
     throw new Error(`Session control frame '${tag}' missing sid`);
   }
-  // hello is the negotiation preamble — its two mandatory numbers must be
+  // hello is the negotiation preamble — its mandatory numbers must be
   // present and numeric or the peer cannot be negotiated with (fail loud).
   if (tag === SESSION_HELLO) {
-    const hello = parsed as { proto?: unknown; maxMsg?: unknown };
-    if (typeof hello.proto !== "number" || typeof hello.maxMsg !== "number") {
-      throw new Error("Session control frame 'hello' missing numeric proto/maxMsg");
+    const hello = parsed as { proto?: unknown; contractVersion?: unknown; maxMsg?: unknown };
+    if (
+      typeof hello.proto !== "number" ||
+      typeof hello.contractVersion !== "number" ||
+      typeof hello.maxMsg !== "number"
+    ) {
+      throw new Error(
+        "Session control frame 'hello' missing numeric proto/contractVersion/maxMsg"
+      );
     }
   }
   return parsed as SessionControlFrame;

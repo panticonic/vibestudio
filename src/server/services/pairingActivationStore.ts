@@ -6,7 +6,7 @@ import {
   DEVICE_REFRESH_TOKEN_PATTERN,
 } from "@vibestudio/shared/deviceCredentials";
 import { writeFileAtomicSync } from "../../atomicFile.js";
-import { PAIRING_CODE_HASH_PATTERN } from "./routedRoomStore.js";
+import { PAIRING_CODE_HASH_PATTERN } from "../hostCore/routedRoomStore.js";
 
 const PendingPairingActivationSchema = z
   .object({

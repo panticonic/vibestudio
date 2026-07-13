@@ -1,8 +1,9 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import { assertAllowedOAuthExternalUrl } from "@vibestudio/shared/externalOpen";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
-import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
+import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -88,14 +89,9 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     description: "Approval-gated system browser opens",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
     methods: externalOpenMethods,
-    handler: async (ctx, method, args) => {
-      switch (method) {
-        case "openExternal":
-          return requestOpen(ctx, args[0] as string, args[1] as OpenExternalOptions | undefined);
-        default:
-          throw new Error(`Unknown externalOpen method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("externalOpen", externalOpenMethods, {
+      openExternal: (ctx, [url, options]) => requestOpen(ctx, url, options),
+    }),
   };
 }
 

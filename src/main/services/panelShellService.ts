@@ -4,9 +4,8 @@ import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "../panelView.js";
 import type { ViewManager } from "../viewManager.js";
-import type { ThemeAppearance, ThemeConfig } from "@vibestudio/shared/types";
 import type { ServerClient } from "../serverClient.js";
-import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
+import { panelMethods } from "@vibestudio/service-schemas/panel";
 import {
   buildPanelChromeState,
   isBrowserPanelSource,
@@ -18,11 +17,11 @@ import {
   type PanelChromeState,
   type PanelRepoState,
 } from "@vibestudio/shared/panelChrome";
-import { createBrowserDataRpcClient } from "@vibestudio/browser-data";
+import { createBrowserDataClient } from "@vibestudio/browser-data";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
-import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
-import type { BrowserNavigationIntent } from "@vibestudio/shared/panelCommands";
+import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { requireAppCapability, requireChromeCaller } from "./appCapabilities.js";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 
 async function getPanelAddressOptions(
   source: string,
@@ -76,13 +75,13 @@ function createRepoAdapter(serverClient: ServerClient) {
 }
 
 function createBrowserDataAdapter(serverClient: ServerClient): AddressProviderBrowserDataAdapter {
-  const client = createBrowserDataRpcClient(serverClient);
+  const client = createBrowserDataClient(serverClient);
   return {
     searchHistoryForAutocomplete: (query, limit) =>
-      client.history.searchForAutocomplete(query, limit),
-    getHistory: (query) => client.history.get(query),
-    searchBookmarks: (query) => client.bookmarks.search(query),
-    getSearchEngines: () => client.searchEngines.getAll(),
+      client.searchHistoryForAutocomplete(query, limit),
+    getHistory: (query) => client.getHistory(query),
+    searchBookmarks: (query) => client.searchBookmarks(query),
+    getSearchEngines: () => client.getSearchEngines(),
   };
 }
 
@@ -132,111 +131,79 @@ export function createPanelShellService(deps: {
     description: "Electron-local panel view helpers",
     policy: { allowed: ["shell", "app"] },
     methods: panelMethods,
-    handler: async (ctx, method, args) => {
-      const lifecycle = deps.panelOrchestrator;
-      const registry = deps.panelRegistry;
-      const pv = deps.panelView;
-      const vm = deps.getViewManager();
-
-      switch (method) {
-        case "updateTheme": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const theme = args[0] as ThemeAppearance;
-          lifecycle.setCurrentTheme(theme);
-          lifecycle.broadcastTheme(theme);
-          return;
-        }
-
-        case "updateThemeConfig": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const config = args[0] as ThemeConfig;
-          lifecycle.setCurrentThemeConfig(config);
-          lifecycle.broadcastThemeConfig();
-          return;
-        }
-
-        case "getThemeConfig": {
-          return lifecycle.getThemeConfig();
-        }
-
-        case "getTreeSnapshot": {
-          requireChromeCaller(ctx, vm, "panel.getTreeSnapshot");
-          return registry.getPanelTreeSnapshot();
-        }
-
-        case "getFocusedPanelId": {
-          requireChromeCaller(ctx, vm, "panel.getFocusedPanelId");
-          return registry.getFocusedPanelId();
-        }
-
-        case "getChromeState": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const panelId = args[0] as string;
-          const panel = registry.getPanel(panelId);
-          if (!panel) throw new Error(`Panel not found: ${panelId}`);
-          const repo = await getRepoState(getPanelSource(panel), deps.serverClient);
-          return buildPanelChromeState({ panel, repo }) satisfies PanelChromeState;
-        }
-
-        case "getAddressOptions": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const source = args[0] as string;
-          const ref = args[1] as string | undefined;
-          return getPanelAddressOptions(source, ref, deps.serverClient);
-        }
-
-        case "getBrowserAddressOptions": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          return getBrowserAddressOptions(args[0] as string, registry, deps.serverClient);
-        }
-
-        case "ensureLoaded": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const panelId = args[0] as string;
-          return lifecycle.ensureLoaded(panelId);
-        }
-
-        case "takeOver": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const panelId = args[0] as string;
-          return lifecycle.takeOverPanel(panelId);
-        }
-
-        case "markBrowserNavigationIntent": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const [panelId, intent] = args as [string, BrowserNavigationIntent];
-          pv.markBrowserNavigationIntent?.(panelId, intent);
-          return;
-        }
-
-        case "reloadView": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const panelId = args[0] as string;
-          vm.reload(panelId);
-          return;
-        }
-
-        case "forceReloadView": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const panelId = args[0] as string;
-          vm.forceReload(panelId);
-          return;
-        }
-
-        case "togglePin": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          const panelId = args[0] as string;
-          return lifecycle.togglePanelPin(panelId);
-        }
-
-        case "listPinnedPanelIds": {
-          requirePanelHostingAppCapability(ctx, vm, method);
-          return lifecycle.listPinnedPanelIds();
-        }
-
-        default:
-          throw new Error(`Unknown panel method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("panel", panelMethods, {
+      updateTheme: (ctx, [theme]) => {
+        const lifecycle = deps.panelOrchestrator;
+        const vm = deps.getViewManager();
+        requirePanelHostingAppCapability(ctx, vm, "updateTheme");
+        lifecycle.setCurrentTheme(theme);
+        lifecycle.broadcastTheme(theme);
+        return;
+      },
+      updateThemeConfig: (ctx, [config]) => {
+        const lifecycle = deps.panelOrchestrator;
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "updateThemeConfig");
+        lifecycle.setCurrentThemeConfig(config);
+        lifecycle.broadcastThemeConfig();
+        return;
+      },
+      getThemeConfig: () => deps.panelOrchestrator.getThemeConfig(),
+      getTreeSnapshot: (ctx) => {
+        requireChromeCaller(ctx, deps.getViewManager(), "panel.getTreeSnapshot");
+        return deps.panelRegistry.getPanelTreeSnapshot();
+      },
+      getFocusedPanelId: (ctx) => {
+        requireChromeCaller(ctx, deps.getViewManager(), "panel.getFocusedPanelId");
+        return deps.panelRegistry.getFocusedPanelId();
+      },
+      getChromeState: async (ctx, [panelId]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getChromeState");
+        const panel = deps.panelRegistry.getPanel(panelId);
+        if (!panel) throw new Error(`Panel not found: ${panelId}`);
+        const repo = await getRepoState(getPanelSource(panel), deps.serverClient);
+        return buildPanelChromeState({ panel, repo }) satisfies PanelChromeState;
+      },
+      getAddressOptions: (ctx, [source, ref]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getAddressOptions");
+        return getPanelAddressOptions(source, ref, deps.serverClient);
+      },
+      getBrowserAddressOptions: (ctx, [query]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getBrowserAddressOptions");
+        return getBrowserAddressOptions(query, deps.panelRegistry, deps.serverClient);
+      },
+      ensureLoaded: (ctx, [panelId]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "ensureLoaded");
+        return deps.panelOrchestrator.ensureLoaded(panelId);
+      },
+      takeOver: (ctx, [panelId]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "takeOver");
+        return deps.panelOrchestrator.takeOverPanel(panelId);
+      },
+      markBrowserNavigationIntent: (ctx, [panelId, intent]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "markBrowserNavigationIntent");
+        deps.panelView.markBrowserNavigationIntent?.(panelId, intent);
+        return;
+      },
+      reloadView: (ctx, [panelId]) => {
+        const vm = deps.getViewManager();
+        requirePanelHostingAppCapability(ctx, vm, "reloadView");
+        vm.reload(panelId);
+        return;
+      },
+      forceReloadView: (ctx, [panelId]) => {
+        const vm = deps.getViewManager();
+        requirePanelHostingAppCapability(ctx, vm, "forceReloadView");
+        vm.forceReload(panelId);
+        return;
+      },
+      togglePin: (ctx, [panelId]) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "togglePin");
+        return deps.panelOrchestrator.togglePanelPin(panelId);
+      },
+      listPinnedPanelIds: (ctx) => {
+        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "listPinnedPanelIds");
+        return deps.panelOrchestrator.listPinnedPanelIds();
+      },
+    }),
   };
 }

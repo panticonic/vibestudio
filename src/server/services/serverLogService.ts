@@ -8,10 +8,8 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import {
-  serverLogMethods,
-  ServerLogQuerySchema,
-} from "@vibestudio/shared/serviceSchemas/serverLog";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { serverLogMethods } from "@vibestudio/service-schemas/serverLog";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServerLogRecord, ServerLogStore } from "./serverLogStore.js";
 
@@ -63,18 +61,11 @@ export function createServerLogService(deps: {
     // `agent` grant is read-only in practice.
     policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension", "agent"] },
     methods: serverLogMethods,
-    handler: async (_ctx, method, args) => {
-      switch (method) {
-        case "query":
-          return envelope(deps.store.query(ServerLogQuerySchema.parse(args[0] ?? {})));
-        case "tail":
-          return envelope(deps.store.tail((args[0] as number | undefined) ?? undefined));
-        case "stats":
-          return deps.store.stats();
-        default:
-          throw new Error(`Unknown serverLog method: ${method}`);
-      }
-    },
+    handler: defineServiceHandler("serverLog", serverLogMethods, {
+      query: (_ctx, [query]) => envelope(deps.store.query(query ?? {})),
+      tail: (_ctx, [limit]) => envelope(deps.store.tail(limit)),
+      stats: () => deps.store.stats(),
+    }),
   };
   return Object.assign(definition, {
     stop: () => {

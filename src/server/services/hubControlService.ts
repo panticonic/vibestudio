@@ -1,6 +1,8 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { UserSubject } from "@vibestudio/shared/users/types";
-import { hubControlMethods } from "@vibestudio/shared/serviceSchemas/hubControl";
+import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { UserSubject } from "@vibestudio/identity/types";
+import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 
 export interface HubControlClient {
   call(
@@ -53,25 +55,43 @@ export function createHubControlClient(input: {
  * taken from `ctx.caller.subject`, never from wire arguments.
  */
 export function createHubControlService(client: HubControlClient): ServiceDefinition {
+  async function forward(
+    ctx: ServiceContext,
+    method: HubControlMethod,
+    args: unknown[]
+  ): Promise<unknown> {
+    const subject = ctx.caller.subject;
+    if (!subject || subject.userId === "system") {
+      throw new Error("Hub control requires an authenticated user");
+    }
+    const callerId = ctx.caller.runtime.id;
+    const deviceId = callerId.startsWith("shell:") ? callerId.slice("shell:".length) : undefined;
+    const rpcMethod: HubControlRpcMethod = `hubControl.${method}`;
+    return client.call(rpcMethod, args, subject, deviceId);
+  }
+
   return {
     name: "hubControl",
     description: "Authenticated workspace-child to server-hub control plane",
     policy: { allowed: ["shell", "panel", "app", "server"] },
     methods: hubControlMethods,
-    handler: async (ctx, method, args) => {
-      if (!(method in hubControlMethods)) throw new Error(`Unknown hubControl method: ${method}`);
-      const subject = ctx.caller.subject;
-      if (!subject || subject.userId === "system") {
-        throw new Error("Hub control requires an authenticated user");
-      }
-      const callerId = ctx.caller.runtime.id;
-      const deviceId = callerId.startsWith("shell:") ? callerId.slice("shell:".length) : undefined;
-      return await client.call(
-        `hubControl.${method}` as HubControlRpcMethod,
-        args,
-        subject,
-        deviceId
-      );
-    },
+    handler: defineServiceHandler("hubControl", hubControlMethods, {
+      listWorkspaces: (ctx, args) => forward(ctx, "listWorkspaces", args),
+      routeWorkspace: (ctx, args) => forward(ctx, "routeWorkspace", args),
+      createWorkspace: (ctx, args) => forward(ctx, "createWorkspace", args),
+      deleteWorkspace: (ctx, args) => forward(ctx, "deleteWorkspace", args),
+      addWorkspaceMember: (ctx, args) => forward(ctx, "addWorkspaceMember", args),
+      removeWorkspaceMember: (ctx, args) => forward(ctx, "removeWorkspaceMember", args),
+      listWorkspaceMembers: (ctx, args) => forward(ctx, "listWorkspaceMembers", args),
+      listUserPresence: (ctx, args) => forward(ctx, "listUserPresence", args),
+      inviteUser: (ctx, args) => forward(ctx, "inviteUser", args),
+      pairDevice: (ctx, args) => forward(ctx, "pairDevice", args),
+      listDevices: (ctx, args) => forward(ctx, "listDevices", args),
+      revokeDevice: (ctx, args) => forward(ctx, "revokeDevice", args),
+      revokeUser: (ctx, args) => forward(ctx, "revokeUser", args),
+      setRole: (ctx, args) => forward(ctx, "setRole", args),
+      updateProfile: (ctx, args) => forward(ctx, "updateProfile", args),
+      getProfile: (ctx, args) => forward(ctx, "getProfile", args),
+    }),
   };
 }

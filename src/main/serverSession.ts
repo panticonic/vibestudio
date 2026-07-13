@@ -16,7 +16,7 @@ import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
 import type { ReconnectProgress } from "@vibestudio/rpc/transports/webrtcClient";
-import { startPanelAssetFacade } from "./panelAssetFacade.js";
+import { startPanelAssetFacade } from "../node/panelAssets/panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
   loadStoredRemotePairing,
@@ -25,16 +25,16 @@ import {
 } from "./services/deviceCredentialStore.js";
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { authMethods } from "@vibestudio/service-schemas/auth";
 import {
   HubWorkspaceRouteSchema,
   type HubWorkspaceRoute,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
+} from "@vibestudio/service-schemas/hubControl";
 import {
   normalizeFingerprint,
   PAIRING_PROTOCOL_VERSION,

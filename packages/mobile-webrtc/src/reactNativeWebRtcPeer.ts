@@ -2,7 +2,7 @@
  * Native WebRTC peer adapter — `react-native-webrtc` implementing the
  * platform-agnostic `PeerConnectionProvider` contract (plan workstream C). This
  * is the **mobile** sibling of the desktop/server adapter
- * (`src/main/webrtc/nodeDatachannelPeer.ts`): both wrap a native WebRTC stack
+ * (`src/node/webrtc/nodeDatachannelPeer.ts`): both wrap a native WebRTC stack
  * into the same `RtcPeerConnectionLike`/`RtcDataChannelLike` shape that the
  * transport (`@vibestudio/rpc/transports/webrtcClient`) codes against, so the
  * transport carries no native dependency and stays unit-testable with fakes.

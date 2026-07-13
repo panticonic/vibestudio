@@ -2,43 +2,43 @@
   "$comment": "Host/workspace boundary allowlist for soft workspace-reference findings only. Hard import findings from scripts/check-host-workspace-imports.mjs are never allowlistable. Regenerate soft references with `node scripts/check-host-workspace-imports.mjs --update-allowlist`. An entry with no `specifier` covers the whole file; `category` is optional.",
   "entries": [
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-about/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-apps/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-extensions/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-panels/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-skills/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace-workers/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
-      "file": "packages/shared/src/workspace/sourceDirs.ts",
+      "file": "packages/workspace-contracts/src/sourceDirs.ts",
       "specifier": "@workspace/",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"

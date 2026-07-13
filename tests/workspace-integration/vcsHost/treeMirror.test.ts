@@ -29,8 +29,12 @@ import {
 import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import { WorktreeStore } from "../../../src/server/vcsHost/worktreeStore.js";
-import { createRefService } from "../../../src/server/services/refService.js";
-import { attachLocalHostBridges, pushToMain, type GadCaller } from "../../../src/server/vcsHost/testSupport.js";
+import { createProtectedRefStore } from "../../../src/server/services/protectedRefStore.js";
+import {
+  attachLocalHostBridges,
+  pushToMain,
+  type GadCaller,
+} from "../../../src/server/vcsHost/testSupport.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
@@ -138,7 +142,9 @@ describe("WorktreeStore eager mirroring (scan/ingest)", () => {
     const second = await vcs.snapshotDir(workDir, { logId: FIXTURE_LOG });
     expect(second.unchanged).toBe(true);
     expect(second.stateHash).toBe(first.stateHash);
-    expect((await treeFiles(blobsDir, first.stateHash)).map((file) => file.path)).toEqual(["a.txt"]);
+    expect((await treeFiles(blobsDir, first.stateHash)).map((file) => file.path)).toEqual([
+      "a.txt",
+    ]);
   });
 
   describe("ensureStateMirrored (strict invariant)", () => {
@@ -197,7 +203,10 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
     workspaceRoot = path.join(root, "workspace");
     await fsp.mkdir(workspaceRoot);
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => {},
+    });
     attachLocalHostBridges(gad.instance, { blobsDir, refs });
     vcs = new WorkspaceVcs({
       workspaceId: "test-ws",
@@ -258,7 +267,7 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
 
     // Composed workspace view (SERVER-minted, P5a): mirrored eagerly by the
     // local composition.
-    const view = await vcs.workspaceView();
+    const view = await vcs.repositories.workspaceView();
     expect(await hasTreeObject(blobsDir, view.stateHash)).toBe(true);
     const composed = await treeFiles(blobsDir, view.stateHash);
     // The composed view re-roots the repo's files under its repoPath.

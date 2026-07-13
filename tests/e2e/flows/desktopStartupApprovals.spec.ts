@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 
-import { CredentialStore } from "../../../packages/shared/src/credentials/store.js";
+import { CredentialStore } from "@vibestudio/credential-client/store";
 import {
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,

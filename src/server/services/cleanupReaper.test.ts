@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCleanupReaper } from "./cleanupReaper.js";
-import type { DODispatch, DORef } from "../doDispatch.js";
+import type { DODispatch } from "../doDispatch.js";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 function makeRecord(id: string): EntityRecord {

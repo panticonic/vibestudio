@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
+import { stateLayout } from "../stateLayout.js";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
-import { writeJsonFileAtomic } from "./atomicFile.js";
+import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
 
 export type CapabilityGrantDecision = "session" | "version";
 
@@ -34,7 +34,7 @@ export class CapabilityGrantStore {
   private persistent: CapabilityGrantFile = { grants: [] };
 
   constructor(opts: { statePath: string }) {
-    this.filePath = path.join(opts.statePath, "capability-grants.json");
+    this.filePath = stateLayout(opts.statePath).capabilityGrantsFile;
     this.load();
   }
 

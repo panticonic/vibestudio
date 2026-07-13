@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Shared browser data contracts, storage schema, and shell RPC client for Vibestudio",
   "type": "module",
+  "vibestudio": {
+    "buildProfile": "tsc-output"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -25,6 +28,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "zod": "^3.24.1"
   },
