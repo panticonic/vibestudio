@@ -37,6 +37,7 @@ import {
   establishWebRtcConnection,
   reconnectViaWebRtc,
   persistShellCredential,
+  completeFreshMobilePairing,
   loadShellCredential,
   clearShellCredential,
   makeShellTokenProvider,
@@ -129,18 +130,11 @@ async function pairViaWebRtc(pairing) {
       tokenProvider.setCredential(credential);
     },
   });
-  if (pairedCredential) {
-    await persistShellCredential(pairedCredential, pairing);
-    connection.deviceId = pairedCredential.deviceId;
-  } else {
-    // The server authenticated us but issued no fresh credential — we are
-    // connected for this session but cannot persist a refresh secret. Surface
-    // it loudly rather than pretending a reconnect will work.
-    await connection.close().catch(() => undefined);
-    throw new Error(
-      "The server did not issue a reusable device credential. Generate a fresh pairing invite and try again."
-    );
-  }
+  await completeFreshMobilePairing({
+    connection,
+    credential: pairedCredential,
+    persistCredential: persistShellCredential,
+  });
   smokePhase("embedded-pairing-complete");
   return connection;
 }

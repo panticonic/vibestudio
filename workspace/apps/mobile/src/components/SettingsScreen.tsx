@@ -8,7 +8,7 @@ import {
   persistStoredShellCredential,
   type MobileHubWorkspace,
   type StoredShellCredential,
-} from "@vibestudio/mobile-webrtc";
+} from "../services/mobileCredentials";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import { resetToNativeBootstrap } from "../services/auth";
 import { listMobileWorkspaces, selectMobileWorkspace } from "../services/workspaceSelection";
