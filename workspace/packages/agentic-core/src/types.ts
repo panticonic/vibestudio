@@ -18,7 +18,7 @@ import type {
   RegisterMessageTypeInput,
 } from "@workspace/pubsub";
 import type { MessageTier } from "@workspace/agentic-protocol";
-import type { RecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
 import type { ChatMethodResult } from "./invocation-result.js";
 import type { AgentSubscriptionConfig } from "./agent-subscription-config.js";

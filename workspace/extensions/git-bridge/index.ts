@@ -23,7 +23,7 @@ import type {
   GitPullUpstreamOptions,
   GitPushUpstreamOptions,
   GitUpstreamStatusOptions,
-} from "@vibestudio/shared/serviceSchemas/gitInterop";
+} from "@vibestudio/service-schemas/gitInterop";
 import { GitBridge, type BridgeHost } from "./bridge.js";
 import { UpstreamEngine } from "./upstream.js";
 import type { ExtensionContextLike } from "./context.js";

@@ -18,7 +18,7 @@ import {
   createApprovalStateController,
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
-} from "@vibestudio/shared/shell/approvalState";
+} from "@vibestudio/shell-core/approvalState";
 import {
   account,
   blobstore,

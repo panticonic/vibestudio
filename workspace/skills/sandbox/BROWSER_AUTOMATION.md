@@ -12,7 +12,7 @@ debugging that app, but do not use them as disposable web pages.
 > browser panel opened from eval can be driven there directly. The "Inline UI:
 > Browser Control Panel" example below shows the panel/component
 > shape; the `eval` snippets show the same page API. (`browserData` from
-> `@workspace/panel-browser` is shell-only and not reachable from server-side
+> `browserData` from `@workspace/runtime` is shell-only and not reachable from server-side
 > eval.)
 
 ## Open Once, Reuse Across Calls (component refs)
@@ -435,7 +435,7 @@ console.log("Dashboard:", dashboardData);
 
 ```tsx
 import { openPanel } from "@workspace/runtime";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 // Step 1: Import cookies from Chrome
 const browsers = await browserData.detectBrowsers();

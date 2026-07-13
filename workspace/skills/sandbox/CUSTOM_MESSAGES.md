@@ -70,7 +70,8 @@ import type { PubSubClient } from "@workspace/pubsub";
 await client.registerMessageType({
   typeId: "weather",
   displayMode: "inline",
-  source: { type: "file", path: "panels/chat/examples/weather-message-type.tsx" },
+  source: { type: "file", path: "skills/sandbox/references/weather-message-renderer.tsx" },
+  imports: { "@radix-ui/themes": "npm:^3.2.1" },
 });
 
 const { messageId } = await client.publishCustomMessage({
@@ -90,8 +91,8 @@ The `source` is either `{ type: "file", path }` or `{ type: "code", code }`
 
 File paths are **workspace-root-relative with no `workspace/` prefix** — the
 panel resolves them inside its context, whose root mirrors the workspace root
-(`skills/…`, `panels/…`, `packages/…`). Use `panels/chat/examples/foo.tsx`, not
-`workspace/panels/chat/examples/foo.tsx` (the latter resolves to a non-existent
+(`skills/…`, `panels/…`, `packages/…`). Use `skills/my-skill/renderer.tsx`, not
+`workspace/skills/my-skill/renderer.tsx` (the latter resolves to a non-existent
 `<context>/workspace/…` and fails with ENOENT). This matches the action-bar file
 convention. The file must exist in the panel's context: it is copied from the
 working tree (uncommitted included) when the context is first created, so a file
@@ -110,10 +111,8 @@ const all = await client.getMessageTypes();
 const weather = await client.getMessageType("weather");
 ```
 
-See the working example in:
-
-- `workspace/panels/chat/examples/weather-message-type.tsx` — the renderer (default, `reduce`).
-- `workspace/panels/chat/examples/weather-message-demo.ts` — registers + publishes + updates.
+The complete renderer used above lives beside this guide at
+`workspace/skills/sandbox/references/weather-message-renderer.tsx`.
 
 ## From sandbox code (eval / inline_ui / action_bar / feedback_custom)
 
@@ -128,8 +127,8 @@ const typeId = "weather";
 await chat.registerMessageType({
   typeId,
   displayMode: "inline",
-  source: { type: "file", path: "panels/chat/examples/weather-message-type.tsx" },
-  // imports: { "@radix-ui/themes": "npm:^3.2.1" }, // for file modules outside a radix package
+  source: { type: "file", path: "skills/sandbox/references/weather-message-renderer.tsx" },
+  imports: { "@radix-ui/themes": "npm:^3.2.1" },
 });
 
 // 2. Publish and update instances.
@@ -168,7 +167,7 @@ context, so a shared types file needs no runtime presence. Value relative
 imports must exist in the panel's context like the renderer itself.
 
 ```tsx
-// workspace/panels/chat/examples/weather-message-type.tsx
+// workspace/skills/sandbox/references/weather-message-renderer.tsx
 import { Badge, Card, Flex, Text } from "@radix-ui/themes";
 
 interface WeatherState {

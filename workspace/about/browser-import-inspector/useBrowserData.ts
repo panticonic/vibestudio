@@ -9,7 +9,7 @@
  * UI can render an inline "approval required" affordance instead of crashing.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 import { type AsyncState, classifyError } from "./format";
 
 export { browserData };
@@ -17,7 +17,10 @@ export { classifyError, relativeTime, mask, DATA_TYPES } from "./format";
 export type { AsyncState, AsyncStatus } from "./format";
 
 /** Run `fn` whenever `deps` change; expose status + a manual `reload`. */
-export function useAsync<T>(fn: () => Promise<T>, deps: ReadonlyArray<unknown>): {
+export function useAsync<T>(
+  fn: () => Promise<T>,
+  deps: ReadonlyArray<unknown>
+): {
   state: AsyncState<T>;
   reload: () => void;
 } {
@@ -34,7 +37,8 @@ export function useAsync<T>(fn: () => Promise<T>, deps: ReadonlyArray<unknown>):
 
   const run = useCallback(() => {
     setState((prev) => ({ status: "loading", data: prev.data }));
-    fnRef.current()
+    fnRef
+      .current()
       .then((data) => {
         if (alive.current) setState({ status: "ready", data });
       })

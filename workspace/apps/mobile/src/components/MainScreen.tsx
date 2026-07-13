@@ -74,7 +74,7 @@ import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
   type ApprovalStateController,
-} from "@vibestudio/shared/shell/approvalState";
+} from "@vibestudio/shell-core/approvalState";
 import type { HostConfig } from "../services/panelUrls";
 import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
 import {

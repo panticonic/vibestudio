@@ -51,7 +51,7 @@ import {
   TREE_FILE_MODE,
   splitTreePath,
 } from "@vibestudio/shared/contentTree/treeObjects";
-import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/workspace/remotes";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/workspace/remotes";
 import { withRepoLock } from "./repoLocks.js";
 
 export const VCS_MAIN_HEAD = "main";

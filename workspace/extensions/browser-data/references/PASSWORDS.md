@@ -19,7 +19,7 @@ inline_ui({
 import { useState, useEffect, useCallback } from "react";
 import { Button, Flex, Text, Table, Badge, TextField, Box, Spinner, IconButton } from "@radix-ui/themes";
 import { EyeOpenIcon, EyeClosedIcon, CopyIcon, CheckIcon, MagnifyingGlassIcon } from "@radix-ui/react-icons";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 export default function PasswordVault({ props, chat }) {
   const [passwords, setPasswords] = useState([]);
@@ -120,7 +120,7 @@ export default function PasswordVault({ props, chat }) {
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const match = await browserData.getPasswordForSite("https://github.com/login");
   if (match) {
     console.log("Found:", match.username, "for", match.origin_url);
@@ -135,7 +135,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   // Formats: "csv-chrome", "csv-firefox", "json"
   const exported = await browserData.exportPasswords("json");
   const parsed = JSON.parse(exported);

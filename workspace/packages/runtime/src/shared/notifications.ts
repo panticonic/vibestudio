@@ -6,7 +6,7 @@
  */
 import type { RpcCaller } from "@vibestudio/rpc";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
 
 type NotificationAction = {
     id?: string;

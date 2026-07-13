@@ -13,7 +13,7 @@ import {
   TextField,
 } from "@radix-ui/themes";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
-import type { AutocompleteDebugResult, DetectedBrowser } from "@workspace/panel-browser";
+import type { AutocompleteDebugResult, DetectedBrowser } from "@vibestudio/browser-data/client";
 import { useAsync, browserData, classifyError } from "../useBrowserData";
 
 export function DebugTab(props: { selection: { browser: DetectedBrowser } | null }) {
@@ -150,7 +150,8 @@ function DiagnosticsDrawer(props: { selection: { browser: DetectedBrowser } | nu
     issues.push({
       level: "warn",
       title: `${browser.displayName} is blocked by macOS privacy (TCC)`,
-      action: "Grant Full Disk Access to this app in System Settings → Privacy & Security, then re-detect.",
+      action:
+        "Grant Full Disk Access to this app in System Settings → Privacy & Security, then re-detect.",
     });
   }
   if (browser && browser.family === "safari") {

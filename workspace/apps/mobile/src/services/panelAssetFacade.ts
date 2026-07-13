@@ -1,7 +1,7 @@
 /**
  * panelAssetFacade — loopback panel-asset HTTP/1.1 server for React Native.
  *
- * The mobile sibling of `src/main/panelAssetFacade.ts`. Panels load from a fixed
+ * The mobile sibling of `src/node/panelAssets/panelAssetFacade.ts`. Panels load from a fixed
  * loopback origin (`buildPanelUrl` → `http://127.0.0.1:<facadePort>/{source}/…`).
  * On mobile there is no local gateway — the RPC plane rides the WebRTC pipe — so
  * this tiny loopback TCP server stands in for it: it parses each webview asset

@@ -3,10 +3,13 @@
  *
  * Worker and Node.js factories live in @workspace/agentic-session.
  */
-import { createBuildServiceClient, createEvalImportLoader } from "@vibestudio/shared/evalImportLoader";
+import {
+  createBuildServiceClient,
+  createEvalImportLoader,
+} from "@vibestudio/service-schemas/clients/evalImportLoader";
 import type { SandboxConfig } from "./types.js";
 interface RpcLike {
-    call(target: string, method: string, args: unknown[]): Promise<unknown>;
+  call(target: string, method: string, args: unknown[]): Promise<unknown>;
 }
 /**
  * Create a SandboxConfig for panel contexts.
@@ -16,9 +19,11 @@ interface RpcLike {
  * to the build service on the main process.
  */
 export function createPanelSandboxConfig(rpc: RpcLike): SandboxConfig {
-    const build = createBuildServiceClient((svc, method, args) => rpc.call("main", `${svc}.${method}`, args));
-    return {
-        rpc: { call: (t: string, m: string, args: unknown[]) => rpc.call(t, m, args) },
-        loadImport: createEvalImportLoader(build, "panel"),
-    };
+  const build = createBuildServiceClient((svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args)
+  );
+  return {
+    rpc: { call: (t: string, m: string, args: unknown[]) => rpc.call(t, m, args) },
+    loadImport: createEvalImportLoader(build, "panel"),
+  };
 }

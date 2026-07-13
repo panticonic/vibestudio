@@ -11,7 +11,7 @@
  *     yields `undefined` silently, surfacing as a confusing error far away.
  */
 
-import { EVAL_AMBIENT_ONLY } from "@vibestudio/shared/runtimeSurface.eval";
+import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 
 /**
  * Eval globals that are injected ambiently, NOT exported by `@workspace/runtime`

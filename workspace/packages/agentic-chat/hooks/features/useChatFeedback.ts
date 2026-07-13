@@ -14,7 +14,7 @@ import type { FeedbackComponentProps } from "@workspace/tool-ui";
 import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
 import { type ChatSandboxValue } from "@workspace/agentic-core";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
 interface UseChatFeedbackOptions {
     chat: ChatSandboxValue;
     loadImport?: SandboxOptions["loadImport"];

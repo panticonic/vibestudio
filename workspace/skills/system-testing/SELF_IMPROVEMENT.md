@@ -368,7 +368,7 @@ For each failure, determine the root cause category and act accordingly:
 - **Validation too strict** → loosen the validator, but only after confirming the agent's response is correct
 - **Prompt truly underspecified** → clarify only the user-visible goal or required output marker; never add implementation details that hide a docs or runtime bug
 - **Long-running task** → inspect where progress stopped and fix the blocked operation
-- **Published test repo survives into a later run** → set `workspaceRepoFixture: true` on the mutating `TestCase`; do not add a fixed project name or cleanup steps to the user prompt. The harness owns a unique `system-test-*` namespace, stale-fixture cleanup, serialization, teardown, and cleanup diagnostics.
+- **Published test repo survives into a later run** → set `workspaceRepoFixture: true` on the mutating `TestCase`; do not add a fixed repository basename or cleanup steps to the user prompt. The harness owns a unique `system-test-*` namespace, stale-fixture cleanup, serialization, teardown, and cleanup diagnostics.
 
 **Default assumption: the infrastructure is wrong, not the test.** Only classify as a test bug after reading the service code and confirming the API works correctly.
 

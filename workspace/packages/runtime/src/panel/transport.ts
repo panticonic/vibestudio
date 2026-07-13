@@ -1,15 +1,15 @@
 import {
-  ELECTRON_LOCAL_SERVICE_NAMES,
   bridgeStreamSurfaceOf,
   openBridgeUploadStream,
+  rpcErrorKindOf,
   responseEnvelopeFor,
   type BridgeStreamShellSurface,
   type EnvelopeRpcTransport,
   type RpcEnvelope,
   type RpcRequest,
 } from "@vibestudio/rpc";
-import { createRecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
-import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shared/shell/recoveryCoordinator";
+import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shell-core/recoveryCoordinator";
 
 /**
  * The host bridge a panel reaches its server through. A panel lives in a webview
@@ -43,6 +43,8 @@ type vibestudioShellBridge = Partial<BridgeStreamShellSurface> & {
   ) => Promise<Response>;
   /** Electron-only: IPC dispatch for electron-local services (kept as-is). */
   serviceCall?: (method: string, ...args: unknown[]) => Promise<unknown>;
+  /** Electron-only: resolves host ownership from the live service registry. */
+  isLocalService?: (service: string) => Promise<boolean>;
 };
 
 export const recoveryCoordinator: RecoveryCoordinator = createRecoveryCoordinator();
@@ -60,15 +62,6 @@ function getShellBridge(): vibestudioShellBridge {
   }
   return shell;
 }
-
-/**
- * Services that panels should call through Electron main. `events` is local
- * for the shell, but panel event subscriptions must stay on the panel's logical
- * session so EventService has a delivery session for that caller.
- */
-const electronLocalServices: ReadonlySet<string> = new Set(
-  ELECTRON_LOCAL_SERVICE_NAMES.filter((service) => service !== "events")
-);
 
 function isRpcEnvelope(value: unknown): value is RpcEnvelope {
   const envelope = value as Partial<RpcEnvelope> | null;
@@ -113,7 +106,9 @@ export function createPanelTransport(): EnvelopeRpcTransport {
         const dotIdx = request.method.indexOf(".");
         const service = dotIdx > 0 ? request.method.slice(0, dotIdx) : "";
 
-        if (electronLocalServices.has(service)) {
+        const routesToElectron =
+          typeof shell.isLocalService === "function" && (await shell.isLocalService(service));
+        if (routesToElectron) {
           if (!electronServiceCall) {
             // Electron-local service called from a non-Electron context
             // (mobile, headless). Fail fast with a clear message instead
@@ -126,6 +121,7 @@ export function createPanelTransport(): EnvelopeRpcTransport {
                 {
                   type: "response",
                   requestId: request.requestId,
+                  errorKind: "service",
                   error:
                     `Service '${service}' is an Electron-local service ` +
                     `and requires the Electron desktop app. It is not available ` +
@@ -159,6 +155,7 @@ export function createPanelTransport(): EnvelopeRpcTransport {
                   {
                     type: "response",
                     requestId: request.requestId,
+                    errorKind: rpcErrorKindOf(err),
                     error: err instanceof Error ? err.message : String(err),
                   }
                 )
@@ -199,7 +196,9 @@ export function createPanelTransport(): EnvelopeRpcTransport {
     transport.streamBody = (envelope, signal, body) => {
       if (!body) {
         return Promise.reject(
-          new Error("panel bridge streamBody() requires a request body — body-less streams ride the duplex envelope path")
+          new Error(
+            "panel bridge streamBody() requires a request body — body-less streams ride the duplex envelope path"
+          )
         );
       }
       return openBridgeUploadStream(uploadSurface, envelope, signal ?? null, body);

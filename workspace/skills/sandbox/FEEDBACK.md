@@ -158,7 +158,7 @@ feedback_custom({
   code: `
 import { useState, useEffect } from "react";
 import { Button, Flex, Text, Select } from "@radix-ui/themes";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 export default function BrowserPicker({ onSubmit, onCancel, chat }) {
   const [browsers, setBrowsers] = useState([]);

@@ -24,19 +24,9 @@ import {
   TextField,
 } from "@radix-ui/themes";
 import { InfoCircledIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import type {
-  FieldDefinition,
-  FieldValue,
-  FieldWarning,
-  FormSchema,
-} from "@vibestudio/types";
+import type { FieldDefinition, FieldValue, FieldWarning, FormSchema } from "@vibestudio/types";
 import { FREE_TEXT_CHOICE_VALUE } from "@vibestudio/types";
-import {
-  isFieldVisible,
-  isFieldEnabled,
-  getFieldWarning,
-  groupFields,
-} from "@workspace/core";
+import { isFieldVisible, isFieldEnabled, getFieldWarning, groupFields } from "./formSchema.js";
 /**
  * Format slider value for display based on field definition hints.
  * Supports notched sliders, temperature-like decimals, and token counts.
@@ -108,7 +98,10 @@ function getFreeTextKey(field: FieldDefinition): string {
 
 function getOptionsWithFreeText(field: FieldDefinition) {
   const options = field.options ?? [];
-  if (!fieldSupportsFreeText(field) || options.some((option) => option.value === FREE_TEXT_CHOICE_VALUE)) {
+  if (
+    !fieldSupportsFreeText(field) ||
+    options.some((option) => option.value === FREE_TEXT_CHOICE_VALUE)
+  ) {
     return options;
   }
   return [
@@ -301,23 +294,17 @@ export function FormRenderer({
         : undefined;
 
     return (
-      <Flex
-        key={field.key}
-        direction="column"
-        gap="1"
-        style={{ opacity: isEnabled ? 1 : 0.5 }}
-      >
+      <Flex key={field.key} direction="column" gap="1" style={{ opacity: isEnabled ? 1 : 0.5 }}>
         {/* Only show label if non-empty (custom field types may have built-in headers) */}
         {field.label && (
           <Text size={size} weight="medium">
             {field.label}
-            {showRequiredIndicators && (
-              field.required ? (
+            {showRequiredIndicators &&
+              (field.required ? (
                 <span style={{ color: "var(--red-9)" }}> *</span>
               ) : (
                 <span style={{ color: "var(--gray-9)", fontWeight: "normal" }}> (optional)</span>
-              )
-            )}
+              ))}
           </Text>
         )}
         {showDescriptions && field.description && (
@@ -327,10 +314,13 @@ export function FormRenderer({
         )}
 
         {/* Custom field renderer (if provided) */}
-        {customFieldRenderers?.[field.type] && (() => {
-          const CustomRenderer = customFieldRenderers[field.type]!;
-          return <CustomRenderer field={field} value={currentValue as FieldValue} theme={theme} />;
-        })()}
+        {customFieldRenderers?.[field.type] &&
+          (() => {
+            const CustomRenderer = customFieldRenderers[field.type]!;
+            return (
+              <CustomRenderer field={field} value={currentValue as FieldValue} theme={theme} />
+            );
+          })()}
 
         {/* String input */}
         {field.type === "string" && (
@@ -351,7 +341,10 @@ export function FormRenderer({
             value={String(currentValue ?? "")}
             disabled={!isEnabled}
             onChange={(e) => onChange(field.key, e.target.value)}
-            style={{ minHeight: field.maxHeight ? Math.min(field.maxHeight, 240) : 120, maxHeight: field.maxHeight }}
+            style={{
+              minHeight: field.maxHeight ? Math.min(field.maxHeight, 240) : 120,
+              maxHeight: field.maxHeight,
+            }}
             {...clickProps}
           />
         )}
@@ -440,17 +433,24 @@ export function FormRenderer({
               </Flex>
             ) : field.sliderLabels ? (
               <Flex justify="between">
-                <Text size="1" color="gray">{field.sliderLabels.min}</Text>
-                <Text size="1" color="gray">{field.sliderLabels.max}</Text>
+                <Text size="1" color="gray">
+                  {field.sliderLabels.min}
+                </Text>
+                <Text size="1" color="gray">
+                  {field.sliderLabels.max}
+                </Text>
               </Flex>
             ) : null}
             {/* Notch description */}
-            {field.notches && (() => {
-              const notch = field.notches.find((n) => n.value === Number(currentValue));
-              return notch?.description ? (
-                <Text size="1" color="gray">{notch.description}</Text>
-              ) : null;
-            })()}
+            {field.notches &&
+              (() => {
+                const notch = field.notches.find((n) => n.value === Number(currentValue));
+                return notch?.description ? (
+                  <Text size="1" color="gray">
+                    {notch.description}
+                  </Text>
+                ) : null;
+              })()}
           </Flex>
         )}
 
@@ -470,10 +470,7 @@ export function FormRenderer({
               }
             >
               {getOptionsWithFreeText(field).map((option) => (
-                <SegmentedControl.Item
-                  key={option.value}
-                  value={option.value}
-                >
+                <SegmentedControl.Item key={option.value} value={option.value}>
                   {option.label}
                 </SegmentedControl.Item>
               ))}
@@ -484,7 +481,9 @@ export function FormRenderer({
                 (o) => o.value === String(currentValue)
               );
               return selectedOption?.description ? (
-                <Text size="1" color="gray">{selectedOption.description}</Text>
+                <Text size="1" color="gray">
+                  {selectedOption.description}
+                </Text>
               ) : null;
             })()}
             {freeTextInput}
@@ -534,7 +533,9 @@ export function FormRenderer({
                           <Flex direction="column" gap="1">
                             <Text weight="medium">{option.label}</Text>
                             {option.description && (
-                              <Text size="1" color="gray">{option.description}</Text>
+                              <Text size="1" color="gray">
+                                {option.description}
+                              </Text>
                             )}
                           </Flex>
                         </Flex>
@@ -564,10 +565,7 @@ export function FormRenderer({
               }
             >
               {field.options.slice(0, 2).map((option) => (
-                <SegmentedControl.Item
-                  key={option.value}
-                  value={option.value}
-                >
+                <SegmentedControl.Item key={option.value} value={option.value}>
                   {option.label}
                 </SegmentedControl.Item>
               ))}
@@ -578,7 +576,9 @@ export function FormRenderer({
                 (o) => o.value === String(currentValue)
               );
               return selectedOption?.description ? (
-                <Text size="1" color="gray">{selectedOption.description}</Text>
+                <Text size="1" color="gray">
+                  {selectedOption.description}
+                </Text>
               ) : null;
             })()}
             {freeTextInput}
@@ -608,12 +608,14 @@ export function FormRenderer({
               {[
                 ...field.buttons,
                 ...(fieldSupportsFreeText(field)
-                  ? [{
-                    value: FREE_TEXT_CHOICE_VALUE,
-                    label: field.freeTextLabel ?? "Other",
-                    color: "gray" as const,
-                  }]
-                      : []),
+                  ? [
+                      {
+                        value: FREE_TEXT_CHOICE_VALUE,
+                        label: field.freeTextLabel ?? "Other",
+                        color: "gray" as const,
+                      },
+                    ]
+                  : []),
               ].map((btn) => (
                 <Button
                   key={btn.value}
@@ -692,7 +694,9 @@ export function FormRenderer({
                       <Flex direction="column" gap="1">
                         <Text weight="medium">{opt.label}</Text>
                         {opt.description && (
-                          <Text size="1" color="gray">{opt.description}</Text>
+                          <Text size="1" color="gray">
+                            {opt.description}
+                          </Text>
                         )}
                       </Flex>
                     </Flex>
@@ -716,9 +720,7 @@ export function FormRenderer({
         {/* Warning callout */}
         {warning && (
           <Callout.Root color={getWarningColor(warning.severity)} size="1">
-            <Callout.Icon>
-              {getWarningIcon(warning.severity)}
-            </Callout.Icon>
+            <Callout.Icon>{getWarningIcon(warning.severity)}</Callout.Icon>
             <Callout.Text>{warning.message}</Callout.Text>
           </Callout.Root>
         )}

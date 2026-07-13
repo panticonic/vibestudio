@@ -11,7 +11,7 @@ import {
   type ServiceCallFn,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
+import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import {
   gadMethods,
   gadWireMethods,

@@ -188,3 +188,35 @@ running app only after the relevant context commits and the runtime build
 reloads that artifact. When a fix appears ignored, inspect VCS status, build
 events, and runtime build provenance before assuming the code path is still
 broken.
+
+## Reviewing code provenance
+
+Start with the bounded inspector and provenance APIs above. Use raw SQL only
+after they identify the exact invocation, state, or envelope that needs deeper
+inspection. To connect one tool invocation to its precise file operations:
+
+```sql
+SELECT st.event_id, st.invocation_id, st.input_state_hash, st.output_state_hash,
+       op.ordinal, op.kind, op.path, op.old_content_hash, op.new_content_hash,
+       op.hunks_json
+FROM gad_state_transitions st
+JOIN gad_worktree_edit_ops op ON op.event_id = st.event_id
+WHERE st.invocation_id = ?
+ORDER BY st.created_at, op.ordinal;
+```
+
+Do not treat every channel envelope without `origin_*` columns as a publication
+bug. User- and channel-origin envelopes are expected to have no trajectory
+origin; only rows that publish private trajectory events point back to an origin
+log, head, and envelope.
+
+Review posture:
+
+- Prefer fail-loud invariant checks over defensive projection code that hides
+  corrupt logs.
+- Treat unexpectedly large inline payloads as storage-boundary bugs.
+- Treat empty rosters, open turns, nonterminal messages, or mismatched
+  invocation reports as system-state issues until the inspector APIs explain
+  them. A projected `failed` assistant message is terminal, not streaming.
+- When a code fix appears ineffective, verify context VCS state and running
+  build provenance before changing the fix.

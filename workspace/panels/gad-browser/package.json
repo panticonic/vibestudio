@@ -18,6 +18,8 @@
     ]
   },
   "dependencies": {
+    "@vibestudio/git": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/ui": "workspace:*",

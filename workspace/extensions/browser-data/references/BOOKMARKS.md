@@ -19,7 +19,7 @@ inline_ui({
 import { useState, useEffect } from "react";
 import { Button, Flex, Text, Box, TextField, Badge, Spinner } from "@radix-ui/themes";
 import { BookmarkIcon, MagnifyingGlassIcon, ChevronRightIcon } from "@radix-ui/react-icons";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 import { openPanel } from "@workspace/runtime";
 
 export default function BookmarkBrowser({ props, chat }) {
@@ -113,7 +113,7 @@ export default function BookmarkBrowser({ props, chat }) {
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const results = await browserData.searchBookmarks("github");
   for (const b of results.slice(0, 10)) {
     console.log(b.title + " → " + b.url);
@@ -126,7 +126,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   // Formats: "html", "json", "chrome-json"
   const exported = await browserData.exportBookmarks("html");
   console.log("Exported " + exported.length + " bytes of HTML bookmarks");

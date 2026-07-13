@@ -12,9 +12,9 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { runtimeMethods } from "@vibestudio/shared/serviceSchemas/runtime";
-import { workerLogMethods } from "@vibestudio/shared/serviceSchemas/workerLog";
-import { workspaceStateMethods } from "@vibestudio/shared/serviceSchemas/workspaceState";
+import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
+import { workerLogMethods } from "@vibestudio/service-schemas/workerLog";
+import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
 import {
   collectExposableMethods,
   createConnectionlessRpcClient,

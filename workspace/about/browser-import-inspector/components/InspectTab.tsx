@@ -20,7 +20,7 @@ import type {
   HistoryDomainSummary,
   PasswordOriginSummary,
   DomainReadiness,
-} from "@workspace/panel-browser";
+} from "@vibestudio/browser-data/client";
 import { useAsync, browserData, relativeTime, mask } from "../useBrowserData";
 
 export function InspectTab(props: { now: number }) {

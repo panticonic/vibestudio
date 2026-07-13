@@ -1,15 +1,15 @@
 import React from "react";
 import { render } from "ink";
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
-import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
-import { createServerWsTransport } from "@vibestudio/shared/shell/transport/serverWsTransport";
+import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
 import WebSocket from "ws";
 import { SessionManager } from "./host/SessionManager.js";
 import { registerHostService } from "./host/HostService.js";
 import { createApprovalsClient } from "./approvals/approvalsClient.js";
 import { TerminalBrowser } from "./host/TerminalBrowser.js";
 import type { LogLine } from "./ui/LogsView.js";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 function requiredEnv(name: string): string {

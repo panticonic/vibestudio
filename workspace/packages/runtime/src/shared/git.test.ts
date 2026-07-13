@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { gitInteropMethods } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { createGitClient } from "./git.js";
 
 describe("runtime Git client", () => {

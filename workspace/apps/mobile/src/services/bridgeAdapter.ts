@@ -1,7 +1,7 @@
-import type { PanelManager } from "@vibestudio/shared/shell/panelManager";
+import type { PanelManager } from "@vibestudio/shell-core/panelManager";
 import { asPanelSlotId, type PanelEntityId } from "@vibestudio/shared/panel/ids";
 import type { OpenExternalOptions } from "@vibestudio/shared/externalOpen";
-import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
+import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createBridgeStreamRelay,

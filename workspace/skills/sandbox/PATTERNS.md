@@ -260,7 +260,7 @@ imports; those built-in APIs have their own trust scopes. See
 
 ## Browser data (cookies/passwords/bookmarks/history/tabs)
 
-`browserData` from `@workspace/panel-browser` is a **panel/component runtime**
+`browserData` from `@workspace/runtime` is a **panel/component runtime**
 capability: it invokes the manifest-selected `browserData` provider namespace,
 whose extension only accepts **shell** callers. It does not resolve or invoke an
 extension package directly. Server-side eval (caller kind `server`) cannot use
@@ -268,7 +268,7 @@ it — run browser-data work from panel code or an
 `inline_ui`/`feedback_custom` component:
 
 ```tsx
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 const browsers = await browserData.detectBrowsers();
 const chrome = browsers.find((b) => b.name === "chrome");
@@ -307,7 +307,7 @@ inline_ui({
 import { useState, useEffect } from "react";
 import { Button, Flex, Text, Table, Badge, TextField } from "@radix-ui/themes";
 import { TrashIcon } from "@radix-ui/react-icons";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 export default function CookieManager({ props, chat }) {
   const [cookies, setCookies] = useState([]);
@@ -452,7 +452,7 @@ cookie-import recipe still runs from panel code or an
 
 ```tsx
 import { openPanel } from "@workspace/runtime";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 // Open the site in a browser panel
 const handle = await openPanel("https://github.com");

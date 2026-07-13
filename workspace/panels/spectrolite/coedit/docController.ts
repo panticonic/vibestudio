@@ -30,7 +30,7 @@
 import { reconcileBlocks, type Block, type Collision } from "./blockReconcile.js";
 import { buildEditOps, type ReplaceEditOp } from "./commitEdits.js";
 import { liftLegacyViewState, type ViewStateStore } from "./viewState.js";
-import type { VcsReadFileInput } from "@vibestudio/shared/serviceSchemas/vcs";
+import type { VcsReadFileInput } from "@vibestudio/service-schemas/vcs";
 
 /** A single top-level editor block for reconciliation (registry view). */
 export interface EditorBlock {

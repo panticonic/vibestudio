@@ -19,7 +19,7 @@ import type {
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { ReconnectProgress, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
-import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { authMethods } from "@vibestudio/service-schemas/auth";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   loadShellCredential,

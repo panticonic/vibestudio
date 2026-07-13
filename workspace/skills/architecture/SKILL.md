@@ -75,7 +75,7 @@ the same permission gates, and the same VCS push gate as any other code.
    (tool dispatches, file observations, approvals, claims). Provenance is
    never silently injected into context.
 5. **Authority is split three ways for source.** The server's content store
-   owns immutable trees; the server's RefService owns protected `main` refs
+   owns immutable trees; the server's ProtectedRefStore owns protected `main` refs
    (advanced only by compare-and-swap through the approval gate); the gad DO
    owns provenance, merge, and edit/commit semantics. Your edit→commit→push
    workflow is the userland face of this split — push is the *only* way

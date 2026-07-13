@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Value } from "@sinclair/typebox/value";
-import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibestudio/shared/serviceSchemas/vcs";
+import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibestudio/service-schemas/vcs";
 import { createReadTool, type ReadProvenanceDeps } from "../read.js";
 import { StubFs } from "./stub-fs.js";
 
@@ -279,7 +279,7 @@ describe("createReadTool", () => {
         if (extensionMethod === "detectMimeType") return Promise.resolve("image/png");
         if (extensionMethod === "resize") {
           return Promise.resolve({
-            data: pngBytes,
+            data: Buffer.from(pngBytes).toString("base64"),
             mimeType: "image/png",
             width: 8,
             height: 8,
@@ -326,7 +326,7 @@ describe("createReadTool", () => {
         if (extensionMethod === "detectMimeType") return Promise.resolve("image/png");
         if (extensionMethod === "resize") {
           return Promise.resolve({
-            data: pngBytes,
+            data: Buffer.from(pngBytes).toString("base64"),
             mimeType: "image/png",
             width: 8,
             height: 8,

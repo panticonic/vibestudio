@@ -25,7 +25,8 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../../skills/sandbox/INTERACTI
 
 ## Architecture
 
-All browser data operations go through `@workspace/panel-browser`. That client
+All browser data operations go through the canonical `browserData` client on
+`@workspace/runtime`. That client
 calls the manifest-selected provider namespace with
 `extensions.invokeProvider("browserData", method, args)`; it neither resolves an
 extension package nor falls back to a hardcoded broker. The declared
@@ -40,7 +41,7 @@ and only the import audit log appends every run.
 
 ```
 Sandbox code (eval / inline_ui / feedback_custom)
-  → import { browserData } from "@workspace/panel-browser"
+  → import { browserData } from "@workspace/runtime"
     → extensions.invokeProvider("browserData", method, args)
       → providers.browserData.extension
         → declared browser-data extension
@@ -51,7 +52,7 @@ Sandbox code (eval / inline_ui / feedback_custom)
 
 ```typescript
 // In eval, inline_ui, and feedback_custom:
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 ```
 
 | Method                                                                                                        | What it does                                                                                                                      |
@@ -225,5 +226,5 @@ If they say yes, load the `api-integrations` skill and follow its provider setup
 
 ## Environment Compatibility
 
-- Browser import is **panel-only** -- it requires a browser context (`@workspace/panel-browser`) and inline UI for interactive flows.
+- Browser import is **panel-only** -- it requires a browser context (`browserData` from `@workspace/runtime`) and inline UI for interactive flows.
 - Headless sessions cannot use this skill.

@@ -68,7 +68,7 @@ The harness writes forensics under `test-results/full-system-smoke/` and runs:
   panel WebView load
 
 Both pairing phases launch the normal `remote serve` hub without a signaling
-override and mint a workspace-scoped invite through `remote invite`. Android
+override and consume the fresh hub's root-device invite. Android
 attempts normal host/STUN/TURN ICE by default; use `--require-turn` to enforce
 relay readiness. Pass `--local-signaling` only for the offline Miniflare/coturn
 variant.
@@ -91,7 +91,7 @@ current context.
 Context isolation does not roll back a `vcs.push`, because publication advances
 workspace `main`. A test that may create or fork a published repo must set
 `workspaceRepoFixture: true` on its `TestCase`. The runner then injects a unique
-`system-test-*` project name as harness metadata, removes stale repos in that
+`system-test-*` repository basename as harness metadata, removes stale repos in that
 reserved namespace before the test, and removes the test's published repos
 afterward. Cleanup errors and repos created outside the namespace fail the run
 with diagnostics. Keep those fixture mechanics out of the user-like `prompt`.
@@ -811,9 +811,9 @@ For SQLite-backed userland storage, the canonical pattern is `this.sql` inside
 a Durable Object service, not eval `db`. Tests for app databases should cover
 the DO methods directly with `createTestDO(...)` and, when testing panels/apps,
 also verify `workers.resolveService(protocol, objectKey?)` plus
-`rpc.call(targetId, method, args)` from the actual caller kind. See
-`workers/sample-do/index.ts` for the minimal example and
-`workers/sample-do/sampleDo.test.ts` for an end-to-end round trip.
+`rpc.call(targetId, method, args)` from the actual caller kind. Keep the fast
+`createTestDO(...)` test co-located with its real worker, and use a disposable
+worker owned by the system-test fixture for the workerd integration path.
 
 ## Filtering
 
@@ -848,7 +848,7 @@ runtime; do not narrow the test prompt to route around the failure.
 For a test that creates or forks a workspace repo, declare
 `workspaceRepoFixture: true` instead of putting a fixed test name or cleanup
 instructions in its prompt. The harness serializes such cases, supplies the
-reserved project name through the system-test environment, cleans only that
+reserved repository basename through the system-test environment, cleans only that
 namespace, and records fixture setup/teardown in `execution.diagnostics`.
 
 ## Auto-Start as Initial Panel

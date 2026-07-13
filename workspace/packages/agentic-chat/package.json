@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@mdx-js/mdx": "^3.1.0",
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

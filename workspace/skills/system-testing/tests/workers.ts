@@ -72,7 +72,10 @@ function checkedOutcome(
   evidence: () => { passed: boolean; reason?: string }
 ) {
   if (finalMessageHasAll(result, [failureMarker]).passed) {
-    return { passed: false, reason: `Agent reported ${failureMarker}; ${okMarker} was not verified` };
+    return {
+      passed: false,
+      reason: `Agent reported ${failureMarker}; ${okMarker} was not verified`,
+    };
   }
   const base = checked(result, [okMarker]);
   if (!base.passed) return base;
@@ -98,7 +101,8 @@ export const workerTests: TestCase[] = [
     name: "create-worker",
     description: "Create a worker instance",
     category: "workers",
-    prompt: "Exercise creating and cleaning up a worker. Finish with WORKER_CREATE_OK and destroyed.",
+    prompt:
+      "Exercise creating and cleaning up a worker. Finish with WORKER_CREATE_OK and destroyed.",
     validate: (result) => {
       const base = checked(result, ["WORKER_CREATE_OK", "destroyed"]);
       if (!base.passed) return base;
@@ -130,7 +134,8 @@ export const workerTests: TestCase[] = [
     name: "create-destroy",
     description: "Create a worker and then destroy it",
     category: "workers",
-    prompt: "Exercise worker destruction. Finish with WORKER_DESTROY_OK or WORKER_DESTROY_MISMATCH.",
+    prompt:
+      "Exercise worker destruction. Finish with WORKER_DESTROY_OK or WORKER_DESTROY_MISMATCH.",
     validate: (result) =>
       checkedOutcome(result, "WORKER_DESTROY_OK", "WORKER_DESTROY_MISMATCH", () =>
         requireAnyEvalEvidence(result, [
@@ -143,7 +148,8 @@ export const workerTests: TestCase[] = [
     name: "call-do-method",
     description: "Call a method on a Durable Object worker",
     category: "workers",
-    prompt: "Exercise calling a worker Durable Object. Finish with WORKER_DO_OK or WORKER_DO_UNAVAILABLE.",
+    prompt:
+      "Exercise calling a worker Durable Object. Finish with WORKER_DO_OK or WORKER_DO_UNAVAILABLE.",
     validate: (result) =>
       checkedOutcome(result, "WORKER_DO_OK", "WORKER_DO_UNAVAILABLE", () =>
         requireEvalEvidence(result, ["rpc.call"])
@@ -166,7 +172,9 @@ export const workerTests: TestCase[] = [
     name: "worker-env",
     description: "Create a worker with environment variables",
     category: "workers",
-    prompt: "Exercise worker environment configuration. Finish with WORKER_ENV_OK or WORKER_ENV_UNOBSERVABLE.",
+    workspaceRepoFixture: true,
+    prompt:
+      "Exercise worker environment configuration with a disposable worker you author in the harness-owned workspace namespace. Expose and call one fixed method that returns only the named non-secret probe binding, prove the running worker observed the configured value, and retire it. Finish with WORKER_ENV_OK or WORKER_ENV_UNOBSERVABLE.",
     validate: (result) =>
       checkedOutcome(result, "WORKER_ENV_OK", "WORKER_ENV_UNOBSERVABLE", () =>
         requireAnyEvalEvidence(

@@ -33,7 +33,7 @@ import {
   type RpcRequest,
 } from "@vibestudio/rpc";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { workerLogMethods } from "@vibestudio/shared/serviceSchemas/workerLog";
+import { workerLogMethods } from "@vibestudio/service-schemas/workerLog";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { fs, _initFsWithRpc } from "./fs.js";
 import type { WebhookIngressClient } from "../shared/webhooks.js";

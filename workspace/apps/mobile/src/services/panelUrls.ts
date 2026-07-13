@@ -5,7 +5,7 @@
  * loads, so the URL only needs to point at the static panel bundle.
  */
 
-import { isManagedHost, parsePanelUrl } from "@vibestudio/shared/shell/urlParsing";
+import { isManagedHost, parsePanelUrl } from "@vibestudio/shell-core/urlParsing";
 
 export { isManagedHost, parsePanelUrl };
 

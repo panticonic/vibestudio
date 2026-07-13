@@ -21,7 +21,7 @@ inline_ui({
 import { useState, useEffect, useCallback } from "react";
 import { Button, Flex, Text, Table, Badge, TextField, Box, Separator, Spinner } from "@radix-ui/themes";
 import { TrashIcon, MagnifyingGlassIcon } from "@radix-ui/react-icons";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 export default function CookieManager({ props, chat }) {
   const [cookies, setCookies] = useState([]);
@@ -126,7 +126,7 @@ export default function CookieManager({ props, chat }) {
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const cookies = await browserData.getCookies("github.com");
   console.log(cookies.length + " cookies for github.com");
   for (const c of cookies.slice(0, 10)) {
@@ -140,7 +140,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   // Formats: "json" or "netscape-txt" (curl/wget compatible)
   const exported = await browserData.exportCookies("netscape-txt");
   console.log(exported.slice(0, 500));

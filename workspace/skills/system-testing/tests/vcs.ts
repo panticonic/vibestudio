@@ -13,7 +13,7 @@ async function orchestrateVcsMergeThenPush(
   context: TestOrchestrationContext
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
-  const fixtureName = context.runner.workspaceRepoProjectName;
+  const fixtureName = context.runner.workspaceRepoName;
   if (!fixtureName) {
     throw new Error("vcs-merge-then-push requires a workspace repo fixture namespace");
   }

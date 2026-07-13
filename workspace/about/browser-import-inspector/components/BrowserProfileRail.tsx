@@ -1,9 +1,6 @@
 import { Badge, Box, Button, Flex, Heading, Spinner, Text } from "@radix-ui/themes";
 import { ReloadIcon, LockClosedIcon } from "@radix-ui/react-icons";
-import type {
-  DetectedBrowser,
-  DetectedProfile,
-} from "@workspace/panel-browser";
+import type { DetectedBrowser, DetectedProfile } from "@vibestudio/browser-data/client";
 import { useAsync, browserData, relativeTime } from "../useBrowserData";
 
 export interface ProfileSelection {
@@ -119,7 +116,7 @@ function ProfileRow(props: {
   const { browser, profile } = props;
   const { state } = useAsync(
     () => browserData.getProfileImportState({ browser: browser.name, profilePath: profile.path }),
-    [browser.name, profile.path],
+    [browser.name, profile.path]
   );
   const lastRun = state.data?.lastRun;
   const lastFinished = lastRun ? Number(lastRun["finished_at"]) : null;

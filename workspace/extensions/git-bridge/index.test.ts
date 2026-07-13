@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { activate } from "./index.js";
 import { UpstreamEngine } from "./upstream.js";
 

@@ -12,32 +12,32 @@ import {
   type RpcEventContext,
 } from "@vibestudio/rpc";
 import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
-import { appMethods } from "@vibestudio/shared/serviceSchemas/app";
+import { appMethods } from "@vibestudio/service-schemas/app";
 import {
   accountMethods,
   type AccountProfile,
   type AccountProfileUpdate,
-} from "@vibestudio/shared/serviceSchemas/account";
-import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
-import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
-import { menuMethods } from "@vibestudio/shared/serviceSchemas/menu";
-import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notification";
-import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
-import { panelTreeMethods } from "@vibestudio/shared/serviceSchemas/panelTree";
-import { paletteMethods } from "@vibestudio/shared/serviceSchemas/palette";
+} from "@vibestudio/service-schemas/account";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
+import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import { menuMethods } from "@vibestudio/service-schemas/menu";
+import { notificationMethods } from "@vibestudio/service-schemas/notification";
+import { panelMethods } from "@vibestudio/service-schemas/panel";
+import { panelTreeMethods } from "@vibestudio/service-schemas/panelTree";
+import { paletteMethods } from "@vibestudio/service-schemas/palette";
 import {
   remoteCredMethods,
   type RemoteCredCurrent as RemoteCredCurrentContract,
   type RemoteCredDeviceRecord,
   type RemoteCredPairingInvite,
-} from "@vibestudio/shared/serviceSchemas/remoteCred";
-import { settingsMethods } from "@vibestudio/shared/serviceSchemas/settings";
-import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
-import { autofillMethods } from "@vibestudio/shared/serviceSchemas/autofill";
-import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
-import { viewMethods } from "@vibestudio/shared/serviceSchemas/view";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
-import { workspacePresenceMethods } from "@vibestudio/shared/serviceSchemas/workspacePresence";
+} from "@vibestudio/service-schemas/remoteCred";
+import { settingsMethods } from "@vibestudio/service-schemas/settings";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import { autofillMethods } from "@vibestudio/service-schemas/autofill";
+import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
+import { viewMethods } from "@vibestudio/service-schemas/view";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { workspacePresenceMethods } from "@vibestudio/service-schemas/workspacePresence";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createDurableObjectServiceClient,
@@ -550,7 +550,7 @@ export const blobstore = {
 // =============================================================================
 // Host presence built from live session facts (zero channel coupling). Read
 // once on mount, then keep fresh via the `workspace-presence-changed` event.
-export type { WorkspacePresenceEntry } from "@vibestudio/shared/serviceSchemas/workspacePresence";
+export type { WorkspacePresenceEntry } from "@vibestudio/shared/workspacePresence";
 export const workspacePresence = {
   list: () => workspacePresenceClient.list(),
 };

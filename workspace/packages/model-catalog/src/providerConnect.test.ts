@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConnectCredentialParamsSchema } from "@vibestudio/shared/serviceSchemas/credentials";
+import { ConnectCredentialParamsSchema } from "@vibestudio/service-schemas/credentials";
 import { toCredentialConnectRequest as toSharedCredentialConnectRequest } from "@vibestudio/shared/providerConnect";
 
 import { toCredentialConnectRequest } from "./providerConnect";

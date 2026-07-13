@@ -14,8 +14,7 @@
       "@radix-ui/react-icons",
       "isomorphic-git",
       "@workspace/runtime",
-      "@workspace/ui",
-      "@workspace/panel-browser"
+      "@workspace/ui"
     ]
   },
   "dependencies": {
@@ -24,7 +23,6 @@
     "@workspace/ui": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
-    "@workspace/panel-browser": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",

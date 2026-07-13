@@ -3,7 +3,10 @@ import type { RpcClient } from "@vibestudio/rpc";
 import { executeSandbox } from "./sandbox.js";
 import { createHostedRuntime, type RuntimeHost } from "@workspace/runtime/hosted";
 import * as portableHelpers from "@workspace/runtime/portable";
-import { evalImportableSurface, EVAL_AMBIENT_ONLY } from "@vibestudio/shared/runtimeSurface.eval";
+import {
+  evalImportableSurface,
+  EVAL_AMBIENT_ONLY,
+} from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 
 /**
  * Surface contract the EvalDO depends on: the eval engine resolves

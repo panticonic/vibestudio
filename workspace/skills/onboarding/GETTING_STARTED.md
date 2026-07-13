@@ -10,7 +10,7 @@ are panel-only or depend on optional services/runtime state.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
 
@@ -210,7 +210,7 @@ Quick start — detect what browsers are available:
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const browsers = await browserData.detectBrowsers();
   for (const b of browsers) {
     const status = b.tccBlocked ? " (blocked — needs permission)" : "";

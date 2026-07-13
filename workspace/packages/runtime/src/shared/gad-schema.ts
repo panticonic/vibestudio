@@ -18,7 +18,7 @@ import { channelEnvelopeSchema, trajectoryEventSchema } from "@workspace/agentic
 import {
   vcsProvenanceForFileResultSchema,
   vcsProvenanceForSessionResultSchema,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+} from "@vibestudio/service-schemas/vcs";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };

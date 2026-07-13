@@ -29,7 +29,7 @@ feedback_custom({
 ```
 eval({
   code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "${selection.browser}",
@@ -94,7 +94,7 @@ Prefer passing the full `DetectedProfile` object returned by detection.
 
 ```typescript
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "${selection.browser}",
@@ -122,7 +122,7 @@ again later; changed source rows update in place and new browser data is added.
 
 ```typescript
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const result = await browserData.openTabsAsPanels({
     browser: "${selection.browser}",
@@ -159,7 +159,7 @@ Use this when the user says "sync again", "pull in new data", or "rerun import".
 
 ```typescript
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "${selection.browser}",
@@ -184,7 +184,7 @@ User asks "import my GitHub cookies" — targeted flow.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   // Find a browser with cookies for this domain
   const browsers = await browserData.detectBrowsers();
@@ -221,7 +221,7 @@ Compare what data exists across multiple browsers.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const browsers = await browserData.detectBrowsers();
   const comparison = [];
@@ -310,7 +310,7 @@ once approved. `fs` here is the injected eval/runtime filesystem — do not impo
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const dump = await browserData.exportAll();
   const path = "/exports/browser-data-" + new Date().toISOString().slice(0, 10) + ".json";

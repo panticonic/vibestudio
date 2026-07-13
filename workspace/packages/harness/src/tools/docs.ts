@@ -11,7 +11,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 
-/** Wire shapes (structural; mirror serviceSchemas/docs.ts). */
+/** Wire shapes (structural; mirror packages/service-schemas/src/docs.ts). */
 export interface CatalogHit {
   id: string;
   surface: string;

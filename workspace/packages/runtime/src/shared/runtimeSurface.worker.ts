@@ -1,1 +1,1 @@
-export { workerRuntimeSurface } from "@vibestudio/shared/runtimeSurface.worker";
+export { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.worker";

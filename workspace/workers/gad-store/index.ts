@@ -5662,7 +5662,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       input.expectedRefStateHash !== currentStateHash
     ) {
       // Repo `main` heads are NOT owned by this store: the server's
-      // protected-ref service (RefService) is the single main authority,
+      // protected-ref service (ProtectedRefStore) is the single main authority,
       // and this store records main transitions as downstream PROVENANCE —
       // synchronously for user-initiated VCS ops, asynchronously through
       // the provenance follower for scan/freshness advances, and via the
@@ -12241,7 +12241,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * Protected-ref access for edit/commit composition — the host `refs.*` RPC
    * (the single `main`-head authority). Protected SEAM like
    * {@link contentStore}: host unit tests override it with the test's
-   * RefService.
+   * ProtectedRefStore.
    */
   protected refsStore(): HostRefsStore {
     return {

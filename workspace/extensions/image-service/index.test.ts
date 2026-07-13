@@ -48,7 +48,8 @@ describe("@workspace-extensions/image-service", () => {
     expect(result.width).toBe(1);
     expect(result.height).toBe(1);
     expect(result.dimensionNote).toBeUndefined();
-    expect(result.data).toBeInstanceOf(Uint8Array);
+    expect(typeof result.data).toBe("string");
+    expect(Buffer.from(result.data, "base64")).not.toHaveLength(0);
   });
 
   it("converts identity formats without changing MIME type", async () => {

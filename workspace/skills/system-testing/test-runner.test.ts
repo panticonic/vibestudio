@@ -453,7 +453,7 @@ describe("TestRunner", () => {
     };
     const fixtureState = {
       testName: "fixture-test",
-      projectName: "system-test-fixture-test-1234",
+      repoName: "system-test-fixture-test-1234",
       repoNamePrefix: "system-test-fixture-test-",
       reposBefore: ["meta"],
       staleReposRemoved: [],

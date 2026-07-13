@@ -4,7 +4,7 @@
  *
  * This is the curated client behind `services.blobstore` / `import { blobstore }
  * from "@workspace/runtime"`. Most methods are thin typed wrappers over the
- * `blobstore` RPC service (`@vibestudio/shared/serviceSchemas/blobstore`). The
+ * `blobstore` RPC service (`@vibestudio/service-schemas/blobstore`). The
  * runtime adds two portable conveniences: `putBytes` losslessly encodes bytes,
  * and `materializeTree` composes read-only CAS calls with the caller-scoped
  * RuntimeFs. The raw host materializer remains admin-only because it accepts an
@@ -23,8 +23,8 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
-export { BLOBSTORE_MEMBERS } from "@vibestudio/shared/runtimeSurface.portable";
+import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
+export { BLOBSTORE_MEMBERS } from "@vibestudio/service-schemas/runtime/runtimeSurface.portable";
 import type { RuntimeFs } from "../types.js";
 
 type BlobstoreServiceClient = TypedServiceClient<typeof blobstoreMethods>;

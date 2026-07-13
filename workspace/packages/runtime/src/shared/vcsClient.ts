@@ -10,12 +10,11 @@ import {
   type VcsCommitInput,
   type VcsCommitResult,
   type VcsEditOpRow,
-  type VcsHeadAdvance,
   type VcsLogEntry,
   type VcsPushInput,
   type VcsPushResult,
-  type VcsWorkingAdvance,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+} from "@vibestudio/service-schemas/vcs";
+import type { VcsHeadAdvance, VcsWorkingAdvance } from "@vibestudio/shared/vcsEvents";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
@@ -38,7 +37,6 @@ export type {
   VcsFileListEntry,
   VcsFileReadContent,
   VcsFileWriteContent,
-  VcsHeadAdvance,
   VcsLogEntry,
   VcsMergeResult,
   VcsPendingMerge,
@@ -48,8 +46,8 @@ export type {
   VcsRecallResult,
   VcsResolveHeadResult,
   VcsStatusResult,
-  VcsWorkingAdvance,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+} from "@vibestudio/service-schemas/vcs";
+export type { VcsHeadAdvance, VcsWorkingAdvance } from "@vibestudio/shared/vcsEvents";
 
 /** Minimal event-capable rpc surface (method form -> param bivariance, so the
  * runtime rpc client is assignable). */

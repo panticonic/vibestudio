@@ -17,7 +17,6 @@
     },
     "./hosted": "./src/shared/hostedRuntime.ts",
     "./portable": "./src/shared/portable.ts",
-    "./panel-runtime": "./src/shared/panelRuntime.ts",
     "./credentials": "./src/shared/credentials.ts",
     "./worker/credentials": "./src/worker/credentials.ts",
     "./worker/test-utils": "./src/worker/durable-test-utils.ts",
@@ -27,11 +26,14 @@
     "./internal/diagnostics": "./src/internal/diagnostics.ts"
   },
   "dependencies": {
+    "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/git": "workspace:*",
     "@workspace/harness": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/types": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

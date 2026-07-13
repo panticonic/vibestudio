@@ -1,7 +1,0 @@
-{
-  "name": "@workspace-skills/browser-import",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Incremental browser data import workflows — cookies, passwords, bookmarks, unified history, and open tabs"
-}

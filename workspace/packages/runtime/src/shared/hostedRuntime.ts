@@ -16,6 +16,7 @@
  */
 
 import type { RpcClient } from "@vibestudio/rpc";
+import { createBrowserDataClient, type BrowserDataClient } from "@vibestudio/browser-data/client";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { helpfulNamespace } from "./helpfulNamespace.js";
 import { createGadClient, type GadClient } from "./gad.js";
@@ -98,6 +99,7 @@ export interface WorkspaceRuntime {
   readonly blobstore: BlobstoreClient;
   readonly workspace: WorkspaceClient;
   readonly credentials: CredentialClient;
+  readonly browserData: BrowserDataClient;
   readonly git: GitClient;
   readonly vcs: VcsClient;
   readonly webhooks: WebhookIngressClient;
@@ -206,6 +208,7 @@ export function createServicesProxy(rt: WorkspaceRuntime): Record<string, unknow
 export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const rpc = host.rpc;
   const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));
+  const browserData = helpfulNamespace("browserData", createBrowserDataClient(rpc));
   const gad = helpfulNamespace("gad", createGadClient(rpc));
   const blobstore = helpfulNamespace("blobstore", createBlobstoreClient(rpc, host.fs));
   const workspace = helpfulNamespace("workspace", createWorkspaceClient(rpc));
@@ -240,6 +243,7 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
     blobstore,
     workspace,
     credentials,
+    browserData,
     git,
     vcs,
     webhooks,

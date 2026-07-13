@@ -65,7 +65,7 @@ import { base64ToUint8Array } from "./image-utils.js";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
 import type { PubSubClient } from "./client.js";
-import type { RecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { iterateChannelReplayAfterPages } from "./channel-replay.js";
 
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";

@@ -1,1 +1,1 @@
-export { panelRuntimeSurface } from "@vibestudio/shared/runtimeSurface.panel";
+export { panelRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.panel";

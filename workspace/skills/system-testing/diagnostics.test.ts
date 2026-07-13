@@ -234,7 +234,7 @@ describe("system-testing diagnostics", () => {
     entry.execution.diagnostics = {
       workspaceRepoFixture: {
         testName: "fixture-test",
-        projectName: "system-test-fixture-test-1234",
+        repoName: "system-test-fixture-test-1234",
         repoNamePrefix: "system-test-fixture-test-",
         reposBefore: ["meta"],
         staleReposRemoved: ["panels/system-test-fixture-test-stale"],
@@ -246,7 +246,7 @@ describe("system-testing diagnostics", () => {
 
     expect(summarizeEntry(entry).workspaceRepoFixture).toEqual({
       testName: "fixture-test",
-      projectName: "system-test-fixture-test-1234",
+      repoName: "system-test-fixture-test-1234",
       repoNamePrefix: "system-test-fixture-test-",
       staleReposRemoved: ["panels/system-test-fixture-test-stale"],
       reposRemoved: ["panels/system-test-fixture-test-1234"],

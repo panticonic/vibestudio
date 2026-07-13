@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@workspace/terminal-host-protocol": "workspace:*",
     "@xterm/headless": "^5.5.0",

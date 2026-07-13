@@ -5,13 +5,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./panel": "./src/panel.ts",
-    "./theme.config": "./src/theme.config.ts",
     "./tokens.css": "./src/tokens.css"
   },
   "dependencies": {
     "@radix-ui/react-icons": "^1.3.2",
     "@radix-ui/themes": "^3.2.1",
-    "@workspace/brand-assets": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "shiki": "^3.23.0"
   },

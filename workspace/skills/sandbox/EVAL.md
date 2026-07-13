@@ -716,25 +716,11 @@ entity introspection that returns the full env object or arbitrary secret keys.
 See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#worker-lifecycle-and-environment-bindings)
 for the worker-side probe pattern.
 
-For a no-edit end-to-end check, the shipped `workers/hello` sample exposes the
-fixed RPC method `readNonSecretProbe` and returns only `NON_SECRET_PROBE`:
-
-```ts
-let probe;
-try {
-  probe = await rpc.call("main", "runtime.createEntity", [{
-    kind: "worker",
-    source: "workers/hello",
-    key: `env-probe-${crypto.randomUUID()}`,
-    contextId: ctx.contextId,
-    env: { NON_SECRET_PROBE: "configured" },
-  }]);
-  const observed = await rpc.call(probe.targetId, "readNonSecretProbe", []);
-  if (observed.value !== "configured") throw new Error("Worker env mismatch");
-} finally {
-  if (probe) await rpc.call("main", "runtime.retireEntity", [{ id: probe.id }]);
-}
-```
+The probe belongs in the worker being tested; a successful check must call that
+worker through the returned `targetId`. See
+[workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#worker-lifecycle-and-environment-bindings)
+for the narrow fixed-method pattern. Do not use a permanently shipped sample as
+a substitute for testing the actual worker.
 
 ## Workspace VCS
 

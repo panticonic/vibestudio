@@ -522,7 +522,7 @@ await services.extensions.invoke("@workspace-extensions/test-runner", "run", [{
 ### Browser Data
 
 ```typescript
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 ```
 
 Available methods:
@@ -566,7 +566,7 @@ each call.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const browsers = await browserData.detectBrowsers();
   console.log(browsers.map(b => b.displayName + ": " + b.profiles.length + " profiles"));
 `
@@ -577,7 +577,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const browsers = await browserData.detectBrowsers();
   const chrome = browsers.find(b => b.name === "chrome");
   if (!chrome) { console.log("Chrome not found"); return; }
@@ -599,7 +599,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const bookmarks = await browserData.searchBookmarks("github");
   console.log("Found", bookmarks.length, "bookmarks");
   const html = await browserData.exportBookmarks("html");

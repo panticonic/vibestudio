@@ -121,7 +121,7 @@ publish custom message types from a headless session, use the underlying
 `session.client` (PubSubClient) escape hatch — `registerMessageType`,
 `publishCustomMessage`, `updateCustomMessage`, `clearMessageType`. The full
 reference lives in
-[`workspace/skills/sandbox/CUSTOM_MESSAGES.md`](../sandbox/CUSTOM_MESSAGES.md).
+[`workspace/skills/sandbox/CUSTOM_MESSAGES.md`](../../../skills/sandbox/CUSTOM_MESSAGES.md).
 Headless sessions don't render React, so they only emit and observe the events;
 the panel side does the rendering.
 

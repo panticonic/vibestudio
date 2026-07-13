@@ -25,7 +25,7 @@ import type {
   ImportResult,
   ImportRun,
   PreviewTypeResult,
-} from "@workspace/panel-browser";
+} from "@vibestudio/browser-data/client";
 import { ProfileSelection } from "./BrowserProfileRail";
 import { useAsync, browserData, relativeTime, DATA_TYPES, classifyError } from "../useBrowserData";
 

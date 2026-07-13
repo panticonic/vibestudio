@@ -115,7 +115,10 @@ describe("InlineGroup custom messages", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const publish = vi.fn().mockResolvedValue(undefined);
     const entry = customEntry();
-    entry.definition.source = { type: "file", path: "panels/chat/examples/weather-message-type.tsx" };
+    entry.definition.source = {
+      type: "code",
+      code: "export default function Renderer() { return null; }",
+    };
     entry.module.default = () => {
       throw new Error("renderer exploded");
     };

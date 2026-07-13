@@ -8,6 +8,7 @@ const g = globalThis as typeof globalThis & {
     onEnvelope: ReturnType<typeof vi.fn>;
     onRecovery?: ReturnType<typeof vi.fn>;
     serviceCall?: ReturnType<typeof vi.fn>;
+    isLocalService?: ReturnType<typeof vi.fn>;
   };
 };
 
@@ -118,7 +119,8 @@ describe("createPanelTransport", () => {
 
   it("routes Electron-local panel host helpers through serviceCall", async () => {
     const serviceCall = vi.fn(async () => "ok");
-    const shell = makeShell({ serviceCall });
+    const isLocalService = vi.fn(async () => true);
+    const shell = makeShell({ serviceCall, isLocalService });
     g.__vibestudioShell = shell;
     const transport = createPanelTransport();
     const handler = vi.fn();
@@ -136,6 +138,7 @@ describe("createPanelTransport", () => {
     await Promise.resolve();
 
     expect(serviceCall).toHaveBeenCalledWith("panel.reloadView", "panel-1");
+    expect(isLocalService).toHaveBeenCalledWith("panel");
     expect(shell.postEnvelope).not.toHaveBeenCalled();
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -146,6 +149,67 @@ describe("createPanelTransport", () => {
           requestId: "req-2",
           result: "ok",
         },
+      })
+    );
+  });
+
+  it("categorizes unavailable Electron-local services on non-Electron hosts", async () => {
+    g.__vibestudioShell = makeShell({ isLocalService: vi.fn(async () => true) });
+    const transport = createPanelTransport();
+    const handler = vi.fn();
+    transport.onMessage(handler);
+
+    await transport.send(
+      envelope("main", {
+        type: "request",
+        fromId: "panel:panel-1",
+        requestId: "req-unavailable",
+        method: "panel.reloadView",
+        args: ["panel-1"],
+      })
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          requestId: "req-unavailable",
+          errorKind: "service",
+        }),
+      })
+    );
+  });
+
+  it("preserves a local service error category", async () => {
+    const failure = Object.assign(new Error("denied"), { errorKind: "access" as const });
+    g.__vibestudioShell = makeShell({
+      isLocalService: vi.fn(async () => true),
+      serviceCall: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    const transport = createPanelTransport();
+    const handler = vi.fn();
+    transport.onMessage(handler);
+
+    await transport.send(
+      envelope("main", {
+        type: "request",
+        fromId: "panel:panel-1",
+        requestId: "req-denied",
+        method: "panel.reloadView",
+        args: ["panel-1"],
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          requestId: "req-denied",
+          error: "denied",
+          errorKind: "access",
+        }),
       })
     );
   });

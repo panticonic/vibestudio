@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "sucrase": "^3.35.0"
   },

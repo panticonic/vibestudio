@@ -1,16 +1,13 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { Panel, PanelTreeSnapshot, ThemeAppearance } from "@vibestudio/shared/types";
-import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { Appearance, Platform } from "react-native";
-import { WorkspaceClient } from "@vibestudio/shared/shell/workspaceClient";
-import { SettingsClient } from "@vibestudio/shared/shell/settingsClient";
-import { EventsClient } from "@vibestudio/shared/shell/eventsClient";
-import { createRecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
-import type {
-  RecoveryCoordinator,
-  RecoveryKind,
-} from "@vibestudio/shared/shell/recoveryCoordinator";
-import type { PanelManager } from "@vibestudio/shared/shell/panelManager";
+import { WorkspaceClient } from "@vibestudio/service-schemas/clients/shellWorkspaceClient";
+import { SettingsClient } from "@vibestudio/service-schemas/clients/settingsClient";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shell-core/recoveryCoordinator";
+import type { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type {
   PanelHost,
   PanelHostRegistration,
@@ -31,7 +28,7 @@ import {
   type PanelRepoState,
 } from "@vibestudio/shared/panelChrome";
 import {
-  createBrowserDataRpcClient,
+  createBrowserDataClient,
   type BrowserDataClient,
   type RecordHistoryVisitRequest,
   type UpdateHistoryTitleRequest,
@@ -42,16 +39,12 @@ import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import { startPanelAssetFacade, type PanelAssetFacade } from "./panelAssetFacade";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
-import { panelRuntimeMethods } from "@vibestudio/shared/serviceSchemas/panelRuntime";
-import { credentialsMethods } from "@vibestudio/shared/serviceSchemas/credentials";
-import { pushMethods } from "@vibestudio/shared/serviceSchemas/push";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
-import {
-  vcsMethods,
-  type VcsPushInput,
-  type VcsPushResult,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
+import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
+import { pushMethods } from "@vibestudio/service-schemas/push";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { vcsMethods, type VcsPushInput, type VcsPushResult } from "@vibestudio/service-schemas/vcs";
 import {
   createDurableObjectServiceClient,
   createGadServiceClient,
@@ -243,7 +236,7 @@ class MobilePanels implements PanelHost {
     this.panelRuntime = createPanelRuntimeClient(this.deps.transport);
     this.workspaceRpc = createWorkspaceRpcClient(this.deps.transport);
     this.vcs = createVcsClient(this.deps.transport);
-    this.browserData = createBrowserDataRpcClient({
+    this.browserData = createBrowserDataClient({
       call: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
     });
@@ -499,18 +492,18 @@ class MobilePanels implements PanelHost {
       ),
       browserData: {
         searchHistoryForAutocomplete: (searchQuery, limit) =>
-          this.browserData.history.searchForAutocomplete(searchQuery, limit),
-        getHistory: (historyQuery) => this.browserData.history.get(historyQuery),
-        searchBookmarks: (searchQuery) => this.browserData.bookmarks.search(searchQuery),
-        getSearchEngines: () => this.browserData.searchEngines.getAll(),
+          this.browserData.searchHistoryForAutocomplete(searchQuery, limit),
+        getHistory: (historyQuery) => this.browserData.getHistory(historyQuery),
+        searchBookmarks: (searchQuery) => this.browserData.searchBookmarks(searchQuery),
+        getSearchEngines: () => this.browserData.getSearchEngines(),
       },
     });
   }
   async recordHistoryVisit(request: RecordHistoryVisitRequest): Promise<void> {
-    await this.browserData.history.recordVisit(request);
+    await this.browserData.recordHistoryVisit(request);
   }
   async updateHistoryTitle(request: UpdateHistoryTitleRequest): Promise<void> {
-    await this.browserData.history.updateTitle(request);
+    await this.browserData.updateHistoryTitle(request);
   }
   async updateTheme(theme: ThemeAppearance): Promise<void> {
     this.requireManager().setCurrentTheme(theme);

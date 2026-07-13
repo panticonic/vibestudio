@@ -19,9 +19,9 @@ method or keep a sandbox alive for the agent to evaluate code.
 
 | Document | Content |
 |----------|---------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Package layout, ConnectionManager vs HeadlessSession, what lives where |
-| [QUICK_START.md](QUICK_START.md) | Getting started: create a session, send messages, drive an agent |
-| [API.md](API.md) | Full API reference for HeadlessSession |
+| [references/ARCHITECTURE.md](references/ARCHITECTURE.md) | Package layout, ConnectionManager vs HeadlessSession, what lives where |
+| [references/QUICK_START.md](references/QUICK_START.md) | Getting started: create a session, send messages, drive an agent |
+| [references/API.md](references/API.md) | Full API reference for HeadlessSession |
 
 ## Packages
 

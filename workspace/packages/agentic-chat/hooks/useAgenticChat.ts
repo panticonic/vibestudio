@@ -14,8 +14,8 @@
 import { useCallback, useMemo, useReducer, useRef, useEffect, useState } from "react";
 import { z } from "zod";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { runtimeMethods } from "@vibestudio/shared/serviceSchemas/runtime";
-import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
+import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
+import { fsMethods } from "@vibestudio/service-schemas/fs";
 import type {
   ChannelConfig,
   MethodDefinition,

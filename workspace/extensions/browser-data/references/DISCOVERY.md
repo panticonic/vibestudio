@@ -6,7 +6,7 @@ Detect installed browsers and enumerate their profiles before importing.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const browsers = await browserData.detectBrowsers();
 
   for (const b of browsers) {
@@ -31,7 +31,7 @@ inline_ui({
   code: `
 import { useState, useEffect } from "react";
 import { Button, Flex, Text, Card, Badge, Box, Spinner, Avatar, Separator } from "@radix-ui/themes";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 const BROWSER_ICONS = {
   chrome: "🌐", firefox: "🦊", safari: "🧭", edge: "🔵",
@@ -147,7 +147,7 @@ feedback_custom({
   code: `
 import { useState, useEffect } from "react";
 import { Button, Flex, Text, Card, Badge, Box, Spinner, Checkbox, Separator } from "@radix-ui/themes";
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 
 const DATA_TYPES = ["cookies", "passwords", "bookmarks", "history", "autofill", "searchEngines"];
 

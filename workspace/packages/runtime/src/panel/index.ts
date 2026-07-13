@@ -131,6 +131,7 @@ export const {
   blobstore,
   workspace,
   credentials,
+  browserData,
   git,
   vcs,
   webhooks,

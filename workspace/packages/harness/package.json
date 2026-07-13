@@ -14,6 +14,7 @@
     "@mozilla/readability": "^0.6.0",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
     "@sinclair/typebox": "^0.27.8",
     "@workspace/pi-core": "workspace:*",
     "@workspace/vcs-engine": "workspace:*",

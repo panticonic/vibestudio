@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Box, Button, Callout, Flex, Spinner, Text, TextField } from "@radix-ui/themes";
 import { CheckCircledIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { isValidHandle } from "@vibestudio/shared/users/types";
+import { isValidHandle } from "@vibestudio/identity/types";
 import {
   ACCOUNT_AVATAR_DATA_URI_PATTERN,
   MAX_AVATAR_DATA_URI_BYTES,
-} from "@vibestudio/shared/serviceSchemas/account";
+} from "@vibestudio/service-schemas/account";
 import { account, type ShellAccountProfile } from "../shell/client";
 
 const COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;

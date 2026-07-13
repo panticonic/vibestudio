@@ -35,7 +35,7 @@ import { pickRecommendedModelId } from "@workspace/model-catalog/modelRecommenda
 import {
   findMatchingUrlAudience,
   type UrlAudience,
-} from "@vibestudio/shared/credentials/urlAudience";
+} from "@vibestudio/credential-client/urlAudience";
 
 const AGENT_THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 

@@ -201,14 +201,14 @@ describe("HeadlessRunner", () => {
     const runner = new HeadlessRunner("ctx-test").forTest("docs-workspace-loop", {
       workspaceRepoFixture: true,
     });
-    const projectName = runner.workspaceRepoProjectName!;
+    const repoName = runner.workspaceRepoName!;
     const prefix = "system-test-docs-workspace-loop-";
     const refs = (...repoPaths: string[]) => repoPaths.map((repoPath) => ({ repoPath }));
     mocks.rpc.call
       .mockResolvedValueOnce(refs("panels/normal", `panels/${prefix}stale`))
       .mockResolvedValueOnce(refs("panels/normal"))
       .mockResolvedValueOnce(
-        refs("panels/normal", `panels/${projectName}`, "panels/outside-fixture")
+        refs("panels/normal", `panels/${repoName}`, "panels/outside-fixture")
       )
       .mockResolvedValueOnce(refs("panels/normal", "panels/outside-fixture"));
     mocks.vcs.deleteRepo.mockResolvedValue({ archived: true });
@@ -219,13 +219,13 @@ describe("HeadlessRunner", () => {
 
     expect(state).toMatchObject({
       testName: "docs-workspace-loop",
-      projectName,
+      repoName,
       repoNamePrefix: prefix,
       staleReposRemoved: [`panels/${prefix}stale`],
       reposBefore: ["panels/normal"],
     });
     expect(cleanup).toEqual({
-      reposRemoved: [`panels/${projectName}`],
+      reposRemoved: [`panels/${repoName}`],
       escapedRepos: ["panels/outside-fixture"],
       reposAfter: ["panels/normal", "panels/outside-fixture"],
     });
@@ -234,14 +234,14 @@ describe("HeadlessRunner", () => {
       force: true,
     });
     expect(mocks.vcs.deleteRepo).toHaveBeenNthCalledWith(2, {
-      repoPath: `panels/${projectName}`,
+      repoPath: `panels/${repoName}`,
       force: true,
     });
     const config = mocks.createWithAgent.mock.calls[0]![0] as {
       extraConfig: Record<string, unknown>;
     };
     expect(config.extraConfig["systemPrompt"]).toContain(
-      `use the exact project name ${JSON.stringify(projectName)}`
+      `use the exact repo basename ${JSON.stringify(repoName)}`
     );
   });
 });

@@ -16,13 +16,13 @@ import {
   validateWorkspaceGitRemoteBranch,
   validateWorkspaceGitRemoteName,
   type ResolvedWorkspaceGitUpstream,
-} from "@vibestudio/shared/workspace/remotes";
+} from "@vibestudio/workspace/remotes";
 import {
   WORKSPACE_IMPORT_PARENT_DIRS,
   assertWorkspaceCreateTargetSafe,
   isSupportedImportRepoPath,
   resolveWorkspaceRepoPath,
-} from "@vibestudio/shared/workspace/pathPolicy";
+} from "@vibestudio/workspace/pathPolicy";
 import type {
   GitCommitMappingRow,
   GitOverwritePreview,
@@ -33,12 +33,12 @@ import type {
   GitUpstreamState,
   GitUpstreamStatusOptions,
   GitUpstreamStatusRow,
-} from "@vibestudio/shared/serviceSchemas/gitInterop";
+} from "@vibestudio/service-schemas/gitInterop";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
   WorkspaceGitUpstreamConfig,
-} from "@vibestudio/shared/workspace/types";
+} from "@vibestudio/workspace-contracts/types";
 import { getRemoteProvider } from "@workspace/integrations/remoteProviders";
 import {
   GitBridge,

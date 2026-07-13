@@ -123,7 +123,7 @@ component code:
 | Module                       | What it provides                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `@workspace/runtime`         | rpc, fs, git, workers, workspace, contextId, panel navigation, credentials, GAD, `approvals.request` for custom shared resources |
-| `@workspace/panel-browser`   | Browser data import/export (cookies, passwords, bookmarks, history)                                             |
+| `browserData` from `@workspace/runtime` | Browser data import/export (cookies, passwords, bookmarks, history)                                  |
 | `react`, `react/jsx-runtime` | React hooks and component APIs                                                                                  |
 | `@radix-ui/themes`           | UI components (Button, Flex, Card, Table, etc.)                                                                 |
 | `@radix-ui/react-icons`      | Icon components                                                                                                 |

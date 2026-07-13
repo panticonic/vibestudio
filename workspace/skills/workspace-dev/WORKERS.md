@@ -24,6 +24,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `openExternal` | value |  |  |
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
+| `browserData` | namespace | `detectBrowsers`, `getOpenTabs`, `openTabsAsPanels`, `startImport`, `getImportHistory`, `getProfileImportState`, `previewImport`, `getCookieDomains`, `getHistoryDomains`, `getPasswordOrigins`, `getAutofillFieldNames`, `getDomainReadiness`, `getAutocompleteDebug`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getAutofillSuggestions`, `getSearchEngines`, `setDefaultEngine`, `getPermissions`, `setPermission`, `exportBookmarks`, `exportPasswords`, `exportCookies`, `exportAll`, `getCookies`, `deleteCookie`, `clearCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
 | `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `resetExportMarker`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
 | `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections`, `provenanceForFile`, `provenanceForSession`, `provenanceForClaim` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
@@ -84,13 +85,7 @@ the worker's `fetch(request, env, ctx)` handler. Read them from `env` (typed as
 A resolved `runtime.createEntity` call proves that the host accepted the env
 configuration and started the worker. It does not prove that the running worker
 observed a value. For an end-to-end check, expose one intentionally non-secret
-probe from worker code and call it through the returned `targetId`:
-
-The shipped `workers/hello` sample already implements the fixed
-`readNonSecretProbe` RPC method for no-edit diagnostics. Launch it with
-`env: { NON_SECRET_PROBE: "configured" }`, then call
-`rpc.call(handle.targetId, "readNonSecretProbe", [])`. It never returns another
-binding. Use the pattern below when authoring your own worker.
+probe from the worker under test and call it through the returned `targetId`:
 
 ```ts
 import {
@@ -106,7 +101,7 @@ export default {
   async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext) {
     const runtime = createWorkerRuntime(env);
     if (exposedForWorker !== env.WORKER_ID) {
-      runtime.rpc.expose("readNonSecretProbe", () => ({
+      runtime.rpc.expose("observeConfiguredValue", () => ({
         value:
           typeof env["NON_SECRET_PROBE"] === "string" ? env["NON_SECRET_PROBE"] : null,
       }));
@@ -122,7 +117,7 @@ export default {
 ```ts
 const observed = await rpc.call<{ value: string | null }>(
   handle.targetId,
-  "readNonSecretProbe",
+  "observeConfiguredValue",
   []
 );
 if (observed.value !== "configured") throw new Error("Worker env mismatch");
@@ -343,11 +338,11 @@ uses workerd, the declared service policy, the method's `@rpc` caller policy,
 and the object's persistent SQLite database.
 
 For fast Vitest-only unit coverage, keep storage logic in methods like the above
-and use `createTestDO(...)`. That helper is intentionally test-only: it creates
-an in-memory sql.js-backed object in the test process and does not exercise
-service resolution, workerd persistence, or the RPC/policy boundary. See
-`workspace/workers/sample-do/sampleDo.test.ts`. Do not import `createTestDO` from
-agent eval or production panel/worker/DO code.
+and use `createTestDO(...)` in a co-located worker test. That helper is
+intentionally test-only: it creates an in-memory sql.js-backed object in the
+test process and does not exercise service resolution, workerd persistence, or
+the RPC/policy boundary. Do not import `createTestDO` from agent eval or
+production panel/worker/DO code.
 
 ## Durable Object Schema & Migrations
 

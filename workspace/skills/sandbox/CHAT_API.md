@@ -249,7 +249,7 @@ const rows = await chat.rpc.call(store.targetId, "listTodos", []);
 const build = await chat.rpc.call("main", "build.getBuild", ["panels/my-app"]);
 
 // Browser data (panel/component runtime; resolves the manifest-declared broker)
-import { browserData } from "@workspace/panel-browser";
+import { browserData } from "@workspace/runtime";
 const browsers = await browserData.detectBrowsers();
 
 // Workers (running worker instances)

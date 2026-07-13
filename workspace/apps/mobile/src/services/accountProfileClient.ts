@@ -2,7 +2,7 @@ import {
   accountMethods,
   type AccountProfile,
   type AccountProfileUpdate,
-} from "@vibestudio/shared/serviceSchemas/account";
+} from "@vibestudio/service-schemas/account";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export type MobileAccountProfile = AccountProfile;

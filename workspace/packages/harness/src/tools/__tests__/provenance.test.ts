@@ -3,7 +3,7 @@ import type {
   VcsProvItem,
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+} from "@vibestudio/service-schemas/vcs";
 import { createProvenanceTool, type ProvenanceToolDeps } from "../provenance.js";
 
 const CWD = "/";

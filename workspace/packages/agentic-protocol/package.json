@@ -4,8 +4,7 @@
   "description": "Pure trajectory event vocabulary, schemas, reducers, and hash helpers for agentic systems",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./handlers": "./src/handlers.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "test": "vitest run"

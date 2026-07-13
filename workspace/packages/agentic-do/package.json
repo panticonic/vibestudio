@@ -15,6 +15,7 @@
     "@workspace/harness": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/pubsub": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@workspace/agent-loop": "workspace:*"
   },

@@ -34,8 +34,8 @@ import type {
   GitPullUpstreamResult,
   GitUpstreamState,
   GitUpstreamStatusRow,
-} from "@vibestudio/shared/serviceSchemas/gitInterop";
-import { formatRelativeTime } from "@vibestudio/shared/gitFormatting";
+} from "@vibestudio/service-schemas/gitInterop";
+import { formatRelativeTime } from "@vibestudio/git/formatting";
 import { useIsMobile, usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import {
   DiffViewer,

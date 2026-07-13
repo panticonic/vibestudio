@@ -44,7 +44,7 @@ export async function activate(ctx: { log: { info(message: string): void } }) {
         options,
       );
       const out: {
-        data: Uint8Array;
+        data: string;
         mimeType: string;
         width: number;
         height: number;
@@ -53,7 +53,7 @@ export async function activate(ctx: { log: { info(message: string): void } }) {
         wasResized: boolean;
         dimensionNote?: string;
       } = {
-        data: new Uint8Array(Buffer.from(result.data, "base64")),
+        data: result.data,
         mimeType: result.mimeType,
         originalWidth: result.originalWidth,
         originalHeight: result.originalHeight,

@@ -12,7 +12,7 @@ import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Buffer } from "node:buffer";
 import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import type { VcsProvenanceForFileResult } from "@vibestudio/shared/serviceSchemas/vcs";
+import type { VcsProvenanceForFileResult } from "@vibestudio/service-schemas/vcs";
 import type { RuntimeFs } from "./runtime-fs.js";
 import type { RpcCaller } from "@vibestudio/rpc";
 import { createExtensionProxy } from "@vibestudio/extension";
@@ -88,7 +88,8 @@ export interface ReadToolDetails {
   suggestions?: string[];
 }
 interface ImageResizeResult {
-  data: Uint8Array;
+  /** Base64 payload: extension RPC return values are JSON, never typed-array objects. */
+  data: string;
   mimeType: string;
   width: number;
   height: number;
@@ -417,9 +418,8 @@ export function createReadTool(
             maxWidth: 2000,
             maxHeight: 2000,
           });
-          const base64 = Buffer.from(resized.data).toString("base64");
           const content: (TextContent | ImageContent)[] = [
-            { type: "image", mimeType: resized.mimeType, data: base64 },
+            { type: "image", mimeType: resized.mimeType, data: resized.data },
           ];
           if (resized.dimensionNote) {
             content.unshift({ type: "text", text: resized.dimensionNote });
@@ -429,7 +429,7 @@ export function createReadTool(
             details: {
               path: absolutePath,
               mimeType: resized.mimeType,
-              size: resized.data.byteLength,
+              size: Buffer.byteLength(resized.data, "base64"),
               originalSize: raw.byteLength,
               originalDimensions: { width: resized.originalWidth, height: resized.originalHeight },
               dimensions: { width: resized.width, height: resized.height },

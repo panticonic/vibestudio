@@ -35,7 +35,7 @@ Every final response should be concise, include the requested marker tokens exac
 
 export interface WorkspaceRepoFixtureState {
   testName: string;
-  projectName: string;
+  repoName: string;
   repoNamePrefix: string;
   reposBefore: string[];
   staleReposRemoved: string[];
@@ -74,7 +74,7 @@ export class HeadlessRunner {
   };
   private readonly testName: string | null;
   private readonly workspaceRepoFixture: {
-    projectName: string;
+    repoName: string;
     repoNamePrefix: string;
   } | null;
 
@@ -121,9 +121,9 @@ export class HeadlessRunner {
     return this.shared.modelPolicy.activeModel;
   }
 
-  /** Exact disposable project name reserved for this test, when enabled. */
-  get workspaceRepoProjectName(): string | null {
-    return this.workspaceRepoFixture?.projectName ?? null;
+  /** Exact disposable repository basename reserved for this test, when enabled. */
+  get workspaceRepoName(): string | null {
+    return this.workspaceRepoFixture?.repoName ?? null;
   }
 
   /** Serializable evidence for inspect/status output. */
@@ -141,7 +141,7 @@ export class HeadlessRunner {
     const workspaceRepoFixture = opts?.workspaceRepoFixture
       ? {
           repoNamePrefix,
-          projectName: `${repoNamePrefix}${crypto.randomUUID().slice(0, 8)}`,
+          repoName: `${repoNamePrefix}${crypto.randomUUID().slice(0, 8)}`,
         }
       : null;
     return new HeadlessRunner(
@@ -168,7 +168,7 @@ export class HeadlessRunner {
     }
     return {
       testName: this.testName ?? "unknown",
-      projectName: fixture.projectName,
+      repoName: fixture.repoName,
       repoNamePrefix: fixture.repoNamePrefix,
       reposBefore: await this.listMainRepoPaths(),
       staleReposRemoved: staleRepos,
@@ -236,8 +236,8 @@ export class HeadlessRunner {
     const usingFallbackModel = model === SYSTEM_TEST_FALLBACK_MODEL;
     const fixturePrompt = this.workspaceRepoFixture
       ? `\n\nHarness-owned workspace fixture: if this task creates or forks a disposable ` +
-        `workspace project, use the exact project name ${JSON.stringify(
-          this.workspaceRepoFixture.projectName
+        `workspace repo, use the exact repo basename ${JSON.stringify(
+          this.workspaceRepoFixture.repoName
         )} whenever the API asks for its name. This is isolation metadata only; ` +
         `choose the normal documented product workflow and do not substitute fixture-specific APIs.`
       : "";

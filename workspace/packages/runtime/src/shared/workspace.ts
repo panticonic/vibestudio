@@ -9,5 +9,5 @@ export type {
   WorkspaceUnitLogRecord,
   WorkspaceUnitsClient,
   WorkspaceUnitStatus,
-} from "@vibestudio/shared/workspace/client";
-export { createWorkspaceClient } from "@vibestudio/shared/workspace/client";
+} from "@vibestudio/service-schemas/clients/workspaceClient";
+export { createWorkspaceClient } from "@vibestudio/service-schemas/clients/workspaceClient";

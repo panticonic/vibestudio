@@ -60,20 +60,19 @@ describe("worker test validators", () => {
   });
 
   it("does not turn an unobservable environment into a passing test", () => {
-    const result = test("worker-env").validate(
-      execution("WORKER_ENV_UNOBSERVABLE", "complete")
-    );
+    const result = test("worker-env").validate(execution("WORKER_ENV_UNOBSERVABLE", "complete"));
     expect(result.passed).toBe(false);
     expect(result.reason).toContain("WORKER_ENV_OK was not verified");
   });
 
   it("requires successful tool evidence for positive lifecycle markers", () => {
     expect(test("create-destroy").validate(execution("WORKER_DESTROY_OK")).passed).toBe(false);
-    expect(
-      test("create-destroy").validate(execution("WORKER_DESTROY_OK", "error")).passed
-    ).toBe(false);
-    expect(test("create-destroy").validate(execution("WORKER_DESTROY_OK", "complete")).passed)
-      .toBe(false);
+    expect(test("create-destroy").validate(execution("WORKER_DESTROY_OK", "error")).passed).toBe(
+      false
+    );
+    expect(test("create-destroy").validate(execution("WORKER_DESTROY_OK", "complete")).passed).toBe(
+      false
+    );
     const verified = execution(
       "WORKER_DESTROY_OK",
       "complete",
@@ -105,7 +104,7 @@ describe("worker test validators", () => {
       "complete",
       [
         'const handle = await rpc.call("main", "runtime.createEntity", [{ env: { PROBE: "x" } }]);',
-        'await rpc.call(handle.targetId, "readNonSecretProbe", []);',
+        'await rpc.call(handle.targetId, "observeConfiguredValue", []);',
         'await rpc.call("main", "runtime.retireEntity", [{ id: handle.id }]);',
       ].join("\n")
     );

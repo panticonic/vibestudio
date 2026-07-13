@@ -5,9 +5,9 @@ import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
-} from "@vibestudio/shared/shell/approvalState";
-import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
-import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
+} from "@vibestudio/shell-core/approvalState";
+import { eventsMethods } from "@vibestudio/service-schemas/events";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 /**

@@ -139,7 +139,7 @@ function createRpc(
 } {
   return {
     call: vi.fn(async (_target: string, method: string) =>
-      method === "extensions.streamingMethods" ? streamingMethods : undefined
+      method === "extensions.streamingMethods" ? streamingMethods : null
     ),
     stream: vi.fn(async () => response),
     emit: vi.fn(async () => undefined),

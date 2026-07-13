@@ -53,10 +53,9 @@ GAD (the workspace provenance system) separates:
   approvals, claims, contradictions, indexing work: never implicitly
   materialized into context.
 
-This is why provenance queries (`gad-context`, `gad-review`,
-`provenance("session")` skills) exist as *pull* surfaces: rich provenance is
-recorded about everything, but only deliberate reads bring it into a model's
-context.
+This is why `gad-context` and the `provenance("session")` orientation workflow
+exist as *pull* surfaces: rich provenance is recorded about everything, but
+only deliberate reads bring it into a model's context.
 
 ## Worktree states and the VCS authority model
 
@@ -67,7 +66,7 @@ manifest root. Authority over source is split three ways:
 1. The server's **content store** (blobstore) owns trees — every state hash
    resolves to an immutable mirrored tree; all tree reads (path resolution,
    diffs, build sources, materialization) go through it.
-2. The server's **RefService** owns protected refs: `repo → main` advances
+2. The server's **ProtectedRefStore** owns protected refs: `repo → main` advances
    only by compare-and-swap through the approval gate. Nothing in userland
    can move `main` directly.
 3. The **gad DO** owns semantics: provenance and history, edit/commit/revert

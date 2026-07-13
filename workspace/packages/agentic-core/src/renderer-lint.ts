@@ -24,7 +24,7 @@ export const DEFAULT_HOST_MODULES: readonly string[] = [
   "@radix-ui/react-icons",
   "isomorphic-git",
   "@workspace/runtime",
-  "@workspace/panel-browser",
+  "@vibestudio/browser-data/client",
 ];
 
 export interface RendererLintIssue {
@@ -70,7 +70,12 @@ export function lintRendererSource(
     if (isTypeOnly) continue;
     // `import { type A, type B } from "x"` — type-only despite no `import type`.
     if (clause && /^\{[^}]*\}$/.test(clause.trim())) {
-      const names = clause.trim().slice(1, -1).split(",").map((name) => name.trim()).filter(Boolean);
+      const names = clause
+        .trim()
+        .slice(1, -1)
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean);
       if (names.length > 0 && names.every((name) => name.startsWith("type "))) continue;
     }
     if (specifier.startsWith("./") || specifier.startsWith("../")) continue;

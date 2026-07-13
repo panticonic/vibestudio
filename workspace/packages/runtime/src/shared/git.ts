@@ -11,7 +11,7 @@ import type { RpcCaller } from "@vibestudio/rpc";
 import {
   gitInteropMethods,
   type GitInteropClient,
-} from "@vibestudio/shared/serviceSchemas/gitInterop";
+} from "@vibestudio/service-schemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export type GitClient = GitInteropClient;
@@ -39,7 +39,7 @@ export type {
   GitUpstreamState,
   GitUpstreamStatusOptions,
   GitUpstreamStatusRow,
-} from "@vibestudio/shared/serviceSchemas/gitInterop";
+} from "@vibestudio/service-schemas/gitInterop";
 
 export function createGitClient(rpc: RpcCaller): GitClient {
   return createTypedServiceClient("gitInterop", gitInteropMethods, (service, method, args) =>

@@ -40,7 +40,7 @@ import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/
 import type {
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+} from "@vibestudio/service-schemas/vcs";
 import { SUPPORTED_IMAGE_TYPES } from "@workspace/pubsub";
 import { AgentVesselBase, type AgentPromptResources, type ApprovalLevel } from "./agent-vessel.js";
 import { AgentHeartbeatLoop, type AgentHeartbeatLoopDeps } from "./agent-heartbeat-loop.js";

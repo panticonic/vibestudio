@@ -3,14 +3,14 @@ import type { RpcClient } from "@vibestudio/rpc";
 import { helpfulNamespace } from "./helpfulNamespace.js";
 import { createHostedRuntime, type RuntimeHost } from "./hostedRuntime.js";
 import { createWorkerRuntime } from "../worker/index.js";
-import { panelRuntimeSurface } from "@vibestudio/shared/runtimeSurface.panel";
-import { workerRuntimeSurface } from "@vibestudio/shared/runtimeSurface.worker";
-import { coreRuntimeSurface } from "@vibestudio/shared/runtimeSurface.core";
+import { panelRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.panel";
+import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.worker";
+import { coreRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.core";
 import {
   EVAL_AMBIENT_ONLY,
   evalImportableSurface,
-} from "@vibestudio/shared/runtimeSurface.eval";
-import { PORTABLE_KEYS } from "@vibestudio/shared/runtimeSurface.portable";
+} from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
+import { PORTABLE_KEYS } from "@vibestudio/service-schemas/runtime/runtimeSurface.portable";
 
 /**
  * Execution-based cross-target parity gates. Instead of grepping source, we
@@ -65,7 +65,7 @@ describe("runtimeSurface manifests", () => {
   it("helpfulNamespace throws a helpful error for missing namespace members", () => {
     const wrapped = helpfulNamespace("workspace", { list: async () => [] });
     expect(() => (wrapped as Record<string, unknown>)["listSources"]).toThrow(
-      "workspace.listSources is not available. Known members on workspace: list. Call `await help()` for the live surface.",
+      "workspace.listSources is not available. Known members on workspace: list. Call `await help()` for the live surface."
     );
   });
 
@@ -111,7 +111,9 @@ describe("runtimeSurface manifests", () => {
       CONTEXT_ID: "ctx",
       GATEWAY_URL: "http://server.test",
     });
-    expect(new Set(Object.keys(runtime))).toEqual(new Set(Object.keys(workerRuntimeSurface.exports)));
+    expect(new Set(Object.keys(runtime))).toEqual(
+      new Set(Object.keys(workerRuntimeSurface.exports))
+    );
     runtime.destroy();
   });
 
@@ -177,7 +179,12 @@ describe("runtimeSurface manifests", () => {
     for (const surface of [panelRuntimeSurface, workerRuntimeSurface]) {
       const members = surface.exports["credentials"]?.members ?? [];
       expect(members).toEqual(
-        expect.arrayContaining(["connect", "configureClient", "getClientConfigStatus", "deleteClientConfig"]),
+        expect.arrayContaining([
+          "connect",
+          "configureClient",
+          "getClientConfigStatus",
+          "deleteClientConfig",
+        ])
       );
     }
   });

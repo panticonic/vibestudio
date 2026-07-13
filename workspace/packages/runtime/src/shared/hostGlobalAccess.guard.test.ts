@@ -10,7 +10,7 @@ import * as path from "node:path";
  * `@workspace/runtime`) in a per-isolate global module map. The eval sandbox is
  * a workerd DO that keeps each owner's runtime in a PER-OBJECT map (so owners
  * sharing an isolate can't leak runtimes into each other), so a global grab of
- * `@workspace/runtime` silently misses there — the `@workspace/panel-browser`
+ * `@workspace/runtime` silently misses there — the `browserData` runtime client
  * bug. Resolve host modules through a normal import instead: the build
  * externalizes it and the bundle's own `require` maps to the right host (the
  * global singleton in a panel, the per-object map in eval).
@@ -59,7 +59,7 @@ describe("host-global access guard", () => {
       offenders,
       `These workspace packages reach for the global \`__vibestudioRequire__\` to resolve a host ` +
         `module — that breaks in the eval/DO per-object module map. Use a normal import instead ` +
-        `(see @workspace/panel-browser). If the use is genuinely legitimate, add it to ALLOWLIST ` +
+        `(see the browserData runtime client). If the use is genuinely legitimate, add it to ALLOWLIST ` +
         `with a justification:\n  ${offenders.join("\n  ")}`
     ).toEqual([]);
   });

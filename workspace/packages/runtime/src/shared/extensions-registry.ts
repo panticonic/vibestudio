@@ -1,7 +1,7 @@
 // @vibestudio-extension-registry-sink
 // Workspace-owned registry sink — the Vibestudio host rewrites everything below the
 // directive line whenever the workspace extension set changes (generator:
-// @vibestudio/shared/workspace/extensionRegistry). Keep the directive to stay
+// @vibestudio/workspace/extensionRegistry). Keep the directive to stay
 // subscribed; remove it (or delete the file) to opt out; move the file to
 // relocate the registry. The committed contents are the fallback used when the
 // host has not (re)generated the registry.

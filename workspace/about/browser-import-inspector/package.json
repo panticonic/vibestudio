@@ -9,7 +9,7 @@
     "hiddenInLauncher": false
   },
   "dependencies": {
-    "@workspace/panel-browser": "workspace:*",
+    "@vibestudio/browser-data": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/ui": "workspace:*",

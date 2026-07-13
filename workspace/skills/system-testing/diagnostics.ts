@@ -114,7 +114,7 @@ export interface FailureDiagnostic {
   cleanupErrors: string[];
   workspaceRepoFixture: {
     testName: string | null;
-    projectName: string | null;
+    repoName: string | null;
     repoNamePrefix: string | null;
     staleReposRemoved: string[];
     reposRemoved: string[];
@@ -263,7 +263,7 @@ function summarizeWorkspaceRepoFixture(
       : [];
   return {
     testName: stringOrNull("testName"),
-    projectName: stringOrNull("projectName"),
+    repoName: stringOrNull("repoName"),
     repoNamePrefix: stringOrNull("repoNamePrefix"),
     staleReposRemoved: strings("staleReposRemoved"),
     reposRemoved: strings("reposRemoved"),

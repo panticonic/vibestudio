@@ -1,4 +1,4 @@
-import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/workspace/remotes";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/workspace/remotes";
 
 const locks = new Map<string, Promise<unknown>>();
 

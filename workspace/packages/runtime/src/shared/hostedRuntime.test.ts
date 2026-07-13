@@ -8,7 +8,10 @@ import {
 } from "./hostedRuntime.js";
 import { createWorkerdClient } from "./workerd.js";
 import { BLOBSTORE_MEMBERS } from "./blobstore.js";
-import { portableExports, PORTABLE_KEYS } from "@vibestudio/shared/runtimeSurface.portable";
+import {
+  portableExports,
+  PORTABLE_KEYS,
+} from "@vibestudio/service-schemas/runtime/runtimeSurface.portable";
 
 /**
  * Identity/wiring assertions for the ONE shared runtime assembly: prove the
@@ -24,6 +27,7 @@ const WORKSPACE_RUNTIME_KEYS: Array<keyof WorkspaceRuntime> = [
   "blobstore",
   "workspace",
   "credentials",
+  "browserData",
   "git",
   "vcs",
   "webhooks",
@@ -252,6 +256,7 @@ describe("createHostedRuntime ⟷ portable surface parity", () => {
     const exactNamespaces = [
       "workers",
       "credentials",
+      "browserData",
       "git",
       "blobstore",
       "webhooks",

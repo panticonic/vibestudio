@@ -11,11 +11,11 @@ import {
 } from "react-native";
 import Clipboard from "@react-native-clipboard/clipboard";
 import { useAtomValue } from "jotai";
-import { isValidHandle } from "@vibestudio/shared/users/types";
+import { isValidHandle } from "@vibestudio/identity/types";
 import {
   ACCOUNT_AVATAR_DATA_URI_PATTERN,
   MAX_AVATAR_DATA_URI_BYTES,
-} from "@vibestudio/shared/serviceSchemas/account";
+} from "@vibestudio/service-schemas/account";
 import type {
   MobileAccountProfile,
   MobileAccountProfileUpdate,

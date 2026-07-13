@@ -3,7 +3,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import { DEFAULT_AGENT_MODEL_REF, type ModelCatalog } from "@workspace/model-catalog/catalog";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
-import type { UrlAudience } from "@vibestudio/shared/credentials/urlAudience";
+import type { UrlAudience } from "@vibestudio/credential-client/urlAudience";
 import { getModelCatalog, ModelSettingsDO, type LocalModelEntry } from "./index.js";
 
 const CATALOG: ModelCatalog = {

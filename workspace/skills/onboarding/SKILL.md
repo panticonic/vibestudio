@@ -38,7 +38,7 @@ collect a lightweight setup snapshot:
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
 

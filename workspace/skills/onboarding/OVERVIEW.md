@@ -85,7 +85,7 @@ All panels and sandbox code can import from `@workspace/runtime`:
 | `workspace` | List, create, configure, switch workspaces           |
 | `rpc`       | Call services on the main process or other panels    |
 
-Additional packages: `@workspace/panel-browser` (browser data import/export), `@workspace/cdp-client` (the lightweight, workerd-native CDP client used by `handle.cdp.lightweightPage()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
+Additional surfaces: `browserData` from `@workspace/runtime` (browser data import/export), and `@workspace/cdp-client` (the lightweight, workerd-native CDP client used by `handle.cdp.lightweightPage()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
 
 ### Build System
 

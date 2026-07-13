@@ -257,7 +257,7 @@ For behind/diverged recovery:
 When changing Git Bridge behavior, update the provider, canonical service schema,
 runtime client, panel calls, docs, and tests together. Check these files first:
 
-- `packages/shared/src/serviceSchemas/gitInterop.ts`
+- `packages/service-schemas/src/gitInterop.ts`
 - `src/server/services/gitInteropService.ts`
 - `workspace/extensions/git-bridge/index.ts`
 - `workspace/extensions/git-bridge/upstream.ts`

@@ -1,8 +1,8 @@
 import type { CSSProperties } from "react";
-import vibestudioLogoDark from "@workspace/brand-assets/vibestudio-dark.png";
-import vibestudioLogoLight from "@workspace/brand-assets/vibestudio-light.png";
-import vibestudioMarkOnDark from "@workspace/brand-assets/vibestudio-mark-on-dark.png";
-import vibestudioMarkOnLight from "@workspace/brand-assets/vibestudio-mark-on-light.png";
+import vibestudioLogoDark from "./assets/vibestudio-dark.png";
+import vibestudioLogoLight from "./assets/vibestudio-light.png";
+import vibestudioMarkOnDark from "./assets/vibestudio-mark-on-dark.png";
+import vibestudioMarkOnLight from "./assets/vibestudio-mark-on-light.png";
 
 export interface VibestudioLogoProps {
   /** Pixel size for the square logo box. */

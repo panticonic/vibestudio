@@ -47,7 +47,7 @@ import:
 
 ```typescript
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "chrome",
@@ -80,7 +80,7 @@ Preview tabs:
 
 ```typescript
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const tabs = await browserData.getOpenTabs({
     browser: "chrome",
@@ -95,7 +95,7 @@ Open current HTTP(S) tabs as child browser panels of the invoking caller:
 
 ```typescript
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const result = await browserData.openTabsAsPanels({
     browser: "chrome",

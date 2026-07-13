@@ -34,6 +34,9 @@ importers:
 
   ../packages/browser-data:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
@@ -53,12 +56,12 @@ importers:
 
   ../packages/credential-client:
     dependencies:
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -97,6 +100,9 @@ importers:
 
   ../packages/extension:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
@@ -122,12 +128,18 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
       '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:../unit-host
+      '@vibestudio/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       yaml:
         specifier: ^2.8.1
         version: 2.9.0
@@ -164,6 +176,18 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  ../packages/identity:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/sqlite':
+        specifier: workspace:*
+        version: link:../sqlite
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   ../packages/mobile-webrtc:
     dependencies:
       '@react-native-community/netinfo':
@@ -172,6 +196,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
@@ -185,15 +212,6 @@ importers:
         specifier: ^3.3.3
         version: 3.3.3
     devDependencies:
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  ../packages/port-utils:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.13.2
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -217,23 +235,86 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  ../packages/service-schemas:
+    dependencies:
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
+      '@vibestudio/identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../shell-core
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   ../packages/shared:
     dependencies:
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../dev-log
       '@vibestudio/env-paths':
         specifier: workspace:*
         version: link:../env-paths
+      '@vibestudio/identity':
+        specifier: workspace:*
+        version: link:../identity
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/sqlite':
+        specifier: workspace:*
+        version: link:../sqlite
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+
+  ../packages/shell-core:
+    dependencies:
+      '@vibestudio/dev-log':
+        specifier: workspace:*
+        version: link:../dev-log
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
+  ../packages/sqlite: {}
 
   ../packages/typecheck:
     dependencies:
@@ -255,6 +336,44 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  ../packages/workspace:
+    dependencies:
+      '@vibestudio/dev-log':
+        specifier: workspace:*
+        version: link:../dev-log
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.6.1
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
+  ../packages/workspace-contracts:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   about/about:
     dependencies:
@@ -288,9 +407,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/panel-browser':
+      '@vibestudio/browser-data':
         specifier: workspace:*
-        version: link:../../packages/panel-browser
+        version: link:../../../packages/browser-data
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -406,15 +525,27 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
+      '@vibestudio/identity':
+        specifier: workspace:*
+        version: link:../../../packages/identity
       '@vibestudio/mobile-webrtc':
         specifier: workspace:*
         version: link:../../../packages/mobile-webrtc
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/workspace-contracts
       jotai:
         specifier: ^2.15.1
         version: 2.20.1(@babel/core@7.29.7)(@babel/template@7.29.7)(@types/react@19.2.17)(react@19.0.0)
@@ -469,9 +600,15 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       ws:
         specifier: ^8.18.3
         version: 8.21.0
@@ -496,12 +633,21 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.0
         version: 3.14.5(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/identity':
+        specifier: workspace:*
+        version: link:../../../packages/identity
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -526,9 +672,15 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       '@workspace/terminal-host-protocol':
         specifier: workspace:*
         version: link:../../packages/terminal-host-protocol
@@ -581,9 +733,18 @@ importers:
       '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/workspace':
+        specifier: workspace:*
+        version: link:../../../packages/workspace
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/workspace-contracts
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
@@ -690,6 +851,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -735,9 +899,15 @@ importers:
 
   packages/agentic-core:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../agentic-protocol
@@ -756,6 +926,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
         version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -812,8 +985,6 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
-  packages/brand-assets: {}
-
   packages/browser-data:
     dependencies:
       '@vibestudio/browser-data':
@@ -857,18 +1028,11 @@ importers:
         specifier: workspace:*
         version: link:../agentic-protocol
 
-  packages/core:
-    dependencies:
-      '@vibestudio/types':
-        specifier: workspace:*
-        version: link:../../../packages/types
-    devDependencies:
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
   packages/eval:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -923,6 +1087,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@workspace/pi-core':
         specifier: workspace:*
         version: link:../pi-core
@@ -1061,6 +1228,9 @@ importers:
 
   packages/model-catalog:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -1068,19 +1238,6 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
-
-  packages/panel-browser:
-    dependencies:
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-    devDependencies:
-      '@vibestudio/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
 
   packages/pi-core:
     dependencies:
@@ -1106,6 +1263,9 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
@@ -1143,9 +1303,6 @@ importers:
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
-      '@workspace/core':
-        specifier: workspace:*
-        version: link:../core
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -1174,6 +1331,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
@@ -1186,9 +1346,15 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
@@ -1304,9 +1470,6 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/brand-assets':
-        specifier: workspace:*
-        version: link:../brand-assets
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -1339,9 +1502,6 @@ importers:
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
-      '@workspace/panel-browser':
-        specifier: workspace:*
-        version: link:../../packages/panel-browser
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
@@ -1366,6 +1526,12 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/git':
+        specifier: workspace:*
+        version: link:../../../packages/git
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1494,6 +1660,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@workspace/agentic-chat':
         specifier: workspace:*
         version: link:../../packages/agentic-chat
@@ -1633,11 +1802,7 @@ importers:
 
   skills/api-integrations: {}
 
-  skills/browser-import: {}
-
   skills/gad-context: {}
-
-  skills/gad-review: {}
 
   skills/github:
     dependencies:
@@ -1719,12 +1884,6 @@ importers:
         specifier: ^4.0.0
         version: 4.0.1
 
-  skills/pdf-ingestion:
-    dependencies:
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-
   skills/sandbox: {}
 
   skills/system-testing:
@@ -1735,15 +1894,6 @@ importers:
       '@workspace/agentic-session':
         specifier: workspace:*
         version: link:../../packages/agentic-session
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-      '@workspace/testkit':
-        specifier: workspace:*
-        version: link:../../packages/testkit
-
-  skills/testkit:
-    dependencies:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -1856,12 +2006,6 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
-  workers/hello:
-    dependencies:
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-
   workers/linked-agent:
     dependencies:
       '@workspace/agent-loop':
@@ -1950,12 +2094,6 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
-  workers/sample-do:
-    dependencies:
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-
   workers/silent-agent-worker:
     dependencies:
       '@workspace-workers/agent-worker':
@@ -1991,18 +2129,6 @@ importers:
       '@workspace/terminal-host-protocol':
         specifier: workspace:*
         version: link:../../packages/terminal-host-protocol
-      '@workspace/terminal-shim':
-        specifier: workspace:*
-        version: link:../../packages/terminal-shim
-      ink:
-        specifier: ^6.0.0
-        version: 6.8.0(@types/react@19.2.17)(react-devtools-core@6.1.5)(react@19.0.0)
-      react:
-        specifier: 19.0.0
-        version: 19.0.0
-
-  workers/terminal-smoke:
-    dependencies:
       '@workspace/terminal-shim':
         specifier: workspace:*
         version: link:../../packages/terminal-shim
@@ -5184,6 +5310,10 @@ packages:
 
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
+
+  dotenv@16.6.1:
+    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -11101,6 +11231,8 @@ snapshots:
       dom-serializer: 2.0.0
       domelementtype: 2.3.0
       domhandler: 5.0.3
+
+  dotenv@16.6.1: {}
 
   dunder-proto@1.0.1:
     dependencies:

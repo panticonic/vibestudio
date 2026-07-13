@@ -295,23 +295,23 @@ return fs.readFileSync("/tmp/a");`,
   });
 
   it("auto-loads an unscoped manifest-declared workspace unit", async () => {
-    const resolveWorkspaceImport = vi.fn(async (specifier: string) => specifier === "sample-do");
+    const resolveWorkspaceImport = vi.fn(async (specifier: string) => specifier === "local-worker");
     const loadImport = Object.assign(
       vi.fn(async (specifier: string, ref: string | undefined) => {
-        expect(specifier).toBe("sample-do");
+        expect(specifier).toBe("local-worker");
         expect(ref).toBeUndefined();
         return "module.exports = { answer: 42 };";
       }),
       { resolveWorkspaceImport }
     );
 
-    const result = await executeSandbox('import { answer } from "sample-do"; return answer;', {
+    const result = await executeSandbox('import { answer } from "local-worker"; return answer;', {
       syntax: "typescript",
       loadImport,
     });
 
     expect(result).toMatchObject({ success: true, returnValue: 42 });
-    expect(resolveWorkspaceImport).toHaveBeenCalledWith("sample-do");
+    expect(resolveWorkspaceImport).toHaveBeenCalledWith("local-worker");
     expect(loadImport).toHaveBeenCalledOnce();
   });
 

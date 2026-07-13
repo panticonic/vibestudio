@@ -1,7 +1,5 @@
-import type {
-  LocalPanelViewState,
-  LocalPanelViewStateStore,
-} from "@vibestudio/shared/shell/panelManager";
+import { createLocalPanelViewStateStore } from "@vibestudio/shell-core/localViewState";
+import type { LocalPanelViewStateStore } from "@vibestudio/shell-core/panelManager";
 
 declare const require: (moduleName: string) => unknown;
 
@@ -23,46 +21,16 @@ function getAsyncStorage(): AsyncStorageLike | null {
 
 export function createMobileLocalViewStateStore(workspaceId: string): LocalPanelViewStateStore {
   const key = `vibestudio:workspace:${workspaceId}:local-view-state`;
-  return {
-    async load() {
+  return createLocalPanelViewStateStore({
+    async read() {
       const storage = getAsyncStorage();
       if (!storage) return null;
-      try {
-        const parsed = JSON.parse(
-          (await storage.getItem(key)) ?? "{}"
-        ) as Partial<LocalPanelViewState>;
-        return {
-          collapsedIds: Array.isArray(parsed.collapsedIds)
-            ? parsed.collapsedIds.filter((id): id is string => typeof id === "string")
-            : [],
-          focusedPanelId: typeof parsed.focusedPanelId === "string" ? parsed.focusedPanelId : null,
-          panelTitles:
-            parsed.panelTitles && typeof parsed.panelTitles === "object"
-              ? Object.fromEntries(
-                  Object.entries(parsed.panelTitles).filter(
-                    (entry): entry is [string, { source: string; title: string }] => {
-                      const value = entry[1] as { source?: unknown; title?: unknown };
-                      return typeof value.source === "string" && typeof value.title === "string";
-                    }
-                  )
-                )
-              : {},
-        };
-      } catch {
-        return null;
-      }
+      return storage.getItem(key);
     },
-    async save(state) {
+    async write(serialized) {
       const storage = getAsyncStorage();
       if (!storage) return;
-      await storage.setItem(
-        key,
-        JSON.stringify({
-          collapsedIds: state.collapsedIds,
-          focusedPanelId: state.focusedPanelId ?? null,
-          panelTitles: state.panelTitles ?? {},
-        })
-      );
+      await storage.setItem(key, serialized);
     },
-  };
+  });
 }

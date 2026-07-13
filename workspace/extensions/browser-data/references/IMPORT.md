@@ -6,7 +6,7 @@ Run browser data imports and handle results.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "chrome",
@@ -31,7 +31,7 @@ Finds the default Chrome profile and imports from it:
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const browsers = await browserData.detectBrowsers();
   const chrome = browsers.find(b => b.name === "chrome");
@@ -59,7 +59,7 @@ Firefox may encrypt passwords with a master password. Pass it via the `masterPas
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "firefox",
@@ -91,7 +91,7 @@ Chrome can export passwords to CSV. Import them:
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "chrome",
@@ -113,7 +113,7 @@ The agent first shows the import wizard (from DISCOVERY.md), receives the user's
 // Step 1: feedback_custom import wizard → returns { browser, profile, dataTypes }
 // Step 2: eval with the result
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const results = await browserData.startImport({
     browser: "${selection.browser}",
@@ -138,7 +138,7 @@ Check what's been imported before:
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
   const history = await browserData.getImportHistory();
   console.log(history);
   return history;
@@ -184,7 +184,7 @@ Firefox/Chrome-family HTTP(S) tabs into Vibestudio:
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
+  import { browserData } from "@workspace/runtime";
 
   const result = await browserData.openTabsAsPanels({
     browser: "chrome",

@@ -1,11 +1,11 @@
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
-import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
-import { createServerWsTransport } from "@vibestudio/shared/shell/transport/serverWsTransport";
+import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
 import {
   hubControlMethods,
   type HubPairingInvite,
-} from "@vibestudio/shared/serviceSchemas/hubControl";
-import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+} from "@vibestudio/service-schemas/hubControl";
+import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import WebSocket from "ws";
 
