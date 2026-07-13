@@ -32,9 +32,9 @@ const BLOCKED_NATIVE_IMPORTS = {
   // bootstrap, is allowlisted by absolute path in createNativeBoundary.)
   "@vibestudio/mobile-webrtc": [
     "src/services/mobileTransport.ts",
+    "src/services/mobileCredentials.ts",
+    "src/services/workspaceSelection.ts",
     "src/services/appBootstrap.ts",
-    "src/components/LoginScreen.tsx",
-    "src/components/SettingsScreen.tsx",
   ],
 };
 

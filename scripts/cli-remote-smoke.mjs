@@ -15,7 +15,7 @@ import {
   parseSignalingEndpoint,
 } from "./cli/lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
-import { createRemoteServeArgs, requireRootInvite } from "./cli/lib/smoke-remote-server.mjs";
+import { createRemoteServeArgs, waitForRootInvite } from "./cli/lib/smoke-remote-server.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -250,8 +250,12 @@ async function main() {
       label: "server",
     });
     children.push(server);
-    const ready = await waitForReadyFile(readyFile, server, deadlineMs);
-    const invite = requireRootInvite(ready, "desktop");
+    await waitForReadyFile(readyFile, server, deadlineMs);
+    const invite = await waitForRootInvite({
+      readyFile,
+      kind: "desktop",
+      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
+    });
     const pairing = parseConnectLink(invite.pairUrl);
     if (pairing.kind !== "ok")
       throw new Error(`desktop root invite was invalid: ${pairing.reason}`);
@@ -279,8 +283,15 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now()),
       "remote pair"
     );
-    const expectedPrefix = `webrtc://${pairing.room}/_workspace/`;
-    if (typeof pair.url !== "string" || !pair.url.startsWith(expectedPrefix)) {
+    const pairedUrl = typeof pair.url === "string" ? new URL(pair.url) : null;
+    const expectedWorkspace = pairing.srv ?? "default";
+    if (
+      !pairedUrl ||
+      pairedUrl.protocol !== "webrtc:" ||
+      !pairedUrl.hostname ||
+      pairedUrl.hostname === pairing.room ||
+      pairedUrl.pathname !== `/_workspace/${expectedWorkspace}`
+    ) {
       throw new Error(`remote pair returned an unexpected URL: ${JSON.stringify(pair)}`);
     }
 

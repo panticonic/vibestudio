@@ -104,6 +104,7 @@ export interface TestApi {
   /** Return host shell view debug state from ViewManager */
   getHostViewDebugInfo(): {
     visibleHostChromeAppId: string | null;
+    shellOverlayActive: boolean | null;
     shell: unknown;
     hostedShell: unknown;
     shellUrl: string | null;
@@ -400,6 +401,7 @@ export function setupTestApi(
       if (!viewManager) {
         return {
           visibleHostChromeAppId: null,
+          shellOverlayActive: null,
           shell: null,
           hostedShell: null,
           shellUrl: null,
@@ -410,6 +412,7 @@ export function setupTestApi(
       const hostedShellAppId = viewManager.getVisibleHostChromeAppId();
       return {
         visibleHostChromeAppId: hostedShellAppId,
+        shellOverlayActive: viewManager.getShellOverlayActive(),
         shell: viewManager.getViewInfo("shell"),
         hostedShell: hostedShellAppId ? viewManager.getViewInfo(hostedShellAppId) : null,
         shellUrl: viewManager.getWebContents("shell")?.getURL() ?? null,

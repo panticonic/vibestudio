@@ -410,6 +410,19 @@ Allowed callers: `shell`, `app`, `panel`, `server`
 | `permissions.list` | List active session and durable capability, userland, and credential-use grants. |
 | `permissions.revoke` | Revoke one durable permission grant by its opaque id. |
 
+## `phoneProvisioning`
+
+Account-scoped proxy to phone capabilities on connected desktop clients
+
+Allowed callers: `agent`, `panel`, `app`, `shell`
+
+| Method | Description |
+|--------|-------------|
+| `phoneProvisioning.providers` | List account-scoped desktop capability providers that can access phones attached to them. |
+| `phoneProvisioning.devices` | Discover Android and iOS devices through the selected desktop, including readiness and compatible app state. |
+| `phoneProvisioning.install` | Install a compatible mobile app through the selected desktop, resolving release tooling lazily when possible. |
+| `phoneProvisioning.openPairing` | Open a one-time pairing link on a phone through the selected desktop without returning or logging the link. |
+
 ## `presence`
 
 Active shell/panel ownership

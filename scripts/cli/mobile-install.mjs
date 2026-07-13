@@ -16,7 +16,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
 const iosDir = path.join(repoRoot, "apps", "mobile", "ios");
 const iosEntitlementsScript = path.join(repoRoot, "scripts", "cli", "ios-entitlements.mjs");
-const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+const pkgPath = path.join(repoRoot, "package.json");
+const pkg = fs.existsSync(pkgPath)
+  ? JSON.parse(fs.readFileSync(pkgPath, "utf8"))
+  : { version: process.env.VIBESTUDIO_APP_VERSION };
+if (!pkg.version) {
+  throw new Error("Unable to resolve the Vibestudio app version");
+}
 const releaseArtifactName = "app-release.apk";
 const releasePackage = "app.vibestudio.mobile";
 const internalPackage = "app.vibestudio.mobile.internal";

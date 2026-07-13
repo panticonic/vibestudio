@@ -1614,11 +1614,13 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     sid: string,
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
-    requestBody?: ReadableStream<Uint8Array> | null
+    requestBody?: ReadableStream<Uint8Array> | null,
+    headTimeoutMs?: number
   ): Promise<Response> {
     const started = beginStream(sid, envelope, signal, requestBody);
     return decodeFramedResponseToStreaming(started.body, "", signal, {
       onBodyCancel: started.onBodyCancel,
+      headTimeoutMs,
     });
   }
 
@@ -1626,11 +1628,13 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     sid: string,
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
-    requestBody?: ReadableStream<Uint8Array> | null
+    requestBody?: ReadableStream<Uint8Array> | null,
+    headTimeoutMs?: number
   ): Promise<DecodedFramedStream> {
     const started = beginStream(sid, envelope, signal, requestBody);
     return decodeFramedStream(started.body, "", signal, {
       onBodyCancel: started.onBodyCancel,
+      headTimeoutMs,
     });
   }
 
@@ -1990,27 +1994,29 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     async stream(
       envelope: RpcEnvelope,
       signal?: AbortSignal | null,
-      body?: ReadableStream<Uint8Array> | null
+      body?: ReadableStream<Uint8Array> | null,
+      headTimeoutMs?: number
     ): Promise<Response> {
       await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`stream() requires a stream-request envelope, got ${message.type}`);
       }
-      return openStream(this.sid, envelope, signal, body);
+      return openStream(this.sid, envelope, signal, body, headTimeoutMs);
     }
 
     async streamReadable(
       envelope: RpcEnvelope,
       signal?: AbortSignal | null,
-      body?: ReadableStream<Uint8Array> | null
+      body?: ReadableStream<Uint8Array> | null,
+      headTimeoutMs?: number
     ): Promise<DecodedFramedStream> {
       await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`streamReadable() requires a stream-request envelope, got ${message.type}`);
       }
-      return openStreamReadable(this.sid, envelope, signal, body);
+      return openStreamReadable(this.sid, envelope, signal, body, headTimeoutMs);
     }
 
     close(): void {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Box, Button, Callout, Code, Dialog, Flex, Table, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import { panel } from "../shell/client";
 import QRCode from "qrcode-terminal/vendor/QRCode/index.js";
 import QRErrorCorrectLevel from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js";
 import {
@@ -14,9 +15,11 @@ import {
 export function PairedDevicesSection({
   currentDeviceId,
   workspaceName,
+  onStartPhoneSetup,
 }: {
   currentDeviceId?: string;
   workspaceName?: string;
+  onStartPhoneSetup?: () => void;
 }) {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [owners, setOwners] = useState<Record<string, ShellAccountProfile>>({});
@@ -136,8 +139,28 @@ export function PairedDevicesSection({
           Paired devices
         </Text>
         <Flex gap="2">
+          <Button
+            size="1"
+            onClick={() => {
+              void panel
+                .createPanel("panels/chat", {
+                  name: "Set up phone",
+                  focus: true,
+                  stateArgs: {
+                    initialPrompt:
+                      "Set up a phone connected to this desktop and pair it with the same current server and workspace. Read skills/phone-setup/SKILL.md first, then use phoneProvisioning and hubControl tools. Diagnose before side effects.",
+                    systemPrompt:
+                      "For phone setup, load skills/phone-setup/SKILL.md and follow it as the source of truth. Never assume adb or Xcode runs on the remote server.",
+                    systemPromptMode: "append",
+                  },
+                })
+                .then(() => onStartPhoneSetup?.());
+            }}
+          >
+            Set up a phone
+          </Button>
           <Button size="1" variant="soft" disabled={inviteBusy} onClick={() => void createInvite()}>
-            {inviteBusy ? "Creating…" : "Connect a device"}
+            {inviteBusy ? "Creating…" : "Show pairing QR"}
           </Button>
           <Button size="1" variant="soft" onClick={() => void load()}>
             Refresh

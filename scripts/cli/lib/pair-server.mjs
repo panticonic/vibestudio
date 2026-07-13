@@ -381,6 +381,12 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           readyPoll = null;
         }
       } catch (error) {
+        // The hub replaces the ready file atomically. A poll can stat the old
+        // inode immediately before the rename and then try to open the path in
+        // the tiny interval where it does not exist. That is readiness still in
+        // progress, not a malformed contract; the replacement will be read on
+        // the next tick.
+        if (error?.code === "ENOENT") return;
         if (fs.existsSync(readyFile)) {
           console.error(
             `[${config.logPrefix}] Invalid hub ready file: ${error instanceof Error ? error.message : String(error)}`

@@ -190,6 +190,50 @@ describe("pair-server runner", () => {
     }
   });
 
+  it("retries when an atomic ready-file replacement races the poll", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    let readyFile = "";
+    let injectedMissingRead = false;
+
+    vi.spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      if (String(file) === readyFile && !injectedMissingRead) {
+        injectedMissingRead = true;
+        const error = new Error("ready file replaced during open") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return originalReadFileSync(file, ...(args as [BufferEncoding]));
+    }) as typeof fs.readFileSync);
+
+    runPairServer(config, ["--port", "3456"], {
+      spawnServer({ serverArgs }: { serverArgs: string[] }) {
+        readyFile = serverArgs[serverArgs.indexOf("--ready-file") + 1] ?? "";
+        setTimeout(() => {
+          const current = invite(
+            "room-ready-replacement",
+            "12".repeat(32),
+            "wss://signal.test",
+            READY_CODE
+          );
+          fs.writeFileSync(
+            readyFile,
+            JSON.stringify(hubReady({ desktop: current, mobile: current }))
+          );
+        }, 10);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+
+    await waitFor(() => logText(logSpy).includes(READY_CODE));
+    expect(injectedMissingRead).toBe(true);
+    expect(child.kill).not.toHaveBeenCalled();
+    child.emit("exit", 0, null);
+  });
+
   it("passes remote-serve readiness gates through to the server and prints the pairing banner", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);

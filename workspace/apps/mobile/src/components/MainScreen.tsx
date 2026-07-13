@@ -45,7 +45,7 @@ import {
 } from "../services/appUpdatePrompt";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 import { resetToNativeBootstrap } from "../services/auth";
-import { clearShellCredential } from "@vibestudio/mobile-webrtc";
+import { clearShellCredential } from "../services/mobileCredentials";
 import {
   buildPanelChromeState,
   buildAddressAutocompleteItems,

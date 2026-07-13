@@ -293,6 +293,8 @@ export interface RpcCallOptions {
 export interface RpcStreamOptions {
   signal?: AbortSignal;
   idempotencyKey?: string;
+  /** Override the transport's deadline for receiving response headers. */
+  headTimeoutMs?: number;
   /** Request read-only containment for streaming calls. */
   readOnly?: boolean;
   /**
@@ -366,7 +368,8 @@ export interface EnvelopeRpcTransport {
   stream?(
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
-    body?: ReadableStream<Uint8Array> | null
+    body?: ReadableStream<Uint8Array> | null,
+    headTimeoutMs?: number
   ): Promise<Response>;
   /**
    * Streaming variant returning the decoded head + raw `ReadableStream<Uint8Array>`
@@ -377,7 +380,8 @@ export interface EnvelopeRpcTransport {
   streamReadable?(
     envelope: RpcEnvelope,
     signal?: AbortSignal | null,
-    body?: ReadableStream<Uint8Array> | null
+    body?: ReadableStream<Uint8Array> | null,
+    headTimeoutMs?: number
   ): Promise<DecodedFramedStream>;
   /**
    * UPLOAD-ONLY first-class hop for panel shell bridges (plan §1.6). A bridge

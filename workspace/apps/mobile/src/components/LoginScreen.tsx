@@ -14,7 +14,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import { resetToNativeBootstrap } from "../services/auth";
 import { readClipboardText } from "../services/nativeCapabilities";
-import { loadShellCredential, clearShellCredential } from "@vibestudio/mobile-webrtc";
+import { loadShellCredential, clearShellCredential } from "../services/mobileCredentials";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 import {
   MobileHostTargetApprovalRequiredError,

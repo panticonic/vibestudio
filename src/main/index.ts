@@ -2536,6 +2536,16 @@ app.on("ready", async () => {
         getViewManager,
       })
     );
+    const { createPhoneProvisioningService } =
+      await import("./services/phoneProvisioningService.js");
+    const { getAppUnpackedRoot, getPhysicalAppPath } = await import("./paths.js");
+    electronContainer.registerRpc(
+      createPhoneProvisioningService({
+        appRoot: getAppUnpackedRoot(),
+        appVersion: app.getVersion(),
+        resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
+      })
+    );
     electronContainer.registerRpc(createAdblockService({ adBlockManager }));
     // Browser-data persistence lives on the server; Electron keeps only the
     // host-bound autofill adapter.

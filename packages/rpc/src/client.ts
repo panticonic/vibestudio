@@ -581,7 +581,12 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
       // Body-capable transports (the WebRTC session) pump the request body on
       // the bulk channel; transports that can't THROW (plan §1.6 — fail loud,
       // never a silent base64 fallback).
-      return config.transport.stream(envelope, options?.signal ?? null, options?.body ?? null);
+      return config.transport.stream(
+        envelope,
+        options?.signal ?? null,
+        options?.body ?? null,
+        options?.headTimeoutMs
+      );
     }
     if (options?.body) {
       // The duplex stream-request/stream-frame envelope path (plain WS, panel
@@ -639,7 +644,8 @@ export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptio
     return config.transport.streamReadable(
       envelope,
       options?.signal ?? null,
-      options?.body ?? null
+      options?.body ?? null,
+      options?.headTimeoutMs
     );
   }
 

@@ -2,14 +2,12 @@ import React from "react";
 import {
   ActivityIndicator,
   Image,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
-import Clipboard from "@react-native-clipboard/clipboard";
 import { useAtomValue } from "jotai";
 import { isValidHandle } from "@vibestudio/identity/types";
 import {
@@ -21,6 +19,7 @@ import type {
   MobileAccountProfileUpdate,
   ShellClient,
 } from "../services/shellClient";
+import { readClipboardImageOrText } from "../services/nativeCapabilities";
 import { themeColorsAtom } from "../state/themeAtoms";
 
 const COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
@@ -165,12 +164,7 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
     setError(null);
     setSuccess(null);
     try {
-      let avatar = "";
-      if (Platform.OS === "ios" && (await Clipboard.hasImage())) {
-        avatar = `data:image/jpeg;base64,${await Clipboard.getImageJPG()}`;
-      } else {
-        avatar = (await Clipboard.getString()).trim();
-      }
+      const avatar = await readClipboardImageOrText();
       if (!ACCOUNT_AVATAR_DATA_URI_PATTERN.test(avatar)) {
         throw new Error("Copy a PNG, JPEG, WebP, or GIF image data URI first.");
       }

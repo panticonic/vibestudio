@@ -20,7 +20,7 @@ import {
   parseSignalingEndpoint,
 } from "./lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
-import { createRemoteServeArgs, requireRootInvite } from "./lib/smoke-remote-server.mjs";
+import { createRemoteServeArgs, waitForRootInvite } from "./lib/smoke-remote-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -404,6 +404,7 @@ function buildConnectLinkFromLog(loggedLink) {
     fp: parsed.fp,
     code: parsed.code,
     sig: parsed.sig,
+    v: parsed.v,
     ice: parsed.ice,
     srv: parsed.srv,
   });
@@ -996,6 +997,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
   let stableVisualAgentFingerprint = "";
   let stableVisualAgentPolls = 0;
   let durableProbeUnavailable = false;
+  let agentRunNotStarted = false;
   while (Date.now() < deadlineMs) {
     const xml = await dumpWindowXml(device);
     const labels = collectWindowLabels(xml);
@@ -1075,6 +1077,9 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         console.log(`[mobile-smoke] Initial agent turn: ${nextAgentState}`);
       }
       lastAgentState = nextAgentState;
+      agentRunNotStarted =
+        agentState.kind === "pending" &&
+        /no agent turn run has started yet/i.test(agentState.summary);
       if (agentState.kind === "failed") {
         throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
       }
@@ -1097,7 +1102,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     }
 
     if (
-      durableProbeUnavailable &&
+      (durableProbeUnavailable || agentRunNotStarted) &&
       visualFallbackAfterMs != null &&
       Date.now() - startedAt >= visualFallbackAfterMs
     ) {
@@ -1430,39 +1435,25 @@ function shellCommand(args) {
   return args.map(shellQuote).join(" ");
 }
 
-async function startConnectIntent(device, packageName, activityName, link) {
-  const packageResult = await adbCapture(
-    device,
-    "shell",
-    shellCommand([
-      "am",
-      "start",
-      "-W",
-      "-a",
-      "android.intent.action.VIEW",
-      "-d",
-      link,
-      "-p",
-      packageName,
-    ])
-  ).catch((error) => error);
-  if (!(packageResult instanceof Error)) return;
-
-  await adb(
-    device,
-    "shell",
-    shellCommand([
-      "am",
-      "start",
-      "-W",
-      "-a",
-      "android.intent.action.VIEW",
-      "-d",
-      link,
-      "-n",
-      `${packageName}/${activityName}`,
-    ])
-  );
+async function startConnectIntent(device, packageName, _activityName, link) {
+  const script = path.join(repoRoot, "scripts", "cli", "mobile-device.mjs");
+  const args = [script, "connect", "--platform", "android"];
+  if (device) args.push("--device", device);
+  args.push("--package", packageName, "--pair", link, "--json");
+  await new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      args,
+      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr = (stderr + chunk.toString()).slice(-16_384)));
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`mobile connect failed (${code ?? signal}): ${stderr.trim()}`));
+    });
+  });
 }
 
 async function main() {
@@ -1639,7 +1630,11 @@ async function main() {
       workspaceDir: path.join(serverConfig, "vibestudio", "workspaces", "default", "source"),
     };
 
-    const invite = requireRootInvite(ready, "mobile");
+    const invite = await waitForRootInvite({
+      readyFile: readyFilePath,
+      kind: "mobile",
+      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
+    });
 
     // Local mode needs adb bridges for its host-only dependencies. Hosted mode
     // intentionally has none: all server traffic must traverse the remote pipe.
@@ -1724,8 +1719,22 @@ async function main() {
       await waitForPhaseTappingApprovals(options.device, logcat, phase, pairingDeadlineMs);
     }
     const managedLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
-    for (const phase of [
+    await waitForPhaseTappingApprovals(
+      options.device,
+      logcat,
       "workspace-connected",
+      managedLaunchDeadlineMs
+    );
+    // The product no longer creates an onboarding panel during workspace
+    // startup. Exercise the default user path instead of relying on hidden
+    // fixture state: open the panel action sheet and create the standard new
+    // panel, which then drives the same lazy materialization path users invoke.
+    if (!options.noTap) {
+      await tapButtonByText(options.device, "Create new panel", managedLaunchDeadlineMs);
+      await tapButtonByText(options.device, "New Panel", managedLaunchDeadlineMs);
+      console.log("[mobile-smoke] Created a panel through the mobile app chrome");
+    }
+    for (const phase of [
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
