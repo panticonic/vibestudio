@@ -96,6 +96,22 @@ export const panelTests: TestCase[] = [
       ),
   },
   {
+    name: "panel-tree-navigation",
+    description: "Walk the panel tree and navigate a child panel through the tree surface",
+    category: "panels",
+    prompt:
+      "Open a child browser panel for https://example.com/, then explore the panel tree around yourself: identify your own node, confirm the child appears among your children, navigate the child to https://example.org/ through the tree surface, and close it afterward so nothing is left open. Finish with PANEL_TREE_OK, children=<count>, navigated=<final-url>, and closed.",
+    validate: (result) => {
+      const base = checkedWithNumericField(
+        result,
+        ["PANEL_TREE_OK", "closed"],
+        "children"
+      );
+      if (!base.passed) return base;
+      return finalMessageHasField(result, "navigated");
+    },
+  },
+  {
     name: "panel-list-sources",
     description: "List visible panel handles through the runtime panel API",
     category: "panels",

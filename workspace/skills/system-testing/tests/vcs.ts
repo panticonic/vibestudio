@@ -9,16 +9,15 @@ function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: strin
   return noIncompleteInvocations(result);
 }
 
-function uniqueRepoPath(): string {
-  const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  return `projects/system-test-vcs-divergence-${suffix}`;
-}
-
 async function orchestrateVcsMergeThenPush(
   context: TestOrchestrationContext
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
-  const repoPath = uniqueRepoPath();
+  const fixtureName = context.runner.workspaceRepoProjectName;
+  if (!fixtureName) {
+    throw new Error("vcs-merge-then-push requires a workspace repo fixture namespace");
+  }
+  const repoPath = `projects/${fixtureName}`;
   const sessions: Array<{ role: "agent-a" | "agent-b"; session: HeadlessSession }> = [];
   const cleanupErrors: string[] = [];
   let agentAPhase1Messages: ChatMessage[] = [];
@@ -27,14 +26,26 @@ async function orchestrateVcsMergeThenPush(
   try {
     const agentA = await context.runner.spawn();
     sessions.push({ role: "agent-a", session: agentA });
-    await context.sendAndWait(agentA, agentAPreparePrompt(repoPath), "agent A prepare unpushed commit");
+    await context.sendAndWait(
+      agentA,
+      agentAPreparePrompt(repoPath),
+      "agent A prepare unpushed commit"
+    );
     agentAPhase1Messages = [...agentA.messages] as ChatMessage[];
 
     const agentB = await context.runner.spawn();
     sessions.push({ role: "agent-b", session: agentB });
-    await context.sendAndWait(agentB, agentBPushPrompt(repoPath), "agent B push competing main commit");
+    await context.sendAndWait(
+      agentB,
+      agentBPushPrompt(repoPath),
+      "agent B push competing main commit"
+    );
 
-    await context.sendAndWait(agentA, agentAFinalPrompt(repoPath), "agent A merge and push after divergence");
+    await context.sendAndWait(
+      agentA,
+      agentAFinalPrompt(repoPath),
+      "agent A merge and push after divergence"
+    );
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
@@ -55,9 +66,13 @@ async function orchestrateVcsMergeThenPush(
     }
     try {
       const snapshot = session.snapshot();
-      cleanupErrors.push(...snapshot.cleanupErrors.map((entry) => `${role} ${entry.phase}: ${entry.message}`));
+      cleanupErrors.push(
+        ...snapshot.cleanupErrors.map((entry) => `${role} ${entry.phase}: ${entry.message}`)
+      );
     } catch (err) {
-      cleanupErrors.push(`${role} cleanup snapshot: ${err instanceof Error ? err.message : String(err)}`);
+      cleanupErrors.push(
+        `${role} cleanup snapshot: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 
@@ -232,6 +247,7 @@ export const vcsTests: TestCase[] = [
     name: "vcs-merge-then-push",
     description: "Reconcile divergence with vcs.merge, then fast-forward push",
     category: "vcs",
+    workspaceRepoFixture: true,
     prompt:
       "Harness-orchestrated two-agent divergence path: Agent A commits locally, Agent B advances main from an independent context, then Agent A observes diverged, merges, and pushes. Finish with VCS_MERGE_PUSH_OK, status:, diverged:yes, and pushed:yes.",
     orchestrate: orchestrateVcsMergeThenPush,

@@ -3,6 +3,7 @@ import {
   completedToolNames,
   finalMessageHasAll,
   findLastAgentMessage,
+  getToolCalls,
   noIncompleteInvocations,
 } from "./_helpers.js";
 
@@ -19,7 +20,14 @@ function channelInspectionIsBounded(result: Parameters<typeof findLastAgentMessa
   const marker = finalMessageHasAll(result, ["CHANNEL_INSPECT_OK"]);
   if (!marker.passed) return marker;
   const message = findLastAgentMessage(result);
-  if (!/\bbounded\b|\blimit\s*[:=]?\s*\d+\b/i.test(message)) {
+  const boundedCall = getToolCalls(result).some((call) => {
+    if (call.name !== "eval" || call.execution?.status !== "complete" || call.execution.isError) {
+      return false;
+    }
+    const code = typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : "";
+    return /inspectChannelEnvelopes/.test(code) && /\blimit\s*:\s*[1-9]\d*\b/.test(code);
+  });
+  if (!boundedCall && !/\bbounded\b|\blimit\b[^\d\n]{0,16}\d+\b/i.test(message)) {
     return {
       passed: false,
       reason: `Expected bounded inspection evidence ("bounded" or an explicit limit): ${message.slice(0, 400)}`,

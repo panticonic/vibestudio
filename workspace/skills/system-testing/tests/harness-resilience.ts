@@ -42,7 +42,7 @@ export const harnessResilienceTests: TestCase[] = [
     description: "Tool validation errors are visible and retry succeeds without poisoning the transcript",
     category: "harness-resilience",
     prompt: "Exercise invalid tool arguments and recovery. Finish with INVALID_ARGS_VISIBLE_OK and INVALID_ARGS_RECOVER_OK.",
-    expectedToolFailures: [{ name: "eval", errorIncludes: "invalid args" }],
+    expectedToolFailures: [{ name: "docs_search", errorIncludes: "invalid" }],
     validate: (result) => checked(result, ["INVALID_ARGS_VISIBLE_OK", "INVALID_ARGS_RECOVER_OK"]),
   },
   {

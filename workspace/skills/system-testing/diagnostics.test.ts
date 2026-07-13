@@ -120,10 +120,10 @@ describe("system-testing diagnostics", () => {
         content: "",
         diagnostic: {
           severity: "error",
-          title: "Model call limit reached",
+          title: "Model retry limit reached",
           detail:
-            "Configured maxModelCallsPerTurn reached for t:chan-1:env-1: 96 model call(s) have already run, and the configured limit is 96.",
-          code: "max_model_calls_per_turn",
+            "Model retry limit reached for t:chan-1:env-1: 3 consecutive model failures occurred.",
+          code: "model_retry_limit_exceeded",
         },
       },
     ];
@@ -133,12 +133,11 @@ describe("system-testing diagnostics", () => {
     expect(diagnostic.conversation[1]).toMatchObject({
       uiType: "diagnostic",
       type: "system",
-      text:
-        "Model call limit reached\nConfigured maxModelCallsPerTurn reached for t:chan-1:env-1: 96 model call(s) have already run, and the configured limit is 96.",
+      text: "Model retry limit reached\nModel retry limit reached for t:chan-1:env-1: 3 consecutive model failures occurred.",
       diagnostic: {
         severity: "error",
-        code: "max_model_calls_per_turn",
-        title: "Model call limit reached",
+        code: "model_retry_limit_exceeded",
+        title: "Model retry limit reached",
       },
     });
   });
@@ -228,5 +227,31 @@ describe("system-testing diagnostics", () => {
         results: [entry],
       }).failureCount
     ).toBe(0);
+  });
+
+  it("includes bounded workspace repo fixture teardown diagnostics", () => {
+    const entry = entryWithMessages([]);
+    entry.execution.diagnostics = {
+      workspaceRepoFixture: {
+        testName: "fixture-test",
+        projectName: "system-test-fixture-test-1234",
+        repoNamePrefix: "system-test-fixture-test-",
+        reposBefore: ["meta"],
+        staleReposRemoved: ["panels/system-test-fixture-test-stale"],
+        reposRemoved: ["panels/system-test-fixture-test-1234"],
+        escapedRepos: [],
+        reposAfter: ["meta"],
+      },
+    };
+
+    expect(summarizeEntry(entry).workspaceRepoFixture).toEqual({
+      testName: "fixture-test",
+      projectName: "system-test-fixture-test-1234",
+      repoNamePrefix: "system-test-fixture-test-",
+      staleReposRemoved: ["panels/system-test-fixture-test-stale"],
+      reposRemoved: ["panels/system-test-fixture-test-1234"],
+      escapedRepos: [],
+      reposAfter: ["meta"],
+    });
   });
 });

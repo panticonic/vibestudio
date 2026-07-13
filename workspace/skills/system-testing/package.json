@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./cli": "./cli.ts",
     "./deterministic": "./deterministic.ts",
     "./diagnostics": "./diagnostics.ts",
     "./report": "./messages/report.ts",

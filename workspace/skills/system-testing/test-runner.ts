@@ -13,7 +13,6 @@ import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-sessio
 type MaybePromise<T> = T | Promise<T>;
 type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
 const DEFAULT_PARALLEL_CONCURRENCY = 4;
-const DEFAULT_TEST_TIMEOUT_MS = 120_000;
 
 export class TestRunner {
   constructor(
@@ -61,7 +60,34 @@ export class TestRunner {
       filter?.concurrency ?? this.opts?.concurrency ?? 1,
       filtered.length
     );
-    let nextIndex = 0;
+    const pending = new Set(filtered.map((_test, index) => index));
+    const activeResources = new Set<string>();
+    let scheduleWaiters: Array<() => void> = [];
+
+    const resourcesFor = (test: TestCase): string[] => [
+      ...new Set([
+        ...(test.resources ?? []).filter(Boolean),
+        ...(test.workspaceRepoFixture ? ["workspace:repo-fixtures"] : []),
+      ]),
+    ];
+    const wakeSchedulers = (): void => {
+      const waiters = scheduleWaiters;
+      scheduleWaiters = [];
+      for (const wake of waiters) wake();
+    };
+    const claimRunnable = async (): Promise<{ index: number; resources: string[] } | null> => {
+      for (;;) {
+        for (const index of pending) {
+          const resources = resourcesFor(filtered[index]!);
+          if (resources.some((resource) => activeResources.has(resource))) continue;
+          pending.delete(index);
+          for (const resource of resources) activeResources.add(resource);
+          return { index, resources };
+        }
+        if (pending.size === 0) return null;
+        await new Promise<void>((resolve) => scheduleWaiters.push(resolve));
+      }
+    };
 
     const runAt = async (index: number): Promise<void> => {
       const test = filtered[index]!;
@@ -88,9 +114,15 @@ export class TestRunner {
     };
 
     const worker = async (): Promise<void> => {
-      while (nextIndex < filtered.length) {
-        const index = nextIndex++;
-        await runAt(index);
+      for (;;) {
+        const claim = await claimRunnable();
+        if (!claim) return;
+        try {
+          await runAt(claim.index);
+        } finally {
+          for (const resource of claim.resources) activeResources.delete(resource);
+          wakeSchedulers();
+        }
       }
     };
 
@@ -140,41 +172,75 @@ export class TestRunner {
 
   async runOne(test: TestCase): Promise<{ result: TestResult; execution: TestExecutionResult }> {
     const startTime = Date.now();
-    const testTimeoutMs = this.opts?.testTimeoutMs ?? DEFAULT_TEST_TIMEOUT_MS;
+    const testTimeoutMs = this.opts?.testTimeoutMs;
+    const testRunner =
+      typeof this.runner.forTest === "function"
+        ? this.runner.forTest(test.name, {
+            workspaceRepoFixture: test.workspaceRepoFixture === true,
+          })
+        : this.runner;
     let session: HeadlessSession | undefined;
     let outcome: { result: TestResult; execution: TestExecutionResult } | undefined;
+    let workspaceRepoFixtureState:
+      | Awaited<ReturnType<HeadlessRunner["prepareWorkspaceRepoFixture"]>>
+      | undefined;
     try {
+      if (test.workspaceRepoFixture) {
+        workspaceRepoFixtureState = await testRunner.prepareWorkspaceRepoFixture();
+      }
       const execution = test.orchestrate
         ? await test.orchestrate({
-            runner: this.runner,
+            runner: testRunner,
             testTimeoutMs,
             sendAndWait: async (targetSession, prompt, phase) => {
-              const controller = new AbortController();
-              await this.withTimeout(
-                targetSession.sendAndWait(prompt, { signal: controller.signal }),
-                testTimeoutMs,
-                `Timed out waiting for agent to finish test "${test.name}" during ${phase}`,
-                controller
-              );
+              if (testTimeoutMs === undefined) {
+                await targetSession.sendAndWait(prompt);
+              } else {
+                const controller = new AbortController();
+                await this.withTimeout(
+                  targetSession.sendAndWait(prompt, { signal: controller.signal }),
+                  testTimeoutMs,
+                  `Timed out waiting for agent to finish test "${test.name}" during ${phase}`,
+                  controller
+                );
+              }
+              await this.captureAndAssertModelExecution(targetSession, test.name, phase);
             },
           })
         : await (async (): Promise<TestExecutionResult> => {
-            session = await this.runner.spawn();
+            session = await testRunner.spawn();
 
-            const controller = new AbortController();
-            await this.withTimeout(
-              session.sendAndWait(test.prompt, { signal: controller.signal }),
-              testTimeoutMs,
-              `Timed out waiting for agent to finish test "${test.name}"`,
-              controller
+            if (testTimeoutMs === undefined) {
+              await session.sendAndWait(test.prompt);
+            } else {
+              const controller = new AbortController();
+              await this.withTimeout(
+                session.sendAndWait(test.prompt, { signal: controller.signal }),
+                testTimeoutMs,
+                `Timed out waiting for agent to finish test "${test.name}"`,
+                controller
+              );
+            }
+
+            const modelExecutionEvidence = await this.captureAndAssertModelExecution(
+              session,
+              test.name,
+              "agent turn"
             );
 
             const messages = [...session.messages] as ChatMessage[];
             const snapshot = session.snapshot();
             const duration = Date.now() - startTime;
-            return { messages, duration, snapshot };
+            return {
+              messages,
+              duration,
+              snapshot,
+              modelExecutionEvidence,
+              provenance: provenanceFromSnapshot(snapshot),
+            };
           })();
       execution.duration ||= Date.now() - startTime;
+      execution.modelExecutionEvidence ??= execution.snapshot?.modelExecutionEvidence;
       execution.toolFailures = classifyExpectedToolFailures(
         collectToolFailures(execution),
         test.expectedToolFailures
@@ -184,6 +250,17 @@ export class TestRunner {
     } catch (err) {
       const duration = Date.now() - startTime;
       const messages = session ? ([...session.messages] as ChatMessage[]) : [];
+      let modelExecutionEvidence: unknown;
+      if (session) {
+        try {
+          modelExecutionEvidence = await session.captureModelExecutionEvidence();
+        } catch (evidenceErr) {
+          console.warn(
+            "[system-testing] Failed to capture model evidence for failed headless session:",
+            evidenceErr
+          );
+        }
+      }
       let snapshot: SessionSnapshot | undefined;
       try {
         snapshot = session?.snapshot();
@@ -196,13 +273,15 @@ export class TestRunner {
         duration,
         error: errorMessage,
         snapshot,
+        ...(modelExecutionEvidence !== undefined ? { modelExecutionEvidence } : {}),
+        ...(snapshot ? { provenance: provenanceFromSnapshot(snapshot) } : {}),
       };
       execution.toolFailures = classifyExpectedToolFailures(
         collectToolFailures(execution),
         test.expectedToolFailures
       );
       try {
-        execution.diagnostics = await this.runner.collectDiagnostics({
+        execution.diagnostics = await testRunner.collectDiagnostics({
           channelId: session?.channelId,
           error: new Error(errorMessage),
         });
@@ -220,13 +299,19 @@ export class TestRunner {
     } finally {
       try {
         if (session) {
-          await session.close({ waitForRemoteCleanup: false });
+          // A failed/timed-out test may still own an active eval or model call.
+          // Await retirement before releasing its resource lock so subsequent
+          // tests cannot race background mutations from the failed trajectory.
+          const awaitRemoteCleanup = Boolean(outcome?.execution.error);
+          await session.close({
+            waitForRemoteCleanup: awaitRemoteCleanup,
+          });
           if (outcome) {
             outcome.execution.diagnostics = {
               ...(outcome.execution.diagnostics ?? {}),
               headlessCleanup: {
-                mode: "detached",
-                remoteCleanupAwaited: false,
+                mode: awaitRemoteCleanup ? "awaited" : "detached",
+                remoteCleanupAwaited: awaitRemoteCleanup,
               },
             };
           }
@@ -291,6 +376,38 @@ export class TestRunner {
           };
         }
       }
+      if (workspaceRepoFixtureState) {
+        try {
+          const fixtureCleanup =
+            await testRunner.cleanupWorkspaceRepoFixture(workspaceRepoFixtureState);
+          if (outcome) {
+            outcome.execution.diagnostics = {
+              ...(outcome.execution.diagnostics ?? {}),
+              workspaceRepoFixture: {
+                ...workspaceRepoFixtureState,
+                ...fixtureCleanup,
+              },
+            };
+          }
+          if (fixtureCleanup.escapedRepos.length > 0) {
+            recordCleanupFailure(
+              outcome,
+              `workspace-repo-fixture: test published repo(s) outside its reserved namespace: ${fixtureCleanup.escapedRepos.join(
+                ", "
+              )}; left intact`
+            );
+          }
+        } catch (fixtureCleanupErr) {
+          recordCleanupFailure(
+            outcome,
+            `workspace-repo-fixture: ${
+              fixtureCleanupErr instanceof Error
+                ? fixtureCleanupErr.message
+                : String(fixtureCleanupErr)
+            }`
+          );
+        }
+      }
     }
     if (!outcome) {
       throw new Error("Test runner finished without producing a result");
@@ -319,6 +436,149 @@ export class TestRunner {
       if (timer !== undefined) clearTimeout(timer);
     }
   }
+
+  private async captureAndAssertModelExecution(
+    session: HeadlessSession,
+    testName: string,
+    phase: string
+  ): Promise<unknown> {
+    const evidence = await session.captureModelExecutionEvidence();
+    const record = asRecord(evidence);
+    const calls = Array.isArray(record?.["calls"])
+      ? (record["calls"] as unknown[]).map(asRecord).filter(Boolean)
+      : [];
+    if (calls.length === 0) {
+      throw new Error(
+        `System test "${testName}" has no journaled model execution evidence after ${phase}`
+      );
+    }
+    const policy =
+      typeof this.runner.modelPolicySnapshot === "function"
+        ? this.runner.modelPolicySnapshot(session)
+        : {
+            primaryModel: this.runner.modelRef,
+            activeModel: this.runner.modelRef,
+            fallbackModel: null,
+          };
+    const allowedRefs = new Set([policy.activeModel]);
+    if (policy.activeModel === policy.fallbackModel && policy.primaryModel !== policy.activeModel) {
+      allowedRefs.add(policy.primaryModel);
+    }
+    const mismatches = calls.filter((call) => {
+      const ref = String(call?.["ref"] ?? "");
+      const separator = ref.indexOf(":");
+      return (
+        !allowedRefs.has(ref) ||
+        call?.["provider"] !== (separator >= 0 ? ref.slice(0, separator) : ref) ||
+        call?.["model"] !== (separator >= 0 ? ref.slice(separator + 1) : "")
+      );
+    });
+    if (mismatches.length > 0) {
+      const actual = [
+        ...new Set(
+          mismatches.map(
+            (call) =>
+              `${String(call?.["ref"] ?? "unknown")} ` +
+              `(provider=${String(call?.["provider"] ?? "missing")}, ` +
+              `model=${String(call?.["model"] ?? "missing")})`
+          )
+        ),
+      ];
+      throw new Error(
+        `System test "${testName}" executed ${actual.join(", ")} during ${phase}; expected ${[
+          ...allowedRefs,
+        ].join(" then ")}`
+      );
+    }
+    if (allowedRefs.size > 1) {
+      const refs = calls.map((call) => String(call?.["ref"] ?? ""));
+      const fallbackIndex = refs.indexOf(policy.activeModel);
+      const invalidTransition =
+        fallbackIndex < 0 ||
+        calls
+          .slice(0, fallbackIndex)
+          .some(
+            (call) =>
+              call?.["ref"] !== policy.primaryModel ||
+              call?.["outcome"] !== "failed"
+          ) ||
+        refs.slice(fallbackIndex).some((ref) => ref !== policy.activeModel);
+      if (invalidTransition) {
+        throw new Error(
+          `System test "${testName}" has an invalid model transition during ${phase}; ` +
+            `expected failed ${policy.primaryModel} call(s) followed only by ${policy.activeModel}`
+        );
+      }
+    }
+    const metered = calls.some((call) => {
+      const usage = asRecord(call?.["usage"]);
+      const totalTokens = usage?.["totalTokens"];
+      const hasPositiveUsage =
+        (typeof totalTokens === "number" && totalTokens > 0) ||
+        ["input", "output", "cacheRead", "reasoning"].some(
+          (key) => typeof usage?.[key] === "number" && (usage[key] as number) > 0
+        );
+      return (
+        typeof call?.["api"] === "string" &&
+        call["api"].length > 0 &&
+        typeof call?.["auth"] === "string" &&
+        call["auth"].length > 0 &&
+        hasPositiveUsage
+      );
+    });
+    if (!metered) {
+      throw new Error(
+        `System test "${testName}" has model labels for ${policy.activeModel} but no ` +
+          `completed API/auth record with positive metered usage after ${phase}`
+      );
+    }
+    return evidence;
+  }
+}
+
+function recordCleanupFailure(
+  outcome: { result: TestResult; execution: TestExecutionResult } | undefined,
+  message: string
+): void {
+  if (!outcome) return;
+  outcome.execution.cleanupErrors = [...(outcome.execution.cleanupErrors ?? []), message];
+  outcome.execution.error ??= `Headless cleanup failed: ${message}`;
+  if (outcome.result.passed) {
+    outcome.result = {
+      passed: false,
+      reason: `Headless cleanup failed: ${message}`,
+      details: { cleanupErrors: [message] },
+    };
+    return;
+  }
+  outcome.result = {
+    ...outcome.result,
+    details: {
+      ...(outcome.result.details ?? {}),
+      cleanupErrors: [
+        ...((outcome.result.details?.["cleanupErrors"] as string[] | undefined) ?? []),
+        message,
+      ],
+    },
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function provenanceFromSnapshot(
+  snapshot: SessionSnapshot
+): NonNullable<TestExecutionResult["provenance"]> {
+  return {
+    channelId: snapshot.channelId,
+    branchId: snapshot.channelId ? `branch:channel:${snapshot.channelId}` : null,
+    agentEntityId: snapshot.agentEntityId,
+    agentTargetId: snapshot.agentTargetId,
+    contextId: snapshot.agentContextId,
+  };
 }
 
 function formatExecutionError(
@@ -446,9 +706,7 @@ function classifyExpectedToolFailures(
   });
 }
 
-function unexpectedToolFailures(
-  failures: ToolFailureSummary[] | undefined
-): ToolFailureSummary[] {
+function unexpectedToolFailures(failures: ToolFailureSummary[] | undefined): ToolFailureSummary[] {
   return (failures ?? []).filter((failure) => failure.expected !== true);
 }
 

@@ -11,13 +11,15 @@ function appliedDocsProbe(
   name: string,
   description: string,
   task: string,
-  expected: string[]
+  expected: string[],
+  options?: { workspaceRepoFixture?: boolean }
 ): TestCase {
   return {
     name,
     description,
     category: "docs-probes",
     prompt: [task, `Finish with: ${expected.join(", ")}.`].join("\n"),
+    ...(options?.workspaceRepoFixture ? { workspaceRepoFixture: true } : {}),
     validate: (result) => hasEvidence(result, expected),
   };
 }
@@ -39,7 +41,8 @@ export const docsProbeTests: TestCase[] = [
     "docs-workspace-dev-change-loop",
     "Create, publish, and inspect a real isolated panel",
     "Create, publish, and inspect a tiny isolated panel project.",
-    ["DOC_WORKSPACE_DEV_LOOP_OK", "published", "opened"]
+    ["DOC_WORKSPACE_DEV_LOOP_OK", "published", "opened"],
+    { workspaceRepoFixture: true }
   ),
   appliedDocsProbe(
     "docs-worker-fork-rpc-plan",

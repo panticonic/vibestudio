@@ -19,6 +19,19 @@ export { docsProbeTests } from "./tests/docs-probes.js";
 export { projectLifecycleTests } from "./tests/project-lifecycle.js";
 export { cdpGadDiagnosticTests } from "./tests/cdp-gad-diagnostics.js";
 export { harnessResilienceTests } from "./tests/harness-resilience.js";
+export { gitInteropTests } from "./tests/git-interop.js";
+export { vcsAdvancedTests } from "./tests/vcs-advanced.js";
+export { blobstoreTests } from "./tests/blobstore.js";
+export { serverLogTests } from "./tests/server-logs.js";
+export { unitDiagnosticsTests } from "./tests/unit-diagnostics.js";
+export { multiUserTests } from "./tests/multi-user.js";
+export { approvalPermissionTests } from "./tests/approvals-permissions.js";
+export { evalLifecycleTests } from "./tests/eval-lifecycle.js";
+export { docsDiscoveryTests } from "./tests/docs-discovery.js";
+export { webhookTests } from "./tests/webhooks.js";
+export { extensionSurfaceTests } from "./tests/extensions-surface.js";
+export { harnessToolTests } from "./tests/harness-tools.js";
+export { credentialTests } from "./tests/credentials.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -39,6 +52,19 @@ import { docsProbeTests as _docs } from "./tests/docs-probes.js";
 import { projectLifecycleTests as _projectLifecycle } from "./tests/project-lifecycle.js";
 import { cdpGadDiagnosticTests as _cdpGad } from "./tests/cdp-gad-diagnostics.js";
 import { harnessResilienceTests as _harnessResilience } from "./tests/harness-resilience.js";
+import { gitInteropTests as _gitInterop } from "./tests/git-interop.js";
+import { vcsAdvancedTests as _vcsAdvanced } from "./tests/vcs-advanced.js";
+import { blobstoreTests as _blobstore } from "./tests/blobstore.js";
+import { serverLogTests as _serverLogs } from "./tests/server-logs.js";
+import { unitDiagnosticsTests as _unitDiagnostics } from "./tests/unit-diagnostics.js";
+import { multiUserTests as _multiUser } from "./tests/multi-user.js";
+import { approvalPermissionTests as _approvals } from "./tests/approvals-permissions.js";
+import { evalLifecycleTests as _evalLifecycle } from "./tests/eval-lifecycle.js";
+import { docsDiscoveryTests as _docsDiscovery } from "./tests/docs-discovery.js";
+import { webhookTests as _webhooks } from "./tests/webhooks.js";
+import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-surface.js";
+import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
+import { credentialTests as _credentials } from "./tests/credentials.js";
 import { deterministicTestCases as _deterministic } from "./deterministic.js";
 
 export type TestStage = {
@@ -70,17 +96,30 @@ export function allTests(): TestCase[] {
     ..._smoke,
     ..._fs,
     ..._vcs,
+    ..._vcsAdvanced,
+    ..._gitInterop,
     ..._panels,
     ..._workers,
     ..._build,
     ..._oauth,
+    ..._credentials,
     ..._ws,
+    ..._unitDiagnostics,
+    ..._multiUser,
+    ..._approvals,
     ..._notif,
     ..._skills,
     ..._agent,
     ..._rpc,
     ..._edge,
     ..._agenticRuntime,
+    ..._evalLifecycle,
+    ..._blobstore,
+    ..._serverLogs,
+    ..._webhooks,
+    ..._extensionSurface,
+    ..._harnessTools,
+    ..._docsDiscovery,
     ..._interaction,
     ..._projectLifecycle,
     ..._cdpGad,

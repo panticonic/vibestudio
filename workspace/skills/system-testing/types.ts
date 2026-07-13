@@ -30,6 +30,19 @@ export interface TestCase {
   /** Tool errors deliberately induced by this test, not infrastructure defects. */
   expectedToolFailures?: ExpectedToolFailure[];
   /**
+   * Shared mutable platform resources this case uses. Cases with an
+   * overlapping resource are serialized even when the suite has spare
+   * concurrency; disjoint cases still run in parallel.
+   */
+  resources?: string[];
+  /**
+   * Give tests that create/publish workspace repos a harness-owned disposable
+   * namespace. The runner removes stale repos in that namespace before the
+   * test, removes repos created in it afterward, and surfaces any teardown
+   * failure. This keeps the user-like prompt free of fixture mechanics.
+   */
+  workspaceRepoFixture?: boolean;
+  /**
    * Optional custom orchestration for tests that need multiple independent
    * headless agents, ordered phases, or other harness-level setup that a single
    * agent should not fake from inside one context.
@@ -41,11 +54,20 @@ export interface TestCase {
 
 export interface TestOrchestrationContext {
   runner: HeadlessRunner;
-  testTimeoutMs: number;
+  /** Optional operator-supplied deadline; normal system tests are unbounded. */
+  testTimeoutMs?: number;
   sendAndWait(session: HeadlessSession, prompt: string, phase: string): Promise<void>;
 }
 
 export interface TestExecutionResult {
+  /** Stable identifiers for inspecting the spawned test trajectory after completion. */
+  provenance?: {
+    channelId: string | null;
+    branchId: string | null;
+    agentEntityId: string | null;
+    agentTargetId: string | null;
+    contextId: string | null;
+  };
   /** Full conversation messages */
   messages: ChatMessage[];
   /** Wall-clock duration in ms */
@@ -56,6 +78,8 @@ export interface TestExecutionResult {
   cleanupErrors?: string[];
   /** Full diagnostic snapshot from the session (invocations, debug events, participants) */
   snapshot?: SessionSnapshot;
+  /** Journal-derived proof of provider/model requests and completed usage. */
+  modelExecutionEvidence?: unknown;
   /** Runtime/GAD diagnostics collected automatically when a test errors. */
   diagnostics?: Record<string, unknown>;
   /** Non-fatal tool-call failures observed during the turn. */

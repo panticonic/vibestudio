@@ -44,6 +44,27 @@ function requireEvalEvidence(
   return { passed: true };
 }
 
+function requireAnyEvalEvidence(
+  result: Parameters<typeof finalMessageHasAll>[0],
+  alternatives: readonly (readonly string[])[],
+  anyPattern?: RegExp
+) {
+  const code = successfulEvalCode(result);
+  const matched = alternatives.some((required) => required.every((token) => code.includes(token)));
+  if (!matched) {
+    return {
+      passed: false,
+      reason: `Successful eval did not exercise any supported path: ${alternatives
+        .map((tokens) => tokens.join(" + "))
+        .join(" or ")}`,
+    };
+  }
+  if (anyPattern && !anyPattern.test(code)) {
+    return { passed: false, reason: "Successful eval did not contain worker-side observation" };
+  }
+  return { passed: true };
+}
+
 function checkedOutcome(
   result: Parameters<typeof finalMessageHasAll>[0],
   okMarker: string,
@@ -81,7 +102,10 @@ export const workerTests: TestCase[] = [
     validate: (result) => {
       const base = checked(result, ["WORKER_CREATE_OK", "destroyed"]);
       if (!base.passed) return base;
-      return requireEvalEvidence(result, ["runtime.createEntity", "runtime.retireEntity"]);
+      return requireAnyEvalEvidence(result, [
+        ["workers.create", "workers.destroy"],
+        ["runtime.createEntity", "runtime.retireEntity"],
+      ]);
     },
   },
   {
@@ -95,7 +119,11 @@ export const workerTests: TestCase[] = [
       if (!msg.passed) return msg;
       const base = checked(result, ["WORKER_LIST_OK"]);
       if (!base.passed) return base;
-      return requireEvalEvidence(result, ["runtime.listEntities"]);
+      return requireAnyEvalEvidence(result, [
+        ["workers.list"],
+        ["runtime.listEntities"],
+        ["workspace.units.list"],
+      ]);
     },
   },
   {
@@ -105,10 +133,9 @@ export const workerTests: TestCase[] = [
     prompt: "Exercise worker destruction. Finish with WORKER_DESTROY_OK or WORKER_DESTROY_MISMATCH.",
     validate: (result) =>
       checkedOutcome(result, "WORKER_DESTROY_OK", "WORKER_DESTROY_MISMATCH", () =>
-        requireEvalEvidence(result, [
-          "runtime.createEntity",
-          "runtime.listEntities",
-          "runtime.retireEntity",
+        requireAnyEvalEvidence(result, [
+          ["workers.create", "workers.list", "workers.destroy"],
+          ["runtime.createEntity", "runtime.listEntities", "runtime.retireEntity"],
         ])
       ),
   },
@@ -123,15 +150,31 @@ export const workerTests: TestCase[] = [
       ),
   },
   {
+    name: "worker-do-sql-persistence",
+    description: "A Durable Object's own storage persists data across separate calls",
+    category: "workers",
+    prompt:
+      "Demonstrate that a Durable Object app can persist data in its own storage: store a couple of rows through a DO's methods in one call, then read them back through a second, separate call to the same object and confirm they survived. Clean up anything you created. Finish with WORKER_DO_SQL_OK and rows:<count>, or WORKER_DO_SQL_UNAVAILABLE with the concrete blocking reason.",
+    validate: (result) =>
+      checkedOutcome(result, "WORKER_DO_SQL_OK", "WORKER_DO_SQL_UNAVAILABLE", () => {
+        const marker = finalMessageHasAll(result, ["rows:"]);
+        if (!marker.passed) return marker;
+        return requireEvalEvidence(result, ["rpc.call"]);
+      }),
+  },
+  {
     name: "worker-env",
     description: "Create a worker with environment variables",
     category: "workers",
     prompt: "Exercise worker environment configuration. Finish with WORKER_ENV_OK or WORKER_ENV_UNOBSERVABLE.",
     validate: (result) =>
       checkedOutcome(result, "WORKER_ENV_OK", "WORKER_ENV_UNOBSERVABLE", () =>
-        requireEvalEvidence(
+        requireAnyEvalEvidence(
           result,
-          ["runtime.createEntity", "env", "runtime.retireEntity"],
+          [
+            ["workers.create", "env", "workers.destroy"],
+            ["runtime.createEntity", "env", "runtime.retireEntity"],
+          ],
           /rpc\.call(?:<[^>]*>)?\s*\(\s*[^,\n]*(?:\.targetId|targetId)\s*,|gatewayFetch\s*\(/
         )
       ),

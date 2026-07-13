@@ -3,6 +3,36 @@ import type { ChatMessage } from "@workspace/agentic-core";
 import { TestRunner } from "./test-runner.js";
 import type { HeadlessRunner } from "./runner.js";
 
+const TEST_MODEL = "openai-codex:gpt-5.3-codex-spark";
+const modelEvidence = () => ({
+  totalCalls: 1,
+  truncated: false,
+  calls: [
+    {
+      ref: TEST_MODEL,
+      provider: "openai-codex",
+      model: "gpt-5.3-codex-spark",
+      api: "openai-codex-responses",
+      auth: "url-bound",
+      usage: { input: 10, output: 5, totalTokens: 15 },
+    },
+  ],
+});
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("TestRunner", () => {
   it("adds pending invocation and lifecycle context to headless timeouts", async () => {
     const lifecycleMessage = {
@@ -40,7 +70,12 @@ describe("TestRunner", () => {
         waitSignal = opts?.signal;
         return new Promise(() => undefined);
       }),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
+        channelId: "chat-timeout",
+        agentEntityId: "agent-entity-timeout",
+        agentTargetId: "agent-target-timeout",
+        agentContextId: "ctx-timeout",
         messages,
         invocations: [{ id: "call-eval", name: "eval", status: "pending" }],
         debugEvents: [],
@@ -52,6 +87,7 @@ describe("TestRunner", () => {
       close: vi.fn(async () => undefined),
     };
     const runner = {
+      modelRef: TEST_MODEL,
       spawn: vi.fn(async () => session),
       collectDiagnostics: vi.fn(async () => ({})),
     } as unknown as HeadlessRunner;
@@ -71,13 +107,24 @@ describe("TestRunner", () => {
     expect(execution.error).toContain(
       'Last lifecycle: waiting reason=model_credential_required "Waiting for model credential approval".'
     );
-    expect(execution.error).toContain('Last diagnostic: code=message_empty "No assistant response".');
+    expect(execution.error).toContain(
+      'Last diagnostic: code=message_empty "No assistant response".'
+    );
     expect(waitSignal?.aborted).toBe(true);
     expect(runner.collectDiagnostics).toHaveBeenCalledWith({
       channelId: "chat-timeout",
       error: expect.objectContaining({ message: execution.error }),
     });
-    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: false });
+    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: true });
+    expect(session.captureModelExecutionEvidence).toHaveBeenCalledOnce();
+    expect(execution.modelExecutionEvidence).toEqual(modelEvidence());
+    expect(execution.provenance).toEqual({
+      channelId: "chat-timeout",
+      branchId: "branch:channel:chat-timeout",
+      agentEntityId: "agent-entity-timeout",
+      agentTargetId: "agent-target-timeout",
+      contextId: "ctx-timeout",
+    });
   });
 
   it("keeps the original test failure when diagnostics collection fails", async () => {
@@ -87,6 +134,7 @@ describe("TestRunner", () => {
       sendAndWait: vi.fn(async () => {
         throw new Error("fetch failed");
       }),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
         messages: [],
         invocations: [],
@@ -99,6 +147,7 @@ describe("TestRunner", () => {
       close: vi.fn(async () => undefined),
     };
     const runner = {
+      modelRef: TEST_MODEL,
       spawn: vi.fn(async () => session),
       collectDiagnostics: vi.fn(async () => {
         throw new Error("diagnostics fetch failed");
@@ -159,6 +208,7 @@ describe("TestRunner", () => {
       channelId: "chat-tool-error",
       messages,
       sendAndWait: vi.fn(async () => undefined),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
         messages,
         invocations: [
@@ -183,6 +233,7 @@ describe("TestRunner", () => {
       close: vi.fn(async () => undefined),
     };
     const runner = {
+      modelRef: TEST_MODEL,
       spawn: vi.fn(async () => session),
       collectDiagnostics: vi.fn(async () => ({})),
     } as unknown as HeadlessRunner;
@@ -257,6 +308,7 @@ describe("TestRunner", () => {
       channelId: "chat-orchestrated",
       messages,
       sendAndWait: vi.fn(async () => undefined),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
         messages,
         invocations: [],
@@ -269,6 +321,7 @@ describe("TestRunner", () => {
       close: vi.fn(async () => undefined),
     };
     const runner = {
+      modelRef: TEST_MODEL,
       spawn: vi.fn(async () => session),
       collectDiagnostics: vi.fn(async () => ({})),
     } as unknown as HeadlessRunner;
@@ -297,7 +350,225 @@ describe("TestRunner", () => {
     expect(execution.messages).toEqual(messages);
     expect(session.sendAndWait).toHaveBeenCalledWith(
       "phase prompt",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("serializes overlapping shared resources without blocking disjoint tests", async () => {
+    let activeGit = 0;
+    let maxActiveGit = 0;
+    let unrelatedRanWhileGitActive = false;
+    const releaseFirst = deferred<void>();
+    const firstStarted = deferred<void>();
+    let sessionNumber = 0;
+    const makeSession = () => ({
+      channelId: `channel-${++sessionNumber}`,
+      messages: [] as ChatMessage[],
+      sendAndWait: vi.fn(async (name: string) => {
+        if (name.startsWith("git")) {
+          activeGit += 1;
+          maxActiveGit = Math.max(maxActiveGit, activeGit);
+          if (name === "git-a") {
+            firstStarted.resolve();
+            await releaseFirst.promise;
+          }
+          activeGit -= 1;
+        } else {
+          await firstStarted.promise;
+          unrelatedRanWhileGitActive = activeGit === 1;
+          releaseFirst.resolve();
+        }
+      }),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: `channel-${sessionNumber}`,
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 1,
+      })),
+      close: vi.fn(async () => undefined),
+    });
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => makeSession()),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { testTimeoutMs: 1_000 });
+    const test = (name: string, resources?: string[]) => ({
+      name,
+      category: "test",
+      description: name,
+      prompt: name,
+      ...(resources ? { resources } : {}),
+      validate: () => ({ passed: true }),
+    });
+
+    const suite = await tester.runSuite(
+      [
+        test("git-a", ["workspace-config:git"]),
+        test("git-b", ["workspace-config:git"]),
+        test("unrelated"),
+      ],
+      { concurrency: 3 }
+    );
+
+    expect(suite.passed).toBe(3);
+    expect(maxActiveGit).toBe(1);
+    expect(unrelatedRanWhileGitActive).toBe(true);
+  });
+
+  it("surfaces workspace repo fixture teardown failures as infrastructure failures", async () => {
+    const messages = [
+      {
+        id: "answer-fixture",
+        senderId: "agent",
+        kind: "message",
+        complete: true,
+        content: "FIXTURE_OK",
+      },
+    ] satisfies ChatMessage[];
+    const session = {
+      channelId: "chat-fixture",
+      messages,
+      sendAndWait: vi.fn(async () => undefined),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-fixture",
+        agentEntityId: "agent-fixture",
+        agentTargetId: "target-fixture",
+        agentContextId: "ctx-fixture",
+        messages,
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const fixtureState = {
+      testName: "fixture-test",
+      projectName: "system-test-fixture-test-1234",
+      repoNamePrefix: "system-test-fixture-test-",
+      reposBefore: ["meta"],
+      staleReposRemoved: [],
+    };
+    const childRunner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+      prepareWorkspaceRepoFixture: vi.fn(async () => fixtureState),
+      cleanupWorkspaceRepoFixture: vi.fn(async () => {
+        throw new Error("delete approval transport failed");
+      }),
+    };
+    const runner = {
+      ...childRunner,
+      forTest: vi.fn(() => childRunner),
+    } as unknown as HeadlessRunner;
+
+    const { result, execution } = await new TestRunner(runner).runOne({
+      name: "fixture-test",
+      category: "test",
+      description: "fixture lifecycle",
+      prompt: "create a project",
+      workspaceRepoFixture: true,
+      validate: () => ({ passed: true }),
+    });
+
+    expect(result).toMatchObject({
+      passed: false,
+      reason: "Headless cleanup failed: workspace-repo-fixture: delete approval transport failed",
+    });
+    expect(execution.error).toBe(
+      "Headless cleanup failed: workspace-repo-fixture: delete approval transport failed"
+    );
+    expect(execution.cleanupErrors).toEqual([
+      "workspace-repo-fixture: delete approval transport failed",
+    ]);
+    expect(runner.forTest).toHaveBeenCalledWith("fixture-test", {
+      workspaceRepoFixture: true,
+    });
+  });
+
+  it("accepts a journaled Spark failure followed by a metered Luna fallback", async () => {
+    const fallbackModel = "openai-codex:gpt-5.6-luna";
+    const messages = [
+      {
+        id: "answer-fallback",
+        senderId: "agent",
+        kind: "message",
+        complete: true,
+        content: "FALLBACK_OK",
+      },
+    ] satisfies ChatMessage[];
+    const evidence = {
+      totalCalls: 2,
+      calls: [
+        {
+          ref: TEST_MODEL,
+          provider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          api: "openai-codex-responses",
+          auth: "url-bound",
+          outcome: "failed",
+        },
+        {
+          ref: fallbackModel,
+          provider: "openai-codex",
+          model: "gpt-5.6-luna",
+          api: "openai-codex-responses",
+          auth: "url-bound",
+          outcome: "completed",
+          usage: { input: 12, output: 4, totalTokens: 16 },
+        },
+      ],
+    };
+    const session = {
+      channelId: "chat-fallback",
+      messages,
+      sendAndWait: vi.fn(async () => messages[0]!),
+      captureModelExecutionEvidence: vi.fn(async () => evidence),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-fallback",
+        messages,
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: fallbackModel,
+      modelPolicySnapshot: () => ({
+        primaryModel: TEST_MODEL,
+        activeModel: fallbackModel,
+        fallbackModel,
+        fallbackThinkingLevel: "minimal",
+        fallbackOn: "usage_limit_terminal",
+        activations: [],
+      }),
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+
+    const { result, execution } = await new TestRunner(runner).runOne({
+      name: "fallback-test",
+      category: "test",
+      description: "fallback",
+      prompt: "continue",
+      validate: () => ({ passed: true }),
+    });
+
+    expect(result.passed).toBe(true);
+    expect(execution.modelExecutionEvidence).toEqual(evidence);
   });
 });

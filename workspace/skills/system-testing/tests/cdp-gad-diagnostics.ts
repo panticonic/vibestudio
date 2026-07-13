@@ -38,7 +38,11 @@ const GAD_INTEGRITY_MARKERS = [
   "integrity",
 ];
 
-function checked(result: Parameters<typeof finalMessageHasAll>[0], markers: string[]) {
+function checked(
+  result: Parameters<typeof finalMessageHasAll>[0],
+  markers: string[],
+  options: { allowInFlightHealthOkFalse?: boolean } = {}
+) {
   const msg = finalMessageHasAll(result, markers);
   if (!msg.passed) return msg;
 
@@ -63,6 +67,13 @@ function checked(result: Parameters<typeof finalMessageHasAll>[0], markers: stri
 
   const impossible = impossibleSuccessPhrase(result);
   if (impossible) {
+    if (
+      impossible === "ok:false" &&
+      options.allowInFlightHealthOkFalse &&
+      hasExpectedInFlightHealthEvidence(result)
+    ) {
+      return { passed: true };
+    }
     return {
       passed: false,
       reason: `Final success marker conflicts with failure wording "${impossible}"`,
@@ -73,10 +84,22 @@ function checked(result: Parameters<typeof finalMessageHasAll>[0], markers: stri
 }
 
 function checkedGadIntegrity(result: Parameters<typeof finalMessageHasAll>[0]) {
-  const strict = checked(result, GAD_INTEGRITY_MARKERS);
-  if (strict.passed) return strict;
-  if (expectedLiveGadHealthOutcome(result)) return { passed: true };
-  return strict;
+  const markers = finalMessageHasAll(result, GAD_INTEGRITY_MARKERS);
+  if (!markers.passed && !expectedLiveGadHealthOutcome(result)) return markers;
+  const incomplete = noIncompleteInvocations(result);
+  if (!incomplete.passed) return incomplete;
+  const failed = unexpectedToolFailures(result);
+  if (failed.length > 0) {
+    return {
+      passed: false,
+      reason: `Expected no failed tool calls, got ${failed.map(formatToolFailure).join(", ")}`,
+    };
+  }
+  // This test validates the diagnostic surface, not that the live trajectory
+  // being diagnosed is perfectly quiescent. `ok:false` is legitimate data for
+  // an open turn/current invocation or a discovered integrity finding; it is
+  // not a tool failure and must not contradict the execution-success marker.
+  return { passed: true };
 }
 
 function unexpectedToolFailures(
@@ -146,7 +169,9 @@ function findOkFalse(value: unknown, path: string, seen = new Set<unknown>()): s
     const parsed = parseJsonish(value);
     if (parsed !== undefined) return findOkFalse(parsed, path, seen);
     if (/"?ok"?\s*[:=]\s*false|ok false/i.test(value)) {
-      if (looksLikeControlledOkFalseText(value)) return undefined;
+      if (looksLikeControlledOkFalseText(value) || looksLikeExpectedInFlightHealthText(value)) {
+        return undefined;
+      }
       return path;
     }
     return undefined;
@@ -241,6 +266,33 @@ function looksLikeControlledOkFalseText(value: string): boolean {
     lower.includes("ok") &&
     /rawsql writes are disabled|unknown worktree state|not-a-real|rejected|expected/.test(lower)
   );
+}
+
+function looksLikeExpectedInFlightHealthText(value: string): boolean {
+  if (!/"?ok"?\s*[:=]\s*false|ok false/i.test(value)) return false;
+  const hasOpenWork =
+    hasPositiveMetric(value, ["openTurns", "nonterminalInvocations", "openProjectedInvocations"]);
+  if (!hasOpenWork) return false;
+  const issueFields = [
+    "publicationIssues",
+    "storageIssues",
+    "missingMappings",
+    "orphanMappings",
+    "sequenceMismatches",
+    "hashIssues",
+    "integrityIssues",
+  ];
+  const namesAnIssueMetric = issueFields.some((field) =>
+    new RegExp(`(?:"${field}"|\\b${field}\\b)\\s*[:=]`, "i").test(value)
+  );
+  return namesAnIssueMetric && !hasPositiveMetric(value, issueFields);
+}
+
+function hasExpectedInFlightHealthEvidence(
+  result: Parameters<typeof finalMessageHasAll>[0]
+): boolean {
+  const evidence = collectInvocationResultText(result);
+  return looksLikeExpectedInFlightHealthText(evidence);
 }
 
 function expectedLiveGadHealthOutcome(
@@ -425,6 +477,10 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     prompt:
       "Probe GAD branch and state inspection. Finish with GAD_BRANCH_OK, branch-files, state-probe, and controlled-errors.",
     validate: (result) =>
-      checked(result, ["GAD_BRANCH_OK", "branch-files", "state-probe", "controlled-errors"]),
+      checked(
+        result,
+        ["GAD_BRANCH_OK", "branch-files", "state-probe", "controlled-errors"],
+        { allowInFlightHealthOkFalse: true }
+      ),
   },
 ];

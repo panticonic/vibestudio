@@ -1,5 +1,10 @@
 import type { TestCase } from "../types.js";
-import { completedToolNames, finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  completedToolNames,
+  finalMessageHasAll,
+  finalMessageHasMarkerCount,
+  noIncompleteInvocations,
+} from "./_helpers.js";
 
 function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
   const msg = finalMessageHasAll(result, tokens);
@@ -20,6 +25,7 @@ export const agentCapabilityTests: TestCase[] = [
     description: "Agent recovers from a thrown error and retries successfully",
     category: "agent-capabilities",
     prompt: "Exercise recovery after a tool failure. Finish with AGENT_ERROR_RECOVERY_OK and recovered.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "INTENTIONAL_RECOVERY_TEST_FAILURE" }],
     validate: (result) => checked(result, ["AGENT_ERROR_RECOVERY_OK", "recovered"]),
   },
   {
@@ -27,7 +33,10 @@ export const agentCapabilityTests: TestCase[] = [
     description: "Agent generates a large data structure and reports on it",
     category: "agent-capabilities",
     prompt: "Exercise summarizing large generated data. Finish with AGENT_LARGE_SUMMARY_OK and count.",
-    validate: (result) => checked(result, ["AGENT_LARGE_SUMMARY_OK", "count"]),
+    validate: (result) => {
+      const marker = finalMessageHasMarkerCount(result, "AGENT_LARGE_SUMMARY_OK");
+      return marker.passed ? noIncompleteInvocations(result) : marker;
+    },
   },
   {
     name: "dynamic-import",

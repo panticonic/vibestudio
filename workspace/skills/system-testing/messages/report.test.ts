@@ -15,7 +15,7 @@ function entry(
     messages?: ChatMessage[];
     snapshot?: TestSuiteResultEntry["execution"]["snapshot"];
     toolFailures?: TestSuiteResultEntry["execution"]["toolFailures"];
-  } = {},
+  } = {}
 ): TestSuiteResultEntry {
   return {
     test: { name, category, description: `desc ${name}`, prompt: `do ${name}` },
@@ -30,14 +30,21 @@ function entry(
   };
 }
 
-function makeScope(entries: TestSuiteResultEntry[], stage: { index: number; name: string; category: string }) {
+function makeScope(
+  entries: TestSuiteResultEntry[],
+  stage: { index: number; name: string; category: string }
+) {
   const aggregate = {
     total: entries.length,
     passed: entries.filter((e) => e.result.passed).length,
     failed: entries.filter((e) => !e.result.passed && !e.execution.error).length,
     errored: entries.filter((e) => Boolean(e.execution.error)).length,
-    toolFailureCount: entries.reduce((count, e) => count + (e.execution.toolFailures?.length ?? 0), 0),
-    testsWithToolFailures: entries.filter((e) => (e.execution.toolFailures?.length ?? 0) > 0).length,
+    toolFailureCount: entries.reduce(
+      (count, e) => count + (e.execution.toolFailures?.length ?? 0),
+      0
+    ),
+    testsWithToolFailures: entries.filter((e) => (e.execution.toolFailures?.length ?? 0) > 0)
+      .length,
     skipped: 0,
     duration: entries.reduce((s, e) => s + (e.execution.duration ?? 0), 0),
     results: entries,
@@ -62,7 +69,10 @@ function makeChat() {
       return 1;
     }),
     publishCustomMessage: vi.fn(async (input: { typeId: string; initialState: unknown }) => {
-      published.push({ typeId: input.typeId, initialState: input.initialState as StageReportState });
+      published.push({
+        typeId: input.typeId,
+        initialState: input.initialState as StageReportState,
+      });
       return { messageId: `msg-${published.length}`, pubsubId: published.length };
     }),
   };
@@ -79,7 +89,9 @@ describe("reportStage", () => {
     const scope = makeScope(entries, { index: 0, name: "filesystem", category: "filesystem" });
     const { chat, published, registered } = makeChat();
 
-    const { messageId } = await reportStage(chat, scope, { prose: "two passed, one symlink failed" });
+    const { messageId } = await reportStage(chat, scope, {
+      prose: "two passed, one symlink failed",
+    });
 
     expect(messageId).toBe("msg-1");
     expect(registered).toEqual(["system-testing.stage-report"]);
@@ -146,6 +158,10 @@ describe("reportStage", () => {
       },
     ] satisfies ChatMessage[];
     const snapshot = {
+      channelId: "headless-test",
+      agentEntityId: "entity-test",
+      agentTargetId: "target-test",
+      agentContextId: "ctx-test",
       messages,
       invocations: [{ id: "call-1", name: "read", status: "complete" }],
       debugEvents: [],
@@ -153,6 +169,7 @@ describe("reportStage", () => {
       participants: {},
       localMethodNames: [],
       connected: true,
+      ownsAgentContext: false,
       duration: 10,
       title: null,
     };
@@ -190,9 +207,23 @@ describe("reportStage", () => {
     ];
     const scope = makeScope(entries, { index: 1, name: "filesystem 2/2", category: "filesystem" });
     // Stage 1/2 only owns fs-1; stage 2/2 owns fs-2, fs-3.
-    (scope["systemTestingRun"] as { stages: Array<{ index: number; name: string; category: string; tests: Array<{ name: string }> }> }).stages = [
+    (
+      scope["systemTestingRun"] as {
+        stages: Array<{
+          index: number;
+          name: string;
+          category: string;
+          tests: Array<{ name: string }>;
+        }>;
+      }
+    ).stages = [
       { index: 0, name: "filesystem 1/2", category: "filesystem", tests: [{ name: "fs-1" }] },
-      { index: 1, name: "filesystem 2/2", category: "filesystem", tests: [{ name: "fs-2" }, { name: "fs-3" }] },
+      {
+        index: 1,
+        name: "filesystem 2/2",
+        category: "filesystem",
+        tests: [{ name: "fs-2" }, { name: "fs-3" }],
+      },
     ];
     const { chat, published } = makeChat();
 

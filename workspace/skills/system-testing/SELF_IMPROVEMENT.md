@@ -2,6 +2,11 @@
 
 When system tests reveal bugs in Vibestudio, follow this workflow to fix them.
 
+For unattended live runs, launch a disposable server with
+`vibestudio remote serve --dev --auto-approve`. This reuses the host's existing
+development approval-queue auto-approver, including credential and userland
+requests that are separate from chat tool approval levels.
+
 ## Priority: Fix Infrastructure First
 
 **Never work around broken infrastructure in skills or prompts.** If an RPC method returns unintuitive results, has a confusing signature, swallows errors, or doesn't exist when it should — fix the service, not the caller. The goal is a platform where agents can discover how to use APIs naturally from skill documentation, without needing implementation tricks.
@@ -21,6 +26,12 @@ state the user-visible goal and final marker, not the API mechanics, object
 shapes, or workaround steps the docs are supposed to teach.
 
 ## Phase 1: Run Tests
+
+For an external CLI orchestrator, run the exact test or selected category with
+`vibestudio system-test run`, then use `inspect`, `trajectory`, and `rerun` as
+documented in `skills/vibestudio-agent/SYSTEM_TESTING.md`. The feedback UI and
+stage cards below apply only to an interactive workspace chat agent that
+actually advertises those UI tools.
 
 Start by presenting the user with a feedback UI so they can choose which stages
 to run. A stage is a category-sized group by default, so stages can contain more
@@ -129,7 +140,6 @@ eval({
       onTestResult: (_entry, aggregate) => {
         console.log("  Stage progress: " + stage.name + " " + aggregate.total + "/" + stage.tests.length);
       },
-      testTimeoutMs: 20 * 60 * 1000,
     });
 
     const concurrency = stage.category === "workers"
@@ -358,6 +368,7 @@ For each failure, determine the root cause category and act accordingly:
 - **Validation too strict** → loosen the validator, but only after confirming the agent's response is correct
 - **Prompt truly underspecified** → clarify only the user-visible goal or required output marker; never add implementation details that hide a docs or runtime bug
 - **Long-running task** → inspect where progress stopped and fix the blocked operation
+- **Published test repo survives into a later run** → set `workspaceRepoFixture: true` on the mutating `TestCase`; do not add a fixed project name or cleanup steps to the user prompt. The harness owns a unique `system-test-*` namespace, stale-fixture cleanup, serialization, teardown, and cleanup diagnostics.
 
 **Default assumption: the infrastructure is wrong, not the test.** Only classify as a test bug after reading the service code and confirming the API works correctly.
 
@@ -595,6 +606,9 @@ if (retest.result.passed) {
 - **Always create a branch** before making changes.
 - **Check type errors before committing.** Use the `@workspace-extensions/typecheck-service` extension.
 - **Re-run the full smoke suite after fixing.** Your fix might break something else.
+- **Declare published repo fixtures.** Any agentic case that may create or fork
+  a workspace repo must use `workspaceRepoFixture: true`; isolated agent
+  contexts alone do not undo `vcs.push` to workspace `main`.
 - **Use `projects/` for plain external repos.** They are editable and can have
   shared remotes, but they are not live runtime units.
 - **Shared remotes are clone declarations.** `git.setSharedRemote()` records

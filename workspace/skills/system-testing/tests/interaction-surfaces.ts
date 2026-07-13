@@ -138,6 +138,39 @@ export const interactionSurfaceTests: TestCase[] = [
     },
   },
   {
+    name: "set-title",
+    description: "Set the conversation title through the supported surface",
+    category: "interaction-surfaces",
+    prompt:
+      "Give this conversation a short descriptive title through the supported titling surface, then confirm it took effect. Finish with SET_TITLE_OK and title:<the-title>.",
+    validate: (result) => {
+      const base = finalMessageHasAll(result, ["SET_TITLE_OK", "title:"]);
+      if (!base.passed) return base;
+      const pending = noIncompleteInvocations(result);
+      if (!pending.passed) return pending;
+      const completed = completedToolNames(result);
+      if (!completed.has("set_title") && !completed.has("eval")) {
+        return {
+          passed: false,
+          reason: `Expected a completed set_title or eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
+        };
+      }
+      return { passed: true };
+    },
+  },
+  {
+    name: "custom-message-update-clear",
+    description: "Update a published custom message in place and clear its renderer",
+    category: "interaction-surfaces",
+    prompt:
+      "Publish a small typed custom chat message, then update that same message in place at least once so viewers see the new state, and finally clean up the message type registration you created. Finish with CUSTOM_MESSAGE_UPDATE_OK and cleared, or CUSTOM_MESSAGE_UPDATE_UNAVAILABLE if this context does not support custom messages.",
+    validate: (result) => {
+      const ok = finalMessageHasAll(result, ["CUSTOM_MESSAGE_UPDATE_OK", "cleared"]);
+      if (ok.passed) return noIncompleteInvocations(result);
+      return finalMessageHasAll(result, ["CUSTOM_MESSAGE_UPDATE_UNAVAILABLE"]);
+    },
+  },
+  {
     name: "custom-message-publish",
     description: "Publish a custom chat message",
     category: "interaction-surfaces",

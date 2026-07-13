@@ -91,6 +91,15 @@ const SESSION_HANDLE = {
   targetId: "session:work",
 };
 
+const LIVE_SESSION_ROW = {
+  id: "session:work",
+  kind: "session",
+  source: "agent-cli",
+  contextId: "ctx_1",
+  title: "work",
+  createdAt: 1,
+};
+
 describe("vibestudio agent commands", () => {
   let tmpDir = "";
 
@@ -154,7 +163,7 @@ describe("vibestudio agent commands", () => {
     const before = fs.readFileSync(sessionFile(tmpDir, "work"), "utf8");
 
     const { rpcBodies } = stubServer((body) => {
-      if (body.method === "runtime.listEntities") return [{ id: "session:work" }];
+      if (body.method === "runtime.listEntities") return [LIVE_SESSION_ROW];
       throw new Error(`unexpected method ${body.method}`);
     });
     await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
@@ -235,7 +244,7 @@ describe("vibestudio agent commands", () => {
     await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
 
     stubServer((body) => {
-      if (body.method === "runtime.listEntities") return [{ id: "session:work" }];
+      if (body.method === "runtime.listEntities") return [LIVE_SESSION_ROW];
       throw new Error(`unexpected method ${body.method}`);
     });
     await expect(main(["agent", "status", "work", "--json"])).resolves.toBe(0);
@@ -251,7 +260,7 @@ describe("vibestudio agent commands", () => {
     await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
 
     const { rpcBodies } = stubServer((body) => {
-      if (body.method === "runtime.retireEntity") return null;
+      if (body.method === "runtime.retireEntity") return undefined;
       throw new Error(`unexpected method ${body.method}`);
     });
     await expect(main(["agent", "detach", "work", "--rm", "--json"])).resolves.toBe(0);
@@ -305,7 +314,7 @@ describe("vibestudio agent commands", () => {
     await expect(main(["agent", "attach", "gone", "--json"])).resolves.toBe(0);
 
     stubServer((body) => {
-      if (body.method === "runtime.listEntities") return [{ id: "session:work" }];
+      if (body.method === "runtime.listEntities") return [LIVE_SESSION_ROW];
       throw new Error(`unexpected method ${body.method}`);
     });
     await expect(main(["agent", "sessions", "--json"])).resolves.toBe(0);
@@ -396,7 +405,14 @@ describe("vibestudio agent commands", () => {
     const { main } = await import("../client.js");
     const { rpcBodies } = stubServer((body) => {
       if (body.method === "docs.listServices") {
-        return [{ name: "runtime", description: "Runtime entity creation" }];
+        return [
+          {
+            name: "runtime",
+            description: "Runtime entity creation",
+            policy: { allowed: ["shell"] },
+            methods: {},
+          },
+        ];
       }
       if (body.method === "docs.describeService") {
         return { name: "runtime", policy: { allowed: ["shell"] }, methods: {} };
@@ -405,7 +421,14 @@ describe("vibestudio agent commands", () => {
     });
 
     await expect(main(["agent", "services", "--json"])).resolves.toBe(0);
-    expect(jsonOutput()).toEqual([{ name: "runtime", description: "Runtime entity creation" }]);
+    expect(jsonOutput()).toEqual([
+      {
+        name: "runtime",
+        description: "Runtime entity creation",
+        policy: { allowed: ["shell"] },
+        methods: {},
+      },
+    ]);
 
     await expect(main(["agent", "services", "runtime", "--json"])).resolves.toBe(0);
     expect(rpcBodies[1]).toEqual({ method: "docs.describeService", args: ["runtime"] });
@@ -415,10 +438,18 @@ describe("vibestudio agent commands", () => {
     writeCredentials(tmpDir);
     const { main } = await import("../client.js");
     const diagnostics = {
-      unit: { name: "foo", kind: "worker", status: "error", lastError: "boom" },
+      unit: {
+        name: "foo",
+        kind: "worker",
+        source: "workers/foo",
+        status: "error",
+        lastError: "boom",
+      },
       logs: [],
       errors: [],
       builds: [],
+      dropped: { entries: 0, errors: 0 },
+      capacity: { entries: 1_000, errors: 500 },
     };
     const { rpcBodies } = stubServer((body) => {
       if (body.method === "workspace.units.diagnostics") return diagnostics;
@@ -450,7 +481,18 @@ describe("vibestudio agent commands", () => {
         ];
       }
       if (body.method === "workspace.readSkill") return "# alpha skill";
-      if (body.method === "workspace.units.logs") return [{ level: "info", message: "hi" }];
+      if (body.method === "workspace.units.logs") {
+        return [
+          {
+            workspaceId: "ws_dev",
+            unitName: "workers/foo",
+            kind: "worker",
+            timestamp: 1,
+            level: "info",
+            message: "hi",
+          },
+        ];
+      }
       throw new Error(`unexpected method ${body.method}`);
     });
 

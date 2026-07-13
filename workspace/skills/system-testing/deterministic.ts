@@ -14,6 +14,7 @@ import { runSuites, summarize, type SuiteRunResult } from "@workspace/testkit";
 import { allSuites } from "@workspace/testkit/suites";
 import type { Suite } from "@workspace/testkit";
 import type { TestCase, TestSuiteResult } from "./types.js";
+import { validateDeterministicSummary } from "./deterministic-validator.js";
 
 export const DETERMINISTIC_CATEGORY = "deterministic";
 
@@ -66,27 +67,6 @@ export function deterministicTestCases(suites: Suite[] = allSuites()): TestCase[
       "```",
       "Then reply with exactly the JSON the eval returned (the summary object) in a fenced code block.",
     ].join("\n"),
-    validate: (result) => {
-      const text = result.messages
-        .map((message) => (typeof message.content === "string" ? message.content : ""))
-        .join("\n");
-      const match = text.match(/\{[\s\S]*"total"[\s\S]*\}/);
-      if (!match) {
-        return { passed: false, reason: "no testkit summary JSON found in agent reply" };
-      }
-      try {
-        const summary = JSON.parse(match[0]) as ReturnType<typeof summarize>;
-        const clean = summary.failed === 0 && summary.errored === 0 && summary.total > 0;
-        return {
-          passed: clean,
-          reason: clean
-            ? undefined
-            : `${summary.failed} failed / ${summary.errored} errored of ${summary.total}`,
-          details: { summary },
-        };
-      } catch {
-        return { passed: false, reason: "testkit summary JSON did not parse" };
-      }
-    },
+    validate: (result) => validateDeterministicSummary(result.messages),
   }));
 }

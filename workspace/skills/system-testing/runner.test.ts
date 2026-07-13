@@ -1,12 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createWithAgent: vi.fn(async (config: unknown) => ({ config })),
+  messageListeners: [] as Array<(message: Record<string, unknown>) => void>,
+  createWithAgent: vi.fn(async (config: unknown) => {
+    const session = {
+      config,
+      onMessage(listener: (message: Record<string, unknown>) => void) {
+        mocks.messageListeners.push(listener);
+        return () => undefined;
+      },
+    };
+    return session;
+  }),
   rpc: {
     selfId: "do:vibestudio/internal:EvalDO:test-eval",
     call: vi.fn(),
   },
   gad: {},
+  vcs: {
+    deleteRepo: vi.fn(),
+  },
 }));
 
 vi.mock("@workspace/agentic-session", () => ({
@@ -16,17 +29,25 @@ vi.mock("@workspace/agentic-session", () => ({
 vi.mock("@workspace/runtime", () => ({
   gad: mocks.gad,
   rpc: mocks.rpc,
+  vcs: mocks.vcs,
 }));
 
+import {
+  SYSTEM_TEST_AGENT_MODEL,
+  SYSTEM_TEST_FALLBACK_MODEL,
+  SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+} from "./config.js";
 import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
 
 describe("HeadlessRunner", () => {
   beforeEach(() => {
     mocks.createWithAgent.mockClear();
     mocks.rpc.call.mockClear();
+    mocks.vcs.deleteRepo.mockReset();
+    mocks.messageListeners.length = 0;
   });
 
-  it("spawns system-test agents in isolated contexts without a model-call cap by default", async () => {
+  it("spawns bounded system-test agents in isolated contexts", async () => {
     const runner = new HeadlessRunner("ctx-test", { model: "anthropic:test-model" });
 
     await runner.spawn();
@@ -44,7 +65,90 @@ describe("HeadlessRunner", () => {
     };
     expect(config.config.clientId).toBe(mocks.rpc.selfId);
     expect(config).not.toHaveProperty("contextId");
+    expect(config.extraConfig["approvalLevel"]).toBe(2);
+    expect(config.extraConfig["fallbackModel"]).toBeUndefined();
+    expect(config.extraConfig).not.toHaveProperty("modelStreamIdleTimeoutMs");
     expect(config.extraConfig).not.toHaveProperty("maxModelCallsPerTurn");
+  });
+
+  it("uses Luna at minimal effort only after Spark reports its terminal usage limit", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+
+    await runner.forTest("first").spawn();
+    const first = mocks.createWithAgent.mock.calls[0]![0] as {
+      extraConfig: Record<string, unknown>;
+    };
+    expect(first.extraConfig).toMatchObject({
+      model: SYSTEM_TEST_AGENT_MODEL,
+      fallbackModel: SYSTEM_TEST_FALLBACK_MODEL,
+      fallbackThinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+      fallbackOn: ["usage_limit_terminal"],
+      fallbackScope: "all-turns",
+    });
+
+    mocks.messageListeners[0]?.({
+      diagnostic: { code: "message_failed", failureCode: "usage_limit_terminal" },
+    });
+    await runner.forTest("second").spawn();
+    const second = mocks.createWithAgent.mock.calls[1]![0] as {
+      extraConfig: Record<string, unknown>;
+    };
+    expect(second.extraConfig).toMatchObject({
+      model: SYSTEM_TEST_FALLBACK_MODEL,
+      thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+    });
+    expect(second.extraConfig).not.toHaveProperty("fallbackModel");
+    expect(runner.modelPolicySnapshot()).toMatchObject({
+      primaryModel: SYSTEM_TEST_AGENT_MODEL,
+      activeModel: SYSTEM_TEST_FALLBACK_MODEL,
+      activations: [
+        {
+          testName: "first",
+          fromModel: SYSTEM_TEST_AGENT_MODEL,
+          toModel: SYSTEM_TEST_FALLBACK_MODEL,
+          failureCode: "usage_limit_terminal",
+        },
+      ],
+    });
+  });
+
+  it("keeps concurrent sessions on their own model route when one activates fallback", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+    const firstRunner = runner.forTest("first");
+    const secondRunner = runner.forTest("second");
+    const firstSession = await firstRunner.spawn();
+    const secondSession = await secondRunner.spawn();
+
+    mocks.messageListeners[0]?.({
+      diagnostic: { code: "message_failed", failureCode: "usage_limit_terminal" },
+    });
+
+    expect(firstRunner.modelPolicySnapshot(firstSession)).toMatchObject({
+      primaryModel: SYSTEM_TEST_AGENT_MODEL,
+      activeModel: SYSTEM_TEST_FALLBACK_MODEL,
+    });
+    expect(secondRunner.modelPolicySnapshot(secondSession)).toMatchObject({
+      primaryModel: SYSTEM_TEST_AGENT_MODEL,
+      activeModel: SYSTEM_TEST_AGENT_MODEL,
+      activations: [],
+    });
+    expect(runner.modelPolicySnapshot()).toMatchObject({
+      activeModel: SYSTEM_TEST_FALLBACK_MODEL,
+    });
+  });
+
+  it("runs an explicit Luna override at minimal effort", async () => {
+    const runner = new HeadlessRunner("ctx-test", { model: SYSTEM_TEST_FALLBACK_MODEL });
+
+    await runner.spawn();
+
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      extraConfig: Record<string, unknown>;
+    };
+    expect(config.extraConfig).toMatchObject({
+      model: SYSTEM_TEST_FALLBACK_MODEL,
+      thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+    });
   });
 
   it("can explicitly spawn in the orchestrator context", async () => {
@@ -55,6 +159,7 @@ describe("HeadlessRunner", () => {
     expect(mocks.createWithAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         contextId: "ctx-test",
+        extraConfig: expect.objectContaining({ model: SYSTEM_TEST_AGENT_MODEL }),
       })
     );
   });
@@ -80,11 +185,63 @@ describe("HeadlessRunner", () => {
       extraConfig: Record<string, unknown>;
     };
     expect(config.extraConfig["systemPrompt"]).toBe(SYSTEM_TEST_AGENT_PROMPT);
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("closest user-facing skill");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Do not inspect");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exercise the documented path honestly");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("most straightforward supported approach");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("If that documented approach fails, stop");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("When reporting a failure");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exact error or unexpected result");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("there is no initial visible panel ancestor");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("create an owned root panel explicitly");
     expect(SYSTEM_TEST_AGENT_PROMPT).not.toContain("smallest relevant canonical workspace docs");
+  });
+
+  it("owns a namespaced published-repo fixture lifecycle outside the user prompt", async () => {
+    const runner = new HeadlessRunner("ctx-test").forTest("docs-workspace-loop", {
+      workspaceRepoFixture: true,
+    });
+    const projectName = runner.workspaceRepoProjectName!;
+    const prefix = "system-test-docs-workspace-loop-";
+    const refs = (...repoPaths: string[]) => repoPaths.map((repoPath) => ({ repoPath }));
+    mocks.rpc.call
+      .mockResolvedValueOnce(refs("panels/normal", `panels/${prefix}stale`))
+      .mockResolvedValueOnce(refs("panels/normal"))
+      .mockResolvedValueOnce(
+        refs("panels/normal", `panels/${projectName}`, "panels/outside-fixture")
+      )
+      .mockResolvedValueOnce(refs("panels/normal", "panels/outside-fixture"));
+    mocks.vcs.deleteRepo.mockResolvedValue({ archived: true });
+
+    const state = await runner.prepareWorkspaceRepoFixture();
+    await runner.spawn();
+    const cleanup = await runner.cleanupWorkspaceRepoFixture(state);
+
+    expect(state).toMatchObject({
+      testName: "docs-workspace-loop",
+      projectName,
+      repoNamePrefix: prefix,
+      staleReposRemoved: [`panels/${prefix}stale`],
+      reposBefore: ["panels/normal"],
+    });
+    expect(cleanup).toEqual({
+      reposRemoved: [`panels/${projectName}`],
+      escapedRepos: ["panels/outside-fixture"],
+      reposAfter: ["panels/normal", "panels/outside-fixture"],
+    });
+    expect(mocks.vcs.deleteRepo).toHaveBeenNthCalledWith(1, {
+      repoPath: `panels/${prefix}stale`,
+      force: true,
+    });
+    expect(mocks.vcs.deleteRepo).toHaveBeenNthCalledWith(2, {
+      repoPath: `panels/${projectName}`,
+      force: true,
+    });
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      extraConfig: Record<string, unknown>;
+    };
+    expect(config.extraConfig["systemPrompt"]).toContain(
+      `use the exact project name ${JSON.stringify(projectName)}`
+    );
   });
 });

@@ -14,7 +14,7 @@ Spin up headless agentic sessions to systematically test every Vibestudio capabi
 | runner.ts                                  | `HeadlessRunner` — spawn headless sessions from eval with one line |
 | test-runner.ts                             | `TestRunner` — orchestrate test suites, collect full diagnostics   |
 | types.ts                                   | `TestCase`, `TestResult`, `TestSuiteResult`, `TestExecutionResult` |
-| tests/                                     | 97 pre-built test cases across 19 categories                       |
+| tests/                                     | 148 pre-built test cases across 32 categories                      |
 | deterministic.ts                           | Bridge to `@workspace/testkit` deterministic suites (see below)    |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and committing fixes               |
 
@@ -82,6 +82,14 @@ prompt one agent to write a foreign `ctx:*` head. Use `runner.spawn({ context:
 "parent" })` only for tests that intentionally exercise the orchestrator's
 current context.
 
+Context isolation does not roll back a `vcs.push`, because publication advances
+workspace `main`. A test that may create or fork a published repo must set
+`workspaceRepoFixture: true` on its `TestCase`. The runner then injects a unique
+`system-test-*` project name as harness metadata, removes stale repos in that
+reserved namespace before the test, and removes the test's published repos
+afterward. Cleanup errors and repos created outside the namespace fail the run
+with diagnostics. Keep those fixture mechanics out of the user-like `prompt`.
+
 ```
 eval({
   code: `
@@ -89,10 +97,8 @@ eval({
     import { TestRunner } from "@workspace-skills/system-testing/test-runner";
     import { smokeTests } from "@workspace-skills/system-testing/stages";
 
-    // Spawned test agents inherit YOUR model — read it from your own state.
-    const runner = new HeadlessRunner(ctx.contextId, {
-      model: (await agent.describe()).config.model,
-    });
+    // Uses the pinned Spark-first, usage-limit-only Luna fallback policy.
+    const runner = new HeadlessRunner(ctx.contextId);
     const tester = new TestRunner(runner, {
       onTestStart: (t) => console.log("Running: " + t.name + "..."),
       onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
@@ -112,6 +118,53 @@ eval({
 
 Workspace packages like `@workspace-skills/system-testing/stages` are auto-resolved - the build system builds them on first import. No `imports` parameter needed.
 
+## CLI/headless orchestrator mode
+
+When the orchestrator is an external CLI agent rather than a workspace chat
+agent, use the first-class CLI commands instead of the feedback-form and stage
+report-card flow below:
+
+```bash
+vibestudio system-test doctor
+vibestudio system-test list --json
+vibestudio system-test run eval-return-value
+vibestudio system-test inspect <run-id> --json
+vibestudio system-test trajectory <run-id> eval-return-value --full --json
+vibestudio system-test rerun <run-id>
+```
+
+For a disposable unattended server, enable the host's existing development
+auto-approver when starting it:
+
+```bash
+vibestudio remote serve --dev --auto-approve
+```
+
+`--auto-approve` is intentionally accepted only with `--dev`. It covers host
+credential, userland, startup-unit, and capability approvals, which are a
+separate layer from the spawned chat agent's approval level. The headless
+runner also fixes every spawned agent at approval level 2.
+
+CLI eval intentionally has no `agent` or `chat` binding, so it cannot call
+`agent.describe()`, publish report cards, or show feedback forms. The CLI-neutral
+`@workspace-skills/system-testing/cli` persists full results under a durable run
+ID and returns machine-readable summaries. By default every test starts with
+`openai-codex:gpt-5.3-codex-spark`; a journaled terminal usage-limit result is
+the only condition that activates `openai-codex:gpt-5.6-luna` at minimal
+reasoning effort for the current and later tests. An explicit model override is
+for model-specific investigations and disables that canonical fallback policy.
+Exact test names, categories, and the complete catalog are supported.
+
+There is no default per-test harness deadline. An explicit deadline is only an
+operator cancellation boundary and must never be used to mask an effect,
+transport, or Durable Object liveness bug.
+
+In CLI mode, a failed command is the start of the repair loop. Inspect the
+bounded packet, inspect the full trajectory if necessary, fix the root cause,
+rerun the exact test, then its category and smoke coverage. Do not stop after
+only reporting a failure unless repair is blocked by missing credentials,
+authority, external infrastructure, or a required server restart.
+
 When a test requires workspace development or panel API docs, read the
 canonical skill path from the workspace root, for example
 `skills/workspace-dev/PANEL_API.md`. Do not use bare root paths like
@@ -119,7 +172,7 @@ canonical skill path from the workspace root, for example
 directory; when using read/grep tools, use workspace-root paths such as
 `skills/system-testing/tests/oauth.ts`, not `system-testing/tests/oauth.ts`.
 
-## Full Suite
+## Interactive workspace-agent full suite
 
 Start by presenting the user with a feedback UI so they can choose which stages
 to run. A stage is a category-sized group by default, so stages can contain more
@@ -279,17 +332,14 @@ eval({
     const { stage, stagePosition, selectedStages } = next;
     const completed = new Set(Array.isArray(run.completedStages) ? run.completedStages : []);
 
-    // Spawned test agents inherit YOUR model — read it from your own state.
-    const runner = new HeadlessRunner(ctx.contextId, {
-      model: (await agent.describe()).config.model,
-    });
+    // Uses the pinned Spark-first, usage-limit-only Luna fallback policy.
+    const runner = new HeadlessRunner(ctx.contextId);
     const tester = new TestRunner(runner, {
       onTestStart: (t) => console.log("Running: " + t.name + "..."),
       onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
       onTestResult: (_entry, aggregate) => {
         console.log("Stage progress: " + stage.name + " " + aggregate.total + "/" + stage.tests.length);
       },
-      testTimeoutMs: 20 * 60 * 1000,
     });
 
     // Cap concurrency: each test is a full headless agent + channel, and the
@@ -424,6 +474,10 @@ inspect failures in detail from `scope.results.results` and include the evidence
 in your answer. Never report only filenames, artifact names, or "files to
 inspect"; those are pointers, not diagnosis.**
 
+`execution.provenance` records `channelId`, `branchId`, `agentEntityId`,
+`agentTargetId`, and the isolated agent `contextId`, so external inspectors do
+not need to infer trajectory identity from the participant roster.
+
 For a bounded structured packet that is safe to paste into a handoff report:
 
 ```typescript
@@ -545,9 +599,7 @@ return {
   build: await rpc.call("main", "build.inspectBuildProvenance", [
     "@workspace-skills/system-testing",
   ]),
-  serverLogs: await rpc.call("main", "serverLog.query", [
-    { level: "warn", limit: 100 },
-  ]),
+  serverLogs: await rpc.call("main", "serverLog.query", [{ level: "warn", limit: 100 }]),
 };
 ```
 
@@ -648,24 +700,37 @@ if (fail.execution.snapshot) {
 | `smokeTests`              | 4     | Basic sanity: eval, fs, package import, file tools                                                                                     |
 | `filesystemTests`         | 9     | All fs operations: read/write, dirs, stats, symlinks, handles                                                                          |
 | `vcsTests`                | 9     | edit (uncommitted working ops) → commit → ff-only push, plus log, state diff, discardEdits, push status, divergence → merge → push     |
-| `panelTests`              | 5     | Open, browser panel create+navigate, screenshot, evaluate, list sources                                                                |
-| `workerTests`             | 6     | Create, list, unified RPC DO calls, destroy, env bindings, list sources                                                                |
+| `vcsAdvancedTests`        | 8     | revert, previewBuild of working content, readFile/listFiles at head, fileHistory, pendingMerge, rebaseContext, edit provenance, recall |
+| `gitInteropTests`         | 4     | External Git bridge: upstream status, publish/push to a disposable remote, importProject, commit mapping                               |
+| `panelTests`              | 4     | Open, browser panel create+navigate, screenshot, evaluate, panel-tree walk/navigate/close, list sources                                |
+| `workerTests`             | 7     | Create, list, unified RPC DO calls, destroy, env bindings, DO SQLite persistence across calls, list sources                            |
 | `buildTests`              | 4     | Workspace + npm builds, build at GAD state ref, eval imports                                                                           |
 | `oauthTests`              | 3     | List providers/connections, error on missing connection                                                                                |
+| `credentialTests`         | 2     | Store/inspect/revoke a dummy URL-bound credential without secret leaks, client config status                                           |
 | `workspaceTests`          | 3     | List, active, config                                                                                                                   |
+| `unitDiagnosticsTests`    | 4     | units list/inspector, persisted unit logs + error buffer, unit versions, recurring jobs + heartbeats read-only                         |
+| `multiUserTests`          | 5     | Account whoami, workspace members, live presence, channel roster human/agent identity, hub workspace listing                           |
+| `approvalPermissionTests` | 3     | Permissions list, approval queue inspection, harmless approval request + withdraw round trip                                           |
 | `notificationTests`       | 2     | Show + dismiss                                                                                                                         |
 | `skillTests`              | 4     | Load sandbox, workspace-dev, api-integrations, headless-sessions                                                                       |
 | `agentCapabilityTests`    | 6     | Multi-turn, error recovery, large output, dynamic import                                                                               |
 | `rpcTests`                | 2     | Cross-service calls                                                                                                                    |
 | `edgeCaseTests`           | 3     | Invalid eval args, invalid imports, missing files                                                                                      |
 | `agenticRuntimeTests`     | 8     | State args, runtime VCS client, GAD conventions, bounded inspection, test-runner extension, no-stall tool turns                        |
-| `interactionSurfaceTests` | 4     | MDX ActionButton, inline UI, action bar, custom messages                                                                               |
+| `evalLifecycleTests`      | 3     | Eval-local db persistence across calls, scope reset produces a fresh sandbox, cancel of a long-running run                             |
+| `blobstoreTests`          | 3     | Text/range/grep round-trips, binary round-trip, immutable file trees (put/list/diff/materialize)                                       |
+| `serverLogTests`          | 2     | Bounded serverLog query + stats, bounded tail of newest entries                                                                        |
+| `webhookTests`            | 2     | Subscription create/list/rotate/revoke lifecycle, bounded listing                                                                      |
+| `extensionSurfaceTests`   | 3     | List extensions, typecheck a unit via the typecheck surface, invoke a harmless extension method                                        |
+| `harnessToolTests`        | 3     | Provenance orientation, knowledge-claim record/revise/retract lifecycle, workspace memory search                                       |
+| `docsDiscoveryTests`      | 3     | Live docs surface: capability search, service description with methods, bounded service listing                                        |
+| `interactionSurfaceTests` | 6     | MDX ActionButton, inline UI, action bar, set_title, custom messages incl. in-place update + clear                                      |
 | `projectLifecycleTests`   | 4     | Create, fork, commit, open, and inspect real workspace units                                                                           |
 | `cdpGadDiagnosticTests`   | 5     | CDP UI mutation, lightweight console/DOM inspection, historical console diagnostics, panel state args, GAD integrity/state diagnostics |
 | `harnessResilienceTests`  | 5     | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups                                                        |
 | `docsProbeTests`          | 10    | Scenario probes that require agents to apply relevant skills, not summarize docs                                                       |
 
-Use `allTests()` to get all 97 tests combined. For full-suite execution, prefer
+Use `allTests()` to get all 148 tests combined. For full-suite execution, prefer
 the staged-progress pattern above: initialize `testStages(allTests())`, build
 feedback choices with `testStageChoices(stages)`, run one selected stage per
 eval with a bounded concurrency cap (`1` for `workers`, at most `2` elsewhere),
@@ -713,6 +778,23 @@ with ordinary smoke testing:
   publication, turn, invocation, hash, branch, and file/state probes
 - harness failures must surface visibly for thrown evals, huge eval returns,
   timeout-style errors, invalid tool arguments, and post-tool follow-up turns
+- external Git interop must go through the documented gitInterop surface with
+  disposable local remotes when real provider credentials are absent; tests
+  accept explicit `*_UNAVAILABLE` markers only with a concrete blocking reason
+- advanced VCS paths (revert, previewBuild of working content, fileHistory,
+  pendingMerge inspection, rebaseContext, edit provenance, recall) are exercised
+  separately from the core edit → commit → push loop
+- identity-aware surfaces must work from a normal agent context: account
+  profile, workspace members, live presence, and channel rosters that
+  distinguish human from agent participants
+- operational read-only surfaces (serverLog, unit diagnostics/versions,
+  recurring jobs, heartbeats, permissions, approval queue) must be inspectable
+  with bounded output and without mutating scheduler or approval state
+- credential and webhook lifecycles are tested with obviously fake artifacts
+  that are revoked at the end and must never surface secret values in
+  transcripts
+- eval sandbox lifecycle (persistent `db` across calls, scope reset freshness,
+  cancellation of long runs) is covered beyond single-shot eval execution
 
 The `docsProbeTests` suite uses realistic user goals and asks agents to choose
 the relevant skills themselves. These tests avoid doc recitation and instead
@@ -738,13 +820,14 @@ await tester.runSuite(allTests(), { name: "fs-write-read" });
 
 Each test case:
 
-1. Spawns a fresh headless session (new channel + new AiChatWorker DO)
-2. Appends the shared system-test agent prompt from `runner.ts`
-3. Sends a short natural-language prompt telling the test agent what goal to accomplish
-4. Waits for the agent to become idle (debounce-based turn completion)
-5. Captures a full snapshot: messages, invocation diagnostics, debug events, cleanup diagnostics, participants
-6. Validates programmatically and returns structured results
-7. Closes the session
+1. Prepares any declared workspace repo fixture and clears stale namespaced artifacts
+2. Spawns a fresh headless session (new channel + new AiChatWorker DO)
+3. Appends the shared system-test agent prompt from `runner.ts`
+4. Sends a short natural-language prompt telling the test agent what goal to accomplish
+5. Waits for the agent to become idle (debounce-based turn completion)
+6. Captures a full snapshot: messages, invocation diagnostics, debug events, cleanup diagnostics, participants
+7. Validates programmatically and returns structured results
+8. Closes the session and tears down the declared fixture, surfacing cleanup failures
 
 The test agent is a standard AiChatWorker with full eval + set_title tools and
 full-auto approval. The shared system-test prompt tells it that it is testing
@@ -755,6 +838,12 @@ state the user-visible goal and required final marker, not the API mechanics,
 object shapes, edge cases, or workaround steps the skill docs are supposed to
 teach. If an agent fails because docs are missing or misleading, fix the docs or
 runtime; do not narrow the test prompt to route around the failure.
+
+For a test that creates or forks a workspace repo, declare
+`workspaceRepoFixture: true` instead of putting a fixed test name or cleanup
+instructions in its prompt. The harness serializes such cases, supplies the
+reserved project name through the system-test environment, cleans only that
+namespace, and records fixture setup/teardown in `execution.diagnostics`.
 
 ## Auto-Start as Initial Panel
 
@@ -783,7 +872,7 @@ runtime API shape rather than guessing from filesystem terms:
 - `vcs.commit({ message })` folds your uncommitted edits into a snapshot per repo (`message` mandatory), advancing each context head; returns per-repo results with `stateHash` and `editCount`. `exclude` leaves listed paths uncommitted.
 - `vcs.discardEdits(repoPath)` drops a repo's uncommitted working edits (and any pending merge), restoring the committed head on disk.
 - `vcs.diff(leftStateHash, rightStateHash)` compares repo-rooted committed state hashes. To build at one of those states, first call `vcs.workspaceViewWithRepoAt(repoPath, repoStateHash)` and pass the returned workspace-rooted `stateHash` to `build.getBuild`.
-- `vcs.readFile("", "path", repoPath)` reads from a repo's current head (working content included).
+- `vcs.readFile({ path: "path", repoPath })` reads from a repo's current head (working content included).
 - `vcs.pushStatus(["panels/chat"])` reports how far each repo is ahead of its `main` (pre-push), its `uncommitted` count, and whether it has `diverged`, without moving anything.
 - `vcs.push({ repoPaths: ["panels/chat"] })` fast-forwards committed changes into each repo's `main`, build-gated. It REJECTS while edits are uncommitted (commit first) and, on divergence (main moved past your base), returns a structured `{ status: "diverged", divergences }` instead of pushing. Reconcile with `vcs.merge(repoPath)`, `vcs.commit(message)`, then re-push so it fast-forwards. Multiple repoPaths push as one atomic group.
 

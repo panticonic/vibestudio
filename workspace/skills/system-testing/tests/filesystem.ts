@@ -57,7 +57,7 @@ export const filesystemTests: TestCase[] = [
   },
   {
     name: "symlinks",
-    description: "Create and read through a symbolic link",
+    description: "Probe symbolic-link inspection and creation support",
     category: "filesystem",
     prompt: "Exercise symlink behavior. Finish with FS_SYMLINK_OK or FS_SYMLINK_UNSUPPORTED.",
     validate: (result) => finalMessageHasAny(result, ["FS_SYMLINK_OK", "FS_SYMLINK_UNSUPPORTED"]),

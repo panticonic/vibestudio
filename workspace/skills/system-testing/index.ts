@@ -1,5 +1,22 @@
 export { HeadlessRunner } from "./runner.js";
 export { TestRunner } from "./test-runner.js";
+export {
+  failedSystemTestNames,
+  getSystemTestRun,
+  inspectSystemTestRun,
+  listSystemTests,
+  runSystemTests,
+  systemTestDoctor,
+  systemTestTrajectory,
+} from "./cli.js";
+export type {
+  SystemTestDescriptor,
+  SystemTestDoctorResult,
+  SystemTestRunOptions,
+  SystemTestRunProgress,
+  SystemTestRunRecord,
+  SystemTestRunSummary,
+} from "./cli.js";
 export { summarizeFailures, summarizeEntry } from "./diagnostics.js";
 export type { FailureDiagnostic, FailureReport, DiagnosticLimits } from "./diagnostics.js";
 export type {

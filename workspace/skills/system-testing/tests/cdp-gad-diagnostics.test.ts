@@ -101,7 +101,7 @@ describe("cdp-gad diagnostics validators", () => {
     expect(result.reason).toContain("Expected no failed tool calls");
   });
 
-  it("rejects an ok:false diagnostic result behind a final success marker", () => {
+  it("accepts an ok:false diagnostic finding behind an execution-success marker", () => {
     const result = integrityTest.validate(
       executionWithInvocation(
         "GAD_DIAGNOSTICS_OK storage publication turn invocation hashes integrity",
@@ -116,13 +116,10 @@ describe("cdp-gad diagnostics validators", () => {
       )
     );
 
-    expect(result).toMatchObject({
-      passed: false,
-    });
-    expect(result.reason).toContain("ok:false");
+    expect(result).toEqual({ passed: true });
   });
 
-  it("rejects a stringified ok:false diagnostic result", () => {
+  it("accepts a stringified ok:false diagnostic finding", () => {
     const result = integrityTest.validate(
       executionWithInvocation(
         "GAD_DIAGNOSTICS_OK storage publication turn invocation hashes integrity",
@@ -137,10 +134,7 @@ describe("cdp-gad diagnostics validators", () => {
       )
     );
 
-    expect(result).toMatchObject({
-      passed: false,
-    });
-    expect(result.reason).toContain("ok:false");
+    expect(result).toEqual({ passed: true });
   });
 
   it("accepts a live-turn-only GAD health report without forcing the OK marker", () => {
@@ -173,17 +167,14 @@ describe("cdp-gad diagnostics validators", () => {
     expect(result).toEqual({ passed: true });
   });
 
-  it("rejects ok:false wording in the final success message", () => {
+  it("accepts ok:false wording when the diagnostic operation itself succeeded", () => {
     const result = integrityTest.validate(
       executionWithFinal(
         "GAD_DIAGNOSTICS_OK storage publication turn invocation hashes integrity, but overall ok: false only because the current turn is open"
       )
     );
 
-    expect(result).toMatchObject({
-      passed: false,
-    });
-    expect(result.reason).toContain("ok:false");
+    expect(result).toEqual({ passed: true });
   });
 
   it("rejects impossible success wording in the final message", () => {
@@ -244,6 +235,62 @@ describe("cdp-gad diagnostics validators", () => {
     );
 
     expect(result).toEqual({ passed: true });
+  });
+
+  it("accepts in-flight health repeated through a bounded eval preview and final prose", () => {
+    const result = branchTest.validate(
+      executionWithInvocation(
+        "GAD_BRANCH_OK branch-files state-probe controlled-errors; current health ok=false because openTurns=1 and nonterminalInvocations=1, with publicationIssues=0 and storageIssues=0",
+        {
+          id: "call-1",
+          name: "eval",
+          execution: {
+            status: "complete",
+            result: {
+              protocolContent: [
+                {
+                  type: "text",
+                  text: {
+                    preview:
+                      '[eval] Return value:\n{"health":{"summary":{"ok":false,"publicationIssues":0,"storageIssues":0,"openTurns":1,"nonterminalInvocations":1}}}',
+                  },
+                },
+              ],
+            },
+          },
+        }
+      )
+    );
+
+    expect(result).toEqual({ passed: true });
+  });
+
+  it("still rejects a nonzero integrity issue alongside in-flight health", () => {
+    const result = branchTest.validate(
+      executionWithInvocation(
+        "GAD_BRANCH_OK branch-files state-probe controlled-errors; current health ok=false",
+        {
+          id: "call-1",
+          name: "eval",
+          execution: {
+            status: "complete",
+            result: {
+              health: {
+                summary: {
+                  ok: false,
+                  openTurns: 1,
+                  nonterminalInvocations: 1,
+                  publicationIssues: 1,
+                  storageIssues: 0,
+                },
+              },
+            },
+          },
+        }
+      )
+    );
+
+    expect(result).toMatchObject({ passed: false });
   });
 
   it("accepts stringified controlled branch probe rejections returned as data", () => {

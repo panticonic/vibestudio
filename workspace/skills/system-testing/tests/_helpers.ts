@@ -59,7 +59,21 @@ export function hasAgentResponse(result: TestExecutionResult): boolean {
 
 /** Check that the response contains a specific string (case-insensitive) */
 export function responseContains(result: TestExecutionResult, text: string): boolean {
-  return findLastAgentMessage(result).toLowerCase().includes(text.toLowerCase());
+  return normalizeMarkerText(findLastAgentMessage(result)).includes(normalizeMarkerText(text));
+}
+
+/** Normalize harmless prose/Markdown presentation around validator markers.
+ * Agent answers are user-facing text, so `field: **yes**`, `field = yes`, and
+ * `FIELD:yes` should carry the same semantic evidence. */
+function normalizeMarkerText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[*_`~]/g, "")
+    // Hyphenated prose tokens are formatting, not protocol identifiers. Treat
+    // ordinary spaces and hyphens equivalently while underscore-based sentinel
+    // markers remain collapsed/exact after the line above.
+    .replace(/[\s-]+/g, " ")
+    .replace(/\s*([:=])\s*/g, "$1");
 }
 
 export function finalMessageHasAll(
@@ -68,8 +82,8 @@ export function finalMessageHasAll(
 ): { passed: boolean; reason?: string } {
   const msg = findLastAgentMessage(result);
   if (!msg) return { passed: false, reason: "No agent response received" };
-  const lower = msg.toLowerCase();
-  const missing = tokens.filter((token) => !lower.includes(token.toLowerCase()));
+  const normalized = normalizeMarkerText(msg);
+  const missing = tokens.filter((token) => !normalized.includes(normalizeMarkerText(token)));
   return {
     passed: missing.length === 0,
     reason:
@@ -85,8 +99,8 @@ export function finalMessageHasAny(
 ): { passed: boolean; reason?: string } {
   const msg = findLastAgentMessage(result);
   if (!msg) return { passed: false, reason: "No agent response received" };
-  const lower = msg.toLowerCase();
-  const found = tokens.some((token) => lower.includes(token.toLowerCase()));
+  const normalized = normalizeMarkerText(msg);
+  const found = tokens.some((token) => normalized.includes(normalizeMarkerText(token)));
   return {
     passed: found,
     reason: found
@@ -225,6 +239,48 @@ function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCar
       isError: nested?.isError ?? call.isError,
     },
   };
+}
+
+/** Concatenated code of all successful eval invocations, for API-usage evidence checks. */
+export function successfulEvalCode(result: TestExecutionResult): string {
+  return getToolCalls(result)
+    .filter(
+      (call) =>
+        call.name === "eval" &&
+        call.execution?.status === "complete" &&
+        call.execution.isError !== true
+    )
+    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
+    .join("\n");
+}
+
+export function requireEvalEvidence(
+  result: TestExecutionResult,
+  required: readonly string[]
+): { passed: boolean; reason?: string } {
+  const code = successfulEvalCode(result);
+  const missing = required.filter((token) => !code.includes(token));
+  if (missing.length > 0) {
+    return { passed: false, reason: `Successful eval did not exercise ${missing.join(", ")}` };
+  }
+  return { passed: true };
+}
+
+export function requireAnyEvalEvidence(
+  result: TestExecutionResult,
+  alternatives: readonly (readonly string[])[]
+): { passed: boolean; reason?: string } {
+  const code = successfulEvalCode(result);
+  const matched = alternatives.some((required) => required.every((token) => code.includes(token)));
+  if (!matched) {
+    return {
+      passed: false,
+      reason: `Successful eval did not exercise any supported path: ${alternatives
+        .map((tokens) => tokens.join(" + "))
+        .join(" or ")}`,
+    };
+  }
+  return { passed: true };
 }
 
 export function completedToolNames(result: TestExecutionResult): Set<string> {

@@ -4,7 +4,12 @@ import type { ChatMessage } from "@workspace/agentic-core";
 import type { TestExecutionResult } from "../types.js";
 import { smokeTests } from "./smoke.js";
 
-function invocationMessage(name: string, status: string, isError = false): ChatMessage {
+function invocationMessage(
+  name: string,
+  status: string,
+  isError = false,
+  args?: Record<string, unknown>
+): ChatMessage {
   return {
     id: `invocation-message-${name}-${status}-${isError ? "error" : "ok"}`,
     kind: "message",
@@ -14,6 +19,7 @@ function invocationMessage(name: string, status: string, isError = false): ChatM
     content: JSON.stringify({
       id: `call-${name}-${status}-${isError ? "error" : "ok"}`,
       name,
+      ...(args ? { arguments: args } : {}),
       execution: {
         status,
         terminalOutcome: isError ? "tool_error" : "success",
@@ -89,5 +95,33 @@ describe("smoke test validation", () => {
         ])
       )
     ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts the sandbox skill's eval fs round-trip with semantic invocation evidence", () => {
+    const test = smokeTests.find((entry) => entry.name === "fs-write-read");
+
+    expect(
+      test?.validate(
+        execution([
+          invocationMessage("eval", "complete", false, {
+            code: 'await fs.writeFile(path, expected); return await fs.readFile(path, "utf8");',
+          }),
+          finalAgentMessage("Wrote and read the file; exact match: true."),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("does not accept a generic eval that lacks file round-trip evidence", () => {
+    const test = smokeTests.find((entry) => entry.name === "fs-write-read");
+    const result = test?.validate(
+      execution([
+        invocationMessage("eval", "complete", false, { code: "return 42;" }),
+        finalAgentMessage("Write/read succeeded."),
+      ])
+    );
+
+    expect(result?.passed).toBe(false);
+    expect(result?.reason).toContain("fs.writeFile and fs.readFile");
   });
 });

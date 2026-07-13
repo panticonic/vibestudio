@@ -92,12 +92,35 @@ export interface FailureDiagnostic {
   validationReason: string | null;
   sessionError: string | null;
   durationMs: number;
+  modelExecution: {
+    totalCalls: number;
+    truncated: boolean;
+    calls: Array<{
+      ref: string;
+      provider?: string;
+      model?: string;
+      api?: string;
+      baseUrl?: string;
+      auth?: string;
+      outcome?: string;
+      usage?: Record<string, unknown>;
+    }>;
+  } | null;
   finalAgentMessage: string | null;
   conversation: DiagnosticConversationItem[];
   invocations: DiagnosticInvocation[];
   toolFailures: ToolFailureSummary[];
   debugEvents: string[];
   cleanupErrors: string[];
+  workspaceRepoFixture: {
+    testName: string | null;
+    projectName: string | null;
+    repoNamePrefix: string | null;
+    staleReposRemoved: string[];
+    reposRemoved: string[];
+    escapedRepos: string[];
+    reposAfter: string[];
+  } | null;
   participants: Array<{
     id: string;
     name?: string;
@@ -110,15 +133,17 @@ export interface FailureDiagnostic {
 
 export interface FailureReport {
   failureCount: number;
+  shownFailureCount: number;
+  truncatedFailureCount: number;
   failures: FailureDiagnostic[];
 }
 
 const DEFAULT_LIMITS = {
-  failures: 12,
-  messages: 12,
-  invocations: 20,
-  debugEvents: 20,
-  text: 900,
+  failures: 3,
+  messages: 6,
+  invocations: 8,
+  debugEvents: 8,
+  text: 500,
 };
 
 export type DiagnosticLimits = typeof DEFAULT_LIMITS;
@@ -133,9 +158,12 @@ export function summarizeFailures(
       !entry.result.passed ||
       (entry.execution.toolFailures ?? []).some((failure) => failure.expected !== true)
   );
+  const failures = failed.slice(0, limits.failures).map((entry) => summarizeEntry(entry, limits));
   return {
     failureCount: failed.length,
-    failures: failed.slice(0, limits.failures).map((entry) => summarizeEntry(entry, limits)),
+    shownFailureCount: failures.length,
+    truncatedFailureCount: Math.max(0, failed.length - failures.length),
+    failures,
   };
 }
 
@@ -159,7 +187,9 @@ function summarizeFailure(
   const conversation = entryExecution["messages"]
     .slice(-limits.messages)
     .map((message) => summarizeMessage(message, selfSenderId, limits));
-  const finalAgentMessage = findFinalAgentMessage(entryExecution["messages"]);
+  const finalAgentMessage =
+    clipOptional(findFinalAgentMessage(entryExecution["messages"]) ?? undefined, limits.text) ??
+    null;
   const snapshot = entryExecution["snapshot"];
   const invocations = summarizeInvocations(
     entryExecution["messages"],
@@ -172,7 +202,7 @@ function summarizeFailure(
   const cleanupErrors = [
     ...(entryExecution["cleanupErrors"] ?? []),
     ...(snapshot?.cleanupErrors ?? []).map((error) => `${error.phase}: ${error.message}`),
-  ];
+  ].map((error) => clip(String(error), limits.text));
   const participants = Object.entries(snapshot?.participants ?? {}).map(([id, participant]) => ({
     id,
     name: participant.name,
@@ -188,22 +218,83 @@ function summarizeFailure(
     name: entry.test.name,
     category: entry.test.category,
     passed: entry.result.passed,
-    prompt: entry.test.prompt,
-    validationReason: entry.result.reason ?? null,
-    sessionError: entryExecution["error"] ?? null,
+    prompt: clip(entry.test.prompt, limits.text),
+    validationReason: clipOptional(entry.result.reason, limits.text) ?? null,
+    sessionError: clipOptional(entryExecution["error"], limits.text) ?? null,
     durationMs: entryExecution["duration"],
+    modelExecution: summarizeModelExecution(
+      entryExecution["modelExecutionEvidence"] ?? snapshot?.modelExecutionEvidence
+    ),
     finalAgentMessage,
     conversation,
     invocations,
-    toolFailures: entryExecution["toolFailures"] ?? [],
+    toolFailures: (entryExecution["toolFailures"] ?? [])
+      .slice(-limits.invocations)
+      .map((failure) => ({
+        ...failure,
+        ...(failure.error ? { error: clip(failure.error, limits.text) } : {}),
+      })),
     debugEvents,
     cleanupErrors,
+    workspaceRepoFixture: summarizeWorkspaceRepoFixture(entryExecution["diagnostics"]),
     participants,
     likelyIssue: entry.result.passed
       ? unexpectedToolFailures.length > 0
         ? `tool-failure-observed:${unexpectedToolFailures.map((failure) => failure.name).join(",")}`
         : "passed"
       : classifyFailure(entry, finalAgentMessage, invocations, cleanupErrors),
+  };
+}
+
+function summarizeWorkspaceRepoFixture(
+  diagnostics: TestSuiteResultEntry["execution"]["diagnostics"]
+): FailureDiagnostic["workspaceRepoFixture"] {
+  const fixture = diagnostics?.["workspaceRepoFixture"];
+  if (!fixture || typeof fixture !== "object" || Array.isArray(fixture)) return null;
+  const record = fixture as Record<string, unknown>;
+  const stringOrNull = (key: string): string | null =>
+    typeof record[key] === "string" ? clip(record[key] as string, 240) : null;
+  const strings = (key: string): string[] =>
+    Array.isArray(record[key])
+      ? (record[key] as unknown[])
+          .filter((value): value is string => typeof value === "string")
+          .slice(0, 20)
+          .map((value) => clip(value, 240))
+      : [];
+  return {
+    testName: stringOrNull("testName"),
+    projectName: stringOrNull("projectName"),
+    repoNamePrefix: stringOrNull("repoNamePrefix"),
+    staleReposRemoved: strings("staleReposRemoved"),
+    reposRemoved: strings("reposRemoved"),
+    escapedRepos: strings("escapedRepos"),
+    reposAfter: strings("reposAfter"),
+  };
+}
+
+function summarizeModelExecution(value: unknown): FailureDiagnostic["modelExecution"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const rawCalls = Array.isArray(record["calls"]) ? record["calls"] : [];
+  const calls = rawCalls
+    .slice(-10)
+    .filter((call): call is Record<string, unknown> => Boolean(call) && typeof call === "object")
+    .map((call) => ({
+      ref: String(call["ref"] ?? ""),
+      ...(typeof call["provider"] === "string" ? { provider: call["provider"] } : {}),
+      ...(typeof call["model"] === "string" ? { model: call["model"] } : {}),
+      ...(typeof call["api"] === "string" ? { api: call["api"] } : {}),
+      ...(typeof call["baseUrl"] === "string" ? { baseUrl: call["baseUrl"] } : {}),
+      ...(typeof call["auth"] === "string" ? { auth: call["auth"] } : {}),
+      ...(typeof call["outcome"] === "string" ? { outcome: call["outcome"] } : {}),
+      ...(call["usage"] && typeof call["usage"] === "object" && !Array.isArray(call["usage"])
+        ? { usage: call["usage"] as Record<string, unknown> }
+        : {}),
+    }));
+  return {
+    totalCalls: typeof record["totalCalls"] === "number" ? record["totalCalls"] : rawCalls.length,
+    truncated: record["truncated"] === true || rawCalls.length > calls.length,
+    calls,
   };
 }
 
@@ -511,19 +602,19 @@ function boundValue(
   seen.add(value);
 
   if (Array.isArray(value)) {
-    if (depth >= 3) return `[Array(${value.length})]`;
-    const items = value.slice(0, 20).map((item) => boundValue(item, stringLimit, depth + 1, seen));
+    if (depth >= 2) return `[Array(${value.length})]`;
+    const items = value.slice(0, 10).map((item) => boundValue(item, stringLimit, depth + 1, seen));
     if (value.length > items.length) items.push(`[... ${value.length - items.length} more]`);
     return items;
   }
 
   const entries = Object.entries(value);
-  if (depth >= 3) return `{Object(${entries.length})}`;
+  if (depth >= 2) return `{Object(${entries.length})}`;
   const out: Record<string, unknown> = {};
-  for (const [key, child] of entries.slice(0, 30)) {
+  for (const [key, child] of entries.slice(0, 12)) {
     out[key] = boundValue(child, stringLimit, depth + 1, seen);
   }
-  if (entries.length > 30) out["..."] = `${entries.length - 30} more keys`;
+  if (entries.length > 12) out["..."] = `${entries.length - 12} more keys`;
   return out;
 }
 

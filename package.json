@@ -23,6 +23,7 @@
     "server": "node dist/server.mjs",
     "server:dev": "NODE_ENV=development node dist/server.mjs",
     "server:live": "tsx src/server/index.ts",
+    "system-test": "pnpm cli system-test",
     "dev:self:server": "node scripts/start-dogfood-server.mjs",
     "pack": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder",

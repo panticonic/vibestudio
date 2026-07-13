@@ -37,9 +37,7 @@ const DEFAULT_SESSION = "default";
 function requireWorkspaceCredentials(): CliCredentials {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError(
-      'not paired — run `vibestudio remote pair "vibestudio://connect?..."` first'
-    );
+    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
   }
   if (!creds.workspaceName) {
     throw new AuthError(
@@ -70,6 +68,65 @@ async function sessionEntityExists(client: RpcClient, entityId: string): Promise
   const runtime = typedClient("runtime", runtimeMethods, client);
   const entities = await runtime.listEntities({ kind: "session" });
   return entities.some((entity) => entity.id === entityId);
+}
+
+interface EnsuredAgentSession {
+  session: AgentSession;
+  reused: boolean;
+}
+
+async function ensureAgentSessionWithCredentials(
+  name: string,
+  creds: CliCredentials
+): Promise<EnsuredAgentSession> {
+  if (!isValidSessionName(name)) {
+    throw new UsageError(`Invalid session name: ${name} (use letters, digits, "_", "-")`);
+  }
+  if (!creds.workspaceName) {
+    throw new AuthError(
+      "no remote workspace selected — run `vibestudio remote select <workspace>`"
+    );
+  }
+  const client = new RpcClient(creds);
+  const existing = loadAgentSession(name);
+  if (existing && existing.serverUrl !== creds.url) {
+    console.error(
+      `warning: session ${name} was created for ${existing.serverUrl}; recreating it on ${creds.url}`
+    );
+  }
+  if (
+    existing &&
+    existing.serverUrl === creds.url &&
+    (await sessionEntityExists(client, existing.entityId))
+  ) {
+    return { session: existing, reused: true };
+  }
+
+  const runtime = typedClient("runtime", runtimeMethods, client);
+  const handle = (await runtime.createEntity({
+    kind: "session",
+    source: "agent-cli",
+    key: name,
+    title: name,
+  })) as RuntimeEntityHandle;
+  const session: AgentSession = {
+    schemaVersion: 1,
+    name,
+    serverUrl: creds.url,
+    entityId: handle.id,
+    contextId: handle.contextId,
+    scopeKey: name,
+    createdAt: Date.now(),
+  };
+  saveAgentSession(session);
+  return { session, reused: false };
+}
+
+/** Ensure a named session exists in the currently selected workspace.
+ * System-test commands use this for explicit `--session` scopes so an
+ * ephemeral dev-workspace restart repairs its context without a manual attach. */
+export async function ensureNamedAgentSession(name: string): Promise<AgentSession> {
+  return (await ensureAgentSessionWithCredentials(name, requireWorkspaceCredentials())).session;
 }
 
 async function attach(inv: ParsedInvocation): Promise<number> {
@@ -111,53 +168,11 @@ async function attach(inv: ParsedInvocation): Promise<number> {
         "no remote workspace selected — pass --workspace <name> or run `vibestudio remote select <workspace>`"
       );
     }
-    const client = new RpcClient(creds);
-
-    // Idempotent re-attach: reuse the stored session when the entity is
-    // still live on the same server; recreate it when it is gone.
-    const existing = loadAgentSession(name);
-    if (existing && existing.serverUrl !== creds.url) {
-      console.error(
-        `warning: session ${name} was created for ${existing.serverUrl}; recreating it on ${creds.url}`
-      );
-    }
-    if (existing && existing.serverUrl === creds.url) {
-      if (await sessionEntityExists(client, existing.entityId)) {
-        printResult(existing, {
-          json,
-          human: () => {
-            console.log(`attached ${existing.name} (existing)`);
-            console.log(`entity: ${existing.entityId}`);
-            console.log(`context: ${existing.contextId}`);
-          },
-        });
-        return 0;
-      }
-    }
-
-    const runtime = typedClient("runtime", runtimeMethods, client);
-    // createEntity has no `returns` schema yet, so the typed client yields
-    // `unknown`; the handle shape comes from the shared entity-spec types.
-    const handle = (await runtime.createEntity({
-      kind: "session",
-      source: "agent-cli",
-      key: name,
-      title: name,
-    })) as RuntimeEntityHandle;
-    const session: AgentSession = {
-      schemaVersion: 1,
-      name,
-      serverUrl: creds.url,
-      entityId: handle.id,
-      contextId: handle.contextId,
-      scopeKey: name,
-      createdAt: Date.now(),
-    };
-    saveAgentSession(session);
+    const { session, reused } = await ensureAgentSessionWithCredentials(name, creds);
     printResult(session, {
       json,
       human: () => {
-        console.log(`attached ${session.name}`);
+        console.log(`attached ${session.name}${reused ? " (existing)" : ""}`);
         console.log(`entity: ${session.entityId}`);
         console.log(`context: ${session.contextId}`);
       },

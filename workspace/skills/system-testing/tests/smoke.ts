@@ -1,5 +1,28 @@
 import type { TestCase } from "../types.js";
-import { completedToolNames, findLastAgentMessage, incompleteToolCalls } from "./_helpers.js";
+import {
+  completedToolNames,
+  findLastAgentMessage,
+  getToolCalls,
+  incompleteToolCalls,
+} from "./_helpers.js";
+
+function completedEvalFileRoundTrip(result: Parameters<typeof getToolCalls>[0]): boolean {
+  return getToolCalls(result).some((call) => {
+    if (
+      call.name !== "eval" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError
+    ) {
+      return false;
+    }
+    const code = call.arguments?.["code"];
+    return (
+      typeof code === "string" &&
+      /\bfs\.(?:writeFile|write)\s*\(/.test(code) &&
+      /\bfs\.(?:readFile|read)\s*\(/.test(code)
+    );
+  });
+}
 
 export const smokeTests: TestCase[] = [
   {
@@ -32,10 +55,14 @@ export const smokeTests: TestCase[] = [
     validate: (result) => {
       const completed = completedToolNames(result);
       const missing = ["write", "read"].filter((name) => !completed.has(name));
-      if (missing.length > 0) {
+      // The sandbox skill documents two equally supported file surfaces:
+      // dedicated file tools and server-side eval's runtime `fs` API. Require
+      // concrete completed invocation evidence for either; do not force an
+      // agent away from the natural eval path merely to satisfy card names.
+      if (missing.length > 0 && !completedEvalFileRoundTrip(result)) {
         return {
           passed: false,
-          reason: `Expected completed tool calls for ${missing.join(", ")}. Completed: ${[...completed].join(", ") || "(none)"}`,
+          reason: `Expected completed write/read tools or one completed eval using both fs.writeFile and fs.readFile. Completed: ${[...completed].join(", ") || "(none)"}`,
         };
       }
       const msg = findLastAgentMessage(result);
