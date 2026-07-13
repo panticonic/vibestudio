@@ -14,6 +14,11 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
+    // Userland's full suite concurrently transforms several large dependency
+    // graphs (TypeScript, provider SDKs, and panel barrels). A five-second
+    // per-test budget makes otherwise-fast dynamic-import tests fail under
+    // CPU contention even though they pass immediately in isolation.
+    testTimeout: 30_000,
     include: [
       "workspace/**/*.test.ts",
       "workspace/**/*.test.tsx",

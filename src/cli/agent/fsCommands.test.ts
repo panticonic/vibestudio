@@ -194,7 +194,7 @@ describe("vibestudio fs commands", () => {
   it("write sends a binary envelope that round-trips the content", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => null);
+    const { rpcBodies } = stubServer(() => undefined);
 
     const { main } = await import("../client.js");
     await expect(
@@ -216,7 +216,7 @@ describe("vibestudio fs commands", () => {
   it("write --append sends one append intent; the service creates parents", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => null);
+    const { rpcBodies } = stubServer(() => undefined);
 
     const { main } = await import("../client.js");
     await expect(
@@ -232,7 +232,7 @@ describe("vibestudio fs commands", () => {
     writeSession(tmpDir);
     const localFile = path.join(tmpDir, "local.txt");
     fs.writeFileSync(localFile, "from disk");
-    const { rpcBodies } = stubServer(() => null);
+    const { rpcBodies } = stubServer(() => undefined);
 
     const { main } = await import("../client.js");
     await expect(
@@ -247,7 +247,17 @@ describe("vibestudio fs commands", () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const { rpcBodies } = stubServer((body) =>
-      body.method === "fs.stat" ? { isFile: true, size: 3 } : null
+      body.method === "fs.stat"
+        ? {
+            isFile: true,
+            isDirectory: false,
+            isSymbolicLink: false,
+            size: 3,
+            mtime: "2026-07-13T00:00:00.000Z",
+            ctime: "2026-07-13T00:00:00.000Z",
+            mode: 0o100644,
+          }
+        : undefined
     );
 
     const { main } = await import("../client.js");
@@ -264,7 +274,7 @@ describe("vibestudio fs commands", () => {
       { method: "fs.mkdir", args: ["ctx_1", "/d/e", { recursive: true }] },
       { method: "fs.stat", args: ["ctx_1", "/c"] },
     ]);
-    expect(jsonOutput()).toEqual({ isFile: true, size: 3 });
+    expect(jsonOutput()).toMatchObject({ isFile: true, size: 3 });
   });
 
   it("grep passes search options and emits the result", async () => {
