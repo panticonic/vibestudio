@@ -15,32 +15,7 @@ import { buildPanelLink, panel, workspace } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 import type { WorkspaceTree, WorkspaceNode } from "@workspace/runtime";
-
-/** Flatten a workspace tree into a list of visible launchable panels. */
-function collectPanels(nodes: WorkspaceNode[]): WorkspaceNode[] {
-  const result: WorkspaceNode[] = [];
-  for (const node of nodes) {
-    if (
-      node.launchable &&
-      !node.launchable.hidden &&
-      (node.path.startsWith("panels/") || node.path.startsWith("about/"))
-    )
-      result.push(node);
-    result.push(...collectPanels(node.children));
-  }
-  return result.sort((a, b) =>
-    (a.launchable?.title ?? a.name).localeCompare(b.launchable?.title ?? b.name)
-  );
-}
-
-function collectWorkspaceFeatures(nodes: WorkspaceNode[], prefix: "skills/" | "extensions/") {
-  const result: WorkspaceNode[] = [];
-  for (const node of nodes) {
-    if (node.path.startsWith(prefix) && node.isUnit) result.push(node);
-    result.push(...collectWorkspaceFeatures(node.children, prefix));
-  }
-  return result.sort((a, b) => a.name.localeCompare(b.name));
-}
+import { collectLaunchablePanels } from "./launchablePanels";
 
 function PanelCard({ node }: { node: WorkspaceNode }) {
   const isMobile = useIsMobile();
@@ -101,15 +76,7 @@ function NewPanelPage() {
     });
   }, [promptInput]);
 
-  const panels = useMemo(() => (tree ? collectPanels(tree.children) : []), [tree]);
-  const skills = useMemo(
-    () => (tree ? collectWorkspaceFeatures(tree.children, "skills/") : []),
-    [tree]
-  );
-  const extensions = useMemo(
-    () => (tree ? collectWorkspaceFeatures(tree.children, "extensions/") : []),
-    [tree]
-  );
+  const panels = useMemo(() => (tree ? collectLaunchablePanels(tree.children) : []), [tree]);
 
   const filteredPanels = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -199,64 +166,6 @@ function NewPanelPage() {
           )}
         </Box>
       )}
-      {!loading && !error ? (
-        <Flex direction="column" gap="4" mt="5">
-          <Section>
-            <Heading size="3" mb="2">
-              Installed skills
-            </Heading>
-            <Text size="2" color="gray" mb="3">
-              Skills teach agents specialized workflows and tools. Mention a skill by name in chat
-              to use it.
-            </Text>
-            <Flex direction="column" gap="2">
-              {skills.length ? (
-                skills.map((node) => (
-                  <Card key={node.path}>
-                    <Text weight="medium" size="2">
-                      {node.skillInfo?.name ?? node.name}
-                    </Text>
-                    <Text as="p" size="1" color="gray">
-                      {node.skillInfo?.description ?? node.path}
-                    </Text>
-                  </Card>
-                ))
-              ) : (
-                <Text size="2" color="gray">
-                  No workspace skills are installed.
-                </Text>
-              )}
-            </Flex>
-          </Section>
-          <Section>
-            <Heading size="3" mb="2">
-              Extensions
-            </Heading>
-            <Text size="2" color="gray" mb="3">
-              Extensions add background integrations and agent capabilities. Listed entries are
-              installed in this workspace.
-            </Text>
-            <Flex direction="column" gap="2">
-              {extensions.length ? (
-                extensions.map((node) => (
-                  <Card key={node.path}>
-                    <Text weight="medium" size="2">
-                      {node.packageInfo?.name ?? node.name}
-                    </Text>
-                    <Text as="p" size="1" color="gray">
-                      Installed · {node.path}
-                    </Text>
-                  </Card>
-                ))
-              ) : (
-                <Text size="2" color="gray">
-                  No workspace extensions are installed.
-                </Text>
-              )}
-            </Flex>
-          </Section>
-        </Flex>
-      ) : null}
     </AboutPage>
   );
 }

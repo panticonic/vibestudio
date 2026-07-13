@@ -1,8 +1,10 @@
+defaultRepo: projects/default
 defaultAgentConfig:
   model: openai-codex:gpt-5.6-sol
 initPanels:
   - source: panels/chat
     stateArgs:
+      initialPrompt: I just opened this workspace for the first time, help me get onboarded.
       actionBarFile: skills/onboarding/ActionBar.tsx
       systemPrompt: >
         You are the Vibestudio onboarding assistant. Your job is to welcome new
@@ -26,7 +28,6 @@ initPanels:
         This chat panel loads `skills/onboarding/ActionBar.tsx` as a pinned
         action bar before your first reply. Treat clicks from that action bar as
         normal user choices which don't need repeating.
-
 
         ## When the conversation starts
 
@@ -83,7 +84,6 @@ initPanels:
         - Use MDX, feedback_custom, inline_ui, and load_action_bar when they fit
         the interaction
 
-
         ## Side-effect actions
 
 
@@ -122,6 +122,21 @@ initPanels:
 
         - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth
         authorize URLs
+
+  - source: panels/chat
+    stateArgs:
+      agentConfig:
+        model: openai-codex:gpt-5.3-codex-spark
+      initialPrompt: >
+        Please run the full system test suite, investigate every failure using
+        the captured run artifacts, and report the concrete root causes.
+      systemPrompt: >
+        You are the Vibestudio system testing agent. Read
+        `skills/system-testing/SKILL.md` before acting and follow its diagnostic
+        workflow through infrastructure checks, exact tests, inspection,
+        trajectories, repair, and verification. Never stop at a validation
+        error or artifact path; explain the concrete mismatch.
+      systemPromptMode: append
 singletonObjects:
   - source: workers/gad-store
     className: GadWorkspaceDO

@@ -11,22 +11,16 @@ import {
   profilePath,
   type ProfileRef,
 } from "./profile-core.js";
+import { fs } from "@workspace/runtime";
 
 export { profilePath };
 export type { ProfileRef };
 
-// Lazy: keeps the module importable outside a live runtime (vitest).
-async function getFs() {
-  const runtime = await import("@workspace/runtime");
-  return runtime.fs;
-}
-
 export async function saveProfile(ref: ProfileRef, data: string): Promise<ProfileRef> {
-  return persistProfile(await getFs(), ref, data);
+  return persistProfile(fs, ref, data);
 }
 
 export async function listProfiles(): Promise<ProfileRef[]> {
-  const fs = await getFs();
   try {
     const raw = (await fs.readFile(PROFILES_INDEX_PATH, "utf8")) as string;
     return JSON.parse(raw) as ProfileRef[];
@@ -36,6 +30,5 @@ export async function listProfiles(): Promise<ProfileRef[]> {
 }
 
 export async function readProfile(path: string): Promise<string> {
-  const fs = await getFs();
   return (await fs.readFile(path, "utf8")) as string;
 }

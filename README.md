@@ -52,10 +52,10 @@ children running when background work is active (you are prompted, and the
 choice can be remembered); idle children stop on their own. See
 [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
 
-On the first launch, choose or create a workspace. The onboarding chat waits for
-you to choose a model provider; it does not send a message on your behalf or begin
-a hidden local-model download. Local models remain an explicit offline option in
-the model picker and Local Models panel.
+On the first launch, choose or create a workspace. Its configured onboarding
+prompt is added to the new chat's history and starts the onboarding agent
+automatically. Local models remain an explicit offline option in the model picker
+and Local Models panel; onboarding never begins a hidden model download.
 
 ### Headless server (remote/home server; clients connect to it)
 

@@ -17,6 +17,10 @@ export interface OpenPanelOptions {
   parentId?: string | null;
   name?: string;
   focus?: boolean;
+  /** Runtime storage/filesystem context for the opened panel. */
+  contextId?: string;
+  /** Optional code-build ref; contextId alone never selects code provenance. */
+  ref?: string;
   stateArgs?: Record<string, unknown>;
   /** Wait until the panel's runtime lease reports loaded (default true). */
   waitLoaded?: boolean;
@@ -109,6 +113,8 @@ export async function openPanel(source: string, opts: OpenPanelOptions = {}): Pr
     parentId: opts.parentId,
     name: opts.name,
     focus: opts.focus,
+    contextId: opts.contextId,
+    ref: opts.ref,
     stateArgs: opts.stateArgs,
   });
   activeTestContext()?.supervisor.watchPanel(handle);

@@ -4,17 +4,27 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 describe("shipped first-run workspace", () => {
-  it("opens one idle onboarding chat without impersonating the user or running system tests", () => {
+  it("automatically starts the onboarding and system-testing chats", () => {
     const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
     const manifest = parse(source) as {
       initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
     };
-    expect(manifest.initPanels).toHaveLength(1);
+    expect(manifest.initPanels).toHaveLength(2);
     expect(manifest.initPanels?.[0]).toMatchObject({
       source: "panels/chat",
-      stateArgs: { actionBarFile: "skills/onboarding/ActionBar.tsx" },
+      stateArgs: {
+        initialPrompt: "I just opened this workspace for the first time, help me get onboarded.",
+        actionBarFile: "skills/onboarding/ActionBar.tsx",
+      },
     });
-    expect(manifest.initPanels?.[0]?.stateArgs).not.toHaveProperty("initialPrompt");
-    expect(source).not.toContain("run the full system test suite");
+    expect(manifest.initPanels?.[1]).toMatchObject({
+      source: "panels/chat",
+      stateArgs: {
+        agentConfig: { model: "openai-codex:gpt-5.3-codex-spark" },
+        initialPrompt: expect.stringContaining("run the full system test suite"),
+        systemPrompt: expect.stringContaining("Vibestudio system testing agent"),
+        systemPromptMode: "append",
+      },
+    });
   });
 });

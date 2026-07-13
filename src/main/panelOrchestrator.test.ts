@@ -3,6 +3,7 @@ import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { Panel, PanelTreeSnapshot } from "@vibestudio/shared/types";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 
 function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel>): Panel {
@@ -27,6 +28,33 @@ function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel
 // the orchestrator applies recovers exactly this root list.
 function forestSnapshot(rootPanels: Panel[], revision = 1): PanelTreeSnapshot {
   return { revision, forest: [{ owner: "user-1", rootPanels }] };
+}
+
+function runtimeLease(
+  runtimeEntityId: string,
+  request: {
+    slotId: string;
+    clientSessionId: string;
+    connectionId: string;
+    hostConnectionId?: string;
+    keepLoaded?: boolean;
+  },
+  overrides: Partial<PanelRuntimeLease> = {}
+): PanelRuntimeLease {
+  return {
+    slotId: asPanelSlotId(request.slotId),
+    runtimeEntityId: asPanelEntityId(runtimeEntityId),
+    clientSessionId: request.clientSessionId,
+    hostConnectionId: request.hostConnectionId ?? request.connectionId,
+    connectionId: request.connectionId,
+    holderLabel: "Desktop",
+    platform: "desktop",
+    supportsCdp: true,
+    loadOnLeaseAssignment: false,
+    ...(request.keepLoaded ? { keepLoaded: true } : {}),
+    acquiredAt: Date.now(),
+    ...overrides,
+  };
 }
 
 function createOrchestrator(
@@ -100,23 +128,11 @@ function createOrchestrator(
       connectionId: string;
       keepLoaded?: boolean;
     }
-  ): Promise<void> => {
+  ): Promise<PanelRuntimeLease> => {
     const orch = orchestratorRef;
-    if (!orch) return;
+    const next = runtimeLease(runtimeEntityId, request);
+    if (!orch) return next;
     leaseVersionCounter += 1;
-    const next = {
-      slotId: asPanelSlotId(request.slotId),
-      runtimeEntityId: asPanelEntityId(runtimeEntityId),
-      clientSessionId: request.clientSessionId,
-      hostConnectionId: request.connectionId,
-      connectionId: request.connectionId,
-      holderLabel: "Desktop",
-      platform: "desktop" as const,
-      supportsCdp: true,
-      loadOnLeaseAssignment: false,
-      ...(request.keepLoaded ? { keepLoaded: true } : {}),
-      acquiredAt: Date.now(),
-    };
     await orch.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
       version: { epoch: "test", counter: leaseVersionCounter },
@@ -126,6 +142,7 @@ function createOrchestrator(
       next,
       reason: "acquired",
     });
+    return next;
   };
   const handleServerCall = async (service: string, method: string, args?: unknown[]) => {
     if (method === "registerClient") return undefined;
@@ -134,8 +151,9 @@ function createOrchestrator(
         string,
         { slotId: string; clientSessionId: string; connectionId: string },
       ];
-      if (runtimeEntityId && request) await dispatchAssignedLease(runtimeEntityId, request);
-      return { acquired: true };
+      if (!runtimeEntityId || !request) throw new Error("panelRuntime.acquire fixture needs args");
+      const lease = await dispatchAssignedLease(runtimeEntityId, request);
+      return { acquired: true, lease };
     }
     if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
     // Simulate the server panel-tree authority: create adds a panel to the
@@ -528,13 +546,27 @@ describe("PanelOrchestrator.focusPanel", () => {
     registry.addPanel(panel, null, { addAsRoot: true });
 
     const { orchestrator, serverClient } = createOrchestrator(registry);
-    serverClient.call.mockImplementation(async (_service: string, method: string) => {
-      if (method === "registerClient") return undefined;
-      if (method === "acquire") {
-        return { acquired: false, lease: { holderLabel: "Desktop B" } };
+    serverClient.call.mockImplementation(
+      async (_service: string, method: string, args?: unknown[]) => {
+        if (method === "registerClient") return undefined;
+        if (method === "acquire") {
+          const [runtimeEntityId, request] = args as [
+            string,
+            {
+              slotId: string;
+              clientSessionId: string;
+              connectionId: string;
+              hostConnectionId?: string;
+            },
+          ];
+          return {
+            acquired: false,
+            lease: runtimeLease(runtimeEntityId, request, { holderLabel: "Desktop B" }),
+          };
+        }
+        return undefined;
       }
-      return undefined;
-    });
+    );
 
     const result = await orchestrator.focusPanel(panel.id, { loadIfNeeded: true });
 
