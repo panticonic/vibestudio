@@ -7,10 +7,7 @@
  * `vcs.push`.
  */
 
-import {
-  createVcsUserlandClient,
-  type RpcCallerLike,
-} from "@vibestudio/shared/userlandServiceRpc";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 
 import { resolveToCwd } from "./path-utils.js";
 
@@ -136,10 +133,7 @@ export interface ToolVcs {
   /** Reconcile a source (`main`, or a context you own/forked) INTO the caller's
    *  context head; one merge commit per repo. Omit repoPaths to reconcile every
    *  repo the context branch touches. */
-  merge(input: {
-    source: ToolVcsSource;
-    repoPaths?: string[];
-  }): Promise<ToolVcsMergeResult[]>;
+  merge(input: { source: ToolVcsSource; repoPaths?: string[] }): Promise<ToolVcsMergeResult[]>;
   /** Cherry-pick selected changes from a source onto the caller's head as
    *  uncommitted working edits (one result per repo touched). */
   pick(input: { source: ToolVcsSource; picks: ToolVcsPick[] }): Promise<ToolVcsEditResult[]>;
@@ -203,8 +197,7 @@ export function createToolVcs(
   return {
     readFile: (path) =>
       callMain<{ content: ToolVcsFileReadContent; stateHash: string } | null>("vcs.readFile", [
-        "",
-        path,
+        { path },
       ]),
     edit: (input) => callMain<ToolVcsEditResult>("vcs.edit", [input]),
     commit: (input) => callMain<ToolVcsCommitResult[]>("vcs.commit", [input]),

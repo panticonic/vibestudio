@@ -43,12 +43,14 @@ describe("composeSystemPrompt", () => {
   });
 
   it("lets a channel prompt replace the full prompt", () => {
-    expect(composeSystemPrompt({
-      workspacePrompt: "WORKSPACE",
-      skillIndex: "SKILLS",
-      systemPrompt: "CHANNEL",
-      systemPromptMode: "replace",
-    })).toBe("CHANNEL");
+    expect(
+      composeSystemPrompt({
+        workspacePrompt: "WORKSPACE",
+        skillIndex: "SKILLS",
+        systemPrompt: "CHANNEL",
+        systemPromptMode: "replace",
+      })
+    ).toBe("CHANNEL");
   });
 
   it("keeps Vibestudio rich-message and browser-open guidance in the base prompt", () => {
@@ -68,6 +70,13 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
       "Use proper grammar in commentary/intermediate messages."
     );
+  });
+
+  it("makes live docs the bounded platform-discovery contract", () => {
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("start with the relevant skill docs");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("`docs_search`/`docs_open`");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("Keep discovery bounded");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("instead of continuing broad source searches");
   });
 
   it("includes core conversation fork and subagent operating guidance", () => {

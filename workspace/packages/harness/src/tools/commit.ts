@@ -88,6 +88,8 @@ export interface CommitToolDetails {
   claimsRecorded: string[];
   claimDuplicates: number;
   nudged: boolean;
+  /** Safe no-op/partial diagnostic; no repository was harmed. */
+  diagnostic?: "nothing-to-commit" | "partially-unchanged";
 }
 
 /** The commit tool's claim-write dependency: the agent's `recordClaim` path +
@@ -131,15 +133,31 @@ export function createCommitTool(
       }
 
       const lines: string[] = [];
-      if (committed.length === 0 || unchanged.length > 0) {
-        const unchangedRepos = unchanged.map((r) => r.repoPath).join(", ");
-        throw new Error(
-          committed.length === 0
-            ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
-                "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
-                "scratch/direct fs writes under .tmp, .vibestudio, node_modules, dist, etc. are outside VCS."
-            : `commit returned unchanged repo(s) (${unchangedRepos}). This is treated as an error ` +
-                "because a commit tool call should seal real working edits, not silently no-op."
+      if (committed.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "No snapshots were created because there are no uncommitted VCS working edits. " +
+                "This is a completed no-op. Check vcs.status or make a tracked edit before retrying.",
+            },
+          ],
+          details: {
+            committed: 0,
+            unchanged: unchanged.length,
+            changedFiles: 0,
+            editOps: 0,
+            claimsRecorded: [],
+            claimDuplicates: 0,
+            nudged: false,
+            diagnostic: "nothing-to-commit",
+          },
+        };
+      }
+      if (unchanged.length > 0) {
+        lines.push(
+          `unchanged repo(s): ${unchanged.map((r) => r.repoPath).join(", ")} (already clean).`
         );
       }
       for (const r of committed) {
@@ -212,6 +230,7 @@ export function createCommitTool(
           claimsRecorded,
           claimDuplicates,
           nudged,
+          ...(unchanged.length > 0 ? { diagnostic: "partially-unchanged" as const } : {}),
         },
       };
     },

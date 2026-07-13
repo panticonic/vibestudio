@@ -9,7 +9,7 @@
  * so the read tool can keep its existing call site.
  */
 
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { isAbsolute, relative, resolve as resolvePath } from "node:path";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
@@ -21,6 +21,13 @@ function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
+function normalizeVirtualWorkspaceAlias(filePath: string): string {
+  if (filePath === "workspace" || filePath === "/workspace") return ".";
+  if (filePath.startsWith("workspace/")) return filePath.slice("workspace/".length);
+  if (filePath.startsWith("/workspace/")) return filePath.slice("/workspace/".length);
+  return filePath;
+}
+
 /**
  * Expand `~` and `~/` to a synthetic home directory and normalise unicode
  * whitespace. workerd has no `os.homedir()`, so we treat `~` as a marker
@@ -28,7 +35,9 @@ function normalizeAtPrefix(filePath: string): string {
  * per-context fs the contextFolderPath is already absolute.
  */
 export function expandPath(filePath: string): string {
-  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+  const normalized = normalizeVirtualWorkspaceAlias(
+    normalizeUnicodeSpaces(normalizeAtPrefix(filePath))
+  );
   // Workerd has no os.homedir(); leave ~ alone — callers using per-context
   // sandbox roots never produce these paths anyway.
   return normalized;
@@ -41,7 +50,17 @@ export function expandPath(filePath: string): string {
 export function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
   if (isAbsolute(expanded)) {
-    return expanded;
+    // Agent file tools expose a virtual workspace filesystem, not the host
+    // filesystem. Treat conventional absolute-looking paths as virtual-root
+    // paths. `/workspace` is a common model/user spelling for that root; the
+    // canonical tool spelling remains `.`. Preserve already-resolved paths
+    // beneath cwd because internal callers may pass those back to us.
+    const withinCwd = relative(cwd, expanded);
+    if (withinCwd === "" || (!withinCwd.startsWith("..") && !isAbsolute(withinCwd))) {
+      return expanded;
+    }
+    const virtual = expanded.slice(1);
+    return resolvePath(cwd, virtual || ".");
   }
   return resolvePath(cwd, expanded);
 }

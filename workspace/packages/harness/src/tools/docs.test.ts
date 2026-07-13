@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { renderEntry, type CatalogEntry } from "./docs.js";
+import { createDocsSearchTool, renderEntry, type CatalogEntry } from "./docs.js";
+
+describe("docs_search", () => {
+  it("caps oversized result requests instead of turning discovery into a tool error", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const tool = createDocsSearchTool(async <T>(method: string, args: unknown[]) => {
+      calls.push({ method, args });
+      return [] as T;
+    });
+
+    await tool.execute("call-1", { query: "runtime", limit: 200 });
+
+    expect(calls).toEqual([
+      { method: "docs.search", args: ["runtime", { surface: undefined, limit: 100 }] },
+    ]);
+  });
+});
 
 describe("renderEntry (readable docs_open text)", () => {
   it("renders a readable signature instead of a raw JSON-schema dump", () => {
@@ -73,5 +89,23 @@ describe("renderEntry (readable docs_open text)", () => {
     expect(text).toContain('await rpc.call("main", "workers.listSources", [])');
     expect(text).toContain("services.<name>");
     expect(text).toContain("ergonomic runtime client");
+  });
+
+  it("shows the public runtime import form for projected namespace methods", () => {
+    const entry: CatalogEntry = {
+      id: "runtime:workerRuntime.webhooks.createSubscription",
+      surface: "runtime",
+      qualifiedName: "webhooks.createSubscription",
+      title: "webhooks.createSubscription",
+      argsSchema: {
+        type: "array",
+        items: [{ type: "object", properties: { target: { type: "object" } } }],
+      },
+    };
+
+    const text = renderEntry(entry);
+    expect(text).toContain('import { webhooks } from "@workspace/runtime"');
+    expect(text).toContain("await webhooks.createSubscription(...)");
+    expect(text).not.toContain("rpc.call");
   });
 });

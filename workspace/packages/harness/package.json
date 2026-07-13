@@ -16,6 +16,7 @@
     "@vibestudio/rpc": "workspace:*",
     "@sinclair/typebox": "^0.27.8",
     "@workspace/pi-core": "workspace:*",
+    "@workspace/vcs-engine": "workspace:*",
     "diff": "^7.0.0",
     "linkedom": "^0.18.5",
     "unpdf": "^1.6.2"

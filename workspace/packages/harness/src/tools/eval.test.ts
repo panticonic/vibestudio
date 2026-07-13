@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatEvalResult, type EvalRunResult } from "./eval.js";
+import { createEvalTool, formatEvalResult, type EvalRunResult } from "./eval.js";
 
 /** Join the text parts of a formatted tool result. */
 function textOf(out: ReturnType<typeof formatEvalResult>): string {
@@ -9,6 +9,58 @@ function textOf(out: ReturnType<typeof formatEvalResult>): string {
 }
 
 describe("formatEvalResult (shared by the eval tool's execute + the agent's deferred onEvalComplete)", () => {
+  it("treats a transport-materialized empty path as omitted for inline code", async () => {
+    const calls: unknown[][] = [];
+    const tool = createEvalTool(async (_method, args) => {
+      calls.push(args);
+      return { success: true, console: "" } as never;
+    });
+    await tool.execute("call-1", { code: "return 1", path: "" } as never);
+    expect(calls[0]?.[0]).toMatchObject({ code: "return 1", path: undefined });
+  });
+  it("uses path as a source-base hint when inline code is present", async () => {
+    const calls: unknown[][] = [];
+    const tool = createEvalTool(async (_method, args) => {
+      calls.push(args);
+      return { success: true, console: "" } as never;
+    });
+
+    await tool.execute("call-1", { code: "return 1", path: "meta" } as never);
+
+    expect(calls[0]?.[0]).toMatchObject({
+      code: "return 1",
+      path: undefined,
+      sourcePath: "meta/__inline_eval__.tsx",
+    });
+  });
+  it("forwards reset as an atomic pre-run lifecycle option", async () => {
+    const calls: unknown[][] = [];
+    const tool = createEvalTool(async (_method, args) => {
+      calls.push(args);
+      return { success: true, console: "", scopeKeys: [] } as never;
+    });
+
+    await tool.execute("call-reset", { reset: true, code: "return Object.keys(scope)" } as never);
+
+    expect(calls[0]?.[0]).toMatchObject({
+      reset: true,
+      code: "return Object.keys(scope)",
+    });
+  });
+  it("loads a non-executable text/data path instead of parsing it as TypeScript", async () => {
+    const calls: unknown[][] = [];
+    const tool = createEvalTool(async (_method, args) => {
+      calls.push(args);
+      return { success: true, console: "", returnValue: "# Sandbox" } as never;
+    });
+
+    await tool.execute("call-1", { path: "skills/sandbox/SKILL.md" } as never);
+
+    expect(calls[0]?.[0]).toMatchObject({
+      code: 'return await fs.readFile("skills/sandbox/SKILL.md", "utf8");',
+    });
+    expect(calls[0]?.[0]).not.toHaveProperty("path");
+  });
   it("formats a successful run: console + return value + scope keys, raw result on details", () => {
     const result: EvalRunResult = {
       success: true,

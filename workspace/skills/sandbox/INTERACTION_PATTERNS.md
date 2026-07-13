@@ -80,8 +80,9 @@ same channel. Keep the UI compact and use `inline_ui` for larger dashboards or
 inspectable results that belong in the transcript.
 
 When creating the file under a workspace repo namespace such as `panels/`, use
-a repo-shaped path like `panels/action-bar-review/index.tsx`; do not write a
-top-level `panels/action-bar-review.tsx` file.
+a canonical repo-shaped path like `panels/action-bar-review/index.tsx`.
+File-oriented APIs also accept `panels/action-bar-review.tsx` as shorthand for
+`panels/action-bar-review/action-bar-review.tsx` and report the canonical path.
 
 ## Browser Opens
 

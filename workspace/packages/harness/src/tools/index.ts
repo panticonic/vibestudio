@@ -75,7 +75,13 @@ export type { LsToolInput, LsToolDetails } from "./ls.js";
 export { createSuspendTurnTool } from "./suspend-turn.js";
 export type { SuspendTurnInput, SuspendTurnDetails } from "./suspend-turn.js";
 
-export { createEvalTool, formatEvalResult, type EvalRunResult } from "./eval.js";
+export {
+  createEvalTool,
+  formatEvalResult,
+  normalizeEvalToolSource,
+  type EvalRunResult,
+  type NormalizedEvalToolSource,
+} from "./eval.js";
 export type { EvalToolInput } from "./eval.js";
 
 export { createDocsSearchTool, createDocsOpenTool } from "./docs.js";

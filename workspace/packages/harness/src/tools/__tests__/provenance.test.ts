@@ -111,6 +111,14 @@ describe("createProvenanceTool", () => {
     expect((result.content[0] as { text: string }).text).toContain("prov · session · 1 of 1 items");
   });
 
+  it("defaults an omitted target to whole-session orientation", async () => {
+    const { deps, calls } = makeDeps();
+    const tool = createProvenanceTool(CWD, deps);
+    const result = await tool.execute("inv-1", {});
+    expect(calls.session).toHaveLength(1);
+    expect(result.details.target).toBe("session");
+  });
+
   it("treats a session:<head> handle as session orientation", async () => {
     const { deps, calls } = makeDeps();
     const tool = createProvenanceTool(CWD, deps);

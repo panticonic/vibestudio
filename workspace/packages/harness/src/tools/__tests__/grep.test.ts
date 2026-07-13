@@ -14,6 +14,12 @@ class CountingFs extends StubFs {
 }
 
 describe("createGrepTool", () => {
+  it("returns actionable guidance when the pattern is omitted", async () => {
+    const tool = createGrepTool(CWD, new StubFs());
+    const result = await tool.execute("call-1", {});
+    expect((result.content[0] as { text: string }).text).toContain("No grep pattern supplied");
+  });
+
   it("finds a literal pattern across multiple files", async () => {
     const fs = new StubFs({
       files: {
@@ -50,11 +56,79 @@ describe("createGrepTool", () => {
     expect(text).toContain("a.ts:1");
   });
 
+  it("falls back to literal search when an explicitly requested regex is invalid", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "open();" } });
+    const tool = createGrepTool(CWD, fs);
+    const result = await tool.execute("call-1", { pattern: "open(", literal: false });
+
+    expect((result.content[0] as { text: string }).text).toContain("a.ts:1");
+    expect(result.details).toMatchObject({ patternFallback: "literal" });
+  });
+
+  it("uses the first recall keyword as a compatibility fallback for a missing pattern", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "readFile(path);" } });
+    const tool = createGrepTool(CWD, fs);
+    const result = await tool.execute("call-1", {
+      path: ".",
+      recallKeywords: "readFile bytes base64",
+    } as never);
+
+    expect((result.content[0] as { text: string }).text).toContain("a.ts:1");
+    expect(result.details).toMatchObject({ patternFallback: "recallKeywords" });
+  });
+
+  it("uses the host fs service before walking files when the extension is unavailable", async () => {
+    const calls: Array<{ target: string; method: string }> = [];
+    const rpc = {
+      async call(target: string, method: string) {
+        calls.push({ target, method });
+        if (method === "fs.grep") {
+          return {
+            matches: [
+              {
+                file: "src/a.ts",
+                lineNumber: 2,
+                line: "open();",
+                before: ["before"],
+                after: ["after"],
+              },
+            ],
+            matchCount: 1,
+            truncated: false,
+          };
+        }
+        throw Object.assign(new Error("Extension is not installed"), { code: "ENOEXT" });
+      },
+    };
+    const tool = createGrepTool(CWD, new StubFs({ files: {} }), { rpc: rpc as never });
+    const result = await tool.execute("call-1", { pattern: "open(" });
+
+    expect((result.content[0] as { text: string }).text).toContain("src/a.ts:2: open();");
+    expect(result.details).toMatchObject({ engine: "fs-service" });
+    expect(calls).toContainEqual({ target: "main", method: "fs.grep" });
+  });
+
   it("returns 'No matches found' when nothing matches", async () => {
     const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "abc" } });
     const tool = createGrepTool(CWD, fs);
     const result = await tool.execute("call-1", { pattern: "xyz" });
     expect((result.content[0] as { text: string }).text).toBe("No matches found");
+  });
+
+  it("returns a diagnostic empty result for a missing exploratory search root", async () => {
+    const tool = createGrepTool(CWD, new StubFs({ files: {} }));
+    const result = await tool.execute("call-1", {
+      path: "packages/missing",
+      pattern: "needle",
+    });
+
+    expect((result.content[0] as { text: string }).text).toContain(
+      "No matches found (search path does not exist: packages/missing)"
+    );
+    expect(result.details).toMatchObject({
+      engine: "runtime-fs",
+      missingSearchPath: "packages/missing",
+    });
   });
 
   it("filters files by glob", async () => {

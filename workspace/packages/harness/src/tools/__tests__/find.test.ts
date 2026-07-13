@@ -5,6 +5,12 @@ import { StubFs } from "./stub-fs.js";
 const CWD = "/work/ctx";
 
 describe("createFindTool", () => {
+  it("returns actionable guidance when the pattern is omitted", async () => {
+    const tool = createFindTool(CWD, new StubFs());
+    const result = await tool.execute("call-1", {});
+    expect((result.content[0] as { text: string }).text).toContain("No find pattern supplied");
+  });
+
   it("finds files matching a glob", async () => {
     const fs = new StubFs({
       files: {
@@ -28,6 +34,22 @@ describe("createFindTool", () => {
     expect((result.content[0] as { text: string }).text).toBe("No files found matching pattern");
   });
 
+  it("returns a diagnostic empty result for a missing exploratory search root", async () => {
+    const tool = createFindTool(CWD, new StubFs({ files: {} }));
+    const result = await tool.execute("call-1", {
+      path: "packages/missing",
+      pattern: "*.ts",
+    });
+
+    expect((result.content[0] as { text: string }).text).toContain(
+      "No files found matching pattern (search path does not exist: packages/missing)"
+    );
+    expect(result.details).toMatchObject({
+      engine: "runtime-fs",
+      missingSearchPath: "packages/missing",
+    });
+  });
+
   it("includes hidden (dot) files", async () => {
     const fs = new StubFs({
       files: { [`${CWD}/.hidden`]: "x", [`${CWD}/visible`]: "x" },
@@ -36,14 +58,6 @@ describe("createFindTool", () => {
     const result = await tool.execute("call-1", { pattern: "*" });
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain(".hidden");
-  });
-
-  it("rejects when search path doesn't exist", async () => {
-    const fs = new StubFs();
-    const tool = createFindTool(CWD, fs);
-    await expect(
-      tool.execute("call-1", { pattern: "*", path: "missing" }),
-    ).rejects.toThrow(/not found/i);
   });
 
   it("delegates to the file-tools extension when context rpc is available", async () => {

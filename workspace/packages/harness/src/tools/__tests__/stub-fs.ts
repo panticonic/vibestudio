@@ -16,7 +16,7 @@ import type {
   RuntimeFs,
 } from "../runtime-fs.js";
 
-const NOW = "2026-01-01T00:00:00.000Z";
+const NOW = new Date("2026-01-01T00:00:00.000Z");
 
 function makeStat(isDir: boolean, size: number): FileStats {
   return {
@@ -24,8 +24,10 @@ function makeStat(isDir: boolean, size: number): FileStats {
     isDirectory: () => isDir,
     isSymbolicLink: () => false,
     size,
-    mtime: NOW,
-    ctime: NOW,
+    mtime: new Date(NOW),
+    ctime: new Date(NOW),
+    mtimeMs: NOW.getTime(),
+    ctimeMs: NOW.getTime(),
     mode: isDir ? 0o755 : 0o644,
   };
 }

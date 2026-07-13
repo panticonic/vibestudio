@@ -99,14 +99,21 @@ function warnFallbackOnce(): void {
   );
 }
 
-function isFileToolsExtensionUnavailable(err: unknown): boolean {
+function isFileToolsExtensionFallback(err: unknown): boolean {
   const code =
     typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
   // ENOEXT = not installed/enabled; ENOTREADY = declared but not yet running.
   // Both mean the extension can't serve this call, so fall back to runtime-fs.
   if (code === "ENOEXT" || code === "ENOTREADY") return true;
   const message = err instanceof Error ? err.message : String(err);
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running/.test(
+  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running|\b(?:ENOENT|path not found|no such file)\b/i.test(
+    message
+  );
+}
+
+function isInvalidRegexError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid regular expression|regex parse error|unclosed group|unterminated group/iu.test(
     message
   );
 }
@@ -141,10 +148,10 @@ export function compileUserRegex(source: string, flags: string): RegexLike {
 }
 
 const grepSchema = Type.Object({
-  pattern: Type.String({
+  pattern: Type.Optional(Type.String({
     description:
       "Text to search for. Treated as a literal string by default; do not escape punctuation or set literal=false for code snippets like openPanel( unless you intentionally want a valid regex.",
-  }),
+  })),
   path: Type.Optional(
     Type.String({
       description:
@@ -200,7 +207,9 @@ export interface GrepToolDetails {
   matchLimitReached?: number;
   linesTruncated?: boolean;
   filesScanned?: number;
-  engine?: "ripgrep" | "runtime-fs";
+  engine?: "ripgrep" | "fs-service" | "runtime-fs";
+  missingSearchPath?: string;
+  patternFallback?: "recallKeywords" | "literal";
 }
 
 export interface GrepToolDeps {
@@ -239,10 +248,20 @@ export function createGrepTool(
     description: `Search file contents. Literal search is the default and should be used for code snippets, identifiers, paths, and punctuation; set literal=false only for intentional valid regex. Returns matching lines with file paths and line numbers. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
     parameters: grepSchema,
     execute: async (_toolCallId, input, signal, onUpdate) => {
-      const { pattern, path: searchDir, glob, ignoreCase, literal, context, limit } = input;
-      const literalSearch = literal !== false;
+      const raw = input as GrepToolInput & { recallKeywords?: string | string[] };
+      const recall = Array.isArray(raw.recallKeywords)
+        ? raw.recallKeywords.find((value) => typeof value === "string" && value.trim())
+        : raw.recallKeywords?.trim().split(/\s+/u).find(Boolean);
+      const pattern = typeof raw.pattern === "string" ? raw.pattern : recall;
+      const { path: searchDir, glob, ignoreCase, literal, context, limit } = raw;
+      let literalSearch = literal !== false;
+      let patternFallback: GrepToolDetails["patternFallback"] =
+        typeof raw.pattern === "string" ? undefined : recall ? "recallKeywords" : undefined;
       if (typeof pattern !== "string") {
-        throw new Error("grep requires pattern");
+        return {
+          content: [{ type: "text", text: "No grep pattern supplied. Pass the text to search for in `pattern`." }],
+          details: undefined,
+        };
       }
       if (signal?.aborted) {
         throw new Error("Operation aborted");
@@ -250,7 +269,7 @@ export function createGrepTool(
 
       if (fileTools) {
         try {
-          return (await fileTools.grep({
+          const request = {
             pattern,
             path: searchDir,
             cwd,
@@ -259,9 +278,21 @@ export function createGrepTool(
             literal: literalSearch,
             context,
             limit,
-          })) as GrepToolResult;
+          };
+          let result: GrepToolResult;
+          try {
+            result = (await fileTools.grep(request)) as GrepToolResult;
+          } catch (error) {
+            if (literalSearch || !isInvalidRegexError(error)) throw error;
+            literalSearch = true;
+            patternFallback = "literal";
+            result = (await fileTools.grep({ ...request, literal: true })) as GrepToolResult;
+          }
+          return patternFallback
+            ? { ...result, details: { ...(result.details ?? {}), patternFallback } }
+            : result;
         } catch (err) {
-          if (!isFileToolsExtensionUnavailable(err)) throw err;
+          if (!isFileToolsExtensionFallback(err)) throw err;
           if (onUpdate) {
             onUpdate({
               content: [],
@@ -271,6 +302,69 @@ export function createGrepTool(
               },
             });
           }
+        }
+      }
+
+      // The extension is optional. Prefer the host fs service before the
+      // workerd file-by-file walker: it searches the same context boundary but
+      // can use the host's native ripgrep path and avoids thousands of RPC
+      // reads for a workspace-wide query.
+      if (deps?.rpc) {
+        try {
+          let serviceLiteral = literalSearch;
+          if (!serviceLiteral) {
+            try {
+              buildRegex(pattern, { literal: false, ignoreCase: !!ignoreCase });
+            } catch (error) {
+              if (!isInvalidRegexError(error)) throw error;
+              serviceLiteral = true;
+              patternFallback = "literal";
+            }
+          }
+          const servicePattern = serviceLiteral ? escapeRegex(pattern) : pattern;
+          const result = await deps.rpc.call<{
+            matches: Array<{
+              file: string;
+              lineNumber: number;
+              line: string;
+              before: string[];
+              after: string[];
+            }>;
+            matchCount: number;
+            truncated: boolean;
+          }>("main", "fs.grep", [
+            servicePattern,
+            {
+              path: searchDir || ".",
+              ...(glob ? { glob } : {}),
+              caseInsensitive: !!ignoreCase,
+              contextLines: context && context > 0 ? context : 0,
+              maxMatches: Math.max(1, limit ?? DEFAULT_LIMIT),
+            },
+          ]);
+          const lines: string[] = [];
+          for (const match of result.matches) {
+            const beforeStart = match.lineNumber - match.before.length;
+            match.before.forEach((line, index) =>
+              lines.push(`${match.file}-${beforeStart + index}- ${truncateLine(line).text}`)
+            );
+            lines.push(`${match.file}:${match.lineNumber}: ${truncateLine(match.line).text}`);
+            match.after.forEach((line, index) =>
+              lines.push(`${match.file}-${match.lineNumber + index + 1}- ${truncateLine(line).text}`)
+            );
+          }
+          const text = lines.length > 0 ? lines.join("\n") : "No matches found";
+          return {
+            content: [{ type: "text", text }],
+            details: {
+              engine: "fs-service",
+              ...(patternFallback ? { patternFallback } : {}),
+              ...(result.truncated ? { matchLimitReached: result.matchCount } : {}),
+            },
+          };
+        } catch {
+          // Older hosts or callers without fs.grep permission retain the
+          // workerd-native fallback below.
         }
       }
 
@@ -287,10 +381,31 @@ export function createGrepTool(
         const hint = /\s/.test((searchDir || "").trim())
           ? " The `path` argument accepts one directory or file, not a space-separated list. Run separate grep calls for multiple roots, or search from `.` with a narrower `glob`."
           : "";
-        throw new Error(`Path not found: ${searchPath}.${hint}`);
+        const displayPath = searchDir || ".";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No matches found (search path does not exist: ${displayPath}).${hint}`,
+            },
+          ],
+          details: {
+            engine: "runtime-fs",
+            missingSearchPath: displayPath,
+            ...(patternFallback ? { patternFallback } : {}),
+          },
+        };
       }
 
-      const regex = buildRegex(pattern, { literal: literalSearch, ignoreCase: !!ignoreCase });
+      let regex: RegexLike;
+      try {
+        regex = buildRegex(pattern, { literal: literalSearch, ignoreCase: !!ignoreCase });
+      } catch (error) {
+        if (literalSearch || !isInvalidRegexError(error)) throw error;
+        literalSearch = true;
+        patternFallback = "literal";
+        regex = buildRegex(pattern, { literal: true, ignoreCase: !!ignoreCase });
+      }
       const globRegex = glob ? globToRegex(glob) : null;
 
       const formatPath = (filePath: string): string => {
@@ -401,14 +516,17 @@ export function createGrepTool(
       if (matchCount === 0) {
         return {
           content: [{ type: "text", text: "No matches found" }],
-          details: undefined,
-        } as { content: (TextContent | ImageContent)[]; details: undefined };
+          details: patternFallback
+            ? { engine: "runtime-fs" as const, patternFallback }
+            : undefined,
+        };
       }
 
       const rawOutput = outputLines.join("\n");
       const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
       let output = truncation.content;
       const details: GrepToolDetails = { engine: "runtime-fs" };
+      if (patternFallback) details.patternFallback = patternFallback;
       const notices: string[] = [];
 
       if (matchLimitReached) {

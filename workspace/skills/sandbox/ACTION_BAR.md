@@ -29,13 +29,14 @@ component via `chat.rpc.call(...)`.
 
 When creating an action-bar file inside a workspace repo namespace such as
 `panels/`, write inside a repo-shaped path, for example
-`panels/action-bar-review/index.tsx`. Do not write `panels/action-bar-review.tsx`;
-that path names `panels/action-bar-review` as a repo root rather than a file
-inside a repo.
+`panels/action-bar-review/index.tsx`. File-oriented APIs also accept
+`panels/action-bar-review.tsx` as shorthand and return its canonical expansion,
+`panels/action-bar-review/action-bar-review.tsx`.
 
-The native `write`/`edit` tools record workspace source changes in VCS and do
-not accept `.tmp`, `.vibestudio`, or other scratch paths. For a transient action
-bar, create it through eval's runtime filesystem instead:
+The native `write`/`edit` tools record workspace source changes in VCS and route
+ordinary non-repo paths to context-local scratch when runtime fs is available.
+Platform-owned or ignored paths such as `.tmp` and `.vibestudio` remain reserved.
+For a transient action bar, create it through eval's runtime filesystem instead:
 
 ```ts
 const stem = await fs.mktemp("action-bar");

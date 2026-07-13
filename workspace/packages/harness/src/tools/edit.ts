@@ -10,6 +10,11 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import {
+  canonicalizeWorkspaceFilePath,
+  splitRepoPath,
+} from "@vibestudio/shared/runtime/entitySpec";
+import type { RuntimeFs } from "./runtime-fs.js";
 import { toVcsPath, withInvocationId, type ToolVcs, type ToolVcsEditOp } from "./tool-vcs.js";
 import {
   detectLineEnding,
@@ -34,11 +39,19 @@ export interface EditToolDetails {
   diff: string;
   /** Line number of the first change in the new file (for editor navigation) */
   firstChangedLine?: number;
+  storage?: "vcs" | "scratch";
+  /** A recoverable precondition mismatch. No file was changed. */
+  diagnostic?: "missing-file" | "not-found" | "ambiguous" | "binary-file";
+  /** Number of matching replacement sites when `diagnostic` is `ambiguous`. */
+  matchCount?: number;
+  /** One-based candidate line numbers for an ambiguous replacement. */
+  candidateLines?: number[];
 }
 
 export function createEditTool(
   cwd: string,
-  vcs: ToolVcs
+  vcs: ToolVcs,
+  fs?: Pick<RuntimeFs, "readFile" | "writeFile">
 ): AgentTool<typeof editSchema, EditToolDetails> {
   return {
     name: "edit",
@@ -53,15 +66,48 @@ export function createEditTool(
       }
       if (signal?.aborted) throw new Error("Operation aborted");
 
-      const relPath = toVcsPath(path, cwd);
-      const base = await vcs.readFile(relPath);
-      if (!base) throw new Error(`File not found: ${path}`);
-      if (base.content.kind !== "text") {
-        throw new Error(`Cannot edit binary file as text: ${path}`);
+      const relPath = canonicalizeWorkspaceFilePath(toVcsPath(path, cwd));
+      const repo = splitRepoPath(relPath);
+      const bareTrackedFile = relPath.length > 0 && !relPath.includes("/");
+      const useVcs = Boolean(repo || bareTrackedFile || !fs);
+      const scratch = !useVcs && fs ? await fs.readFile(relPath, "utf8") : null;
+      const base = useVcs ? await vcs.readFile(relPath) : null;
+      if (!base && scratch === null) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `No changes made: ${path} does not exist. ` +
+                "Create it with the write tool, or read/list the parent directory and retry with the current path.",
+            },
+          ],
+          details: { diff: "", diagnostic: "missing-file" },
+        };
+      }
+      if (base && base.content.kind !== "text") {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `No changes made: ${path} is binary and cannot be edited as text. ` +
+                "Use the write tool with binary content if replacement is intended.",
+            },
+          ],
+          details: { diff: "", diagnostic: "binary-file", storage: "vcs" },
+        };
       }
       if (signal?.aborted) throw new Error("Operation aborted");
 
-      const { bom, text: content } = stripBom(base.content.text);
+      const sourceContent = base
+        ? base.content.kind === "text"
+          ? base.content.text
+          : ""
+        : typeof scratch === "string"
+          ? scratch
+          : (scratch?.toString("utf8") ?? "");
+      const { bom, text: content } = stripBom(sourceContent);
       const originalEnding = detectLineEnding(content);
       const normalizedContent = normalizeToLF(content);
       const normalizedOldText = normalizeToLF(oldText);
@@ -69,18 +115,50 @@ export function createEditTool(
 
       const matchResult = fuzzyFindText(normalizedContent, normalizedOldText);
       if (!matchResult.found) {
-        throw new Error(
-          `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`
-        );
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `No changes made: the requested old text was not found in ${path}. ` +
+                "Read the current file (or grep for a shorter anchor) and retry with current text including whitespace and newlines.",
+            },
+          ],
+          details: {
+            diff: "",
+            diagnostic: "not-found",
+            storage: base ? "vcs" : "scratch",
+          },
+        };
       }
 
       const fuzzyContent = normalizeForFuzzyMatch(normalizedContent);
       const fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText);
       const occurrences = fuzzyContent.split(fuzzyOldText).length - 1;
       if (occurrences > 1) {
-        throw new Error(
-          `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`
-        );
+        const candidateLines: number[] = [];
+        for (let at = fuzzyContent.indexOf(fuzzyOldText); at >= 0; ) {
+          candidateLines.push(fuzzyContent.slice(0, at).split("\n").length);
+          at = fuzzyContent.indexOf(fuzzyOldText, at + Math.max(1, fuzzyOldText.length));
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `No changes made: found ${occurrences} matching occurrences in ${path}` +
+                `${candidateLines.length ? ` on lines ${candidateLines.join(", ")}` : ""}. ` +
+                "Include surrounding context in oldText so the replacement identifies one site.",
+            },
+          ],
+          details: {
+            diff: "",
+            diagnostic: "ambiguous",
+            matchCount: occurrences,
+            candidateLines,
+            storage: base ? "vcs" : "scratch",
+          },
+        };
       }
       if (signal?.aborted) throw new Error("Operation aborted");
 
@@ -129,7 +207,11 @@ export function createEditTool(
       // trajectory: file → edit → invocation → turn → session, queryable + kept
       // through commit). The invocationId is stamped by the shared adapter seam
       // (T2) — the tool no longer hand-passes it per vcs call.
-      await withInvocationId(vcs, toolCallId).edit({ baseStateHash: base.stateHash, edits });
+      if (base) {
+        await withInvocationId(vcs, toolCallId).edit({ baseStateHash: base.stateHash, edits });
+      } else if (fs) {
+        await fs.writeFile(relPath, bom + restoreLineEndings(newContent, originalEnding));
+      }
       if (signal?.aborted) throw new Error("Operation aborted");
 
       const diffResult = generateDiffString(baseContent, newContent);
@@ -138,7 +220,11 @@ export function createEditTool(
       ];
       return {
         content: content_,
-        details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },
+        details: {
+          diff: diffResult.diff,
+          firstChangedLine: diffResult.firstChangedLine,
+          storage: base ? "vcs" : "scratch",
+        },
       };
     },
   };

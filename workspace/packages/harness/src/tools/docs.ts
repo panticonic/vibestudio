@@ -29,10 +29,9 @@ export interface CatalogEntry extends CatalogHit {
 }
 
 const surfaceParam = Type.Optional(
-  Type.Union(
-    [Type.Literal("service"), Type.Literal("runtime")],
-    { description: "Restrict results to one surface." }
-  )
+  Type.Union([Type.Literal("service"), Type.Literal("runtime")], {
+    description: "Restrict results to one surface.",
+  })
 );
 
 const searchSchema = Type.Object(
@@ -43,7 +42,10 @@ const searchSchema = Type.Object(
     }),
     surface: surfaceParam,
     limit: Type.Optional(
-      Type.Integer({ minimum: 1, maximum: 50, description: "Max results (default 20)." })
+      Type.Integer({
+        minimum: 1,
+        description: "Requested result count (default 20; safely capped at 100).",
+      })
     ),
   },
   { additionalProperties: false }
@@ -78,11 +80,12 @@ export function createDocsSearchTool(
       "Search the capability catalog — server services and runtime APIs — by keyword. Returns compact hits filtered to what you may call; use docs_open(id) for the full typed schema, access rules, and examples.",
     parameters: searchSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogHit[]>> => {
+      const limit = Math.min(params.limit ?? 20, 100);
       const serverHits = await callMain<CatalogHit[]>("docs.search", [
         params.query,
-        { surface: params.surface, limit: params.limit },
+        { surface: params.surface, limit },
       ]);
-      const hits = serverHits.slice(0, params.limit ?? 20);
+      const hits = serverHits.slice(0, limit);
       if (hits.length === 0) {
         return {
           content: [
@@ -279,6 +282,14 @@ export function renderEntry(entry: CatalogEntry): string {
             "In eval, this raw service method is always reachable through the portable `rpc.call(target, method, args)` form. " +
             "The `services.<name>` convenience binding may be an ergonomic runtime client when " +
             "the service name also exists in `@workspace/runtime`."
+        );
+      }
+    } else {
+      const [namespace] = entry.qualifiedName.split(".");
+      if (namespace && entry.qualifiedName.includes(".")) {
+        parts.push(
+          `Eval/runtime call:\nimport { ${namespace} } from "@workspace/runtime";\n` +
+            `await ${entry.qualifiedName}(...);`
         );
       }
     }

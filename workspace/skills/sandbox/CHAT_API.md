@@ -52,14 +52,23 @@ interface ChatSandboxValue {
     options?: { idempotencyKey?: string }
   ): Promise<number | undefined>;
 
+  /** Look up one durable channel envelope by its stable id; null when absent. */
+  replayEnvelope(envelopeId: string): Promise<unknown | null>;
+
   /** Call a method on a channel participant */
-  callMethod(participantId: string, method: string, args: unknown): Promise<unknown>;
+  callMethod(
+    participantId: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number }
+  ): Promise<unknown>;
 
   /** Call a method and return the full transport result envelope */
   callMethodResult(
     participantId: string,
     method: string,
-    args: unknown
+    args: unknown,
+    options?: { timeoutMs?: number }
   ): Promise<{
     content: unknown;
     attachments?: unknown[];
@@ -73,13 +82,19 @@ interface ChatSandboxValue {
   ): Promise<{ id: string; metadata: Record<string, unknown> } | null>;
 
   /** Call by participant handle and return the provider payload */
-  callMethodByHandle(handle: string, method: string, args: unknown): Promise<unknown>;
+  callMethodByHandle(
+    handle: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number }
+  ): Promise<unknown>;
 
   /** Call by participant handle and return the full invocation envelope */
   callMethodResultByHandle(
     handle: string,
     method: string,
-    args: unknown
+    args: unknown,
+    options?: { timeoutMs?: number }
   ): Promise<{
     content: unknown;
     attachments?: unknown[];
@@ -93,7 +108,7 @@ interface ChatSandboxValue {
   channelId: string | null;
 
   /** RPC bridge — call any server/main service */
-  rpc: { call: (target: string, method: string, ...args: unknown[]) => Promise<unknown> };
+  rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };
 }
 ```
 
@@ -139,6 +154,11 @@ For provenance queries, use `gad.getTrajectoryForEnvelope()` or
 `gad.listPublishedEnvelopesForTrajectory()` rather than reading private
 trajectory state as if it were the chat transcript.
 
+`await chat.replayEnvelope(envelopeId)` performs a lineage-aware lookup of one
+durable envelope on the current channel and returns `null` when the id belongs
+to another log (for example, a VCS commit event). The same method is available
+in panel components and agent-owned server eval.
+
 ## chat.callMethod
 
 Call a registered method on a specific channel participant. Blocks until the method returns.
@@ -147,6 +167,19 @@ This resolves to the provider's actual return value.
 ```typescript
 // Call a method on an agent
 const result = await chat.callMethod("agent-participant-id", "someMethod", { arg1: "value" });
+```
+
+For diagnostics against a participant that may itself be stalled, pass a
+bounded timeout so the diagnostic turn can report a non-responsive target
+instead of becoming stalled too:
+
+```typescript
+const result = await chat.callMethod(
+  agentParticipantId,
+  "inspectMethodSuspensions",
+  {},
+  { timeoutMs: 15_000 }
+);
 ```
 
 This is useful for inline UI components that need to trigger agent-side behavior directly.

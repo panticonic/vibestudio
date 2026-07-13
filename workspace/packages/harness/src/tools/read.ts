@@ -26,8 +26,20 @@ import {
   truncateHead,
   type TruncationResult,
 } from "./truncate.js";
-const readSchema = Type.Object({
-  path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
+const readLocationSchema = Type.Union([
+  Type.Object({
+    path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
+  }),
+  Type.Object({
+    target: Type.String({
+      description:
+        "File resource reference to read, normally a file:<path> value returned by another tool.",
+    }),
+    kind: Type.Optional(Type.Literal("file")),
+  }),
+]);
+
+const readOptionsSchema = Type.Object({
   // Optional (§7.1): the agent's context budget for this read. Choose from what
   // you are doing right now (merely using code / executing a set plan / planning
   // a change) crossed with how provenance has been behaving on this codebase
@@ -52,6 +64,7 @@ const readSchema = Type.Object({
     })
   ),
 });
+const readSchema = Type.Intersect([readLocationSchema, readOptionsSchema]);
 export type ReadToolInput = Static<typeof readSchema>;
 export interface ReadToolDetails {
   truncation?: TruncationResult;
@@ -69,7 +82,10 @@ export interface ReadToolDetails {
   };
   wasResized?: boolean;
   engine?: "node-file" | "runtime-fs";
+  directory?: boolean;
   extensionFallback?: string;
+  missing?: boolean;
+  suggestions?: string[];
 }
 interface ImageResizeResult {
   data: Uint8Array;
@@ -143,6 +159,69 @@ export function createReadTool(
     : null;
   const provenanceDeps = deps?.provenance ?? null;
 
+  const resolveWorkspaceSkillAlias = async (requestedPath: string): Promise<ReadResult | null> => {
+    if (!fileToolsRpc) return null;
+    const normalized = requestedPath.replace(/^\/+/, "");
+    const match = /^(?:skills\/)?([^/]+)\/SKILL\.md$/iu.exec(normalized);
+    if (!match?.[1]) return null;
+    try {
+      const entries = await fileToolsRpc.call<
+        Array<{ name: string; dirPath: string; skillPath: string }>
+      >("main", "workspace.listSkills", []);
+      const matches = entries.filter((entry) => entry.name === match[1]);
+      if (matches.length !== 1) return null;
+      const entry = matches[0]!;
+      const content = await fileToolsRpc.call<string>("main", "workspace.readSkill", [
+        entry.dirPath,
+      ]);
+      return {
+        content: [{ type: "text", text: content }],
+        details: {
+          path: entry.skillPath,
+          engine: "runtime-fs",
+          extensionFallback: `workspace-skill-alias:${requestedPath}`,
+        },
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const missingResult = async (requestedPath: string, absolutePath: string): Promise<ReadResult> => {
+    const skillAlias = await resolveWorkspaceSkillAlias(requestedPath);
+    if (skillAlias) return skillAlias;
+    const slash = absolutePath.lastIndexOf("/");
+    const parent = slash <= 0 ? "/" : absolutePath.slice(0, slash);
+    const wanted = absolutePath.slice(slash + 1).toLowerCase();
+    let suggestions: string[] = [];
+    try {
+      suggestions = (await fs.readdir(parent))
+        .map(String)
+        .sort((a, b) => {
+          const aScore = similarityScore(a.toLowerCase(), wanted);
+          const bScore = similarityScore(b.toLowerCase(), wanted);
+          return bScore - aScore || a.localeCompare(b);
+        })
+        .slice(0, 12);
+    } catch {
+      // A missing parent has no useful siblings; the diagnostic still remains
+      // a successful discovery result rather than poisoning the turn.
+    }
+    const hint =
+      suggestions.length > 0
+        ? ` Nearby entries: ${suggestions.join(", ")}.`
+        : " The parent directory is also unavailable or empty.";
+    return {
+      content: [
+        {
+          type: "text",
+          text: `File not found: ${requestedPath}.${hint} Use ls/find before choosing another path.`,
+        },
+      ],
+      details: { path: requestedPath, missing: true, suggestions },
+    };
+  };
+
   /** Fire the §7.2 provenance attachment for a read, or return `null` to skip it
    *  silently (no client, tier `none`, or the path is outside any tracked repo —
    *  `skills/` docs, absolute non-repo paths). Best-effort: a rejection resolves
@@ -198,23 +277,62 @@ export function createReadTool(
     description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
     parameters: readSchema,
     execute: async (toolCallId, input, signal, onUpdate) => {
-      const { path, offset, limit } = input;
-      if (typeof path !== "string") {
-        throw new Error("read requires path");
+      const path = normalizeReadLocation(input);
+      if (!path) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No file reference was supplied. Call read with path, or with a file:<path> target returned by a discovery tool.",
+            },
+          ],
+          details: { missing: true, suggestions: [] },
+        };
       }
+      const { offset, limit } = input;
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }
+      // Resolve semantic skill names before probing the sparse context
+      // filesystem. Extension-owned skills intentionally do not live at
+      // `skills/<name>`, so a filesystem-first lookup creates misleading
+      // materialization/ENOENT warnings even though the canonical skill is
+      // available through workspace.listSkills/readSkill.
+      const skillAlias = await resolveWorkspaceSkillAlias(path);
+      if (skillAlias) return skillAlias;
       const absolutePath = resolveReadPath(path, cwd);
-      // Directories are a common model mistake — answer with guidance
-      // instead of a raw EISDIR from the fs layer.
+      // A file-or-directory probe is a reasonable discovery action. Return a
+      // bounded listing here so callers do not need to recover from EISDIR and
+      // repeat the same request through another tool.
       try {
         const stats = await fs.stat(absolutePath);
         if (stats.isDirectory()) {
-          throw new Error(`Path is a directory, not a file: ${path} — use the ls tool to list it.`);
+          const entries = (await fs.readdir(absolutePath)).map(String).sort();
+          const shown = entries.slice(0, 200);
+          const rendered = await Promise.all(
+            shown.map(async (name) => {
+              try {
+                const child = await fs.stat(`${absolutePath.replace(/\/$/, "")}/${name}`);
+                return child.isDirectory() ? `${name}/` : name;
+              } catch {
+                return name;
+              }
+            })
+          );
+          const omitted = entries.length - shown.length;
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  rendered.join("\n") +
+                  (omitted > 0 ? `\n... ${omitted} more entries omitted` : ""),
+              },
+            ],
+            details: { path, engine: "runtime-fs", directory: true },
+          };
         }
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("is a directory, not a file")) throw err;
+      } catch {
         // stat failures fall through — the read below reports them naturally.
       }
       // §7.2: content NEVER moves onto the DO. Start provenance only after the
@@ -251,6 +369,7 @@ export function createReadTool(
           );
         } catch (err) {
           if (isFileToolsReadAbort(err)) throw err;
+          if (isMissingReadError(err)) return missingResult(path, absolutePath);
           if (!isFileToolsExtensionFallback(err) && !isFileToolsReadTimeout(err)) throw err;
           fileToolsFallbackReason = describeFileToolsFallback(err, fileToolsReadTimeoutMs);
           if (isFileToolsReadTimeout(err)) {
@@ -271,7 +390,7 @@ export function createReadTool(
         await fs.access(absolutePath, fs.constants.R_OK);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new Error(`File not found: ${path}`);
+          return missingResult(path, absolutePath);
         }
         throw err;
       }
@@ -287,7 +406,7 @@ export function createReadTool(
         raw = await fs.readFile(absolutePath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new Error(`File not found: ${path}`);
+          return missingResult(path, absolutePath);
         }
         throw err;
       }
@@ -326,6 +445,33 @@ export function createReadTool(
       );
     },
   };
+}
+
+function normalizeReadLocation(input: { path?: unknown; target?: unknown }): string | null {
+  const raw = typeof input.path === "string" ? input.path : input.target;
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  // Discovery and provenance tools return stable `file:<path>` references.
+  // Accept them directly so the agent does not have to manually translate a
+  // resource descriptor back into the read tool's path spelling.
+  return raw.replace(/^file:(?:\/\/)?/iu, "");
+}
+
+function isMissingReadError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : String(error);
+  return code === "ENOENT" || /\b(?:ENOENT|file not found|path not found|no such file)\b/i.test(message);
+}
+
+function similarityScore(candidate: string, wanted: string): number {
+  if (candidate === wanted) return 100;
+  let score = 0;
+  if (candidate.split(".").pop() === wanted.split(".").pop()) score += 10;
+  const max = Math.min(candidate.length, wanted.length);
+  for (let i = 0; i < max && candidate[i] === wanted[i]; i += 1) score += 2;
+  for (const token of wanted.split(/[^a-z0-9]+/u)) {
+    if (token && candidate.includes(token)) score += token.length;
+  }
+  return score;
 }
 
 async function callFileToolsRead(
@@ -450,7 +596,17 @@ function formatTextResult(
   const startLine = offset ? Math.max(0, offset - 1) : 0;
   const startLineDisplay = startLine + 1;
   if (startLine >= allLines.length) {
-    throw new Error(`Offset ${offset} is beyond end of file (${allLines.length} lines total)`);
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `[Offset ${offset} is beyond end of file (${allLines.length} lines total). ` +
+            `The last valid offset is ${allLines.length}.]`,
+        },
+      ],
+      details: { path: displayPath, engine: "runtime-fs", extensionFallback },
+    };
   }
   let selectedContent: string;
   let userLimitedLines: number | undefined;

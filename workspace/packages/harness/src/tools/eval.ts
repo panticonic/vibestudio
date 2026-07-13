@@ -9,15 +9,27 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 
 const evalCommonSchema = {
-  syntax: Type.Optional(
-    Type.Union([Type.Literal("typescript"), Type.Literal("jsx"), Type.Literal("tsx")], {
-      description: "Source syntax (default: tsx).",
+  reset: Type.Optional(
+    Type.Boolean({
+      description:
+        "Clear this agent/channel sandbox scope and user db atomically before executing this call. Use this for reset lifecycle work; do not call eval.reset or eval.forceReset from inside eval code.",
     })
+  ),
+  syntax: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal("javascript"),
+        Type.Literal("typescript"),
+        Type.Literal("jsx"),
+        Type.Literal("tsx"),
+      ],
+      { description: "Source syntax (default: tsx)." }
+    )
   ),
   imports: Type.Optional(
     Type.Record(Type.String(), Type.String(), {
       description:
-        'On-demand packages, e.g. { "lodash": "npm:^4.17.21" }. Workspace packages auto-resolve.',
+        'On-demand packages, e.g. { "lodash": "npm:^4.17.21" }. Workspace packages auto-resolve from the current context; omit them or use "workspace:*". Explicit workspace pins are "main", "ctx:<contextId>", or "state:<stateHash>".',
     })
   ),
 };
@@ -30,7 +42,18 @@ const evalSchema = Type.Union(
         code: Type.String({
           description: "TypeScript/JavaScript to execute in the sandbox.",
         }),
-        path: Type.Optional(Type.Never()),
+        path: Type.Optional(
+          Type.String({
+            description:
+              "Optional context-relative source file or directory hint for inline code; relative imports resolve from it.",
+          })
+        ),
+        sourcePath: Type.Optional(
+          Type.String({
+            description:
+              "Optional context-relative virtual filename for inline code; relative imports resolve from it.",
+          })
+        ),
       },
       { additionalProperties: false }
     ),
@@ -40,12 +63,16 @@ const evalSchema = Type.Union(
         path: Type.String({
           description: "Context-relative .ts/.tsx file to execute instead of inline code.",
         }),
+        sourcePath: Type.Optional(Type.Never()),
         code: Type.Optional(Type.Never()),
       },
       { additionalProperties: false }
     ),
   ],
-  { description: "Execute exactly one code string or context-relative path." }
+  {
+    description:
+      "Execute inline code or a context-relative file. Inline code may include a sourcePath/path hint for relative imports.",
+  }
 );
 
 export type EvalToolInput = Static<typeof evalSchema>;
@@ -56,6 +83,51 @@ export interface EvalRunResult {
   returnValue?: unknown;
   error?: string;
   scopeKeys?: string[];
+}
+
+export interface NormalizedEvalToolSource {
+  code?: string;
+  path?: string;
+  sourcePath?: string;
+}
+
+const EXECUTABLE_EVAL_PATH = /\.(?:[cm]js|[cm]ts|jsx|tsx)$/i;
+
+/** Shared by the immediate tool and AgentVessel's deferred eval gate. */
+export function normalizeEvalToolSource(params: {
+  code?: unknown;
+  path?: unknown;
+  sourcePath?: unknown;
+  syntax?: "javascript" | "typescript" | "jsx" | "tsx";
+}): NormalizedEvalToolSource {
+  const path = typeof params.path === "string" && params.path.trim() ? params.path.trim() : undefined;
+  const explicitSourcePath =
+    typeof params.sourcePath === "string" && params.sourcePath.trim()
+      ? params.sourcePath.trim()
+      : undefined;
+  if (params.code !== undefined && typeof params.code !== "string") {
+    throw new Error("eval code must be a string");
+  }
+  const code = typeof params.code === "string" ? params.code : undefined;
+  if (code === undefined && path === undefined) {
+    throw new Error("eval requires code or path");
+  }
+  // File-backed eval is also a useful loader for documents/data. Parsing a
+  // Markdown/JSON/YAML/text path as TS produces a noisy syntax failure and is
+  // never useful; load it through the same context-scoped runtime fs instead.
+  if (code === undefined && path !== undefined && !EXECUTABLE_EVAL_PATH.test(path)) {
+    return {
+      code: `return await fs.readFile(${JSON.stringify(path)}, "utf8");`,
+    };
+  }
+  return {
+    code,
+    path: code === undefined ? path : undefined,
+    sourcePath:
+      code !== undefined
+        ? explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined)
+        : undefined,
+  };
 }
 
 /**
@@ -92,20 +164,22 @@ export function createEvalTool(
     name: "eval",
     label: "eval",
     description:
-      "Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available; call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.",
+      "Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available. Set reset:true to clear scope/db atomically before this call; never call eval.reset or eval.forceReset from inside the running eval. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.",
     parameters: evalSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
-      if ((params.code === undefined) === (params.path === undefined)) {
-        throw new Error("eval requires exactly one of code or path");
-      }
+      // Some model transports materialize an optional string as "". Treat an
+      // empty path as omitted when inline code is present; it is never a valid
+      // context-relative file and should not turn an otherwise valid eval into
+      // a mutually-exclusive-arguments error.
+      const source = normalizeEvalToolSource(params);
       const result = await callMain<EvalRunResult>("eval.run", [
         {
           subKey: opts.subKey,
           // The agent's eval subKey IS its channelId — thread it through so the
           // service can give the sandbox a `chat` binding proxied to this agent.
           channelId: opts.subKey,
-          code: params.code,
-          path: params.path,
+          reset: params.reset,
+          ...source,
           syntax: params.syntax,
           imports: params.imports,
         },
@@ -114,6 +188,23 @@ export function createEvalTool(
       return formatEvalResult(result);
     },
   };
+}
+
+function inlineSourcePathFromHint(
+  hint: string,
+  syntax: "javascript" | "typescript" | "jsx" | "tsx" | undefined
+): string {
+  if (/\.[cm]?[jt]sx?$/iu.test(hint)) return hint;
+  const base = hint.replace(/\/+$/u, "");
+  const extension =
+    syntax === "javascript"
+      ? "js"
+      : syntax === "jsx"
+        ? "jsx"
+        : syntax === "typescript"
+          ? "ts"
+          : "tsx";
+  return `${base}/__inline_eval__.${extension}`;
 }
 
 // Catastrophe safety-net ONLY — a runaway eval that returns hundreds of KB

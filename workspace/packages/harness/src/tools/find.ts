@@ -27,9 +27,9 @@ import {
 import { globToRegex } from "./grep.js";
 
 const findSchema = Type.Object({
-  pattern: Type.String({
+  pattern: Type.Optional(Type.String({
     description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
-  }),
+  })),
   path: Type.Optional(Type.String({ description: "Directory to search in (default: current directory)" })),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
 });
@@ -40,6 +40,7 @@ export interface FindToolDetails {
   truncation?: TruncationResult;
   resultLimitReached?: number;
   engine?: "ripgrep" | "runtime-fs";
+  missingSearchPath?: string;
 }
 
 interface FindToolResult {
@@ -90,7 +91,10 @@ export function createFindTool(
     execute: async (_toolCallId, input, signal) => {
       const { pattern, path: searchDir, limit } = input;
       if (typeof pattern !== "string") {
-        throw new Error("find requires pattern");
+        return {
+          content: [{ type: "text", text: "No find pattern supplied. Pass a glob such as `*`, `**/*.ts`, or `src/**`." }],
+          details: undefined,
+        };
       }
       if (signal?.aborted) {
         throw new Error("Operation aborted");
@@ -100,7 +104,7 @@ export function createFindTool(
         try {
           return (await fileTools.find({ pattern, path: searchDir, cwd, limit })) as FindToolResult;
         } catch (err) {
-          if (!isFileToolsExtensionUnavailable(err)) throw err;
+          if (!isFileToolsExtensionFallback(err)) throw err;
         }
       }
 
@@ -111,7 +115,16 @@ export function createFindTool(
       try {
         await fs.stat(searchPath);
       } catch {
-        throw new Error(`Path not found: ${searchPath}`);
+        const displayPath = searchDir || ".";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No files found matching pattern (search path does not exist: ${displayPath})`,
+            },
+          ],
+          details: { engine: "runtime-fs", missingSearchPath: displayPath },
+        };
       }
 
       const regex = globToRegex(pattern);
@@ -200,7 +213,7 @@ export function createFindTool(
   };
 }
 
-function isFileToolsExtensionUnavailable(err: unknown): boolean {
+function isFileToolsExtensionFallback(err: unknown): boolean {
   const code = typeof err === "object" && err !== null
     ? (err as { code?: unknown }).code
     : undefined;
@@ -208,5 +221,5 @@ function isFileToolsExtensionUnavailable(err: unknown): boolean {
   // Both mean the extension can't serve this call, so fall back to runtime-fs.
   if (code === "ENOEXT" || code === "ENOTREADY") return true;
   const message = err instanceof Error ? err.message : String(err);
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running/.test(message);
+  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running|\b(?:ENOENT|path not found|no such file)\b/i.test(message);
 }

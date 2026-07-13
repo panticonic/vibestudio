@@ -15,6 +15,86 @@ describe("createReadTool", () => {
     expect(result.details.path).toBe("hello.txt");
   });
 
+  it("returns a bounded directory listing instead of failing the turn", async () => {
+    const fs = new StubFs({
+      files: {
+        [`${CWD}/skills/git/SKILL.md`]: "# Git",
+        [`${CWD}/skills/README.md`]: "skills",
+      },
+    });
+    const tool = createReadTool(CWD, fs);
+
+    const result = await tool.execute("call-1", { path: "skills", provenance: "none" });
+
+    expect(result.details).toMatchObject({
+      path: "skills",
+      engine: "runtime-fs",
+      directory: true,
+    });
+    expect((result.content[0] as { text: string }).text).toBe("README.md\ngit/");
+  });
+
+  it("returns a successful discovery diagnostic with nearby entries for a missing path", async () => {
+    const fs = new StubFs({
+      files: {
+        [`${CWD}/panel/index.ts`]: "export {};",
+        [`${CWD}/panel/package.json`]: "{}",
+      },
+    });
+    const tool = createReadTool(CWD, fs);
+
+    const result = await tool.execute("call-1", {
+      path: "panel/index.html",
+      provenance: "none",
+    });
+
+    expect(result.details).toMatchObject({
+      path: "panel/index.html",
+      missing: true,
+      suggestions: expect.arrayContaining(["index.ts", "package.json"]),
+    });
+    expect((result.content[0] as { text: string }).text).toContain("Use ls/find");
+  });
+
+  it("resolves a unique workspace skill name when its guessed skills/ path is absent", async () => {
+    const fs = new StubFs();
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        if (method === "extensions.invoke") {
+          const error = new Error("ENOENT: guessed skill path is absent") as Error & {
+            code: string;
+          };
+          error.code = "ENOENT";
+          throw error;
+        }
+        if (method === "workspace.listSkills") {
+          return [
+            {
+              name: "git-bridge",
+              dirPath: "extensions/git-bridge",
+              skillPath: "extensions/git-bridge/SKILL.md",
+            },
+          ];
+        }
+        if (method === "workspace.readSkill") return "# Git Bridge\n";
+        throw new Error(`Unexpected RPC ${method}`);
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const tool = createReadTool(CWD, fs, { rpc: rpc as never });
+
+    const result = await tool.execute("call-1", {
+      path: "skills/git-bridge/SKILL.md",
+      provenance: "none",
+    });
+
+    expect(result.content[0]).toMatchObject({ type: "text", text: "# Git Bridge\n" });
+    expect(result.details).toMatchObject({
+      path: "extensions/git-bridge/SKILL.md",
+      extensionFallback: "workspace-skill-alias:skills/git-bridge/SKILL.md",
+    });
+  });
+
   it("validates and executes serialized calls that omit provenance", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
     const tool = createReadTool(CWD, fs);
@@ -23,6 +103,17 @@ describe("createReadTool", () => {
     expect(Value.Check(tool.parameters, input)).toBe(true);
     const result = await tool.execute("call-1", input);
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
+  });
+
+  it("accepts file resource references returned by discovery tools", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
+    const tool = createReadTool(CWD, fs);
+    const input = { target: "file:hello.txt", kind: "file" as const };
+
+    expect(Value.Check(tool.parameters, input)).toBe(true);
+    const result = await tool.execute("call-1", input);
+    expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
+    expect(result.details.path).toBe("hello.txt");
   });
 
   it("respects offset and limit", async () => {
@@ -40,6 +131,22 @@ describe("createReadTool", () => {
     expect(text).toContain("line 3");
     expect(text).toContain("line 4");
     expect(text).not.toContain("line 5\n");
+  });
+
+  it("returns a successful bounded diagnostic when offset is past EOF", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/small.txt`]: "one\ntwo" } });
+    const tool = createReadTool(CWD, fs);
+
+    const result = await tool.execute("call-1", {
+      path: "small.txt",
+      provenance: "none",
+      offset: 615,
+    });
+
+    expect((result.content[0] as { text: string }).text).toContain(
+      "Offset 615 is beyond end of file (2 lines total)"
+    );
+    expect(result.details).toMatchObject({ path: "small.txt", engine: "runtime-fs" });
   });
 
   it("delegates text reads to the file extension when context rpc is available", async () => {
@@ -199,12 +306,12 @@ describe("createReadTool", () => {
     );
   });
 
-  it("throws when file is missing", async () => {
+  it("returns a non-poisoning discovery result when a file is missing", async () => {
     const fs = new StubFs();
     const tool = createReadTool(CWD, fs);
     await expect(
       tool.execute("call-1", { path: "missing.txt", provenance: "none" })
-    ).rejects.toThrow(/not found/i);
+    ).resolves.toMatchObject({ details: { missing: true, path: "missing.txt" } });
   });
 
   it("returns ImageContent when the image service extension detects an image type", async () => {
@@ -361,7 +468,7 @@ describe("createReadTool provenance attachment (§7.5)", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("does not record a provenance touch when the file read fails", async () => {
+  it("does not record a provenance touch for a missing-file discovery result", async () => {
     const fs = new StubFs();
     const calls: Array<Record<string, unknown>> = [];
     const tool = createReadTool(REPO_CWD, fs, {
@@ -370,7 +477,7 @@ describe("createReadTool provenance attachment (§7.5)", () => {
 
     await expect(
       tool.execute("i", { path: "packages/foo/missing.ts", provenance: "moderate" })
-    ).rejects.toThrow(/not found/i);
+    ).resolves.toMatchObject({ details: { missing: true } });
 
     expect(calls).toHaveLength(0);
   });

@@ -139,7 +139,18 @@ async function realpathWithin(root: string, input: string): Promise<string> {
 
 function resolveVirtualPath(cwd: string | undefined, input: string | undefined): string {
   const base = cwd && cwd.startsWith("/") ? cwd : `/${cwd ?? ""}`;
-  const requested = input ?? ".";
+  const rawRequested = input ?? ".";
+  // `workspace` and `/workspace` are conventional user/model names for the virtual
+  // workspace root. This extension operates inside a scoped context folder,
+  // so accepting the alias cannot expose a host path.
+  const requested =
+    rawRequested === "workspace" || rawRequested === "/workspace"
+      ? "/"
+      : rawRequested.startsWith("workspace/")
+        ? rawRequested.slice("workspace".length)
+        : rawRequested.startsWith("/workspace/")
+          ? rawRequested.slice("/workspace".length)
+          : rawRequested;
   const joined = requested.startsWith("/")
     ? path.posix.normalize(requested)
     : path.posix.normalize(path.posix.join(base, requested));
@@ -172,7 +183,8 @@ async function resolveSearchPath(
   let stat;
   try {
     stat = await fs.stat(searchPath);
-  } catch {
+  } catch (error) {
+    if (!isMissingSearchPathError(error)) throw error;
     const hint = /\s/.test(virtualPath.trim())
       ? " The `path` argument accepts one directory or file, not a space-separated list. Run separate grep calls for multiple roots, or search from `.` with a narrower `glob`."
       : "";
@@ -194,6 +206,24 @@ function formatRipgrepFailure(message: string, req: GrepRequest): string {
     "Invalid grep regex pattern.",
     "The grep tool searches literally by default; use literal search for code snippets, identifiers, function calls, paths, and punctuation.",
     "Retry without `literal: false` or pass `literal: true` unless you intentionally need a valid regex.",
+    `Pattern: ${JSON.stringify(req.pattern)}`,
+    `ripgrep: ${base}`,
+  ].join(" ");
+}
+
+function isMissingSearchPathError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : String(error);
+  return code === "ENOENT" || /\b(?:ENOENT|path not found|no such file)\b/i.test(message);
+}
+
+function formatFindFailure(message: string, req: FindRequest): string {
+  const trimmed = message.trim();
+  const base = trimmed || "ripgrep --files failed";
+  const looksLikeGlobParseError = /(?:error parsing glob|unclosed alternate group)/i.test(base);
+  if (!looksLikeGlobParseError) return base;
+  return [
+    "Invalid find glob pattern.",
     `Pattern: ${JSON.stringify(req.pattern)}`,
     `ripgrep: ${base}`,
   ].join(" ");
@@ -402,7 +432,10 @@ export async function activate(ctx: ExtensionContextLike) {
             return;
           }
           if (matchCount === 0) {
-            resolve({ content: [{ type: "text", text: "No matches found" }], details: undefined });
+            resolve({
+              content: [{ type: "text", text: "No matches found" }],
+              details: undefined,
+            });
             return;
           }
 
@@ -502,7 +535,11 @@ export async function activate(ctx: ExtensionContextLike) {
         child.on("close", (code) => {
           rl.close();
           if (!killedDueToLimit && code !== 0 && code !== 1) {
-            reject(new Error(stderr.trim() || `ripgrep --files exited with code ${code}`));
+            reject(
+              new Error(
+                formatFindFailure(stderr.trim() || `ripgrep --files exited with code ${code}`, raw)
+              )
+            );
             return;
           }
           if (matches.length === 0) {
@@ -613,7 +650,15 @@ export async function activate(ctx: ExtensionContextLike) {
       }
 
       if (lineNumber < startLine && outputLines.length === 0) {
-        throw new Error(`Offset ${startLine} is beyond end of file (${lineNumber} lines total)`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `[Offset ${startLine} is beyond end of file (${lineNumber} lines total). The last valid offset is ${lineNumber}.]`,
+            },
+          ],
+          details: { path: raw.path, size: stat.size, engine: "node-file" },
+        };
       }
 
       const truncated = truncatedBy !== null;

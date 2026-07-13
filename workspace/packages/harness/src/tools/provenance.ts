@@ -24,10 +24,10 @@ import { toVcsPath } from "./tool-vcs.js";
 import { renderProvenanceBlock } from "./provenance-format.js";
 
 const provenanceSchema = Type.Object({
-  target: Type.String({
+  target: Type.Optional(Type.String({
     description:
-      'What to trace: a file path ("packages/x/y.ts"), a claim ("claim#42"), a commit ("commit:9f2e"), or "session" for whole-session orientation. Use the handles the read attachment renders.',
-  }),
+      'What to trace (default: "session"): a file path ("packages/x/y.ts"), a claim ("claim#42"), a commit ("commit:9f2e"), or "session" for whole-session orientation. Use the handles the read attachment renders.',
+  })),
   after: Type.Optional(
     Type.String({
       description: "Paging cursor from a prior result's `nextCursor` — fetch the next page.",
@@ -94,9 +94,8 @@ export function createProvenanceTool(
       'Trace provenance by handle: pass a file path, "claim#<id>", "commit:<id>", or "session" (whole-session orientation — what to know before you act). Returns the ranked items with follow-on handles; page the tail with `after`.',
     parameters: provenanceSchema,
     execute: async (toolCallId, input) => {
-      const target = String(input.target ?? "").trim();
+      const target = String(input.target ?? "session").trim() || "session";
       const after = typeof input.after === "string" && input.after.length > 0 ? input.after : null;
-      if (!target) throw new Error("provenance requires a target");
 
       const render = (
         label: string,

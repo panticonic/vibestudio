@@ -29,6 +29,8 @@ export type LsToolInput = Static<typeof lsSchema>;
 export interface LsToolDetails {
   truncation?: TruncationResult;
   entryLimitReached?: number;
+  diagnostic?: "not-found" | "not-directory";
+  path?: string;
 }
 
 const DEFAULT_LIMIT = 500;
@@ -55,12 +57,32 @@ export function createLsTool(
         stat = await fs.stat(dirPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new Error(`Path not found: ${dirPath}`);
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Path not found: ${dirPath}\n` +
+                  "This is a recoverable lookup miss. Check the parent directory with ls or locate the path with find.",
+              },
+            ],
+            details: { diagnostic: "not-found", path: dirPath },
+          };
         }
         throw err;
       }
       if (!stat.isDirectory()) {
-        throw new Error(`Not a directory: ${dirPath}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Not a directory: ${dirPath}\n` +
+                "This is a recoverable path-kind mismatch. Use read for a file or ls on its parent directory.",
+            },
+          ],
+          details: { diagnostic: "not-directory", path: dirPath },
+        };
       }
 
       let entries: Dirent[];

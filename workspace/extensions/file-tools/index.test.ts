@@ -113,7 +113,53 @@ describe("@workspace-extensions/file-tools", () => {
     expect(text).toContain("script.ts:1:");
   });
 
-  it("gives actionable guidance for invalid regex grep patterns", async () => {
+  it("reports an invalid glob instead of rewriting the request", async () => {
+    const workspaceRoot = await makeTempRoot();
+    await fs.writeFile(path.join(workspaceRoot, "script.ts"), "const marker = 'glob-repair';\n");
+    const api = await activate({
+      workspace: {
+        getInfo: async () => ({
+          path: workspaceRoot,
+          contextsPath: path.join(workspaceRoot, ".contexts"),
+        }),
+      },
+      fs: { realpath: async () => workspaceRoot },
+      log: { info: vi.fn() },
+    });
+
+    await expect(
+      api.grep({
+        pattern: "glob-repair",
+        path: ".",
+        glob: "**/*.{ts,tsx,md",
+      })
+    ).rejects.toThrow(/invalid glob|error parsing glob|unclosed alternate group/i);
+  });
+
+  it("accepts relative workspace as the virtual-root alias", async () => {
+    const workspaceRoot = await makeTempRoot();
+    await fs.writeFile(path.join(workspaceRoot, "script.ts"), "const marker = 'root-alias';\n");
+    const api = await activate({
+      workspace: {
+        getInfo: async () => ({
+          path: workspaceRoot,
+          contextsPath: path.join(workspaceRoot, ".contexts"),
+        }),
+      },
+      fs: { realpath: async () => workspaceRoot },
+      log: { info: vi.fn() },
+    });
+
+    const result = (await api.grep({
+      pattern: "root-alias",
+      path: "workspace",
+    })) as TextToolResult;
+
+    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]!.text).toContain("script.ts:1:");
+  });
+
+  it("reports invalid requested regexes instead of changing their meaning", async () => {
     const workspaceRoot = await makeTempRoot();
     await fs.writeFile(path.join(workspaceRoot, "script.ts"), "openPanel('panels/chat');\n");
 
@@ -134,10 +180,10 @@ describe("@workspace-extensions/file-tools", () => {
         path: ".",
         literal: false,
       })
-    ).rejects.toThrow("Retry without `literal: false` or pass `literal: true`");
+    ).rejects.toThrow(/invalid grep regex pattern/i);
   });
 
-  it("explains that grep path is a single root when a space-separated path is missing", async () => {
+  it("rejects a missing grep path with an actionable diagnostic", async () => {
     const workspaceRoot = await makeTempRoot();
     const api = await activate({
       workspace: {
@@ -156,7 +202,7 @@ describe("@workspace-extensions/file-tools", () => {
         path: "packages workers panels",
         glob: "*diagnostic*",
       })
-    ).rejects.toThrow("not a space-separated list");
+    ).rejects.toThrow(/path not found.*not a space-separated list/i);
   });
 
   it("finds files with ripgrep file listing", async () => {
@@ -183,6 +229,27 @@ describe("@workspace-extensions/file-tools", () => {
 
     expect(result.content[0]).toEqual({ type: "text", text: "src/a.ts" });
     expect(result.details?.engine).toBe("ripgrep");
+  });
+
+  it("reports invalid find globs and missing search paths", async () => {
+    const workspaceRoot = await makeTempRoot();
+    const api = await activate({
+      workspace: {
+        getInfo: async () => ({
+          path: workspaceRoot,
+          contextsPath: path.join(workspaceRoot, ".contexts"),
+        }),
+      },
+      fs: { realpath: async () => workspaceRoot },
+      log: { info: vi.fn() },
+    });
+
+    await expect(api.find({ pattern: "**/*.{ts,tsx", path: "." })).rejects.toThrow(
+      /invalid find glob pattern/i
+    );
+    await expect(api.find({ pattern: "**/*.ts", path: "missing" })).rejects.toThrow(
+      /path not found/i
+    );
   });
 
   it("streams text reads with offset and limit", async () => {

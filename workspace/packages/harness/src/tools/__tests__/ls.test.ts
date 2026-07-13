@@ -30,15 +30,19 @@ describe("createLsTool", () => {
     expect((result.content[0] as { text: string }).text).toBe("(empty directory)");
   });
 
-  it("rejects when path doesn't exist", async () => {
+  it("returns a recoverable diagnostic when path doesn't exist", async () => {
     const fs = new StubFs();
     const tool = createLsTool(CWD, fs);
-    await expect(tool.execute("call-1", { path: "nope" })).rejects.toThrow(/not found/i);
+    const result = await tool.execute("call-1", { path: "nope" });
+    expect((result.content[0] as { text: string }).text).toMatch(/recoverable lookup miss/i);
+    expect(result.details).toEqual({ diagnostic: "not-found", path: `${CWD}/nope` });
   });
 
-  it("rejects when path is a file, not a directory", async () => {
+  it("returns a recoverable diagnostic when path is a file, not a directory", async () => {
     const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "x" } });
     const tool = createLsTool(CWD, fs);
-    await expect(tool.execute("call-1", { path: "a.ts" })).rejects.toThrow(/Not a directory/);
+    const result = await tool.execute("call-1", { path: "a.ts" });
+    expect((result.content[0] as { text: string }).text).toMatch(/use read for a file/i);
+    expect(result.details).toEqual({ diagnostic: "not-directory", path: `${CWD}/a.ts` });
   });
 });

@@ -19,8 +19,10 @@ export interface FileStats {
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
   size: number;
-  mtime: string;
-  ctime: string;
+  mtime: Date;
+  ctime: Date;
+  mtimeMs: number;
+  ctimeMs: number;
   mode: number;
 }
 
@@ -67,4 +69,5 @@ export interface RuntimeFs {
   access(path: string, mode?: number): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   realpath?(path: string): Promise<string>;
+  symlink?(target: string, path: string, type?: "file" | "dir" | "junction"): Promise<void>;
 }

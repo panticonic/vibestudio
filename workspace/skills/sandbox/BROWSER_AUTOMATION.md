@@ -49,6 +49,14 @@ Reuse the same `page` for subsequent interactions — do not call `openPanel()` 
 create duplicate panels; repeated CDP client calls create duplicate CDP
 connections.
 
+When a task specifically requires a child panel from a genuinely headless
+session, `getParent()` is null because there is no initial UI node. The tree is
+still available: create an owned root with
+`openPanel("about/new", { parentId: null })`, then open the target with
+`{ parentId: root.id }`. See `EVAL.md#eval-perspective` for the complete cleanup
+pattern. Do not test for an owner with the truthiness of the compatibility
+`parent` handle.
+
 ## Existing Panels
 
 Use `panelTree` for already-open panels; do not reopen duplicates. Only drive
