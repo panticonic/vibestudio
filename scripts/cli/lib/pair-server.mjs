@@ -85,6 +85,7 @@ function parsePort(value, label) {
 }
 
 export function parsePairArgs(argv, config) {
+  const signalEnv = signalEnvFor(config);
   const options = {
     port: parsePort(
       firstDefined(config.portEnv.map((key) => process.env[key])) ?? "3030",
@@ -118,12 +119,13 @@ export function parsePairArgs(argv, config) {
       throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
       options.appRoot = argv[++i] ?? "";
-    } else if (arg === "--signal-url") {
+    } else if (arg === "--ready-file") {
+      const readyFile = argv[++i] ?? "";
+      if (!readyFile) throw new Error("--ready-file requires a path");
+      options.readyFile = path.resolve(readyFile);
+    } else if (arg === "--signal-url" || arg === "--signaling-url") {
       options.signalUrl = argv[++i] ?? "";
       options.signalSource = "flag";
-    } else if (arg === "--ready-file") {
-      options.readyFile = argv[++i] ?? "";
-      if (!options.readyFile) throw new Error("--ready-file requires a path");
     } else if (arg === "--dev") {
       options.dev = true;
     } else if (arg === "--auto-approve") {
@@ -143,7 +145,7 @@ export function parsePairArgs(argv, config) {
     if (options.autoApprove && !options.dev) {
       throw new Error("--auto-approve is development-only; pass --dev as well");
     }
-    const resolved = resolveSignalingEndpoint(options.signalUrl);
+    const resolved = resolveSignalingEndpoint(options.signalUrl, signalEnv, config);
     options.signalUrl = resolved.url;
     options.signalSource = resolved.source;
   }
@@ -166,8 +168,8 @@ Options:
       Stable gateway port for the loopback server. Defaults through ${config.portEnv.join(", ")} or 3030.
   --app-root <path>
       Application root passed to the server.
-  --signal-url <url>
-      WebRTC signaling endpoint. Resolution: flag > ${SIGNAL_ENV[0]} > hosted default.
+  --signal-url, --signaling-url <url>
+      WebRTC signaling endpoint. Resolution: flag > ${signalEnvFor(config).join(", ")} > config > hosted default.
       Use wss:// or https:// for remote endpoints; ws:// and http:// are only
       accepted for loopback development.
   --ready-file <path>
@@ -530,6 +532,8 @@ function buildServerArgs(options, config = {}) {
     serverEntryArg(),
     "--host",
     LOOPBACK_HOST,
+    "--bind-host",
+    LOOPBACK_HOST,
     "--gateway-port",
     String(options.port),
     "--serve-panels",
@@ -556,10 +560,17 @@ function firstDefined(values) {
   return values.find((value) => value !== undefined && value !== "");
 }
 
-function resolveSignalingEndpoint(raw) {
+function signalEnvFor(config) {
+  return Array.isArray(config.signalEnv) && config.signalEnv.length > 0
+    ? config.signalEnv
+    : SIGNAL_ENV;
+}
+
+function resolveSignalingEndpoint(raw, signalEnv, config) {
   return resolveSignalingUrl({
     flag: raw,
     env: process.env,
-    envKeys: SIGNAL_ENV,
+    envKeys: signalEnv,
+    configUrl: typeof config.signalingUrl === "string" ? config.signalingUrl : undefined,
   });
 }

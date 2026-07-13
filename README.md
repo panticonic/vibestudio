@@ -92,6 +92,10 @@ See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
 [workspace/skills/remote-access/SKILL.md](workspace/skills/remote-access/SKILL.md)
 for the operational runbook.
 
+The real-client smoke tests use that deployed route, the normal `remote serve`
+hub, and a workspace-scoped `remote invite` by default. Use
+`pnpm smoke:full -- --local-signaling` only for an offline Miniflare/coturn run.
+
 ### Develop (contributors)
 
 ```bash

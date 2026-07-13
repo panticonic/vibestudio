@@ -39,7 +39,6 @@ describe("BuildSystemV2 startup", () => {
   let root: string;
   let workspaceRoot: string;
   let buildSystem: BuildSystemV2 | null;
-  let releaseBuild: (() => void) | null;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -48,18 +47,16 @@ describe("BuildSystemV2 startup", () => {
     const { setUserDataPath } = await import("@vibestudio/env-paths");
     setUserDataPath(path.join(root, "state"));
     buildSystem = null;
-    releaseBuild = null;
   });
 
   afterEach(async () => {
-    releaseBuild?.();
     await buildSystem?.shutdown();
     vi.doUnmock("./builder.js");
     vi.resetModules();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("does not await missing non-app initial builds", async () => {
+  it("does not speculatively build missing non-app units at startup", async () => {
     const panelDir = path.join(workspaceRoot, "panels", "slow-panel");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
@@ -71,34 +68,21 @@ describe("BuildSystemV2 startup", () => {
       })
     );
 
-    const pendingBuild = new Promise<unknown>((resolve) => {
-      releaseBuild = () => resolve({});
-    });
     vi.doMock("./builder.js", async () => {
       const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
       return {
         ...actual,
-        buildUnit: vi.fn(() => pendingBuild),
+        buildUnit: vi.fn(),
       };
     });
 
     const { initBuildSystemV2 } = await import("./index.js");
     const { buildUnit } = await import("./builder.js");
-    const init = initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), []);
-
-    await expect(
-      Promise.race([
-        init.then(() => "resolved"),
-        new Promise((resolve) => setTimeout(() => resolve("timeout"), 50)),
-      ])
-    ).resolves.toBe("resolved");
-    buildSystem = await init;
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), []);
     expect(vi.mocked(buildUnit)).not.toHaveBeenCalled();
 
     await new Promise((resolve) => setImmediate(resolve));
-    expect(vi.mocked(buildUnit)).toHaveBeenCalledTimes(1);
-    releaseBuild?.();
-    releaseBuild = null;
+    expect(vi.mocked(buildUnit)).not.toHaveBeenCalled();
   });
 
   it("uses the explicit dependency workspace root for root-dependency fingerprints", async () => {

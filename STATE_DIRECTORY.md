@@ -14,6 +14,21 @@ These paths are determined by `getUserDataPath()` from `@vibestudio/env-paths`.
 
 ## Contents
 
+### `build-cache/`
+
+Complete immutable build results shared by managed workspaces and addressed by
+the normal Build V2 key. Artifact files are hardlinks into `cas/`; the small
+manifest and metadata files make a cached result immediately activatable in a
+new workspace without rebuilding it.
+
+### `cas/`
+
+Global physical SHA-256 content store shared by all managed workspaces. Workspace
+blob namespaces and build artifact files hardlink into this store, so identical
+bytes occupy one inode even when several workspaces reference them. The CAS is
+not itself an authorization namespace: services continue to check the
+workspace-local reference before serving a digest.
+
 ### `builds/`
 
 Content-addressed build store. Each build is stored immutably at `{userData}/builds/{build_key}/`:
@@ -29,6 +44,10 @@ Content-addressed build store. Each build is stored immutably at `{userData}/bui
 ```
 
 The build key is a hash of `BUILD_CACHE_VERSION + unitName + effectiveVersion + rootDepsFingerprint + sourcemap`. No LRU or TTL — garbage collection prunes entries not referenced by any active unit.
+
+Build metadata and manifests remain per-workspace, while immutable artifact
+payloads are hardlinks into the global `cas/`. This preserves workspace-specific
+provenance (`sourceStateHash`, `builtAt`) without duplicating bundle bytes.
 
 **When to clear**:
 
@@ -48,15 +67,16 @@ blobs/
 ```
 
 Each object filename is the remaining 60 hex chars of its sha256 digest. The
-two-level fanout keeps any single directory bounded. The algorithm name is
-embedded in the path so additional digests can be added later without
-migrating existing objects.
+two-level fanout keeps any single directory bounded. These paths are logical
+workspace-membership references hardlinked into the global `cas/`; a workspace
+cannot read another workspace's blob merely by knowing its digest.
 
-Writes go via `PUT /_r/s/blobstore/blob` (streaming, atomic-link to the final
-path with EEXIST treated as a dedup hit); reads via `GET /_r/s/blobstore/blob/<digest>`.
-There is no automatic GC — the layer above (e.g. the workspace's
-git-replacement system) is responsible for tracking reachability and calling
-`blobstore.delete(digest)`. See
+Writes go via `PUT /_r/s/blobstore/blob` (streaming, atomic-link into the global
+CAS and then into the workspace namespace, with EEXIST treated as a dedup hit);
+reads via `GET /_r/s/blobstore/blob/<digest>`. Deletion removes the workspace
+reference, never another workspace's reference. The layer above (e.g. the
+workspace's git-replacement system) remains responsible for tracking workspace
+reachability and calling `blobstore.delete(digest)`. See
 [`docs/architecture/storage.md`](docs/architecture/storage.md#blobstore-content-addressable-objects).
 
 ### `external-deps/`

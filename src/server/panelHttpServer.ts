@@ -295,6 +295,15 @@ export class PanelHttpServer {
     return this.servingCache.get(this.buildCacheKey(source, ref))?.revision;
   }
 
+  /**
+   * Begin resolving a panel runtime image when its entity becomes active.
+   * The supplied factory is lazy so duplicate entity activations and HTTP
+   * requests share one build flight without even asking BuildV2 twice.
+   */
+  primeBuild(source: string, ref: string | undefined, getBuild: () => Promise<BuildResult>): void {
+    void this.ensureBuild(source, ref, getBuild);
+  }
+
   async stop(): Promise<void> {
     if (this.wss) {
       this.wss.close();
@@ -374,17 +383,7 @@ export class PanelHttpServer {
       // Only an explicit ref selects a non-main build.
       const ref = url.searchParams.get("ref") || this.refFromReferer(req) || undefined;
       this.logPanelResourceRequest(req, res, parsed.source, parsed.resource, routeLabel);
-      const isHtmlRequest = parsed.resource === "/" || parsed.resource === "/index.html";
-      if (isHtmlRequest) {
-        await this.resolveAndServeBuild(res, parsed.source, routeLabel, true, ref);
-      } else {
-        const build = this.servingCache.get(this.buildCacheKey(parsed.source, ref));
-        if (build) {
-          this.servePanelResource(res, build, parsed.resource);
-        } else {
-          await this.resolveAndServeBuild(res, parsed.source, routeLabel, false, ref);
-        }
-      }
+      await this.resolveAndServeBuild(res, parsed.source, routeLabel, parsed.resource, ref);
       return;
     }
 
@@ -431,76 +430,80 @@ export class PanelHttpServer {
    * for builds. This method always goes through it to ensure freshness, then
    * updates servingCache so sub-resource requests are served fast.
    *
-   * @param waitForResult - If true, waits briefly for getBuild to resolve
-   *   (used for HTML requests where a fast cached build is likely).
-   *   If false, immediately shows the building page (used for sub-resource fallback).
+   * Entity activation normally starts this build before the browser navigates.
+   * A direct HTTP request remains a valid fallback and starts the same
+   * deduplicated flight. The response waits for the requested artifact rather
+   * than returning an HTML `202` placeholder for an asset request.
    */
   private async resolveAndServeBuild(
     res: import("http").ServerResponse,
     source: string,
     panelLabel: string,
-    waitForResult = true,
+    resource: string,
     ref?: string
   ): Promise<void> {
     const flightKey = this.buildCacheKey(source, ref);
 
-    // Start build if not already in flight (dedup concurrent requests).
-    // Always start a fresh getBuild — errors from previous attempts are
-    // cleared when the new build completes or fails again.
-    if (!this.buildInFlight.has(flightKey)) {
-      if (!this.callbacks?.getBuild) {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Panel build service unavailable");
-        return;
-      }
-      const promise = this.callbacks
-        .getBuild(source, ref)
-        .then((result) => {
-          this.storeBuild(source, result, ref);
-          this.buildErrors.delete(flightKey);
-          this.buildInFlight.delete(flightKey);
-        })
-        .catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.info(`Build failed for ${flightKey}: ${msg}`);
-          this.buildErrors.set(flightKey, msg);
-          this.buildInFlight.delete(flightKey);
-          this.callbacks?.onBuildComplete?.(source, msg);
-        });
-      this.buildInFlight.set(flightKey, promise);
-    }
-
-    if (!waitForResult) {
-      this.serveBuildingPage(res, panelLabel);
+    const cached = this.servingCache.get(flightKey);
+    if (cached) {
+      this.servePanelResource(res, cached, resource);
       return;
     }
 
-    // Hold the HTML request open while the build runs (up to a budget) rather
-    // than racing a short timer: the building placeholder costs a 2s
-    // meta-refresh poll cycle, so serving it for a build that finishes at
-    // 501ms used to add ~2.5s to the edit-reload loop. Cached builds resolve
-    // in milliseconds either way.
-    const BUILD_WAIT_BUDGET_MS = 3_000;
-    const resolved = await Promise.race([
-      assertPresent(this.buildInFlight.get(flightKey)).then(() => true),
-      new Promise<false>((r) => setTimeout(() => r(false), BUILD_WAIT_BUDGET_MS)),
-    ]);
-
-    if (resolved) {
-      const build = this.servingCache.get(flightKey);
-      if (build) {
-        this.servePanelResource(res, build, "/");
-      } else {
-        const error = this.buildErrors.get(flightKey);
-        if (error) {
-          this.serveBuildErrorPage(res, source, error);
-        } else {
-          this.serveBuildingPage(res, panelLabel);
-        }
-      }
-    } else {
-      this.serveBuildingPage(res, panelLabel);
+    const flight = this.ensureBuild(source, ref);
+    if (!flight) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Panel build service unavailable");
+      return;
     }
+    await flight;
+
+    const build = this.servingCache.get(flightKey);
+    if (build) {
+      this.servePanelResource(res, build, resource);
+      return;
+    }
+
+    const error = this.buildErrors.get(flightKey);
+    if (error && (resource === "/" || resource === "/index.html")) {
+      this.serveBuildErrorPage(res, source, error);
+      return;
+    }
+    res.writeHead(error ? 500 : 404, { "Content-Type": "text/plain" });
+    res.end(error ?? `Panel artifact not found: ${panelLabel}${resource}`);
+  }
+
+  private ensureBuild(
+    source: string,
+    ref?: string,
+    getBuild?: () => Promise<BuildResult>
+  ): Promise<void> | null {
+    const flightKey = this.buildCacheKey(source, ref);
+    if (this.servingCache.has(flightKey)) return Promise.resolve();
+    const existing = this.buildInFlight.get(flightKey);
+    if (existing) return existing;
+
+    const defaultGetBuild = this.callbacks?.getBuild;
+    const factory = getBuild ?? (defaultGetBuild ? () => defaultGetBuild(source, ref) : null);
+    if (!factory) return null;
+
+    const promise = Promise.resolve()
+      .then(factory)
+      .then((result) => {
+        this.storeBuild(source, result, ref);
+        this.buildErrors.delete(flightKey);
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.info(`Build failed for ${flightKey}: ${msg}`);
+        this.buildErrors.set(flightKey, msg);
+        this.callbacks?.onBuildComplete?.(source, msg);
+      })
+      .finally(() => {
+        this.buildInFlight.delete(flightKey);
+      });
+    this.buildInFlight.set(flightKey, promise);
+    return promise;
   }
 
   private buildCacheKey(source: string, ref?: string): string {
@@ -565,14 +568,37 @@ export class PanelHttpServer {
   <title>Building — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
-    h1 { color: #f8fafc; font-size: 1.5rem; }
-    p { color: #9ca3af; line-height: 1.6; }
-    code { color: #facc15; }
-    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
-    .spinner { width: 24px; height: 24px; border: 3px solid #303a4f; border-top: 3px solid #f59e0b;
+    :root {
+      color-scheme: light dark;
+      --page-bg: radial-gradient(circle at top, #fffbeb 0%, #f8fafc 58%);
+      --heading: #111827;
+      --muted: #64748b;
+      --accent: #b45309;
+      --spinner-track: #e2e8f0;
+      --mark-filter: brightness(0) saturate(100%);
+      --mark-shadow: drop-shadow(0 18px 24px rgba(15, 23, 42, 0.12));
+    }
+    html { min-height: 100%; background: var(--page-bg); }
+    body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
+    h1 { color: var(--heading); font-size: 1.5rem; }
+    p { color: var(--muted); line-height: 1.6; }
+    code { color: var(--accent); }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; filter: var(--mark-filter); }
+    .spinner { width: 24px; height: 24px; border: 3px solid var(--spinner-track); border-top-color: #f59e0b;
                border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1rem auto; }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page-bg: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%);
+        --heading: #f8fafc;
+        --muted: #9ca3af;
+        --accent: #facc15;
+        --spinner-track: #303a4f;
+        --mark-filter: none;
+        --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
+      }
+    }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
   <meta http-equiv="refresh" content="2">
@@ -605,14 +631,40 @@ export class PanelHttpServer {
   <title>Build Error — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
-    h1 { color: #f8fafc; font-size: 1.5rem; }
-    p { color: #9ca3af; line-height: 1.6; }
-    code { color: #facc15; }
-    pre { background: #101318; border: 1px solid #303a4f; padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: #fecaca; }
-    a { color: #f59e0b; }
-    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    :root {
+      color-scheme: light dark;
+      --page-bg: radial-gradient(circle at top, #fff7ed 0%, #f8fafc 58%);
+      --heading: #111827;
+      --muted: #64748b;
+      --accent: #b45309;
+      --error-bg: #fff1f2;
+      --error-border: #fecdd3;
+      --error-text: #b91c1c;
+      --mark-filter: brightness(0) saturate(100%);
+      --mark-shadow: drop-shadow(0 18px 24px rgba(15, 23, 42, 0.12));
+    }
+    html { min-height: 100%; background: var(--page-bg); }
+    body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
+    h1 { color: var(--heading); font-size: 1.5rem; }
+    p { color: var(--muted); line-height: 1.6; }
+    code { color: var(--accent); }
+    pre { background: var(--error-bg); border: 1px solid var(--error-border); padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: var(--error-text); }
+    a { color: var(--accent); }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; filter: var(--mark-filter); }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page-bg: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%);
+        --heading: #f8fafc;
+        --muted: #9ca3af;
+        --accent: #f59e0b;
+        --error-bg: #101318;
+        --error-border: #303a4f;
+        --error-text: #fecaca;
+        --mark-filter: none;
+        --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
+      }
+    }
   </style>
 </head>
 <body>

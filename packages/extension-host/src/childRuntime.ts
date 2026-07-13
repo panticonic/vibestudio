@@ -449,22 +449,22 @@ function createContext() {
     subscriptions: [] as Array<{ dispose(): void }>,
     log: {
       debug: (message: string, fields?: Record<string, unknown>) => {
-        void rpcCall("extensions.log", ["debug", message, fields]).catch((err) => {
+        void writeExtensionLog("debug", message, fields).catch((err) => {
           console.error("[ExtensionRuntime] Failed to write debug log:", err);
         });
       },
       info: (message: string, fields?: Record<string, unknown>) => {
-        void rpcCall("extensions.log", ["info", message, fields]).catch((err) => {
+        void writeExtensionLog("info", message, fields).catch((err) => {
           console.error("[ExtensionRuntime] Failed to write info log:", err);
         });
       },
       warn: (message: string, fields?: Record<string, unknown>) => {
-        void rpcCall("extensions.log", ["warn", message, fields]).catch((err) => {
+        void writeExtensionLog("warn", message, fields).catch((err) => {
           console.error("[ExtensionRuntime] Failed to write warn log:", err);
         });
       },
       error: (message: string, fields?: Record<string, unknown>) => {
-        void rpcCall("extensions.log", ["error", message, fields]).catch((err) => {
+        void writeExtensionLog("error", message, fields).catch((err) => {
           console.error("[ExtensionRuntime] Failed to write error log:", err);
         });
       },
@@ -654,6 +654,17 @@ function streamChunkFromBytes(bytes: Uint8Array): StreamChunkEnvelope {
     done: false,
     chunk: { __bin: true, data: Buffer.from(bytes).toString("base64") },
   };
+}
+
+function writeExtensionLog(
+  level: "debug" | "info" | "warn" | "error",
+  message: string,
+  fields?: Record<string, unknown>
+): Promise<unknown> {
+  return rpcCall(
+    "extensions.log",
+    fields === undefined ? [level, message] : [level, message, fields]
+  );
 }
 
 async function readNextResponseBodyChunk(id: string): Promise<StreamChunkEnvelope> {

@@ -2100,7 +2100,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * workspace-relative so recall returns globally-addressable paths regardless
    * of which repo owns the file.
    */
-  enableMemoryIndexing(): void {
+  enableMemoryIndexing(opts: { startupBarrier?: Promise<void> } = {}): void {
+    if (opts.startupBarrier) {
+      this.memoryIndexQueue = this.memoryIndexQueue
+        .then(() => opts.startupBarrier)
+        .catch((error) => console.warn("[VcsMemory] startup barrier failed:", error));
+    }
     this.onStateAdvanced((event) => {
       if (event.head !== VCS_MAIN_HEAD) return;
       this.memoryIndexQueue = this.memoryIndexQueue

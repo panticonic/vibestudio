@@ -176,40 +176,49 @@ export class MobileAssetMemoryCache {
       const response = await fetcher();
       if (!response.cacheable || !response.body) {
         settle(null);
+        this.inflight.delete(urlPath);
         return { kind: "passthrough", response };
       }
       const [cacheBody, passthroughBody] = response.body.tee();
-      let body: Uint8Array;
-      try {
-        body = await streamToUint8Array(cacheBody, this.maxBytes);
-      } catch (err) {
-        if (err instanceof MobileCachePopulationTooLargeError) {
-          settle(null);
-          return {
-            kind: "passthrough",
-            response: { ...response, cacheable: false, body: passthroughBody },
+      // First-use latency matters more than waiting for the cache write: stream
+      // one tee branch to the WebView immediately while the other fills the LRU.
+      // The old path awaited the complete remote download and only then wrote
+      // the buffered body to the loopback socket, serializing two multi-MB hops
+      // before an ES-module chunk could execute.
+      void (async () => {
+        try {
+          const body = await streamToUint8Array(cacheBody, this.maxBytes);
+          const asset: MobileCachedAsset = {
+            status: response.status,
+            statusText: response.statusText,
+            gzip: response.gzip,
+            contentType: response.contentType,
+            replayHeaders: response.replayHeaders,
+            body,
           };
+          this.store(urlPath, asset);
+          settle(asset);
+        } catch (err) {
+          // Cache population is an optimization. An oversized or failed cache
+          // branch must not fail the independent passthrough response.
+          settle(null);
+          if (!(err instanceof MobileCachePopulationTooLargeError)) {
+            console.warn(
+              `[panel-facade] failed to cache immutable asset ${urlPath}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        } finally {
+          this.inflight.delete(urlPath);
         }
-        void passthroughBody.cancel(err).catch(() => {});
-        throw err;
-      }
-      void passthroughBody.cancel().catch(() => {});
-      const asset: MobileCachedAsset = {
-        status: response.status,
-        statusText: response.statusText,
-        gzip: response.gzip,
-        contentType: response.contentType,
-        replayHeaders: response.replayHeaders,
-        body,
+      })();
+      return {
+        kind: "passthrough",
+        response: { ...response, body: passthroughBody },
       };
-      this.store(urlPath, asset);
-      settle(asset);
-      return { kind: "asset", asset };
     } catch (err) {
       settle(null);
-      throw err;
-    } finally {
       this.inflight.delete(urlPath);
+      throw err;
     }
   }
 

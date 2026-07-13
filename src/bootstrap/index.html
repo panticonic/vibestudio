@@ -405,72 +405,141 @@
       @media (prefers-color-scheme: light) {
         :root {
           color-scheme: light;
-          background: #f5f7f8;
-          color: #182026;
+          background: #f1f3f5;
+          color: #17202a;
         }
         body {
-          background: linear-gradient(180deg, #fbfcfc 0%, #eef2f3 100%);
+          background: linear-gradient(180deg, #f8fafb 0%, #eef1f4 100%);
         }
         .bootstrap-titlebar {
-          border-bottom-color: rgb(15 35 45 / 10%);
-          background: rgb(247 249 250 / 88%);
-          color: #68777f;
+          border-bottom-color: rgb(15 23 42 / 10%);
+          background: rgb(240 242 245 / 88%);
+          color: #687681;
         }
         p,
-        label,
         .meta,
-        .empty,
-        .unit-review-hint,
-        .launch-phase {
-          color: #5c6b73;
+        .empty {
+          color: #64727d;
+        }
+        .launch-mark {
+          filter: drop-shadow(0 8px 16px rgb(15 23 42 / 12%));
+        }
+        .launch-mark img {
+          filter: brightness(0) saturate(100%);
+        }
+        .eyebrow,
+        .status,
+        .unit-kind {
+          color: #0f766e;
         }
         .launch-card,
         .connection-option,
         .connection-form,
-        .workspace-row,
-        .approval,
-        .unit-review {
-          border-color: #d4dde1;
+        .approval {
+          border-color: #d7dde3;
           background: #ffffff;
-          box-shadow: 0 14px 34px rgb(31 54 65 / 9%);
+          box-shadow: 0 12px 32px rgb(15 23 42 / 10%);
         }
-        input,
-        button {
-          border-color: #b8c5cb;
+        .connection-error {
+          border-color: #fecaca;
+          background: #fff1f2;
+          color: #b4232d;
+        }
+        label {
+          color: #475569;
+        }
+        input {
+          border-color: #c8d0d9;
           background: #ffffff;
-          color: #182026;
+          color: #17202a;
         }
         input:focus {
-          border-color: #3e897d;
-          box-shadow: 0 0 0 3px rgb(62 137 125 / 14%);
+          border-color: #0d9488;
+          box-shadow: 0 0 0 3px rgb(13 148 136 / 14%);
+        }
+        .workspace-row,
+        .unit-review {
+          border-color: #d7dde3;
+          background: #f7f9fa;
+        }
+        .unit-summary {
+          border-color: #d7dde3;
+          background: #f7f9fa;
+        }
+        .unit-summary-total {
+          color: #17202a;
+        }
+        .unit-chip {
+          border-color: #99e5d8;
+          background: #dff8f3;
+          color: #115e59;
+        }
+        .unit-review[open] > summary {
+          border-bottom-color: #d7dde3;
         }
         .workspace-list,
         .unit-list,
         .unit-review > summary {
-          border-color: #dbe3e6;
+          border-color: #d7dde3;
           background: #f7f9fa;
         }
-        .connection-error {
-          border-color: #dbaaaa;
-          background: #fff0f0;
-          color: #842828;
+        .unit-review-hint,
+        .unit-meta,
+        .unit-capabilities {
+          color: #64727d;
+        }
+        .unit-list li {
+          border-color: #d7dde3;
+          background: #ffffff;
+        }
+        button {
+          border-color: #c8d0d9;
+          background: #f7f9fa;
+          color: #26323d;
+        }
+        button.primary {
+          border-color: #5fc8b7;
+          background: #79d8c8;
+          color: #09201c;
+        }
+        button.danger {
+          border-color: #fecaca;
+          background: #fff1f2;
+          color: #b4232d;
+        }
+        .empty-message {
+          color: #334155;
         }
         .log-path {
-          border-color: #d4dde1;
-          background: #eef2f3;
-          color: #46565e;
+          border-color: #d7dde3;
+          background: #eef1f4;
+          color: #475569;
         }
-        .unit-chip {
-          border-color: #b9d8d2;
-          background: #e9f5f2;
-          color: #28675d;
+        .launch-phase {
+          color: #71808b;
+        }
+        .launch-phase-dot {
+          background: #aab4bd;
+        }
+        .launch-phase.complete {
+          color: #0f766e;
+        }
+        .launch-phase.complete .launch-phase-dot {
+          background: #2ba693;
         }
         .launch-phase.active {
-          color: #182026;
+          color: #17202a;
+        }
+        .launch-phase.active .launch-phase-dot {
+          background: #d89b22;
         }
         .launch-phase.blocked,
         .launch-phase.failed {
-          color: #9b3232;
+          color: #b4232d;
+        }
+        .launch-phase.blocked .launch-phase-dot,
+        .launch-phase.failed .launch-phase-dot {
+          background: #d04d58;
         }
       }
       @media (max-width: 760px) {

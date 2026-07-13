@@ -72,7 +72,10 @@ pnpm smoke:full
 
 `pnpm smoke:full` is the composition ladder: build, desktop WebRTC pairing,
 desktop e2e, and Android emulator pairing. Run the narrower desktop pairing and
-mobile smoke commands when iterating on one side of the system.
+mobile smoke commands when iterating on one side of the system. The real-client
+pairing phases use `signal.vibestudio.app`, the normal `remote serve` hub, and a
+workspace-scoped `remote invite` by default; pass `--local-signaling` for an
+offline Miniflare/coturn run.
 
 ## Documentation And Skills
 

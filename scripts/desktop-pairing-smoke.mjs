@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// End-to-end desktop pairing smoke over WebRTC. Spawns the signaling worker
-// (`wrangler dev apps/signaling`), starts a disposable server as a WebRTC
-// answerer, reads its strict ready-file handoff, then launches
+// End-to-end desktop pairing smoke over WebRTC. Uses the deployed hosted
+// signaling service by default, starts the normal `vibestudio remote serve` hub,
+// mints a workspace invite through `remote invite`, then launches
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
@@ -23,10 +23,16 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
-import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
-import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import {
+  DEFAULT_SIGNAL_URL,
+  createConnectDeepLink,
+  parseConnectLink,
+  parseSignalingEndpoint,
+} from "./cli/lib/connect-utils.mjs";
+import { createRemoteServeArgs, mintRemoteInvite } from "./cli/lib/smoke-remote-server.mjs";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
@@ -60,24 +66,39 @@ function parseArgs(argv) {
     timeoutMs: 420_000,
     launchTimeoutMs: 180_000,
     readyFile: defaultReadyFile,
+    localSignaling: false,
+    signalUrl: null,
     help: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
-      throw new Error("Forwarding raw server flags is no longer supported");
+      continue;
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = parsePositiveInt(argv[++i], "--timeout-ms");
     } else if (arg === "--launch-timeout-ms") {
       options.launchTimeoutMs = parsePositiveInt(argv[++i], "--launch-timeout-ms");
     } else if (arg === "--ready-file") {
       options.readyFile = path.resolve(argv[++i] ?? "");
+    } else if (arg === "--local-signaling") {
+      options.localSignaling = true;
+    } else if (arg === "--signal-url") {
+      options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--help") {
       options.help = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+
+  if (options.localSignaling && options.signalUrl) {
+    throw new Error("--local-signaling cannot be combined with --signal-url");
+  }
+  if (options.signalUrl !== null) {
+    const parsed = parseSignalingEndpoint(options.signalUrl);
+    if (parsed.kind === "error") throw new Error(`--signal-url: ${parsed.reason}`);
+    options.signalUrl = parsed.url;
   }
 
   return options;
@@ -102,13 +123,15 @@ Runner options:
   --launch-timeout-ms <ms>  Time to wait for Electron launch and shell load.
                             Defaults to 180000.
   --ready-file <path>       Server ready-file path. Defaults to an OS temp path.
+  --signal-url <url>        Use a specific existing signaling service.
+  --local-signaling         Start a local Wrangler signaling service instead of
+                            the hosted production service.
   --help                    Show this help message.
 
-The smoke spawns the signaling worker (wrangler dev apps/signaling), starts a
-disposable server as a WebRTC answerer, reads its validated desktop root invite,
-and launches Electron with that deep link so the desktop shell
-connects over the encrypted WebRTC pipe. It then clicks the bootstrap launch
-approval and asserts the hosted shell loads.
+By default the smoke starts the normal remote-serve hub without a signaling
+override, mints an invite with remote invite --workspace default, verifies that
+the invite uses ${DEFAULT_SIGNAL_URL}, and pairs through the deployed service.
+Use --local-signaling for an offline Miniflare run.
 
 Requires the native node-datachannel module: run \`pnpm rebuild node-datachannel\`
 once before this smoke.
@@ -186,41 +209,12 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs) {
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
-      let value;
-      try {
-        value = JSON.parse(content);
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          await sleep(250);
-          continue;
-        }
-        throw error;
-      }
-      return parseHubReadyPayload(value);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+      return JSON.parse(content);
+    } catch {
       await sleep(250);
     }
   }
   throw new Error(`Timed out waiting for server ready file: ${readyFile}`);
-}
-
-function createServerArgs(readyFilePath) {
-  // Loopback-only: the gateway binds 127.0.0.1; remote reach is the WebRTC pipe
-  // attached to the same RpcServer when VIBESTUDIO_WEBRTC_SIGNAL_URL is set.
-  return [
-    serverEntryArg(),
-    "--app-root",
-    repoRoot,
-    "--ready-file",
-    readyFilePath,
-    "--ephemeral",
-    "--serve-panels",
-    "--host",
-    "127.0.0.1",
-    "--bind-host",
-    "127.0.0.1",
-  ];
 }
 
 function findFreePort() {
@@ -257,6 +251,43 @@ async function startSignaling(port) {
   throw new Error("wrangler dev (signaling) did not become healthy");
 }
 
+function signalingHttpUrl(signalUrl, pathname) {
+  const url = new URL(signalUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = pathname;
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+async function verifyExternalSignaling(signalUrl) {
+  const health = await fetch(signalingHttpUrl(signalUrl, "/healthz"));
+  if (!health.ok) throw new Error(`Signaling health failed: HTTP ${health.status}`);
+  const room = `desktop-smoke-${randomUUID()}`;
+  const ice = await fetch(
+    signalingHttpUrl(signalUrl, `/room/${encodeURIComponent(room)}/ice-servers`)
+  );
+  if (!ice.ok) throw new Error(`Signaling ICE lookup failed: HTTP ${ice.status}`);
+  console.log(
+    `[desktop-smoke] Signaling: ${signalUrl} (${ice.headers.get("x-signaling-turn") ?? "ICE ready"})`
+  );
+}
+
+function buildConnectDeepLinkFromLog(loggedLink) {
+  const parsed = parseConnectLink(loggedLink);
+  if (parsed.kind !== "ok") {
+    throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
+  }
+  return createConnectDeepLink({
+    room: parsed.room,
+    fp: parsed.fp,
+    code: parsed.code,
+    sig: parsed.sig,
+    ice: parsed.ice,
+    srv: parsed.srv,
+  });
+}
+
 function hasElectronDisplay() {
   if (process.platform !== "linux") return true;
   return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -280,7 +311,6 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
     ELECTRON_DISABLE_SANDBOX: "1",
     HOME: path.join(tempRoot, "home"),
     XDG_CONFIG_HOME: path.join(tempRoot, "xdg"),
-    APPDATA: path.join(tempRoot, "appdata"),
   };
 
   await fsp.mkdir(env.HOME, { recursive: true });
@@ -332,7 +362,7 @@ async function waitForDesktopShell(app, timeoutMs) {
     }
 
     if (snapshots.some((snapshot) => snapshot.hasLaunchGateApproval)) {
-      const clicked = await clickDesktopButton(app, /^(Trust and start|Approve and start)$/i);
+      const clicked = await clickDesktopButton(app, /^(Trust and (start|connect)|Approve and (start|connect))$/i);
       if (clicked) {
         clickedApprovals += 1;
         console.log("[desktop-smoke] Approved desktop workspace app launch gate");
@@ -366,10 +396,13 @@ async function collectShellSnapshots(app) {
               .map((button) => button.textContent?.trim() ?? "")
               .filter(Boolean);
             const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-              && buttons.some((label) => /^(Trust and start|Approve and start|Deny)$/i.test(label));
+              && buttons.some((label) =>
+                /^(Trust and (start|connect)|Approve and (start|connect)|Deny)$/i.test(label)
+              );
             const hasHostedShellChrome = Boolean(
               document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]')
+                || document.querySelector('[data-hosted-shell="true"]')
             );
             return {
               text: text.slice(0, 3000),
@@ -455,6 +488,106 @@ async function getPanelTree(app) {
     const testApi = globalThis.__testApi;
     return testApi?.getPanelTree?.() ?? [];
   });
+}
+
+async function waitForRenderedPanel(app, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = [];
+  while (Date.now() < deadline) {
+    latest = await app.evaluate(async ({ webContents }) => {
+      const inspections = [];
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed()) continue;
+        const url = contents.getURL();
+        if (!url.includes("/panels/")) continue;
+        try {
+          const dom = await contents.executeJavaScript(
+            `(() => {
+                const body = document.body;
+                const text = body?.innerText?.replace(/\\s+/g, " ").trim() ?? "";
+                return {
+                  readyState: document.readyState,
+                  text,
+                  childCount: body?.querySelectorAll("*").length ?? 0,
+                  hasHostChrome: Boolean(
+                    document.querySelector(".titlebar-breadcrumb-scroll")
+                      || document.querySelector('[aria-label="Menu"]')
+                  ),
+                  hasLaunchGateApproval: Boolean(
+                    document.querySelector('[data-bootstrap-launch-gate="true"]')
+                  ),
+                };
+              })()`,
+            true
+          );
+          if (
+            dom.hasHostChrome
+            || dom.hasLaunchGateApproval
+            || dom.readyState !== "complete"
+            || dom.childCount < 4
+            || dom.text.length < 12
+          ) {
+            continue;
+          }
+
+          const image = await Promise.race([
+            contents.capturePage(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`panel capture timed out: ${url}`)), 2_000)
+            ),
+          ]);
+          const size = image.getSize();
+          if (size.width < 200 || size.height < 120) continue;
+          const bitmap = image.toBitmap();
+          const step = Math.max(1, Math.floor(Math.min(size.width, size.height) / 180));
+          const buckets = new Map();
+          let sampled = 0;
+          let lumaSum = 0;
+          let lumaSquaredSum = 0;
+          for (let y = 0; y < size.height; y += step) {
+            for (let x = 0; x < size.width; x += step) {
+              const offset = (y * size.width + x) * 4;
+              const b = bitmap[offset] ?? 0;
+              const g = bitmap[offset + 1] ?? 0;
+              const r = bitmap[offset + 2] ?? 0;
+              const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+              const bucket = `${r >> 4}:${g >> 4}:${b >> 4}`;
+              buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+              sampled += 1;
+              lumaSum += luma;
+              lumaSquaredSum += luma * luma;
+            }
+          }
+          const dominant = Math.max(...buckets.values());
+          const meanLuma = lumaSum / sampled;
+          const variance = Math.max(0, lumaSquaredSum / sampled - meanLuma * meanLuma);
+          inspections.push({
+            url,
+            text: dom.text.slice(0, 240),
+            childCount: dom.childCount,
+            width: size.width,
+            height: size.height,
+            uniqueBuckets: buckets.size,
+            dominantRatio: dominant / sampled,
+            lumaStdDev: Math.sqrt(variance),
+          });
+        } catch {
+          // Ignore non-DOM and shutting-down webContents.
+        }
+      }
+      return inspections;
+    });
+
+    const rendered = latest.find(
+      (entry) =>
+        entry.uniqueBuckets >= 8 && entry.dominantRatio < 0.995 && entry.lumaStdDev >= 3
+    );
+    if (rendered) return rendered;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(
+    `Timed out waiting for a rendered panel surface. Last candidates: ${JSON.stringify(latest)}`
+  );
 }
 
 async function saveScreenshot(app) {
@@ -561,48 +694,76 @@ async function main() {
       await fsp.unlink(options.readyFile);
     } catch {}
     tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
+
+    // 1. Production signaling by default. Local Miniflare remains available for
+    // offline development, but must be requested explicitly.
+    let signalUrl = options.signalUrl ?? DEFAULT_SIGNAL_URL;
+    if (options.localSignaling) {
+      const signalPort = await findFreePort();
+      const signalingChild = await startSignaling(signalPort);
+      children.push(signalingChild);
+      signalUrl = `ws://127.0.0.1:${signalPort}`;
+      console.log(`[desktop-smoke] Signaling: ${signalUrl} (local)`);
+    } else {
+      await verifyExternalSignaling(signalUrl);
+    }
+
+    // 2. Start the same remote-serve launcher users run. Hosted mode deliberately
+    // removes any inherited override so this exercises the compiled-in default.
+    const gatewayPort = await findFreePort();
+    const serverArgs = createRemoteServeArgs(repoRoot, options.readyFile, gatewayPort);
     const serverHome = path.join(tempRoot, "server-home");
-    const serverConfig = path.join(tempRoot, "server-xdg-config");
+    const serverConfig = path.join(tempRoot, "server-config");
     await Promise.all([
       fsp.mkdir(serverHome, { recursive: true }),
       fsp.mkdir(serverConfig, { recursive: true }),
     ]);
-
-    // 1. Local signaling (Cloudflare local runtime) — the WebRTC rendezvous.
-    const signalPort = await findFreePort();
-    const signalingChild = await startSignaling(signalPort);
-    children.push(signalingChild);
-    const signalUrl = `ws://127.0.0.1:${signalPort}`;
-
-    // 2. A disposable hub. It creates/routes the ephemeral workspace child and
-    //    publishes the child's complete root pairing invite in its ready file.
-    const serverArgs = createServerArgs(options.readyFile);
-    const serverInvocation = createServerInvocation(serverArgs);
-    const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
+    const serverEnv = {
+      ...process.env,
+      NODE_ENV: process.env.NODE_ENV ?? "development",
+      VIBESTUDIO_TEST_MODE: "1",
+      HOME: serverHome,
+      XDG_CONFIG_HOME: serverConfig,
+    };
+    if (options.localSignaling || options.signalUrl) {
+      serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
+    } else {
+      delete serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL;
+    }
+    const serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV ?? "development",
-        VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
-        HOME: serverHome,
-        XDG_CONFIG_HOME: serverConfig,
-        APPDATA: path.join(tempRoot, "server-appdata"),
-      },
+      env: serverEnv,
       label: "server",
     });
-    await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
+    await waitForSpawn(serverChild, process.execPath, serverArgs);
     children.push(serverChild);
+
     const ready = await waitForServerReady(
       options.readyFile,
       serverChild,
       Math.max(1_000, deadlineMs - Date.now())
     );
-    const invite = ready.rootInvites?.desktop;
-    if (!invite) {
-      throw new Error("Fresh isolated hub did not publish a desktop root invite");
+
+    // 3. Follow the deployed flow: ask the loopback hub to start/select the
+    // workspace and mint the child answerer's WebRTC invite.
+    const invite = await mintRemoteInvite({
+      repoRoot,
+      env: serverEnv,
+      port: ready.gatewayPort,
+      timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
+    });
+    const loggedLink = invite.pairUrl;
+    const deepLink = buildConnectDeepLinkFromLog(loggedLink);
+    const parsed = parseConnectLink(deepLink);
+    if (parsed.kind !== "ok") {
+      throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
     }
-    const deepLink = invite.deepLink;
-    console.log(`[desktop-smoke] WebRTC pairing: room=${invite.room} fp=${invite.fp}`);
+    if (!options.localSignaling && !options.signalUrl && parsed.sig !== DEFAULT_SIGNAL_URL) {
+      throw new Error(
+        `remote serve did not use the hosted default (expected ${DEFAULT_SIGNAL_URL}, got ${parsed.sig})`
+      );
+    }
+    console.log(`[desktop-smoke] WebRTC pairing: room=${parsed.room} fp=${parsed.fp}`);
     console.log(`[desktop-smoke] Deep link: ${deepLink}`);
 
     electronApp = await launchDesktopApp(deepLink, tempRoot, options.launchTimeoutMs);
@@ -610,11 +771,20 @@ async function main() {
     const hostView = result.hostView;
     const hostedShellUrl = String(hostView?.hostedShellUrl ?? "");
     const panels = await getPanelTree(electronApp).catch(() => []);
+    const dismissedRemotePane = await clickDesktopButton(electronApp, "^Cancel$");
+    if (!dismissedRemotePane) {
+      throw new Error("Desktop shell paired, but the Remote server pane could not be dismissed");
+    }
+    const renderedPanel = await waitForRenderedPanel(
+      electronApp,
+      Math.max(1_000, deadlineMs - Date.now())
+    );
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);
     console.log(
       `[desktop-smoke] PASS paired desktop app over WebRTC; ` +
         `approvals=${result.clickedApprovals}; hostedShell=${hostedShellUrl}; ` +
-        `panels=${Array.isArray(panels) ? panels.length : "unknown"}` +
+        `panels=${Array.isArray(panels) ? panels.length : "unknown"}; ` +
+        `renderedPanel=${JSON.stringify(renderedPanel)}` +
         (screenshotPath ? `; screenshot=${path.relative(repoRoot, screenshotPath)}` : "")
     );
     await cleanup();

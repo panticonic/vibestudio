@@ -164,16 +164,6 @@ export interface ExtensionDependencyDiagnostics {
 
 const execFileAsync = promisify(execFile);
 
-// Framework-agnostic packages that frequently dominate bundle size.
-// Framework-specific split packages live in the adapter (e.g., @radix-ui/react-icons in React adapter).
-const FORCED_SPLIT_PACKAGES = [
-  "@mdx-js/mdx",
-  "rehype-highlight",
-  "typescript",
-  "monaco-editor",
-  "sucrase",
-] as const;
-
 function isVerboseBuildLogEnabled(): boolean {
   return process.env["VIBESTUDIO_LOG_LEVEL"] === "verbose";
 }
@@ -655,29 +645,6 @@ function createExtensionCjsShimPlugin(
       });
     },
   };
-}
-
-function pickForcedSplitModules(
-  forcedSplitPackages: readonly string[],
-  transitiveExternals: Record<string, string>,
-  exposeModules: string[]
-): string[] {
-  const selected = new Set<string>();
-
-  for (const pkg of forcedSplitPackages) {
-    if (transitiveExternals[pkg]) {
-      selected.add(pkg);
-    }
-  }
-
-  // If a module is explicitly exposed for __vibestudioRequire__, keep it split out.
-  for (const specifier of exposeModules) {
-    if (transitiveExternals[specifier]) {
-      selected.add(specifier);
-    }
-  }
-
-  return [...selected].sort();
 }
 
 function createDedupePlugin(runtimeNodeModules: string, packages: string[]): esbuild.Plugin | null {
@@ -1313,10 +1280,6 @@ ${shimLines.join("\n")}
 `;
 }
 
-function isSyntheticSplitEntryOutput(fileName: string): boolean {
-  return /^split-\d+\.js(\.map)?$/.test(fileName);
-}
-
 function generatePanelEntry(
   exposeEntryFile: string,
   entryFile: string,
@@ -1360,12 +1323,6 @@ const __vibestudioDefaultExport = Object.prototype.hasOwnProperty.call(__vibestu
   ? Reflect.get(__vibestudioWorkerEntry, "default")
   : { fetch() { return new Response("Vibestudio worker module has no default fetch handler."); } };
 export default __vibestudioDefaultExport;
-`;
-}
-
-export function generateForcedSplitEntry(specifier: string): string {
-  return `import * as __vibestudioForcedSplitModule from ${JSON.stringify(specifier)};
-export { __vibestudioForcedSplitModule };
 `;
 }
 
@@ -1742,12 +1699,6 @@ async function buildPanel(
     ...adapter.dedupePackages,
     ...(extractedManifest.dedupeModules ?? []),
   ]);
-  const allForcedSplitPackages = [...FORCED_SPLIT_PACKAGES, ...adapter.forcedSplitPackages];
-  const forcedSplitModules = pickForcedSplitModules(
-    allForcedSplitPackages,
-    env.externalDeps,
-    exposeModules
-  );
   const { resolveDir } = env;
 
   // Generate expose/wrapper entries.
@@ -1763,16 +1714,11 @@ async function buildPanel(
   const wrapperPath = path.join(outdir, "_entry.js");
   fs.writeFileSync(wrapperPath, wrapperCode);
 
-  // Force additional split points for known heavy modules to avoid oversized single chunks.
+  // Keep all eagerly imported code in the primary entry. `splitting: true`
+  // still emits chunks for genuine dynamic imports, but synthetic entry points
+  // for exposed/heavy modules turned eager dependencies into a remote startup
+  // waterfall without making any of them lazy.
   const entryPoints: Record<string, string> = { bundle: wrapperPath };
-  for (const [index, specifier] of forcedSplitModules.entries()) {
-    const moduleEntry = path.join(
-      outdir,
-      `_split_${index}_${sanitizeModuleForFileName(specifier)}.js`
-    );
-    fs.writeFileSync(moduleEntry, generateForcedSplitEntry(specifier));
-    entryPoints[`split-${index}`] = moduleEntry;
-  }
 
   // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
@@ -1885,9 +1831,7 @@ async function buildPanel(
 
         // Skip main bundle and CSS
         const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");
-        const basename = path.basename(absPath);
         if (relativeName === bundleArtifactPath || relativeName === cssArtifactPath) continue;
-        if (isSyntheticSplitEntryOutput(basename)) continue;
         if (!fs.existsSync(absPath)) continue;
 
         const ext = path.extname(absPath).toLowerCase();

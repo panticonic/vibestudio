@@ -73,6 +73,15 @@ const config = {
         }
       }
 
+      // The native Android/iOS project links the root react-native-webrtc
+      // package. Force every workspace importer onto that same JS instance so
+      // PeerConnection/DataChannel events share one NativeEventEmitter bridge.
+      if (moduleName === "react-native-webrtc" || moduleName.startsWith("react-native-webrtc/")) {
+        const subpath = moduleName.slice("react-native-webrtc".length);
+        const rootWebRtc = path.resolve(monorepoRoot, "node_modules", "react-native-webrtc");
+        return context.resolveRequest(context, `${rootWebRtc}${subpath}`, platform);
+      }
+
       // 0a. Shim Node builtins pulled in transitively by @vibestudio/shared.
       //     shell lifecycle imports trickle down into panelTypes/panelIdUtils
       //     which assume a Node runtime. Mobile-safe replacements live in

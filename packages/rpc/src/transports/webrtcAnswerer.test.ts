@@ -657,6 +657,21 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
+  it("keeps the current peer when the offerer re-sends identical SDP", async () => {
+    const h = makeHarness();
+    const { peer } = await pairUp(h);
+
+    h.signals[0]!.deliverOffer("offer-sdp");
+    await tick();
+
+    expect(h.downs).toEqual([]);
+    expect(h.peers).toEqual([peer]);
+    expect(peer.closed).toBe(false);
+    expect(peer.remoteDescriptions).toHaveLength(1);
+    expect(h.signals[0]!.sentDescriptions.filter((d) => d.type === "answer")).toHaveLength(1);
+    await h.pipe.close();
+  });
+
   it("splits an oversized HEAD across MORE messages that demux back to one frame", async () => {
     const h = makeHarness();
     const { bulk } = await pairUp(h, { maxMsg: 105 }); // budget = 100

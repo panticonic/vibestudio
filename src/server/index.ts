@@ -429,6 +429,7 @@ async function main() {
   const {
     resolveWorkspaceTrustGrants,
     resolveHostTargetDecl,
+    resolveHostTargetRequiredExtensions,
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
   } = await import("@vibestudio/shared/workspace/configParser");
@@ -557,6 +558,7 @@ async function main() {
   const { EntityCache } = await import("@vibestudio/shared/runtime/entityCache");
   const { ConnectionGrantService } = await import("@vibestudio/shared/connectionGrants");
   const entityCache = new EntityCache();
+  let primePanelRuntimeImage: (source: string, ref?: string) => void = () => {};
   entityCache.registerBootstrap({ id: "server", kind: "server" });
   entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
   // Reap a connectionless DO/worker's event-push subscriptions when its entity is
@@ -886,12 +888,32 @@ async function main() {
       (host): host is TrustedUnitHostInstance => host !== null
     );
   let startupWorkspaceUnitReconcile: Promise<void> | null = null;
-  // Resolved once startup unit reconcile AND any approval-gated applies have
-  // settled (or startup fails); holds the build system's background prewarm
-  // pool off the CPUs while launch-critical unit builds run.
-  let releaseStartupUnitsSettled: () => void = () => {};
-  const startupUnitsSettled = new Promise<void>((resolve) => {
-    releaseStartupUnitsSettled = resolve;
+  let startupNonCriticalUnitReconcile: Promise<void> = Promise.resolve();
+  let releaseStartupLaunchWindow!: () => void;
+  let startupLaunchWindowReleased = false;
+  let startupLaunchRequested = false;
+  let startupLaunchFallbackTimer: NodeJS.Timeout | null = null;
+  const startupLaunchWindowComplete = new Promise<void>((resolve) => {
+    releaseStartupLaunchWindow = resolve;
+  });
+  const finishStartupLaunchWindow = (reason: string): void => {
+    if (startupLaunchWindowReleased) return;
+    startupLaunchWindowReleased = true;
+    if (startupLaunchFallbackTimer) clearTimeout(startupLaunchFallbackTimer);
+    console.info(`[StartupCriticalPath] Interactive launch window complete: ${reason}`);
+    releaseStartupLaunchWindow();
+  };
+  const armStartupLaunchFallback = (): void => {
+    if (startupLaunchRequested || startupLaunchWindowReleased || startupLaunchFallbackTimer) return;
+    startupLaunchFallbackTimer = setTimeout(
+      () => finishStartupLaunchWindow("no host target requested within 10000ms"),
+      10000
+    );
+    startupLaunchFallbackTimer.unref();
+  };
+  let releaseStartupBackgroundWork!: () => void;
+  const startupBackgroundWorkComplete = new Promise<void>((resolve) => {
+    releaseStartupBackgroundWork = resolve;
   });
   const { HostTargetLaunchCoordinator } = await import("./hostTargetLaunchCoordinator.js");
   // Launch/session state only needs declared units to be CLASSIFIED (pending
@@ -906,13 +928,51 @@ async function main() {
     ).then(() => {});
     return Promise.race([staged, startupWorkspaceUnitReconcile]);
   };
+  const startupHostTargetPreparations = new Map<string, Promise<void>>();
+  const prepareStartupHostTarget = async (
+    target: import("@vibestudio/shared/hostTargets").HostTarget
+  ): Promise<void> => {
+    await startupUnitDeclarationsStaged();
+    const required = resolveHostTargetRequiredExtensions(workspaceConfig, target);
+    if (!extensionHostForGateway || required.length === 0) return;
+    const key = `${target}:${required.map((decl) => `${decl.source}@${decl.ref}`).join(",")}`;
+    let preparation = startupHostTargetPreparations.get(key);
+    if (!preparation) {
+      const startedAt = Date.now();
+      preparation = extensionHostForGateway
+        .reconcileDeclared(required, {
+          trigger: "startup",
+          removeUndeclared: false,
+          waitFor: "staged",
+        })
+        .then(() => {
+          console.info(
+            `[StartupCriticalPath] ${target} provider dependencies classified in ${Date.now() - startedAt}ms (${required.map((decl) => decl.source).join(", ")})`
+          );
+        });
+      startupHostTargetPreparations.set(key, preparation);
+      void preparation.catch(() => startupHostTargetPreparations.delete(key));
+    }
+    await preparation;
+  };
   const hostTargetLaunchCoordinator = new HostTargetLaunchCoordinator({
     approvalQueue,
     eventService,
     startupApprovals: unitApprovalCoordinator,
     awaitStartupUnitReconcile: startupUnitDeclarationsStaged,
+    prepareHostTarget: prepareStartupHostTarget,
+    getRequiredExtensionSources: (target) =>
+      resolveHostTargetRequiredExtensions(workspaceConfig, target).map((decl) => decl.source),
     getAppHost: () => appHostForGateway,
     getTrustedUnitHosts: trustedUnitHosts,
+    onLaunchActivity: (target, phase) => {
+      if (phase === "requested") {
+        startupLaunchRequested = true;
+        if (startupLaunchFallbackTimer) clearTimeout(startupLaunchFallbackTimer);
+        return;
+      }
+      finishStartupLaunchWindow(`${target} launch settled`);
+    },
   });
   // Protected server refs (repo → main): the single main-head authority.
   // Constructed BEFORE WorkspaceVcs (which routes every main read/advance
@@ -1066,35 +1126,58 @@ async function main() {
     const reconcile = async (): Promise<void> => {
       const tasks: Array<Promise<void>> = [];
       if (extensionHostForGateway) {
-        tasks.push(
-          extensionHostForGateway
-            .reconcileDeclared(resolveDeclaredExtensions(nextConfig), { trigger })
-            .then(() => extensionHostForGateway?.whenReconciled())
+        const extensionHost = extensionHostForGateway;
+        const critical = resolveHostTargetRequiredExtensions(nextConfig);
+        const criticalSources = new Set(critical.map((decl) => decl.source));
+        const declared = [
+          ...critical,
+          ...resolveDeclaredExtensions(nextConfig).filter(
+            (declaration) => !criticalSources.has(declaration.source)
+          ),
+        ];
+        const reconcileAll = () =>
+          extensionHost
+            .reconcileDeclared(declared, { trigger })
+            .then(() => extensionHost.whenReconciled())
             .then(() => import("@vibestudio/shared/workspace/extensionRegistry"))
             .then(({ writeExtensionRegistry }) => {
               writeExtensionRegistry(workspacePath);
+            });
+        if (trigger === "startup") {
+          console.info(
+            "[StartupCriticalPath] Extension builds deferred until a host target or background reconcile needs them"
+          );
+          armStartupLaunchFallback();
+          startupNonCriticalUnitReconcile = Promise.resolve()
+            .then(() => startupLaunchWindowComplete)
+            .then(() => {
+              const backgroundStartedAt = Date.now();
+              return reconcileAll().then(() => {
+                unitApprovalCoordinator.publishPending("startup");
+                console.info(
+                  `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
+                );
+              });
             })
             .catch((err: unknown) =>
+              console.warn("[Extensions] Failed to reconcile background workspace units:", err)
+            );
+        } else {
+          tasks.push(
+            reconcileAll().catch((err: unknown) =>
               console.warn("[Extensions] Failed to reconcile declared workspace units:", err)
             )
-        );
+          );
+        }
       }
       if (appHostForGateway) {
-        if (trigger === "startup") {
-          tasks.push(
-            appHostForGateway
-              .reconcileDeclared(resolveDeclaredApps(nextConfig), { trigger })
-              .then(() => appHostForGateway?.whenReconciled())
-              .catch((err: unknown) =>
-                console.warn("[Apps] Failed to reconcile declared workspace app units:", err)
-              )
-          );
-        } else {
-          try {
-            appHostForGateway.setDeclared(resolveDeclaredApps(nextConfig), { trigger });
-          } catch (err) {
-            console.warn("[Apps] Failed to update declared workspace app units:", err);
+        try {
+          appHostForGateway.setDeclared(resolveDeclaredApps(nextConfig), { trigger });
+          if (trigger === "startup") {
+            console.info("[StartupCriticalPath] App declarations staged for on-demand launch");
           }
+        } catch (err) {
+          console.warn("[Apps] Failed to update declared workspace app units:", err);
         }
       }
       await Promise.all(tasks);
@@ -1257,8 +1340,6 @@ async function main() {
         {
           appRoot,
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
-          deferInitialBuildPrewarm: true,
-          holdInitialPrewarm: () => startupUnitsSettled,
         }
       );
     },
@@ -1442,18 +1523,62 @@ async function main() {
     },
   });
   container.registerRpc(gitInteropDefinition);
+  const pendingGitUpstreamRepos = new Set<string>();
+  let gitUpstreamFlushRunning = false;
+  const flushGitUpstreamRepos = async (): Promise<void> => {
+    if (gitUpstreamFlushRunning) return;
+    gitUpstreamFlushRunning = true;
+    let readinessAttempts = 0;
+    try {
+      // Ref advances begin during VCS/bootstrap attachment, before declared
+      // extensions are reconciled. Keep those notifications queued until the
+      // background extension pass has installed git-bridge instead of polling
+      // and emitting a transient ENOEXT on the interactive launch path.
+      await startupBackgroundWorkComplete;
+      while (pendingGitUpstreamRepos.size > 0) {
+        if (!extensionHostForGateway) {
+          if (readinessAttempts >= 120) {
+            console.warn("[GitUpstream] extension host did not become ready within 60s");
+            return;
+          }
+          readinessAttempts += 1;
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        const repos = [...pendingGitUpstreamRepos];
+        pendingGitUpstreamRepos.clear();
+        try {
+          await invokeGitInteropProvider(
+            { caller: createVerifiedCaller("server", "server") },
+            "onMainAdvanced",
+            [repos]
+          );
+          readinessAttempts = 0;
+        } catch (err) {
+          const code =
+            typeof err === "object" && err !== null && "code" in err
+              ? (err as { code?: unknown }).code
+              : undefined;
+          if ((code === "ENOEXT" || code === "ENOTREADY") && readinessAttempts < 120) {
+            for (const repo of repos) pendingGitUpstreamRepos.add(repo);
+            readinessAttempts += 1;
+            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          console.warn("[GitUpstream] forward failed:", err);
+        }
+      }
+    } finally {
+      gitUpstreamFlushRunning = false;
+    }
+  };
   refService.onRefsChanged((changes) => {
     const repos = changes
       .filter((change) => change.stateHash !== null)
       .map((change) => change.repoPath);
     if (repos.length === 0) return;
-    const extensionName = workspaceProviderExtensionPackageName(workspaceConfig, "gitInterop");
-    if (!extensionName || !extensionHostForGateway?.registry.get(extensionName)) return;
-    void invokeGitInteropProvider(
-      { caller: createVerifiedCaller("server", "server") },
-      "onMainAdvanced",
-      [repos]
-    ).catch((err) => console.warn("[GitUpstream] forward failed:", err));
+    for (const repo of repos) pendingGitUpstreamRepos.add(repo);
+    void flushGitUpstreamRepos();
   });
   const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
     try {
@@ -2173,7 +2298,7 @@ async function main() {
       null;
     container.registerManaged({
       name: "runtime",
-      dependencies: ["doDispatch", "workerdManager", "buildSystem"],
+      dependencies: ["doDispatch", "workerdManager", "buildSystem", "panelHttpServer"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -2184,6 +2309,13 @@ async function main() {
         const buildSystem = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
+        const { server: panelHttpServer } = assertPresent(
+          resolve<{ server: import("./panelHttpServer.js").PanelHttpServer }>("panelHttpServer")
+        );
+        primePanelRuntimeImage = (source, ref) => {
+          if (source.startsWith("browser:")) return;
+          panelHttpServer.primeBuild(source, ref, () => buildSystem.getBuild(source, ref));
+        };
         runtimeDefinition = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
@@ -2206,10 +2338,10 @@ async function main() {
             destroyDurableStorage: async ({ source, className, key }) => {
               await workerdManager.destroyDO({ source, className, objectKey: key });
             },
-            resolvePanelEffectiveVersion: async ({ source, ref }) => {
-              if (source.startsWith("browser:")) return "";
-              void ref;
-              return buildSystem.getEffectiveVersion(source) ?? "";
+            preparePanel: async ({ source, ref }) => {
+              if (source.startsWith("browser:")) return { effectiveVersion: "" };
+              primePanelRuntimeImage(source, ref);
+              return { effectiveVersion: buildSystem.getEffectiveVersion(source) ?? "" };
             },
             resolveAppEffectiveVersion: async ({ source, ref }) => {
               void ref;
@@ -3618,7 +3750,7 @@ async function main() {
               ? doDispatch.dispatchOnBehalf(gadRef, method, [input], opts.invocationToken)
               : doDispatch.dispatch(gadRef, method, input)) as Promise<T>,
         });
-        workspaceVcs.enableMemoryIndexing();
+        workspaceVcs.enableMemoryIndexing({ startupBarrier: startupBackgroundWorkComplete });
         console.log(`[Vcs] Attached to VCS store DO (${source}:${className})`);
         return workspaceVcs;
       },
@@ -3656,7 +3788,10 @@ async function main() {
         const attachedVcs = assertPresent(
           resolve<import("./vcsHost/workspaceVcs.js").WorkspaceVcs>("vcsAttach")
         );
-        const scheduler = new VcsGcScheduler({ workspaceVcs: attachedVcs });
+        const scheduler = new VcsGcScheduler({
+          workspaceVcs: attachedVcs,
+          startupBarrier: startupBackgroundWorkComplete,
+        });
         scheduler.start();
         return scheduler;
       },
@@ -4576,13 +4711,19 @@ async function main() {
       });
       const iceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
         process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
+      const serverIceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
+        process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "relay"
+          ? "relay"
+          : process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "all"
+            ? "all"
+            : iceTransportPolicy;
       const ingress = startWebRtcIngress({
         rpcServer: rpcServerForGateway,
         signalUrl: webrtcSignalUrl,
         certificatePemFile: cert.certificatePemFile,
         keyPemFile: cert.keyPemFile,
         fingerprint: cert.fingerprint,
-        iceTransportPolicy,
+        iceTransportPolicy: serverIceTransportPolicy,
       });
       webrtcIngress = ingress;
       for (const route of routedRoomStore.list()) {
@@ -4663,6 +4804,12 @@ async function main() {
     recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
+  // Runtime creation primes new panel entities. Replaying active panels after
+  // durable hydration gives restored trees the same lazy dependency behavior
+  // without treating manifest initPanels as a build-time special case.
+  for (const record of entityCache.listActive()) {
+    if (record.kind === "panel") primePanelRuntimeImage(record.source.repoPath);
+  }
   // Re-arm server-driven DO alarms now that workerd is up and WorkspaceDO is
   // reachable (the managed-service start() ran before workerd was ready).
   try {
@@ -4768,10 +4915,11 @@ async function main() {
   };
   startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
   void startupWorkspaceUnitReconcile
-    .catch(() => {})
-    .then(() => Promise.all(trustedUnitHosts().map((host) => host.whenSettled())))
-    .catch(() => {})
-    .finally(() => releaseStartupUnitsSettled());
+    .then(
+      () => startupNonCriticalUnitReconcile,
+      () => startupNonCriticalUnitReconcile
+    )
+    .finally(() => releaseStartupBackgroundWork());
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
@@ -4803,7 +4951,7 @@ async function main() {
     );
   }
   if (requireElectronReady) {
-    await startupWorkspaceUnitReconcile;
+    await startupUnitDeclarationsStaged();
     const appHost = container.get<import("./appHost.js").AppHost>("appHost");
     const readiness = await appHost.ensureElectronReady();
     if (!readiness.ready) {
@@ -4883,13 +5031,9 @@ async function main() {
     }
   }
 
-  // Ephemeral workspaces are discarded at shutdown, so eagerly warming their
-  // entire unit graph only delays useful work and produces a cache nobody can
-  // reuse. Persistent hosts warm opportunistically after readiness.
+  // Eval libraries are the only intentional warmup. Panels, apps, extensions,
+  // and workers activate their own dependency graph on demand.
   if (!workspaceIsEphemeral) {
-    container
-      .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-      .startInitialBuildPrewarm();
     container.get<() => void>("evalEnginePrewarm")();
   }
 

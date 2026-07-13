@@ -6,7 +6,10 @@ import { WorkspaceClient } from "@vibestudio/shared/shell/workspaceClient";
 import { SettingsClient } from "@vibestudio/shared/shell/settingsClient";
 import { EventsClient } from "@vibestudio/shared/shell/eventsClient";
 import { createRecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
-import type { RecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type {
+  RecoveryCoordinator,
+  RecoveryKind,
+} from "@vibestudio/shared/shell/recoveryCoordinator";
 import type { PanelManager } from "@vibestudio/shared/shell/panelManager";
 import type {
   PanelHost,
@@ -710,6 +713,7 @@ export class ShellClient {
   private navigationListeners = new Set<(panelId: string) => void>();
   private periodicSyncTimer: ReturnType<typeof setInterval> | null = null;
   private panelRecoveryUnsubs: Array<() => void> | null = null;
+  private recoveryCompleteListeners = new Set<(kind: RecoveryKind) => void>();
   private workspaceInfo: WorkspaceInfo | null = null;
   private readonly accountProfileClient: MobileAccountProfileClient;
   private panelsInitialized = false;
@@ -725,8 +729,16 @@ export class ShellClient {
       this.statusUnsub = this.transport.onStatusChange(config.onStatusChange);
     }
     this.recovery = createRecoveryCoordinator();
-    this.transport.onRecovery("resubscribe", () => this.recovery.run("resubscribe"));
-    this.transport.onRecovery("cold-recover", () => this.recovery.run("cold-recover"));
+    this.transport.onRecovery("resubscribe", async () => {
+      await this.recovery.run("resubscribe");
+      smokePhase("workspace-recovery-complete", { kind: "resubscribe" });
+      this.emitRecoveryComplete("resubscribe");
+    });
+    this.transport.onRecovery("cold-recover", async () => {
+      await this.recovery.run("cold-recover");
+      smokePhase("workspace-recovery-complete", { kind: "cold-recover" });
+      this.emitRecoveryComplete("cold-recover");
+    });
     this.panels = new MobilePanels({
       serverUrl: MOBILE_SERVER_LOOPBACK_ORIGIN,
       transport: this.transport,
@@ -999,6 +1011,12 @@ export class ShellClient {
       this.navigationListeners.delete(listener);
     };
   }
+  onRecoveryComplete(listener: (kind: RecoveryKind) => void): () => void {
+    this.recoveryCompleteListeners.add(listener);
+    return () => {
+      this.recoveryCompleteListeners.delete(listener);
+    };
+  }
   async handlePanelBridgeCall(panelId: string, method: string, args: unknown[]): Promise<unknown> {
     return this.panels.handleBridgeCall(panelId, method, args);
   }
@@ -1015,10 +1033,14 @@ export class ShellClient {
       }),
     ];
   }
+  private emitRecoveryComplete(kind: RecoveryKind): void {
+    for (const listener of this.recoveryCompleteListeners) listener(kind);
+  }
   dispose(): void {
     this.stopPeriodicSync();
     for (const unsubscribe of this.panelRecoveryUnsubs ?? []) unsubscribe();
     this.panelRecoveryUnsubs = null;
+    this.recoveryCompleteListeners.clear();
     void (async () => {
       await this.panelRuntime.unregisterClient(this.credentials.deviceId).catch(() => {});
       await this.facade?.close().catch(() => {});

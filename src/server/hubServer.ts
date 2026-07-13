@@ -1949,6 +1949,36 @@ export function prepareEphemeralWorkspaceDisk(
   centralData.setEphemeralWorkspaceDiskName(workspaceId, nextDiskName);
 }
 
+export function buildWorkspaceChildArgs(input: {
+  entry: string;
+  workspaceName: string;
+  appRoot: string;
+  readyFile: string;
+  logLevel?: string;
+  requireMobileReady?: boolean;
+  requireElectronReady?: boolean;
+}): string[] {
+  const args = [
+    input.entry,
+    "--workspace",
+    input.workspaceName,
+    "--app-root",
+    input.appRoot,
+    "--ready-file",
+    input.readyFile,
+    "--host",
+    "127.0.0.1",
+    "--bind-host",
+    "127.0.0.1",
+    "--serve-panels",
+    "--init",
+  ];
+  if (input.logLevel) args.push("--log-level", input.logLevel);
+  if (input.requireMobileReady) args.push("--require-mobile-ready");
+  if (input.requireElectronReady) args.push("--require-electron-ready");
+  return args;
+}
+
 async function startWorkspaceRuntime(
   state: HubRuntimeState,
   advertisedName: string,
@@ -1977,24 +2007,15 @@ async function startWorkspaceRuntime(
   );
   const readyFile = path.join(readyDir, "ready.json");
   const publicUrl = workspaceEndpointUrl(state, advertisedName);
-  const childArgs = [
-    ...process.argv.slice(1, 2),
-    "--workspace",
-    childWorkspaceName,
-    "--app-root",
-    state.appRoot,
-    "--ready-file",
+  const childArgs = buildWorkspaceChildArgs({
+    entry: process.argv.slice(1, 2)[0] ?? "",
+    workspaceName: childWorkspaceName,
+    appRoot: state.appRoot,
     readyFile,
-    "--host",
-    "127.0.0.1",
-    "--bind-host",
-    "127.0.0.1",
-    "--serve-panels",
-    "--init",
-  ];
-  if (state.args.logLevel) childArgs.push("--log-level", state.args.logLevel);
-  if (state.args.requireMobileReady) childArgs.push("--require-mobile-ready");
-  if (state.args.requireElectronReady) childArgs.push("--require-electron-ready");
+    logLevel: state.args.logLevel,
+    requireMobileReady: state.args.requireMobileReady,
+    requireElectronReady: state.args.requireElectronReady,
+  });
 
   const childEnv = buildWorkspaceChildEnv({
     baseEnv: process.env,
@@ -2496,7 +2517,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
 
   const workspaceChildren = (): ChildProcess[] => [
     ...new Set(
-      [...state!.runtimes.values()]
+      [...activeState.runtimes.values()]
         .map((runtime) => runtime.child)
         .filter((child): child is ChildProcess => child !== undefined)
     ),

@@ -55,8 +55,11 @@ export interface HostTargetLaunchCoordinatorDeps {
   eventService: Pick<EventService, "emit">;
   startupApprovals: StartupApprovalPublisher;
   awaitStartupUnitReconcile?: () => Promise<void> | void;
+  prepareHostTarget?: (target: HostTarget) => Promise<void> | void;
+  getRequiredExtensionSources?: (target: HostTarget) => readonly string[];
   getAppHost(): AppHost | null;
   getTrustedUnitHosts(): TrustedUnitHostLike[];
+  onLaunchActivity?: (target: HostTarget, phase: "requested" | "settled") => void;
 }
 
 export class HostTargetLaunchCoordinator {
@@ -66,11 +69,16 @@ export class HostTargetLaunchCoordinator {
   constructor(private readonly deps: HostTargetLaunchCoordinatorDeps) {}
 
   pendingLaunchApprovals(target: HostTarget): PendingUnitBatchApproval[] {
-    return filterBootstrapApprovalsForTarget(this.deps.approvalQueue.listPending(), target);
+    return filterBootstrapApprovalsForTarget(
+      this.deps.approvalQueue.listPending(),
+      target,
+      this.deps.getRequiredExtensionSources?.(target) ?? []
+    );
   }
 
   async publishPendingStartupApprovals(target: HostTarget): Promise<PendingUnitBatchApproval[]> {
     await this.deps.awaitStartupUnitReconcile?.();
+    await this.deps.prepareHostTarget?.(target);
     this.deps.startupApprovals.publishPending("startup");
     return this.pendingLaunchApprovals(target);
   }
@@ -82,14 +90,24 @@ export class HostTargetLaunchCoordinator {
   }
 
   async launch(target: HostTarget): Promise<HostTargetLaunchResult> {
-    return await this.resolveLaunch(target);
+    this.reportLaunchActivity(target, "requested");
+    const result = await this.resolveLaunch(target);
+    if (result.status !== "approval-required" && result.status !== "preparing") {
+      this.reportLaunchActivity(target, "settled");
+    }
+    return result;
   }
 
   async beginLaunch(target: HostTarget): Promise<HostTargetLaunchSessionSnapshot> {
+    this.reportLaunchActivity(target, "requested");
     const existing = [...this.sessions.values()].find(
       (session) => session.target === target && !session.settled
     );
-    if (existing) return await this.refreshSessionForBegin(existing.sessionId);
+    if (existing) {
+      const refreshed = await this.refreshSessionForBegin(existing.sessionId);
+      if (refreshed.settled) this.reportLaunchActivity(target, "settled");
+      return refreshed;
+    }
 
     const now = Date.now();
     const session: HostTargetLaunchSessionSnapshot = {
@@ -107,11 +125,15 @@ export class HostTargetLaunchCoordinator {
       settled: false,
     };
     this.sessions.set(session.sessionId, session);
-    return await this.refreshSessionForBegin(session.sessionId);
+    const refreshed = await this.refreshSessionForBegin(session.sessionId);
+    if (refreshed.settled) this.reportLaunchActivity(target, "settled");
+    return refreshed;
   }
 
-  getLaunchSession(sessionId: string): HostTargetLaunchSessionSnapshot | null {
-    return this.sessions.get(sessionId) ?? null;
+  async getLaunchSession(sessionId: string): Promise<HostTargetLaunchSessionSnapshot | null> {
+    const current = this.sessions.get(sessionId) ?? null;
+    if (!current || current.settled) return current;
+    return await this.refreshSession(sessionId, { emit: false }).catch(() => current);
   }
 
   async resolveLaunchSessionApproval(
@@ -140,6 +162,7 @@ export class HostTargetLaunchCoordinator {
       };
       this.sessions.set(sessionId, denied);
       this.emitSession(denied);
+      this.reportLaunchActivity(session.target, "settled");
       return denied;
     }
     const approved = {
@@ -164,12 +187,15 @@ export class HostTargetLaunchCoordinator {
   }
 
   cancelLaunchSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
+    if (session) this.reportLaunchActivity(session.target, "settled");
   }
 
   async ensureMobileHostReadyForPairing(
     source?: string | null
   ): Promise<MobileHostReadinessForPairing> {
+    this.reportLaunchActivity("react-native", "requested");
     const pendingBeforeLaunch = await this.pendingOrPublishedStartupApprovals("react-native");
     if (pendingBeforeLaunch.length > 0) {
       const readiness = approvalRequiredReadiness(
@@ -187,6 +213,7 @@ export class HostTargetLaunchCoordinator {
 
     const readiness = await appHost.ensureReactNativeReady(source, { waitForApproval: false });
     if (readiness.ready) {
+      this.reportLaunchActivity("react-native", "settled");
       return readiness;
     }
 
@@ -232,8 +259,9 @@ export class HostTargetLaunchCoordinator {
   }
 
   private async resolveLaunch(target: HostTarget): Promise<HostTargetLaunchResult> {
-    const pending = await this.pendingOrPublishedStartupApprovals(target);
-    if (pending.length > 0) return approvalRequiredResult(target, pending);
+    await this.deps.awaitStartupUnitReconcile?.();
+    const alreadyPending = this.pendingLaunchApprovals(target);
+    if (alreadyPending.length > 0) return approvalRequiredResult(target, alreadyPending);
 
     const appHost = this.deps.getAppHost();
     if (!appHost) return unavailableResult(target, "App host is not available", []);
@@ -245,6 +273,8 @@ export class HostTargetLaunchCoordinator {
         details: this.hostTargetPreparingDetails(target, launch.details),
       };
     }
+    const pending = await this.pendingOrPublishedStartupApprovals(target);
+    if (pending.length > 0) return approvalRequiredResult(target, pending);
     if (
       target === "react-native" &&
       launch.status === "unavailable" &&
@@ -279,8 +309,15 @@ export class HostTargetLaunchCoordinator {
       (session) => session.target === target && !session.settled
     );
     for (const session of sessions) {
-      await this.refreshSession(session.sessionId, { emit: true }).catch(() => {});
+      const refreshed = await this.refreshSession(session.sessionId, { emit: true }).catch(
+        () => null
+      );
+      if (refreshed?.settled) this.reportLaunchActivity(target, "settled");
     }
+  }
+
+  private reportLaunchActivity(target: HostTarget, phase: "requested" | "settled"): void {
+    this.deps.onLaunchActivity?.(target, phase);
   }
 
   private async refreshSessionForBegin(
@@ -363,20 +400,26 @@ export class HostTargetLaunchCoordinator {
     // building extensions count as "preparing".
     const rnAppSource = this.deps.getAppHost()?.selectedHostTargetAppSource("react-native") ?? null;
     const rnAppPackageName = rnAppSource ? tryWorkspaceAppPackageName(rnAppSource) : null;
-    const building = this.deps
+    const requiredExtensionSources = new Set(
+      this.deps.getRequiredExtensionSources?.("react-native") ?? []
+    );
+    const progressing = this.deps
       .getTrustedUnitHosts()
       .flatMap((host) => host.listWorkspaceUnits())
       .filter(
         (unit) =>
-          unit.status === "building" &&
-          (unit.kind === "extension" ||
-            (rnAppSource !== null && unit.source === rnAppSource) ||
-            (rnAppPackageName !== null && unit.name === rnAppPackageName))
+          ((unit.status === "building" || unit.status === "pending-approval") &&
+            (unit.kind === "extension" ||
+              (rnAppSource !== null && unit.source === rnAppSource) ||
+              (rnAppPackageName !== null && unit.name === rnAppPackageName))) ||
+          (unit.kind === "extension" &&
+            unit.status === "running" &&
+            requiredExtensionSources.has(unit.source))
       );
-    if (building.length === 0) return null;
+    if (progressing.length === 0) return null;
     return [
       ...details,
-      ...building.map((unit) => `${unit.name} (${unit.source}) status: ${unit.status}`),
+      ...progressing.map((unit) => `${unit.name} (${unit.source}) status: ${unit.status}`),
     ];
   }
 

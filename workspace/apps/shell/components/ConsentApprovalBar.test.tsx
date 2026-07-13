@@ -116,7 +116,7 @@ function userlandApproval(
   };
 }
 
-function startupApproval(approvalId: string): PendingUnitBatchApproval {
+function hostAppStartupApproval(approvalId: string): PendingUnitBatchApproval {
   return {
     kind: "unit-batch",
     trigger: "startup",
@@ -125,18 +125,19 @@ function startupApproval(approvalId: string): PendingUnitBatchApproval {
     repoPath: "meta",
     effectiveVersion: "ev",
     requestedAt: Date.now(),
-    title: "Approve native extension",
+    title: "Approve host app",
     description: "startup",
     approvalId,
     units: [
       {
-        unitKind: "extension",
-        unitName: "@workspace-extensions/ext",
-        displayName: "Extension",
+        unitKind: "app",
+        unitName: "@workspace-apps/shell",
+        displayName: "Shell",
         version: "0.1.0",
-        source: { kind: "workspace-repo", repo: "extensions/ext", ref: "main" },
-        ev: "ev-ext",
-        capabilities: ["node:fs"],
+        target: "electron",
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
+        ev: "ev-shell",
+        capabilities: ["panel-hosting"],
       },
     ],
   };
@@ -220,9 +221,9 @@ describe("ConsentApprovalBar coordinator", () => {
     expect((overlay.options?.props?.queue as { total: number }).total).toBe(3);
   });
 
-  it("excludes startup approvals from the runtime overlay", async () => {
+  it("excludes host-app startup approvals from the runtime overlay", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      startupApproval("extension-startup"),
+      hostAppStartupApproval("app-startup"),
       userlandApproval({ approvalId: "runtime", title: "Runtime approval" }),
     ]);
     mountBar();

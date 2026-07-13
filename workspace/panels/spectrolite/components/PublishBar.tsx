@@ -24,12 +24,18 @@ import { useApp, useAppState } from "../app/context";
 import type { PublishSnapshot } from "../app/publishController";
 import { getPublishPresentation } from "./publishPresentation";
 
-export function PublishBar({ mobile = false, trailing }: { mobile?: boolean; trailing?: ReactNode }) {
+export function PublishBar({
+  mobile = false,
+  trailing,
+}: {
+  mobile?: boolean;
+  trailing?: ReactNode;
+}) {
   const app = useApp();
   const snapshot = useSyncExternalStore(
     (cb) => app.publish.subscribe(cb),
     () => app.publish.getSnapshot(),
-    () => app.publish.getSnapshot(),
+    () => app.publish.getSnapshot()
   );
   // Working-copy dirtiness (uncommitted local edits). With deliberate commits
   // there is no commit-per-keystroke stream, so the "unpublished" indicator must
@@ -50,9 +56,15 @@ export function PublishBar({ mobile = false, trailing }: { mobile?: boolean; tra
       py="2"
       className="spectrolite-publish-bar"
       data-testid="spectrolite-publish-bar"
-      style={{ borderTop: "1px solid var(--gray-4)", minHeight: mobile ? 52 : undefined }}
+      style={{
+        borderTop: "1px solid var(--gray-4)",
+        minHeight: mobile ? 52 : undefined,
+        width: "100%",
+        maxWidth: "100%",
+        boxSizing: "border-box",
+      }}
     >
-      <Flex align="center" gap="2" style={{ minWidth: 0 }}>
+      <Flex align="center" gap="2" style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden" }}>
         <span
           aria-hidden
           style={{
@@ -84,7 +96,7 @@ export function PublishBar({ mobile = false, trailing }: { mobile?: boolean; tra
       </Flex>
       {/* On mobile the Send action lives here (one action bar, not a separate
           strip), so the editor keeps maximum vertical room. */}
-      <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
+      <Flex align="center" gap="2" style={{ flex: "0 0 auto", minWidth: 0 }}>
         {trailing}
         {snapshot.behind ? (
           <Button
@@ -130,7 +142,13 @@ function buildReportSummary(reports: PublishSnapshot["buildReport"]): string {
   return `Build failed — ${where} ${first.message}${more}`;
 }
 
-function PendingMergeBar({ snapshot, mobile = false }: { snapshot: PublishSnapshot; mobile?: boolean }) {
+function PendingMergeBar({
+  snapshot,
+  mobile = false,
+}: {
+  snapshot: PublishSnapshot;
+  mobile?: boolean;
+}) {
   const app = useApp();
   const conflicts = snapshot.pending?.conflicts ?? [];
   const mapping = app.vault.mapping();
@@ -161,7 +179,8 @@ function PendingMergeBar({ snapshot, mobile = false }: { snapshot: PublishSnapsh
         <Flex align="center" gap="2" style={{ minWidth: 0 }}>
           <ExclamationTriangleIcon color="var(--amber-11)" />
           <Text size="1" color="amber" truncate>
-            Pull from main needs resolving ({conflicts.length} file{conflicts.length === 1 ? "" : "s"})
+            Pull from main needs resolving ({conflicts.length} file
+            {conflicts.length === 1 ? "" : "s"})
           </Text>
         </Flex>
         <Flex align="center" gap="1" style={{ flexShrink: 0 }}>
@@ -221,7 +240,12 @@ function PendingMergeBar({ snapshot, mobile = false }: { snapshot: PublishSnapsh
               className="spectrolite-publish-conflict-row"
               data-testid={`spectrolite-publish-conflict-${index}`}
             >
-              <Badge size="1" color="amber" variant="soft" data-testid={`spectrolite-publish-conflict-kind-${index}`}>
+              <Badge
+                size="1"
+                color="amber"
+                variant="soft"
+                data-testid={`spectrolite-publish-conflict-kind-${index}`}
+              >
                 {conflict.kind}
               </Badge>
               <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>

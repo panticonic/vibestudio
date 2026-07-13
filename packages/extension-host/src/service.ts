@@ -254,6 +254,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private fetchRequestBodies = new Map<string, FetchRequestBodyStream>();
   private activeInvocations = new Map<string, ExtensionInvocation>();
   private registeredBuildProviderTargets = new Map<string, Set<BuildProviderTarget>>();
+  private activationTails = new Map<string, Promise<void>>();
   private readonly sourceChangeGrants: UnitSourceChangeGrantStore;
 
   constructor(private readonly deps: ExtensionHostDeps) {
@@ -427,7 +428,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
    */
   async reconcileDeclared(
     declared: Array<{ source: string; ref: string }>,
-    opts: { trigger?: UnitReconcileTrigger } = {}
+    opts: {
+      trigger?: UnitReconcileTrigger;
+      removeUndeclared?: boolean;
+      waitFor?: "staged" | "applied";
+    } = {}
   ): Promise<void> {
     await this.unitHost.reconcileDeclared(declared, opts);
   }
@@ -454,15 +459,22 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
     decl: UnitDeclaration
   ): Promise<void> {
-    await this.unitHost.applyRuntimeDeclaration({
-      node,
-      decl,
-      validateBeforeActivateCurrent: () =>
-        this.validateExtensionManifestAtPath(node.path, node.name),
-      needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node),
-      buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref),
-      activateCurrent: async () => this.activate(node.name),
-    });
+    try {
+      await this.unitHost.applyRuntimeDeclaration({
+        node,
+        decl,
+        validateBeforeActivateCurrent: () =>
+          this.validateExtensionManifestAtPath(node.path, node.name),
+        needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node),
+        buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref),
+        activateCurrent: async () => this.activate(node.name),
+      });
+    } catch (error) {
+      console.error(
+        `[ExtensionHost] Failed to activate ${node.name}: ${error instanceof Error ? error.message : String(error)}`
+      );
+      throw error;
+    }
   }
 
   private pendingEntryFor(
@@ -1598,6 +1610,10 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   }
 
   async activate(name: string): Promise<void> {
+    await this.runActivationExclusive(name, () => this.activateOnce(name));
+  }
+
+  private async activateOnce(name: string): Promise<void> {
     const entry = this.registry.get(name);
     if (!entry?.activeBundleKey) throw new Error(`Extension has no active approved build: ${name}`);
     const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
@@ -1620,6 +1636,10 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   }
 
   private async buildAndActivate(name: string, ref?: string): Promise<void> {
+    await this.runActivationExclusive(name, () => this.buildAndActivateOnce(name, ref));
+  }
+
+  private async buildAndActivateOnce(name: string, ref?: string): Promise<void> {
     const node = this.findExtensionNode(name);
     const previous = this.registry.get(node.name);
     this.unitHost.markBuilding(node.name);
@@ -1641,7 +1661,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       status: "building",
     });
     try {
-      await this.activate(node.name);
+      await this.activateOnce(node.name);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (previous?.activeBundleKey) {
@@ -1656,7 +1676,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           lastError: message,
         });
         try {
-          await this.activate(node.name);
+          await this.activateOnce(node.name);
         } catch (rollbackErr) {
           this.registry.patch(node.name, {
             status: "error",
@@ -1667,17 +1687,28 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         }
       } else {
         this.registry.patch(node.name, {
-          activeEv: previous?.activeEv ?? null,
-          activeSourceHash: previous?.activeSourceHash ?? null,
-          activeBundleKey: previous?.activeBundleKey ?? null,
-          activeDependencyEvs: previous?.activeDependencyEvs ?? {},
-          activeExternalDeps: previous?.activeExternalDeps ?? {},
-          activeRuntimeDepsKey: previous?.activeRuntimeDepsKey ?? null,
           status: "error",
           lastError: message,
         });
       }
       throw err;
+    }
+  }
+
+  private async runActivationExclusive(
+    name: string,
+    operation: () => Promise<void>
+  ): Promise<void> {
+    const previous = this.activationTails.get(name) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const tail = result.catch(() => {});
+    this.activationTails.set(name, tail);
+    try {
+      await result;
+    } finally {
+      if (this.activationTails.get(name) === tail) {
+        this.activationTails.delete(name);
+      }
     }
   }
 

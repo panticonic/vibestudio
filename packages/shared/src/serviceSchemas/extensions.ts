@@ -166,10 +166,9 @@ export const extensionsMethods = defineServiceMethods({
   },
   log: {
     description: "Extension-only: write a structured log record (level, message, optional fields).",
-    args: z.tuple([
-      z.enum(["debug", "info", "warn", "error"]),
-      z.string(),
-      z.record(z.unknown()).optional(),
+    args: z.union([
+      z.tuple([z.enum(["debug", "info", "warn", "error"]), z.string()]),
+      z.tuple([z.enum(["debug", "info", "warn", "error"]), z.string(), z.record(z.unknown())]),
     ]),
     returns: z.null(),
     access: EXTENSION_REPORT_ACCESS,

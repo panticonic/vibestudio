@@ -223,6 +223,19 @@ export function MainScreen() {
       webViewRefsMap.current.get(panelId)?.deliverEnvelope(envelope);
     });
   }, [shellClient]);
+  useEffect(() => {
+    if (!shellClient) return;
+    return shellClient.onRecoveryComplete((kind) => {
+      if (kind !== "cold-recover") return;
+      // A restarted server has discarded every panel-side RPC session. Keep
+      // external browser tabs untouched, but reload managed panels after the
+      // authoritative snapshot is recovered so they recreate their bridge
+      // sessions and fetch assets through the restored WebRTC facade.
+      for (const entry of webViewStackRef.current) {
+        if (entry.managed) webViewRefsMap.current.get(entry.panelId)?.reload();
+      }
+    });
+  }, [shellClient]);
   const handleWebViewUnmount = useCallback(
     (panelId: string) => {
       webViewRefsMap.current.delete(panelId);

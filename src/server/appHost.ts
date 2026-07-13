@@ -1657,6 +1657,25 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   }
 
   private async applyDeclared(node: AppGraphNode, decl: WorkspaceAppDeclaration): Promise<void> {
+    if (
+      this.appTarget(node, decl) === "react-native" &&
+      !this.deps.buildSystem.getBuildProviderDetails?.("react-native")
+    ) {
+      // The native host supplies the React Native build provider when a mobile
+      // client connects. A desktop-only server is therefore waiting for a
+      // capability, not observing a failed app build. Preserve an existing
+      // runnable bundle; otherwise keep a clean stopped entry that provider
+      // registration can reconcile on demand.
+      const existing = this.registry.get(node.name) ?? null;
+      if (!existing) this.registry.upsert(this.pendingEntryFor(node, decl));
+      const deferred = this.registry.patch(node.name, {
+        status: existing?.activeBundleKey ? "running" : "stopped",
+        lastError: null,
+        lastErrorDetails: null,
+      });
+      this.emitStatus(deferred.name, deferred.status, null);
+      return;
+    }
     await this.unitHost.applyRuntimeDeclaration({
       node,
       decl,
@@ -2448,12 +2467,16 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   }
 
   private async reconcileAfterProviderChange(_providerName: string): Promise<void> {
-    this.emitDevStatusDiagnostic("provider-change");
     const source = this.getSelectedReactNativeSource();
     if (!source) return;
     const candidate = this.listHostTargetCandidates("react-native").find(
       (item) => item.source === normalizeRepoPath(source) || item.name === source
     );
+    // Provider activation invalidates readiness but must not implicitly build
+    // the mobile app during a desktop or terminal launch. Active React Native
+    // launch sessions are refreshed by the coordinator and explicitly call
+    // ensureReactNativeReady() themselves.
+    this.emitDevStatusDiagnostic("provider-change");
     const entry = candidate ? this.registry.get(candidate.name) : null;
     if (entry) this.emitStatus(entry.name, entry.status, entry.lastError);
   }
@@ -2480,11 +2503,10 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     await this.unitHost.reconcileDeclared([{ ...declared }], {
       trigger: "startup",
       removeUndeclared: false,
+      waitFor: opts.waitForApproval === false ? "staged" : "applied",
     });
     if (opts.waitForApproval !== false) {
       await this.whenSettled();
-    } else {
-      await this.whenReconciled();
     }
     this.emitDevStatusDiagnostic(`launch:${target}`);
   }
@@ -2566,9 +2588,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         const target = this.appTarget(node, decl);
         const activeEv = entry?.activeEv ? shortId(entry.activeEv) : "none";
         const activeBuild = entry?.activeBundleKey ? shortId(entry.activeBundleKey) : "none";
+        const error =
+          entry?.status === "error" && entry.lastError
+            ? ` error=${JSON.stringify(entry.lastError)}`
+            : "";
 
         rows.push(
-          `${node.name} target=${target} source=${node.relativePath} ref=${decl.ref} status=${entry?.status ?? "uninstalled"} ev=${activeEv} build=${activeBuild}`
+          `${node.name} target=${target} source=${node.relativePath} ref=${decl.ref} status=${entry?.status ?? "uninstalled"} ev=${activeEv} build=${activeBuild}${error}`
         );
       } catch (error) {
         rows.push(

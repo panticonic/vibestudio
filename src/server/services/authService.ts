@@ -542,6 +542,7 @@ export function createAuthService(deps: {
       methods: ["POST"],
       auth: "public",
       handler: async (req, res) => {
+        const startedAt = Date.now();
         try {
           if (!deps.getMobileAppBootstrap) {
             sendJson(res, 503, {
@@ -555,6 +556,9 @@ export function createAuthService(deps: {
           const readiness = await deps.ensureMobileAppReady?.(body.source ?? null);
           if (readiness && !readiness.ready) {
             const approvalRequired = readiness.approvalRequired === true;
+            console.info(
+              `[mobile-bootstrap] not ready elapsedMs=${Date.now() - startedAt} reason=${JSON.stringify(readiness.reason ?? "unavailable")}`
+            );
             sendJson(res, approvalRequired ? 409 : 503, {
               error: [
                 readiness.reason ?? "No approved React Native workspace app is available",
@@ -567,12 +571,20 @@ export function createAuthService(deps: {
           }
           const bootstrap = await deps.getMobileAppBootstrap(body.source ?? null);
           if (!bootstrap) {
+            console.info(`[mobile-bootstrap] no bootstrap elapsedMs=${Date.now() - startedAt}`);
             sendJson(res, 404, {
               error: "No approved React Native workspace app is available",
               code: "MOBILE_APP_UNAVAILABLE",
             });
             return;
           }
+          const bootstrapBuildKey =
+            typeof bootstrap === "object" && "buildKey" in bootstrap
+              ? String(bootstrap.buildKey)
+              : "unknown";
+          console.info(
+            `[mobile-bootstrap] ready elapsedMs=${Date.now() - startedAt} build=${bootstrapBuildKey}`
+          );
           sendJson(res, 200, {
             serverId: deps.deviceAuthStore.getServerId(),
             serverBootId: deps.getServerBootId(),
@@ -580,7 +592,10 @@ export function createAuthService(deps: {
             bootstrap,
           });
         } catch (error) {
-          sendAuthError(res, error, 400);
+          console.error(
+            `[mobile-bootstrap] failed elapsedMs=${Date.now() - startedAt}: ${error instanceof Error ? error.message : String(error)}`
+          );
+          sendAuthError(res, error, 401);
         }
       },
     },

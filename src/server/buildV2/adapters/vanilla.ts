@@ -4,7 +4,6 @@ export const vanillaAdapter: FrameworkAdapter = {
   id: "vanilla",
 
   dedupePackages: [],
-  forcedSplitPackages: [],
 
   // No JSX transform
   jsx: undefined,

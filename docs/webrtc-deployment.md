@@ -163,6 +163,20 @@ pnpm smoke:cloudflare:signaling -- --expect-turn
 pnpm smoke:cloudflare:apex -- --expect-app-links
 ```
 
+Run the real desktop and Android clients through the deployed signaling route:
+
+```bash
+pnpm test:desktop-pairing-smoke
+pnpm smoke:full -- --android-avd NatStack_Test
+```
+
+These commands start the normal `vibestudio remote serve` hub in an isolated
+home, run `vibestudio remote invite --workspace default`, and assert that the
+workspace child's invite contains `wss://signal.vibestudio.app/`. Android
+emulators attempt normal host/STUN/TURN ICE by default. Add `--require-turn` for
+a relay-readiness pass that fails during preflight when the service is still
+STUN-only. Use `--local-signaling` only for an offline Miniflare/coturn run.
+
 ## Run A Server
 
 Signaling resolves as flag > environment > config > hosted default:

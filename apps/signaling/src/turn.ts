@@ -74,10 +74,19 @@ export async function mintIceServers(
     env.VIBESTUDIO_LOCAL_TURN_PASS
   ) {
     const port = env.VIBESTUDIO_LOCAL_TURN_PORT ?? "3478";
+    const lanUrl = `turn:${env.VIBESTUDIO_LOCAL_TURN_HOST}:${port}?transport=udp`;
     return {
       iceServers: [
         {
-          urls: `turn:${env.VIBESTUDIO_LOCAL_TURN_HOST}:${port}?transport=udp`,
+          // The server reaches coturn through the host LAN address. Android's
+          // QEMU NAT reaches the same listeners reliably through its reserved
+          // host alias even when host-LAN hairpinning is unavailable.
+          urls: [
+            lanUrl,
+            `turn:10.0.2.2:${port}?transport=udp`,
+            `turn:10.0.2.2:${port}?transport=tcp`,
+            `turn:127.0.0.1:${port}?transport=tcp`,
+          ],
           username: env.VIBESTUDIO_LOCAL_TURN_USER,
           credential: env.VIBESTUDIO_LOCAL_TURN_PASS,
         },

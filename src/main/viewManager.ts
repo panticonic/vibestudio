@@ -1109,6 +1109,16 @@ export class ViewManager {
     if (this.shellOverlayActive === active) return;
     this.shellOverlayActive = active;
 
+    if (active) {
+      // A shell dialog lives in the hosted shell WebContentsView. CSS z-index
+      // cannot put it above a separate native panel WebContentsView, so enforce
+      // the overlay invariant across every panel surface, including fallback or
+      // transitioning panels that are not represented by an active slot.
+      for (const managed of this.views.values()) {
+        if (managed.type === "panel") managed.view.setVisible(false);
+      }
+    }
+
     if (this.nativePanelSlots.activeSlots.size > 0) {
       this.refreshActivePanelSlots();
       return;
@@ -1415,7 +1425,11 @@ export class ViewManager {
     if (now - lastCycleTime < 1000) return;
     this.lastVisibilityCycleTimeByView.set(managed.id, now);
     managed.view.setVisible(false);
-    managed.view.setVisible(true);
+    // Compositor recovery must not resurrect a native panel above a shell DOM
+    // dialog. The normal overlay-close refresh will restore the active surface.
+    if (!(this.shellOverlayActive && managed.type === "panel")) {
+      managed.view.setVisible(true);
+    }
   }
 
   /**

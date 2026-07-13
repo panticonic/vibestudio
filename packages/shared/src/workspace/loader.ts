@@ -17,7 +17,11 @@ import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "../chromeTrust.js";
-export { resolveDeclaredApps, resolveDeclaredExtensions } from "./configParser.js";
+export {
+  resolveDeclaredApps,
+  resolveDeclaredExtensions,
+  resolveHostTargetRequiredExtensions,
+} from "./configParser.js";
 
 const log = createDevLogger("Workspace");
 const DESKTOP_AUTO_APPROVE_ONCE_FILE = "desktop-auto-approve-once";

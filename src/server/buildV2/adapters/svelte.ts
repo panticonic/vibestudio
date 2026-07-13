@@ -8,8 +8,6 @@ export const svelteAdapter: FrameworkAdapter = {
 
   dedupePackages: ["svelte", "svelte/internal"],
 
-  forcedSplitPackages: [],
-
   // Svelte uses its own compiler, no JSX
   jsx: undefined,
   tsconfigJsx: undefined,

@@ -19,6 +19,7 @@ import { EventService } from "@vibestudio/shared/eventsService";
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
 import { isDev } from "./utils.js";
+import { cleanupNodeDatachannel } from "./webrtc/nodeDatachannelPeer.js";
 import { maybeNotifyNpmUpdate } from "./updateCheck.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
@@ -104,6 +105,14 @@ function writeHeadlessStartupError(error: unknown, wsDir?: string): void {
     );
   } catch (writeError) {
     console.error("[headless] Failed to write startup-error.json:", writeError);
+  }
+}
+
+function cleanupNativeWebRtc(): void {
+  try {
+    cleanupNodeDatachannel();
+  } catch (error) {
+    console.error("[App] Native WebRTC cleanup failed:", formatUnknownError(error));
   }
 }
 
@@ -3113,6 +3122,7 @@ app.on("ready", async () => {
       cdpHostProvider = null;
     }
     await Promise.all(cleanupPromises);
+    cleanupNativeWebRtc();
 
     console.error("[App] Startup failed:", formatUnknownError(error));
     if (!IS_HEADLESS_HOST && mainWindow) {
@@ -3265,6 +3275,7 @@ app.on("will-quit", (event) => {
   Promise.all(stopPromises).finally(() => {
     shellCore?.shutdown?.();
     shellCore = null;
+    cleanupNativeWebRtc();
     clearTimeout(shutdownTimeout);
     console.log("[App] Shutdown complete");
     app.exit(0);

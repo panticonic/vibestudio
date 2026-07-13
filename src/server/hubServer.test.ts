@@ -18,6 +18,7 @@ import { DeviceAuthStore } from "./services/deviceAuthStore.js";
 import {
   applyHubWorkspacePresenceReport,
   buildHubReadyPayload,
+  buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
   handleRpc,
   HubCompletePairingBodySchema,
@@ -125,6 +126,21 @@ describe("ephemeral workspace evidence retention", () => {
     prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-current", remove);
 
     expect(remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildWorkspaceChildArgs", () => {
+  it("uses only current server flags and binds the child gateway to loopback", () => {
+    const args = buildWorkspaceChildArgs({
+      entry: "/app/dist/server.mjs",
+      workspaceName: "default",
+      appRoot: "/app",
+      readyFile: "/tmp/ready.json",
+    });
+
+    expect(args).not.toContain("--protocol");
+    expect(args[args.indexOf("--host") + 1]).toBe("127.0.0.1");
+    expect(args[args.indexOf("--bind-host") + 1]).toBe("127.0.0.1");
   });
 });
 

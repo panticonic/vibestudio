@@ -27,9 +27,9 @@
  *     triggers libdatachannel to gather and emit the actual local description.
  *
  * The native module is loaded LAZILY (only when a peer is actually created) and
- * through a renamed `require` binding so esbuild cannot hoist it to an eager
- * top-level import (see `build.mjs` — bare `require()` calls get lifted). If the
- * prebuilt addon is absent, `create()` fails loud with an actionable message;
+ * through `createRequire` so bundled ESM CLIs never hit esbuild's unsupported
+ * dynamic-require shim. If the prebuilt addon is absent, `create()` fails loud
+ * with an actionable message;
  * importing this module (and the pure helpers below) never touches it, so the
  * test suite runs without the binary.
  */
@@ -349,22 +349,34 @@ interface NativePeerConnectionCtor {
 
 interface NodeDatachannelModule {
   PeerConnection: NativePeerConnectionCtor;
+  cleanup?: () => void;
 }
 
 let cachedModule: NodeDatachannelModule | null = null;
 
 /**
+ * Tear down libdatachannel's process-global callback/runtime state before the
+ * Electron Node environment exits. Closing individual peers is not sufficient:
+ * the addon otherwise tries to release N-API callback handles during teardown.
+ */
+export function cleanupNodeDatachannel(): void {
+  const mod = cachedModule;
+  cachedModule = null;
+  mod?.cleanup?.();
+}
+
+/**
  * Load the native addon lazily and fail loud if absent. The `require` is reached
- * through a renamed binding so esbuild leaves it as a runtime call (it only
- * rewrites/bundles calls to the literal `require`); in the CJS Electron-main
- * bundle that renamed binding is the ambient `require`, and in the standalone
- * ESM build / test runner it falls back to `createRequire`.
+ * through `createRequire`. Bundled entrypoints inject `__filename`; unbundled
+ * ESM tests use this module's URL. This keeps the native addon lazy without
+ * relying on esbuild's dynamic-require compatibility shim.
  */
 function loadNodeDatachannel(): NodeDatachannelModule {
   if (cachedModule) return cachedModule;
   try {
-    const runtimeRequire: NodeRequire =
-      typeof require === "function" ? require : createRequire(import.meta.url);
+    const runtimeRequire = createRequire(
+      typeof __filename === "string" && __filename ? __filename : import.meta.url
+    );
     const mod = runtimeRequire("node-datachannel") as Partial<NodeDatachannelModule>;
     if (typeof mod?.PeerConnection !== "function") {
       throw new Error("module did not export a PeerConnection constructor");
@@ -438,7 +450,8 @@ class WrappedDataChannel implements RtcDataChannelLike {
   }
 
   send(data: Uint8Array): void {
-    this.dc.sendMessageBinary(toNodeBuffer(data));
+    const sent = this.dc.sendMessageBinary(toNodeBuffer(data));
+    if (!sent) throw new Error(`data channel '${this.label}' rejected ${data.byteLength} bytes`);
   }
 
   close(): void {

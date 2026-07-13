@@ -16,8 +16,10 @@
     "@vibestudio/shared": "workspace:*",
     "@react-native-community/netinfo": "^11.4.1",
     "react-native-keychain": "^9.2.2",
-    "react-native-webrtc": "^124.0.5",
     "web-streams-polyfill": "^3.3.3"
+  },
+  "peerDependencies": {
+    "react-native-webrtc": "^124.0.5"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

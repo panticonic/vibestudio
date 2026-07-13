@@ -62,11 +62,11 @@ export interface RuntimeEntityHooks {
     parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
   }) => Promise<{ targetId: string; effectiveVersion: string }>;
 
-  /** Resolve effective version for "panel" entities (no runtime prep). */
-  resolvePanelEffectiveVersion: (args: {
+  /** Start the lazy runtime image for a panel entity and resolve its EV. */
+  preparePanel: (args: {
     source: string;
     ref: string | undefined;
-  }) => Promise<string>;
+  }) => Promise<{ effectiveVersion: string }>;
 
   /** Resolve effective version for "app" entities (no runtime prep). */
   resolveAppEffectiveVersion: (args: {
@@ -464,12 +464,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     } else {
       canonicalId = canonicalEntityId({ kind: "panel", key });
       existing = await store.resolveRecord(canonicalId);
-      const resolvedVersion = await deps.hooks.resolvePanelEffectiveVersion({
+      const prepared = await deps.hooks.preparePanel({
         source: spec.source,
         ref: spec.ref,
       });
       effectiveVersion =
-        existing?.status === "retired" ? existing.source.effectiveVersion : resolvedVersion;
+        existing?.status === "retired"
+          ? existing.source.effectiveVersion
+          : prepared.effectiveVersion;
       targetId = canonicalId;
     }
 

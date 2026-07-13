@@ -281,6 +281,47 @@ describe("PanelHttpServer build cache", () => {
     expect(getBuild).toHaveBeenCalledWith("panels/my-app", "state:abc123");
   });
 
+  it("reuses an entity-primed build flight and waits for the requested artifact", async () => {
+    const server = new PanelHttpServer();
+    let resolveBuild!: (result: typeof buildResult) => void;
+    const primedBuild = new Promise<typeof buildResult>((resolve) => {
+      resolveBuild = resolve;
+    });
+    const getBuild = vi.fn(() => primedBuild);
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(async () => buildResult),
+    });
+    server.primeBuild("panels/my-app", undefined, getBuild);
+
+    const responsePending = handlePanelRequest(server, "/panels/my-app/bundle.js");
+    await Promise.resolve();
+    expect(getBuild).toHaveBeenCalledOnce();
+    resolveBuild(buildResult);
+    const response = await responsePending;
+
+    expect(response.statusCodeWritten).toBe(200);
+    expect(response.body).toBe("console.log('hi')");
+  });
+
+  it("serves a theme-adaptive build error page", async () => {
+    const server = new PanelHttpServer();
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(async () => {
+        throw new Error("broken build");
+      }),
+    });
+
+    const response = await handlePanelRequest(server, "/panels/my-app/");
+    const body = String(response.body);
+
+    expect(response.statusCodeWritten).toBe(500);
+    expect(body).toContain("--error-bg: #fff1f2");
+    expect(body).toContain("@media (prefers-color-scheme: dark)");
+    expect(body).toContain("broken build");
+  });
+
   it("does not serve a main entry artifact for a referer-less ref-pinned asset path", async () => {
     const server = new PanelHttpServer();
     const mainBuild = {

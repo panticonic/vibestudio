@@ -57,6 +57,36 @@ describe("VcsGcScheduler", () => {
     scheduler.stop();
   });
 
+  it("does not start its initial delay until interactive startup work completes", async () => {
+    let releaseStartup!: () => void;
+    const startupBarrier = new Promise<void>((resolve) => {
+      releaseStartup = resolve;
+    });
+    const runGc = vi.fn(gcResult);
+    const scheduler = new VcsGcScheduler({
+      workspaceVcs: {
+        attached: true,
+        runGc,
+        reindexKnownRepos: vi.fn(async () => {}),
+        pruneProvenanceSoftState: vi.fn(async () => {}),
+      } as SchedulerVcs,
+      startupBarrier,
+      initialDelayMs: 25,
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runGc).not.toHaveBeenCalled();
+
+    releaseStartup();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(24);
+    expect(runGc).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runGc).toHaveBeenCalledTimes(1);
+    scheduler.stop();
+  });
+
   it("runs the reindex + prune passes even when GC throws (independently guarded)", async () => {
     const runGc = vi.fn(async () => {
       throw new Error("gc boom");
