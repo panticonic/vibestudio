@@ -45,6 +45,9 @@ body,
   --surface-card: var(--gray-4);
   --surface-raised: var(--gray-3);
   --surface-border: var(--gray-a7);
+  /* Approval cards already have a border and tone ring. Keep their light-mode
+     lift compact enough for the native overlay's 16px transparent margin. */
+  --approval-card-shadow: 0 4px 12px var(--gray-a5), 0 1px 3px var(--black-a3);
 }
 
 .radix-themes:where(.dark, .dark-theme) {
@@ -52,6 +55,7 @@ body,
   --surface-card: var(--gray-3);
   --surface-raised: var(--gray-4);
   --surface-border: var(--gray-a7);
+  --approval-card-shadow: var(--elevation-overlay);
 }
 
 .app-shell-theme {
@@ -85,6 +89,13 @@ body,
   /* Structural panes fill their slot flush — the rounded global radius is for
      controls (buttons, rows, badges), not these big rectangular containers. */
   border-radius: 0;
+}
+
+/* The tree is persistent shell chrome, not panel content. In light mode its
+   raised surface was nearly identical to pale panel pages, so keep it on the
+   slightly deeper chrome step used by the surrounding shell. */
+.app-shell-panel-card[data-shell-panel-sidebar="true"] {
+  background-color: var(--app-chrome-bg);
 }
 
 /* Radix Card paints its surface border on `::after`, so the element's
@@ -264,7 +275,7 @@ body,
   box-shadow:
     inset 0 0 0 1px var(--surface-border),
     0 0 0 1px var(--approval-ring),
-    var(--elevation-overlay);
+    var(--approval-card-shadow, var(--elevation-overlay));
   transform-origin: top left;
   animation: approval-card-in var(--motion-emphasized) var(--ease-emphasized);
   outline: none;
