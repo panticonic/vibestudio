@@ -77,6 +77,38 @@ async function readBodyLength(stream: ReadableStream<Uint8Array>): Promise<numbe
 }
 
 describe("MobileAssetMemoryCache oversized-asset handling", () => {
+  it("streams a first immutable miss while populating the cache", async () => {
+    const cache = new MobileAssetMemoryCache(1000);
+    let sourceController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let fetches = 0;
+    const fetcher = () => {
+      fetches += 1;
+      return Promise.resolve({
+        ...cacheableResponse(0),
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            sourceController = controller;
+          },
+        }),
+      });
+    };
+
+    const first = await cache.serve("/cold-abc.js", fetcher);
+    expect(first.kind).toBe("passthrough");
+    if (first.kind !== "passthrough") throw new Error("expected a streaming cache miss");
+
+    const reader = first.response.body!.getReader();
+    sourceController!.enqueue(new Uint8Array([1, 2, 3]));
+    await expect(reader.read()).resolves.toMatchObject({ done: false, value: new Uint8Array([1, 2, 3]) });
+    sourceController!.close();
+    await expect(reader.read()).resolves.toMatchObject({ done: true });
+    reader.releaseLock();
+
+    const hit = await cache.serve("/cold-abc.js", fetcher);
+    expect(hit.kind).toBe("asset");
+    expect(fetches).toBe(1);
+  });
+
   it("does not cache an asset larger than the byte budget (re-fetches next time)", async () => {
     const cache = new MobileAssetMemoryCache(100);
     let fetches = 0;

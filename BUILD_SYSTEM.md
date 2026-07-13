@@ -110,6 +110,13 @@ are stored in the central SHA-256 CAS and hardlinked into each workspace build
 directory. Identical bundles, chunks, and assets therefore occupy one physical
 copy across workspaces without sharing workspace-specific metadata.
 
+Managed workspaces also publish completed immutable build results into the
+central `build-cache/`. Because the build key includes the unit effective
+version, build mode, sourcemap setting, and runtime/provider ABI inputs, another
+workspace with the same key can activate that result directly without running
+the builder again. The request still carries its own current workspace state;
+the cached metadata records the state that originally materialized the bytes.
+
 Whole-build ref targeting is a separate concept (see `refs.ts` / `RuntimeEntityBuildRef`): a build ref is `main`, `state:<stateHash>`, or `ctx:<contextId>` — not a git branch/commit/tag.
 
 ### Effective Version Computation (`effectiveVersion.ts`)
@@ -150,7 +157,7 @@ Two build strategies, selected by unit kind:
 - Plugins: workspace resolve, `.js` → `.ts` rewrite, `fs` shim, `path` shim, React/react-dom dedupe
 - `fs` shim imports `{ fs as _fs }` from `@workspace/runtime` and re-exports individual methods as wrapper functions
 - `path` shim delegates to `pathe` (browser-compatible)
-- Forced split points for known heavy modules (`@mdx-js/mdx`, `typescript`, `monaco-editor`, etc.)
+- Eager panel dependencies stay in the primary artifact; chunks are reserved for genuine dynamic imports so remote clients do not waterfall through synthetic startup dependencies
 - Manifest `externals` produce an import map in the generated HTML
 - Manifest `exposeModules` register modules on `globalThis.__vibestudioModuleMap__`
 - Output: `bundle.js` + `bundle.css` + `index.html` + `assets/`
