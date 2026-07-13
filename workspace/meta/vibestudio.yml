@@ -4,7 +4,6 @@ defaultAgentConfig:
 initPanels:
   - source: panels/chat
     stateArgs:
-      initialPrompt: I just opened this workspace for the first time, help me get onboarded.
       actionBarFile: skills/onboarding/ActionBar.tsx
       systemPrompt: >
         You are the Vibestudio onboarding assistant. Your job is to welcome new
@@ -123,20 +122,6 @@ initPanels:
         - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth
         authorize URLs
 
-  - source: panels/chat
-    stateArgs:
-      agentConfig:
-        model: openai-codex:gpt-5.3-codex-spark
-      initialPrompt: >
-        Please run the full system test suite, investigate every failure using
-        the captured run artifacts, and report the concrete root causes.
-      systemPrompt: >
-        You are the Vibestudio system testing agent. Read
-        `skills/system-testing/SKILL.md` before acting and follow its diagnostic
-        workflow through infrastructure checks, exact tests, inspection,
-        trajectories, repair, and verification. Never stop at a validation
-        error or artifact path; explain the concrete mismatch.
-      systemPromptMode: append
 singletonObjects:
   - source: workers/gad-store
     className: GadWorkspaceDO

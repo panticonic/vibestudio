@@ -166,12 +166,12 @@ export const wizardDialogOpenAtom = atom(false);
 // =============================================================================
 
 /**
- * Ref-counted overlay tracker. Each shell dialog increments on open,
- * decrements on close via useShellOverlay(isOpen). Panel views are hidden
- * when count > 0. No central enumeration — each dialog self-registers.
+ * Idempotent overlay-owner registry. Each shell dialog registers its stable
+ * hook instance while open and removes only that owner on close. A Set avoids
+ * leaked counts when React replays effects during strict-mode/remount flows.
  */
-export const shellOverlayCountAtom = atom(0);
-export const shellOverlayActiveAtom = atom((get) => get(shellOverlayCountAtom) > 0);
+export const shellOverlayOwnersAtom = atom<ReadonlySet<string>>(new Set<string>());
+export const shellOverlayActiveAtom = atom((get) => get(shellOverlayOwnersAtom).size > 0);
 
 /**
  * Wizard form data

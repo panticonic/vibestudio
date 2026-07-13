@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { useSetAtom } from "jotai";
-import { shellOverlayCountAtom } from "../state/appModeAtoms";
+import { shellOverlayOwnersAtom } from "../state/appModeAtoms";
 
 /**
  * Register a shell overlay. When `isOpen` is true, panel WebContentsViews
@@ -13,13 +13,24 @@ import { shellOverlayCountAtom } from "../state/appModeAtoms";
  *   useShellOverlay(dialogIsOpen);
  */
 export function useShellOverlay(isOpen: boolean): void {
-  const setCount = useSetAtom(shellOverlayCountAtom);
+  const ownerId = useId();
+  const setOwners = useSetAtom(shellOverlayOwnersAtom);
 
   useEffect(() => {
     if (!isOpen) return;
-    setCount((c) => c + 1);
+    setOwners((current) => {
+      if (current.has(ownerId)) return current;
+      const next = new Set(current);
+      next.add(ownerId);
+      return next;
+    });
     return () => {
-      setCount((c) => c - 1);
+      setOwners((current) => {
+        if (!current.has(ownerId)) return current;
+        const next = new Set(current);
+        next.delete(ownerId);
+        return next;
+      });
     };
-  }, [isOpen, setCount]);
+  }, [isOpen, ownerId, setOwners]);
 }

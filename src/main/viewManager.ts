@@ -2019,6 +2019,10 @@ export class ViewManager {
     return null;
   }
 
+  getShellOverlayActive(): boolean {
+    return this.shellOverlayActive;
+  }
+
   openHostChromeAppDevTools(mode: "detach" | "right" | "bottom" = "detach"): boolean {
     const appId = this.getVisibleHostChromeAppId();
     if (!appId) return false;

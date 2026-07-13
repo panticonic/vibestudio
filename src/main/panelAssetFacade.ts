@@ -63,7 +63,7 @@ const log = createDevLogger("PanelAssetFacade");
  *    duration. A multi-MB bundle over slow TURN keeps arming the timer on every
  *    chunk, so only a genuine no-progress stall trips it.
  */
-const ASSET_CONNECT_BACKSTOP_MS = 30_000;
+const ASSET_CONNECT_BACKSTOP_MS = 60_000;
 const ASSET_STALL_BACKSTOP_MS = 30_000;
 
 /** Distinguishes a backstop/cancel abort from a generic pipe error (nicer copy). */
@@ -335,7 +335,11 @@ async function handleRequest(
           "gateway",
           "fetch",
           [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
-          { signal: controller.signal, ...(requestBody ? { body: requestBody } : {}) }
+          {
+            signal: controller.signal,
+            headTimeoutMs: backstops.connectMs,
+            ...(requestBody ? { body: requestBody } : {}),
+          }
         ),
       controller,
       reqPath,
