@@ -172,10 +172,9 @@ async function loadWithMocks(): Promise<{
   const diagnosticsStore = await import("./diagnosticsStore.js");
   const graph = discoverPackageGraph(workspaceRoot);
   const buildSystem = await initBuildSystemV2(workspaceRoot, fakeSource(workspaceRoot, graph), []);
-  // Let the background initial-build prewarm settle so it does not race later
-  // assertions, then start from a clean call log.
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  buildCalls = [];
+  // Initialization only discovers/version-tracks units. Actual panel/worker
+  // builds are demand-driven by their runtime access paths.
+  expect(buildCalls).toEqual([]);
 
   return {
     buildSystem,

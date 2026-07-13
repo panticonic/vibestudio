@@ -193,18 +193,17 @@ export interface UnitBuildStatus {
 /**
  * Result of `statusAt(viewHash)` — a PURE cache read over recorded/cached
  * per-unit build results at an exact composed view. Never triggers a build.
- * Deliberately coarser than a `validate` report: it answers "were the eagerly-
- * maintained units at this view built, and did any fail," NOT required-vs-
- * informational push classification (that is `validate`'s job). This is the
- * approval gate's host-sourced prompt build-status line (plan §5 / §2.2).
+ * Deliberately coarser than a `validate` report: it answers whether buildable
+ * units changed from the published workspace state were built, and whether any
+ * failed. Required-vs-informational classification remains `validate`'s job.
  */
 export interface BuildStatusAt {
-  /** True iff every eagerly-built unit at this view has a cached-or-recorded
-   *  result (no `unknown`). False for unknown/never-validated views. */
+  /** True iff every changed buildable unit has a cached-or-recorded result (no
+   * `unknown`). A resolvable content-only/unchanged view is already validated. */
   validated: boolean;
   /** True iff any unit at this view has a recorded build failure. */
   failed?: boolean;
-  /** Per-unit statuses for the eagerly-built units at this view. */
+  /** Per-unit statuses for buildable units changed from published state. */
   unitStatuses?: UnitBuildStatus[];
 }
 
@@ -272,13 +271,6 @@ export interface BuildSystemRootOptions {
    * under user data but dependencies are installed from <appRoot>/workspace.
    */
   dependencyWorkspaceRoot?: string;
-  /**
-   * Awaited before the initial missing-build prewarm pool starts, so the
-   * background compiles do not steal CPU from launch-critical app/extension
-   * builds during startup. Best-effort: rejections are swallowed and the wait
-   * is capped, so prewarm always eventually runs.
-   */
-  holdInitialPrewarm?: () => Promise<void>;
 }
 
 export interface BuildSystemV2 extends RepoPushValidator {
@@ -512,23 +504,10 @@ export async function initBuildSystemV2(
     persistEvState({ stateHash, evMap, contentHashes });
   }
 
-  // Step 3: Identify missing non-trusted builds. The prewarm runs after the
-  // build system is usable, so startup can continue to the app host while
-  // unrelated workspace units compile in the background.
-  const buildableNodes = graph
-    .allNodes()
-    // Trusted units are built only after the approval/reconcile path.
-    .filter((n) => isNodeBuildable(n) && n.kind !== "extension" && n.kind !== "app");
-
-  const missingInitialBuilds = buildableNodes.filter((node) => {
-    const ev = evMap[node.name];
-    if (!ev) return false;
-    return !buildStore.has(computeBuildKey(node.name, ev, sourcemapForNode(node)));
-  });
-  let shuttingDown = false;
-  let initialBuildPrewarm: Promise<void> = Promise.resolve();
-
-  // Step 4: Start the state trigger (subscribes to vcs state advances)
+  // Step 3: Start the state trigger (subscribes to vcs state advances).
+  // Panels and workers build on demand through getBuild/bindRuntimeImage; a
+  // broad speculative startup build competes with the first unit a user
+  // actually opens and makes shutdown wait for unrelated sample/test units.
   const trigger = new StateTransitionTrigger({
     graph,
     evMap,
@@ -585,42 +564,6 @@ export async function initBuildSystemV2(
       }
     }
   });
-
-  if (missingInitialBuilds.length > 0) {
-    console.log(
-      `[BuildV2] Prewarming ${missingInitialBuilds.length} missing non-app units in background...`
-    );
-    const holdInitialPrewarm = rootOptions.holdInitialPrewarm;
-    initialBuildPrewarm = (async () => {
-      if (holdInitialPrewarm) {
-        // Startup-critical unit builds go first. Cap the hold so prewarm still
-        // runs when startup stalls (e.g. an unanswered trust approval).
-        await Promise.race([
-          holdInitialPrewarm().catch(() => {}),
-          new Promise<void>((resolve) => setTimeout(resolve, INITIAL_PREWARM_MAX_HOLD_MS).unref()),
-        ]);
-        console.log(`[BuildV2] Startup builds settled; starting initial build prewarm`);
-      } else {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      if (shuttingDown) return;
-      await prewarmInitialBuilds({
-        nodes: missingInitialBuilds,
-        evMap,
-        graph,
-        workspaceRoot,
-        stateHash,
-        recordBuildEvent,
-      }).catch((error: unknown) => {
-        console.error(
-          "[BuildV2] Initial build prewarm failed:",
-          error instanceof Error ? error.message : String(error)
-        );
-      });
-    })();
-  } else {
-    console.log(`[BuildV2] All builds up-to-date`);
-  }
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -1046,11 +989,10 @@ export async function initBuildSystemV2(
 
   /**
    * `build.statusAt` (plan §2.2 / §5). PURE lookup over recorded/cached per-unit
-   * results at an exact composed view — never calls `buildUnit`. Scoped to the
-   * eagerly-maintained buildable units (panels/about/workers), matching the set
-   * the state trigger keeps warm at main and the GC active set; extensions/apps
-   * are activation-gated (not baseline-built) so they are intentionally out of
-   * this coarse read. A unit is `failed` when the most recent recorded
+   * results at an exact composed view — never calls `buildUnit`. Scoped to
+   * non-trusted buildable units whose EV differs from the published state;
+   * unchanged units need no candidate build, and extensions/apps remain
+   * activation-gated. A unit is `failed` when the most recent recorded
    * diagnostics for that key carry errors, `ok` when no error diagnostics are
    * recorded and its runtime build key is in the store, else `unknown` (never
    * validated at this EV).
@@ -1064,16 +1006,17 @@ export async function initBuildSystemV2(
       return { validated: false };
     }
     const unitStatuses: UnitBuildStatus[] = [];
+    const published = currentState();
     let anyFailed = false;
     let anyUnknown = false;
-    let anyChecked = false;
     for (const node of view.graph.allNodes()) {
-      // Same set the state trigger builds eagerly at main (see prewarm + GC
-      // active set): buildable, excluding activation-gated extensions/apps.
+      // Trusted extensions/apps are validated by their approval/activation
+      // path. Unchanged non-trusted units already have published-state evidence
+      // and do not need a speculative candidate build.
       if (!isNodeBuildable(node) || node.kind === "extension" || node.kind === "app") continue;
       const ev = view.evMap[node.name];
       if (!ev) continue;
-      anyChecked = true;
+      if (published.evMap[node.name] === ev) continue;
       const buildKey = computeBuildUnitKey(node, ev);
       let status: UnitBuildStatus["status"];
       const diagnostics = diagnosticsForBuildKey(buildKey);
@@ -1089,7 +1032,7 @@ export async function initBuildSystemV2(
       unitStatuses.push({ unit: node.name, status });
     }
     return {
-      validated: anyChecked && !anyUnknown,
+      validated: !anyUnknown,
       ...(anyFailed ? { failed: true } : {}),
       unitStatuses,
     };
@@ -1664,8 +1607,6 @@ export async function initBuildSystemV2(
     },
 
     async shutdown(): Promise<void> {
-      shuttingDown = true;
-      await initialBuildPrewarm.catch(() => {});
       trigger.stop();
       setBuildSourceProvider(null);
       console.log("[BuildV2] Shut down");
@@ -1676,71 +1617,6 @@ export async function initBuildSystemV2(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-interface InitialBuildPrewarmOptions {
-  nodes: GraphNode[];
-  evMap: EffectiveVersionMap;
-  graph: PackageGraph;
-  workspaceRoot: string;
-  stateHash: string;
-  recordBuildEvent(event: Omit<BuildSystemBuildEvent, "relativePath" | "timestamp">): void;
-}
-
-async function prewarmInitialBuilds(opts: InitialBuildPrewarmOptions): Promise<void> {
-  await runLimited(opts.nodes, initialBuildPrewarmConcurrency(), async (node) => {
-    const ev = opts.evMap[node.name];
-    if (!ev) return;
-    const buildKey = computeBuildUnitKey(node, ev);
-    if (buildStore.has(buildKey)) {
-      opts.recordBuildEvent({ type: "build-complete", name: node.name, buildKey });
-      return;
-    }
-
-    opts.recordBuildEvent({ type: "build-started", name: node.name });
-    try {
-      await buildUnit(node, ev, opts.graph, opts.workspaceRoot, opts.stateHash);
-      opts.recordBuildEvent({ type: "build-complete", name: node.name, buildKey });
-      console.log(`[BuildV2] Prewarmed ${node.name}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const diagnostics = diagnosticsFromError(error, opts.workspaceRoot);
-      recordDiagnostics(node.name, buildKey, diagnostics);
-      opts.recordBuildEvent({
-        type: "build-error",
-        name: node.name,
-        error: message,
-        diagnostics,
-      });
-      console.error(`[BuildV2] Failed to prewarm ${node.name}:`, message);
-    }
-  });
-  console.log(`[BuildV2] Initial build prewarm complete`);
-}
-
-/** Upper bound on deferring the initial prewarm behind startup unit builds. */
-const INITIAL_PREWARM_MAX_HOLD_MS = 3 * 60 * 1000;
-
-function initialBuildPrewarmConcurrency(): number {
-  const raw = Number.parseInt(process.env["VIBESTUDIO_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);
-  if (Number.isInteger(raw) && raw > 0) return raw;
-  return 4;
-}
-
-async function runLimited<T>(
-  items: readonly T[],
-  concurrency: number,
-  task: (item: T) => Promise<void>
-): Promise<void> {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const item = items[next++];
-      if (item === undefined) continue;
-      await task(item);
-    }
-  });
-  await Promise.all(workers);
-}
 
 function resolveUnit(
   graph: PackageGraph,
