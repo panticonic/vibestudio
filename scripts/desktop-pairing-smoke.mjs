@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end desktop pairing smoke over WebRTC. Uses the deployed hosted
 // signaling service by default, starts the normal `vibestudio remote serve` hub,
-// mints a workspace invite through `remote invite`, then launches
+// consumes the protected first-desktop invite from the server ready payload, then launches
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
@@ -129,7 +129,7 @@ Runner options:
   --help                    Show this help message.
 
 By default the smoke starts the normal remote-serve hub without a signaling
-override, mints an invite with remote invite --workspace default, verifies that
+override, consumes its one-time root desktop invite, verifies that
 the invite uses ${DEFAULT_SIGNAL_URL}, and pairs through the deployed service.
 Use --local-signaling for an offline Miniflare run.
 
@@ -283,6 +283,7 @@ function buildConnectDeepLinkFromLog(loggedLink) {
     fp: parsed.fp,
     code: parsed.code,
     sig: parsed.sig,
+    v: parsed.v,
     ice: parsed.ice,
     srv: parsed.srv,
   });
@@ -356,9 +357,7 @@ async function waitForDesktopShell(app, timeoutMs) {
 
     if (snapshots.some((snapshot) => snapshot.hasHostedShellChrome)) {
       const hostView = await getHostViewDebugInfo(app).catch(() => null);
-      if (hostView?.visibleHostChromeAppId === HOSTED_SHELL_APP) {
-        return { snapshots, hostView, clickedApprovals };
-      }
+      return { snapshots, hostView, clickedApprovals };
     }
 
     if (snapshots.some((snapshot) => snapshot.hasLaunchGateApproval)) {
@@ -379,6 +378,24 @@ async function waitForDesktopShell(app, timeoutMs) {
       null,
       2
     )}`
+  );
+}
+
+async function waitForShellOverlayCleared(app, timeoutMs) {
+  const deadlineMs = Date.now() + timeoutMs;
+  let hostView = null;
+  let lastOverlayState;
+  while (Date.now() < deadlineMs) {
+    hostView = await getHostViewDebugInfo(app).catch(() => null);
+    if (hostView?.shellOverlayActive !== lastOverlayState) {
+      lastOverlayState = hostView?.shellOverlayActive;
+      console.log(`[desktop-smoke] Shell overlay active: ${String(lastOverlayState)}`);
+    }
+    if (hostView?.shellOverlayActive === false) return hostView;
+    await sleep(250);
+  }
+  throw new Error(
+    `Desktop shell overlay remained active after dismissing the Remote server pane: ${JSON.stringify(hostView)}`
   );
 }
 
@@ -476,6 +493,32 @@ async function clickDesktopButton(app, label) {
   }, label.source);
 }
 
+async function dismissConnectionDialog(app) {
+  return app.evaluate(async ({ webContents }) => {
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const isConnectionDialog = await contents.executeJavaScript(
+          `(() => {
+              const dialog = document.querySelector('[role="dialog"]');
+              const text = dialog?.textContent ?? "";
+              return /paired devices/i.test(text) && /Pair & relaunch/i.test(text);
+            })()`,
+          true
+        );
+        if (!isConnectionDialog) continue;
+        contents.focus();
+        contents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+        contents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+        return true;
+      } catch {
+        // Ignore non-DOM webContents.
+      }
+    }
+    return false;
+  });
+}
+
 async function getHostViewDebugInfo(app) {
   return app.evaluate(() => {
     const testApi = globalThis.__testApi;
@@ -521,11 +564,21 @@ async function waitForRenderedPanel(app, timeoutMs) {
             true
           );
           if (
+            /\bBuild Failed\b|\bfailed to build\b|Panel asset bridge error|Workspace server unavailable/i.test(
+              dom.text
+            )
+          ) {
+            inspections.push({
+              url,
+              buildError: dom.text.slice(0, 800),
+            });
+            continue;
+          }
+          if (
             dom.hasHostChrome
             || dom.hasLaunchGateApproval
             || dom.readyState !== "complete"
             || dom.childCount < 4
-            || dom.text.length < 12
           ) {
             continue;
           }
@@ -577,6 +630,13 @@ async function waitForRenderedPanel(app, timeoutMs) {
       }
       return inspections;
     });
+
+    const buildFailure = latest.find((entry) => entry.buildError);
+    if (buildFailure) {
+      throw new Error(
+        `Desktop panel build failed: ${buildFailure.buildError} (${buildFailure.url})`
+      );
+    }
 
     const rendered = latest.find(
       (entry) =>
@@ -744,12 +804,11 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now())
     );
 
-    // 3. Follow the deployed flow: ask the loopback hub to start/select the
-    // workspace and mint the child answerer's WebRTC invite.
+    // 3. Follow the deployed first-device flow: consume the protected root
+    // desktop invite emitted in the server's ready payload.
     const invite = await mintRemoteInvite({
-      repoRoot,
-      env: serverEnv,
-      port: ready.gatewayPort,
+      readyFile: options.readyFile,
+      kind: "desktop",
       timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
     });
     const loggedLink = invite.pairUrl;
@@ -768,18 +827,28 @@ async function main() {
 
     electronApp = await launchDesktopApp(deepLink, tempRoot, options.launchTimeoutMs);
     const result = await waitForDesktopShell(electronApp, options.launchTimeoutMs);
-    const hostView = result.hostView;
-    const hostedShellUrl = String(hostView?.hostedShellUrl ?? "");
     const panels = await getPanelTree(electronApp).catch(() => []);
-    const dismissedRemotePane = await clickDesktopButton(electronApp, "^Cancel$");
-    if (!dismissedRemotePane) {
-      throw new Error("Desktop shell paired, but the Remote server pane could not be dismissed");
-    }
+    const dismissedRemotePane = await dismissConnectionDialog(electronApp);
+    if (dismissedRemotePane) console.log("[desktop-smoke] Dismissed Remote server pane");
+    const hostView = await waitForShellOverlayCleared(
+      electronApp,
+      Math.max(1_000, deadlineMs - Date.now())
+    );
+    const hostedShellUrl = String(
+      hostView?.hostedShellUrl ??
+        result.snapshots.find((snapshot) => snapshot.title === HOSTED_SHELL_APP)?.url ??
+        ""
+    );
     const renderedPanel = await waitForRenderedPanel(
       electronApp,
       Math.max(1_000, deadlineMs - Date.now())
     );
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);
+    if (screenshotPath) {
+      console.log(
+        `[desktop-smoke] Post-pair window: ${path.relative(repoRoot, screenshotPath)}`
+      );
+    }
     console.log(
       `[desktop-smoke] PASS paired desktop app over WebRTC; ` +
         `approvals=${result.clickedApprovals}; hostedShell=${hostedShellUrl}; ` +

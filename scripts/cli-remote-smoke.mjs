@@ -251,9 +251,8 @@ async function main() {
     children.push(server);
     const ready = await waitForReadyFile(readyFile, server, deadlineMs);
     const invite = await mintRemoteInvite({
-      repoRoot,
-      env: serverEnv,
-      port: ready.gatewayPort,
+      readyFile,
+      kind: "desktop",
       timeoutMs: Math.max(1_000, deadlineMs - Date.now()),
     });
     const pairing = parseConnectLink(invite.pairUrl);
@@ -282,8 +281,15 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now()),
       "remote pair"
     );
-    const expectedPrefix = `webrtc://${pairing.room}/_workspace/`;
-    if (typeof pair.url !== "string" || !pair.url.startsWith(expectedPrefix)) {
+    const pairedUrl = typeof pair.url === "string" ? new URL(pair.url) : null;
+    const expectedWorkspace = pairing.srv ?? "default";
+    if (
+      !pairedUrl ||
+      pairedUrl.protocol !== "webrtc:" ||
+      !pairedUrl.hostname ||
+      pairedUrl.hostname === pairing.room ||
+      pairedUrl.pathname !== `/_workspace/${expectedWorkspace}`
+    ) {
       throw new Error(`remote pair returned an unexpected URL: ${JSON.stringify(pair)}`);
     }
 
