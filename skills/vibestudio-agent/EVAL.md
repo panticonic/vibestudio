@@ -19,17 +19,25 @@ top-level `await` and `return` are allowed. The session's eval scope is
 selected by `--session`; the owner is your verified CLI identity, so eval runs
 against that session's context (fs/git/vcs) automatically.
 
+A trailing async IIFE is implicitly returned and awaited. Prefix it with
+`void` only when detached background execution is intentional; otherwise use
+top-level `await`, `return`, or the trailing IIFE so failures reach the caller.
+
 ## Bindings available to your code
 
-| Binding | What it is |
-|---------|------------|
-| `rpc.call(method, args)` | Raw RPC: `await rpc.call("vcs.status", ["ctx:" + ctx.contextId])` |
+| Binding                                  | What it is                                                                                                                                                                                                                          |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rpc.call(method, args)`                 | Raw RPC: `await rpc.call("vcs.status", ["ctx:" + ctx.contextId])`                                                                                                                                                                   |
 | `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `workers.resolveService`: `const svc = await rpc.call("workers.resolveService", ["vibestudio.testkit-driver.v1", null]); await rpc.callTarget(svc.targetId, "ping", [])` |
-| `services` | Proxy over rpc: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])` |
-| `fs` | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})` |
-| `ctx` | `{contextId, sessionId, workspaceId, serverUrl}` |
-| `scope` | Persistent REPL scope (see below): `scope.results = data` survives across runs |
-| `help()` | `await help()` lists services + import guidance; `await help("vcs")` describes one service |
+| `services`                               | Proxy over rpc: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`                                                                                                                                          |
+| `fs`                                     | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})`                                                                                                 |
+| `ctx`                                    | `{contextId, sessionId, workspaceId, serverUrl}`                                                                                                                                                                                    |
+| `scope`                                  | Persistent REPL scope (see below): `scope.results = data` survives across runs                                                                                                                                                      |
+| `help()`                                 | `await help()` lists services + import guidance; `await help("vcs")` describes one service                                                                                                                                          |
+
+CLI-owned eval does not inject the agent-only `chat` or `agent` bindings. Use
+`vibestudio channel ...` for conversation operations and pass agent configuration
+explicitly to CLI-oriented orchestration APIs.
 
 ```bash
 vibestudio eval run -e '
@@ -58,7 +66,7 @@ vibestudio eval run --imports '{"lodash":"npm:4","@workspace/gad":"latest"}' -e 
 '
 ```
 
-- The map value is a *ref*, not a package name: `npm:<version>` for npm
+- The map value is a _ref_, not a package name: `npm:<version>` for npm
   packages (installed/bundled server-side on demand), `"latest"` or a git
   ref (branch/tag/SHA) for `@workspace/*` packages.
 - `@workspace/*` packages resolve to server-built library bundles, including
@@ -74,11 +82,33 @@ panel or worker gets — no imports map entry needed. The full list is in
 
 ```ts
 import {
-  gad, workspace, vcs, git, credentials, webhooks, extensions, approvals, notifications,
-  callMain, parent, getParent, getParentWithContract,
-  workers, doTargetId, createDurableObjectServiceClient,
-  openPanel, listPanels, getPanelHandle, panelTree, openExternal,
-  gatewayConfig, gatewayFetch, rpc, fs, id, contextId,
+  gad,
+  workspace,
+  vcs,
+  git,
+  credentials,
+  webhooks,
+  extensions,
+  approvals,
+  notifications,
+  callMain,
+  parent,
+  getParent,
+  getParentWithContract,
+  workers,
+  doTargetId,
+  createDurableObjectServiceClient,
+  openPanel,
+  listPanels,
+  getPanelHandle,
+  panelTree,
+  openExternal,
+  gatewayConfig,
+  gatewayFetch,
+  rpc,
+  fs,
+  id,
+  contextId,
 } from "@workspace/runtime";
 ```
 
@@ -107,9 +137,10 @@ where `console` is the formatted console output captured during the run and
 
 ## Timeouts and exit codes
 
-- `--timeout MS` (default 120000) bounds how long the CLI waits for the
-  server. On timeout the CLI stops waiting and exits `4`; the eval may keep
-  running server-side.
+- `--timeout MS` opts into a bound on how long the CLI waits; it is unbounded
+  when omitted. The same deadline is passed to the EvalDO. On timeout the CLI
+  stops waiting and exits `4`; cancellation is requested server-side, though a
+  wedged downstream operation may take additional time to unwind.
 - Exit codes: `0` success · `1` eval threw / RPC error · `2` usage (bad
   flags, conflicting code sources) · `3` not paired/unreachable · `4` timeout ·
   `5` stale session.

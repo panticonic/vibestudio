@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSandbox } from "./sandbox";
 
 describe("executeSandbox", () => {
@@ -19,22 +19,27 @@ describe("executeSandbox", () => {
       if (id in moduleMap) return moduleMap[id];
       throw new Error(`Module not found: ${id}`);
     };
-    (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = async (ids: string[]) => (
+    (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = async (
+      ids: string[]
+    ) =>
       ids.map((id) => {
         if (id in moduleMap) return moduleMap[id];
         throw new Error(`Module not found: ${id}`);
-      })
-    );
+      });
   });
 
   afterEach(() => {
-    if (originalModuleMap === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
+    if (originalModuleMap === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
     else (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] = originalModuleMap;
-    if (originalRequire === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
+    if (originalRequire === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
     else (globalThis as Record<string, unknown>)["__vibestudioRequire__"] = originalRequire;
-    if (originalPreload === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
+    if (originalPreload === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
     else (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = originalPreload;
-    if (originalLoadImport === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
+    if (originalLoadImport === undefined)
+      delete (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
     else (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"] = originalLoadImport;
   });
 
@@ -74,6 +79,188 @@ describe("executeSandbox", () => {
     expect(result.returnValue).toBe(3);
   });
 
+  it("awaits a trailing async IIFE as the eval result", async () => {
+    const result = await executeSandbox(
+      "(async () => { await Promise.resolve(); return 42; })();",
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: 42 });
+  });
+
+  it("returns a trailing object literal like a notebook REPL", async () => {
+    const result = await executeSandbox(
+      "const path = 'probe.txt';\nconst actorId = 'agent:1';\n{ path, actorId, turnId: 'turn:1' }",
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      returnValue: { path: "probe.txt", actorId: "agent:1", turnId: "turn:1" },
+    });
+  });
+
+  it("repairs transport-escaped whitespace outside literals", async () => {
+    const result = await executeSandbox(
+      String.raw`return { first: 1,\n second: 2, text: "keep,\\n literal" };`,
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      returnValue: { first: 1, second: 2, text: "keep,\\n literal" },
+    });
+  });
+
+  it("repairs a missing call parenthesis before a line-ending semicolon", async () => {
+    const result = await executeSandbox(
+      "const list = [{repoPath: 'demo'}];\nconsole.log(JSON.stringify({count:list.length, repos:list.map(s=>s.repoPath)});\nreturn list.length;",
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: 1 });
+  });
+
+  it("does not treat parentheses inside a regular-expression literal as unmatched calls", async () => {
+    const result = await executeSandbox('const value = /\\(/.test("("); return value;', {
+      syntax: "typescript",
+    });
+
+    expect(result).toMatchObject({ success: true, returnValue: true });
+  });
+
+  it("repairs a leaked tool-call JSON suffix after otherwise complete code", async () => {
+    const result = await executeSandbox('const value = 41;\nreturn value + 1;\n"}', {
+      syntax: "typescript",
+    });
+
+    expect(result).toMatchObject({ success: true, returnValue: 42 });
+  });
+
+  it("lifts direct node:fs sync calls to awaited portable operations", async () => {
+    const files = new Map<string, string | Uint8Array>();
+    const nodeFs = {
+      async writeFile(path: string, data: string | Uint8Array) {
+        files.set(path, data);
+      },
+      async readFile(path: string) {
+        return files.get(path);
+      },
+      async unlink(path: string) {
+        files.delete(path);
+      },
+    };
+    (nodeFs as Record<string, unknown>)["default"] = nodeFs;
+    const moduleMap = { "node:fs": nodeFs };
+
+    const result = await executeSandbox(
+      "import fs from 'node:fs';\nfs.writeFileSync('/tmp/a', 'hello');\nconst text = fs.readFileSync('/tmp/a');\nfs.unlinkSync('/tmp/a');\nreturn { text, gone: !files.has('/tmp/a') };",
+      {
+        syntax: "typescript",
+        bindings: { files },
+        moduleMap,
+        require: (id) => moduleMap[id as keyof typeof moduleMap],
+      }
+    );
+
+    expect(result.success, result.error).toBe(true);
+    expect(result.returnValue).toEqual({ text: "hello", gone: true });
+  });
+
+  it("never injects await into a nested synchronous helper while lifting outer fs calls", async () => {
+    const files = new Map<string, string>();
+    const links = new Map<string, string>();
+    const nodeFs = {
+      async writeFile(path: string, data: string) {
+        files.set(path, data);
+      },
+      async symlink(target: string, path: string) {
+        links.set(path, target);
+      },
+      async readFile(path: string) {
+        return files.get(links.get(path) ?? path);
+      },
+    };
+    (nodeFs as Record<string, unknown>)["default"] = nodeFs;
+    const moduleMap = { "node:fs": nodeFs };
+
+    const result = await executeSandbox(
+      `import fs from "node:fs";
+function cleanup(path: string) {
+  try { if (fs.existsSync(path)) fs.unlinkSync(path); } catch {}
+}
+cleanup("/tmp/link");
+fs.writeFileSync("/tmp/target", "ok");
+fs.symlinkSync("/tmp/target", "/tmp/link", "file");
+return fs.readFileSync("/tmp/link");`,
+      {
+        syntax: "typescript",
+        moduleMap,
+        require: (id) => moduleMap[id as keyof typeof moduleMap],
+      }
+    );
+
+    expect(result.success, result.error).toBe(true);
+    expect(result.returnValue).toBe("ok");
+  });
+
+  it("never injects await into an expression-bodied synchronous arrow", async () => {
+    const nodeFs = {
+      async writeFile() {},
+    };
+    (nodeFs as Record<string, unknown>)["default"] = nodeFs;
+    const moduleMap = { "node:fs": nodeFs };
+
+    const result = await executeSandbox(
+      `import fs from "node:fs";
+const write = () => fs.writeFileSync("/tmp/value", "ok");
+return typeof write;`,
+      {
+        syntax: "typescript",
+        moduleMap,
+        require: (id) => moduleMap[id as keyof typeof moduleMap],
+      }
+    );
+
+    expect(result.success, result.error).toBe(true);
+    expect(result.returnValue).toBe("function");
+  });
+
+  it("accepts JavaScript syntax and lifts bare require('fs') calls", async () => {
+    const files = new Map<string, string>();
+    const fsModule = {
+      async writeFile(path: string, data: string) {
+        files.set(path, data);
+      },
+      async readFile(path: string) {
+        return files.get(path);
+      },
+    };
+    const moduleMap = { fs: fsModule };
+    const result = await executeSandbox(
+      `const fs = require("fs");
+fs.writeFileSync("/tmp/a", "ok");
+return fs.readFileSync("/tmp/a");`,
+      {
+        syntax: "javascript",
+        moduleMap,
+        require: (id) => moduleMap[id as keyof typeof moduleMap],
+      }
+    );
+
+    expect(result.success, result.error).toBe(true);
+    expect(result.returnValue).toBe("ok");
+  });
+
+  it("does not alter semicolons in a valid for header", async () => {
+    const result = await executeSandbox(
+      "let total = 0; for (let i = 0; i < 3; i++) total += i; return total;",
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: 3 });
+  });
+
   it("does not suggest npm imports for unavailable Node built-ins", async () => {
     const result = await executeSandbox(
       'import { spawn } from "node:child_process"; return spawn;',
@@ -105,5 +292,62 @@ describe("executeSandbox", () => {
     expect(result.success).toBe(true);
     expect(result.returnValue).toBe(42);
     expect((globalThis as Record<string, unknown>)["__vibestudioLoadImport__"]).toBeUndefined();
+  });
+
+  it("auto-loads an unscoped manifest-declared workspace unit", async () => {
+    const resolveWorkspaceImport = vi.fn(async (specifier: string) => specifier === "sample-do");
+    const loadImport = Object.assign(
+      vi.fn(async (specifier: string, ref: string | undefined) => {
+        expect(specifier).toBe("sample-do");
+        expect(ref).toBeUndefined();
+        return "module.exports = { answer: 42 };";
+      }),
+      { resolveWorkspaceImport }
+    );
+
+    const result = await executeSandbox('import { answer } from "sample-do"; return answer;', {
+      syntax: "typescript",
+      loadImport,
+    });
+
+    expect(result).toMatchObject({ success: true, returnValue: 42 });
+    expect(resolveWorkspaceImport).toHaveBeenCalledWith("sample-do");
+    expect(loadImport).toHaveBeenCalledOnce();
+  });
+
+  it("keeps unknown npm packages on the explicit npm import path", async () => {
+    const resolveWorkspaceImport = vi.fn(async () => false);
+    const loadImport = Object.assign(vi.fn(), { resolveWorkspaceImport });
+
+    const result = await executeSandbox('import pad from "left-pad"; return pad;', {
+      syntax: "typescript",
+      loadImport,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Module "left-pad" not available');
+    expect(result.error).toContain('"left-pad":"npm:latest"');
+    expect(loadImport).not.toHaveBeenCalled();
+  });
+
+  it("maps a flat workspace alias to an already preloaded canonical module", async () => {
+    const canonical = { answer: 42 };
+    const moduleMap = { "@workspace/runtime": canonical };
+    const loadImport = vi.fn();
+
+    const result = await executeSandbox(
+      'import { answer } from "@workspace-runtime"; return answer;',
+      {
+        syntax: "typescript",
+        imports: { "@workspace-runtime": "workspace-runtime" },
+        moduleMap,
+        loadImport,
+        require: (id) => moduleMap[id as keyof typeof moduleMap],
+      }
+    );
+
+    expect(result).toMatchObject({ success: true, returnValue: 42 });
+    expect(moduleMap["@workspace-runtime" as keyof typeof moduleMap]).toBe(canonical);
+    expect(loadImport).not.toHaveBeenCalled();
   });
 });

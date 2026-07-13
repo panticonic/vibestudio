@@ -19,6 +19,7 @@ import type { ContextFolderManager } from "./contextFolderManager.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { EntityCache } from "./runtime/entityCache.js";
 import {
+  canonicalizeWorkspaceFilePath,
   CONTAINER_SECTIONS,
   splitRepoPath,
   taxonomyRepoForPath,
@@ -200,6 +201,31 @@ async function resolveFsPath(
   return (await resolveFsPathInfo(scope, userPath, options)).path;
 }
 
+/** Resolve a file-oriented path through the workspace's canonical shorthand.
+ * Directory-oriented operations deliberately continue to use resolveFsPath:
+ * a dotted repo id can still be addressed as a directory, while a file call
+ * such as `projects/report.md` consistently addresses
+ * `projects/report/report.md` across fs, vcs, and agent tools. */
+async function resolveFsFilePathInfo(
+  scope: FsCallScope,
+  userPath: string,
+  options: ResolveFsPathOptions = {}
+): Promise<ResolvedFsPath> {
+  return resolveFsPathInfo(
+    scope,
+    scope.unrestricted ? userPath : canonicalizeWorkspaceFilePath(userPath),
+    options
+  );
+}
+
+async function resolveFsFilePath(
+  scope: FsCallScope,
+  userPath: string,
+  options: ResolveFsPathOptions = {}
+): Promise<string> {
+  return (await resolveFsFilePathInfo(scope, userPath, options)).path;
+}
+
 /**
  * Return the caller-visible path after resolving any existing in-sandbox
  * symlink/case aliases. The target file may not exist yet, so resolve the
@@ -213,7 +239,7 @@ async function canonicalContextRelativePath(
   options: { preserveLeaf?: boolean } = {}
 ): Promise<string> {
   const preserveLeaf = options.preserveLeaf ?? false;
-  const resolved = await resolveFsPath(scope, userPath, {
+  const resolved = await resolveFsFilePath(scope, userPath, {
     leafMode: preserveLeaf ? "entry" : "follow",
   });
   if (scope.unrestricted) return resolved;
@@ -245,7 +271,7 @@ async function canonicalContextRelativePath(
  * sandbox-validated, so this is safe for deciding whether an operation acts on
  * a disk-only symlink directory entry. */
 async function isLeafSymlink(scope: FsCallScope, userPath: string): Promise<boolean> {
-  const resolved = await resolveFsPath(scope, userPath, { leafMode: "entry" });
+  const resolved = await resolveFsFilePath(scope, userPath, { leafMode: "entry" });
   try {
     return (await fs.lstat(resolved)).isSymbolicLink();
   } catch (error) {
@@ -1084,9 +1110,7 @@ export class FsService {
         }
         if (force && !(await readWsFile(rel))) {
           const prefix = `${rel}/`;
-          const hasSubtree = (await bridge.listFiles(contextId)).some((p) =>
-            p.startsWith(prefix)
-          );
+          const hasSubtree = (await bridge.listFiles(contextId)).some((p) => p.startsWith(prefix));
           if (!hasSubtree) return { handled: true };
         }
         await commit([{ kind: "delete", path: rel }]);
@@ -1098,7 +1122,9 @@ export class FsService {
         const srcRel = await relOf(args[0] as string);
         const content = (await tracked(srcRel))
           ? await readWsFile(srcRel)
-          : dataToVcsContent(encodeBinary(await fs.readFile(await resolveFsPath(scope, args[0] as string))));
+          : dataToVcsContent(
+              encodeBinary(await fs.readFile(await resolveFsFilePath(scope, args[0] as string)))
+            );
         if (!content) throw codedError("ENOENT", `copyFile: source not found: ${String(args[0])}`);
         await commit([{ kind: "write", path: dstRel, content }]);
         return { handled: true };
@@ -1140,7 +1166,7 @@ export class FsService {
         if (!srcTracked && dstTracked) {
           // Atomic-write pattern: a scratch temp file renamed into a tracked
           // path. Commit its bytes through GAD, then drop the temp file.
-          const srcAbs = await resolveFsPath(scope, args[0] as string);
+          const srcAbs = await resolveFsFilePath(scope, args[0] as string);
           const buf = await fs.readFile(srcAbs);
           await commit([
             { kind: "write", path: dstRel, content: dataToVcsContent(encodeBinary(buf)) },
@@ -1230,7 +1256,12 @@ export class FsService {
           ? { kind: "delete", path: repoRelPath }
           : edit.kind === "chmod"
             ? { kind: "chmod", path: repoRelPath, mode: edit.mode }
-            : { kind: "write", path: repoRelPath, content: edit.content, ...(edit.mode !== undefined ? { mode: edit.mode } : {}) };
+            : {
+                kind: "write",
+                path: repoRelPath,
+                content: edit.content,
+                ...(edit.mode !== undefined ? { mode: edit.mode } : {}),
+              };
       const bucket = byRepo.get(repoPath);
       if (bucket) bucket.push(rerooted);
       else byRepo.set(repoPath, [rerooted]);
@@ -1307,7 +1338,8 @@ export class FsService {
     if (!scope.contextId || scope.unrestricted || !this.vcsBridge) return;
     const p = readScopePath(method, args);
     if (p === null) return;
-    const wsRel = p.replace(/^\/+/, "");
+    const fileOrSearchMethod = method !== "readdir" && method !== "glob";
+    const wsRel = (fileOrSearchMethod ? canonicalizeWorkspaceFilePath(p) : p).replace(/^\/+/, "");
     const repos = scopeForPath(wsRel);
     if (repos === null) return;
     if (repos !== "all" && !(await this.vcsBridge.isTracked(wsRel.replace(/\/+$/, "")))) {
@@ -1375,7 +1407,7 @@ export class FsService {
     switch (method) {
       // ----- File content -----
       case "readFile": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         const encoding = args[1] as string | undefined;
         if (encoding) {
           return fs.readFile(p, encoding as BufferEncoding);
@@ -1385,7 +1417,7 @@ export class FsService {
       }
 
       case "writeFile": {
-        const resolvedPath = await resolveFsPathInfo(scope, args[0] as string);
+        const resolvedPath = await resolveFsFilePathInfo(scope, args[0] as string);
         const p = resolvedPath.path;
         const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
         await ensureDirectWriteParent(scope, p);
@@ -1394,7 +1426,7 @@ export class FsService {
       }
 
       case "appendFile": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
         await ensureDirectWriteParent(scope, p);
         await fs.appendFile(p, data);
@@ -1449,17 +1481,17 @@ export class FsService {
 
       // ----- Stat / metadata -----
       case "stat": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         return serializeStat(await fs.stat(p));
       }
 
       case "lstat": {
-        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
+        const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
         return serializeStat(await fs.lstat(p));
       }
 
       case "exists": {
-        const p = await resolveFsPath(scope, args[0] as string, {
+        const p = await resolveFsFilePath(scope, args[0] as string, {
           leafMode: "allow-dangling",
         });
         try {
@@ -1471,36 +1503,36 @@ export class FsService {
       }
 
       case "access": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         await fs.access(p, args[1] as number | undefined);
         return;
       }
 
       // ----- File manipulation -----
       case "unlink": {
-        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
+        const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
         await fs.unlink(p);
         return;
       }
 
       case "copyFile": {
-        const src = await resolveFsPath(scope, args[0] as string);
-        const dest = await resolveFsPath(scope, args[1] as string);
+        const src = await resolveFsFilePath(scope, args[0] as string);
+        const dest = await resolveFsFilePath(scope, args[1] as string);
         await ensureDirectWriteParent(scope, dest);
         await fs.copyFile(src, dest);
         return;
       }
 
       case "rename": {
-        const oldP = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
-        const newP = await resolveFsPath(scope, args[1] as string, { leafMode: "entry" });
+        const oldP = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
+        const newP = await resolveFsFilePath(scope, args[1] as string, { leafMode: "entry" });
         await ensureDirectWriteParent(scope, newP);
         await fs.rename(oldP, newP);
         return;
       }
 
       case "realpath": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         const real = await fs.realpath(p);
         if (scope.unrestricted || scope.exposeHostPaths) return real;
         // Return relative to root (panel sees paths relative to context root)
@@ -1511,14 +1543,14 @@ export class FsService {
       }
 
       case "truncate": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         await fs.truncate(p, args[1] as number | undefined);
         return;
       }
 
       // ----- Symlinks -----
       case "readlink": {
-        const p = await resolveFsPath(scope, args[0] as string, { leafMode: "entry" });
+        const p = await resolveFsFilePath(scope, args[0] as string, { leafMode: "entry" });
         const target = await fs.readlink(p);
         if (scope.unrestricted) return target;
         // If the target is absolute, relativize to prevent leaking host paths
@@ -1532,27 +1564,61 @@ export class FsService {
         return target;
       }
 
-      // NOTE: `symlink` and `chown` were removed entirely (audit findings #38,
-      // #39): they are sandbox-escape primitives (TOCTOU symlink races,
-      // privilege weirdness on setgid dirs). Internal server code can use raw
-      // Node fs; nothing in the service surface needs them.
+      case "symlink": {
+        const target = args[0] as string;
+        const linkPath = args[1] as string;
+        const type = args[2] as "file" | "dir" | "junction" | undefined;
+        const p = await resolveFsPath(scope, linkPath, { leafMode: "entry" });
+        if (scope.unrestricted) {
+          await ensureDirectWriteParent(scope, p);
+          await fs.symlink(target, p, type);
+          return;
+        }
+        const wsRel = await canonicalContextRelativePath(scope, linkPath, { preserveLeaf: true });
+        const sourceRoot = wsRel.split("/", 1)[0] ?? "";
+        const isWorkspaceSourcePath = this.vcsBridge
+          ? await isGadMutationPath(this.vcsBridge, wsRel)
+          : splitRepoPath(wsRel) !== null || WORKSPACE_SOURCE_ROOTS.has(sourceRoot);
+        if (isWorkspaceSourcePath) {
+          throw codedError(
+            "ENOTSUP",
+            `Symbolic links are supported for context-local scratch paths, not GAD workspace-repo paths: ${JSON.stringify(linkPath)}`
+          );
+        }
+        const virtualLinkDir = path.posix.dirname(linkPath.replaceAll("\\", "/"));
+        const virtualTarget = target.startsWith("/")
+          ? target
+          : path.posix.join(virtualLinkDir, target);
+        const targetPath = await resolveFsPath(scope, virtualTarget, {
+          leafMode: "allow-dangling",
+        });
+        const containedTarget = path.relative(path.dirname(p), targetPath) || ".";
+        await ensureDirectWriteParent(scope, p);
+        await fs.symlink(containedTarget, p, type);
+        return;
+      }
+
+      // `chown` remains absent: ownership mutation is neither portable nor safe
+      // for context callers. Symlink creation above is scratch-only and stores
+      // a target proven to resolve lexically inside the context; every follow-up
+      // operation still revalidates traversal through sandboxPath().
 
       // ----- Permissions & timestamps -----
       case "chmod": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         await fs.chmod(p, args[1] as number);
         return;
       }
 
       case "utimes": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         await fs.utimes(p, args[1] as number, args[2] as number);
         return;
       }
 
       // ----- File handles -----
       case "open": {
-        const p = await resolveFsPath(scope, args[0] as string);
+        const p = await resolveFsFilePath(scope, args[0] as string);
         const flags = (args[1] as string) ?? "r";
         const mode = args[2] as number | undefined;
         const handle = await fs.open(p, flags, mode);
@@ -1669,7 +1735,7 @@ export class FsService {
       GREP_HARD_MAX_MATCHES,
       Math.max(1, Math.floor(opts.maxMatches ?? GREP_DEFAULT_MAX_MATCHES))
     );
-    const searchRoot = await resolveFsPath(scope, opts.path ?? "/");
+    const searchRoot = await resolveFsFilePath(scope, opts.path ?? "/");
 
     const rgPath = findRipgrep();
     const { raw, truncated } = rgPath

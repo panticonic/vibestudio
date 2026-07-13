@@ -25,7 +25,12 @@ describe("buildOwnerBindings", () => {
         describe: () => Promise<unknown>;
         setApprovalLevel: (n: number) => Promise<unknown>;
       };
-      chat: { send: (c: string) => Promise<unknown>; contextId: string; channelId: string };
+      chat: {
+        send: (c: string) => Promise<unknown>;
+        replayEnvelope: (id: string) => Promise<unknown>;
+        contextId: string;
+        channelId: string;
+      };
     };
 
     await b.agent.setModel("openai:gpt-5.3");
@@ -47,6 +52,12 @@ describe("buildOwnerBindings", () => {
 
     await b.chat.send("hi");
     expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", ["chan-1", "send", ["hi"]]);
+    await b.chat.replayEnvelope("event-1");
+    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", [
+      "chan-1",
+      "replayEnvelope",
+      ["event-1"],
+    ]);
     expect(b.chat.contextId).toBe("ctx-1");
     expect(b.chat.channelId).toBe("chan-1");
   });

@@ -83,6 +83,14 @@ describe("assertNoPreInjectedImports (#1)", () => {
     ).toThrow(/scope/);
   });
 
+  it("allows an ambient compatibility import when the live runtime module exports it", () => {
+    expect(() =>
+      assertNoPreInjectedImports(`import { help } from "@workspace/runtime";`, {
+        help: async () => ({}),
+      })
+    ).not.toThrow();
+  });
+
   it("allows legitimate runtime imports and ambient usage", () => {
     expect(() =>
       assertNoPreInjectedImports(

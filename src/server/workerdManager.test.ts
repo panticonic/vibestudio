@@ -182,6 +182,16 @@ describe("WorkerdManager", () => {
       );
     });
 
+    it("resolves canonical worker target ids to loader instance names", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const handle = await mgr.startWorker(
+        startArgs({ source: "workers/hello", key: "instance:with spaces" })
+      );
+
+      expect(mgr.resolveWorkerInstanceName(handle.targetId)).toBe("instance_with_spaces");
+      expect(mgr.resolveWorkerInstanceName("worker:workers/hello:missing")).toBeNull();
+    });
+
     it("injects parent handle metadata into the worker runtime env", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);

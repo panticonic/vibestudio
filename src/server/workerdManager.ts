@@ -825,6 +825,14 @@ export class WorkerdManager {
     }
   }
 
+  /** Resolve a canonical runtime worker id to the loader's opaque instance name. */
+  resolveWorkerInstanceName(targetId: string): string | null {
+    for (const instance of this.instances.values()) {
+      if (instance.runtimeImageId === targetId) return instance.name;
+    }
+    return null;
+  }
+
   /**
    * Idempotent worker teardown invoked by the runtime-service retire hook.
    * Revokes the bearer token, drops the worker instance, runs handle/webhook

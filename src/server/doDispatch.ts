@@ -345,12 +345,14 @@ export class DODispatch {
    * holds the response. Pair with the DO disabling its own `respond` reaper (`respondTimeoutMs`).
    */
   async dispatchHeld(ref: DORef, method: string, ...args: unknown[]): Promise<unknown> {
-    // A held call is INTENTIONALLY long (the eval runs for its whole duration), so warn at a coarse
-    // 5-min cadence — enough to confirm liveness without spamming ~180 lines over a 30-min run.
+    // A held call is INTENTIONALLY long (the eval runs for its whole duration),
+    // so report coarse liveness at info level. Warning/error streams are
+    // reserved for calls whose duration is actually anomalous.
     return this.withSlowWarning(
       `${doRefKey(ref)}.${method} (held)`,
       () => this.dispatchImpl(ref, method, args, true),
-      300_000
+      300_000,
+      console.info
     );
   }
 
@@ -362,11 +364,12 @@ export class DODispatch {
   private async withSlowWarning<T>(
     label: string,
     fn: () => Promise<T>,
-    intervalMs = 10_000
+    intervalMs = 10_000,
+    report: (message: string) => void = console.warn
   ): Promise<T> {
     const startedAt = Date.now();
     const timer = setInterval(() => {
-      console.warn(
+      report(
         `[DODispatch] ${label} still pending after ${Math.round((Date.now() - startedAt) / 1000)}s`
       );
     }, intervalMs);

@@ -5,8 +5,8 @@
  */
 
 export interface TransformOptions {
-  /** Source syntax: typescript, jsx, or tsx */
-  syntax: "typescript" | "jsx" | "tsx";
+  /** Source syntax: JavaScript, TypeScript, JSX, or TSX. */
+  syntax: "javascript" | "typescript" | "jsx" | "tsx";
 }
 
 export interface TransformResult {

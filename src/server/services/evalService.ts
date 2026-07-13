@@ -300,7 +300,7 @@ export function createEvalService(deps: {
     return { objectKey };
   }
 
-  function assertRunSource(args: { code?: string; path?: string }): void {
+  function assertRunSource(args: { code?: string; path?: string; sourcePath?: string }): void {
     const hasCode = args.code !== undefined;
     const hasPath = args.path !== undefined;
     if (hasCode === hasPath) {
@@ -328,7 +328,9 @@ export function createEvalService(deps: {
         channelId?: string;
         code?: string;
         path?: string;
-        syntax?: "typescript" | "jsx" | "tsx";
+        sourcePath?: string;
+        reset?: boolean;
+        syntax?: "javascript" | "typescript" | "jsx" | "tsx";
         imports?: Record<string, string>;
         runId?: string;
         timeoutMs?: number;
@@ -366,6 +368,8 @@ export function createEvalService(deps: {
           assembledArgs: {
             code: runArgs.code,
             path: runArgs.path,
+            sourcePath: runArgs.sourcePath,
+            reset: runArgs.reset,
             syntax: runArgs.syntax,
             imports: runArgs.imports,
             contextId: owner.contextId,
@@ -439,6 +443,54 @@ export function createEvalService(deps: {
           { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
           "getRun",
           getArgs.runId
+        );
+      }
+      if (method === "readScopeTextPage") {
+        const pageArgs = (args[0] ?? {}) as {
+          ownerId?: string;
+          contextId?: string;
+          subKey?: string;
+          key: string;
+          offset: number;
+          limit: number;
+        };
+        const owner = await resolveOwnerForCaller({
+          ownerId: pageArgs.ownerId,
+          contextId: pageArgs.contextId,
+        });
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          pageArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
+        return deps.doDispatch.dispatch(
+          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+          "readScopeTextPage",
+          pageArgs.key,
+          pageArgs.offset,
+          pageArgs.limit
+        );
+      }
+      if (method === "deleteScopeValue") {
+        const deleteArgs = (args[0] ?? {}) as {
+          ownerId?: string;
+          contextId?: string;
+          subKey?: string;
+          key: string;
+        };
+        const owner = await resolveOwnerForCaller({
+          ownerId: deleteArgs.ownerId,
+          contextId: deleteArgs.contextId,
+        });
+        const { objectKey } = await ensureEvalDO(
+          owner,
+          deleteArgs.subKey ?? "default",
+          ctx.caller.subject?.userId
+        );
+        return deps.doDispatch.dispatch(
+          { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+          "deleteScopeValue",
+          deleteArgs.key
         );
       }
       if (method === "reset") {

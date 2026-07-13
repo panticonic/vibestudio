@@ -185,11 +185,9 @@ describe("full-gateway attribution (row 11)", () => {
           requestId: crypto.randomUUID(),
           fromId: opts.caller.runtime.id,
           method: "vcsPush",
-          // `actor` is a provenance LABEL, distinct from gate attribution (which
-          // the host resolves from the token). Pass an explicit valid actor, as
-          // an in-process host caller does — the caller kind (shell/do) is not a
-          // provenance participant kind.
-          args: [{ ...opts.input, actor: USER }],
+          // Userland provenance is derived from the verified envelope caller;
+          // only privileged host/DO-internal paths may supply an explicit actor.
+          args: [opts.input],
           ...(minted ? { invocationToken: minted.token } : {}),
           ...(opts.callerContextId ? { callerContextId: opts.callerContextId } : {}),
         },

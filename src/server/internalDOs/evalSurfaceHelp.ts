@@ -28,9 +28,27 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
       "NOT Node's mkdtemp (which creates the directory), and .tmp paths are scratch space, not " +
       "tracked edit/VCS destinations.",
   },
+  "vcs.fileHistory": {
+    description:
+      "fileHistory({ path, repoPath?, head?, limit? }) → edit rows in commit-lineage order plus the uncommitted tail. `path` is workspace-relative unless `repoPath` makes it repo-relative; `head` defaults to this runtime's own ctx head.",
+  },
+  "vcs.commit": {
+    description:
+      "commit(input) → per-repo result array. For a single result, its fields are also available on the array (`result.eventId`, `result.status`, etc.) while `result[0]` remains canonical.",
+  },
+  "vcs.editsByActor": {
+    description: "editsByActor(actorId, limit?) → edit rows attributed to that actor.",
+  },
+  "vcs.editsByTurn": {
+    description: "editsByTurn(turnId) → edit rows causally attributed to that agent turn.",
+  },
+  "vcs.editsByInvocation": {
+    description:
+      "editsByInvocation(invocationId) → edit rows causally attributed to one tool invocation.",
+  },
   "runtime.createEntity": {
     description:
-      "Workers are launched via " +
+      "Prefer workers.create(source, options) for regular workers. The raw equivalent is " +
       'rpc.call("main", `runtime.createEntity`, [{ kind: "worker", source, key, contextId, env, stateArgs }]). ' +
       "`key` names the instance (it maps to the worker entity key); pass " +
       "`ref: `ctx:${ctx.contextId}`` for worker code created or edited on the current context head, " +
@@ -44,9 +62,9 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "runtime.retireEntity": {
     description:
-      'Retire (stop) a worker via rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity ' +
-      "id returned by runtime.createEntity. Verify it disappeared with runtime.listEntities. This " +
-      "replaces the removed workers.destroy.",
+      "Prefer workers.destroy(handleOrId) for regular workers. The raw equivalent is " +
+      'rpc.call("main", `runtime.retireEntity`, [{ id }]), passing the entity id returned by ' +
+      "runtime.createEntity. Verify it disappeared with workers.list() or runtime.listEntities.",
   },
 };
 

@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("runNpmInstall", () => {
-  it("uses a Vibestudio-owned cache instead of the user's npm cache", () => {
+  it("uses a Vibestudio-owned cache instead of the user's npm cache", async () => {
     const fixture = createFakeNpmFixture();
     const centralDataPath = path.join(fixture.root, "vibestudio-data");
     getCentralDataPath.mockReturnValue(centralDataPath);
@@ -29,7 +29,7 @@ describe("runNpmInstall", () => {
 
     try {
       // Keep the legacy numeric options form covered for existing callers.
-      runNpmInstall(fixture.installDir, 5_000);
+      await runNpmInstall(fixture.installDir, 5_000);
     } finally {
       restoreEnv();
     }
@@ -39,7 +39,7 @@ describe("runNpmInstall", () => {
     expect(args).toContain("--ignore-scripts");
   });
 
-  it("retries a corrupt cacache read once with a clean temporary cache", () => {
+  it("retries a corrupt cacache read once with a clean temporary cache", async () => {
     const fixture = createFakeNpmFixture();
     const primaryCache = path.join(fixture.root, "primary-cache");
     const restoreEnv = replaceEnv({
@@ -49,7 +49,7 @@ describe("runNpmInstall", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     try {
-      runNpmInstall(fixture.installDir, {
+      await runNpmInstall(fixture.installDir, {
         timeout: 5_000,
         ignoreScripts: false,
         cacheDir: primaryCache,
@@ -67,7 +67,7 @@ describe("runNpmInstall", () => {
     expect(attempts.every((args) => !args.includes("--ignore-scripts"))).toBe(true);
   });
 
-  it("does not retry ordinary npm failures", () => {
+  it("does not retry ordinary npm failures", async () => {
     const fixture = createFakeNpmFixture();
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
@@ -75,17 +75,55 @@ describe("runNpmInstall", () => {
     });
 
     try {
-      expect(() =>
+      await expect(
         runNpmInstall(fixture.installDir, {
           timeout: 5_000,
           cacheDir: path.join(fixture.root, "primary-cache"),
         })
-      ).toThrow("Command failed");
+      ).rejects.toThrow("Command failed");
     } finally {
       restoreEnv();
     }
 
     expect(readAttempts(fixture.installDir)).toHaveLength(1);
+  });
+
+  it("retries transient network failures", async () => {
+    const fixture = createFakeNpmFixture();
+    getCentralDataPath.mockReturnValue(path.join(fixture.root, "vibestudio-data"));
+    const restoreEnv = replaceEnv({
+      VIBESTUDIO_APP_ROOT: fixture.appRoot,
+      VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE: "1",
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await runNpmInstall(fixture.installDir, { timeout: 5_000 });
+    } finally {
+      restoreEnv();
+    }
+
+    expect(readAttempts(fixture.installDir)).toHaveLength(2);
+  });
+
+  it("hard-stops and retries an npm process that ignores SIGTERM", async () => {
+    const fixture = createFakeNpmFixture();
+    getCentralDataPath.mockReturnValue(path.join(fixture.root, "vibestudio-data"));
+    const restoreEnv = replaceEnv({
+      VIBESTUDIO_APP_ROOT: fixture.appRoot,
+      VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE: "1",
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      // Leave enough time for a cold Node process to start and persist its
+      // first-attempt marker before exercising the install deadline.
+      await runNpmInstall(fixture.installDir, { timeout: 500 });
+    } finally {
+      restoreEnv();
+    }
+
+    expect(readAttempts(fixture.installDir)).toHaveLength(2);
   });
 });
 
@@ -114,6 +152,15 @@ const attempts = fs.existsSync(attemptsPath)
 const args = process.argv.slice(2);
 attempts.push(args);
 fs.writeFileSync(attemptsPath, JSON.stringify(attempts));
+if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+  return;
+}
+if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE && attempts.length === 1) {
+  process.stderr.write("npm error network ETIMEDOUT while fetching package\\n");
+  process.exit(1);
+}
 const cacheIndex = args.indexOf("--cache");
 const cacheDir = cacheIndex >= 0 ? args[cacheIndex + 1] : "";
 if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_CACHE === cacheDir) {

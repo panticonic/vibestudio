@@ -14,7 +14,8 @@
  * when `options.signal` aborts). So this faithfully exercises `runEval`'s controller wiring, the CAS
  * persist, and the `cancel`/`forceReset`/run-chain machinery — the code under change.
  *
- * No timeouts/deadlines are used anywhere: recovery is via abort/forced-reset only.
+ * Recovery tests use abort/forced-reset directly; one expired-deadline regression
+ * verifies cleanup failures still reach a durable terminal result.
  */
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
@@ -71,6 +72,62 @@ function seedPendingRun(
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("pages large scope text losslessly without creating eval runs and persists cleanup", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const value = `before-${"😀\u0000".repeat(60_000)}-after`;
+    const current: Record<string, unknown> = { temporary: value };
+    const enterEval = vi.fn();
+    const exitEval = vi.fn(() => Promise.resolve());
+    setPriv(instance, "ensureEngine", () => Promise.resolve({}));
+    setPriv(instance, "scopeManager", {
+      current,
+      api: {},
+      hydrate: () => Promise.resolve(),
+      enterEval,
+      exitEval,
+    });
+
+    const first = await instance.readScopeTextPage("temporary", 0, 131_072);
+    const second = await instance.readScopeTextPage("temporary", 131_072, 131_072);
+    const decode = (chunk: string) => Buffer.from(chunk, "base64").toString("utf16le");
+    expect(decode(first.chunk) + decode(second.chunk)).toBe(value);
+    expect(first.length).toBe(value.length);
+
+    await expect(instance.deleteScopeValue("temporary")).resolves.toEqual({
+      ok: true,
+      existed: true,
+    });
+    expect(Object.prototype.hasOwnProperty.call(current, "temporary")).toBe(false);
+    expect(enterEval).toHaveBeenCalledOnce();
+    expect(exitEval).toHaveBeenCalledOnce();
+  });
+
+  it("persists bounded run progress without queueing another eval", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    await instance.startRun({
+      runId: "run-progress",
+      code: "return 1",
+      syntax: "typescript",
+    });
+
+    priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress").call(
+      instance,
+      "run-progress",
+      { active: ["fs-write-read"], completed: 2 }
+    );
+
+    expect(instance.getRun("run-progress")).toMatchObject({
+      status: "pending",
+      progress: { active: ["fs-write-read"], completed: 2 },
+    });
+    expect(() =>
+      priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress").call(
+        instance,
+        "run-progress",
+        "x".repeat(256 * 1024 + 1)
+      )
+    ).toThrow(/256 KiB/);
+  });
   it("startRun counts as activity and re-arms idle eviction", async () => {
     const { instance } = await createTestDO(EvalDO);
     const setAlarmAt = vi
@@ -80,11 +137,11 @@ describe("EvalDO cancellation + forced recovery", () => {
       )
       .mockImplementation(() => undefined);
 
-    const ret = priv<
-      (args: { runId: string; code: string; contextId: string }) => {
+    const ret = await priv<
+      (args: { runId: string; code: string; contextId: string }) => Promise<{
         runId: string;
         status: string;
-      }
+      }>
     >(instance, "startRun").call(instance, {
       runId: "queued",
       code: "return 1;",
@@ -204,6 +261,18 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(JSON.stringify(persisted.result).length).toBeLessThan(250_000);
   });
 
+  it("retains a small structured return for REPL-style follow-up inspection", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const scope: Record<string, unknown> = {};
+
+    priv<(scope: Record<string, unknown>, console: string, value: unknown) => void>(
+      instance,
+      "spillLargeOutput"
+    ).call(instance, scope, "", { methods: { inspect: true } });
+
+    expect(scope["$lastReturn"]).toEqual({ methods: { inspect: true } });
+  });
+
   it("cancel(runId): an in-flight run wedged on an outbound call unwinds once cancelled", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const { runLocked, started } = blockUntilAborted();
@@ -224,13 +293,21 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'run-A'`).toArray()[0]).toMatchObject({
       status: "running",
     });
+    const cleanup = vi.fn(async () => {
+      expect(signal!.aborted).toBe(false);
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-A",
+      new Set([cleanup])
+    );
 
     // Cancel: CAS row → cancelled, then abort the controller threaded into the run.
-    const cancelRet = priv<(id: string) => { ok: boolean }>(instance, "cancel").call(
+    const cancelRet = await priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
       instance,
       "run-A"
     );
     expect(cancelRet).toEqual({ ok: true });
+    expect(cleanup).toHaveBeenCalledOnce();
     expect(signal!.aborted).toBe(true);
 
     // The wedged run unwinds (rejects), and `runEval` maps the cancelled status to a failure result —
@@ -252,7 +329,10 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
     seedPendingRun(sql, "other");
 
-    const ret = priv<(id: string) => { ok: boolean }>(instance, "cancel").call(instance, "done-1");
+    const ret = await priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+      instance,
+      "done-1"
+    );
     expect(ret).toEqual({ ok: true });
     // The done run is NOT flipped to cancelled (CAS only touches pending/running), and `other` is untouched.
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'done-1'`).toArray()[0]).toMatchObject({
@@ -261,6 +341,40 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'other'`).toArray()[0]).toMatchObject({
       status: "pending",
     });
+  });
+
+  it("an already-expired run reports cleanup failure and still releases its lifecycle state", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(
+      `INSERT INTO runs (run_id, args, status, started_at, deadline_at)
+       VALUES (?, ?, 'pending', ?, ?)`,
+      "expired",
+      JSON.stringify({ code: "return 1", contextId: "ctx", timeoutMs: 1 }),
+      Date.now() - 10,
+      Date.now() - 1
+    );
+    const runLocked = vi.fn(async () => ({ success: true, console: "unexpected" }));
+    setPriv(instance, "runLocked", runLocked);
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "expired",
+      new Set([async () => Promise.reject(new Error("cleanup exploded"))])
+    );
+
+    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "expired"
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.error).toMatch(/cancellation cleanup failed/i);
+    expect(runLocked).not.toHaveBeenCalled();
+    expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'expired'`).toArray()[0]).toMatchObject(
+      {
+        status: "done",
+      }
+    );
+    expect(priv<Map<string, unknown>>(instance, "runAborts").has("expired")).toBe(false);
+    expect(priv<Set<string>>(instance, "activeRunIds").has("expired")).toBe(false);
   });
 
   it("forceReset(): a wedged run on runChain does not block a later run, and tables/scope are cleared", async () => {
@@ -275,7 +389,21 @@ describe("EvalDO cancellation + forced recovery", () => {
       "wedged"
     );
     wedgedP.catch(() => undefined);
-    await wedgeStarted; // the wedged run now occupies runChain
+    const { signal } = await wedgeStarted; // the wedged run now occupies runChain
+    let releaseCleanup!: () => void;
+    let announceCleanup!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
+    const cleanup = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          announceCleanup();
+          releaseCleanup = resolve;
+        })
+    );
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "wedged",
+      new Set([cleanup])
+    );
 
     // Seed user table + a fake scope table so we can assert resetLocked wiped them.
     sql.exec(`CREATE TABLE IF NOT EXISTS user_data (k TEXT)`);
@@ -285,7 +413,14 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     // 2) forceReset: cancel non-terminal runs, abort in-flight, REPLACE runChain, resetLocked NOW.
     const chainBefore = priv<Promise<unknown>>(instance, "runChain");
-    const forceRet = priv<() => { ok: boolean }>(instance, "forceReset").call(instance);
+    const forcePromise = priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(
+      instance
+    );
+    await cleanupStarted;
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(signal?.aborted).toBe(false);
+    releaseCleanup();
+    const forceRet = await forcePromise;
     expect(forceRet).toEqual({ ok: true });
 
     // The wedged run was CAS'd to cancelled and aborted (so it unwinds rather than leaking forever).
@@ -300,7 +435,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(chainAfter).not.toBe(chainBefore);
     await expect(chainAfter).resolves.toBeUndefined();
 
-    // resetLocked ran SYNCHRONOUSLY (not queued behind the wedged run): user tables + scope cleared.
+    // resetLocked ran directly (not queued behind the wedged run): user tables + scope cleared.
     const tables = sql
       .exec(`SELECT name FROM sqlite_master WHERE type='table'`)
       .toArray()
@@ -331,6 +466,71 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'after'`).toArray()[0]).toMatchObject({
       status: "done",
     });
+  });
+
+  it("forceReset reports cleanup failures after completing the reset", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "cleanup-failure");
+    sql.exec(`CREATE TABLE IF NOT EXISTS user_cleanup_probe (value TEXT)`);
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "cleanup-failure",
+      new Set([async () => Promise.reject(new Error("cleanup failed"))])
+    );
+
+    await expect(
+      priv<() => Promise<{ ok: boolean }>>(instance, "forceReset").call(instance)
+    ).rejects.toThrow(/cancellation cleanup failed during force reset/i);
+
+    expect(
+      sql.exec(`SELECT name FROM sqlite_master WHERE name = 'user_cleanup_probe'`).toArray()
+    ).toEqual([]);
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'cleanup-failure'`).toArray()[0]
+    ).toMatchObject({ status: "cancelled" });
+  });
+
+  it("startRun reset is atomic and idempotent on the run id", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    sql.exec(`CREATE TABLE IF NOT EXISTS user_reset_probe (value TEXT)`);
+    sql.exec(`INSERT INTO user_reset_probe (value) VALUES ('before')`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS repl_scopes (id TEXT)`);
+    setPriv(instance, "scopeManager", { marker: "stale" });
+
+    const first = await priv<
+      (args: { runId: string; code: string; reset: boolean }) => Promise<{
+        runId: string;
+        status: string;
+      }>
+    >(instance, "startRun").call(instance, {
+      runId: "reset-run",
+      code: "return Object.keys(scope)",
+      reset: true,
+    });
+
+    expect(first).toEqual({ runId: "reset-run", status: "pending" });
+    const tablesAfterFirst = sql
+      .exec(`SELECT name FROM sqlite_master WHERE type='table'`)
+      .toArray()
+      .map((row) => String(row["name"]));
+    expect(tablesAfterFirst).not.toContain("user_reset_probe");
+    expect(tablesAfterFirst).not.toContain("repl_scopes");
+
+    sql.exec(`CREATE TABLE user_after_insert (value TEXT)`);
+    const replay = await priv<
+      (args: { runId: string; code: string; reset: boolean }) => Promise<{
+        runId: string;
+        status: string;
+      }>
+    >(instance, "startRun").call(instance, {
+      runId: "reset-run",
+      code: "return Object.keys(scope)",
+      reset: true,
+    });
+
+    expect(replay).toEqual({ runId: "reset-run", status: "pending" });
+    expect(
+      sql.exec(`SELECT name FROM sqlite_master WHERE name='user_after_insert'`).toArray()
+    ).toHaveLength(1);
   });
 
   it("runLocked threads the run's abort signal into eval outbound rpc.call", async () => {
@@ -369,7 +569,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       "@workspace/runtime";
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
-        createHostedRuntime: (host: Record<string, unknown>) => ({ rpc: host["rpc"] }),
+        createHostedRuntime: (host: Record<string, unknown>) => ({
+          rpc: host["rpc"],
+          fs: host["fs"],
+        }),
         createPanelRuntime: () => ({ getPanelHandle: () => null }),
         createRuntimeSelfHandle: () => ({}),
         createGatewayFetch: () => () => {},

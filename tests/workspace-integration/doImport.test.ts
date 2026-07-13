@@ -161,6 +161,9 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
           set: async (key, value) => {
             map.set(key, value);
           },
+          delete: async (key) => {
+            map.delete(key);
+          },
         };
       })(),
     };

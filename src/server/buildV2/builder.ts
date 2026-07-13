@@ -891,7 +891,7 @@ export const access = (...a) => _fs.access(...a);
 export const appendFile = (...a) => _fs.appendFile(...a);
 export const chmod = (...a) => _fs.chmod(...a);
 export const chown = () => { throw new Error("chown is not available in workspace panels"); };
-export const symlink = () => { throw new Error("symlink is not available in workspace panels"); };
+export const symlink = (...a) => _fs.symlink(...a);
 export const readlink = (...a) => _fs.readlink(...a);
 export const realpath = (...a) => _fs.realpath(...a);
 export const truncate = (...a) => _fs.truncate(...a);
@@ -916,6 +916,15 @@ export const unlink = (...a) => _fs.unlink(...a);
 export const rename = (...a) => _fs.rename(...a);
 export const copyFile = (...a) => _fs.copyFile(...a);
 export const access = (...a) => _fs.access(...a);
+export const appendFile = (...a) => _fs.appendFile(...a);
+export const chmod = (...a) => _fs.chmod(...a);
+export const symlink = (...a) => _fs.symlink(...a);
+export const readlink = (...a) => _fs.readlink(...a);
+export const realpath = (...a) => _fs.realpath(...a);
+export const truncate = (...a) => _fs.truncate(...a);
+export const utimes = (...a) => _fs.utimes(...a);
+export const rm = (...a) => _fs.rm(...a);
+export const open = (...a) => _fs.open(...a);
 export const constants = {};
 export const existsSync = () => { throw new Error("Synchronous fs methods are not available in workspace panels. Use async alternatives."); };
 export const readFileSync = existsSync;
@@ -924,7 +933,7 @@ export const readdirSync = existsSync;
 export const statSync = existsSync;
 export const mkdirSync = existsSync;
 export const realpathSync = existsSync;
-export default { promises: _fs, readFile: (...a) => _fs.readFile(...a), writeFile: (...a) => _fs.writeFile(...a), readdir: (...a) => _fs.readdir(...a), stat: (...a) => _fs.stat(...a), constants: {}, existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync };`;
+export default { promises: _fs, readFile, writeFile, readdir, stat, lstat, mkdir, rmdir, unlink, rename, copyFile, access, appendFile, chmod, symlink, readlink, realpath, truncate, utimes, rm, open, constants, existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync };`;
         return { contents, loader: "js", resolveDir };
       });
     },
@@ -1288,7 +1297,7 @@ export function generateExposeModuleCode(
   var _fs = ${rtVar}["fs"];
   if (!_fs) return;
   var fsShim = { promises: _fs, default: null, constants: {} };
-  var methods = ["readFile","writeFile","readdir","stat","lstat","mkdir","rmdir","unlink","rename","copyFile","access","rm","readlink","realpath","appendFile","chmod","truncate","utimes","open"];
+  var methods = ["readFile","writeFile","readdir","stat","lstat","mkdir","rmdir","unlink","rename","copyFile","access","rm","symlink","readlink","realpath","appendFile","chmod","truncate","utimes","open"];
   methods.forEach(function(m) { if (_fs[m]) fsShim[m] = function() { return _fs[m].apply(_fs, arguments); }; });
   fsShim.default = fsShim;
   var map = globalThis.__vibestudioModuleMap__;
@@ -3414,6 +3423,12 @@ async function doPlatformBuild(
         // Use "neutral" not "browser" — @vibestudio/* packages (like git wrapping
         // isomorphic-git) work with injected fs, not Node.js builtins.
         platform: "neutral",
+        // Neutral defaults ignore package.json `main`. Platform libraries may
+        // legitimately depend on CommonJS/main-only packages (isomorphic-git's
+        // crc-32, clean-git-ref, diff3, sha.js -> inherits, and many others).
+        // Match worker/extension resolution instead of maintaining a brittle
+        // package allowlist.
+        mainFields: ["module", "main"],
         outfile: path.join(outdir, "bundle.js"),
         write: true,
         external: externals,

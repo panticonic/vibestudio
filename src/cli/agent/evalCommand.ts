@@ -89,11 +89,13 @@ function parseImports(inv: ParsedInvocation): Record<string, string> | undefined
   return parsed as Record<string, string>;
 }
 
-function parseSyntax(inv: ParsedInvocation): "typescript" | "jsx" | "tsx" | undefined {
+function parseSyntax(
+  inv: ParsedInvocation
+): "javascript" | "typescript" | "jsx" | "tsx" | undefined {
   const raw = inv.flags["syntax"];
   if (typeof raw !== "string") return undefined;
-  if (raw !== "typescript" && raw !== "jsx" && raw !== "tsx") {
-    throw new UsageError("--syntax must be one of: typescript, jsx, tsx");
+  if (raw !== "javascript" && raw !== "typescript" && raw !== "jsx" && raw !== "tsx") {
+    throw new UsageError("--syntax must be one of: javascript, typescript, jsx, tsx");
   }
   return raw;
 }
@@ -229,7 +231,11 @@ export const evalCommands: CliCommand[] = [
         takesValue: false,
         description: "Reset the REPL scope before running",
       },
-      { name: "syntax", takesValue: true, description: "typescript | jsx | tsx (default tsx)" },
+      {
+        name: "syntax",
+        takesValue: true,
+        description: "javascript | typescript | jsx | tsx (default tsx)",
+      },
       {
         name: "imports",
         takesValue: true,

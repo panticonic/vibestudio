@@ -23,6 +23,28 @@ perspective:
   `parent`/`getParent()` for the owner agent's nearest visible panel ancestor.
 - `openPanel()` from eval defaults new panels under that owner panel ancestor
   when one exists.
+- A genuinely headless session has no initial panel ancestor. The panel tree is
+  still fully available, but a child needs a real panel node to parent it. Use
+  `getParent()` to test for an owner (`parent` is a compatibility no-panel
+  handle when none exists). If it returns null, create an owned root explicitly
+  and pass that handle's id as `parentId` when opening the child:
+
+  ```ts
+  import { openPanel } from "@workspace/runtime";
+
+  const inherited = await getParent();
+  const root = inherited ?? await openPanel("about/new", { parentId: null });
+  const child = await openPanel("panels/spectrolite", {
+    parentId: root.id,
+    focus: true,
+  });
+  await child.refresh();
+  if (child.parentId !== root.id) throw new Error("Panel was not created as a child");
+
+  // Close the temporary root when the whole headless workflow is done; closing
+  // it owns/cleans its descendants. Do not close an inherited user panel.
+  if (!inherited) await root.close();
+  ```
 - When the user points at "this panel", "the parent panel", or another visible
   panel, inspect the visible tree with `panelTree.list()/roots()/children()`,
   choose the target panel, and read `await target.stateArgs.get()` to find its
@@ -37,6 +59,21 @@ you are inspecting.
 ```
 eval({ code: `console.log("hello")` })
 ```
+
+Workspace packages are build-resolved automatically. To exercise or inspect a
+built package, use a normal static import and return only the small export
+summary you need—the first import builds on demand and later imports are cached:
+
+```ts
+import * as pkg from "@workspace-skills/workspace-dev";
+return { exports: Object.keys(pkg).sort() };
+```
+
+Do not search generated build directories or call a separate “import build”
+service. For npm packages, declare the npm mapping in the eval tool's `imports`
+argument; workspace package specifiers need no mapping. See
+[workspace and npm import rules](#imports) for
+ref-pinned imports and the full rules.
 
 Console capture belongs to eval itself; no panel, CDP session, or testkit helper
 is needed. A single successful eval may emit several lines and return a compact
@@ -63,18 +100,24 @@ File-loaded eval reads the entry file from the current context, supports static
 relative imports from that file, and resolves bare imports from the nearest
 `package.json` when it can find one.
 
-Inline `code` eval has no source file, so relative imports such as
-`./panels/my-app/module` are not resolvable there. Put multi-file eval code in a
-context-relative file and pass `path`, or import workspace packages by package
-name.
+When `path` names a non-executable document/data file (for example `.md`,
+`.json`, `.yaml`, or `.txt`), eval returns its UTF-8 contents instead of trying
+to parse it as TypeScript. Executable `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`,
+`.mts`, `.cts`, and `.tsx` paths retain normal file-execution behavior.
+
+Inline `code` eval normally has no source file. To resolve relative imports,
+pass `sourcePath` as a context-relative virtual filename, or pass `path` with
+inline code as a directory/file hint. With no inline code, `path` retains its
+file-loaded meaning. For substantial multi-file work, prefer a real entry file.
 
 ## Parameters
 
 | Param     | Type                             | Default | Description                                                            |
 | --------- | -------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `code`    | string                           | —       | TypeScript/JavaScript code to execute. Provide either `code` or `path` |
-| `path`    | string                           | —       | Context-relative TypeScript/TSX file to execute instead of inline code |
-| `syntax`  | `"typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                                          |
+| `code`    | string                           | —       | TypeScript/JavaScript code to execute |
+| `path`    | string                           | —       | Code file to execute, text/data file to load, or a source-base hint when `code` is also present |
+| `sourcePath` | string                        | —       | Virtual context-relative filename for inline code and relative imports |
+| `syntax`  | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                           |
 | `imports` | `Record<string, string>`         | —       | Packages to build on-demand (workspace or npm)                         |
 
 ## Injected Variables
@@ -82,7 +125,9 @@ name.
 These are available in eval code. `services`, `ctx`, `scope`, `scopes`, `db`,
 `help`, `chat`, and `agent` are eval-only ambient variables. `rpc` and `fs` are
 the same portable bindings used by panels/workers; use them ambiently or import
-them from `@workspace/runtime`.
+them from `@workspace/runtime`. Eval also accepts importing an available ambient
+helper from `@workspace/runtime` as a compatibility form; it resolves to the
+same live binding rather than shadowing it.
 
 | Variable | What it is |
 | --- | --- |
@@ -190,6 +235,19 @@ eval({ code: `
 })
 ```
 
+A trailing async IIFE is also treated as the eval result and awaited:
+
+```ts
+(async () => {
+  await services.vcs.push({ repoPaths: ["panels/example"] });
+  return "done";
+})();
+```
+
+Use `void (async () => { /* ... */ })()` only when intentionally starting
+detached background work. Detached work may outlive the eval result, so it is
+not appropriate for mutations whose result or failure the caller needs.
+
 ## Console Output
 
 `console.log/warn/error/info/debug` output is captured during the run and
@@ -215,6 +273,10 @@ open the `about/server-logs` viewer for a live follow. See
 
 Non-serializable values (functions, symbols, circular refs) are safely converted
 to string representations in `returnValue`.
+
+The most recent defined return is also retained as `scope.$lastReturn` for a
+follow-up eval. Small returns keep their structured shape; oversized returns are
+stored as a bounded JSON/text string and can be paged with `.slice(...)`.
 
 Terminal eval results are always bounded so a huge return cannot strand the
 turn in `eval:pending`. For large data, return a compact summary and keep the
@@ -292,20 +354,24 @@ eval({ code: `
 })
 ```
 
-The first import triggers an on-demand build from the committed workspace state (a few seconds). Subsequent imports use the cached build.
+The first import triggers an on-demand build from the eval caller's current
+context working state (a few seconds). Subsequent imports of that state use the
+cached build.
 
 To pin a specific VCS ref or state hash, use the `imports` parameter explicitly:
 
 ```
-eval({ code: `...`, imports: { "@workspace-skills/workspace-dev": "my-branch" } })
+eval({ code: `...`, imports: { "@workspace-skills/workspace-dev": "state:<stateHash>" } })
 ```
 
-The map value is a *ref*, not a package name: `"latest"` or a git ref
-(branch/tag/SHA) for `@workspace/*` packages. They resolve to server-built
-library bundles, including subpath exports (e.g.
-`{ "@workspace/testkit/profiling": "latest" }`).
+The map value is a *ref*, not a package name. Omit workspace packages entirely
+for the current context; `"latest"`, `"workspace"`, and package-manager-style
+`"workspace:*"`/`"workspace:^"`/`"workspace:~"` are accepted aliases for that
+same context working state. Explicit pins are GAD build refs: `"main"`,
+`"ctx:<contextId>"`, or `"state:<stateHash>"`. Git branches, tags, and raw SHAs
+are not build refs. Workspace bundles include subpath exports.
 
-**Important:** Workspace runtime units are built from your context head's working state, which is always in lockstep with your edits. The model is **edit → commit → push**: the `edit`/`write` tools and `vcs.edit({ edits })` record each change to source under `apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, or `skills/` as one tracked working edit on your context head and project it to disk, so the change takes effect for builds immediately (a working edit is NOT a commit — `vcs.commit({ message })` seals working edits as a messaged milestone, and `vcs.push` advances `main`). Do not edit source via `fs.writeFile` and expect it to build: the worktree is a projection, builds read GAD state, and stray `fs` writes are not recorded as working edits.
+**Important:** Workspace runtime units are built from your context head's working state, which is always in lockstep with your edits. The model is **edit → commit → push**: the `edit`/`write` tools and `vcs.edit({ edits })` record each change to source under `apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, or `skills/` as one tracked working edit on your context head and project it to disk, so the change takes effect for builds immediately (a working edit is NOT a commit — `vcs.commit({ message })` seals working edits as a messaged milestone, and `vcs.push` advances `main`). Runtime `fs` mutations under source repos route through the same GAD working state, so Node-like code cannot bypass VCS; prefer `edit`/`write`/`vcs.edit` for intentional authoring because they expose edit intent and invocation provenance directly.
 
 Context folders are isolated working trees backed by per-repo context-local VCS heads. Do not assume another context's edits reset your current context. An "unpushed changes" count shown by a running panel is the unpushed state of that panel's own per-repo context head (changes ahead of that repo's `main`), not a global workspace state.
 
@@ -426,10 +492,16 @@ non-serializable values are lost.
 ### Resetting scope
 
 To start with an empty scope and empty `db`, reset the eval context. The agent
-`eval` tool does not take a reset flag; reset is exposed as the `eval.reset` RPC
-(`rpc.call("main", "eval.reset", [])` resets your own session, since the owner is your
-verified identity). `eval.reset` drops your user `db` tables and the persistent
-scope, preserving only reserved/base tables.
+`eval` tool accepts `reset: true`; reset and the following execution are atomic
+and idempotent on that tool invocation. It drops your user `db` tables and the
+persistent scope before running the supplied code, preserving only reserved/base
+tables. Verify reset effects in that call or a later call.
+
+Do not call `eval.reset` or `eval.forceReset` through `rpc` from inside eval
+code. Nested RPC is authenticated as the EvalDO, not as the agent that invoked
+the tool, so it cannot address the executing agent/channel sandbox. Those raw
+service methods exist for host lifecycle recovery; the agent-facing lifecycle
+surface is `eval({ reset: true, ... })`.
 
 ### Deep Mutations
 
@@ -492,7 +564,52 @@ Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
 
 Use `await help("fs")` for the live surface. Common methods include `readFile`,
 `writeFile`, `appendFile`, `readdir`, `stat`, `mkdir`, `rm`, `exists`,
-`copyFile`, `rename`, `grep`, `glob`, and `mktemp`.
+`copyFile`, `rename`, `open`, `grep`, `glob`, and `mktemp`.
+
+`fs.open(path, flags?, mode?)` returns the portable low-level file-handle
+contract `{ fd, read, write, stat, close }` in eval, panels, workers, and
+Durable Objects. `read(buffer, offset, length, position)` resolves to
+`{ bytesRead, buffer }`; `write(data, offset?, length?, position?)` resolves to
+`{ bytesWritten, buffer }`. Always close in `finally`:
+
+```ts
+const path = await fs.mktemp("handle");
+await fs.writeFile(path, "hello");
+const handle = await fs.open(path, "r+");
+try {
+  const buffer = new Uint8Array(5);
+  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  await handle.write(new TextEncoder().encode("H"), 0, 1, 0);
+  console.log({ bytesRead, text: new TextDecoder().decode(buffer) });
+} finally {
+  await handle.close();
+  await fs.rm(path, { force: true });
+}
+```
+
+`fs.stat()` and `fs.lstat()` return Node-shaped metadata: `mtime` and `ctime`
+are `Date` instances (with `mtimeMs`/`ctimeMs` numeric companions), alongside
+`size`, `mode`, and the `isFile()`/`isDirectory()`/`isSymbolicLink()` methods.
+
+Portable `node:fs`/`node:fs/promises` imports and the equivalent bare Node
+aliases `fs`/`fs/promises` are backed by this same context-scoped filesystem,
+never the host filesystem. The other safe compatibility modules accept both
+spellings too (`node:path`/`path`, `node:os`/`os`, `node:util`/`util`, and
+`node:crypto`/`crypto`). Eval is asynchronous, so
+prefer promises. For direct default or namespace `node:fs` imports, familiar
+top-level supported calls such as `readFileSync()`, `writeFileSync()`, and
+`unlinkSync()` are automatically lifted to their awaited portable equivalents;
+code inside a nested synchronous callback should use the async methods
+explicitly.
+
+`node:path` is available for path manipulation. A tenant-neutral `node:os`
+facade is also available for portable recipes: notably, `tmpdir()` returns the
+context-local `/.tmp` directory rather than a host path. Machine identity,
+network, CPU, and memory methods return stable non-host values.
+Pure `node:util` helpers are available too, including `TextEncoder`,
+`TextDecoder`, `inspect`, and `promisify`.
+Pure `node:crypto` hashing, randomness, and Web Crypto compatibility are
+available as well.
 
 For disposable files, let `mktemp` choose an untracked path. This is the
 canonical write → rename → content-match flow:
@@ -527,7 +644,7 @@ Use `rpc.call("main", "<svc>.<method>", [...])` to reach raw server/main service
 catalog methods from eval. `services.<svc>.<method>(...)` is available for
 service names that do not collide with runtime bindings, but rich runtime
 bindings win on collision: `services.workers` is the ergonomic `workers` client,
-which includes `workers.listSources()`. The equivalent raw catalog call is
+which includes worker `create`/`list`/`destroy` plus `listSources()`. The equivalent raw catalog call is
 `rpc.call("main", "workers.listSources", [])`.
 
 ```
@@ -545,9 +662,10 @@ name as a string; do not call `help(workers)`.
 
 ## Worker Management
 
-Launch, list, and retire workers through the **runtime entity API**
-(`runtime.createEntity` / `runtime.listEntities` / `runtime.retireEntity`). List
-launchable sources with the typed `workers.listSources()` runtime method. Each
+Launch, list, and retire regular workers with the typed `workers.create`,
+`workers.list`, and `workers.destroy` methods. They delegate to the canonical
+runtime entity lifecycle, whose raw methods remain available for advanced and
+non-worker entities. List launchable sources with `workers.listSources()`. Each
 row includes `source`, the manifest's real `entry` (do not guess `index.ts`), and
 `classes` (empty for regular workers).
 
@@ -558,7 +676,7 @@ eval({ code: `
   console.log("Available worker sources:", sources);
 
   // Currently-running worker instances
-  const instances = await rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
+  const instances = await workers.list();
   console.log("Running instances:", instances.map((w) => w.id));
 ` })
 ```
@@ -570,20 +688,18 @@ eval({ code: `
   try {
     // \`key\` names the instance; pass \`ref\` for code edited on the current
     // context head, or omit it for the main build.
-    handle = await rpc.call("main", "runtime.createEntity", [{
-      kind: "worker",
-      source: "workers/my-worker",
+    handle = await workers.create("workers/my-worker", {
       key,
       contextId: ctx.contextId,
       ref: \`ctx:${ctx.contextId}\`,
       env: { NON_SECRET_PROBE: "configured" },
-    }]);
-    const during = await rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
+    });
+    const during = await workers.list();
     if (!during.some((entity) => entity.id === handle.id)) throw new Error("Worker was not listed");
   } finally {
-    if (handle) await rpc.call("main", "runtime.retireEntity", [{ id: handle.id }]);
+    if (handle) await workers.destroy(handle);
   }
-  const after = await rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
+  const after = await workers.list();
   if (handle && after.some((entity) => entity.id === handle.id)) {
     throw new Error("Worker remained active after retireEntity");
   }
@@ -648,7 +764,10 @@ VCS tracks workspace **source**: every path must live under a tracked directory
 (`.vibestudio`, `.tmp`, `.git`, `.gad`, `node_modules`, `dist`, `.env`, `*.log`),
 so never use an `fs.mktemp()` path here. In container sections such as
 `projects/`, `section/name` is the repo root; write `section/name/file`, not the
-repo root itself. `vcs.readFile("", path)` returns
+repo root itself. File-oriented APIs accept a file-looking shorthand such as
+`projects/note.txt` and return its canonical expansion
+`projects/note/note.txt`; names without an extension remain repo roots.
+`vcs.readFile({ path })` returns
 `{ content, stateHash, ... }` (no `baseStateHash` field) — pass its `stateHash`
 as the `baseStateHash` of a later `vcs.edit`. `content` is a tagged union:
 use `content.text` only after checking `content.kind === "text"`; binary reads
@@ -692,7 +811,7 @@ eval({ code: `
     edits: [{ kind: "write", path, content: { kind: "text", text: "initial\\n" } }],
   });
 
-  const read = await services.vcs.readFile("", path);
+  const read = await services.vcs.readFile({ path });
   if (!read) throw new Error(\`Missing file: \${path}\`);
   if (read.content.kind !== "text") throw new Error(\`Not a text file: \${path}\`);
 
@@ -801,7 +920,7 @@ return its digest, byte count, and a small head sample. Keep full objects in
 The blobstore is a curated runtime binding — reach it as `services.blobstore`
 (equivalently `import { blobstore } from "@workspace/runtime"`, or a raw
 `rpc.call("main", "blobstore.<method>", [...])`). Read/write methods
-(`putText`/`putBase64`/`getText`/`getRange`/`grep`/…) work from agent eval; the
+(`putText`/`putBase64`/`getText`/`readText`/`getRange`/`grep`/…) work from agent eval; the
 admin methods (`delete`/`list`) are server-only. Raw calls
 use `rpc.call("main", "blobstore.<method>", [...])`. A binary
 artifact such as a `Uint8Array` screenshot can be stored directly:
@@ -838,6 +957,9 @@ return {
   preview: text.slice(0, 1000),
 };
 ```
+
+`readText(digest)` is the portable readable alias of `getText(digest)`; both
+return `string | null` directly (not an object with a `text` property).
 
 The method transport also caps oversized durable results and records a blob
 digest when storage is available. Agents should still return bounded summaries

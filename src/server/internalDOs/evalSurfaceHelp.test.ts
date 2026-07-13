@@ -48,6 +48,16 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(description).toContain("MIME metadata");
   });
 
+  it("documents runtime-only VCS history signatures", () => {
+    const result = describeEvalBindingSurface("vcs", ["fileHistory", "editsByTurn"], {});
+    expect(result?.methods["fileHistory"]).toMatchObject({
+      description: expect.stringContaining("fileHistory({ path, repoPath?, head?, limit? })"),
+    });
+    expect(result?.methods["editsByTurn"]).toMatchObject({
+      description: expect.stringContaining("editsByTurn(turnId)"),
+    });
+  });
+
   it("describes mktemp as a temp FILE path (not a directory) so it isn't misused", () => {
     const out = describeEvalBindingSurface("fs", ["mktemp"], fsService);
     const desc = (out!.methods["mktemp"] as { description: string }).description;

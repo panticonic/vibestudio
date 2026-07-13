@@ -245,10 +245,7 @@ describe("FsService", () => {
       const ctx = makeDoCtx("do:workers/agent-worker:AiChatWorker:agent-1");
       registerContext(ctx.caller.runtime.id, "do", "ctx-agent");
       mkdirSync(path.join(tmpRoot, "ctx-agent", "skills", "onboarding"), { recursive: true });
-      writeFileSync(
-        path.join(tmpRoot, "ctx-agent", "skills", "onboarding", "SKILL.md"),
-        "skill"
-      );
+      writeFileSync(path.join(tmpRoot, "ctx-agent", "skills", "onboarding", "SKILL.md"), "skill");
 
       await expect(
         service.handleCall(ctx, "access", ["/skills/onboarding/SKILL.md"])
@@ -302,9 +299,9 @@ describe("FsService", () => {
       const outside = path.join(tmpRoot, "outside-created-by-link.txt");
       symlinkSync(path.relative(contextRoot, outside), path.join(contextRoot, "escape.txt"));
 
-      await expect(
-        service.handleCall(ctx, "writeFile", ["escape.txt", "outside"])
-      ).rejects.toThrow(/Dangling symlink is not allowed/i);
+      await expect(service.handleCall(ctx, "writeFile", ["escape.txt", "outside"])).rejects.toThrow(
+        /Dangling symlink is not allowed/i
+      );
       expect(existsSync(outside)).toBe(false);
     });
 
@@ -333,6 +330,42 @@ describe("FsService", () => {
       symlinkSync("another-missing-target.txt", path.join(contextRoot, "rm-link"));
       await service.handleCall(ctx, "rm", ["rm-link", { force: true }]);
       expect(() => lstatSync(path.join(contextRoot, "rm-link"))).toThrow();
+    });
+
+    it("creates contained scratch symlinks that every caller kind can inspect and follow", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-contained-link");
+
+      await service.handleCall(ctx, "writeFile", ["/.tmp/target.txt", "linked"]);
+      await service.handleCall(ctx, "symlink", [
+        "/.tmp/target.txt",
+        "/.tmp/target-link.txt",
+        "file",
+      ]);
+
+      await expect(
+        service.handleCall(ctx, "lstat", ["/.tmp/target-link.txt"])
+      ).resolves.toMatchObject({
+        isSymbolicLink: true,
+      });
+      await expect(service.handleCall(ctx, "readlink", ["/.tmp/target-link.txt"])).resolves.toBe(
+        "target.txt"
+      );
+      await expect(
+        service.handleCall(ctx, "readFile", ["/.tmp/target-link.txt", "utf8"])
+      ).resolves.toBe("linked");
+    });
+
+    it("rejects escaping targets and GAD workspace-repo link entries", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-link-policy");
+
+      await expect(
+        service.handleCall(ctx, "symlink", ["/../../outside.txt", "/.tmp/bad-link"])
+      ).rejects.toThrow(/traversal/i);
+      await expect(
+        service.handleCall(ctx, "symlink", ["/.tmp/target.txt", "/projects/demo/target-link.txt"])
+      ).rejects.toThrow(/GAD workspace-repo/i);
     });
   });
 
@@ -446,9 +479,9 @@ describe("FsService", () => {
     });
 
     it("rejects calls without a contextId first argument", async () => {
-      await expect(
-        service.handleCall(makeShellCtx("shell-1"), "readFile", [])
-      ).rejects.toThrow(/must provide contextId/);
+      await expect(service.handleCall(makeShellCtx("shell-1"), "readFile", [])).rejects.toThrow(
+        /must provide contextId/
+      );
     });
 
     it("server callers may address fresh contexts (created on the fly)", async () => {
@@ -470,13 +503,10 @@ describe("FsService", () => {
     });
   });
 
-  describe("removed sandbox-escape primitives", () => {
-    it("symlink and chown are no longer dispatchable", async () => {
+  describe("removed ownership primitive", () => {
+    it("chown is not dispatchable", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-removed");
-      await expect(service.handleCall(ctx, "symlink", ["/a", "/b"])).rejects.toThrow(
-        /Unknown fs method: symlink/
-      );
       await expect(service.handleCall(ctx, "chown", ["/a", 0, 0])).rejects.toThrow(
         /Unknown fs method: chown/
       );
@@ -501,7 +531,13 @@ describe("FsService", () => {
         "/",
         { recursive: true },
       ])) as string[];
-      expect(names.sort()).toEqual(["sub", "sub/deeper", "sub/deeper/leaf.txt", "sub/mid.txt", "top.txt"]);
+      expect(names.sort()).toEqual([
+        "sub",
+        "sub/deeper",
+        "sub/deeper/leaf.txt",
+        "sub/mid.txt",
+        "top.txt",
+      ]);
     });
 
     it("supports recursive withFileTypes with nested relative names", async () => {
@@ -677,10 +713,7 @@ describe("FsService", () => {
       writeFileSync(path.join(root, "a", "in.txt"), "");
       writeFileSync(path.join(root, "b", "out.txt"), "");
 
-      const result = (await service.handleCall(ctx, "glob", [
-        "*.txt",
-        { path: "/a" },
-      ])) as string[];
+      const result = (await service.handleCall(ctx, "glob", ["*.txt", { path: "/a" }])) as string[];
       expect(result).toEqual(["/a/in.txt"]);
     });
 
@@ -738,7 +771,8 @@ describe("FsService", () => {
             else if (e.kind === "delete") files.delete(key);
           }
         },
-        readFile: async (contextId, repoPath, rel) => files.get(keyFor(contextId, repoPath, rel)) ?? null,
+        readFile: async (contextId, repoPath, rel) =>
+          files.get(keyFor(contextId, repoPath, rel)) ?? null,
         listFiles: async (contextId) =>
           [...files.keys()]
             .filter((k) => k.startsWith(`${contextId}/`))
@@ -911,7 +945,10 @@ describe("FsService", () => {
       const files = new Map<string, FsVcsContent>(); // `${contextId}/${repoPath}/${repoRel}` -> content
       const applyCalls: Array<{ repoPath: string; edits: FsVcsEditOp[] }> = [];
       const isScratch = (rel: string) =>
-        rel === ".tmp" || rel.startsWith(".tmp/") || rel === ".testkit" || rel.startsWith(".testkit/");
+        rel === ".tmp" ||
+        rel.startsWith(".tmp/") ||
+        rel === ".testkit" ||
+        rel.startsWith(".testkit/");
       const keyFor = (contextId: string, repoPath: string, rel: string) =>
         `${contextId}/${repoPath}/${rel}`;
       const bridge: FsVcsBridge = {
@@ -930,7 +967,8 @@ describe("FsService", () => {
             else if (e.kind === "delete") files.delete(key);
           }
         },
-        readFile: async (contextId, repoPath, rel) => files.get(keyFor(contextId, repoPath, rel)) ?? null,
+        readFile: async (contextId, repoPath, rel) =>
+          files.get(keyFor(contextId, repoPath, rel)) ?? null,
         listFiles: async () => [],
       };
       return { bridge, applyCalls, files };
@@ -1035,9 +1073,9 @@ describe("FsService", () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-root");
 
-      await expect(
-        svc.handleCall(ctx, "writeFile", ["/projects/scratch", "nope"])
-      ).rejects.toThrow(/names a workspace repo root.*projects\/scratch\/README\.md/s);
+      await expect(svc.handleCall(ctx, "writeFile", ["/projects/scratch", "nope"])).rejects.toThrow(
+        /names a workspace repo root.*projects\/scratch\/README\.md/s
+      );
       expect(applyCalls).toHaveLength(0);
     });
 
@@ -1060,24 +1098,32 @@ describe("FsService", () => {
       registerContext(ctx.caller.runtime.id, "do", "ctx-rm-force-recursive");
 
       await expect(
-        svc.handleCall(ctx, "rm", [
-          "/projects/missing/tree",
-          { recursive: true, force: true },
-        ])
+        svc.handleCall(ctx, "rm", ["/projects/missing/tree", { recursive: true, force: true }])
       ).resolves.toBeUndefined();
       expect(applyCalls).toHaveLength(0);
     });
 
-    it("suggests a repo-shaped path when a dotted project filename is used at repo root", async () => {
+    it("canonicalizes a dotted project filename into a repo-shaped path", async () => {
       const { bridge, applyCalls } = makeRoutedBridge();
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, { vcsBridge: bridge });
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-dotted");
 
       await expect(
-        svc.handleCall(ctx, "writeFile", ["/projects/file-roundtrip-test.txt", "nope"])
-      ).rejects.toThrow(/repo-shaped path.*projects\/file-roundtrip-test\/file-roundtrip-test\.txt/s);
-      expect(applyCalls).toHaveLength(0);
+        svc.handleCall(ctx, "writeFile", ["/projects/file-roundtrip-test.txt", "ok"])
+      ).resolves.toBeUndefined();
+      expect(applyCalls).toEqual([
+        expect.objectContaining({
+          repoPath: "projects/file-roundtrip-test",
+          edits: [
+            {
+              kind: "write",
+              path: "file-roundtrip-test.txt",
+              content: { kind: "text", text: "ok" },
+            },
+          ],
+        }),
+      ]);
     });
   });
 

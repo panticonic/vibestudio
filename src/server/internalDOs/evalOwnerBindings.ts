@@ -43,6 +43,8 @@ export interface ChatBinding {
   ) => Promise<number | undefined>;
   getMessageType: (typeId: string) => Promise<unknown>;
   getMessageTypes: () => Promise<unknown[]>;
+  /** Look up one durable channel envelope by id; returns null if absent. */
+  replayEnvelope: (envelopeId: string) => Promise<unknown | null>;
   callMethod: (
     participantId: string,
     method: string,
@@ -100,6 +102,7 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
     clearMessageType: op("clearMessageType") as ChatBinding["clearMessageType"],
     getMessageType: op("getMessageType") as ChatBinding["getMessageType"],
     getMessageTypes: op("getMessageTypes") as ChatBinding["getMessageTypes"],
+    replayEnvelope: op("replayEnvelope") as ChatBinding["replayEnvelope"],
     callMethod: op("callMethod") as ChatBinding["callMethod"],
     callMethodResult: op("callMethodResult") as ChatBinding["callMethodResult"],
     participantByHandle: op("participantByHandle") as ChatBinding["participantByHandle"],
@@ -122,10 +125,6 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
     setRespondPolicy: (respondPolicy: string, respondFrom?: string[]) =>
       configure(respondFrom !== undefined ? { respondPolicy, respondFrom } : { respondPolicy }),
     setRespondFrom: (respondFrom: string[]) => configure({ respondFrom }),
-    setMaxModelCallsPerTurn: (maxModelCallsPerTurn: number | null) =>
-      configure({ maxModelCallsPerTurn }),
-    setModelStreamIdleTimeoutMs: (modelStreamIdleTimeoutMs: number | null) =>
-      configure({ modelStreamIdleTimeoutMs }),
   };
   return { chat, agent };
 }

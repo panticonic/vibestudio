@@ -419,14 +419,36 @@ export async function ensureExtensionRuntimeDeps(
   return { key, nodeModulesDir };
 }
 
+type EnsureDepsOptions = {
+  baseDir: string;
+  key: string;
+  ignoreScripts: boolean;
+  overrides?: Record<string, string>;
+};
+
+// Builds for several panels commonly converge on the same dependency graph.
+// Share one install promise per cache key so concurrency produces parallel
+// builds, not duplicate npm processes competing for network/cache resources.
+const inFlightInstalls = new Map<string, Promise<string>>();
+
 async function ensureDepsInstalled(
   deps: Record<string, string>,
-  options: {
-    baseDir: string;
-    key: string;
-    ignoreScripts: boolean;
-    overrides?: Record<string, string>;
-  }
+  options: EnsureDepsOptions
+): Promise<string> {
+  const flightKey = `${path.resolve(options.baseDir)}\0${options.key}`;
+  const existing = inFlightInstalls.get(flightKey);
+  if (existing) return existing;
+
+  const pending = ensureDepsInstalledOnce(deps, options).finally(() => {
+    if (inFlightInstalls.get(flightKey) === pending) inFlightInstalls.delete(flightKey);
+  });
+  inFlightInstalls.set(flightKey, pending);
+  return pending;
+}
+
+async function ensureDepsInstalledOnce(
+  deps: Record<string, string>,
+  options: EnsureDepsOptions
 ): Promise<string> {
   if (Object.keys(deps).length === 0) {
     // No external deps — return a dummy path

@@ -37,9 +37,15 @@ import { assertNoPreInjectedImports, assertNamedExportsExist } from "./importVal
 // Types
 // =============================================================================
 
+export interface SandboxImportLoader {
+  (specifier: string, ref: string | undefined, externals: string[]): Promise<string>;
+  /** Optional build-backed probe supplied by Vibestudio hosts. */
+  resolveWorkspaceImport?: (specifier: string) => Promise<boolean>;
+}
+
 export interface SandboxOptions {
   /** Source syntax (default: "tsx") */
-  syntax?: "typescript" | "jsx" | "tsx";
+  syntax?: "javascript" | "typescript" | "jsx" | "tsx";
   /** Abort signal used to interrupt async eval work. Synchronous user code cannot be preempted. */
   signal?: AbortSignal;
   /** Packages to build and load before execution.
@@ -50,7 +56,7 @@ export interface SandboxOptions {
   /** Console streaming callback */
   onConsole?: (formatted: string) => void;
   /** Dynamic import loader — keeps this module free of runtime/RPC deps */
-  loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+  loadImport?: SandboxImportLoader;
   /** File path for this source. Enables relative imports. */
   sourcePath?: string;
   /** Preloaded source files keyed by normalized path. */
@@ -109,7 +115,7 @@ export interface CompileComponentOptions {
   /** Packages to build and load before compilation. Same semantics as eval imports. */
   imports?: Record<string, string>;
   /** Dynamic import loader — keeps this module free of runtime/RPC deps */
-  loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+  loadImport?: SandboxImportLoader;
   /** File path for this source. Enables relative imports. */
   sourcePath?: string;
   /** Preloaded source files keyed by normalized path. */
@@ -179,13 +185,31 @@ async function loadImports(
     // @radix-ui/*, …) never go through the build service. Asking it for
     // "react" can even resolve to an unrelated workspace unit via basename
     // matching (workspace/packages/react) and build that instead.
-    if (moduleMap[specifier]) continue;
+    if (moduleMap[specifier] || installPreloadedModuleAlias(specifier, moduleMap)) continue;
     const ref = refValue === "latest" ? undefined : refValue;
     // Recompute externals each iteration so earlier imports are externalized
     const externals = Object.keys(moduleMap);
     const bundleCode = await loadImport(specifier, ref, externals);
     loadLibraryBundle(specifier, bundleCode, moduleMap, requireFn);
   }
+}
+
+function installPreloadedModuleAlias(
+  specifier: string,
+  moduleMap: Record<string, unknown>
+): boolean {
+  const candidates: string[] = [];
+  const flatScoped = specifier.match(/^@workspace-([^/]+)$/u);
+  if (flatScoped) candidates.push(`@workspace/${flatScoped[1]}`);
+  const flatBare = specifier.match(/^workspace-([^/]+)$/u);
+  if (flatBare) candidates.push(`@workspace/${flatBare[1]}`);
+  for (const candidate of candidates) {
+    if (moduleMap[candidate] !== undefined) {
+      moduleMap[specifier] = moduleMap[candidate];
+      return true;
+    }
+  }
+  return false;
 }
 
 function installLazyImportLoader(
@@ -217,14 +241,45 @@ function installLazyImportLoader(
   };
 }
 
+async function inferSandboxImports(
+  missing: string[],
+  loadImport: SandboxImportLoader,
+  context: {
+    importerPath?: string;
+    loadSourceFile?: LoadSourceFile;
+    explicitImports?: Record<string, string>;
+  }
+): Promise<Record<string, string>> {
+  const inferred = await inferImportsFromPackageJson(missing, context);
+  if (!loadImport.resolveWorkspaceImport) return inferred;
+
+  // Scoped @workspace/@vibestudio packages and declared package.json deps are
+  // already covered above. Probe the remaining bare specifiers against the
+  // workspace graph so unscoped panels/workers/packages get the same ergonomic
+  // auto-import behavior. A false result remains an npm-package error with the
+  // existing explicit `imports: { pkg: "npm:..." }` guidance.
+  const unresolved = missing.filter(
+    (specifier) =>
+      inferred[specifier] === undefined &&
+      !specifier.startsWith("node:") &&
+      !specifier.startsWith("cloudflare:")
+  );
+  const resolutions = await Promise.all(
+    unresolved.map(async (specifier) => ({
+      specifier,
+      resolved: await loadImport.resolveWorkspaceImport!(specifier),
+    }))
+  );
+  for (const { specifier, resolved } of resolutions) {
+    if (resolved) inferred[specifier] = "latest";
+  }
+  return inferred;
+}
+
 async function ensureRequires(
   requires: string[],
   options: {
-    loadImport?: (
-      specifier: string,
-      ref: string | undefined,
-      externals: string[]
-    ) => Promise<string>;
+    loadImport?: SandboxImportLoader;
     loadSourceFile?: LoadSourceFile;
     sourcePath?: string;
     imports?: Record<string, string>;
@@ -241,7 +296,7 @@ async function ensureRequires(
   if (!validation.valid && options.loadImport) {
     const moduleMap = getModuleMap(options.moduleMap);
     const missing = requires.filter((r) => !moduleMap[r]);
-    const inferredImports = await inferImportsFromPackageJson(missing, {
+    const inferredImports = await inferSandboxImports(missing, options.loadImport, {
       importerPath: context?.importerPath ?? options.sourcePath,
       loadSourceFile: options.loadSourceFile,
       explicitImports: options.imports,
@@ -321,6 +376,512 @@ function safeSerialize(value: unknown, maxDepth = 10): unknown {
 
 function wrapForTopLevelAwait(code: string): string {
   return `return (async () => {\n${code}\n})()`;
+}
+
+/**
+ * Model/tool transports occasionally leave JSON-style whitespace escapes in
+ * executable code (for example `afterCommit,\\n afterPush`). Such escapes are
+ * invalid outside literals. Repair only code-state escapes; strings, template
+ * text, comments, and regular expressions retain their bytes.
+ */
+function repairEscapedWhitespaceOutsideLiterals(code: string): string {
+  type Mode =
+    | "code"
+    | "single"
+    | "double"
+    | "template"
+    | "line-comment"
+    | "block-comment"
+    | "regex";
+  let mode: Mode = "code";
+  let escaped = false;
+  let regexClass = false;
+  let previousSignificant = "";
+  let output = "";
+
+  const regexCanStartAfter = (char: string): boolean =>
+    char === "" || "([{,:;=!?&|+-*%^~<>".includes(char);
+
+  for (let index = 0; index < code.length; index++) {
+    const char = code[index]!;
+    const next = code[index + 1];
+
+    if (mode === "line-comment") {
+      output += char;
+      if (char === "\n" || char === "\r") mode = "code";
+      continue;
+    }
+    if (mode === "block-comment") {
+      output += char;
+      if (char === "*" && next === "/") {
+        output += next;
+        index++;
+        mode = "code";
+      }
+      continue;
+    }
+    if (mode !== "code") {
+      output += char;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (mode === "regex") {
+        if (char === "[") regexClass = true;
+        else if (char === "]") regexClass = false;
+        else if (char === "/" && !regexClass) mode = "code";
+      } else if (
+        (mode === "single" && char === "'") ||
+        (mode === "double" && char === '"') ||
+        (mode === "template" && char === "`")
+      ) {
+        mode = "code";
+      }
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      output += "//";
+      index++;
+      mode = "line-comment";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      output += "/*";
+      index++;
+      mode = "block-comment";
+      continue;
+    }
+    if (char === "'") mode = "single";
+    else if (char === '"') mode = "double";
+    else if (char === "`") mode = "template";
+    else if (char === "/" && regexCanStartAfter(previousSignificant)) {
+      mode = "regex";
+      regexClass = false;
+    } else if (char === "\\" && (next === "n" || next === "r" || next === "t")) {
+      if (next === "r" && code[index + 2] === "\\" && code[index + 3] === "n") {
+        output += "\n";
+        index += 3;
+      } else {
+        output += next === "t" ? " " : "\n";
+        index++;
+      }
+      continue;
+    }
+
+    output += char;
+    if (!/\s/u.test(char)) previousSignificant = char;
+  }
+  return output;
+}
+
+/**
+ * Eval is REPL-like: a trailing async IIFE is an implicit result, not detached
+ * background work. Awaiting it makes errors/output visible and prevents agents
+ * from retrying a still-running mutation because the tool returned `(no output)`.
+ * Explicit `void (async ... )()` remains the opt-in detached form.
+ */
+function awaitTrailingAsyncIife(code: string): string {
+  const starts = [...code.matchAll(/^\(async\s*\(\s*\)\s*=>/gmu)];
+  const start = starts.at(-1)?.index;
+  if (start === undefined) return code;
+  const suffix = code.slice(start).trim();
+  if (!/\}\s*\)\s*\(\s*\)\s*;?$/u.test(suffix)) return code;
+  return `${code.slice(0, start)}return await ${code.slice(start)}`;
+}
+
+/** Return a final top-level object literal like a notebook/REPL result. */
+function returnTrailingObjectLiteral(code: string): string {
+  type Mode =
+    | "code"
+    | "single"
+    | "double"
+    | "template"
+    | "line-comment"
+    | "block-comment"
+    | "regex";
+  let mode: Mode = "code";
+  let escaped = false;
+  let regexClass = false;
+  let parens = 0;
+  let brackets = 0;
+  let braces = 0;
+  let lineStart = 0;
+  let candidate = -1;
+  let previousSignificant = "";
+  const regexCanStartAfter = (char: string): boolean =>
+    char === "" || "([{,:;=!?&|+-*%^~<>".includes(char);
+
+  for (let index = 0; index < code.length; index++) {
+    const char = code[index]!;
+    const next = code[index + 1];
+    if (mode === "line-comment") {
+      if (char === "\n" || char === "\r") {
+        mode = "code";
+        lineStart = index + 1;
+      }
+      continue;
+    }
+    if (mode === "block-comment") {
+      if (char === "*" && next === "/") {
+        index++;
+        mode = "code";
+      }
+      continue;
+    }
+    if (mode !== "code") {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (mode === "regex") {
+        if (char === "[") regexClass = true;
+        else if (char === "]") regexClass = false;
+        else if (char === "/" && !regexClass) mode = "code";
+      } else if (
+        (mode === "single" && char === "'") ||
+        (mode === "double" && char === '"') ||
+        (mode === "template" && char === "`")
+      ) {
+        mode = "code";
+      }
+      continue;
+    }
+    if (char === "\n" || char === "\r") {
+      lineStart = index + 1;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      index++;
+      mode = "line-comment";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index++;
+      mode = "block-comment";
+      continue;
+    }
+    if (char === "'") mode = "single";
+    else if (char === '"') mode = "double";
+    else if (char === "`") mode = "template";
+    else if (char === "/" && regexCanStartAfter(previousSignificant)) {
+      mode = "regex";
+      regexClass = false;
+    } else if (char === "(") parens++;
+    else if (char === ")") parens = Math.max(0, parens - 1);
+    else if (char === "[") brackets++;
+    else if (char === "]") brackets = Math.max(0, brackets - 1);
+    else if (char === "{") {
+      if (
+        parens === 0 &&
+        brackets === 0 &&
+        braces === 0 &&
+        code.slice(lineStart, index).trim() === ""
+      ) {
+        candidate = index;
+      }
+      braces++;
+    } else if (char === "}") braces = Math.max(0, braces - 1);
+    if (!/\s/u.test(char)) previousSignificant = char;
+  }
+
+  if (candidate < 0 || parens !== 0 || brackets !== 0 || braces !== 0) return code;
+  const prefix = code.slice(0, candidate);
+  if (prefix.trim() && !prefix.trimEnd().endsWith(";")) return code;
+  const suffix = code.slice(candidate).trim().replace(/;\s*$/u, "");
+  if (!suffix.startsWith("{") || !suffix.endsWith("}") || !/[:,]/u.test(suffix)) return code;
+  return `${prefix}return (${suffix});`;
+}
+
+function normalizeAgentEvalCode(code: string, repairMissingCallParens = false): string {
+  const portableCode = repairEscapedWhitespaceOutsideLiterals(
+    liftPortableNodeFsSyncCalls(repairLeakedJsonEnvelopeSuffix(code))
+  );
+  return returnTrailingObjectLiteral(
+    awaitTrailingAsyncIife(
+      repairMissingCallParens ? repairMissingCallParensBeforeSemicolon(portableCode) : portableCode
+    )
+  );
+}
+
+const PORTABLE_FS_SYNC_METHODS: Record<string, string> = {
+  accessSync: "access",
+  appendFileSync: "appendFile",
+  chmodSync: "chmod",
+  copyFileSync: "copyFile",
+  existsSync: "exists",
+  lstatSync: "lstat",
+  mkdirSync: "mkdir",
+  readFileSync: "readFile",
+  readdirSync: "readdir",
+  readlinkSync: "readlink",
+  realpathSync: "realpath",
+  renameSync: "rename",
+  rmSync: "rm",
+  rmdirSync: "rmdir",
+  statSync: "stat",
+  symlinkSync: "symlink",
+  truncateSync: "truncate",
+  unlinkSync: "unlink",
+  utimesSync: "utimes",
+  writeFileSync: "writeFile",
+};
+
+/**
+ * Eval runs in an async workerd and cannot perform synchronous host I/O. For a
+ * direct default/namespace `node:fs` import, lift supported `*Sync(...)` calls
+ * to the equivalent awaited context-fs operation. This preserves the familiar
+ * Node snippet while keeping all paths owner-scoped by the EvalDO facade.
+ */
+function liftPortableNodeFsSyncCalls(code: string): string {
+  const aliases = new Set<string>();
+  const importPattern =
+    /\bimport\s+(?:(?:\*\s+as\s+)?([A-Za-z_$][\w$]*))\s+from\s+["'](?:node:)?fs["']/gu;
+  for (const match of code.matchAll(importPattern)) {
+    if (match[1]) aliases.add(match[1]);
+  }
+  const requirePattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*["'](?:node:)?fs["']\s*\)/gu;
+  for (const match of code.matchAll(requirePattern)) {
+    if (match[1]) aliases.add(match[1]);
+  }
+  if (aliases.size === 0) return code;
+
+  // `await` is only valid in the eval's outer async body. Never inject it into
+  // a nested synchronous function/arrow body: doing so turns otherwise valid
+  // user code into a compile-time SyntaxError. Nested code can use the async fs
+  // methods explicitly, as it would against any promise-backed filesystem.
+  const nestedFunctionRanges = findNestedFunctionBodyRanges(code);
+  const aliasPattern = [...aliases].map(escapeRegExp).join("|");
+  const methodPattern = Object.keys(PORTABLE_FS_SYNC_METHODS).map(escapeRegExp).join("|");
+  const call = new RegExp(`\\b(${aliasPattern})\\s*\\.\\s*(${methodPattern})\\s*\\(`, "gu");
+  return code.replace(call, (source, alias: string, syncName: string, offset: number) => {
+    if (nestedFunctionRanges.some(([start, end]) => offset >= start && offset < end)) return source;
+    return `await ${alias}.${PORTABLE_FS_SYNC_METHODS[syncName]}(`;
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Locate ordinary function and block-arrow bodies well enough to protect
+ * their source ranges from top-level async lifting. The matcher is deliberately
+ * conservative: a false-positive merely leaves a sync call untouched; it can
+ * never inject invalid `await` into nested code. */
+function findNestedFunctionBodyRanges(code: string): Array<[number, number]> {
+  const starts = [
+    ...code.matchAll(/\b(?:async\s+)?function\b[^{}]*\{/gu),
+    ...code.matchAll(/(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*(?::[^={};]+)?=>\s*\{/gu),
+  ]
+    .map((match) => (match.index ?? 0) + match[0].lastIndexOf("{"))
+    .sort((a, b) => a - b);
+  const ranges: Array<[number, number]> = [];
+  for (const start of starts) {
+    const end = findBalancedBraceEnd(code, start);
+    if (end !== null) ranges.push([start, end]);
+  }
+  ranges.push(...findExpressionArrowRanges(code));
+  return ranges;
+}
+
+/** Conservatively protect expression-bodied arrows from top-level `await`
+ * lifting. A false positive only leaves a sync call untouched; a false
+ * negative would produce invalid JavaScript, so uncertain ranges extend to the
+ * next top-level statement boundary. */
+function findExpressionArrowRanges(code: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const arrowPattern = /=>\s*/gu;
+  for (const match of code.matchAll(arrowPattern)) {
+    const start = (match.index ?? 0) + match[0].length;
+    if (code[start] === "{") continue;
+    let parens = 0;
+    let brackets = 0;
+    let braces = 0;
+    let mode: "code" | "single" | "double" | "template" | "line-comment" | "block-comment" = "code";
+    let escaped = false;
+    let end = code.length;
+    for (let index = start; index < code.length; index++) {
+      const char = code[index]!;
+      const next = code[index + 1];
+      if (mode === "line-comment") {
+        if (char === "\n") {
+          end = index;
+          break;
+        }
+        continue;
+      }
+      if (mode === "block-comment") {
+        if (char === "*" && next === "/") {
+          mode = "code";
+          index++;
+        }
+        continue;
+      }
+      if (mode !== "code") {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (
+          (mode === "single" && char === "'") ||
+          (mode === "double" && char === '"') ||
+          (mode === "template" && char === "`")
+        ) {
+          mode = "code";
+        }
+        continue;
+      }
+      if (char === "/" && next === "/") {
+        mode = "line-comment";
+        index++;
+      } else if (char === "/" && next === "*") {
+        mode = "block-comment";
+        index++;
+      } else if (char === "'") mode = "single";
+      else if (char === '"') mode = "double";
+      else if (char === "`") mode = "template";
+      else if (char === "(") parens++;
+      else if (char === ")") {
+        if (parens === 0) {
+          end = index;
+          break;
+        }
+        parens--;
+      } else if (char === "[") brackets++;
+      else if (char === "]") {
+        if (brackets === 0) {
+          end = index;
+          break;
+        }
+        brackets--;
+      } else if (char === "{") braces++;
+      else if (char === "}") {
+        if (braces === 0) {
+          end = index;
+          break;
+        }
+        braces--;
+      } else if (
+        parens === 0 &&
+        brackets === 0 &&
+        braces === 0 &&
+        (char === ";" || char === "," || char === "\n")
+      ) {
+        end = index;
+        break;
+      }
+    }
+    ranges.push([start, end]);
+  }
+  return ranges;
+}
+
+function findBalancedBraceEnd(code: string, start: number): number | null {
+  let depth = 0;
+  let mode: "code" | "single" | "double" | "template" | "line-comment" | "block-comment" = "code";
+  let escaped = false;
+  for (let index = start; index < code.length; index++) {
+    const char = code[index]!;
+    const next = code[index + 1];
+    if (mode === "line-comment") {
+      if (char === "\n") mode = "code";
+      continue;
+    }
+    if (mode === "block-comment") {
+      if (char === "*" && next === "/") {
+        mode = "code";
+        index++;
+      }
+      continue;
+    }
+    if (mode !== "code") {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (
+        (mode === "single" && char === "'") ||
+        (mode === "double" && char === '"') ||
+        (mode === "template" && char === "`")
+      ) {
+        mode = "code";
+      }
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      mode = "line-comment";
+      index++;
+    } else if (char === "/" && next === "*") {
+      mode = "block-comment";
+      index++;
+    } else if (char === "'") mode = "single";
+    else if (char === '"') mode = "double";
+    else if (char === "`") mode = "template";
+    else if (char === "{") depth++;
+    else if (char === "}" && --depth === 0) return index + 1;
+  }
+  return null;
+}
+
+/**
+ * A model occasionally closes the surrounding tool-call JSON inside the code
+ * string, leaving an otherwise complete program followed by a standalone
+ * `"}` line. That byte sequence cannot terminate any valid JavaScript program,
+ * so removing it is a conservative transport repair rather than source
+ * rewriting.
+ */
+function repairLeakedJsonEnvelopeSuffix(code: string): string {
+  return code.replace(/\n\s*"\}\s*$/u, "");
+}
+
+/** Repair an unmatched call parenthesis at a line-ending semicolon. */
+function repairMissingCallParensBeforeSemicolon(code: string): string {
+  return code
+    .split("\n")
+    .map((line) => {
+      const semicolon = line.match(/^(.*);(\s*(?:\/\/.*)?)$/u);
+      if (!semicolon) return line;
+      const body = semicolon[1]!;
+      if (/^\s*(?:for|while|if|switch|catch|with)\s*\(/u.test(body)) return line;
+      if (!/[\w$.)\]]\s*\(/u.test(body)) return line;
+
+      let mode: "code" | "single" | "double" | "template" = "code";
+      let escaped = false;
+      let parens = 0;
+      let braces = 0;
+      let brackets = 0;
+      for (const char of body) {
+        if (mode !== "code") {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (
+            (mode === "single" && char === "'") ||
+            (mode === "double" && char === '"') ||
+            (mode === "template" && char === "`")
+          ) {
+            mode = "code";
+          }
+          continue;
+        }
+        if (char === "'") mode = "single";
+        else if (char === '"') mode = "double";
+        else if (char === "`") mode = "template";
+        else if (char === "(") parens++;
+        else if (char === ")") parens--;
+        else if (char === "{") braces++;
+        else if (char === "}") braces--;
+        else if (char === "[") brackets++;
+        else if (char === "]") brackets--;
+      }
+      if (parens < 1 || parens > 3 || braces !== 0 || brackets !== 0) return line;
+      return `${body}${")".repeat(parens)};${semicolon[2] ?? ""}`;
+    })
+    .join("\n");
 }
 
 function isPromise(value: unknown): value is Promise<unknown> {
@@ -417,8 +978,15 @@ export async function executeSandbox(
 
   try {
     throwIfAborted(signal);
+    let normalizedCode = normalizeAgentEvalCode(code);
     // (#1) Fail loudly if pre-injected globals are imported from the runtime.
-    assertNoPreInjectedImports(code);
+    const ambientCompatModule = moduleMap["@workspace/runtime"];
+    assertNoPreInjectedImports(
+      normalizedCode,
+      ambientCompatModule && typeof ambientCompatModule === "object"
+        ? (ambientCompatModule as Record<string, unknown>)
+        : null
+    );
     restoreLazyImportLoader = installLazyImportLoader(options.loadImport, moduleMap, requireFn);
 
     // Load on-demand imports
@@ -432,37 +1000,58 @@ export async function executeSandbox(
       );
     }
 
-    const prepared = await withAbort(
-      prepareSourceCode(
-        code,
-        {
-          syntax,
-          sourcePath: options.sourcePath,
-          sourceFiles: options.sourceFiles,
-          loadSourceFile: options.loadSourceFile,
-          moduleMap,
-          require: requireFn,
-        },
-        (requires, context) =>
-          ensureRequires(
-            requires,
-            {
-              loadImport: options.loadImport,
-              loadSourceFile: options.loadSourceFile,
-              sourcePath: options.sourcePath,
-              imports: options.imports,
-              moduleMap,
-              require: requireFn,
-            },
-            context
-          )
-      ),
-      signal
-    );
+    const prepare = (source: string) =>
+      withAbort(
+        prepareSourceCode(
+          source,
+          {
+            syntax,
+            sourcePath: options.sourcePath,
+            sourceFiles: options.sourceFiles,
+            loadSourceFile: options.loadSourceFile,
+            moduleMap,
+            require: requireFn,
+          },
+          (requires, context) =>
+            ensureRequires(
+              requires,
+              {
+                loadImport: options.loadImport,
+                loadSourceFile: options.loadSourceFile,
+                sourcePath: options.sourcePath,
+                imports: options.imports,
+                moduleMap,
+                require: requireFn,
+              },
+              context
+            )
+        ),
+        signal
+      );
+    const prepareAndTransform = async (source: string) => {
+      const prepared = await prepare(source);
+      throwIfAborted(signal);
+      const transformed = await withAbort(transformCode(prepared.code, { syntax }), signal);
+      return { prepared, transformed };
+    };
+    let built: Awaited<ReturnType<typeof prepareAndTransform>>;
+    try {
+      built = await prepareAndTransform(normalizedCode);
+    } catch (originalError) {
+      // The missing-call-parenthesis heuristic is intentionally a parse-error
+      // fallback. Never rewrite source that already parses: valid regex literals
+      // and other JavaScript punctuation must remain byte-for-byte meaningful.
+      const repairedCode = normalizeAgentEvalCode(code, true);
+      if (repairedCode === normalizedCode) throw originalError;
+      try {
+        built = await prepareAndTransform(repairedCode);
+        normalizedCode = repairedCode;
+      } catch {
+        throw originalError;
+      }
+    }
     throwIfAborted(signal);
-
-    const transformed = await withAbort(transformCode(prepared.code, { syntax }), signal);
-    throwIfAborted(signal);
+    const { transformed } = built;
 
     // Validate requires
     if (!requireFn) {
@@ -479,7 +1068,7 @@ export async function executeSandbox(
       // Auto-resolve: build missing workspace packages on-demand
       const missingModules = transformed.requires.filter((r) => !moduleMap[r]);
       const autoImports = await withAbort(
-        inferImportsFromPackageJson(missingModules, {
+        inferSandboxImports(missingModules, options.loadImport, {
           importerPath: options.sourcePath,
           loadSourceFile: options.loadSourceFile,
           explicitImports: options.imports,
@@ -489,10 +1078,7 @@ export async function executeSandbox(
       if (Object.keys(autoImports).length > 0) {
         throwIfAborted(signal);
         options.onConsole?.(`[eval] Auto-loading: ${Object.keys(autoImports).join(", ")}...`);
-        await withAbort(
-          loadImports(autoImports, options.loadImport, moduleMap, requireFn),
-          signal
-        );
+        await withAbort(loadImports(autoImports, options.loadImport, moduleMap, requireFn), signal);
         validation = validateRequires(transformed.requires, requireFn);
       }
     }
@@ -536,7 +1122,7 @@ export async function executeSandbox(
 
     // (#2) Now that workspace modules are loaded, fail loudly on imports of
     // names they do not export (instead of a silent `undefined`).
-    assertNamedExportsExist(code, (specifier) => moduleMap[specifier]);
+    assertNamedExportsExist(normalizedCode, (specifier) => moduleMap[specifier]);
 
     // Enter tracking context
     if (tracking && trackingContext) {

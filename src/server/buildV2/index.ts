@@ -321,8 +321,8 @@ export interface BuildSystemV2 extends RepoPushValidator {
     externals?: string[]
   ): Promise<{ bundle: string }>;
 
-  /** Get effective version for a unit */
-  getEffectiveVersion(unitName: string): string | null;
+  /** Get effective version by package name or workspace-relative source path. */
+  getEffectiveVersion(unitNameOrPath: string): string | null;
 
   /** Get external npm runtime/build dependencies for a unit. */
   getExternalDeps(unitName: string): Record<string, string>;
@@ -1343,8 +1343,10 @@ export async function initBuildSystemV2(
       return buildStore.get(key);
     },
 
-    getEffectiveVersion(unitName: string): string | null {
-      return currentState().evMap[unitName] ?? null;
+    getEffectiveVersion(unitNameOrPath: string): string | null {
+      const snapshot = currentState();
+      const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
+      return node ? (snapshot.evMap[node.name] ?? null) : null;
     },
 
     getExternalDeps(unitName: string): Record<string, string> {

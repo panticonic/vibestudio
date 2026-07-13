@@ -66,6 +66,12 @@ function createHarness(contexts: Record<string, string | null>) {
       if (method === "getRun") {
         return { status: "done", result: { success: true, console: "", scopeKeys: [] } };
       }
+      if (method === "readScopeTextPage") {
+        return { length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" };
+      }
+      if (method === "deleteScopeValue") {
+        return { ok: true, existed: true };
+      }
       if (method === "onEvalComplete") {
         return undefined;
       }
@@ -340,6 +346,49 @@ describe("createEvalService", () => {
     expect(calls.find((c) => c.method === "getRun")).toMatchObject({
       ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
       args: ["inv-42"],
+    });
+  });
+
+  it("large-result scope paging stays owner-scoped and forwards only bounded page fields", async () => {
+    const ownerId = "session:default";
+    const { service, calls } = createHarness({ [ownerId]: "ctx_1" });
+    const caller = { caller: createVerifiedCaller("shell:dev_cli", "shell") };
+
+    const page = await service.handler(caller, "readScopeTextPage", [
+      {
+        ownerId,
+        contextId: "ctx_1",
+        subKey: "system-tests",
+        key: "__temporary",
+        offset: 131_072,
+        limit: 4096,
+      },
+    ]);
+    expect(page).toEqual({ length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" });
+    expect(calls.find((call) => call.method === "readScopeTextPage")).toMatchObject({
+      ref: {
+        source: INTERNAL_DO_SOURCE,
+        className: "EvalDO",
+        objectKey: evalKey(ownerId, "system-tests"),
+      },
+      args: ["__temporary", 131_072, 4096],
+    });
+
+    await service.handler(caller, "deleteScopeValue", [
+      {
+        ownerId,
+        contextId: "ctx_1",
+        subKey: "system-tests",
+        key: "__temporary",
+      },
+    ]);
+    expect(calls.find((call) => call.method === "deleteScopeValue")).toMatchObject({
+      ref: {
+        source: INTERNAL_DO_SOURCE,
+        className: "EvalDO",
+        objectKey: evalKey(ownerId, "system-tests"),
+      },
+      args: ["__temporary"],
     });
   });
 
