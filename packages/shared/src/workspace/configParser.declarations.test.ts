@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseWorkspaceConfigContentWithId,
   resolveHostTargetDecl,
+  resolveHostTargetRequiredExtensions,
   resolveWorkspaceTrustGrants,
   workspaceAppPackageName,
   workspaceExtensionPackageName,
@@ -82,6 +83,13 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
       requiresExtensions: ["extensions/react-native"],
     });
     expect(resolveHostTargetDecl(parse("initPanels: []\n"), "electron")).toBeNull();
+    expect(resolveHostTargetRequiredExtensions(config)).toEqual([
+      { source: "extensions/react-native", ref: "main" },
+    ]);
+    expect(resolveHostTargetRequiredExtensions(config, "electron")).toEqual([]);
+    expect(resolveHostTargetRequiredExtensions(config, "react-native")).toEqual([
+      { source: "extensions/react-native", ref: "main" },
+    ]);
   });
 
   it("resolves the browser-data provider package name (null when undeclared)", () => {

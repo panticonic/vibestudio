@@ -95,7 +95,7 @@ describe("bootstrap approvals", () => {
     ]);
   });
 
-  it("treats startup workspace-unit approvals as blocking every host target", () => {
+  it("matches startup units only to their app target or required provider extension", () => {
     const extensionStartup = unitBatch("startup", { kind: "extension" });
     const mixedStartup = unitBatch("startup", {
       target: "electron",
@@ -115,9 +115,16 @@ describe("bootstrap approvals", () => {
     expect(
       filterBootstrapApprovalsForTarget(
         [extensionStartup, mixedStartup, unitBatch("source-change", { target: "electron" })],
-        "react-native"
+        "react-native",
+        ["extensions/test"]
       ).map((approval) => approval.approvalId)
     ).toEqual([extensionStartup.approvalId, mixedStartup.approvalId]);
+
+    expect(
+      filterBootstrapApprovalsForTarget([extensionStartup, mixedStartup], "terminal").map(
+        (approval) => approval.approvalId
+      )
+    ).toEqual([]);
   });
 
   it("can still narrow app meta approvals to one host target", () => {
@@ -159,6 +166,10 @@ describe("bootstrap approvals", () => {
         extensionStartupApproval,
         runtimeApproval,
       ]).map((approval) => approval.approvalId)
-    ).toEqual([appMetaApproval.approvalId, runtimeApproval.approvalId]);
+    ).toEqual([
+      appMetaApproval.approvalId,
+      extensionStartupApproval.approvalId,
+      runtimeApproval.approvalId,
+    ]);
   });
 });

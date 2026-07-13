@@ -26,16 +26,29 @@ export function filterBootstrapApprovals(approvals: PendingApproval[]): PendingU
  */
 export function filterRuntimeApprovals(approvals: PendingApproval[]): PendingApproval[] {
   return approvals.filter(
-    (approval) => !(isBootstrapUnitApproval(approval) && approval.trigger === "startup")
+    (approval) =>
+      !(
+        isBootstrapUnitApproval(approval) &&
+        approval.trigger === "startup" &&
+        approval.units.some((unit) => unit.unitKind === "app")
+      )
   );
 }
 
 export function isBootstrapHostTargetApproval(
   approval: PendingApproval,
-  target: HostTarget
+  target: HostTarget,
+  requiredExtensionSources: readonly string[] = []
 ): approval is PendingUnitBatchApproval {
   if (!isBootstrapUnitApproval(approval)) return false;
-  if (approval.trigger === "startup") return true;
+  if (approval.trigger === "startup") {
+    const required = new Set(requiredExtensionSources);
+    return approval.units.some(
+      (unit) =>
+        (unit.unitKind === "app" && unit.target === target) ||
+        (unit.unitKind === "extension" && required.has(unit.source.repo))
+    );
+  }
   return (
     approval.units.length > 0 &&
     approval.units.every((unit) => unit.unitKind === "app") &&
@@ -45,9 +58,10 @@ export function isBootstrapHostTargetApproval(
 
 export function filterBootstrapApprovalsForTarget(
   approvals: PendingApproval[],
-  target: HostTarget
+  target: HostTarget,
+  requiredExtensionSources: readonly string[] = []
 ): PendingUnitBatchApproval[] {
   return approvals.filter((approval): approval is PendingUnitBatchApproval =>
-    isBootstrapHostTargetApproval(approval, target)
+    isBootstrapHostTargetApproval(approval, target, requiredExtensionSources)
   );
 }

@@ -314,6 +314,8 @@ export type UnitApprovalDecision = "once" | "session" | "version" | "repo" | "de
 export interface UnitReconcileOptions {
   trigger?: UnitReconcileTrigger;
   removeUndeclared?: boolean;
+  /** Return after declarations/approvals are staged instead of waiting for builds. */
+  waitFor?: "staged" | "applied";
 }
 
 export interface UnitApprovalCoordinator<ApprovalEntry> {
@@ -649,16 +651,32 @@ export class UnitHost<
   }
 
   async reconcileDeclared(declared: Decl[], opts: UnitReconcileOptions = {}): Promise<void> {
+    let resolveStaged!: () => void;
+    const staged = new Promise<void>((resolve) => {
+      resolveStaged = resolve;
+    });
+    let didStage = false;
+    const markStaged = (): void => {
+      if (didStage) return;
+      didStage = true;
+      this.declarationsStaged?.();
+      resolveStaged();
+    };
     const run = (this.reconciling ?? Promise.resolve()).then(() =>
       this.reconcileDeclaredOnce(declared, {
         trigger: opts.trigger ?? "startup",
         removeUndeclared: opts.removeUndeclared ?? true,
+        onStaged: markStaged,
       })
     );
     // A pass that throws before reaching its staging point must still release
     // whenDeclarationsStaged() waiters, or launch gates would hang forever.
-    this.reconciling = run.catch(() => {}).finally(() => this.declarationsStaged?.());
-    await run;
+    this.reconciling = run.catch(() => {}).finally(markStaged);
+    if (opts.waitFor === "staged") {
+      await Promise.race([staged, run]);
+    } else {
+      await run;
+    }
   }
 
   async whenSettled(): Promise<void> {
@@ -837,7 +855,11 @@ export class UnitHost<
 
   private async reconcileDeclaredOnce(
     declared: Decl[],
-    opts: { trigger: UnitReconcileTrigger; removeUndeclared: boolean }
+    opts: {
+      trigger: UnitReconcileTrigger;
+      removeUndeclared: boolean;
+      onStaged: () => void;
+    }
   ): Promise<void> {
     const preApproved = this.preapprovedTrust;
     this.preapprovedTrust = new Set();
@@ -914,7 +936,7 @@ export class UnitHost<
 
     // Every declared unit is now classified (pending entry upserted, approval
     // staged) — release whenDeclarationsStaged() waiters before the builds run.
-    this.declarationsStaged?.();
+    opts.onStaged();
 
     // Apply trusted units concurrently, mirroring the post-approval path.
     // Serializing them here turned startup reconcile into a chain of builds.

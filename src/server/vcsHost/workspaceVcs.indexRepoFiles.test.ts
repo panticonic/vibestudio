@@ -154,3 +154,36 @@ describe("WorkspaceVcs.indexRepoFiles marker discipline (A4)", () => {
     }
   });
 });
+
+describe("WorkspaceVcs memory indexing startup scheduling", () => {
+  it("defers catch-up indexing and state-advance work behind the startup barrier", async () => {
+    let releaseStartup!: () => void;
+    const startupBarrier = new Promise<void>((resolve) => {
+      releaseStartup = resolve;
+    });
+    const reindexKnownRepos = vi.fn(async () => {});
+    const listeners: Array<(event: { head: string; repoPath?: string }) => void> = [];
+    const indexRepoFiles = vi.fn(async () => {});
+    const runtime = {
+      memoryIndexQueue: Promise.resolve(),
+      onStateAdvanced: (listener: (event: { head: string; repoPath?: string }) => void) => {
+        listeners.push(listener);
+      },
+      reindexKnownRepos,
+      indexRepoFiles,
+    };
+
+    WorkspaceVcs.prototype.enableMemoryIndexing.call(runtime as never, { startupBarrier });
+    listeners[0]?.({ head: "main", repoPath: "panels/chat" });
+    await Promise.resolve();
+
+    expect(reindexKnownRepos).not.toHaveBeenCalled();
+    expect(indexRepoFiles).not.toHaveBeenCalled();
+
+    releaseStartup();
+    await runtime.memoryIndexQueue;
+
+    expect(reindexKnownRepos).toHaveBeenCalledOnce();
+    expect(indexRepoFiles).toHaveBeenCalledWith("panels/chat");
+  });
+});

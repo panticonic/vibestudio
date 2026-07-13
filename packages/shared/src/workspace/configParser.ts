@@ -537,6 +537,35 @@ export function resolveHostTargetDecl(
 }
 
 /**
+ * Resolve the declared extensions that are launch prerequisites for one host
+ * target, or for every target when omitted. The result is deduplicated and
+ * retains each extension's declared ref. Callers can therefore resolve a
+ * selected target lazily without maintaining a second prewarm list.
+ */
+export function resolveHostTargetRequiredExtensions(
+  config: WorkspaceConfig,
+  target?: (typeof WORKSPACE_HOST_TARGETS)[number]
+): Array<{ source: string; ref: string }> {
+  const declaredBySource = new Map(
+    resolveDeclaredExtensions(config).map((decl) => [
+      canonicalUnitRepoPath(decl.source, EXTENSION_UNIT, "extensions[].source"),
+      decl,
+    ])
+  );
+  const seen = new Set<string>();
+  const required: Array<{ source: string; ref: string }> = [];
+  const targets = target === undefined ? WORKSPACE_HOST_TARGETS : [target];
+  for (const candidate of targets) {
+    for (const source of resolveHostTargetDecl(config, candidate)?.requiresExtensions ?? []) {
+      if (seen.has(source)) continue;
+      seen.add(source);
+      required.push(declaredBySource.get(source) ?? { source, ref: "main" });
+    }
+  }
+  return required;
+}
+
+/**
  * Resolve a manifest-declared extension provider slot to a package name
  * (`@workspace-extensions/name`). Unknown/missing slots return null; malformed
  * declared slots throw during config parsing before callers get here.
