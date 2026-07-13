@@ -734,13 +734,6 @@ async function main() {
       (host): host is TrustedUnitHostInstance => host !== null
     );
   let startupWorkspaceUnitReconcile: Promise<void> | null = null;
-  // Resolved once startup unit reconcile AND any approval-gated applies have
-  // settled (or startup fails); holds the build system's background prewarm
-  // pool off the CPUs while launch-critical unit builds run.
-  let releaseStartupUnitsSettled: () => void = () => {};
-  const startupUnitsSettled = new Promise<void>((resolve) => {
-    releaseStartupUnitsSettled = resolve;
-  });
   const { HostTargetLaunchCoordinator } = await import("./hostTargetLaunchCoordinator.js");
   // Launch/session state only needs declared units to be CLASSIFIED (pending
   // entries upserted, approval batches staged with the coordinator) — waiting
@@ -1105,7 +1098,6 @@ async function main() {
         {
           appRoot,
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
-          holdInitialPrewarm: () => startupUnitsSettled,
         }
       );
     },
@@ -1237,17 +1229,57 @@ async function main() {
     },
   });
   container.registerRpc(gitInteropDefinition);
+  const pendingGitUpstreamRepos = new Set<string>();
+  let gitUpstreamFlushRunning = false;
+  const flushGitUpstreamRepos = async (): Promise<void> => {
+    if (gitUpstreamFlushRunning) return;
+    gitUpstreamFlushRunning = true;
+    let readinessAttempts = 0;
+    try {
+      while (pendingGitUpstreamRepos.size > 0) {
+        if (!extensionHostForGateway) {
+          if (readinessAttempts >= 120) {
+            console.warn("[GitUpstream] extension host did not become ready within 60s");
+            return;
+          }
+          readinessAttempts += 1;
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        const repos = [...pendingGitUpstreamRepos];
+        pendingGitUpstreamRepos.clear();
+        try {
+          await invokeGitInteropProvider(
+            { caller: createVerifiedCaller("server", "server") },
+            "onMainAdvanced",
+            [repos]
+          );
+          readinessAttempts = 0;
+        } catch (err) {
+          const code =
+            typeof err === "object" && err !== null && "code" in err
+              ? (err as { code?: unknown }).code
+              : undefined;
+          if ((code === "ENOEXT" || code === "ENOTREADY") && readinessAttempts < 120) {
+            for (const repo of repos) pendingGitUpstreamRepos.add(repo);
+            readinessAttempts += 1;
+            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          console.warn("[GitUpstream] forward failed:", err);
+        }
+      }
+    } finally {
+      gitUpstreamFlushRunning = false;
+    }
+  };
   refService.onRefsChanged((changes) => {
     const repos = changes
       .filter((change) => change.stateHash !== null)
       .map((change) => change.repoPath);
     if (repos.length === 0) return;
-    if (!extensionHostForGateway) return;
-    void invokeGitInteropProvider(
-      { caller: createVerifiedCaller("server", "server") },
-      "onMainAdvanced",
-      [repos]
-    ).catch((err) => console.warn("[GitUpstream] forward failed:", err));
+    for (const repo of repos) pendingGitUpstreamRepos.add(repo);
+    void flushGitUpstreamRepos();
   });
   const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
     try {
@@ -3700,13 +3732,19 @@ async function main() {
       });
       const iceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
         process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
+      const serverIceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
+        process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "relay"
+          ? "relay"
+          : process.env["VIBESTUDIO_WEBRTC_SERVER_ICE"] === "all"
+            ? "all"
+            : iceTransportPolicy;
       const ingress = startWebRtcIngress({
         rpcServer: rpcServerForGateway,
         signalUrl: webrtcSignalUrl,
         certificatePemFile: cert.certificatePemFile,
         keyPemFile: cert.keyPemFile,
         fingerprint: cert.fingerprint,
-        iceTransportPolicy,
+        iceTransportPolicy: serverIceTransportPolicy,
       });
       webrtcIngress = ingress;
       // Expose the pairing seam (fp/sig/ice/srv — rooms are per-invite) to
@@ -3915,11 +3953,6 @@ async function main() {
     }
   };
   startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
-  void startupWorkspaceUnitReconcile
-    .catch(() => {})
-    .then(() => Promise.all(trustedUnitHosts().map((host) => host.whenSettled())))
-    .catch(() => {})
-    .finally(() => releaseStartupUnitsSettled());
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(

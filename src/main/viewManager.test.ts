@@ -494,6 +494,7 @@ describe("ViewManager", () => {
 
     it("reasserts active slot visibility when shell overlay state changes", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const transitioningPanelView = vm.createView({ id: "panel-transitioning", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
         type: "app",
@@ -507,9 +508,11 @@ describe("ViewManager", () => {
         panelId: "panel-1",
         bounds: { x: 10, y: 20, width: 300, height: 200 },
       });
+      vm.setViewVisible("panel-transitioning", true);
 
       vm.setShellOverlayActive(true);
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+      expect(transitioningPanelView.setVisible).toHaveBeenLastCalledWith(false);
       vm.setShellOverlayActive(false);
       expect(panelView.setBounds).toHaveBeenLastCalledWith({
         x: 10,

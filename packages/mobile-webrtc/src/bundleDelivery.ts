@@ -39,6 +39,16 @@ export interface BundleDeliveryRpc {
   }>;
 }
 
+export class BundleGatewayFetchError extends Error {
+  readonly status: number;
+
+  constructor(path: string, status: number, detail: string) {
+    super(`gateway.fetch ${path} failed (${status}): ${detail}`);
+    this.name = "BundleGatewayFetchError";
+    this.status = status;
+  }
+}
+
 export interface ActivateWorkspaceAppOptions {
   source?: string | null;
   nativeHost?: NativeBundleHost;
@@ -147,9 +157,10 @@ async function gatewayFetchBytes(
   );
   const bytes = await drainStream(decoded.body);
   if (decoded.status !== 200) {
-    throw new Error(
-      `gateway.fetch ${String(descriptor["path"])} failed (${decoded.status}): ` +
-        new TextDecoder().decode(bytes).slice(0, 300)
+    throw new BundleGatewayFetchError(
+      String(descriptor["path"]),
+      decoded.status,
+      new TextDecoder().decode(bytes).slice(0, 300)
     );
   }
   return bytes;

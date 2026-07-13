@@ -7,12 +7,13 @@ import { workspaceChooserDialogOpenAtom, activeWorkspaceNameAtom } from "../stat
 import {
   effectiveThemeAtom,
   loadThemePreferenceAtom,
+  themeModeAtom,
   themeConfigAtom,
   loadThemeConfigAtom,
 } from "../state/themeAtoms";
 import { useAtomValue } from "jotai";
 import { useShellEvent } from "../shell/useShellEvent";
-import { panel, workspace, shellNetwork } from "../shell/client";
+import { app, panel, workspace, shellNetwork } from "../shell/client";
 import { ChunkErrorBoundary } from "./ChunkErrorBoundary";
 import { AppCommandPalette } from "./AppCommandPalette";
 
@@ -38,6 +39,7 @@ function LoadingSpinner() {
  */
 export function App() {
   const effectiveTheme = useAtomValue(effectiveThemeAtom);
+  const themeMode = useAtomValue(themeModeAtom);
   const themeConfig = useAtomValue(themeConfigAtom);
   const loadThemePreference = useSetAtom(loadThemePreferenceAtom);
   const loadThemeConfig = useSetAtom(loadThemeConfigAtom);
@@ -51,6 +53,15 @@ export function App() {
     loadThemePreference();
     loadThemeConfig();
   }, [loadThemePreference, loadThemeConfig]);
+
+  // Keep Electron and its embedded panel web contents on the same appearance
+  // as the shell. Server-owned pages use prefers-color-scheme because they do
+  // not have access to the panel runtime while a build is still pending.
+  useEffect(() => {
+    void app.setThemeMode(themeMode).catch((error) => {
+      console.error("Failed to synchronize native appearance", error);
+    });
+  }, [themeMode]);
 
   // When the OS reports the network came back, tell main to nudge the server
   // pipe awake (a stale WebRTC "connected" can linger ~45s after a flap). Pure

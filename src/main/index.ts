@@ -17,6 +17,7 @@ import { randomBytes } from "node:crypto";
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
 import { isDev } from "./utils.js";
+import { cleanupNodeDatachannel } from "./webrtc/nodeDatachannelPeer.js";
 import { maybeNotifyNpmUpdate } from "./updateCheck.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
@@ -46,6 +47,14 @@ function formatUnknownError(error: unknown): string {
     return error.stack ?? error.message;
   }
   return String(error);
+}
+
+function cleanupNativeWebRtc(): void {
+  try {
+    cleanupNodeDatachannel();
+  } catch (error) {
+    console.error("[App] Native WebRTC cleanup failed:", formatUnknownError(error));
+  }
 }
 
 function logSuppressedErrorDialog(title: string, content: string): void {
@@ -2663,6 +2672,7 @@ app.on("ready", async () => {
       cdpHostProvider = null;
     }
     await Promise.all(cleanupPromises);
+    cleanupNativeWebRtc();
 
     console.error("[App] Startup failed; exiting:", formatUnknownError(error));
     app.exit(1);
@@ -2791,6 +2801,7 @@ app.on("will-quit", (event) => {
   Promise.all(stopPromises).finally(() => {
     shellCore?.shutdown?.();
     shellCore = null;
+    cleanupNativeWebRtc();
     clearTimeout(shutdownTimeout);
     console.log("[App] Shutdown complete");
     app.exit(0);

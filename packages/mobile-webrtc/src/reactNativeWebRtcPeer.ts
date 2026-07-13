@@ -39,7 +39,8 @@
  * typings, which do not surface `addEventListener` to consumers.
  */
 
-import { RTCIceCandidate, RTCPeerConnection } from "react-native-webrtc";
+import { RTCPeerConnection } from "react-native-webrtc";
+import { NativeEventEmitter, NativeModules } from "react-native";
 import type {
   PeerConnectionProvider,
   RtcCandidateType,
@@ -86,7 +87,14 @@ interface NativeIceCandidateEvent {
   candidate: NativeIceCandidate | null;
 }
 
+interface NativeIceCandidateErrorEvent {
+  errorCode?: number;
+  errorText?: string;
+  url?: string;
+}
+
 interface NativeRtcDataChannel {
+  readonly _reactTag?: string;
   readonly label: string;
   readonly readyState: string;
   readonly bufferedAmount: number;
@@ -112,9 +120,19 @@ interface NativeStatsReport {
   localCandidateId?: string;
   /** local-candidate: host / srflx / prflx / relay. */
   candidateType?: string;
+  foundation?: string | number;
+  address?: string;
+  ip?: string;
+  port?: number;
+  protocol?: string;
+  priority?: number;
+  tcpType?: string;
+  relatedAddress?: string;
+  relatedPort?: number;
 }
 
 interface NativeRtcPeerConnection {
+  readonly _pcId?: number;
   readonly connectionState: string;
   readonly iceConnectionState: string;
   readonly localDescription: NativeSessionDescription | null;
@@ -136,6 +154,61 @@ interface NativeRtcPeerConnection {
     listener: () => void
   ): void;
   addEventListener(type: "icecandidate", listener: (event: NativeIceCandidateEvent) => void): void;
+  addEventListener(
+    type: "icecandidateerror",
+    listener: (event: NativeIceCandidateErrorEvent) => void
+  ): void;
+}
+
+interface NativeEventSubscription {
+  remove(): void;
+}
+
+interface DirectNativeEventMap {
+  dataChannelStateChanged: {
+    reactTag?: unknown;
+    state?: unknown;
+  };
+  dataChannelReceiveMessage: {
+    reactTag?: unknown;
+    data?: unknown;
+    type?: unknown;
+  };
+  dataChannelDidChangeBufferedAmount: {
+    reactTag?: unknown;
+    bufferedAmount?: unknown;
+  };
+  peerConnectionStateChanged: {
+    pcId?: unknown;
+    connectionState?: unknown;
+  };
+  peerConnectionIceConnectionChanged: {
+    pcId?: unknown;
+    iceConnectionState?: unknown;
+  };
+  peerConnectionGotICECandidate: {
+    pcId?: unknown;
+    candidate?: unknown;
+  };
+}
+
+let directNativeEmitter: NativeEventEmitter | null = null;
+
+function addDirectNativeListener<EventName extends keyof DirectNativeEventMap>(
+  eventName: EventName,
+  listener: (event: DirectNativeEventMap[EventName]) => void
+): NativeEventSubscription | null {
+  const nativeModule = NativeModules["WebRTCModule"];
+  if (!nativeModule) return null;
+  directNativeEmitter ??= new NativeEventEmitter(nativeModule);
+  return directNativeEmitter.addListener(eventName, listener);
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = globalThis.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 export interface ReactNativeWebRtcProviderOptions {
@@ -154,8 +227,14 @@ export function createReactNativeWebRtcProvider(
   const log = options.logPrefix ?? "[rn-webrtc]";
   return {
     create(config: RtcPeerConfig): RtcPeerConnectionLike {
+      const iceServers = config.iceServers.flatMap(toNativeIceServers);
+      console.log(
+        `${log} create peer policy=${config.iceTransportPolicy ?? "all"} ice=${iceServers
+          .map((server) => server.urls)
+          .join(",")}`
+      );
       const pc = new RTCPeerConnection({
-        iceServers: config.iceServers.map(toNativeIceServer),
+        iceServers,
         iceTransportPolicy: config.iceTransportPolicy,
         // react-native-webrtc gathers ICE candidates incrementally (trickle) and
         // surfaces them via the 'icecandidate' event, which the transport relays.
@@ -205,16 +284,17 @@ export class Fanout<Args extends unknown[]> {
 }
 
 /** Map the contract's WHATWG-shaped ICE server to react-native-webrtc's form. */
-function toNativeIceServer(server: RtcIceServer): {
+function toNativeIceServers(server: RtcIceServer): Array<{
   urls: string | string[];
   username?: string;
   credential?: string;
-} {
-  return {
-    urls: server.urls,
-    username: server.username,
-    credential: server.credential,
-  };
+}> {
+  const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+  return urls.map((url) => ({
+    urls: url,
+    ...(server.username !== undefined ? { username: server.username } : {}),
+    ...(server.credential !== undefined ? { credential: server.credential } : {}),
+  }));
 }
 
 /** react-native-webrtc connection states already match the contract; normalize
@@ -291,6 +371,10 @@ class WrappedDataChannel implements RtcDataChannelLike {
   private readonly errorFanout: Fanout<[Error]>;
   private readonly messageFanout: Fanout<[Uint8Array]>;
   private readonly lowFanout: Fanout<[]>;
+  private readonly directSubscriptions: NativeEventSubscription[] = [];
+  private usesDirectNativeEvents = false;
+  private readyStateValue: RtcDataChannelState;
+  private bufferedAmountValue: number;
 
   constructor(
     private readonly dc: NativeRtcDataChannel,
@@ -302,33 +386,72 @@ class WrappedDataChannel implements RtcDataChannelLike {
     this.errorFanout = new Fanout(log);
     this.messageFanout = new Fanout(log);
     this.lowFanout = new Fanout(log);
+    this.readyStateValue = dc.readyState as RtcDataChannelState;
+    this.bufferedAmountValue = dc.bufferedAmount;
     // Deliver binary as ArrayBuffer (react-native-webrtc only supports this mode).
     this.dc.binaryType = "arraybuffer";
-    // Register exactly one native handler per event; fan out to N listeners.
-    this.dc.addEventListener("open", () => this.openFanout.emit());
-    this.dc.addEventListener("close", () => this.closeFanout.emit());
-    this.dc.addEventListener("error", () =>
-      this.errorFanout.emit(new Error(`data channel '${this.label}' error`))
-    );
-    this.dc.addEventListener("message", (event) => {
-      const data = event.data;
-      if (data instanceof ArrayBuffer) {
-        // Copy into a fresh view — the contract delivers the raw bytes.
-        this.messageFanout.emit(new Uint8Array(data));
-      } else if (typeof data === "string") {
-        // Control frames ride as binary, but tolerate a text frame defensively.
-        this.messageFanout.emit(new TextEncoder().encode(data));
+    const reactTag = this.dc._reactTag;
+    // Prefer react-native-webrtc's RTCDataChannel event bridge. It owns the
+    // native subscription lifecycle and converts binary messages to
+    // ArrayBuffers before dispatching them. The direct native path is only a
+    // compatibility fallback for channel-like objects without EventTarget.
+    if (reactTag && typeof dc.addEventListener !== "function") {
+      this.usesDirectNativeEvents = true;
+      const stateSubscription = addDirectNativeListener("dataChannelStateChanged", (event) => {
+        if (event.reactTag !== reactTag || typeof event.state !== "string") return;
+        this.setReadyState(event.state as RtcDataChannelState);
+      });
+      const messageSubscription = addDirectNativeListener("dataChannelReceiveMessage", (event) => {
+        if (event.reactTag !== reactTag || typeof event.data !== "string") return;
+        this.messageFanout.emit(
+          event.type === "binary" ? decodeBase64(event.data) : new TextEncoder().encode(event.data)
+        );
+      });
+      const bufferedSubscription = addDirectNativeListener(
+        "dataChannelDidChangeBufferedAmount",
+        (event) => {
+          if (event.reactTag !== reactTag || typeof event.bufferedAmount !== "number") return;
+          this.bufferedAmountValue = event.bufferedAmount;
+          if (this.bufferedAmountValue < this.bufferedAmountLowThreshold) this.lowFanout.emit();
+        }
+      );
+      for (const subscription of [stateSubscription, messageSubscription, bufferedSubscription]) {
+        if (subscription) this.directSubscriptions.push(subscription);
       }
-    });
-    this.dc.addEventListener("bufferedamountlow", () => this.lowFanout.emit());
+    } else {
+      // Fallback for mocks and older react-native-webrtc releases without tags.
+      this.dc.addEventListener("open", () => this.setReadyState("open"));
+      this.dc.addEventListener("close", () => this.setReadyState("closed"));
+      this.dc.addEventListener("error", () =>
+        this.errorFanout.emit(new Error(`data channel '${this.label}' error`))
+      );
+      this.dc.addEventListener("message", (event) => {
+        const data = event.data;
+        if (data instanceof ArrayBuffer) this.messageFanout.emit(new Uint8Array(data));
+        else if (typeof data === "string") this.messageFanout.emit(new TextEncoder().encode(data));
+      });
+      this.dc.addEventListener("bufferedamountlow", () => this.lowFanout.emit());
+    }
+  }
+
+  private setReadyState(state: RtcDataChannelState): void {
+    if (state === this.readyStateValue) return;
+    this.readyStateValue = state;
+    if (state === "open") this.openFanout.emit();
+    if (state === "closed") {
+      this.closeFanout.emit();
+      for (const subscription of this.directSubscriptions.splice(0)) subscription.remove();
+    }
   }
 
   get readyState(): RtcDataChannelState {
-    return this.dc.readyState as RtcDataChannelState;
+    return this.readyStateValue;
   }
 
   get bufferedAmount(): number {
-    return this.dc.bufferedAmount;
+    // react-native-webrtc keeps its public value current on the standard
+    // EventTarget path. Only the direct-native fallback needs our own cache.
+    return this.usesDirectNativeEvents ? this.bufferedAmountValue : this.dc.bufferedAmount;
   }
 
   get bufferedAmountLowThreshold(): number {
@@ -379,6 +502,8 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   private readonly localDescFanout: Fanout<[RtcSessionDescription]>;
   private readonly localCandFanout: Fanout<[RtcIceCandidate]>;
   private readonly candidateTypeFanout: Fanout<[RtcCandidateType | null]>;
+  private readonly directSubscriptions: NativeEventSubscription[] = [];
+  private readonly gatheredLocalCandidates: RtcIceCandidate[] = [];
   // The SDP last passed to setRemoteDescription — cached so remoteFingerprint()
   // can read the a=fingerprint line back the instant sRD resolves, without
   // depending on the timing of the native remoteDescription accessor.
@@ -397,33 +522,62 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     this.localCandFanout = new Fanout(log);
     this.candidateTypeFanout = new Fanout(log);
 
-    const emitState = (): void =>
-      this.stateFanout.emit(normalizeConnectionState(this.pc.connectionState));
-    // `connectionState` is the authoritative aggregate (ICE + DTLS); re-read it on
-    // both the aggregate and the ICE event so a transition surfaces promptly.
-    this.pc.addEventListener("connectionstatechange", () => {
-      emitState();
-      void this.refreshSelectedCandidate();
-    });
-    this.pc.addEventListener("iceconnectionstatechange", () => {
-      // ICE 'failed' means the pipe is down even if the aggregate lags; surface it
-      // explicitly so the transport's recovery fires (fail-loud).
-      if (this.pc.iceConnectionState === "failed") this.stateFanout.emit("failed");
-      else emitState();
-      // Poll the selected pair on ICE transitions — the closest signal RN gives
-      // for a late nomination or a mid-connection host→relay switch (§9.8).
-      void this.refreshSelectedCandidate();
-    });
-    this.pc.addEventListener("icecandidate", (event) => {
-      const candidate = event.candidate;
+    const emitCandidate = (candidate: NativeIceCandidate | null): void => {
       // A null candidate (or empty string) is the end-of-candidates marker — the
       // node adapter trickles real candidates only; match that.
       if (!candidate || !candidate.candidate) return;
-      this.localCandFanout.emit({
+      const normalized = {
         candidate: candidate.candidate,
         sdpMid: candidate.sdpMid ?? null,
         sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+      };
+      if (this.rememberLocalCandidate(normalized)) this.localCandFanout.emit(normalized);
+    };
+    const pcId = this.pc._pcId;
+    if (typeof pcId === "number") {
+      const stateSubscription = addDirectNativeListener("peerConnectionStateChanged", (event) => {
+        if (event.pcId !== pcId || typeof event.connectionState !== "string") return;
+        this.stateFanout.emit(normalizeConnectionState(event.connectionState));
+        void this.refreshSelectedCandidate();
       });
+      const iceSubscription = addDirectNativeListener(
+        "peerConnectionIceConnectionChanged",
+        (event) => {
+          if (event.pcId !== pcId || typeof event.iceConnectionState !== "string") return;
+          if (event.iceConnectionState === "failed") this.stateFanout.emit("failed");
+          void this.refreshSelectedCandidate();
+        }
+      );
+      const candidateSubscription = addDirectNativeListener(
+        "peerConnectionGotICECandidate",
+        (event) => {
+          if (event.pcId !== pcId) return;
+          emitCandidate((event.candidate as NativeIceCandidate | undefined) ?? null);
+        }
+      );
+      for (const subscription of [stateSubscription, iceSubscription, candidateSubscription]) {
+        if (subscription) this.directSubscriptions.push(subscription);
+      }
+    } else {
+      const emitState = (): void =>
+        this.stateFanout.emit(normalizeConnectionState(this.pc.connectionState));
+      this.pc.addEventListener("connectionstatechange", () => {
+        emitState();
+        void this.refreshSelectedCandidate();
+      });
+      this.pc.addEventListener("iceconnectionstatechange", () => {
+        if (this.pc.iceConnectionState === "failed") this.stateFanout.emit("failed");
+        else emitState();
+        void this.refreshSelectedCandidate();
+      });
+      this.pc.addEventListener("icecandidate", (event) => emitCandidate(event.candidate));
+    }
+    this.pc.addEventListener("icecandidateerror", (event) => {
+      console.warn(
+        `${this.log} ICE candidate error code=${event.errorCode ?? "?"} url=${event.url ?? "?"}: ${
+          event.errorText ?? "unknown error"
+        }`
+      );
     });
   }
 
@@ -448,15 +602,114 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
 
   async setLocalDescription(desc?: RtcSessionDescription): Promise<void> {
     await this.pc.setLocalDescription(desc ? { type: desc.type, sdp: desc.sdp } : undefined);
+    // Some react-native-webrtc/Android combinations allocate TURN candidates but
+    // fail to dispatch their JS `icecandidate` events. The native wrapper still
+    // refreshes `localDescription` as gathering progresses, so include those
+    // candidates in the SDP as a non-trickle fallback before publishing it.
+    await this.waitForLocalCandidate();
     // Standard negotiation: the local SDP is final on `pc.localDescription` once
     // sLD resolves. Emit it so the transport ships it through signaling — the
     // transport never reads our return value; it waits on onLocalDescription.
     const local = this.pc.localDescription;
-    const sdp = local?.sdp ?? desc?.sdp;
+    const rawSdp = local?.sdp ?? desc?.sdp;
     const type = local?.type ?? desc?.type;
-    if (sdp && type) {
+    if (rawSdp && type) {
+      const sdp = this.embedGatheredLocalCandidates(rawSdp);
+      const candidateCount = (sdp.match(/^a=candidate:/gm) ?? []).length;
+      console.info(`${this.log} publishing local SDP candidates=${candidateCount}`);
       this.localDescFanout.emit({ type: type === "answer" ? "answer" : "offer", sdp });
     }
+  }
+
+  private async waitForLocalCandidate(timeoutMs = 4_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (
+        this.gatheredLocalCandidates.length > 0 ||
+        /^a=candidate:/m.test(this.pc.localDescription?.sdp ?? "")
+      ) {
+        return;
+      }
+      await this.collectLocalCandidatesFromStats();
+      if (this.gatheredLocalCandidates.length > 0) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+    console.warn(`${this.log} ICE candidate wait timed out; publishing partial local SDP`);
+  }
+
+  private rememberLocalCandidate(candidate: RtcIceCandidate): boolean {
+    if (this.gatheredLocalCandidates.some((entry) => entry.candidate === candidate.candidate)) {
+      return false;
+    }
+    this.gatheredLocalCandidates.push(candidate);
+    return true;
+  }
+
+  private async collectLocalCandidatesFromStats(): Promise<void> {
+    try {
+      const stats = await this.pc.getStats();
+      const sdpMid = this.pc.localDescription?.sdp.match(/^a=mid:(.+)$/m)?.[1]?.trim() ?? null;
+      for (const report of stats.values()) {
+        if (report.type !== "local-candidate") continue;
+        const address = report.address ?? report.ip;
+        const candidateType = report.candidateType;
+        if (!address || !report.port || !report.protocol || !candidateType) continue;
+        const parts = [
+          `candidate:${report.foundation ?? "1"}`,
+          "1",
+          report.protocol.toUpperCase(),
+          String(report.priority ?? 1),
+          address,
+          String(report.port),
+          "typ",
+          candidateType,
+        ];
+        if (report.relatedAddress) parts.push("raddr", report.relatedAddress);
+        if (report.relatedPort) parts.push("rport", String(report.relatedPort));
+        if (report.tcpType) parts.push("tcptype", report.tcpType);
+        this.rememberLocalCandidate({
+          candidate: parts.join(" "),
+          sdpMid,
+          sdpMLineIndex: 0,
+        });
+      }
+    } catch {
+      // Gathering may not have populated stats yet; the bounded caller retries.
+    }
+  }
+
+  private embedGatheredLocalCandidates(sdp: string): string {
+    if (this.gatheredLocalCandidates.length === 0) return sdp;
+    const newline = sdp.includes("\r\n") ? "\r\n" : "\n";
+    const lines = sdp.trimEnd().split(/\r?\n/);
+    for (const candidate of this.gatheredLocalCandidates) {
+      const line = candidate.candidate.startsWith("a=")
+        ? candidate.candidate
+        : `a=${candidate.candidate}`;
+      if (lines.includes(line)) continue;
+
+      let sectionStart = -1;
+      if (candidate.sdpMid) {
+        const midIndex = lines.findIndex((entry) => entry === `a=mid:${candidate.sdpMid}`);
+        for (let index = midIndex; index >= 0; index -= 1) {
+          if (lines[index]?.startsWith("m=")) {
+            sectionStart = index;
+            break;
+          }
+        }
+      }
+      if (sectionStart < 0 && typeof candidate.sdpMLineIndex === "number") {
+        const mediaSections = lines
+          .map((entry, index) => (entry.startsWith("m=") ? index : -1))
+          .filter((index) => index >= 0);
+        sectionStart = mediaSections[candidate.sdpMLineIndex] ?? -1;
+      }
+      const nextSection = lines.findIndex(
+        (entry, index) => index > sectionStart && entry.startsWith("m=")
+      );
+      lines.splice(nextSection >= 0 ? nextSection : lines.length, 0, line);
+    }
+    return `${lines.join(newline)}${newline}`;
   }
 
   async setRemoteDescription(desc: RtcSessionDescription): Promise<void> {
@@ -467,13 +720,11 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   }
 
   async addRemoteCandidate(candidate: RtcIceCandidate): Promise<void> {
-    await this.pc.addIceCandidate(
-      new RTCIceCandidate({
-        candidate: candidate.candidate,
-        sdpMid: candidate.sdpMid ?? null,
-        sdpMLineIndex: candidate.sdpMLineIndex ?? null,
-      })
-    );
+    await this.pc.addIceCandidate({
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid ?? null,
+      sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+    });
   }
 
   remoteFingerprint(): string | null {
@@ -536,6 +787,7 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   }
 
   close(): void {
+    for (const subscription of this.directSubscriptions.splice(0)) subscription.remove();
     this.pc.close();
   }
 }

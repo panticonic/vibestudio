@@ -2201,15 +2201,17 @@ describe("AppHost", () => {
     });
   });
 
-  it("ensures React Native readiness by rebuilding an errored app after provider startup", async () => {
+  it("defers React Native builds cleanly until the provider starts", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
 
     await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
     await host.whenSettled();
     expect(host.registry.get(graphNode.name)).toMatchObject({
-      status: "error",
+      status: "stopped",
+      lastError: null,
     });
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
 
     const provider = {
       name: "@workspace-extensions/react-native",
@@ -2262,15 +2264,17 @@ describe("AppHost", () => {
     });
   });
 
-  it("recovers React Native readiness once the provider build is available", async () => {
+  it("recovers deferred React Native readiness once the provider build is available", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
 
     await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
     await host.whenSettled();
     expect(host.registry.get(graphNode.name)).toMatchObject({
-      status: "error",
+      status: "stopped",
+      lastError: null,
     });
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
 
     const provider = {
       name: "@workspace-extensions/react-native",
@@ -2492,6 +2496,7 @@ describe("AppHost", () => {
   it("fails closed before activating React Native builds without provider identity", async () => {
     const { host, buildSystem, eventService, graphNode } = makeHarness();
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
+    buildSystem.getBuildProviderDetails.mockReturnValue(REACT_NATIVE_PROVIDER);
     const rnBuild = {
       dir: path.join(
         path.dirname(graphNode.path),
@@ -2557,6 +2562,7 @@ describe("AppHost", () => {
   it("fails closed before activating React Native builds without platform-keyed primary artifacts", async () => {
     const { host, buildSystem, eventService, graphNode } = makeHarness();
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
+    buildSystem.getBuildProviderDetails.mockReturnValue(REACT_NATIVE_PROVIDER);
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-bad-key"),
       metadata: {
@@ -2604,6 +2610,7 @@ describe("AppHost", () => {
   it("activates React Native builds with a single platform primary artifact", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
+    buildSystem.getBuildProviderDetails.mockReturnValue(REACT_NATIVE_PROVIDER);
     const rnBuild = {
       dir: path.join(
         path.dirname(graphNode.path),

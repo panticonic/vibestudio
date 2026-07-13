@@ -4,6 +4,7 @@
 // the workspace app, and rendering a panel WebView.
 
 import fsp from "node:fs/promises";
+import dgram from "node:dgram";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -418,12 +419,50 @@ function findFreePort() {
   });
 }
 
-// The first non-internal 192.168.x IPv4 — the host LAN address both the emulator
-// (via QEMU's NAT) and the server can reach for the TURN relay.
-function hostLanIp() {
+// Resolve the IPv4 address selected by the host's default route. GitHub-hosted
+// runners commonly use 10/8 or 172.16/12 rather than a 192.168/16 LAN, and the
+// TURN relay must bind the interface that can actually route peer traffic.
+async function hostLanIp() {
+  const routedAddress = await new Promise((resolve) => {
+    const socket = dgram.createSocket("udp4");
+    let settled = false;
+    let bound = false;
+    const finish = (address, error = null) => {
+      if (settled) return;
+      settled = true;
+      if (bound) socket.close();
+      if (error) {
+        console.warn(
+          `[mobile-smoke] Default-route IPv4 probe failed; falling back to network interfaces: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+      resolve(address);
+    };
+    socket.once("error", (error) => finish(null, error));
+    socket.bind(0, "0.0.0.0", () => {
+      bound = true;
+      // UDP connect performs only a route lookup; it sends no traffic.
+      socket.connect(53, "192.0.2.1", () => {
+        const address = socket.address();
+        finish(typeof address === "object" ? address.address : null);
+      });
+    });
+  });
+  if (
+    typeof routedAddress === "string" &&
+    routedAddress !== "0.0.0.0" &&
+    !routedAddress.startsWith("127.")
+  ) {
+    return routedAddress;
+  }
+
+  // Hosts without a default route can still run the local smoke over any
+  // non-loopback IPv4 interface.
   for (const addrs of Object.values(os.networkInterfaces())) {
-    for (const a of addrs ?? []) {
-      if (a.family === "IPv4" && !a.internal && a.address.startsWith("192.168.")) return a.address;
+    for (const address of addrs ?? []) {
+      if (address.family === "IPv4" && !address.internal) return address.address;
     }
   }
   return null;
@@ -436,8 +475,8 @@ function hostLanIp() {
 // (`turnserver`). Returns the iceServer creds the signaling worker advertises to
 // BOTH peers, plus the managed child (caller pushes it to `children` for cleanup).
 async function startLocalTurn() {
-  const lanIp = hostLanIp();
-  if (!lanIp) throw new Error("No 192.168.x LAN IP found for the local TURN relay");
+  const lanIp = await hostLanIp();
+  if (!lanIp) throw new Error("No routable IPv4 address found for the local TURN relay");
   const port = 47000;
   const user = "vibestudio";
   const pass = "vibestudiopass";
@@ -557,7 +596,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const phases = new Set();
+  const phases = new Map();
   const recentLines = [];
   let buffer = "";
   let stderr = "";
@@ -569,11 +608,11 @@ function startLogcat(device, expectedPhases, deadlineMs) {
       recentLines.push(line);
       if (recentLines.length > 200) recentLines.shift();
       const match = line.match(/\bphase=([A-Za-z0-9._-]+)/);
-      if (match) phases.add(match[1]);
+      if (match) phases.set(match[1], (phases.get(match[1]) ?? 0) + 1);
     } else if (
-      line.includes("AndroidRuntime") ||
       line.includes("ReactNativeJS") ||
-      line.includes("VibestudioMobileHost")
+      line.includes("VibestudioMobileHost") ||
+      (line.includes("AndroidRuntime") && /FATAL EXCEPTION|Process:/.test(line))
     ) {
       recentLines.push(line);
       if (recentLines.length > 200) recentLines.shift();
@@ -594,8 +633,8 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     stderr += `${error.message}\n`;
   });
 
-  const waitForPhase = async (phase) => {
-    while (Date.now() < deadlineMs) {
+  const waitForPhase = async (phase, phaseDeadlineMs = deadlineMs) => {
+    while (Date.now() < phaseDeadlineMs) {
       if (phases.has(phase)) return;
       if (child.exitCode != null) {
         throw new Error(`adb logcat exited before phase ${phase}\n${stderr}`.trim());
@@ -611,8 +650,23 @@ function startLogcat(device, expectedPhases, deadlineMs) {
   };
 
   const hasPhase = (phase) => phases.has(phase);
+  const phaseCount = (phase) => phases.get(phase) ?? 0;
+  const waitForPhaseAfter = async (phase, previousCount, timeoutMs) => {
+    const occurrenceDeadlineMs = Date.now() + timeoutMs;
+    while (Date.now() < occurrenceDeadlineMs) {
+      if (phaseCount(phase) > previousCount) return;
+      if (child.exitCode != null) {
+        throw new Error(`adb logcat exited before a new ${phase} phase\n${stderr}`.trim());
+      }
+      await sleep(250);
+    }
+    const recent = recentLines.length
+      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
+      : "";
+    throw new Error(`Timed out waiting for a new smoke phase ${phase}${recent}`);
+  };
 
-  return { child, waitForPhase, hasPhase };
+  return { child, waitForPhase, waitForPhaseAfter, hasPhase, phaseCount };
 }
 
 async function waitForLogcatReady(device, logcat) {
@@ -646,7 +700,13 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     }
     await sleep(250);
   }
-  await logcat.waitForPhase(phase);
+  try {
+    await logcat.waitForPhase(phase, deadlineMs);
+  } catch (error) {
+    const labels = collectWindowLabels(await dumpWindowXml(device)).slice(0, 40);
+    const visible = labels.length > 0 ? `\n\nVisible UI:\n${labels.join("\n")}` : "";
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${visible}`);
+  }
 }
 
 async function tapButtonByText(device, text, deadlineMs) {
@@ -791,23 +851,24 @@ async function probeInitialAgentTurn(probe) {
     return { kind: "unavailable", summary: "ready file did not include workspaceDir" };
   }
 
-  const agentRunDbs = await getDatabasesWithTable(probe, "agent_turn_runs");
-  if (!agentRunDbs.length) {
-    return { kind: "pending", summary: "agent_turn_runs table not found yet" };
+  const turnDbs = await getDatabasesWithTable(probe, "trajectory_turns");
+  if (!turnDbs.length) {
+    return { kind: "pending", summary: "trajectory_turns table not found yet" };
   }
 
   let latest = null;
-  for (const dbPath of agentRunDbs) {
+  for (const dbPath of turnDbs) {
     const rows = await sqliteJson(
       dbPath,
-      `SELECT turn_id, channel_id, status, failure_code, failure_message, opened_at, updated_at, closed_at
-       FROM agent_turn_runs
+      `SELECT turn_id, opened_at, closed_at, summary
+       FROM trajectory_turns
        ORDER BY opened_at DESC
        LIMIT 1`
     ).catch(() => []);
     for (const row of rows) {
-      if (!latest || Number(row.opened_at ?? 0) > Number(latest.opened_at ?? 0)) {
-        latest = row;
+      const openedAt = Date.parse(String(row.opened_at ?? "")) || 0;
+      if (!latest || openedAt > latest.openedAt) {
+        latest = { ...row, openedAt };
       }
     }
   }
@@ -816,35 +877,33 @@ async function probeInitialAgentTurn(probe) {
     return { kind: "pending", summary: "no agent turn run has started yet" };
   }
 
-  if (
-    latest.failure_code ||
-    latest.failure_message ||
-    /\b(?:failed|failure|error|aborted)\b/i.test(String(latest.status ?? ""))
-  ) {
+  const messageSummary = await countCompletedAssistantMessages(probe, latest.turn_id);
+  if (messageSummary.failedAssistant > 0) {
     return {
       kind: "failed",
-      summary:
-        `${latest.turn_id} status=${latest.status}` +
-        (latest.failure_code ? ` code=${latest.failure_code}` : "") +
-        (latest.failure_message ? ` message=${latest.failure_message}` : ""),
+      summary: `${latest.turn_id} failedAssistant=${messageSummary.failedAssistant}`,
     };
   }
 
-  const messageSummary = await countCompletedAssistantMessages(probe, latest.turn_id);
-  const status = String(latest.status ?? "");
-  const closed = status === "closed" || latest.closed_at != null;
+  const closed = latest.closed_at != null;
   if (closed && messageSummary.completedAssistant > 0) {
     return {
       kind: "completed",
-      summary: `${latest.turn_id} status=${status} completedAssistant=${messageSummary.completedAssistant}`,
+      summary: `${latest.turn_id} closed completedAssistant=${messageSummary.completedAssistant}`,
+    };
+  }
+  if (closed) {
+    return {
+      kind: "failed",
+      summary:
+        `${latest.turn_id} closed without a completed assistant message` +
+        (latest.summary ? ` summary=${latest.summary}` : ""),
     };
   }
 
   return {
     kind: "pending",
-    summary:
-      `${latest.turn_id} status=${status || "(unknown)"} ` +
-      `completedAssistant=${messageSummary.completedAssistant}`,
+    summary: `${latest.turn_id} open completedAssistant=${messageSummary.completedAssistant}`,
   };
 }
 
@@ -1010,7 +1069,11 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         kind: "unavailable",
         summary: error instanceof Error ? error.message : String(error),
       }));
-      lastAgentState = `${agentState.kind}: ${agentState.summary}`;
+      const nextAgentState = `${agentState.kind}: ${agentState.summary}`;
+      if (nextAgentState !== lastAgentState) {
+        console.log(`[mobile-smoke] Initial agent turn: ${nextAgentState}`);
+      }
+      lastAgentState = nextAgentState;
       if (agentState.kind === "failed") {
         throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
       }
@@ -1023,7 +1086,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       }
       if (
         (agentState.kind === "unavailable" ||
-          /agent_turn_runs table not found yet/i.test(agentState.summary)) &&
+          /trajectory_turns table not found yet/i.test(agentState.summary)) &&
         !agentProbe.warned
       ) {
         durableProbeUnavailable = true;
@@ -1119,6 +1182,10 @@ function summarizeLabels(labels) {
 
 async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, options = {}) {
   const agentProbe = createAgentTurnProbe(readyInfo);
+  const visualFallbackAgentProbeMs = Math.min(
+    defaultVisualFallbackAgentProbeMs,
+    agentTimeoutMs
+  );
   await ensureDeviceInteractive(device);
   await sleep(2_000);
   if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
@@ -1127,29 +1194,31 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
   if (await tapOptionalButtonByLabelPrefix(device, "Use once", 2_000)) {
     await sleep(3_000);
   }
-  let agentTurnCompleted = true;
-  try {
-    const waitOptions = options.realModel
-      ? {
-          requireVisibleAgentOutput: true,
-          rejectTestModelResponse: true,
-          failOnCredentialSetup: true,
-          requireNoUnresolvedApproval: true,
-        }
-      : {
-          visualFallbackAfterMs: defaultVisualFallbackAgentProbeMs,
-        };
-    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
-  } catch (error) {
-    if (!isInitialAgentProbeTimeout(error)) throw error;
-    if (options.realModel) throw error;
-    agentTurnCompleted = false;
-    console.warn(
-      `[mobile-smoke] Initial agent turn probe did not produce an observable completion within ` +
-        `${defaultVisualFallbackAgentProbeMs}ms of an unavailable durable probe; ` +
-        `continuing with visual panel assertion. ` +
-        `${error instanceof Error ? error.message : String(error)}`
-    );
+  let agentTurnCompleted = false;
+  if (options.checkAgentTurn !== false) {
+    agentTurnCompleted = true;
+    try {
+      const waitOptions = options.realModel
+        ? {
+            requireVisibleAgentOutput: true,
+            rejectTestModelResponse: true,
+            failOnCredentialSetup: true,
+            requireNoUnresolvedApproval: true,
+          }
+        : {
+            visualFallbackAfterMs: visualFallbackAgentProbeMs,
+          };
+      await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
+    } catch (error) {
+      if (!isInitialAgentProbeTimeout(error)) throw error;
+      if (options.realModel) throw error;
+      agentTurnCompleted = false;
+      console.warn(
+        `[mobile-smoke] Initial agent turn probe did not produce an observable completion within ` +
+          `${visualFallbackAgentProbeMs}ms; continuing with visual panel assertion. ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
   await ensureDeviceInteractive(device);
   assertNoBlockingPermissionDialog(await dumpWindowXml(device));
@@ -1554,7 +1623,12 @@ async function main() {
       // Emulator: force relay-only through the local coturn (a direct NAT'd pipe
       // can't hold ICE consent freshness). The answerer threads this into the
       // pairing link's `ice=relay`, which the client honors.
-      ...(turn ? { VIBESTUDIO_WEBRTC_ICE: "relay" } : {}),
+      ...(turn
+        ? {
+            VIBESTUDIO_WEBRTC_ICE: "relay",
+            VIBESTUDIO_WEBRTC_SERVER_ICE: "all",
+          }
+        : {}),
     };
     if (options.localSignaling || options.signalUrl) {
       serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
@@ -1566,7 +1640,7 @@ async function main() {
     } else {
       serverEnv.VIBESTUDIO_TEST_MODE = "1";
     }
-    const serverChild = spawnManaged(process.execPath, serverArgs, {
+    let serverChild = spawnManaged(process.execPath, serverArgs, {
       cwd: repoRoot,
       env: serverEnv,
       label: "server",
@@ -1595,6 +1669,9 @@ async function main() {
     // intentionally has none: all server traffic must traverse the remote pipe.
     if (options.localSignaling) {
       await adb(options.device, "reverse", `tcp:${signalPort}`, `tcp:${signalPort}`);
+      if (turn) {
+        await adb(options.device, "reverse", `tcp:${turn.port}`, `tcp:${turn.port}`);
+      }
     }
     await adb(options.device, "logcat", "-c");
 
@@ -1609,6 +1686,7 @@ async function main() {
       "embedded-bundle-activate-start",
       "embedded-bundle-activate-complete",
       "workspace-connected",
+      "workspace-recovery-complete",
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
@@ -1661,17 +1739,22 @@ async function main() {
         .catch(() => {});
     }
 
-    // Post-launch phases: bundle activate → workspace connect → panel webview loaded.
-    // (approval-required + host-target-preparing are optional — skipped under auto-approve.)
+    // The clean workspace build belongs to the launch budget. Once its bundle
+    // is activated, give the independently reloaded managed app a fresh budget
+    // for WebRTC authentication, facade startup, and panel materialization.
+    // Otherwise a slow-but-successful first build can expire the connection
+    // deadline just as the managed client starts its handshake.
+    for (const phase of ["embedded-bundle-activate-start", "embedded-bundle-activate-complete"]) {
+      await waitForPhaseTappingApprovals(options.device, logcat, phase, pairingDeadlineMs);
+    }
+    const managedLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     for (const phase of [
-      "embedded-bundle-activate-start",
-      "embedded-bundle-activate-complete",
       "workspace-connected",
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
     ]) {
-      await waitForPhaseTappingApprovals(options.device, logcat, phase, pairingDeadlineMs);
+      await waitForPhaseTappingApprovals(options.device, logcat, phase, managedLaunchDeadlineMs);
     }
     const panelResult = await captureAndAssertPanelVisible(
       options.device,
@@ -1680,10 +1763,89 @@ async function main() {
       { realModel: options.realModel }
     );
 
+    // Recovery contract: a paired installation must cold-start without another
+    // invite, then survive a server restart using the persisted device room and
+    // server identity. Count phase occurrences so an earlier successful launch
+    // cannot satisfy either recovery assertion.
+    const appRestartWorkspaceCount = logcat.phaseCount("workspace-connected");
+    const appRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
+    await adb(options.device, "shell", "am", "force-stop", options.packageName);
+    await adb(
+      options.device,
+      "shell",
+      "monkey",
+      "-p",
+      options.packageName,
+      "-c",
+      "android.intent.category.LAUNCHER",
+      "1"
+    );
+    await logcat.waitForPhaseAfter(
+      "workspace-connected",
+      appRestartWorkspaceCount,
+      options.pairingTimeoutMs
+    );
+    await logcat.waitForPhaseAfter(
+      "workspace-panel-webview-loaded",
+      appRestartPanelCount,
+      options.pairingTimeoutMs
+    );
+    console.log("[mobile-smoke] Recovery: persisted app cold-start reconnected");
+
+    const serverRestartRecoveryCount = logcat.phaseCount("workspace-recovery-complete");
+    const serverRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
+    const serverExit = new Promise((resolve) => serverChild.once("exit", resolve));
+    serverChild.kill("SIGTERM");
+    await Promise.race([serverExit, sleep(10_000)]);
+    if (serverChild.exitCode == null && serverChild.signalCode == null) {
+      serverChild.kill("SIGKILL");
+      // Do not let the replacement race the old process for the fixed gateway
+      // port. SIGKILL is asynchronous with respect to Node's ChildProcess state.
+      await serverExit;
+    }
+    try {
+      await fsp.unlink(readyFilePath);
+    } catch {}
+    serverChild = spawnManaged(process.execPath, serverArgs, {
+      cwd: repoRoot,
+      env: serverEnv,
+      label: "server-restart",
+    });
+    await waitForSpawn(serverChild, process.execPath, serverArgs);
+    children.push(serverChild);
+    const restartedReady = await waitForServerReady(
+      readyFilePath,
+      serverChild,
+      options.pairingTimeoutMs
+    );
+    readyInfo = {
+      ...restartedReady,
+      workspaceDir: path.join(serverConfig, "vibestudio", "workspaces", "default", "source"),
+    };
+    await logcat.waitForPhaseAfter(
+      "workspace-recovery-complete",
+      serverRestartRecoveryCount,
+      options.pairingTimeoutMs
+    );
+    await logcat.waitForPhaseAfter(
+      "workspace-panel-webview-loaded",
+      serverRestartPanelCount,
+      options.pairingTimeoutMs
+    );
+    await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, readyInfo, {
+      realModel: false,
+      // If the deliberately bounded initial probe moved on while a turn was
+      // still running, the server restart can durably close that turn as a
+      // recoverable interruption. Recovery is a connectivity/rendering check;
+      // do not misreport that old turn as a new recovery failure.
+      checkAgentTurn: panelResult.agentTurnCompleted,
+    });
+    console.log("[mobile-smoke] Recovery: server restart reconnected the persisted device room");
+
     console.log(
       panelResult.agentTurnCompleted
-        ? "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and completed the initial agent turn"
-        : "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and rendered a nonblank panel"
+        ? "[mobile-smoke] PASS remote pairing, app restart, and server restart completed with the initial agent turn"
+        : "[mobile-smoke] PASS remote pairing, app restart, and server restart rendered a nonblank panel"
     );
     await cleanup();
   } catch (error) {

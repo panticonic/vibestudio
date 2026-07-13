@@ -212,6 +212,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   let bulk: RtcDataChannelLike | null = null;
   const peerUnsubs: Array<() => void> = [];
   let peerHasRemote = false;
+  let appliedRemoteOfferSdp: string | null = null;
   let controlOpen = false;
   let bulkOpen = false;
 
@@ -296,6 +297,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       }
       if (client) {
         signaling = client;
+        appliedRemoteOfferSdp = null;
         // Reset backoff ONLY when the join proves LIVE — an `onOpen` (the WS
         // actually upgraded) or the first inbound description/candidate (the
         // peer reached us through the room). NEVER on mere construction:
@@ -450,6 +452,14 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
         console.warn(`${log} dropping unexpected remote answer`);
         continue;
       }
+      // The offerer deliberately re-sends its current offer when it observes a
+      // peer-joined event. That lifecycle hint can race the original relay, so
+      // receiving the exact same SDP twice is normal and must be idempotent.
+      // A genuinely new SDP still takes the re-pair path below.
+      if (peer && peerHasRemote && desc.sdp === appliedRemoteOfferSdp) {
+        console.log(`${log} duplicate offer — keeping current peer`);
+        continue;
+      }
       if (peer && peerHasRemote) {
         // Re-pair: the same device re-established (new PeerConnection + DTLS).
         // A second offer cannot apply to a used peer — tear down and re-answer.
@@ -470,6 +480,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       await pc.setRemoteDescription(desc);
       if (peer !== pc || closed) return;
       peerHasRemote = true;
+      appliedRemoteOfferSdp = desc.sdp;
       flushCandidates();
       const answer = await pc.createAnswer();
       if (peer !== pc || closed) return;
@@ -500,6 +511,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     }
     peer = pc;
     peerHasRemote = false;
+    appliedRemoteOfferSdp = null;
     // Pre-negotiated channels with the SAME ids the offerer opens.
     const ctl = pc.createDataChannel(CONTROL_LABEL, {
       ordered: true,
@@ -516,6 +528,35 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     ctl.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
     blk.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
 
+    let pendingLocalDescription: { type: "offer" | "answer"; sdp: string } | null = null;
+    let localDescriptionSent = false;
+    const sendLocalDescription = (
+      desc: { type: "offer" | "answer"; sdp: string },
+      candidate?: { candidate: string; sdpMid?: string | null }
+    ): void => {
+      if (localDescriptionSent || peer !== pc || closed) return;
+      localDescriptionSent = true;
+      const current = signaling;
+      if (!current) return;
+      let outbound = desc;
+      if (candidate) {
+        const lines = desc.sdp.trimEnd().split(/\r?\n/);
+        const candidateLine = candidate.candidate.startsWith("a=")
+          ? candidate.candidate
+          : `a=${candidate.candidate}`;
+        const midIndex = candidate.sdpMid
+          ? lines.findIndex((line) => line === `a=mid:${candidate.sdpMid}`)
+          : -1;
+        const mediaIndex = lines.findIndex((line) => line.startsWith("m="));
+        const insertAfter = midIndex >= 0 ? midIndex : mediaIndex;
+        lines.splice(insertAfter >= 0 ? insertAfter + 1 : lines.length, 0, candidateLine);
+        outbound = { ...desc, sdp: `${lines.join("\r\n")}\r\n` };
+      }
+      void current
+        .sendDescription(outbound)
+        .catch((e) => console.warn(`${log} sendDescription`, e));
+    };
+
     peerUnsubs.push(
       ctl.onOpen(() => onControlChannelOpen()),
       ctl.onClose(() => pipeDown("control channel closed")),
@@ -530,11 +571,17 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       blk.onMessage((data) => handleBulkMessage(data)),
       pc.onConnectionStateChange((state) => onConnectionState(state)),
       pc.onLocalDescription((desc) => {
-        const current = signaling;
-        if (!current) return;
-        void current.sendDescription(desc).catch((e) => console.warn(`${log} sendDescription`, e));
+        pendingLocalDescription = desc;
+        // Publish the answer immediately. Candidates trickle independently;
+        // holding SDP here consumes the transport hello deadline and can make a
+        // healthy mobile peer look unreachable on slower networks.
+        sendLocalDescription(desc);
       }),
       pc.onLocalCandidate((cand) => {
+        if (pendingLocalDescription && !localDescriptionSent) {
+          sendLocalDescription(pendingLocalDescription, cand);
+          return;
+        }
         const current = signaling;
         if (!current) return;
         void current.sendCandidate(cand).catch((e) => console.warn(`${log} sendCandidate`, e));
@@ -945,6 +992,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     controlOpen = false;
     bulkOpen = false;
     peerHasRemote = false;
+    appliedRemoteOfferSdp = null;
     effectiveChunk = DEFAULT_CHUNK_SIZE;
     localMaxMsg = DEFAULT_CHUNK_SIZE;
     // Unsubscribe BEFORE closing so the close/error handlers don't re-enter.

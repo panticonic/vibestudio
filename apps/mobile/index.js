@@ -159,7 +159,7 @@ function isBootstrapReadinessError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /MOBILE_APP_APPROVAL_REQUIRED|MOBILE_APP_UNAVAILABLE|approval|required|not ready|not available/i.test(
     message
-  );
+  ) || error?.status === 503;
 }
 
 async function launchGateRpc(connection, method, args, deadline) {

@@ -1026,6 +1026,28 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     shuttingDown: false,
   };
 
+  // A hub restart must not strand clients whose persistent device credentials
+  // point at a workspace-owned WebRTC room. Restore every configured workspace
+  // before advertising hub readiness so each child can re-arm those rooms and
+  // answer reconnecting desktop, mobile, and CLI clients immediately.
+  if (!args.ephemeral) {
+    const persistedWorkspaces = centralData
+      .listWorkspaces()
+      .map((entry) => entry.name)
+      .filter((name) => workspaceConfigExists(name));
+    const restored = await Promise.allSettled(
+      persistedWorkspaces.map((name) => ensureWorkspaceRuntime(state!, name))
+    );
+    for (let index = 0; index < restored.length; index += 1) {
+      const result = restored[index]!;
+      if (result.status === "rejected") {
+        console.warn(
+          `[Hub] Failed to restore workspace "${persistedWorkspaces[index]}": ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`
+        );
+      }
+    }
+  }
+
   console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
