@@ -362,7 +362,7 @@ async function waitForDesktopShell(app, timeoutMs) {
     }
 
     if (snapshots.some((snapshot) => snapshot.hasLaunchGateApproval)) {
-      const clicked = await clickDesktopButton(app, /^(Trust and start|Approve and start)$/i);
+      const clicked = await clickDesktopButton(app, /^(Trust and (start|connect)|Approve and (start|connect))$/i);
       if (clicked) {
         clickedApprovals += 1;
         console.log("[desktop-smoke] Approved desktop workspace app launch gate");
@@ -396,10 +396,13 @@ async function collectShellSnapshots(app) {
               .map((button) => button.textContent?.trim() ?? "")
               .filter(Boolean);
             const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-              && buttons.some((label) => /^(Trust and start|Approve and start|Deny)$/i.test(label));
+              && buttons.some((label) =>
+                /^(Trust and (start|connect)|Approve and (start|connect)|Deny)$/i.test(label)
+              );
             const hasHostedShellChrome = Boolean(
               document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]')
+                || document.querySelector('[data-hosted-shell="true"]')
             );
             return {
               text: text.slice(0, 3000),

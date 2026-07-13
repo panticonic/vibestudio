@@ -19,8 +19,10 @@ const BLOCKED_NATIVE_IMPORTS = {
   "@react-native-async-storage/async-storage": [
     "src/services/backgroundActionQueue.ts",
     "src/services/connectLinkReplayGuard.ts",
+    "src/services/panelAssetFacade.ts",
     "src/services/pushNotifications.ts",
     "src/shellCore/localViewState.ts",
+    "src/shellCore/pinnedPanels.ts",
   ],
   // The shared WebRTC shell-connection capability (provider + reconnect + the
   // device's shell-reconnect credential, which it persists via AsyncStorage). The
@@ -30,7 +32,9 @@ const BLOCKED_NATIVE_IMPORTS = {
   // bootstrap, is allowlisted by absolute path in createNativeBoundary.)
   "@vibestudio/mobile-webrtc": [
     "src/services/mobileTransport.ts",
+    "src/services/appBootstrap.ts",
     "src/components/LoginScreen.tsx",
+    "src/components/SettingsScreen.tsx",
   ],
 };
 
@@ -71,12 +75,16 @@ function createNativeBoundary(workspaceAppRoot) {
   const mobileWebRtcConnect = normalize(
     path.join(__dirname, "..", "..", "packages", "mobile-webrtc", "src", "connect.ts"),
   );
+  const mobileWebRtcConnectLink = normalize(
+    path.join(__dirname, "..", "..", "packages", "mobile-webrtc", "src", "connectLink.ts"),
+  );
   const keychainAllowed = allowedByModule.get("react-native-keychain");
   keychainAllowed?.add(mobileWebRtcConnect);
   const asyncStorageAllowed = allowedByModule.get(
     "@react-native-async-storage/async-storage",
   );
   asyncStorageAllowed?.add(mobileWebRtcConnect);
+  asyncStorageAllowed?.add(mobileWebRtcConnectLink);
   // The native host bootstrap (apps/mobile/index.js) is the out-of-tree trusted
   // consumer of the @vibestudio/mobile-webrtc capability; allowlist it by absolute
   // path alongside the workspace-app-relative shell consumers above.
@@ -92,6 +100,7 @@ function createNativeBoundary(workspaceAppRoot) {
       if (allowedByModule.get(blocked)?.has(origin)) return;
       throw new Error(
         `Direct import of native module "${moduleName}" from workspace app code is blocked. ` +
+          `Importer: ${origin || "unknown"}. ` +
           "Use the Vibestudio capability-gated service wrapper for this native surface.",
       );
     },

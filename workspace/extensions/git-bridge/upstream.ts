@@ -83,11 +83,22 @@ export class UpstreamEngine {
   ) {}
 
   async activate(): Promise<void> {
-    const config = await this.readConfig();
-    // Tolerant enumeration: one unresolvable declaration must not stop the
-    // engine from serving every other repo.
-    for (const entry of listDeclaredUpstreams(config)) {
-      if (entry.upstream) this.enqueue(entry.repoPath, 100);
+    try {
+      const config = await this.readConfig();
+      // Tolerant enumeration: one unresolvable declaration must not stop the
+      // engine from serving every other repo.
+      for (const entry of listDeclaredUpstreams(config)) {
+        if (entry.upstream) this.enqueue(entry.repoPath, 100);
+      }
+    } catch (error) {
+      // Provider activation must not depend on workspace RPC readiness. The
+      // build smoke intentionally supplies no live config, and a real server
+      // can also activate extensions while workspace services are converging.
+      // Every provider operation reads the current config on demand; main-head
+      // notifications enqueue affected repos once the workspace is live.
+      this.ctx.log.warn?.("git upstream startup deferred until workspace config is available", {
+        error: errorMessage(error),
+      });
     }
     await this.reportHealth();
   }

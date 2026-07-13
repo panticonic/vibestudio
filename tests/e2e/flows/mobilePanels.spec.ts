@@ -50,18 +50,13 @@ function writeInitPanelsConfig(
   panels: Array<{ source: string; stateArgs?: Record<string, unknown> }>
 ): void {
   const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
-  const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = panels;
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
 }
 
 async function launchMobileTestApp(
-  panels: Array<{ source: string; stateArgs?: Record<string, unknown> }> = [
-    { source: "about/new" },
-  ]
+  panels: Array<{ source: string; stateArgs?: Record<string, unknown> }> = [{ source: "about/new" }]
 ): Promise<TestApp> {
   const workspacePath = createManagedTestWorkspace();
   writeInitPanelsConfig(workspacePath, panels);
@@ -111,6 +106,8 @@ async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
     const snapshots = [];
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
+      const url = contents.getURL();
+      const title = contents.getTitle();
       try {
         const dom = await contents.executeJavaScript(
           `(() => ({
@@ -120,6 +117,8 @@ async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
                 || document.querySelector('[aria-label="Menu"]')
                 || document.querySelector('[aria-label="Open panel tree"]')
                 || document.querySelector('[aria-label="Close panel tree"]')
+                || document.querySelector('[data-shell-top-chrome]')
+                || document.querySelector('[data-native-panel-slot-id]')
             ),
             labels: Array.from(document.querySelectorAll("[aria-label]"))
               .map((node) => node.getAttribute("aria-label"))
@@ -135,16 +134,76 @@ async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
         );
         snapshots.push({
           id: contents.id,
-          url: contents.getURL(),
-          title: contents.getTitle(),
+          url,
+          title,
           ...dom,
         });
       } catch {
-        // Ignore non-DOM webContents.
+        snapshots.push({
+          id: contents.id,
+          url,
+          title,
+          text: "",
+          hasShellChrome: false,
+          labels: [],
+          viewport: { width: 0, height: 0, scrollWidth: 0 },
+        });
       }
     }
     return snapshots;
   });
+}
+
+async function clickShellButton(app: ElectronApplication, label: RegExp): Promise<boolean> {
+  return app.evaluate(async ({ webContents }, source) => {
+    const candidates: Array<{ contents: Electron.WebContents; priority: number }> = [];
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const priority = await contents.executeJavaScript(
+          `(() => {
+              const hasHostedShellChrome = Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+                || document.querySelector('[aria-label="Menu"]')
+                || document.querySelector('[aria-label="Open panel tree"]')
+                || document.querySelector('[aria-label="Close panel tree"]')
+                || document.querySelector('[aria-label="Switch to tree navigation"]')
+                || document.querySelector('[aria-label="Switch to breadcrumb navigation"]')
+                || document.querySelector('[data-shell-top-chrome]')
+                || document.querySelector('[data-native-panel-slot-id]'));
+              const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'));
+              if (hasHostedShellChrome) return 0;
+              if (hasLaunchGateApproval) return 1;
+              return 2;
+            })()`,
+          true
+        );
+        candidates.push({ contents, priority });
+      } catch {
+        // Ignore non-DOM webContents.
+      }
+    }
+    candidates.sort((a, b) => a.priority - b.priority);
+    for (const { contents } of candidates) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const clicked = await contents.executeJavaScript(
+          `(() => {
+              const pattern = new RegExp(${JSON.stringify(source)}, "i");
+              const buttons = Array.from(document.querySelectorAll("button"));
+              const button = buttons.find((item) => pattern.test((item.textContent ?? "").trim()));
+              if (!button) return false;
+              button.click();
+              return true;
+            })()`,
+          true
+        );
+        if (clicked) return true;
+      } catch {
+        // Ignore non-DOM webContents.
+      }
+    }
+    return false;
+  }, label.source);
 }
 
 async function rpcCall(
@@ -153,17 +212,20 @@ async function rpcCall(
   method: string,
   args: unknown[] = []
 ): Promise<unknown> {
-  return app.evaluate(async (_electron, request) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.rpcCall(request.service, request.method, request.args);
-  }, { service, method, args });
+  return app.evaluate(
+    async (_electron, request) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: {
+            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+          };
+        }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.rpcCall(request.service, request.method, request.args);
+    },
+    { service, method, args }
+  );
 }
 
 async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean> {
@@ -208,6 +270,10 @@ async function evaluateInHostedShell<T>(
         || document.querySelector('[aria-label="Menu"]')
         || document.querySelector('[aria-label="Open panel tree"]')
         || document.querySelector('[aria-label="Close panel tree"]')
+        || document.querySelector('[aria-label="Switch to tree navigation"]')
+        || document.querySelector('[aria-label="Switch to breadcrumb navigation"]')
+        || document.querySelector('[data-shell-top-chrome]')
+        || document.querySelector('[data-native-panel-slot-id]')
     ))()`;
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
@@ -285,6 +351,10 @@ async function waitForHostedShellChrome(app: ElectronApplication): Promise<void>
         probe["resolvePendingError"] = error instanceof Error ? error.message : String(error);
       });
     }
+    await clickShellButton(
+      app,
+      /^(Trust and (start|connect)|Approve and (start|connect)|Approve all|Approve|Continue|Run)$/i
+    ).catch(() => false);
     const hasShell = Boolean(
       await evaluateInHostedShell(
         app,
@@ -295,10 +365,13 @@ async function waitForHostedShellChrome(app: ElectronApplication): Promise<void>
             || document.querySelector('[aria-label="Close panel tree"]')
             || document.querySelector('[aria-label="Switch to tree navigation"]')
             || document.querySelector('[aria-label="Switch to breadcrumb navigation"]')
+            || document.querySelector('[data-shell-top-chrome]')
         ))()`
       )
     );
     probe["hasShell"] = hasShell;
+    const panelTree = await getPanelTree(app).catch(() => []);
+    probe["panelCount"] = panelTree.length;
     lastProbe = probe;
     if (hasShell) return;
     await delay(500);
@@ -356,6 +429,58 @@ async function shellElementVisibleByLabel(
   );
 }
 
+async function shellElementVisibleByLabels(
+  app: ElectronApplication,
+  labels: string[]
+): Promise<boolean> {
+  return Boolean(
+    await evaluateInHostedShell(
+      app,
+      `(() => {
+        const labels = ${JSON.stringify(labels)};
+        const visible = (node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && rect.width > 0
+            && rect.height > 0
+            && !node.closest("[hidden], [aria-hidden='true']");
+        };
+        return Array.from(document.querySelectorAll("[aria-label]"))
+          .some((node) => labels.includes(node.getAttribute("aria-label") ?? "") && visible(node));
+      })()`
+    )
+  );
+}
+
+async function shellClickByLabels(app: ElectronApplication, labels: string[]): Promise<boolean> {
+  return Boolean(
+    await evaluateInHostedShell(
+      app,
+      `(() => {
+        const labels = ${JSON.stringify(labels)};
+        const visible = (node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && rect.width > 0
+            && rect.height > 0
+            && !node.closest("[hidden], [aria-hidden='true']");
+        };
+        const node = Array.from(document.querySelectorAll("[aria-label]"))
+          .find((item) => labels.includes(item.getAttribute("aria-label") ?? "") && visible(item));
+        if (!(node instanceof HTMLElement)) return false;
+        node.click();
+        return true;
+      })()`
+    )
+  );
+}
+
 async function shellClickByLabel(app: ElectronApplication, label: string): Promise<boolean> {
   return Boolean(
     await evaluateInHostedShell(
@@ -380,6 +505,18 @@ async function shellClickByLabel(app: ElectronApplication, label: string): Promi
       })()`
     )
   );
+}
+
+function normalizeNavigationTreeOpenLabel(): string[] {
+  return ["Open panel tree", "Switch to tree view", "Open stack", "Show panel tree"];
+}
+
+function normalizeNavigationTreeCloseLabel(): string[] {
+  return ["Close panel tree", "Switch to breadcrumb navigation", "Hide panel tree", "Close stack"];
+}
+
+function normalizeHideAddressBarLabels(): string[] {
+  return ["Hide address bar", "Back to breadcrumbs"];
 }
 
 async function shellClickButtonByTextPattern(
@@ -568,10 +705,10 @@ async function expectShellFitsMobileViewport(app: ElectronApplication): Promise<
 }
 
 async function ensureShellStackMode(app: ElectronApplication): Promise<void> {
-  await shellClickByLabel(app, "Hide address bar").catch(() => false);
-  await shellClickByLabel(app, "Close panel tree").catch(() => false);
+  await shellClickByLabels(app, normalizeHideAddressBarLabels()).catch(() => false);
+  await shellClickByLabels(app, normalizeNavigationTreeCloseLabel()).catch(() => false);
   await expect
-    .poll(() => shellElementVisibleByLabel(app, "Open panel tree"), {
+    .poll(() => shellElementVisibleByLabels(app, normalizeNavigationTreeOpenLabel()), {
       timeout: 30_000,
       intervals: [250, 500, 1000],
     })
@@ -600,7 +737,7 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
       }
     ).__testApi;
     if (!testApi) throw new Error("Test API not available");
-    const pending = await testApi.rpcCall("shellApproval", "listPending", []) as Array<{
+    const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
       approvalId: string;
       kind: string;
       options?: Array<{
@@ -665,17 +802,18 @@ async function approveShellPrompts(app: ElectronApplication): Promise<void> {
 }
 
 test.describe("Mobile Panels", () => {
-  test.describe.configure({ mode: "serial" });
-  test.setTimeout(600_000);
+  test.describe.configure({ mode: "serial", timeout: 600_000 });
 
   let testApp: TestApp | undefined;
 
-  test.beforeAll(async () => {
+  test.beforeAll(async ({}, testInfo) => {
+    testInfo.setTimeout(600_000);
     testApp = await launchMobileTestApp([{ source: "about/new" }]);
     await setMobileWindow(testApp.app);
   });
 
-  test.afterAll(async () => {
+  test.afterAll(async ({}, testInfo) => {
+    testInfo.setTimeout(600_000);
     await testApp?.cleanup();
     testApp = undefined;
   });
@@ -688,18 +826,22 @@ test.describe("Mobile Panels", () => {
 
     await expectShellFitsMobileViewport(testApp!.app);
 
-    expect(await shellClickByLabel(testApp!.app, "Open panel tree")).toBe(true);
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Close panel tree"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(true);
+    expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeOpenLabel())).toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
     await expectShellFitsMobileViewport(testApp!.app);
 
-    expect(await shellClickByLabel(testApp!.app, "Close panel tree")).toBe(true);
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Open panel tree"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(true);
+    expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeCloseLabel())).toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeOpenLabel()), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
   });
 
   test("mobile titlebar toggles the address bar without overflow", async () => {
@@ -709,17 +851,21 @@ test.describe("Mobile Panels", () => {
     await ensurePanelSource(testApp!.app, "about/help");
 
     expect(await shellClickByLabel(testApp!.app, "Show address bar")).toBe(true);
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
     await expectShellFitsMobileViewport(testApp!.app);
 
-    expect(await shellClickByLabel(testApp!.app, "Hide address bar")).toBe(true);
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(false);
+    expect(await shellClickByLabels(testApp!.app, normalizeHideAddressBarLabels())).toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(false);
     await expectShellFitsMobileViewport(testApp!.app);
   });
 
@@ -755,21 +901,27 @@ test.describe("Mobile Panels", () => {
     await createPanel(testApp!.app, parentId, "about/help", { focus: false });
     await waitForSourcePanel(testApp!.app, "about/help");
 
-    expect(await shellClickByLabel(testApp!.app, "Open panel tree")).toBe(true);
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Close panel tree"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(true);
+    expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeOpenLabel())).toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
     expect(await shellClickByLabel(testApp!.app, "Select panel Help")).toBe(true);
 
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Open panel tree"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(true);
-    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Close panel tree"), {
-      timeout: 30_000,
-      intervals: [250, 500, 1000],
-    }).toBe(false);
+    await expect
+      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeOpenLabel()), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(false);
     await expectShellFitsMobileViewport(testApp!.app);
   });
 
@@ -781,13 +933,16 @@ test.describe("Mobile Panels", () => {
     await approveShellPrompts(testApp!.app);
 
     await expect
-      .poll(async () => {
-        await approveShellPrompts(testApp!.app);
-        return getPanelText(testApp!.app, panelId);
-      }, {
-        timeout: 60_000,
-        intervals: [500, 1000, 2000],
-      })
+      .poll(
+        async () => {
+          await approveShellPrompts(testApp!.app);
+          return getPanelText(testApp!.app, panelId);
+        },
+        {
+          timeout: 60_000,
+          intervals: [500, 1000, 2000],
+        }
+      )
       .toMatch(/(?:\$|#|>\s*)|(?:\d+x\d+)/);
     await expectPanelFitsMobileViewport(testApp!.app, panelId);
   });
@@ -804,5 +959,4 @@ test.describe("Mobile Panels", () => {
       await expectPanelFitsMobileViewport(testApp!.app, panelId);
     });
   }
-
 });

@@ -32,5 +32,45 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install desktop smoke runtime
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Hosted CLI and desktop remote smokes
+        run: xvfb-run -a pnpm smoke:full --skip-android
+
       - name: WebRTC e2e suites
         run: pnpm test:webrtc-e2e
+
+  android-remote-smoke:
+    name: Android remote smoke (local signaling + TURN)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies and TURN
+        run: |
+          pnpm install --frozen-lockfile
+          sudo apt-get update
+          sudo apt-get install -y coturn
+
+      - name: Build server artifacts
+        run: pnpm build
+
+      - name: Android remote and recovery smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          script: node scripts/cli/mobile-smoke.mjs --platform android --local-signaling

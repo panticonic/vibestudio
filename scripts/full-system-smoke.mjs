@@ -17,6 +17,7 @@ const defaultResultsRoot = path.join(repoRoot, "test-results", "full-system-smok
 function parseArgs(argv) {
   const options = {
     skipBuild: false,
+    skipCliRemote: false,
     skipDesktopPairing: false,
     skipDesktopE2e: false,
     skipAndroid: false,
@@ -36,6 +37,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--") continue;
     else if (arg === "--skip-build") options.skipBuild = true;
+    else if (arg === "--skip-cli-remote") options.skipCliRemote = true;
     else if (arg === "--skip-desktop-pairing") options.skipDesktopPairing = true;
     else if (arg === "--skip-desktop-e2e") options.skipDesktopE2e = true;
     else if (arg === "--skip-android") options.skipAndroid = true;
@@ -74,12 +76,14 @@ Usage:
 
 Phases:
   build                  pnpm build
+  cli-remote             scripts/cli-remote-smoke.mjs
   desktop-pairing        scripts/desktop-pairing-smoke.mjs
   desktop-e2e            pnpm test:e2e
   android-mobile         scripts/cli/mobile-smoke.mjs --platform android
 
 Options:
   --skip-build              Reuse the current dist/ output.
+  --skip-cli-remote         Skip the CLI client remote pair/status smoke.
   --skip-desktop-pairing    Skip the branded Electron WebRTC pairing smoke.
   --skip-desktop-e2e        Skip the Playwright desktop e2e suite.
   --skip-android            Skip Android emulator/mobile smoke.
@@ -194,6 +198,16 @@ async function main() {
 
   if (!options.skipBuild) {
     await runPhase("build", "pnpm", ["build"], { resultsDir });
+  }
+  if (!options.skipCliRemote) {
+    const args = [
+      path.join(repoRoot, "scripts", "cli-remote-smoke.mjs"),
+      "--timeout-ms",
+      String(options.timeoutMs),
+    ];
+    if (options.localSignaling) args.push("--local-signaling");
+    if (options.signalUrl) args.push("--signal-url", options.signalUrl);
+    await runPhase("cli-remote", process.execPath, args, { resultsDir });
   }
   if (!options.skipDesktopPairing) {
     const args = [
