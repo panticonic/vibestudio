@@ -32,9 +32,21 @@ export const ScannedFileSchema = z.object({
   mode: WorktreeFileModeSchema,
 });
 
+/** A directory entry the scan skipped because it is not a regular file
+ *  (symlink/socket/FIFO/device) — never captured in a state; surfaced so the
+ *  driving DO (and ultimately the agent) learns the entry was not tracked. */
+export const SkippedEntrySchema = z.object({
+  path: z.string(),
+  kind: z.enum(["symlink", "socket", "fifo", "block-device", "char-device", "other"]),
+});
+
 export const ScanResultSchema = z.object({
   stateHash: StateHashSchema,
   files: z.array(ScannedFileSchema),
+  skipped: z.array(SkippedEntrySchema),
+  /** The tree exists but is empty while the head has files — a whole-repo
+   *  wipe. Adoption paths must refuse it without an explicit opt-in. */
+  wipedRepo: z.boolean(),
 });
 
 export const ProjectResultSchema = z.object({

@@ -1,17 +1,27 @@
 import type { RpcCaller } from "@vibestudio/rpc";
 import type {
-  PutUserNotificationInput,
   UserNotification,
   UserNotificationAcknowledgementResult,
   UserNotificationListResult,
 } from "@vibestudio/shared/userNotifications";
 import { createGadServiceClient } from "@vibestudio/shared/userlandServiceRpc";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  callTypedServiceMethod,
+  createTypedServiceClient,
+  type ServiceCallFn,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
-import type {
-  VcsProvenanceForFileResult,
-  VcsProvenanceForSessionResult,
-} from "@vibestudio/shared/serviceSchemas/vcs";
+import {
+  gadMethods,
+  gadWireMethods,
+  type EnvelopeLineage,
+  type GadSqlBinding,
+  type GadSqlInput,
+  type PrivateLineageForPublishedEnvelope,
+  type PublishedArtifact,
+} from "./gad-schema.js";
+import type { ChannelEnvelopePage } from "@vibestudio/shared/channelEnvelopePaging";
 import {
   hydrateStoredValueRefs,
   type ChannelEnvelope,
@@ -19,310 +29,17 @@ import {
 } from "@workspace/agentic-protocol";
 
 export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/userlandServiceRpc";
+export type * from "./gad-schema.js";
 
-export type GadSqlBinding = null | string | number | boolean | Uint8Array;
-export type GadJsonRecord = Record<string, unknown>;
-export interface GadSqlResult {
-  rows: GadJsonRecord[];
-}
-export interface GadStatusMetric {
-  metric: string;
-  value: number;
-}
+/** Typed entirely from the shared GAD runtime method schemas. */
+export type GadClient = TypedServiceClient<typeof gadMethods>;
 
-export interface ChannelPublication {
-  eventId: string;
-  trajectoryId: string;
-  branchId: string;
-  channelId: string;
-  channelSeq: number;
-  envelopeId: string;
-  publishedAt: string;
-}
-
-export interface EnvelopeLineage {
-  publication: ChannelPublication;
-  envelope: ChannelEnvelope;
-  trajectoryEvent: TrajectoryEvent;
-}
-
-export interface PublishedArtifact {
-  lineage: EnvelopeLineage;
-}
-
-export interface PrivateLineageForPublishedEnvelope {
-  lineage: EnvelopeLineage;
-  branchEvents: TrajectoryEvent[];
-}
-
-export interface ChannelReplayWindow {
-  envelopes: ChannelEnvelope[];
-  totalCount: number;
-  firstEnvelopeSeq?: number;
-  replayFromId?: number;
-  replayToId?: number;
-  hasMoreBefore?: boolean;
-}
-
-export interface ChannelEnvelopeInspection {
-  envelopeId: string;
-  channelId: string;
-  seq: number;
-  payloadKind?: string;
-  from: GadJsonRecord;
-  metadata?: GadJsonRecord;
-  bytes: Record<string, number>;
-  payloadSummary: unknown;
-  storedRefs: GadJsonRecord[];
-  publishedAt: string;
-}
-
-export interface PublicationIntegrityInspection {
-  summary: GadJsonRecord;
-  rows: GadJsonRecord[];
-}
-
-export interface TurnStateInspection {
-  summary: GadJsonRecord;
-  rows: GadJsonRecord[];
-}
-
-export interface InvocationStateInspection {
-  summary: GadJsonRecord;
-  rows: GadJsonRecord[];
-}
-
-export interface ChannelRosterInspection {
-  summary: GadJsonRecord;
-  rows: GadJsonRecord[];
-}
-
-export interface AgentHealthInspection {
-  channelId: string;
-  branchId: string;
-  generatedAt: string;
-  summary: GadJsonRecord;
-  publicationIntegrity: PublicationIntegrityInspection;
-  turnState: TurnStateInspection;
-  invocationState: InvocationStateInspection;
-  roster: ChannelRosterInspection;
-  envelopes: { rows: ChannelEnvelopeInspection[] };
-  storage: { rows: GadJsonRecord[] };
-}
-
-export interface ChannelMessageTypeDefinition {
-  typeId: string;
-  displayMode: "inline" | "row";
-  source: { type: "code"; code: string } | { type: "file"; path: string };
-  imports?: Record<string, string>;
-  stateSchema?: Record<string, unknown>;
-  updateSchema?: Record<string, unknown>;
-  registeredBy?: Record<string, unknown>;
-  updatedAtSeq: number;
-  clearedAtSeq?: number;
-}
-
-export type RegistryMutationInput =
-  | {
-      kind: "upsertMessageType";
-      typeId: string;
-      row: Omit<ChannelMessageTypeDefinition, "typeId" | "updatedAtSeq" | "clearedAtSeq">;
-    }
-  | { kind: "clearMessageType"; typeId: string };
-
-export type GadSqlInput =
-  | string
-  | { sql: string; params?: GadSqlBinding[]; bindings?: GadSqlBinding[] };
-
-export interface GadClient {
-  rawSql(sql: GadSqlInput, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
-  query(sql: GadSqlInput, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
-  status(): Promise<GadStatusMetric[]>;
-  ensureBlob(hash: string, size?: number, mimeType?: string | null): Promise<void>;
-  /** Durable workspace notifications for the host-verified account caller. */
-  listUserNotificationsForMe(): Promise<UserNotification[]>;
-  /** Dismiss one durable notification for the host-verified account caller. */
-  acknowledgeUserNotification(id: string): Promise<boolean>;
-  /** Publish/update one account notification from a trusted worker/DO. */
-  putUserNotification(input: PutUserNotificationInput): Promise<UserNotification>;
-  /** Withdraw one account notification from a trusted worker/DO. */
-  deleteUserNotification(userId: string, id: string): Promise<boolean>;
-  getTrajectoryBranchHead(input: {
-    trajectoryId: string;
-    branchId: string;
-  }): Promise<GadJsonRecord | null>;
-  listTrajectoryEvents(input: {
-    trajectoryId?: string | null;
-    branchId: string;
-    cursor?: number | null;
-    limit?: number | null;
-  }): Promise<TrajectoryEvent[]>;
-  appendChannelEnvelope(
-    input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
-      envelopeId?: string | null;
-      publishedAt?: string | null;
-    }
-  ): Promise<ChannelEnvelope>;
-  appendChannelEnvelopeWithRegistryMutation(
-    input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
-      envelopeId?: string | null;
-      publishedAt?: string | null;
-      registryMutation: RegistryMutationInput;
-    }
-  ): Promise<ChannelEnvelope>;
-  listMessageTypes(input: { channelId: string }): Promise<ChannelMessageTypeDefinition[]>;
-  getMessageType(input: {
-    channelId: string;
-    typeId: string;
-  }): Promise<ChannelMessageTypeDefinition | null>;
-  getChannelEnvelope(input: { envelopeId: string }): Promise<ChannelEnvelope | null>;
-  getTrajectoryForEnvelope(input: { envelopeId: string }): Promise<EnvelopeLineage | null>;
-  listPublishedEnvelopesForTrajectory(input: {
-    trajectoryId?: string | null;
-    branchId?: string | null;
-    eventId?: string | null;
-    turnId?: string | null;
-    channelId?: string | null;
-    limit?: number | null;
-  }): Promise<EnvelopeLineage[]>;
-  getEnvelopesForTrajectory(input: {
-    trajectoryId?: string | null;
-    branchId?: string | null;
-    eventId?: string | null;
-    turnId?: string | null;
-    channelId?: string | null;
-    limit?: number | null;
-  }): Promise<EnvelopeLineage[]>;
-  getPublishedArtifactsForTurn(input: {
-    branchId?: string | null;
-    turnId: string;
-    channelId?: string | null;
-    limit?: number | null;
-  }): Promise<PublishedArtifact[]>;
-  getPrivateLineageForPublishedEnvelope(input: {
-    envelopeId: string;
-  }): Promise<PrivateLineageForPublishedEnvelope | null>;
-  getDownstreamConsumers(input: {
-    envelopeId: string;
-    limit?: number | null;
-  }): Promise<TrajectoryEvent[]>;
-  getChannelReplayWindow(input: {
-    channelId: string;
-    mode: "initial" | "after" | "before";
-    sinceSeq?: number | null;
-    beforeSeq?: number | null;
-    limit?: number | null;
-  }): Promise<ChannelReplayWindow>;
-  listChannelEnvelopesAfter(input: {
-    channelId: string;
-    seq?: number | null;
-    limit?: number | null;
-  }): Promise<ChannelEnvelope[]>;
-  listChannelEnvelopesBefore(input: {
-    channelId: string;
-    seq: number;
-    limit?: number | null;
-  }): Promise<ChannelEnvelope[]>;
-  getInitialChannelWindow(input: {
-    channelId: string;
-    limit?: number | null;
-  }): Promise<ChannelReplayWindow>;
-  listChannelEnvelopes(input: {
-    channelId: string;
-    cursor?: number | null;
-    limit?: number | null;
-    payloadKind?: string | null;
-  }): Promise<ChannelEnvelope[]>;
-  inspectChannelEnvelopes(input: {
-    channelId: string;
-    cursor?: number | null;
-    limit?: number | null;
-    payloadKind?: string | null;
-  }): Promise<{ rows: ChannelEnvelopeInspection[] }>;
-  listStoredValueRefs(input?: {
-    eventId?: string | null;
-    envelopeId?: string | null;
-    digest?: string | null;
-    limit?: number | null;
-  }): Promise<{ rows: GadJsonRecord[] }>;
-  inspectStorageDiagnostics(input?: {
-    rowByteLimit?: number | null;
-    limit?: number | null;
-    branchId?: string | null;
-    channelId?: string | null;
-  }): Promise<{ rows: GadJsonRecord[] }>;
-  inspectPublicationIntegrity(input?: {
-    channelId?: string | null;
-    branchId?: string | null;
-    limit?: number | null;
-  }): Promise<PublicationIntegrityInspection>;
-  inspectTurnState(input?: {
-    branchId?: string | null;
-    channelId?: string | null;
-    limit?: number | null;
-  }): Promise<TurnStateInspection>;
-  inspectInvocationState(input?: {
-    branchId?: string | null;
-    invocationId?: string | null;
-    transportCallId?: string | null;
-    limit?: number | null;
-  }): Promise<InvocationStateInspection>;
-  inspectChannelRoster(input: {
-    channelId: string;
-    limit?: number | null;
-  }): Promise<ChannelRosterInspection>;
-  inspectAgentHealth(input: {
-    channelId: string;
-    branchId?: string | null;
-    limit?: number | null;
-    envelopeLimit?: number | null;
-    storageLimit?: number | null;
-    rowByteLimit?: number | null;
-  }): Promise<AgentHealthInspection>;
-  listGadBranchFiles(input: { branchId: string }): Promise<GadJsonRecord[]>;
-  diffGadStates(input: {
-    leftStateHash: string;
-    rightStateHash: string;
-  }): Promise<{ added: GadJsonRecord[]; removed: GadJsonRecord[]; changed: GadJsonRecord[] }>;
-  readGadFileAtState(input: { stateHash: string; path: string }): Promise<GadJsonRecord | null>;
-  getGadStateProducer(input: { stateHash: string }): Promise<GadJsonRecord | null>;
-  validateGadHashes(input?: object): Promise<{ ok: boolean; errors: string[] }>;
-  clearDirtyAfterValidation(input?: object): Promise<{ ok: boolean; errors: string[] }>;
-  checkGadIntegrity(input?: object): Promise<{ ok: boolean; errors: GadJsonRecord[] }>;
-  rebuildTrajectoryProjections(input?: object): Promise<{ replayed: number }>;
-  /** §6/§7 read-time attachment for one file (provenance ∪ recall, density-ranked;
-   *  exceptions first, salience-floored). Eval-reachable per design §7.1/§9. */
-  provenanceForFile(input: {
-    repoPath: string;
-    path: string;
-    head: string;
-    tier: "none" | "moderate" | "deep";
-    sessionLogId: string;
-    sessionHead: string;
-    invocationId?: string | null;
-    recallKeywords?: string[] | null;
-    after?: string | null;
-    skipSuppression?: boolean | null;
-  }): Promise<VcsProvenanceForFileResult>;
-  /** §7.6 session orientation over the session touch-set (exceptions-first). */
-  provenanceForSession(input: {
-    sessionLogId: string;
-    sessionHead: string;
-    after?: string | null;
-  }): Promise<VcsProvenanceForSessionResult>;
-  /** §7.1 claim drill-down — writes a `cited` touch and returns the claim's
-   *  relations / anchoring commit / touching sessions. */
-  provenanceForClaim(input: {
-    claimId: string;
-    sessionLogId: string;
-    sessionHead: string;
-    invocationId?: string | null;
-    after?: string | null;
-  }): Promise<VcsProvenanceForFileResult>;
-}
 export function createGadClient(rpc: RpcCaller): GadClient {
   const service = createGadServiceClient(rpc);
-  const call = <T>(method: string, ...args: unknown[]) => service.call<T>(method, ...args);
+  const wireTransport: ServiceCallFn = (_service, method, args) =>
+    service.call(method, ...args);
+  const call = <T>(method: keyof typeof gadWireMethods & string, ...args: unknown[]) =>
+    callTypedServiceMethod("gad-wire", gadWireMethods, wireTransport, method, args) as Promise<T>;
   const normalizeSqlArgs = (
     input: GadSqlInput,
     bindings?: GadSqlBinding[]
@@ -337,17 +54,13 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     hydrateStoredValueRefs(value, {
       getText: (digest) => blobstore.getText(digest),
     }) as Promise<T>;
-  const hydrateLineage = async <
-    T extends { envelope: ChannelEnvelope; trajectoryEvent: TrajectoryEvent },
-  >(
-    item: T
-  ): Promise<T> => ({
+  const hydrateLineage = async (item: EnvelopeLineage): Promise<EnvelopeLineage> => ({
     ...item,
     envelope: await hydrate(item.envelope),
     trajectoryEvent: await hydrate(item.trajectoryEvent),
   });
 
-  return {
+  const adapter: GadClient = {
     rawSql: (input, bindings) => call("rawSql", ...normalizeSqlArgs(input, bindings)),
     query: (input, bindings) => call("query", ...normalizeSqlArgs(input, bindings)),
     status: () => call("getStatus"),
@@ -427,38 +140,13 @@ export function createGadClient(rpc: RpcCaller): GadClient {
           hydrate(event)
         )
       ),
-    getChannelReplayWindow: async (input) => {
-      const window = await call<ChannelReplayWindow>("getChannelReplayWindow", input);
+    readChannelEnvelopes: async (input) => {
+      const page = await call<ChannelEnvelopePage<ChannelEnvelope>>("readChannelEnvelopes", input);
       return {
-        ...window,
-        envelopes: await Promise.all(window.envelopes.map((envelope) => hydrate(envelope))),
+        ...page,
+        items: await Promise.all(page.items.map((envelope) => hydrate(envelope))),
       };
     },
-    listChannelEnvelopesAfter: async (input) =>
-      Promise.all(
-        (await call<ChannelEnvelope[]>("listChannelEnvelopesAfter", input)).map((envelope) =>
-          hydrate(envelope)
-        )
-      ),
-    listChannelEnvelopesBefore: async (input) =>
-      Promise.all(
-        (await call<ChannelEnvelope[]>("listChannelEnvelopesBefore", input)).map((envelope) =>
-          hydrate(envelope)
-        )
-      ),
-    getInitialChannelWindow: async (input) => {
-      const window = await call<ChannelReplayWindow>("getInitialChannelWindow", input);
-      return {
-        ...window,
-        envelopes: await Promise.all(window.envelopes.map((envelope) => hydrate(envelope))),
-      };
-    },
-    listChannelEnvelopes: async (input) =>
-      Promise.all(
-        (await call<ChannelEnvelope[]>("listChannelEnvelopes", input)).map((envelope) =>
-          hydrate(envelope)
-        )
-      ),
     inspectChannelEnvelopes: (input) => call("inspectChannelEnvelopes", input),
     listStoredValueRefs: (input) => call("listStoredValueRefs", input ?? {}),
     inspectStorageDiagnostics: (input) => call("inspectStorageDiagnostics", input ?? {}),
@@ -479,4 +167,12 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     provenanceForClaim: (input) => call("provenanceForClaim", input),
     rebuildTrajectoryProjections: (input) => call("rebuildTrajectoryProjections", input),
   };
+
+  return createTypedServiceClient("gad", gadMethods, (_service, method, args) => {
+    const member = (adapter as unknown as Record<string, unknown>)[method];
+    if (typeof member !== "function") {
+      throw new Error(`GAD public adapter has no method ${JSON.stringify(method)}`);
+    }
+    return (member as (...values: unknown[]) => Promise<unknown>)(...args);
+  });
 }

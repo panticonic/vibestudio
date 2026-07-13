@@ -196,6 +196,9 @@ export function createRpcFs(rpc: Pick<RpcClient, "call">): RuntimeFs {
         async readlink(path: string): Promise<string> {
             return call<string>("readlink", path);
         },
+        async symlink(target: string, path: string, type?: "file" | "dir" | "junction"): Promise<void> {
+            await call<void>("symlink", target, path, type);
+        },
         async chmod(path: string, mode: number): Promise<void> {
             await call<void>("chmod", path, mode);
         },

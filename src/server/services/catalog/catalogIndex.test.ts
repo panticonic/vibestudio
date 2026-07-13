@@ -41,6 +41,15 @@ describe("createCatalogIndex", () => {
     expect(index.get("service:nope", "server")).toBeNull();
   });
 
+  it("opens service roots with only the caller-visible child methods", () => {
+    const index = createCatalogIndex(load);
+    expect(index.get("service:blobstore", "panel")?.members).toEqual(["blobstore.putText"]);
+    expect(index.get("service:blobstore", "server")?.members).toEqual([
+      "blobstore.admin.wipe",
+      "blobstore.putText",
+    ]);
+  });
+
   it("listSurfaces counts only visible entries", () => {
     const index = createCatalogIndex(load);
     const sp = index.listSurfaces("panel").find((s) => s.surface === "service")?.count ?? 0;
@@ -58,11 +67,16 @@ describe("createCatalogIndex", () => {
         name: "demo2",
         description: "d",
         policy: { allowed: ["server"] },
-        methods: {},
+        methods: { ping: { args: z.tuple([]) } },
         handler: async () => undefined,
       },
     ];
     expect(index.get("service:demo2", "server")).toBeTruthy();
+  });
+
+  it("caps oversized direct search requests instead of rejecting discovery", () => {
+    const index = createCatalogIndex(load);
+    expect(index.search("", "server", { limit: 200 })).toHaveLength(3);
   });
 
   it("picks up same-name definition replacements without explicit rebuild", () => {

@@ -967,6 +967,22 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
    * declaration time (startup / meta-change reconcile), not at invocation.
    */
   private lookupForInvoke(name: string): RegistryEntry | null {
+    const direct = this.registry.get(name);
+    if (direct?.activeBundleKey) return direct;
+    // `extensions.list` advertises shortName and source repo as accepted
+    // identifiers. Resolve those from the active registry itself; graph lookup
+    // only understands canonical names/paths and previously made the advertised
+    // short-name contract false (e.g. `local-models`). Require uniqueness so a
+    // basename collision can never route an invocation to the wrong extension.
+    const aliasMatches = this.registry.list().filter((entry) => {
+      const source = entry.source.repo.replace(/^workspace\//u, "").replace(/\/+$/u, "");
+      const shortName =
+        source.split("/").filter(Boolean).at(-1) ??
+        entry.name.split("/").filter(Boolean).at(-1) ??
+        entry.name;
+      return (name === source || name === shortName) && Boolean(entry.activeBundleKey);
+    });
+    if (aliasMatches.length === 1) return aliasMatches[0] ?? null;
     let resolvedName = name;
     try {
       resolvedName = this.findExtensionNode(name).name;

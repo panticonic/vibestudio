@@ -285,12 +285,13 @@ export interface ExtensionFsClient {
   copyFile(src: string, dest: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   realpath(path: string): Promise<string>;
+  /** Materialize sparse context paths before an extension subprocess reads disk directly. */
+  ensureMaterialized(scope: string | string[] | "all"): Promise<void>;
   open(path: string, flags?: string, mode?: number): Promise<ExtensionFileHandle>;
   truncate(path: string, len?: number): Promise<void>;
   readlink(path: string): Promise<string>;
-  symlink(target: string, path: string): Promise<void>;
+  symlink(target: string, path: string, type?: "file" | "dir" | "junction"): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
-  chown(path: string, uid: number, gid: number): Promise<void>;
   utimes(path: string, atime: Date | number, mtime: Date | number): Promise<void>;
 }
 

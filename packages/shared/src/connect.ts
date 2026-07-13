@@ -230,7 +230,7 @@ export function parseConnectLink(raw: string): ConnectLink {
   if (params.values.get("v") !== String(PAIRING_PROTOCOL_VERSION)) {
     return {
       kind: "error",
-      reason: `Unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION})`,
+      reason: `Old or unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION}); re-pair this device with a fresh link`,
     };
   }
 

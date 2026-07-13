@@ -2,6 +2,9 @@
   "name": "sample-do",
   "version": "0.0.0",
   "type": "module",
+  "dependencies": {
+    "@workspace/runtime": "workspace:*"
+  },
   "vibestudio": {
     "title": "Sample Durable Object",
     "kind": "worker",

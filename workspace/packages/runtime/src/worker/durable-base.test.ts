@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { rpc } from "@vibestudio/rpc";
 import initSqlJs from "sql.js";
@@ -55,6 +56,16 @@ class SchemaProbeDO extends DurableObjectBase {
         .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'required_table'`)
         .toArray().length === 1
     );
+  }
+}
+
+class AlarmProbeDO extends DurableObjectBase {
+  protected createTables(): void {}
+
+  @rpc({ callers: ["server"] })
+  scheduleWake(wakeAt: number): string {
+    this.setAlarmAt(wakeAt);
+    return "scheduled";
   }
 }
 
@@ -158,6 +169,70 @@ describe("DurableObjectBase lifecycle routing", () => {
     // lifecycle caller must NOT leak into it. (The default-deny gate refuses an
     // unattributed ordinary call, so a real caller is always present.)
     await expect(callAs("panel", "callerKind")).resolves.toBe("panel");
+  });
+});
+
+describe("DurableObjectBase server-driven alarm durability", () => {
+  it("does not return an RPC response until a scheduled alarm is durably registered", async () => {
+    let releaseAlarmWrite!: () => void;
+    const alarmWrite = new Promise<void>((resolve) => {
+      releaseAlarmWrite = resolve;
+    });
+    let observeAlarmWrite!: () => void;
+    const alarmWriteObserved = new Promise<void>((resolve) => {
+      observeAlarmWrite = resolve;
+    });
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        from: string;
+        target: string;
+        message: { requestId: string; method: string };
+      };
+      if (envelope.message.method === "workspace-state.alarmSet") {
+        observeAlarmWrite();
+        await alarmWrite;
+      }
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: { callerId: "main", callerKind: "server" } },
+          provenance: [],
+          message: {
+            type: "response",
+            requestId: envelope.message.requestId,
+            result: undefined,
+          },
+        })
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind TCP");
+
+    try {
+      const { call } = await createTestDO(AlarmProbeDO, {
+        GATEWAY_URL: `http://127.0.0.1:${address.port}`,
+      });
+      let settled = false;
+      const pending = call("scheduleWake", Date.now() + 1_000).then((value) => {
+        settled = true;
+        return value;
+      });
+      await alarmWriteObserved;
+
+      expect(settled).toBe(false);
+      releaseAlarmWrite();
+      await expect(pending).resolves.toBe("scheduled");
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
   });
 });
 

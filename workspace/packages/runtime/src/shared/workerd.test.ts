@@ -1,9 +1,8 @@
 /**
  * Tests for the typed workerd client.
  *
- * Worker instance lifecycle now lives on `runtime.createEntity`/`retireEntity`
- * (no `workerd.*` lifecycle client). What remains is userland service resolution
- * and the fork/storage DO primitives.
+ * Worker lifecycle delegates to the canonical runtime entity service while
+ * discovery and userland service resolution use the workers service.
  */
 
 import { createWorkerdClient, type WorkerdClient } from "./workerd.js";
@@ -31,18 +30,51 @@ describe("createWorkerdClient", () => {
     client = createWorkerdClient(mock.rpc);
   });
 
-  it("exposes only service-resolution (no lifecycle, no DO-storage primitives)", () => {
+  it("exposes ergonomic worker lifecycle without DO-storage primitives", () => {
     // cloneDO/destroyDO are closed off — reachable only via runtime.cloneContext/
     // destroyContext (server-internal), never on this userland client.
     expect(Object.keys(client).sort()).toEqual(
       [
+        "create",
+        "destroy",
         "durableObjectService",
+        "list",
         "listServices",
         "listSources",
         "resolveDurableObject",
         "resolveService",
       ].sort()
     );
+  });
+
+  it("creates, lists, and destroys workers through runtime entity methods", async () => {
+    await client.create("workers/example", {
+      key: "probe",
+      contextId: "ctx-1",
+      env: { NON_SECRET_PROBE: "configured" },
+    });
+    await client.list();
+    await client.destroy({ id: "worker:workers/example:probe" });
+    await client.destroy("worker:workers/example:probe-2");
+
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.createEntity", [
+      {
+        kind: "worker",
+        source: "workers/example",
+        key: "probe",
+        contextId: "ctx-1",
+        env: { NON_SECRET_PROBE: "configured" },
+      },
+    ]);
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.listEntities", [
+      { kind: "worker" },
+    ]);
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.retireEntity", [
+      { id: "worker:workers/example:probe" },
+    ]);
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.retireEntity", [
+      { id: "worker:workers/example:probe-2" },
+    ]);
   });
 
   it("listSources calls workers.listSources", async () => {

@@ -144,6 +144,7 @@
         "workspace/packages/runtime/src/worker/durable-test-utils.ts"
       ],
       "@workspace/runtime/workerd-client": ["workspace/packages/runtime/src/shared/workerd.ts"],
+      "@workspace/runtime/gad-schema": ["workspace/packages/runtime/src/shared/gad-schema.ts"],
       "@workspace/svelte": ["workspace/packages/svelte/src/index.ts"],
       "@workspace/tool-ui": ["workspace/packages/tool-ui/src/index.ts"],
       "@workspace/tool-ui/*": ["workspace/packages/tool-ui/src/*"],

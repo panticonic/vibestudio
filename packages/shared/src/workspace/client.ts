@@ -10,6 +10,7 @@ import type { RpcCaller } from "@vibestudio/rpc";
 import { createTypedServiceClient, type TypedServiceClient } from "../typedServiceClient.js";
 import { eventsMethods } from "../serviceSchemas/events.js";
 import { workspaceMethods, type WorkspaceUnitStatus } from "../serviceSchemas/workspace.js";
+import type { WorkspaceTreeNode } from "../serviceSchemas/workspace.js";
 
 export type { InitPanelEntry, WorkspaceConfig } from "./types.js";
 export type {
@@ -27,6 +28,8 @@ type WorkspaceTypedClient = TypedServiceClient<typeof workspaceMethods>;
 type EventsTypedClient = TypedServiceClient<typeof eventsMethods>;
 
 export type WorkspaceUnitsClient = WorkspaceTypedClient["units"] & {
+  /** Current unit status rows; ergonomic alias for `list()`. */
+  status(): Promise<WorkspaceUnitStatus[]>;
   /**
    * Live unit-status snapshots: emits a fresh `units.list()` result on every
    * unit-related event (status, health, lifecycle, logs). Best-effort — fetch
@@ -35,10 +38,19 @@ export type WorkspaceUnitsClient = WorkspaceTypedClient["units"] & {
   watch(): AsyncIterable<WorkspaceUnitStatus[]>;
 };
 
+export type WorkspaceProjectsClient = {
+  /** List project-root unit paths (for example `projects/my-app`). */
+  list(): Promise<string[]>;
+  /** Resolve a path to its owning project, or null when it is not under projects/. */
+  findForPath(path: string): ReturnType<WorkspaceTypedClient["findUnitForPath"]>;
+};
+
 export type WorkspaceClient = Omit<WorkspaceTypedClient, "units"> & {
   /** Alias for the wire method `workspace.select` (switch + relaunch). */
   switchTo(name: string): Promise<void>;
   units: WorkspaceUnitsClient;
+  /** Ergonomic project discovery; distinct from `workspace.list()` (workspace catalog). */
+  projects: WorkspaceProjectsClient;
 };
 
 type WorkspaceRpc = RpcCaller & {
@@ -50,14 +62,36 @@ export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
     rpc.call("main", `${svc}.${method}`, args)
   );
   const listUnits = () => typed.units.list();
+  const listProjects = async (): Promise<string[]> => {
+    const tree = await typed.sourceTree();
+    return collectProjectUnitPaths(tree.children);
+  };
   return {
     ...typed,
     switchTo: (name) => typed.select(name),
     units: {
       ...typed.units,
+      status: listUnits,
       watch: () => createUnitsWatch(rpc, listUnits),
     },
+    projects: {
+      list: listProjects,
+      findForPath: async (path) => {
+        const resolved = await typed.findUnitForPath(path);
+        return resolved?.unitPath.startsWith("projects/") ? resolved : null;
+      },
+    },
   };
+}
+
+function collectProjectUnitPaths(nodes: readonly WorkspaceTreeNode[]): string[] {
+  const paths: string[] = [];
+  const visit = (node: WorkspaceTreeNode): void => {
+    if (node.isUnit && node.path.startsWith("projects/")) paths.push(node.path);
+    for (const child of node.children) visit(child);
+  };
+  for (const node of nodes) visit(node);
+  return [...new Set(paths)].sort();
 }
 
 const SUBSCRIBE_MAX_ATTEMPTS = 4;

@@ -18,6 +18,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // TypeScript lib files needed for panel development
 const LIBS = [
   "lib.es5.d.ts",
+  // TS 5 standard and legacy decorator globals. lib.es5 references both, but
+  // the hermetic language-service host can only resolve files bundled here.
+  "lib.decorators.d.ts",
+  "lib.decorators.legacy.d.ts",
   "lib.es2015.core.d.ts",
   "lib.es2015.collection.d.ts",
   "lib.es2015.symbol.d.ts",

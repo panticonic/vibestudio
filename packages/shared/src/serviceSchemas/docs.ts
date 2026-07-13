@@ -53,7 +53,12 @@ export type CatalogHit = z.infer<typeof catalogHitSchema>;
 const searchOptsSchema = z
   .object({
     surface: catalogSurfaceSchema.optional(),
-    limit: z.number().int().positive().max(100).optional(),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Requested result count; the service safely caps it at 100."),
   })
   .optional();
 
@@ -118,14 +123,14 @@ export const docsMethods = defineServiceMethods({
   },
   listSurfaces: {
     description: "List catalog surfaces and the number of entries the caller can see in each.",
-    args: z.tuple([]),
+    args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
     returns: z.array(z.object({ surface: catalogSurfaceSchema, count: z.number() })),
     access: READONLY_ACCESS,
   },
   listServices: {
     description:
       "List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...).",
-    args: z.tuple([]),
+    args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
     returns: z.array(serializedServiceSchema),
     access: READONLY_ACCESS,
   },

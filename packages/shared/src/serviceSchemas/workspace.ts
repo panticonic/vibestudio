@@ -566,7 +566,7 @@ export const workspaceMethods = defineServiceMethods({
   },
   "units.versions": {
     description:
-      "List the active build and rollback-capable previous versions for an app unit; userland is restricted to managing its own app.",
+      "List the active build and retained previous versions for an app unit. This is read-only diagnostics and is available to every workspace caller; rollback remains ownership-restricted.",
     args: z.tuple([z.string().describe("App unit name or source path.")]),
     returns: WorkspaceAppVersionsSchema,
     access: READ_ACCESS,

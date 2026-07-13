@@ -15,6 +15,7 @@
     "@vibestudio/dev-log": "workspace:*",
     "@vibestudio/env-paths": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/types": "workspace:*"
+    "@vibestudio/types": "workspace:*",
+    "zod": "^3.24.1"
   }
 }

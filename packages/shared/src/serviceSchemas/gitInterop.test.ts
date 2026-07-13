@@ -12,21 +12,54 @@ describe("gitInterop canonical contract", () => {
       "removeSharedRemote",
       "setUpstream",
       "removeUpstream",
+      "detachUpstream",
       "setAutoPush",
       "upstreamStatus",
       "pushUpstream",
       "pullUpstream",
       "publishRepo",
+      "createDisposableRemote",
+      "publishToDisposableRemote",
+      "pushDisposableRemote",
+      "inspectDisposableRemote",
+      "removeDisposableRemote",
+      "resetExportMarker",
+      "commitMapping",
       "importProject",
       "completeWorkspaceDependencies",
     ]);
   });
 
+  it("exposes a strict stepwise disposable-remote push", () => {
+    expect(
+      gitInteropMethods.pushDisposableRemote.args.safeParse([
+        "projects/demo",
+        "http://vibestudio.local/_disposable-git/id/demo.git",
+        "main",
+      ]).success
+    ).toBe(true);
+    expect(
+      gitInteropMethods.pushDisposableRemote.args.safeParse([
+        {
+          repoPath: "projects/demo",
+          url: "http://vibestudio.local/_disposable-git/id/demo.git",
+          branch: "main",
+        },
+      ]).success
+    ).toBe(false);
+  });
+
   it("accepts only array-based status queries", () => {
     expect(gitInteropMethods.upstreamStatus.args.safeParse([[]]).success).toBe(true);
     expect(
-      gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { fetch: true }]).success
+      gitInteropMethods.upstreamStatus.args.safeParse([
+        ["projects/demo"],
+        { fetch: true, ttlMs: 60_000 },
+      ]).success
     ).toBe(true);
+    expect(
+      gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { ttlMs: -1 }]).success
+    ).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse([]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse(["projects/demo", {}]).success).toBe(
       false
@@ -190,7 +223,11 @@ describe("gitInterop canonical contract", () => {
       "pushUpstream",
       "pullUpstream",
       "publishRepo",
+      "resetExportMarker",
+      "commitMapping",
+      "pushDisposableRemote",
       "cloneRepo",
+      "remoteDefaultBranch",
       "onMainAdvanced",
     ]);
     expect(GIT_INTEROP_PROVIDER_METHOD_NAMES).toEqual(Object.keys(gitInteropProviderMethods));

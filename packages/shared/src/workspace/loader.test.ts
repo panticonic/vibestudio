@@ -78,6 +78,20 @@ describe("loadWorkspaceConfig", () => {
     expect(loadWorkspaceConfig(sourceRoot).id).toBe(workspaceRoot);
   });
 
+  it("loads a canonical default repo and rejects paths that name files or sections", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+    tempRoots.push(root);
+    const sourceRoot = path.join(root, "workspace", "source");
+    writeConfig(sourceRoot, "defaultRepo: projects/notes\n");
+    expect(loadWorkspaceConfig(sourceRoot).defaultRepo).toBe("projects/notes");
+
+    writeConfig(sourceRoot, "defaultRepo: projects/notes/file.md\n");
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/invalid `defaultRepo`/i);
+
+    writeConfig(sourceRoot, "defaultRepo: projects\n");
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/invalid `defaultRepo`/i);
+  });
+
   it("rejects .git-suffixed extension declarations", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);

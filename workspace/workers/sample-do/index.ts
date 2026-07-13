@@ -22,14 +22,14 @@ export class SampleDO extends DurableObjectBase {
     `);
   }
 
-  @rpc({ callers: ["server"] })
+  @rpc({ callers: ["panel", "app", "worker", "do", "agent", "extension", "shell", "server"] })
   recordVisit(): { count: number } {
     this.ensureReady();
     this.sql.exec(`INSERT INTO visits (ts) VALUES (?)`, new Date().toISOString());
     return this.visitCount();
   }
 
-  @rpc({ callers: ["server"] })
+  @rpc({ callers: ["panel", "app", "worker", "do", "agent", "extension", "shell", "server"] })
   visitCount(): { count: number } {
     this.ensureReady();
     const row = this.sql.exec(`SELECT COUNT(*) as count FROM visits`).one() as { count: number };

@@ -11,6 +11,7 @@ import type {
 import { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE } from "./types.js";
 import { WORKSPACE_SOURCE_DIRS } from "./sourceDirs.js";
 import { validateWorkspaceGitConfig } from "./remotes.js";
+import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
@@ -119,6 +120,18 @@ function validateDeclaredUnitList<Decl extends { source: string }>(
 }
 
 function validateDeclaredUnits(config: WorkspaceConfig): void {
+  if (config.defaultRepo !== undefined) {
+    if (typeof config.defaultRepo !== "string") {
+      throw new Error("meta/vibestudio.yml: `defaultRepo` must be a workspace repo path");
+    }
+    try {
+      config.defaultRepo = normalizeWorkspaceRepoPath(config.defaultRepo);
+    } catch (error) {
+      throw new Error(
+        `meta/vibestudio.yml: invalid \`defaultRepo\`: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
   validateDeclaredUnitList<WorkspaceExtensionDecl>({
     section: "extensions",
     sourceRoot: "extensions",
@@ -249,15 +262,6 @@ function validateHeartbeats(heartbeats: WorkspaceHeartbeatDecl[] | undefined): v
     ) {
       throw new Error(
         `meta/vibestudio.yml: heartbeat ${heartbeat.name} context.tokenBudget is out of range`
-      );
-    }
-    const maxModelCalls = heartbeat.behavior?.maxModelCalls;
-    if (
-      maxModelCalls !== undefined &&
-      (!Number.isInteger(maxModelCalls) || maxModelCalls < 1 || maxModelCalls > 10)
-    ) {
-      throw new Error(
-        `meta/vibestudio.yml: heartbeat ${heartbeat.name} behavior.maxModelCalls is out of range`
       );
     }
     if (heartbeat.behavior?.failureBackoff?.base !== undefined) {

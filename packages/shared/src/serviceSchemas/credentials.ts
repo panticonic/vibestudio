@@ -1019,6 +1019,7 @@ export const credentialsMethods = defineServiceMethods({
   storeCredential: {
     description:
       "Persist a URL-bound credential (label, audience, injection, secret material); userland callers are prompted to approve it before it is stored, and the returned summary never echoes the secret.",
+    agentFacing: false,
     args: z.tuple([StoreUrlBoundCredentialParamsSchema]),
     returns: StoredCredentialSummarySchema,
     access: STORE_CREDENTIAL_ACCESS,
@@ -1154,6 +1155,7 @@ export const credentialsMethods = defineServiceMethods({
   proxyFetch: {
     description:
       "Forward an outbound HTTP request through the egress proxy, injecting the resolved credential; returns status, ordered header pairs, final URL, and a base64 body.",
+    agentFacing: false,
     args: z.tuple([ProxyFetchParamsSchema]),
     returns: CredentialProxyFetchResponseSchema,
     access: PROXY_ACCESS,
@@ -1162,6 +1164,7 @@ export const credentialsMethods = defineServiceMethods({
   proxyGitHttp: {
     description:
       "Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded.",
+    agentFacing: false,
     args: z.tuple([ProxyGitHttpParamsSchema]),
     returns: ProxyGitHttpResponseSchema,
     access: PROXY_ACCESS,

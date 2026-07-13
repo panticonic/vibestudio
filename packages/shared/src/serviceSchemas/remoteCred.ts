@@ -29,7 +29,7 @@ export const RemoteCredCurrentSchema = z.object({
   isActive: z.boolean(),
   // A remote is reached over a paired WebRTC pipe ("device") or not configured
   // ("none"). The old cleartext "admin-token"/"hybrid" URL remotes were deleted
-  // (§8c), along with the `url`/`tokenPreview`/`hubUrl` fields they carried.
+  // (§8c), along with the URL, token-preview, and nested-hub fields they carried.
   bootstrap: z.enum(["device", "none"]),
   deviceId: z.string().optional(),
   workspaceName: z.string().optional(),

@@ -260,7 +260,6 @@ export interface WorkspaceHeartbeatDecl {
     skipWhenBusy?: boolean;
     delivery?: "none" | "channel" | "last-contact";
     ackToken?: string;
-    maxModelCalls?: number;
     failureBackoff?: { base?: string; max?: string };
   };
 }
@@ -403,6 +402,12 @@ export interface WorkspaceRouteDecl {
 export interface WorkspaceConfig {
   /** Resolved workspace identifier. If omitted on disk, derived from the workspace location. */
   id: string;
+  /**
+   * Repo used as the base for bare VCS file paths such as `notes.md`.
+   * This is workspace policy, not a host convention: omit it to require every
+   * tracked path to name its repo explicitly.
+   */
+  defaultRepo?: string;
   /** Workspace Git remote declarations */
   git?: GitConfig;
   /**

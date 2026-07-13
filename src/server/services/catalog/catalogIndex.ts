@@ -137,7 +137,7 @@ export function createCatalogIndex(load: () => BuildCatalogDeps): CatalogIndex {
   return {
     search(query, callerKind, opts) {
       const terms = tokenize(query);
-      const limit = opts?.limit ?? 20;
+      const limit = Math.min(Math.max(opts?.limit ?? 20, 1), 100);
       return entries()
         .filter((e) => isCatalogEntryVisible(e, callerKind))
         .filter((e) => (opts?.surface ? e.surface === opts.surface : true))
@@ -156,6 +156,20 @@ export function createCatalogIndex(load: () => BuildCatalogDeps): CatalogIndex {
     get(id, callerKind) {
       const e = entries().find((entry) => entry.id === id);
       if (!e || !isCatalogEntryVisible(e, callerKind)) return null;
+      // Opening a service root should be a useful discovery step, not a dead
+      // end that only repeats the service title. Attach the caller-visible
+      // child method names so docs_open("service:foo") naturally tells an
+      // agent which exact entries to open next. Compute this per caller rather
+      // than storing all children on the root, so method-level policies never
+      // leak restricted capabilities.
+      if (e.surface === "service" && !e.parent) {
+        const members = entries()
+          .filter((candidate) => candidate.parent === e.id)
+          .filter((candidate) => isCatalogEntryVisible(candidate, callerKind))
+          .map((candidate) => candidate.qualifiedName)
+          .sort();
+        return { ...e, ...(members.length > 0 ? { members } : {}) };
+      }
       return e;
     },
     listSurfaces(callerKind) {

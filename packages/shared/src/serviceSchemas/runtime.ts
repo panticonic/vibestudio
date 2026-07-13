@@ -283,7 +283,7 @@ export const runtimeMethods = defineServiceMethods({
           .enum(["panel", "app", "worker", "do", "session"])
           .optional()
           .describe("Filter to a single entity kind; omit to list all kinds."),
-      }),
+      }).optional(),
     ]),
     returns: z.array(
       z.object({
@@ -297,7 +297,7 @@ export const runtimeMethods = defineServiceMethods({
     ),
     access: READ_ACCESS,
     policy: RUNTIME_AGENT_READ_POLICY,
-    examples: [{ args: [{ kind: "session" }] }],
+    examples: [{ args: [] }, { args: [{ kind: "session" }] }],
   },
   resolveContext: {
     description:

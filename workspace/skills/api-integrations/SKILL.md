@@ -10,6 +10,28 @@ Provider setup should be user-friendly: when a provider requires console work,
 OAuth app creation, webhook registration, or API enablement, render a workflow
 UI with deep links instead of writing a long plain-text checklist.
 
+## Missing-Credential Outcomes
+
+Treat a missing credential as a normal setup state, not as a reason to search
+the repository for provider details or to invent an audience, endpoint, or
+secret. If the request does not identify the provider and target URL clearly
+enough to create a correct URL-bound credential, explain the trusted setup flow
+and ask for those non-secret details. Do not open a credential prompt with
+placeholder values.
+
+When the provider and audience are known, call the appropriate host-owned
+credential or OAuth setup API once. A denial or cancellation means setup did
+not complete; report that outcome and stop. In particular, an unattended host
+may automatically deny value-entry prompts because auto-approval cannot invent
+client ids, tokens, or secrets. Do not retry the prompt, inspect application
+source looking for a secret, switch to raw credential-service RPC methods, or
+ask the user to paste the value into chat.
+
+Use the `credentials` namespace exported by `@workspace/runtime`. Its public
+methods include `store`, `requestCredentialInput`, `connect`, `fetch`,
+`hookForUrl`, `gitHttp`, and `forAudience`; lower-level wire transports are not
+an alternative public API.
+
 ## UX Rules
 
 1. Prefer a `feedback_custom` workflow UI for setup flows with multiple steps.

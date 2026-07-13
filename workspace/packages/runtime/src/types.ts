@@ -35,8 +35,10 @@ export interface FileStats {
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
   size: number;
-  mtime: string;
-  ctime: string;
+  mtime: Date;
+  ctime: Date;
+  mtimeMs: number;
+  ctimeMs: number;
   /** Unix-style file mode (e.g. 0o644). Required by isomorphic-git. */
   mode: number;
 }
@@ -153,6 +155,7 @@ export interface RuntimeFs {
   realpath(path: string): Promise<string>;
   open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
   readlink(path: string): Promise<string>;
+  symlink(target: string, path: string, type?: "file" | "dir" | "junction"): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
   utimes(path: string, atime: Date | number, mtime: Date | number): Promise<void>;
   truncate(path: string, len?: number): Promise<void>;

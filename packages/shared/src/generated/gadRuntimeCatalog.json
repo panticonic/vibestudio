@@ -1,0 +1,5277 @@
+{
+  "rawSql": {
+    "description": "Execute SQL against the workspace GAD database and return result rows.",
+    "access": {
+      "sensitivity": "admin"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "sql": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "null"
+                        ],
+                        "nullable": true
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {}
+                    ]
+                  }
+                },
+                "bindings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/items/0/anyOf/1/properties/params/items"
+                  }
+                }
+              },
+              "required": [
+                "sql"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/items/0/anyOf/1/properties/params/items"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "query": {
+    "description": "Execute a read-oriented SQL query against the workspace GAD database.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "sql": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "null"
+                        ],
+                        "nullable": true
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {}
+                    ]
+                  }
+                },
+                "bindings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/items/0/anyOf/1/properties/params/items"
+                  }
+                }
+              },
+              "required": [
+                "sql"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/items/0/anyOf/1/properties/params/items"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "status": {
+    "description": "Return compact GAD storage and projection status metrics.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "metric",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "ensureBlob": {
+    "description": "Ensure that a content digest is registered in GAD blob metadata.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": [
+        {
+          "type": "string"
+        },
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "string",
+              "nullable": true
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {}
+  },
+  "listUserNotificationsForMe": {
+    "description": "List durable notifications for the host-verified current account.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "items": []
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {},
+          "createdAt": {
+            "type": "number"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "userId",
+          "kind",
+          "title",
+          "createdAt",
+          "revision"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "acknowledgeUserNotification": {
+    "description": "Acknowledge one durable notification for the current account.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "boolean"
+    }
+  },
+  "putUserNotification": {
+    "description": "Create or update one durable account notification from a trusted runtime.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "data": {},
+            "createdAt": {
+              "type": "number"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "id",
+            "userId",
+            "kind",
+            "title",
+            "createdAt",
+            "revision"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {},
+        "createdAt": {
+          "type": "number"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "kind",
+        "title",
+        "createdAt",
+        "revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "deleteUserNotification": {
+    "description": "Withdraw one durable account notification from a trusted runtime.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "boolean"
+    }
+  },
+  "getTrajectoryBranchHead": {
+    "description": "Return the durable head record for one trajectory branch.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string"
+            },
+            "branchId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "trajectoryId",
+            "branchId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {},
+      "nullable": true
+    }
+  },
+  "listTrajectoryEvents": {
+    "description": "List hydrated trajectory events after an optional sequence cursor.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string",
+              "nullable": true
+            },
+            "branchId": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "required": [
+            "branchId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {}
+    }
+  },
+  "appendChannelEnvelope": {
+    "description": "Atomically append one semantic envelope to a durable channel log.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "agent",
+                    "system",
+                    "external",
+                    "panel",
+                    "app",
+                    "worker",
+                    "do",
+                    "shell",
+                    "server",
+                    "extension"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user",
+                          "agent",
+                          "system",
+                          "external",
+                          "panel"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "all",
+                        "role",
+                        "participant"
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "participantId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "payload": {},
+            "payloadKind": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "attachments": {
+              "type": "array",
+              "items": {}
+            },
+            "annotations": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "envelopeId": {
+              "type": "string",
+              "nullable": true
+            },
+            "publishedAt": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "required": [
+            "channelId",
+            "from"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "envelopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelId": {
+          "$ref": "#/properties/envelopeId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "from": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "user",
+                "agent",
+                "system",
+                "external",
+                "panel",
+                "app",
+                "worker",
+                "do",
+                "shell",
+                "server",
+                "extension"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "participantId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "system",
+                      "external",
+                      "panel"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "role",
+                    "participant"
+                  ]
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "payload": {},
+        "payloadKind": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "attachments": {
+          "type": "array",
+          "items": {}
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "envelopeId",
+        "channelId",
+        "seq",
+        "from",
+        "publishedAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "appendChannelEnvelopeWithRegistryMutation": {
+    "description": "Append an envelope and its message-type registry mutation atomically.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "agent",
+                    "system",
+                    "external",
+                    "panel",
+                    "app",
+                    "worker",
+                    "do",
+                    "shell",
+                    "server",
+                    "extension"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user",
+                          "agent",
+                          "system",
+                          "external",
+                          "panel"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "all",
+                        "role",
+                        "participant"
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "participantId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "payload": {},
+            "payloadKind": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "attachments": {
+              "type": "array",
+              "items": {}
+            },
+            "annotations": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "envelopeId": {
+              "type": "string",
+              "nullable": true
+            },
+            "publishedAt": {
+              "type": "string",
+              "nullable": true
+            },
+            "registryMutation": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "upsertMessageType"
+                      ]
+                    },
+                    "typeId": {
+                      "type": "string"
+                    },
+                    "row": {
+                      "type": "object",
+                      "properties": {
+                        "displayMode": {
+                          "type": "string",
+                          "enum": [
+                            "inline",
+                            "row"
+                          ]
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "code"
+                                  ]
+                                },
+                                "code": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "code"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "file"
+                                  ]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "path"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "imports": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        },
+                        "stateSchema": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "updateSchema": {
+                          "$ref": "#/items/0/properties/registryMutation/anyOf/0/properties/row/properties/stateSchema"
+                        },
+                        "registeredBy": {
+                          "$ref": "#/items/0/properties/registryMutation/anyOf/0/properties/row/properties/stateSchema"
+                        }
+                      },
+                      "required": [
+                        "displayMode",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "typeId",
+                    "row"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "clearMessageType"
+                      ]
+                    },
+                    "typeId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "typeId"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "channelId",
+            "from",
+            "registryMutation"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "envelopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelId": {
+          "$ref": "#/properties/envelopeId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "from": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "user",
+                "agent",
+                "system",
+                "external",
+                "panel",
+                "app",
+                "worker",
+                "do",
+                "shell",
+                "server",
+                "extension"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "participantId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "system",
+                      "external",
+                      "panel"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "role",
+                    "participant"
+                  ]
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "payload": {},
+        "payloadKind": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "attachments": {
+          "type": "array",
+          "items": {}
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "envelopeId",
+        "channelId",
+        "seq",
+        "from",
+        "publishedAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "listMessageTypes": {
+    "description": "List active custom message-type definitions for a channel.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channelId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "typeId": {
+            "type": "string"
+          },
+          "displayMode": {
+            "type": "string",
+            "enum": [
+              "inline",
+              "row"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "code"
+                    ]
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "code"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "file"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "imports": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "stateSchema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "updateSchema": {
+            "$ref": "#/items/properties/stateSchema"
+          },
+          "registeredBy": {
+            "$ref": "#/items/properties/stateSchema"
+          },
+          "updatedAtSeq": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "clearedAtSeq": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "typeId",
+          "displayMode",
+          "source",
+          "updatedAtSeq"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "getMessageType": {
+    "description": "Get one custom message-type definition from a channel registry.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string"
+            },
+            "typeId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channelId",
+            "typeId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "typeId": {
+          "type": "string"
+        },
+        "displayMode": {
+          "type": "string",
+          "enum": [
+            "inline",
+            "row"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "code"
+                  ]
+                },
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "code"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "file"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "imports": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "stateSchema": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "updateSchema": {
+          "$ref": "#/properties/stateSchema"
+        },
+        "registeredBy": {
+          "$ref": "#/properties/stateSchema"
+        },
+        "updatedAtSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clearedAtSeq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "typeId",
+        "displayMode",
+        "source",
+        "updatedAtSeq"
+      ],
+      "additionalProperties": false,
+      "nullable": true
+    }
+  },
+  "getChannelEnvelope": {
+    "description": "Get one hydrated channel envelope by its durable id.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "envelopeId": {
+              "type": "string"
+            },
+            "channelId": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "required": [
+            "envelopeId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "envelopeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelId": {
+          "$ref": "#/properties/envelopeId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "from": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "user",
+                "agent",
+                "system",
+                "external",
+                "panel",
+                "app",
+                "worker",
+                "do",
+                "shell",
+                "server",
+                "extension"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "participantId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "system",
+                      "external",
+                      "panel"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "role",
+                    "participant"
+                  ]
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "payload": {},
+        "payloadKind": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "attachments": {
+          "type": "array",
+          "items": {}
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "envelopeId",
+        "channelId",
+        "seq",
+        "from",
+        "publishedAt"
+      ],
+      "additionalProperties": false,
+      "nullable": true
+    }
+  },
+  "getTrajectoryForEnvelope": {
+    "description": "Resolve the private trajectory lineage that published an envelope.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "envelopeId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "envelopeId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "publication": {
+          "type": "object",
+          "properties": {
+            "eventId": {
+              "type": "string"
+            },
+            "trajectoryId": {
+              "type": "string"
+            },
+            "branchId": {
+              "type": "string"
+            },
+            "channelId": {
+              "type": "string"
+            },
+            "channelSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "envelopeId": {
+              "type": "string"
+            },
+            "publishedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "eventId",
+            "trajectoryId",
+            "branchId",
+            "channelId",
+            "channelSeq",
+            "envelopeId",
+            "publishedAt"
+          ],
+          "additionalProperties": false
+        },
+        "envelope": {
+          "type": "object",
+          "properties": {
+            "envelopeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "channelId": {
+              "$ref": "#/properties/envelope/properties/envelopeId"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "from": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "agent",
+                    "system",
+                    "external",
+                    "panel",
+                    "app",
+                    "worker",
+                    "do",
+                    "shell",
+                    "server",
+                    "extension"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user",
+                          "agent",
+                          "system",
+                          "external",
+                          "panel"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "all",
+                        "role",
+                        "participant"
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "participantId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "payload": {},
+            "payloadKind": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "attachments": {
+              "type": "array",
+              "items": {}
+            },
+            "annotations": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "publishedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "envelopeId",
+            "channelId",
+            "seq",
+            "from",
+            "publishedAt"
+          ],
+          "additionalProperties": false
+        },
+        "trajectoryEvent": {}
+      },
+      "required": [
+        "publication",
+        "envelope",
+        "trajectoryEvent"
+      ],
+      "additionalProperties": false,
+      "nullable": true
+    }
+  },
+  "listPublishedEnvelopesForTrajectory": {
+    "description": "List published envelope lineage matching trajectory selectors.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string",
+              "nullable": true
+            },
+            "branchId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "eventId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "turnId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "channelId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "publication": {
+            "type": "object",
+            "properties": {
+              "eventId": {
+                "type": "string"
+              },
+              "trajectoryId": {
+                "type": "string"
+              },
+              "branchId": {
+                "type": "string"
+              },
+              "channelId": {
+                "type": "string"
+              },
+              "channelSeq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "envelopeId": {
+                "type": "string"
+              },
+              "publishedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "eventId",
+              "trajectoryId",
+              "branchId",
+              "channelId",
+              "channelSeq",
+              "envelopeId",
+              "publishedAt"
+            ],
+            "additionalProperties": false
+          },
+          "envelope": {
+            "type": "object",
+            "properties": {
+              "envelopeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "channelId": {
+                "$ref": "#/items/properties/envelope/properties/envelopeId"
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "from": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "system",
+                      "external",
+                      "panel",
+                      "app",
+                      "worker",
+                      "do",
+                      "shell",
+                      "server",
+                      "extension"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "agent",
+                            "system",
+                            "external",
+                            "panel"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "metadata": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "participantId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "role",
+                          "participant"
+                        ]
+                      },
+                      "role": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "payload": {},
+              "payloadKind": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "attachments": {
+                "type": "array",
+                "items": {}
+              },
+              "annotations": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "publishedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "envelopeId",
+              "channelId",
+              "seq",
+              "from",
+              "publishedAt"
+            ],
+            "additionalProperties": false
+          },
+          "trajectoryEvent": {}
+        },
+        "required": [
+          "publication",
+          "envelope",
+          "trajectoryEvent"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "getEnvelopesForTrajectory": {
+    "description": "List hydrated published envelopes for matching trajectory selectors.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string",
+              "nullable": true
+            },
+            "branchId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "eventId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "turnId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "channelId": {
+              "$ref": "#/items/0/properties/trajectoryId"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "publication": {
+            "type": "object",
+            "properties": {
+              "eventId": {
+                "type": "string"
+              },
+              "trajectoryId": {
+                "type": "string"
+              },
+              "branchId": {
+                "type": "string"
+              },
+              "channelId": {
+                "type": "string"
+              },
+              "channelSeq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "envelopeId": {
+                "type": "string"
+              },
+              "publishedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "eventId",
+              "trajectoryId",
+              "branchId",
+              "channelId",
+              "channelSeq",
+              "envelopeId",
+              "publishedAt"
+            ],
+            "additionalProperties": false
+          },
+          "envelope": {
+            "type": "object",
+            "properties": {
+              "envelopeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "channelId": {
+                "$ref": "#/items/properties/envelope/properties/envelopeId"
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "from": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "system",
+                      "external",
+                      "panel",
+                      "app",
+                      "worker",
+                      "do",
+                      "shell",
+                      "server",
+                      "extension"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "agent",
+                            "system",
+                            "external",
+                            "panel"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "metadata": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "participantId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "role",
+                          "participant"
+                        ]
+                      },
+                      "role": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "payload": {},
+              "payloadKind": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "attachments": {
+                "type": "array",
+                "items": {}
+              },
+              "annotations": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "publishedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "envelopeId",
+              "channelId",
+              "seq",
+              "from",
+              "publishedAt"
+            ],
+            "additionalProperties": false
+          },
+          "trajectoryEvent": {}
+        },
+        "required": [
+          "publication",
+          "envelope",
+          "trajectoryEvent"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "getPublishedArtifactsForTurn": {
+    "description": "List published artifacts attributed to one durable agent turn.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "branchId": {
+              "type": "string",
+              "nullable": true
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "channelId": {
+              "$ref": "#/items/0/properties/branchId"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "required": [
+            "turnId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "lineage": {
+            "type": "object",
+            "properties": {
+              "publication": {
+                "type": "object",
+                "properties": {
+                  "eventId": {
+                    "type": "string"
+                  },
+                  "trajectoryId": {
+                    "type": "string"
+                  },
+                  "branchId": {
+                    "type": "string"
+                  },
+                  "channelId": {
+                    "type": "string"
+                  },
+                  "channelSeq": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "envelopeId": {
+                    "type": "string"
+                  },
+                  "publishedAt": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "trajectoryId",
+                  "branchId",
+                  "channelId",
+                  "channelSeq",
+                  "envelopeId",
+                  "publishedAt"
+                ],
+                "additionalProperties": false
+              },
+              "envelope": {
+                "type": "object",
+                "properties": {
+                  "envelopeId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "channelId": {
+                    "$ref": "#/items/properties/lineage/properties/envelope/properties/envelopeId"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "from": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user",
+                          "agent",
+                          "system",
+                          "external",
+                          "panel",
+                          "app",
+                          "worker",
+                          "do",
+                          "shell",
+                          "server",
+                          "extension"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "displayName": {
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "to": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "agent",
+                                "system",
+                                "external",
+                                "panel"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "displayName": {
+                              "type": "string"
+                            },
+                            "metadata": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            },
+                            "participantId": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "all",
+                              "role",
+                              "participant"
+                            ]
+                          },
+                          "role": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "participantId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "payload": {},
+                  "payloadKind": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {}
+                  },
+                  "annotations": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "publishedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "envelopeId",
+                  "channelId",
+                  "seq",
+                  "from",
+                  "publishedAt"
+                ],
+                "additionalProperties": false
+              },
+              "trajectoryEvent": {}
+            },
+            "required": [
+              "publication",
+              "envelope",
+              "trajectoryEvent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "lineage"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "getPrivateLineageForPublishedEnvelope": {
+    "description": "Return publication lineage plus the private branch events behind an envelope.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "envelopeId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "envelopeId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "lineage": {
+          "type": "object",
+          "properties": {
+            "publication": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string"
+                },
+                "trajectoryId": {
+                  "type": "string"
+                },
+                "branchId": {
+                  "type": "string"
+                },
+                "channelId": {
+                  "type": "string"
+                },
+                "channelSeq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "envelopeId": {
+                  "type": "string"
+                },
+                "publishedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "eventId",
+                "trajectoryId",
+                "branchId",
+                "channelId",
+                "channelSeq",
+                "envelopeId",
+                "publishedAt"
+              ],
+              "additionalProperties": false
+            },
+            "envelope": {
+              "type": "object",
+              "properties": {
+                "envelopeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "channelId": {
+                  "$ref": "#/properties/lineage/properties/envelope/properties/envelopeId"
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "from": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "user",
+                        "agent",
+                        "system",
+                        "external",
+                        "panel",
+                        "app",
+                        "worker",
+                        "do",
+                        "shell",
+                        "server",
+                        "extension"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "participantId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                },
+                "to": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "user",
+                              "agent",
+                              "system",
+                              "external",
+                              "panel"
+                            ]
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "displayName": {
+                            "type": "string"
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          },
+                          "participantId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "all",
+                            "role",
+                            "participant"
+                          ]
+                        },
+                        "role": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "participantId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "payload": {},
+                "payloadKind": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {}
+                },
+                "annotations": {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                "publishedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "envelopeId",
+                "channelId",
+                "seq",
+                "from",
+                "publishedAt"
+              ],
+              "additionalProperties": false
+            },
+            "trajectoryEvent": {}
+          },
+          "required": [
+            "publication",
+            "envelope",
+            "trajectoryEvent"
+          ],
+          "additionalProperties": false
+        },
+        "branchEvents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/lineage/properties/trajectoryEvent"
+          }
+        }
+      },
+      "required": [
+        "lineage",
+        "branchEvents"
+      ],
+      "additionalProperties": false,
+      "nullable": true
+    }
+  },
+  "getDownstreamConsumers": {
+    "description": "List trajectory events that consumed a published envelope.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "envelopeId": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "required": [
+            "envelopeId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {}
+    }
+  },
+  "readChannelEnvelopes": {
+    "description": "Read one bounded page of hydrated semantic channel envelopes.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "window": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "tail"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "after"
+                      ]
+                    },
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "throughSeq": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "seq"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "before"
+                      ]
+                    },
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "seq"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500,
+              "nullable": true
+            },
+            "payloadKind": {
+              "type": "string",
+              "minLength": 1,
+              "nullable": true
+            }
+          },
+          "required": [
+            "channelId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "envelopeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "channelId": {
+                "$ref": "#/properties/items/items/properties/envelopeId"
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "from": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "system",
+                      "external",
+                      "panel",
+                      "app",
+                      "worker",
+                      "do",
+                      "shell",
+                      "server",
+                      "extension"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              "to": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "agent",
+                            "system",
+                            "external",
+                            "panel"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "metadata": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "participantId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "role",
+                          "participant"
+                        ]
+                      },
+                      "role": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "participantId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "payload": {},
+              "payloadKind": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "attachments": {
+                "type": "array",
+                "items": {}
+              },
+              "annotations": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "publishedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "envelopeId",
+              "channelId",
+              "seq",
+              "from",
+              "publishedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "pageInfo": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "type": "object",
+              "properties": {
+                "window": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "tail"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "after"
+                          ]
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "throughSeq": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "seq"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "before"
+                          ]
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "seq"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 500
+                },
+                "payloadKind": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "window",
+                "limit"
+              ],
+              "additionalProperties": false
+            },
+            "returnedCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "totalCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "firstSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lastSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "snapshotLastSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "returnedFromSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "returnedToSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hasMoreBefore": {
+              "type": "boolean"
+            },
+            "hasMoreAfter": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "request",
+            "returnedCount",
+            "totalCount",
+            "hasMoreBefore",
+            "hasMoreAfter"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "items",
+        "pageInfo"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectChannelEnvelopes": {
+    "description": "Read one bounded page of compact channel-envelope diagnostics.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "window": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "tail"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "after"
+                      ]
+                    },
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "throughSeq": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "seq"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "before"
+                      ]
+                    },
+                    "seq": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "seq"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500,
+              "nullable": true
+            },
+            "payloadKind": {
+              "type": "string",
+              "minLength": 1,
+              "nullable": true
+            }
+          },
+          "required": [
+            "channelId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "envelopeId": {
+                "type": "string"
+              },
+              "channelId": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "payloadKind": {
+                "type": "string"
+              },
+              "from": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "metadata": {
+                "$ref": "#/properties/items/items/properties/from"
+              },
+              "bytes": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "to": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "payload": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "metadata": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "attachments": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "payload",
+                  "metadata",
+                  "attachments"
+                ],
+                "additionalProperties": false
+              },
+              "payloadSummary": {},
+              "storedRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/items/items/properties/from"
+                }
+              },
+              "publishedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "envelopeId",
+              "channelId",
+              "seq",
+              "from",
+              "bytes",
+              "storedRefs",
+              "publishedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "pageInfo": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "type": "object",
+              "properties": {
+                "window": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "tail"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "after"
+                          ]
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "throughSeq": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "seq"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "before"
+                          ]
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "seq"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 500
+                },
+                "payloadKind": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "window",
+                "limit"
+              ],
+              "additionalProperties": false
+            },
+            "returnedCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "totalCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "firstSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lastSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "snapshotLastSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "returnedFromSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "returnedToSeq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hasMoreBefore": {
+              "type": "boolean"
+            },
+            "hasMoreAfter": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "request",
+            "returnedCount",
+            "totalCount",
+            "hasMoreBefore",
+            "hasMoreAfter"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "items",
+        "pageInfo"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "listStoredValueRefs": {
+    "description": "List stored-value references matching event, envelope, or digest selectors.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "envelopeId": {
+                  "$ref": "#/items/0/anyOf/1/properties/eventId"
+                },
+                "digest": {
+                  "$ref": "#/items/0/anyOf/1/properties/eventId"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "nullable": true
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectStorageDiagnostics": {
+    "description": "Inspect oversized or unresolved durable storage rows with bounded output.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rowByteLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "nullable": true
+                },
+                "limit": {
+                  "$ref": "#/items/0/anyOf/1/properties/rowByteLimit"
+                },
+                "branchId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "channelId": {
+                  "$ref": "#/items/0/anyOf/1/properties/branchId"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectPublicationIntegrity": {
+    "description": "Inspect publication mappings and sequence integrity.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "channelId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "branchId": {
+                  "$ref": "#/items/0/anyOf/1/properties/channelId"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "nullable": true
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "expectedMappings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingMappings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "orphanMappings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingPublicationEvents": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingPublicationEnvelopes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sequenceMismatches": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "channelOriginAgenticEnvelopes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "expectedMappings",
+            "missingMappings",
+            "orphanMappings",
+            "missingPublicationEvents",
+            "missingPublicationEnvelopes",
+            "sequenceMismatches",
+            "channelOriginAgenticEnvelopes"
+          ],
+          "additionalProperties": false
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectTurnState": {
+    "description": "Inspect open, streaming, and duplicate durable turn state.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "trajectoryId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "branchId": {
+                  "$ref": "#/items/0/anyOf/1/properties/trajectoryId"
+                },
+                "channelId": {
+                  "$ref": "#/items/0/anyOf/1/properties/trajectoryId"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "nullable": true
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "branches": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "openTurns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "streamingMessages": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nonterminalInvocations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "duplicateOpenedTurns": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "branches",
+            "openTurns",
+            "streamingMessages",
+            "nonterminalInvocations",
+            "duplicateOpenedTurns"
+          ],
+          "additionalProperties": false
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectInvocationState": {
+    "description": "Inspect projected and journaled invocation lifecycle state.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {
+                "trajectoryId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "branchId": {
+                  "$ref": "#/items/0/anyOf/1/properties/trajectoryId"
+                },
+                "invocationId": {
+                  "$ref": "#/items/0/anyOf/1/properties/trajectoryId"
+                },
+                "transportCallId": {
+                  "$ref": "#/items/0/anyOf/1/properties/trajectoryId"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "nullable": true
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "projected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "startedEvents": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "terminalEvents": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "openProjectedInvocations": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "projected",
+            "startedEvents",
+            "terminalEvents",
+            "openProjectedInvocations"
+          ],
+          "additionalProperties": false
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectChannelRoster": {
+    "description": "Inspect durable participant membership for one channel.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "required": [
+            "channelId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "activeParticipants": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "inactiveParticipants": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "rows",
+            "activeParticipants",
+            "inactiveParticipants"
+          ],
+          "additionalProperties": false
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "rows"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "inspectAgentHealth": {
+    "description": "Return one compact integrity and in-flight activity snapshot for an agent channel.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string"
+            },
+            "branchId": {
+              "type": "string",
+              "nullable": true
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            },
+            "envelopeLimit": {
+              "$ref": "#/items/0/properties/limit"
+            },
+            "storageLimit": {
+              "$ref": "#/items/0/properties/limit"
+            },
+            "rowByteLimit": {
+              "$ref": "#/items/0/properties/limit"
+            }
+          },
+          "required": [
+            "channelId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "branchId": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "durableIntegrityOk": {
+              "type": "boolean"
+            },
+            "inFlightOnly": {
+              "type": "boolean"
+            },
+            "activity": {
+              "type": "string",
+              "enum": [
+                "idle",
+                "in-flight"
+              ]
+            },
+            "publicationIssues": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "turnIntegrityIssues": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "openTurns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "streamingMessages": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nonterminalInvocations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "activeParticipants": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "storageIssues": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "ok",
+            "durableIntegrityOk",
+            "inFlightOnly",
+            "activity",
+            "publicationIssues",
+            "turnIntegrityIssues",
+            "openTurns",
+            "streamingMessages",
+            "nonterminalInvocations",
+            "activeParticipants",
+            "storageIssues"
+          ],
+          "additionalProperties": false
+        },
+        "publicationIntegrity": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "object",
+              "properties": {
+                "expectedMappings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "missingMappings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "orphanMappings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "missingPublicationEvents": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "missingPublicationEnvelopes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sequenceMismatches": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "channelOriginAgenticEnvelopes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "expectedMappings",
+                "missingMappings",
+                "orphanMappings",
+                "missingPublicationEvents",
+                "missingPublicationEnvelopes",
+                "sequenceMismatches",
+                "channelOriginAgenticEnvelopes"
+              ],
+              "additionalProperties": false
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            }
+          },
+          "required": [
+            "summary",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "turnState": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "object",
+              "properties": {
+                "branches": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "openTurns": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "streamingMessages": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "nonterminalInvocations": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "duplicateOpenedTurns": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "branches",
+                "openTurns",
+                "streamingMessages",
+                "nonterminalInvocations",
+                "duplicateOpenedTurns"
+              ],
+              "additionalProperties": false
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+              }
+            }
+          },
+          "required": [
+            "summary",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "invocationState": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "object",
+              "properties": {
+                "projected": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "startedEvents": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "terminalEvents": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "openProjectedInvocations": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "projected",
+                "startedEvents",
+                "terminalEvents",
+                "openProjectedInvocations"
+              ],
+              "additionalProperties": false
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+              }
+            }
+          },
+          "required": [
+            "summary",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "roster": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "activeParticipants": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "inactiveParticipants": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rows",
+                "activeParticipants",
+                "inactiveParticipants"
+              ],
+              "additionalProperties": false
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+              }
+            }
+          },
+          "required": [
+            "summary",
+            "rows"
+          ],
+          "additionalProperties": false
+        },
+        "envelopes": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "envelopeId": {
+                    "type": "string"
+                  },
+                  "channelId": {
+                    "type": "string"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "payloadKind": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+                  },
+                  "metadata": {
+                    "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+                  },
+                  "bytes": {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "to": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "payload": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "metadata": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "attachments": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to",
+                      "payload",
+                      "metadata",
+                      "attachments"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "payloadSummary": {},
+                  "storedRefs": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+                    }
+                  },
+                  "publishedAt": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "envelopeId",
+                  "channelId",
+                  "seq",
+                  "from",
+                  "bytes",
+                  "storedRefs",
+                  "publishedAt"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "pageInfo": {
+              "type": "object",
+              "properties": {
+                "request": {
+                  "type": "object",
+                  "properties": {
+                    "window": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "tail"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "after"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "throughSeq": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "seq"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "before"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "seq"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 500
+                    },
+                    "payloadKind": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "window",
+                    "limit"
+                  ],
+                  "additionalProperties": false
+                },
+                "returnedCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "totalCount": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "firstSeq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "lastSeq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "snapshotLastSeq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "returnedFromSeq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "returnedToSeq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "hasMoreBefore": {
+                  "type": "boolean"
+                },
+                "hasMoreAfter": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "request",
+                "returnedCount",
+                "totalCount",
+                "hasMoreBefore",
+                "hasMoreAfter"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "items",
+            "pageInfo"
+          ],
+          "additionalProperties": false
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/properties/publicationIntegrity/properties/rows/items"
+              }
+            }
+          },
+          "required": [
+            "rows"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "channelId",
+        "branchId",
+        "generatedAt",
+        "summary",
+        "publicationIntegrity",
+        "turnState",
+        "invocationState",
+        "roster",
+        "envelopes",
+        "storage"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "listGadBranchFiles": {
+    "description": "List files represented by one GAD state branch.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "branchId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "branchId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": {}
+      }
+    }
+  },
+  "diffGadStates": {
+    "description": "Compare two GAD state hashes and list added, removed, and changed files.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "leftStateHash": {
+              "type": "string"
+            },
+            "rightStateHash": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "leftStateHash",
+            "rightStateHash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/added/items"
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/added/items"
+          }
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "changed"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "readGadFileAtState": {
+    "description": "Read one file record from an immutable GAD state.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "stateHash": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "stateHash",
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {},
+      "nullable": true
+    }
+  },
+  "getGadStateProducer": {
+    "description": "Resolve the trajectory event that produced a GAD state hash.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "stateHash": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "stateHash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "additionalProperties": {},
+      "nullable": true
+    }
+  },
+  "validateGadHashes": {
+    "description": "Validate content, manifest, and state hashes without mutating durable state.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "errors"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "clearDirtyAfterValidation": {
+    "description": "Clear the dirty marker only after durable hash validation succeeds.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "errors"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "checkGadIntegrity": {
+    "description": "Run durable GAD integrity checks and return structured errors.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "required": [
+        "ok",
+        "errors"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "rebuildTrajectoryProjections": {
+    "description": "Rebuild trajectory-derived projections from the durable event log.",
+    "access": {
+      "sensitivity": "admin"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "anyOf": [
+            {
+              "not": {}
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          ]
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "replayed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "replayed"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "provenanceForFile": {
+    "description": "Return density-ranked provenance and recall context for one file.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "repoPath": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "head": {
+              "type": "string"
+            },
+            "tier": {
+              "type": "string",
+              "enum": [
+                "none",
+                "moderate",
+                "deep"
+              ]
+            },
+            "sessionLogId": {
+              "type": "string"
+            },
+            "sessionHead": {
+              "type": "string"
+            },
+            "invocationId": {
+              "type": "string",
+              "nullable": true
+            },
+            "recallKeywords": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "nullable": true
+            },
+            "after": {
+              "$ref": "#/items/0/properties/invocationId"
+            },
+            "skipSuppression": {
+              "type": "boolean",
+              "nullable": true
+            }
+          },
+          "required": [
+            "repoPath",
+            "path",
+            "head",
+            "tier",
+            "sessionLogId",
+            "sessionHead"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "handle": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "exception": {
+                "type": "boolean"
+              },
+              "score": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "line",
+              "handle",
+              "kind",
+              "exception",
+              "score"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "shown": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "suppressed": {
+          "type": "boolean"
+        },
+        "degraded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "shown",
+        "total",
+        "suppressed"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "provenanceForSession": {
+    "description": "Return provenance orientation across a session touch set.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "sessionLogId": {
+              "type": "string"
+            },
+            "sessionHead": {
+              "type": "string"
+            },
+            "after": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "required": [
+            "sessionLogId",
+            "sessionHead"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "handle": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "exception": {
+                "type": "boolean"
+              },
+              "score": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "line",
+              "handle",
+              "kind",
+              "exception",
+              "score"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "shown": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "nextCursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "shown",
+        "total"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "provenanceForClaim": {
+    "description": "Drill into one provenance claim and record that it was cited.",
+    "access": {
+      "sensitivity": "write"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "claimId": {
+              "type": "string"
+            },
+            "sessionLogId": {
+              "type": "string"
+            },
+            "sessionHead": {
+              "type": "string"
+            },
+            "invocationId": {
+              "type": "string",
+              "nullable": true
+            },
+            "after": {
+              "$ref": "#/items/0/properties/invocationId"
+            }
+          },
+          "required": [
+            "claimId",
+            "sessionLogId",
+            "sessionHead"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "handle": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "exception": {
+                "type": "boolean"
+              },
+              "score": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "line",
+              "handle",
+              "kind",
+              "exception",
+              "score"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "shown": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "suppressed": {
+          "type": "boolean"
+        },
+        "degraded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "shown",
+        "total",
+        "suppressed"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -39,6 +39,7 @@ import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
+import { webhookIngressMethods } from "./webhookIngress.js";
 import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
 import { workspacePresenceMethods } from "./workspacePresence.js";
@@ -88,6 +89,7 @@ const serviceTables: ServiceTable[] = [
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
   { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
+  { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },
   {
@@ -107,6 +109,25 @@ const approvedReturnlessMethods = new Set([
 ]);
 
 describe("service schema contracts", () => {
+  it("allows reset-style eval methods to omit their optional routing object", () => {
+    expect(evalMethods.reset.args.safeParse([]).success).toBe(true);
+    expect(evalMethods.reset.args.safeParse([{}]).success).toBe(true);
+    expect(evalMethods.forceReset.args.safeParse([]).success).toBe(true);
+    expect(evalMethods.forceReset.args.safeParse([{}]).success).toBe(true);
+  });
+
+  it("bounds lossless eval scope pages at 128 Ki code units", () => {
+    expect(
+      evalMethods.readScopeTextPage.args.safeParse([{ key: "large", offset: 0, limit: 128 * 1024 }])
+        .success
+    ).toBe(true);
+    expect(
+      evalMethods.readScopeTextPage.args.safeParse([
+        { key: "large", offset: 0, limit: 128 * 1024 + 1 },
+      ]).success
+    ).toBe(false);
+  });
+
   it("covers every service schema file in this directory", () => {
     const schemaDir = dirname(fileURLToPath(import.meta.url));
     const schemaFiles = readdirSync(schemaDir)

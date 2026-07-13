@@ -368,15 +368,28 @@ export abstract class DurableObjectBase {
    *   whose handler may abort its own DO (idle GC). Default alarms are at-least-once.
    */
   protected setAlarmAt(timeMs: number, opts?: { bestEffort?: boolean }): void {
-    void this.alarmRpc("workspace-state.alarmSet", {
+    this.trackAlarmRpc(this.alarmRpc("workspace-state.alarmSet", {
       ...this.lifecycleKey(),
       wakeAt: timeMs,
       ...(opts?.bestEffort ? { bestEffort: true } : {}),
-    });
+    }));
   }
 
   protected deleteAlarm(): void {
-    void this.alarmRpc("workspace-state.alarmClear", this.lifecycleKey());
+    this.trackAlarmRpc(this.alarmRpc("workspace-state.alarmClear", this.lifecycleKey()));
+  }
+
+  private readonly pendingAlarmRpcs = new Set<Promise<void>>();
+
+  private trackAlarmRpc(pending: Promise<void>): void {
+    this.pendingAlarmRpcs.add(pending);
+    void pending.finally(() => this.pendingAlarmRpcs.delete(pending));
+  }
+
+  private async drainAlarmRpcs(): Promise<void> {
+    while (this.pendingAlarmRpcs.size > 0) {
+      await Promise.allSettled([...this.pendingAlarmRpcs]);
+    }
   }
 
   private lifecycleKey(): { source: string; className: string; objectKey: string } {
@@ -460,7 +473,10 @@ export abstract class DurableObjectBase {
           }
           const result =
             method === "__lifecycle/prepare"
-              ? await this.prepareForRestart(args[0] as LifecyclePrepareInput)
+              ? await (async () => {
+                  await this.drainAlarmRpcs();
+                  return this.prepareForRestart(args[0] as LifecyclePrepareInput);
+                })()
               : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
           return jsonResponse(result ?? null);
         });

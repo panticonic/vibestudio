@@ -12,6 +12,37 @@ export function defineServiceMethods(methods) {
   return methods;
 }
 
+function schemaFailure(service, method, boundary, error) {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `Service "${service}" method "${method}" ${boundary} failed schema validation: ${detail}`,
+    { cause: error }
+  );
+}
+
+export async function callTypedServiceMethod(service, methods, call, method, args) {
+  const definition = methods[method];
+  if (!definition) throw new Error(`Service "${service}" has no method "${method}"`);
+  let parsedArgs;
+  try {
+    const tupleItems = definition.args?._def?.items;
+    const paddedArgs = tupleItems
+      ? [...args, ...Array(Math.max(0, tupleItems.length - args.length))]
+      : args;
+    parsedArgs = definition.args.parse(paddedArgs);
+    while (parsedArgs.length > args.length && parsedArgs.at(-1) === undefined) parsedArgs.pop();
+  } catch (error) {
+    throw schemaFailure(service, method, "arguments", error);
+  }
+  const result = await call(service, method, parsedArgs);
+  if (!definition.returns) return result;
+  try {
+    return definition.returns.parse(result);
+  } catch (error) {
+    throw schemaFailure(service, method, "return value", error);
+  }
+}
+
 export function createTypedServiceClient(service, methods, call) {
   const root = {};
   for (const fullName of Object.keys(methods)) {
@@ -30,7 +61,7 @@ export function createTypedServiceClient(service, methods, call) {
     if (node[leaf] !== undefined) {
       throw new Error(`Service "${service}" method "${fullName}" collides with group "${leaf}"`);
     }
-    node[leaf] = (...args) => call(service, fullName, args);
+    node[leaf] = (...args) => callTypedServiceMethod(service, methods, call, fullName, args);
   }
   return root;
 }

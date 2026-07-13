@@ -683,8 +683,10 @@ export abstract class DurableObjectBase {
   // workerd does not implement alarms for SQLite-backed Durable Objects (and
   // never for facets), so the wake time is registered durably with the server
   // (WorkspaceDO `do_alarms`) and the server's AlarmDriver fires `__alarm` on
-  // schedule. These are fire-and-forget relay calls (matching the old sync
-  // `ctx.storage.setAlarm` signature); persistent failure is logged.
+  // schedule. Call sites keep the synchronous `ctx.storage.setAlarm` shape,
+  // while fetch() drains the tracked relay writes before returning so the wake
+  // is durable across immediate hibernation/eviction. Persistent failure is
+  // logged rather than silently dropped.
 
   protected setAlarm(delayMs: number): void {
     this.setAlarmAt(Date.now() + delayMs);
@@ -692,16 +694,33 @@ export abstract class DurableObjectBase {
 
   /** Schedule the alarm at an absolute epoch-ms time. */
   protected setAlarmAt(timeMs: number): void {
-    void this.alarmRpc("workspace-state.alarmSet", () =>
-      this.workspaceStateService.alarmSet({ ...this.lifecycleKey(), wakeAt: timeMs })
+    this.trackAlarmRpc(
+      this.alarmRpc("workspace-state.alarmSet", () =>
+        this.workspaceStateService.alarmSet({ ...this.lifecycleKey(), wakeAt: timeMs })
+      )
     );
   }
 
   /** Cancel any pending alarm for this DO. */
   protected deleteAlarm(): void {
-    void this.alarmRpc("workspace-state.alarmClear", () =>
-      this.workspaceStateService.alarmClear(this.lifecycleKey())
+    this.trackAlarmRpc(
+      this.alarmRpc("workspace-state.alarmClear", () =>
+        this.workspaceStateService.alarmClear(this.lifecycleKey())
+      )
     );
+  }
+
+  private readonly pendingAlarmRpcs = new Set<Promise<void>>();
+
+  private trackAlarmRpc(pending: Promise<void>): void {
+    this.pendingAlarmRpcs.add(pending);
+    void pending.finally(() => this.pendingAlarmRpcs.delete(pending));
+  }
+
+  private async drainAlarmRpcs(): Promise<void> {
+    while (this.pendingAlarmRpcs.size > 0) {
+      await Promise.allSettled([...this.pendingAlarmRpcs]);
+    }
   }
 
   private lifecycleKey(): { source: string; className: string; objectKey: string } {
@@ -743,6 +762,19 @@ export abstract class DurableObjectBase {
   // --- HTTP dispatch + WebSocket upgrade ---
 
   async fetch(request: Request): Promise<Response> {
+    try {
+      return await this.dispatchFetch(request);
+    } finally {
+      // setAlarmAt/deleteAlarm mirror the synchronous DO storage API, but this
+      // runtime persists alarms through an asynchronous server RPC. Do not let
+      // any request/alarm boundary return until those durability writes have
+      // settled: a hibernation or eviction immediately after the response must
+      // never lose the only wake that advances an effect outbox.
+      await this.drainAlarmRpcs();
+    }
+  }
+
+  private async dispatchFetch(request: Request): Promise<Response> {
     // Parse /{objectKey}/{method} — router includes objectKey in forwarded URL
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
@@ -809,7 +841,10 @@ export abstract class DurableObjectBase {
           }
           const result =
             method === "__lifecycle/prepare"
-              ? await this.prepareForRestart(args[0] as LifecyclePrepareInput)
+              ? await (async () => {
+                  await this.drainAlarmRpcs();
+                  return this.prepareForRestart(args[0] as LifecyclePrepareInput);
+                })()
               : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
           return new Response(JSON.stringify(result ?? null), {
             headers: { "Content-Type": "application/json" },

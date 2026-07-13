@@ -22,7 +22,9 @@ export interface WebhookIngressClient {
   createSubscription(
     input: CreateWebhookIngressSubscriptionRequest
   ): Promise<WebhookIngressSubscriptionSummary>;
-  listSubscriptions(): Promise<WebhookIngressSubscriptionSummary[]>;
+  listSubscriptions(options?: {
+    includeRevoked?: boolean;
+  }): Promise<WebhookIngressSubscriptionSummary[]>;
   revokeSubscription(subscriptionId: string): Promise<void>;
   rotateSecret(subscriptionId: string, secret?: string): Promise<RotateWebhookIngressSecretResult>;
 }
@@ -35,11 +37,11 @@ export function createWebhookIngressClient(rpc: RpcCaller): WebhookIngressClient
         [input]
       );
     },
-    listSubscriptions() {
+    listSubscriptions(options) {
       return rpc.call<WebhookIngressSubscriptionSummary[]>(
         "main",
         "webhookIngress.listSubscriptions",
-        []
+        options ? [options] : []
       );
     },
     async revokeSubscription(subscriptionId) {

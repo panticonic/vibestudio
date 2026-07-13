@@ -40,7 +40,9 @@ export function serializeDef(def: ServiceDefinition) {
     ...(def.description ? { description: def.description } : {}),
     policy: def.policy,
     methods: Object.fromEntries(
-      Object.entries(def.methods).map(([name, method]) => [name, serializeMethod(method)])
+      Object.entries(def.methods)
+        .filter(([, method]) => method.agentFacing !== false)
+        .map(([name, method]) => [name, serializeMethod(method)])
     ),
   };
 }

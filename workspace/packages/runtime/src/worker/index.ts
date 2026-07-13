@@ -142,7 +142,7 @@ export type * from "../shared/git.js";
 export type { WorkspaceRuntime } from "../shared/hostedRuntime.js";
 // Note: createTestDO is intentionally NOT exported here because it depends on
 // sql.js test-only helpers that should not be bundled into production workers.
-// Import directly from "@workspace/runtime/src/worker/durable-test-utils" in tests.
+// Import from "@workspace/runtime/worker/test-utils" in Vitest-only code.
 // Cache runtime per worker ID to avoid creating multiple bridges
 let cachedRuntime: WorkerRuntime | null = null;
 let cachedWorkerId: string | null = null;

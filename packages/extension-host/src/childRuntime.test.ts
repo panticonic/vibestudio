@@ -26,6 +26,16 @@ describe("extension child runtime", () => {
     expect(source.includes("call" + "DO")).toBe(false);
   });
 
+  it("exposes sparse context materialization on the extension fs client", () => {
+    const source = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("async ensureMaterialized(scope:");
+    expect(source).toContain('rpcCall("fs.ensureMaterialized", [scope])');
+  });
+
   it("synthesizes a rejecting response from ws:routed-response-error and logs ws:routed-event-error", () => {
     const source = fs.readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
@@ -42,7 +52,9 @@ describe("extension child runtime", () => {
     expect(responseErrorIdx).toBeGreaterThan(-1);
     expect(eventErrorIdx).toBeGreaterThan(-1);
     expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain('type: "response"');
-    expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain("for (const listener of listeners) listener(envelope)");
+    expect(source.slice(responseErrorIdx, eventErrorIdx)).toContain(
+      "for (const listener of listeners) listener(envelope)"
+    );
   });
 
   it("supports chunked streaming extension fetch bodies", () => {

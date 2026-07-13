@@ -114,7 +114,7 @@ interface RuntimeFs {
   realpath(path: string): Promise<string>;
   open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
   readlink(path: string): Promise<string>;
-  symlink(target: string, path: string): Promise<void>;
+  symlink(target: string, path: string, type?: "file" | "dir" | "junction"): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
   chown(path: string, uid: number, gid: number): Promise<void>;
   utimes(path: string, atime: Date | number, mtime: Date | number): Promise<void>;

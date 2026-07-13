@@ -32,7 +32,11 @@ export const evalRunArgsSchema = z
     code: z.string().optional(),
     /** Context-relative TS/TSX file to execute instead of inline code. */
     path: z.string().optional(),
-    syntax: z.enum(["typescript", "jsx", "tsx"]).optional(),
+    /** Optional context-relative virtual filename/base for inline code. */
+    sourcePath: z.string().optional(),
+    /** Atomically clear this owner's scope and user db before this run is inserted/executed. */
+    reset: z.boolean().optional(),
+    syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
     /** On-demand package builds (e.g. { "lodash": "npm:^4.17.21" }). */
     imports: z.record(z.string()).optional(),
     /** Caller-supplied idempotency key (agents pass their raw invocationId). Defaults server-side. */
@@ -52,6 +56,13 @@ export const evalRunArgsSchema = z
         code: z.ZodIssueCode.custom,
         message: "provide exactly one of code or path",
         path: hasCode ? ["path"] : ["code"],
+      });
+    }
+    if (value.sourcePath !== undefined && !hasCode) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "sourcePath is only valid with inline code",
+        path: ["sourcePath"],
       });
     }
     if ((value.ownerId === undefined) !== (value.contextId === undefined)) {
@@ -94,6 +105,8 @@ export const evalRunStatusSchema = z
   .object({
     status: z.string(),
     result: evalRunResultSchema.optional(),
+    /** Latest durable heartbeat published by the running sandbox. */
+    progress: z.unknown().optional(),
   })
   .strict();
 
@@ -133,16 +146,60 @@ export const evalCancelArgsSchema = z
     }
   });
 
+/**
+ * Owner-scoped routing plus a bounded page into one durable string value in the
+ * current eval scope. This is the lossless transport for values too large for
+ * an eval run's deliberately bounded result envelope.
+ */
+export const evalReadScopeTextPageArgsSchema = z
+  .object({
+    ownerId: z.string().optional(),
+    contextId: z.string().optional(),
+    subKey: z.string().optional(),
+    key: z.string().min(1).max(512),
+    offset: z.number().int().nonnegative(),
+    /** Bounded so the base64 RPC response remains comfortably below transport limits. */
+    limit: z.number().int().positive().max(128 * 1024),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if ((value.ownerId === undefined) !== (value.contextId === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ownerId and contextId must be provided together",
+        path: value.ownerId === undefined ? ["ownerId"] : ["contextId"],
+      });
+    }
+  });
+
+export const evalDeleteScopeValueArgsSchema = z
+  .object({
+    ownerId: z.string().optional(),
+    contextId: z.string().optional(),
+    subKey: z.string().optional(),
+    key: z.string().min(1).max(512),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if ((value.ownerId === undefined) !== (value.contextId === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ownerId and contextId must be provided together",
+        path: value.ownerId === undefined ? ["ownerId"] : ["contextId"],
+      });
+    }
+  });
+
 export const evalMethods = defineServiceMethods({
   run: {
     args: z.tuple([evalRunArgsSchema]),
     returns: evalRunResultSchema,
     description:
-      "Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Owner is the verified caller; fs is scoped to the owner's context.",
+      "Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context.",
     access: { sensitivity: "write" },
   },
   reset: {
-    args: z.tuple([evalResetArgsSchema]),
+    args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
       "Reset the eval context: wipe the persistent scope + the user `db` tables (a fresh scope), preserving the kernel's own state. The owner's existing data is cleared.",
@@ -152,15 +209,35 @@ export const evalMethods = defineServiceMethods({
     args: z.tuple([evalRunArgsSchema]),
     returns: z.object({ runId: z.string() }).strict(),
     description:
-      "Start an eval run for a caller that cannot hold a connection (an agent DO): returns a runId at once; the eval runs server-held in the EvalDO and the result is delivered out-of-band (onEvalComplete) and/or polled via getRun. Connection-holding callers (panels/CLI) should use `run` for a one-request result.",
+      "Start an eval run for a caller that cannot hold a connection (an agent DO): returns a runId at once; reset:true atomically clears scope/db before the idempotent run is first inserted. The eval runs server-held in the EvalDO and the result is delivered out-of-band (onEvalComplete) and/or polled via getRun. Connection-holding callers (panels/CLI) should use `run` for a one-request result.",
     access: { sensitivity: "write" },
   },
   getRun: {
     args: z.tuple([evalGetRunArgsSchema]),
     returns: evalRunStatusSchema,
     description:
-      "Poll an async run started with startRun: returns its status and (when done) result.",
+      "Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result.",
     access: { sensitivity: "read" },
+  },
+  readScopeTextPage: {
+    args: z.tuple([evalReadScopeTextPageArgsSchema]),
+    returns: z
+      .object({
+        length: z.number().int().nonnegative(),
+        encoding: z.literal("utf16le-base64"),
+        chunk: z.string(),
+      })
+      .strict(),
+    description:
+      "Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly.",
+    access: { sensitivity: "read" },
+  },
+  deleteScopeValue: {
+    args: z.tuple([evalDeleteScopeValueArgsSchema]),
+    returns: z.object({ ok: z.boolean(), existed: z.boolean() }).strict(),
+    description:
+      "Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging.",
+    access: { sensitivity: "write" },
   },
   cancel: {
     args: z.tuple([evalCancelArgsSchema]),
@@ -170,7 +247,7 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   forceReset: {
-    args: z.tuple([evalResetArgsSchema]),
+    args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
       "Forced recovery for a wedged eval DO: cancel every non-terminal run, abort all in-flight runs, and reset the eval context (wipe scope + user db) IMMEDIATELY without waiting on the stuck run chain. Use when `reset` itself would hang behind a wedged run.",

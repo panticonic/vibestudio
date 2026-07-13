@@ -28,8 +28,8 @@ describe("WorkspaceClient", () => {
   describe("list()", () => {
     it("calls workspace.list RPC and returns result", async () => {
       const entries = [
-        { name: "default", isActive: true },
-        { name: "dev", isActive: false },
+        { workspaceId: "ws_default", name: "default", lastOpened: 2 },
+        { workspaceId: "ws_dev", name: "dev", lastOpened: 1 },
       ];
       rpc.call.mockResolvedValueOnce(entries);
 
@@ -42,7 +42,7 @@ describe("WorkspaceClient", () => {
 
   describe("create()", () => {
     it("calls workspace.create RPC with name", async () => {
-      const entry = { name: "new-ws", isActive: false };
+      const entry = { workspaceId: "ws_new", name: "new-ws", lastOpened: 1 };
       rpc.call.mockResolvedValueOnce(entry);
 
       const result = await client.create("new-ws");
@@ -56,7 +56,7 @@ describe("WorkspaceClient", () => {
     });
 
     it("calls workspace.create RPC with forkFrom option", async () => {
-      const entry = { name: "forked", isActive: false };
+      const entry = { workspaceId: "ws_forked", name: "forked", lastOpened: 1 };
       rpc.call.mockResolvedValueOnce(entry);
 
       const result = await client.create("forked", { forkFrom: "default" });

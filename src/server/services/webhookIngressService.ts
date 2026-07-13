@@ -1,9 +1,13 @@
 import * as crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import {
+  createWebhookIngressSubscriptionSchema as createSubscriptionSchema,
+  rotateWebhookIngressSecretSchema as rotateSecretSchema,
+  webhookIngressMethods,
+} from "@vibestudio/shared/serviceSchemas/webhookIngress";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -24,6 +28,7 @@ import {
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
+import type { DODispatch } from "../doDispatch.js";
 
 /**
  * Skew tolerance for the relay envelope timestamp. Generous fail-loud backstop:
@@ -31,139 +36,10 @@ import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
  * tight enough that a stale/replayed frame eventually fails closed.
  */
 const RELAY_ENVELOPE_TOLERANCE_MS = 5 * 60 * 1000;
-const GOOGLE_OIDC_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 /** Remember processed deliveryIds so a relay retry re-acks without re-dispatching. */
 const DELIVERY_DEDUPE_TTL_MS = 15 * 60 * 1000;
 
 type JwkWithKeyId = crypto.JsonWebKey & { kid?: string };
-
-const identifierSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._@+=:-]{0,127}$/);
-
-const targetSchema = z
-  .object({
-    source: z.string().regex(/^[A-Za-z0-9._@+=:-]+\/[A-Za-z0-9._@+=:-]+$/),
-    className: identifierSchema,
-    objectKey: z.string().min(1).max(256),
-    method: identifierSchema,
-  })
-  .strict();
-
-const verifierSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("hmac-sha256"),
-      headerName: z.string().min(1).max(128),
-      secret: z.string().min(1).max(4096),
-      prefix: z.string().max(64).optional(),
-      encoding: z.enum(["hex", "base64"]).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("timestamped-hmac-sha256"),
-      signatureHeaderName: z.string().min(1).max(128),
-      timestampHeaderName: z.string().min(1).max(128),
-      secret: z.string().min(1).max(4096),
-      prefix: z.string().max(64).optional(),
-      encoding: z.enum(["hex", "base64"]).optional(),
-      toleranceMs: z
-        .number()
-        .int()
-        .positive()
-        .max(24 * 60 * 60 * 1000)
-        .optional(),
-      signedPayload: z.enum(["slack-v0", "timestamp-dot-body"]),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("bearer"),
-      headerName: z.string().min(1).max(128),
-      token: z.string().min(1).max(4096),
-      scheme: z.string().min(1).max(64).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("query-token"),
-      paramName: z.string().min(1).max(128),
-      token: z.string().min(1).max(4096),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("oidc-jwt"),
-      issuer: z.string().min(1).max(256),
-      audience: z.string().min(1).max(2048),
-      jwksUrl: z.string().url().default(GOOGLE_OIDC_JWKS_URL),
-      headerName: z.string().min(1).max(128).optional(),
-      serviceAccountEmail: z.string().email().optional(),
-    })
-    .strict(),
-]);
-
-const deliverySchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("relay") }).strict(),
-  z.object({ mode: z.literal("direct") }).strict(),
-]);
-
-const payloadFormatSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("raw") }).strict(),
-  z.object({ type: z.literal("json") }).strict(),
-  z
-    .object({
-      type: z.literal("cloud-pubsub"),
-      decodeData: z.enum(["base64", "text", "json"]),
-    })
-    .strict(),
-]);
-
-const replayKeySchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("header"), name: z.string().min(1).max(128) }).strict(),
-  z.object({ type: z.literal("json-pointer"), pointer: z.string().min(1).max(512) }).strict(),
-  z.object({ type: z.literal("body-sha256") }).strict(),
-]);
-
-const createSubscriptionSchema = z
-  .object({
-    label: z.string().min(1).max(256).optional(),
-    target: targetSchema,
-    delivery: deliverySchema,
-    payload: payloadFormatSchema,
-    verifier: verifierSchema,
-    replay: z
-      .object({
-        key: replayKeySchema,
-        ttlMs: z
-          .number()
-          .int()
-          .positive()
-          .max(7 * 24 * 60 * 60 * 1000),
-      })
-      .strict()
-      .optional(),
-    response: z
-      .object({
-        successStatus: z.union([z.literal(200), z.literal(201), z.literal(202), z.literal(204)]),
-        malformedPayload: z.enum(["ack", "reject"]),
-        dispatchError: z.enum(["ack", "retry"]),
-      })
-      .strict(),
-  })
-  .strict();
-
-const subscriptionIdSchema = z
-  .object({
-    subscriptionId: identifierSchema,
-  })
-  .strict();
-
-const rotateSecretSchema = z
-  .object({
-    subscriptionId: identifierSchema,
-    secret: z.string().min(1).max(4096).optional(),
-  })
-  .strict();
 
 export interface WebhookIngressStore {
   create(
@@ -217,30 +93,41 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
     objectKey: "global",
   };
 
-  constructor(private readonly rpc: RpcCallerLike) {}
+  constructor(
+    private readonly rpc?: RpcCallerLike,
+    private readonly doDispatch?: Pick<DODispatch, "dispatch">
+  ) {
+    if (!rpc && !doDispatch) {
+      throw new Error("DOWebhookIngressStore requires an RPC relay or direct server DO dispatch");
+    }
+  }
+
+  private call(method: string, args: unknown[]): Promise<unknown> {
+    // Server-owned internal DOs are infrastructure, not user-created runtime
+    // entities. Direct DODispatch preserves the server caller envelope and
+    // lazily ensures workerd without inventing a public runtime entity merely
+    // to satisfy the unified userland relay's active-entity assertion.
+    if (this.doDispatch) return this.doDispatch.dispatch(this.ref, method, ...args);
+    if (!this.rpc) throw new Error("DOWebhookIngressStore has no configured RPC relay");
+    return this.rpc.call(doTargetId(this.ref), method, args);
+  }
 
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">
   ): Promise<WebhookIngressSubscription> {
-    return this.rpc.call(doTargetId(this.ref), "create", [
-      input,
-    ]) as Promise<WebhookIngressSubscription>;
+    return this.call("create", [input]) as Promise<WebhookIngressSubscription>;
   }
 
   get(subscriptionId: string): Promise<WebhookIngressSubscription | null> {
-    return this.rpc.call(doTargetId(this.ref), "get", [
-      subscriptionId,
-    ]) as Promise<WebhookIngressSubscription | null>;
+    return this.call("get", [subscriptionId]) as Promise<WebhookIngressSubscription | null>;
   }
 
   list(ownerCallerId?: string): Promise<WebhookIngressSubscription[]> {
-    return this.rpc.call(doTargetId(this.ref), "list", [ownerCallerId]) as Promise<
-      WebhookIngressSubscription[]
-    >;
+    return this.call("list", [ownerCallerId]) as Promise<WebhookIngressSubscription[]>;
   }
 
   async replace(subscription: WebhookIngressSubscription): Promise<void> {
-    await this.rpc.call(doTargetId(this.ref), "replace", [subscription]);
+    await this.call("replace", [subscription]);
   }
 }
 
@@ -262,7 +149,19 @@ export interface WebhookIngressServiceDeps {
   directPublicBaseUrl?: string | null;
   store?: WebhookIngressStore;
   rpc?: RpcCallerLike;
+  /** Server-internal path for the infrastructure-owned WebhookStoreDO. */
+  doDispatch?: Pick<DODispatch, "dispatch">;
   now?: () => number;
+  /**
+   * Resolve a trusted internal runtime (currently an owner-scoped EvalDO) to
+   * the runtime on whose behalf its ergonomic client operates. The resolver is
+   * host-supplied and must use server-authored entity lineage, never call args.
+   */
+  resolveDelegatedCaller?: (callerId: string) => Promise<{
+    callerId: string;
+    callerKind: CallerKind;
+    repoPath: string;
+  } | null>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
   /** Backhaul registrar; relay-mode subscriptions register through it. */
@@ -283,7 +182,9 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
 } {
   const store =
     deps.store ??
-    (deps.rpc ? new DOWebhookIngressStore(deps.rpc) : new InMemoryWebhookIngressStore());
+    (deps.doDispatch || deps.rpc
+      ? new DOWebhookIngressStore(deps.rpc, deps.doDispatch)
+      : new InMemoryWebhookIngressStore());
   const relayOrigin = deps.relayOrigin ? normalizeBaseUrl(deps.relayOrigin) : null;
   const directPublicBaseUrl = deps.directPublicBaseUrl
     ? normalizeBaseUrl(deps.directPublicBaseUrl)
@@ -297,20 +198,49 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     return summarizeWebhookIngressSubscription(subscription);
   }
 
-  function ensureOwner(ctx: ServiceContext, subscription: WebhookIngressSubscription): void {
+  type ResolvedCallerScope = {
+    ownerCallerId: string;
+    ownerCallerKind: CallerKind;
+    targetSource: string | null;
+  };
+
+  async function callerScope(ctx: ServiceContext): Promise<ResolvedCallerScope> {
+    const delegated = await deps.resolveDelegatedCaller?.(ctx.caller.runtime.id);
+    return delegated
+      ? {
+          ownerCallerId: delegated.callerId,
+          ownerCallerKind: delegated.callerKind,
+          targetSource: delegated.repoPath,
+        }
+      : {
+          ownerCallerId: ctx.caller.runtime.id,
+          ownerCallerKind: ctx.caller.runtime.kind,
+          targetSource: ctx.caller.code?.repoPath ?? null,
+        };
+  }
+
+  async function ensureOwner(
+    ctx: ServiceContext,
+    subscription: WebhookIngressSubscription
+  ): Promise<void> {
     if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
-    if (subscription.ownerCallerId !== ctx.caller.runtime.id) {
+    const scope = await callerScope(ctx);
+    if (subscription.ownerCallerId !== scope.ownerCallerId) {
       throw new Error("webhook subscription is not owned by caller");
     }
   }
 
-  function ensureTargetIsCallerSource(ctx: ServiceContext, target: WebhookTarget): void {
+  async function ensureTargetIsCallerSource(
+    ctx: ServiceContext,
+    target: WebhookTarget,
+    resolvedScope?: ResolvedCallerScope
+  ): Promise<void> {
     if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
-    const identity = ctx.caller.code;
-    if (!identity) {
+    const scope = resolvedScope ?? (await callerScope(ctx));
+    if (!scope.targetSource) {
       throw new Error("webhook target source cannot be verified for caller");
     }
-    if (identity.repoPath !== target.source) {
+    if (scope.targetSource !== target.source) {
       throw new Error("webhook subscription target must belong to caller source");
     }
   }
@@ -320,7 +250,8 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     input: CreateWebhookIngressSubscriptionRequest
   ): Promise<WebhookIngressSubscriptionSummary> {
     const parsed = createSubscriptionSchema.parse(input) as CreateWebhookIngressSubscriptionRequest;
-    ensureTargetIsCallerSource(ctx, parsed.target);
+    const scope = await callerScope(ctx);
+    await ensureTargetIsCallerSource(ctx, parsed.target, scope);
     const resolvedBase = parsed.delivery.mode === "direct" ? directPublicBaseUrl : relayOrigin;
     if (resolvedBase === null || resolvedBase === undefined) {
       throw new Error(
@@ -332,8 +263,8 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     const pendingBase = resolvedBase;
     const subscription = await store.create({
       label: parsed.label,
-      ownerCallerId: ctx.caller.runtime.id,
-      ownerCallerKind: ctx.caller.runtime.kind,
+      ownerCallerId: scope.ownerCallerId,
+      ownerCallerKind: scope.ownerCallerKind,
       target: parsed.target,
       delivery: parsed.delivery,
       payload: parsed.payload,
@@ -362,18 +293,22 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   }
 
   async function listSubscriptions(
-    ctx: ServiceContext
+    ctx: ServiceContext,
+    options: { includeRevoked?: boolean } = {}
   ): Promise<WebhookIngressSubscriptionSummary[]> {
     const owner = isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })
       ? undefined
-      : ctx.caller.runtime.id;
-    return (await store.list(owner)).map(toSummary);
+      : (await callerScope(ctx)).ownerCallerId;
+    const rows = await store.list(owner);
+    return rows
+      .filter((subscription) => options.includeRevoked === true || subscription.revokedAt == null)
+      .map(toSummary);
   }
 
   async function revokeSubscription(ctx: ServiceContext, subscriptionId: string): Promise<void> {
     const subscription = await store.get(subscriptionId);
     if (!subscription) return;
-    ensureOwner(ctx, subscription);
+    await ensureOwner(ctx, subscription);
     await store.replace({ ...subscription, revokedAt: now() });
     if (subscription.delivery.mode === "relay") {
       deps.relayRegistrar?.unregisterWebhook(subscriptionId);
@@ -389,7 +324,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     if (!subscription || subscription.revokedAt) {
       throw new Error("webhook subscription not found");
     }
-    ensureOwner(ctx, subscription);
+    await ensureOwner(ctx, subscription);
     const secret = parsed.secret ?? crypto.randomBytes(32).toString("base64url");
     if (subscription.verifier.type === "oidc-jwt") {
       throw new Error("oidc-jwt webhook subscriptions do not have a rotatable secret");
@@ -652,26 +587,16 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     name: "webhookIngress",
     description: "Generic public webhook ingress subscriptions",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
-    methods: {
-      createSubscription: {
-        args: z.tuple([createSubscriptionSchema]),
-      },
-      listSubscriptions: {
-        args: z.tuple([]),
-      },
-      revokeSubscription: {
-        args: z.tuple([subscriptionIdSchema]),
-      },
-      rotateSecret: {
-        args: z.tuple([rotateSecretSchema]),
-      },
-    },
+    methods: webhookIngressMethods,
     handler: async (ctx, method, args) => {
       switch (method) {
         case "createSubscription":
           return createSubscription(ctx, args[0] as CreateWebhookIngressSubscriptionRequest);
         case "listSubscriptions":
-          return listSubscriptions(ctx);
+          return listSubscriptions(
+            ctx,
+            (args[0] as { includeRevoked?: boolean } | undefined) ?? {}
+          );
         case "revokeSubscription":
           return revokeSubscription(ctx, (args[0] as { subscriptionId: string }).subscriptionId);
         case "rotateSecret":

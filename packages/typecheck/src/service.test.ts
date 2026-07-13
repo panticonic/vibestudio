@@ -29,6 +29,30 @@ afterEach(() => {
 });
 
 describe("TypeCheckService workspace resolution", () => {
+  it("provides the standard decorator context globals in hermetic builds", () => {
+    const root = createTempDir("typecheck-service-decorators-");
+    const sourceFile = path.join(root, "index.ts");
+    writeFile(
+      sourceFile,
+      [
+        "function rpc(value: () => void, context: ClassMethodDecoratorContext): void {",
+        "  void value; void context;",
+        "}",
+        "class DecoratedService { @rpc run(): void {} }",
+      ].join("\n"),
+    );
+    const service = new TypeCheckService({
+      panelPath: root,
+      skipSuggestions: true,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+    });
+    service.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf8"));
+
+    const errors = service.check(sourceFile).diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toEqual([]);
+  });
+
   it("resolves a workspace package from its source via the workspace context map", () => {
     // Build a minimal pnpm-workspace-style monorepo:
     //   <root>/pnpm-workspace.yaml           (packages: ["packages/*"])
@@ -174,6 +198,64 @@ describe("TypeCheckService workspace resolution", () => {
     expect(unresolvedModules).toHaveLength(0);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors).toHaveLength(0);
+  });
+
+  it("prefers DefinitelyTyped declarations for JavaScript package subpaths", () => {
+    const root = createTempDir("typecheck-service-definitely-typed-");
+    const consumerDir = path.join(root, "workspace", "panels", "consumer");
+    const externalNodeModules = path.join(root, "external-deps", "node_modules");
+
+    writeFile(
+      path.join(externalNodeModules, "react", "package.json"),
+      JSON.stringify({
+        name: "react",
+        exports: {
+          ".": "./index.js",
+          "./jsx-runtime": "./jsx-runtime.js",
+        },
+      }),
+    );
+    writeFile(path.join(externalNodeModules, "react", "index.js"), "export const runtime = true;\n");
+    writeFile(
+      path.join(externalNodeModules, "react", "jsx-runtime.js"),
+      "export function jsx() {}\n",
+    );
+    writeFile(
+      path.join(externalNodeModules, "@types", "react", "package.json"),
+      JSON.stringify({ name: "@types/react", types: "index.d.ts" }),
+    );
+    writeFile(
+      path.join(externalNodeModules, "@types", "react", "index.d.ts"),
+      "export interface ReactNodeMarker { readonly kind: 'react-node' }\n",
+    );
+    writeFile(
+      path.join(externalNodeModules, "@types", "react", "jsx-runtime.d.ts"),
+      "export declare function jsx(type: string): { readonly type: string };\n",
+    );
+
+    const sourceFile = path.join(consumerDir, "index.tsx");
+    writeFile(
+      sourceFile,
+      [
+        'import type { ReactNodeMarker } from "react";',
+        'import { jsx } from "react/jsx-runtime";',
+        "const marker: ReactNodeMarker = { kind: 'react-node' };",
+        "const elementType: string = jsx('div').type;",
+        "void marker; void elementType;",
+      ].join("\n"),
+    );
+
+    const service = new TypeCheckService({
+      panelPath: consumerDir,
+      nodeModulesPaths: [externalNodeModules],
+      skipSuggestions: true,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+    });
+    service.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf-8"));
+
+    const errors = service.check(sourceFile).diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toEqual([]);
   });
 });
 

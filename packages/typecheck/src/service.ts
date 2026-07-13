@@ -551,14 +551,21 @@ export class TypeCheckService {
 
     for (const nodeModulesPath of this.config.nodeModulesPaths ?? []) {
       const resolved = this.resolveFromNodeModulesRoot(nodeModulesPath, packageName, subpath);
-      if (resolved) return resolved;
-
-      // Fallback to DefinitelyTyped naming for packages that don't ship types.
+      // A runtime package can resolve successfully to JavaScript while keeping
+      // its declarations in DefinitelyTyped (React is the common example).
+      // TypeScript's normal node_modules resolver consults @types in that case;
+      // our explicit isolated-root resolver must preserve the same behavior.
+      // Keep the original subpath so `react/jsx-runtime` maps to
+      // `@types/react/jsx-runtime`, rather than incorrectly using its index.
       if (!packageName.startsWith("@types/")) {
         const typesName = `@types/${packageName.replace("@", "").replace("/", "__")}`;
-        const fromTypes = this.resolveFromNodeModulesRoot(nodeModulesPath, typesName, null);
+        const fromTypes = this.resolveFromNodeModulesRoot(nodeModulesPath, typesName, subpath);
         if (fromTypes) return fromTypes;
       }
+
+      // No separate declaration package exists. Returning the runtime result
+      // retains TypeScript's useful "implicitly has an any type" diagnostic.
+      if (resolved) return resolved;
     }
 
     return null;

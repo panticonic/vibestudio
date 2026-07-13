@@ -175,6 +175,75 @@ function ackBody(ack: { response?: { bodyBase64?: string } }): unknown {
 }
 
 describe("webhookIngressService — RPC surface", () => {
+  it("uses direct server dispatch for the infrastructure-owned storage DO", async () => {
+    const dispatch = vi.fn(async (_ref, method: string) => (method === "list" ? [] : undefined));
+    const svc = createWebhookIngressService({
+      doDispatch: { dispatch },
+      relayOrigin: RELAY_BASE_URL,
+    });
+
+    await expect(svc.definition.handler(shellCtx(), "listSubscriptions", [])).resolves.toEqual([]);
+    expect(dispatch).toHaveBeenCalledWith(
+      {
+        source: "vibestudio/internal",
+        className: "WebhookStoreDO",
+        objectKey: "global",
+      },
+      "list",
+      undefined
+    );
+  });
+
+  it("attributes an owner-scoped EvalDO lifecycle to its host-verified owner", async () => {
+    const evalId = "do:vibestudio/internal:EvalDO:owner-hash";
+    const ownerId = "do:workers/github:GithubDO:agent-1";
+    const resolveDelegatedCaller = vi.fn(async (callerId: string) =>
+      callerId === evalId
+        ? { callerId: ownerId, callerKind: "do" as const, repoPath: TARGET.source }
+        : null
+    );
+    const { svc, store } = setup({ resolveDelegatedCaller });
+    const ctx: ServiceContext = {
+      caller: createVerifiedCaller(evalId, "do", {
+        callerId: evalId,
+        callerKind: "do",
+        repoPath: "vibestudio/internal",
+        effectiveVersion: "internal",
+      }),
+    };
+
+    const created = (await svc.definition.handler(ctx, "createSubscription", [
+      {
+        target: TARGET,
+        delivery: { mode: "relay" },
+        payload: { type: "json" },
+        verifier: { type: "bearer", headerName: "Authorization", token: "test-token" },
+        response: { successStatus: 202, malformedPayload: "reject", dispatchError: "retry" },
+      },
+    ])) as WebhookIngressSubscriptionSummary;
+
+    expect(await store.list(evalId)).toEqual([]);
+    expect(await store.list(ownerId)).toHaveLength(1);
+    await expect(svc.definition.handler(ctx, "listSubscriptions", [])).resolves.toHaveLength(1);
+    await svc.definition.handler(ctx, "rotateSecret", [{ subscriptionId: created.subscriptionId }]);
+    await svc.definition.handler(ctx, "revokeSubscription", [
+      { subscriptionId: created.subscriptionId },
+    ]);
+    expect((await store.list(ownerId))[0]?.revokedAt).toBeTypeOf("number");
+    await expect(svc.definition.handler(ctx, "listSubscriptions", [])).resolves.toEqual([]);
+    await expect(
+      svc.definition.handler(ctx, "listSubscriptions", [{ includeRevoked: true }])
+    ).resolves.toEqual([expect.objectContaining({ subscriptionId: created.subscriptionId })]);
+    expect(resolveDelegatedCaller).toHaveBeenCalledWith(evalId);
+  });
+
+  it("keeps the raw RPC transport out of agent-facing discovery", () => {
+    const { svc } = setup();
+    expect(
+      Object.values(svc.definition.methods).every((method) => method.agentFacing === false)
+    ).toBe(true);
+  });
+
   it("creates, lists, revokes, and rotates subscriptions for a shell caller", async () => {
     const { svc } = setup();
     const ctx = shellCtx();
@@ -225,7 +294,11 @@ describe("webhookIngressService — RPC surface", () => {
       "listSubscriptions",
       []
     )) as WebhookIngressSubscriptionSummary[];
-    expect(after[0]!.revokedAt).toBeTruthy();
+    expect(after).toEqual([]);
+    const history = (await svc.definition.handler(ctx, "listSubscriptions", [
+      { includeRevoked: true },
+    ])) as WebhookIngressSubscriptionSummary[];
+    expect(history[0]!.revokedAt).toBeTruthy();
   });
 
   it("scopes panel callers to their own subscriptions and forbids cross-owner revoke", async () => {

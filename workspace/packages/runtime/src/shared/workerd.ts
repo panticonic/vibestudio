@@ -1,11 +1,9 @@
 /**
  * Typed client for the workerd RPC service.
  *
- * Worker instance lifecycle is launched via `runtime.createEntity({kind:"worker"})`
- * and retired via `runtime.retireEntity({id})` — there is no `workerd.*` lifecycle
- * client anymore. What remains here is manifest-declared userland service
- * resolution (`listServices`/`resolveService`/`resolveDurableObject`/
- * `durableObjectService`).
+ * Worker instance lifecycle and manifest-declared userland service resolution.
+ * The ergonomic methods here delegate to the canonical runtime entity service,
+ * so panels, workers, Durable Objects, and eval all use the same lifecycle.
  *
  * DO-storage primitives (cloneDO/destroyDO) are NOT here: they are server-internal
  * and reached only through `runtime.cloneContext`/`runtime.destroyContext`.
@@ -15,6 +13,10 @@
  * Available to server, panel, and worker callers.
  */
 import type { RpcCaller } from "@vibestudio/rpc";
+import type {
+  RuntimeEntityCreateSpec,
+  RuntimeEntityHandle,
+} from "@vibestudio/shared/runtime/entitySpec";
 import {
   createDurableObjectServiceClient,
   type DurableObjectServiceClient,
@@ -52,6 +54,22 @@ export interface WorkerSourceInfo {
     icon?: string;
     defaultConfig?: unknown;
   };
+}
+
+export type WorkerCreateOptions = Omit<
+  Extract<RuntimeEntityCreateSpec, { kind: "worker" }>,
+  "kind" | "source"
+>;
+
+export type WorkerEntityHandle = RuntimeEntityHandle & { kind: "worker" };
+
+export interface WorkerEntityInfo {
+  id: string;
+  kind: "worker";
+  source: string;
+  contextId: string;
+  title?: string;
+  createdAt: number;
 }
 
 export type UserlandServiceInfo = {
@@ -97,6 +115,12 @@ export type ResolvedUserlandService = {
 export interface WorkerdClient {
   /** List every launchable worker source and its real manifest entry point. */
   listSources(): Promise<WorkerSourceInfo[]>;
+  /** Launch a regular worker through the canonical runtime entity lifecycle. */
+  create(source: string, options?: WorkerCreateOptions): Promise<WorkerEntityHandle>;
+  /** List live regular-worker instances. */
+  list(): Promise<WorkerEntityInfo[]>;
+  /** Retire a regular worker by handle or canonical entity id. */
+  destroy(worker: string | Pick<WorkerEntityHandle, "id">): Promise<void>;
   /** List manifest-declared userland services offered by worker packages. */
   listServices(): Promise<UserlandServiceInfo[]>;
   /** Resolve a manifest-declared userland service by name or protocol. */
@@ -116,6 +140,16 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
 
   return {
     listSources: () => callWorkers<WorkerSourceInfo[]>("listSources"),
+    create: (source, options = {}) =>
+      rpc.call<WorkerEntityHandle>("main", "runtime.createEntity", [
+        { kind: "worker", source, ...options },
+      ]),
+    list: () =>
+      rpc.call<WorkerEntityInfo[]>("main", "runtime.listEntities", [{ kind: "worker" }]),
+    destroy: (worker) =>
+      rpc.call<void>("main", "runtime.retireEntity", [
+        { id: typeof worker === "string" ? worker : worker.id },
+      ]),
     listServices: () => callWorkers<UserlandServiceInfo[]>("listServices"),
     resolveService: (query, objectKey) =>
       callWorkers<ResolvedUserlandService>("resolveService", query, objectKey ?? null),

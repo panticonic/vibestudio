@@ -4,9 +4,12 @@ import vm from "node:vm";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
+import { tsImport } from "tsx/esm/api";
+import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+const gadCatalogPath = path.join(repoRoot, "packages/shared/src/generated/gadRuntimeCatalog.json");
 
 /**
  * Load a runtime-surface manifest by bundling it with esbuild (which resolves
@@ -28,7 +31,13 @@ function loadRuntimeSurface(relativePath, exportName) {
   const module = { exports: {} };
   vm.runInNewContext(
     code,
-    { module, exports: module.exports, require: createRequire(import.meta.url) },
+    {
+      module,
+      exports: module.exports,
+      require: createRequire(import.meta.url),
+      TextEncoder,
+      TextDecoder,
+    },
     { filename: filePath }
   );
   const runtimeSurface = module.exports[exportName];
@@ -94,6 +103,52 @@ function updateDoc(relativePath, replacements, checkOnly) {
   }
 }
 
+async function updateGadRuntimeCatalog(checkOnly) {
+  const schemaPath = path.join(repoRoot, "workspace/packages/runtime/src/shared/gad-schema.ts");
+  const module = await tsImport(schemaPath, import.meta.url);
+  const methods = module.gadMethods;
+  if (!methods || typeof methods !== "object") {
+    throw new Error("Failed to load gadMethods for runtime catalog generation");
+  }
+  const catalog = Object.fromEntries(
+    Object.entries(methods).map(([name, method]) => [
+      name,
+      {
+        ...(method.description ? { description: method.description } : {}),
+        ...(method.access ? { access: method.access } : {}),
+        argsSchema: convertZodToJsonSchema(method.args, { target: "openApi3" }),
+        ...(method.returns
+          ? {
+              returnsSchema: convertZodToJsonSchema(method.returns, {
+                target: "openApi3",
+              }),
+            }
+          : {}),
+        ...(method.examples ? { examples: method.examples } : {}),
+      },
+    ])
+  );
+  const next = `${JSON.stringify(catalog, null, 2)}\n`;
+  const current = fs.existsSync(gadCatalogPath) ? fs.readFileSync(gadCatalogPath, "utf8") : null;
+  if (checkOnly) {
+    if (next !== current) {
+      throw new Error(
+        "packages/shared/src/generated/gadRuntimeCatalog.json is out of date. " +
+          "Run: pnpm run generate:runtime-docs"
+      );
+    }
+    return;
+  }
+  if (next !== current) {
+    fs.mkdirSync(path.dirname(gadCatalogPath), { recursive: true });
+    fs.writeFileSync(gadCatalogPath, next);
+  }
+}
+
+const checkOnly = process.argv.includes("--check");
+
+await updateGadRuntimeCatalog(checkOnly);
+
 // The authoritative surfaces live in @vibestudio/shared; the workspace runtime
 // files are re-export shims this loader cannot evaluate.
 const panelSurface = loadRuntimeSurface(
@@ -104,8 +159,6 @@ const workerSurface = loadRuntimeSurface(
   "packages/shared/src/runtimeSurface.worker.ts",
   "workerRuntimeSurface"
 );
-
-const checkOnly = process.argv.includes("--check");
 
 updateDoc(
   "workspace/skills/sandbox/RUNTIME_API.md",

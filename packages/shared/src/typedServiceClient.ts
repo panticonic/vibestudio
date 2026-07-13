@@ -48,6 +48,10 @@ export interface MethodSchema {
   description?: string;
   args: z.ZodType;
   returns?: z.ZodType;
+  /** Whether this wire method belongs in agent-facing capability discovery.
+   *  Defaults to true. Set false for implementation transports that remain
+   *  callable by typed runtime clients but have a higher-level public API. */
+  agentFacing?: boolean;
   /** Enforced caller-kind gate. Overrides the service policy for this method. */
   policy?: ServicePolicy;
   /** Unified access & restrictedness descriptor (caller kinds, conditional
@@ -112,6 +116,60 @@ export type TypedServiceClient<M extends ServiceMethodSchemas> = {
 /** Transport-agnostic call signature: `(service, method, args) → result`. */
 export type ServiceCallFn = (service: string, method: string, args: unknown[]) => Promise<unknown>;
 
+function schemaFailure(
+  service: string,
+  method: string,
+  boundary: "arguments" | "return value",
+  error: unknown
+): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  const failure = new Error(
+    `Service "${service}" method "${method}" ${boundary} failed schema validation: ${detail}`
+  ) as Error & { cause?: unknown };
+  // ErrorOptions is not declared by every consumer tsconfig even though all
+  // supported runtimes allow custom Error properties. Preserve the original
+  // validator error without requiring an ES2022 Error constructor signature.
+  failure.cause = error;
+  return failure;
+}
+
+/** Validate and dispatch one dynamically selected method from a schema table.
+ * Adapters use this when their public method name differs from the wire name. */
+export async function callTypedServiceMethod<M extends ServiceMethodSchemas>(
+  service: string,
+  methods: M,
+  call: ServiceCallFn,
+  method: keyof M & string,
+  args: unknown[]
+): Promise<unknown> {
+  const definition = methods[method];
+  if (!definition) throw new Error(`Service "${service}" has no method "${method}"`);
+  let parsedArgs: unknown[];
+  try {
+    const tupleItems = (definition.args as unknown as { _def?: { items?: readonly unknown[] } })
+      ._def?.items;
+    const paddedArgs = tupleItems
+      ? [...args, ...Array(Math.max(0, tupleItems.length - args.length))]
+      : args;
+    parsedArgs = definition.args.parse(paddedArgs) as unknown[];
+    // Zod tuples require their full item count even when the trailing item is
+    // optional. Padding is only a validation detail; preserve omission on the
+    // transport unless a schema default materialized an actual value.
+    while (parsedArgs.length > args.length && parsedArgs[parsedArgs.length - 1] === undefined) {
+      parsedArgs.pop();
+    }
+  } catch (error) {
+    throw schemaFailure(service, method, "arguments", error);
+  }
+  const result = await call(service, method, parsedArgs);
+  if (!definition.returns) return result;
+  try {
+    return definition.returns.parse(result);
+  } catch (error) {
+    throw schemaFailure(service, method, "return value", error);
+  }
+}
+
 /**
  * Build the typed client object for a service. The object is constructed
  * eagerly (no Proxy) so it's enumerable and debuggable; each leaf forwards to
@@ -139,7 +197,8 @@ export function createTypedServiceClient<M extends ServiceMethodSchemas>(
     if (node[leaf] !== undefined) {
       throw new Error(`Service "${service}" method "${fullName}" collides with group "${leaf}"`);
     }
-    node[leaf] = (...args: unknown[]) => call(service, fullName, args);
+    node[leaf] = (...args: unknown[]) =>
+      callTypedServiceMethod(service, methods, call, fullName, args);
   }
   return root as TypedServiceClient<M>;
 }

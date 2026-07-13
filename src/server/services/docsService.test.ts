@@ -25,11 +25,21 @@ const blobstore: ServiceDefinition = {
       args: z.tuple([]),
       policy: { allowed: ["server"] },
     },
+    internalTransport: {
+      description: "Internal transport that has a higher-level runtime API",
+      args: z.tuple([]),
+      agentFacing: false,
+    },
   },
   handler: async () => undefined,
 };
 
-const dispatcher = { getServiceDefinitions: () => [blobstore] } as unknown as ServiceDispatcher;
+const dispatcher = {
+  getServiceDefinitions: () => [blobstore],
+  getPolicy: (service: string) => (service === blobstore.name ? blobstore.policy : undefined),
+  getMethodPolicy: (service: string, method: string) =>
+    service === blobstore.name ? blobstore.methods[method]?.policy : undefined,
+} as unknown as ServiceDispatcher;
 const emptySurface = (target: "panel" | "workerRuntime"): RuntimeSurface => ({
   target,
   description: "",
@@ -60,6 +70,27 @@ describe("docs service (caller-aware)", () => {
       undefined,
     ])) as CatalogHit[];
     expect(serverHits.find((h) => h.id === "service:blobstore.admin.wipe")).toBeTruthy();
+  });
+
+  it("omits transport-only methods from all agent-facing discovery views", async () => {
+    const hits = (await svc.handler(ctx("server"), "search", [
+      "internal transport",
+      undefined,
+    ])) as CatalogHit[];
+    expect(hits.find((hit) => hit.id === "service:blobstore.internalTransport")).toBeUndefined();
+
+    const listed = (await svc.handler(ctx("server"), "listServices", [])) as Array<{
+      name: string;
+      methods: Record<string, unknown>;
+    }>;
+    expect(listed.find((service) => service.name === "blobstore")?.methods).not.toHaveProperty(
+      "internalTransport"
+    );
+
+    const described = (await svc.handler(ctx("server"), "describeService", ["blobstore"])) as {
+      methods: Record<string, unknown>;
+    };
+    expect(described.methods).not.toHaveProperty("internalTransport");
   });
 
   it("describe returns null for hidden entries, the entry for allowed callers", async () => {

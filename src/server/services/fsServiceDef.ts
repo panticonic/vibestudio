@@ -11,9 +11,8 @@
  * - extension callers: chained caller context (or explicit host-fs capability).
  * - server/shell callers: explicit contextId as the first argument.
  *
- * `symlink` and `chown` are deliberately absent (audit findings #38/#39):
- * they are sandbox-escape primitives and nothing on the service surface
- * needs them.
+ * `chown` remains deliberately absent. `symlink` is exposed only through the
+ * FsService's contained, scratch-only implementation.
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";

@@ -17,11 +17,17 @@
  */
 
 import { namespaceEntry, valueEntry, type RuntimeSurfaceEntry } from "./runtimeSurface.js";
+import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
+import { blobstoreMethods } from "./serviceSchemas/blobstore.js";
+import { GAD_RUNTIME_METHOD_NAMES } from "./gadRuntimeMethods.js";
 import { gitInteropMethods } from "./serviceSchemas/gitInterop.js";
 
 // --- shared namespace member arrays (single source of truth) ---
 export const WORKERS_MEMBERS = [
   "listSources",
+  "create",
+  "list",
+  "destroy",
   "listServices",
   "resolveService",
   "resolveDurableObject",
@@ -95,64 +101,9 @@ export const VCS_MEMBERS = [
 export const VCS_DESCRIPTION =
   "Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance.";
 
-export const GAD_MEMBERS = [
-  "rawSql",
-  "query",
-  "status",
-  "ensureBlob",
-  "getTrajectoryBranchHead",
-  "listTrajectoryEvents",
-  "appendChannelEnvelope",
-  "getChannelEnvelope",
-  "getTrajectoryForEnvelope",
-  "listPublishedEnvelopesForTrajectory",
-  "getEnvelopesForTrajectory",
-  "getPublishedArtifactsForTurn",
-  "getPrivateLineageForPublishedEnvelope",
-  "getDownstreamConsumers",
-  "getChannelReplayWindow",
-  "listChannelEnvelopesAfter",
-  "listChannelEnvelopesBefore",
-  "getInitialChannelWindow",
-  "listChannelEnvelopes",
-  "inspectChannelEnvelopes",
-  "listStoredValueRefs",
-  "inspectStorageDiagnostics",
-  "inspectPublicationIntegrity",
-  "inspectTurnState",
-  "inspectInvocationState",
-  "inspectChannelRoster",
-  "inspectAgentHealth",
-  "listGadBranchFiles",
-  "diffGadStates",
-  "readGadFileAtState",
-  "getGadStateProducer",
-  "validateGadHashes",
-  "clearDirtyAfterValidation",
-  "checkGadIntegrity",
-  "rebuildTrajectoryProjections",
-];
+export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES];
 
-export const BLOBSTORE_MEMBERS = [
-  "has",
-  "stat",
-  "putText",
-  "getText",
-  "getRange",
-  "getRangeBytes",
-  "grep",
-  "putBase64",
-  "putBytes",
-  "getBase64",
-  "delete",
-  "list",
-  "putTree",
-  "getTree",
-  "listTree",
-  "readFileAtTree",
-  "diffTrees",
-  "materializeTree",
-];
+export const BLOBSTORE_MEMBERS = [...Object.keys(blobstoreMethods), "putBytes", "readText"];
 
 export const WEBHOOKS_MEMBERS = [
   "createSubscription",
@@ -206,23 +157,37 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
   workers: namespaceEntry(
     WORKERS_MEMBERS,
-    "Worker discovery and manifest-declared service resolution. listSources() returns every launchable worker with its source, real manifest entry point, and Durable Object classes; lifecycle uses runtime.createEntity/retireEntity."
+    "Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes."
   ),
   workspace: namespaceEntry(WORKSPACE_MEMBERS),
-  credentials: namespaceEntry(CREDENTIALS_MEMBERS, undefined, "credentials"),
+  credentials: namespaceEntry(
+    CREDENTIALS_MEMBERS,
+    "Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal."
+  ),
   git: namespaceEntry(
     GIT_MEMBERS,
     "Typed external Git operations routed through the workspace's configured gitInterop provider.",
     "gitInterop"
   ),
   vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),
-  gad: namespaceEntry(GAD_MEMBERS),
+  gad: namespaceEntry(
+    GAD_MEMBERS,
+    "Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging.",
+    undefined,
+    gadRuntimeCatalog
+  ),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
-    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Runtime-only putBytes(Uint8Array | ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
+    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string | null. Runtime-only putBytes(Uint8Array | ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
     "blobstore"
   ),
-  webhooks: namespaceEntry(WEBHOOKS_MEMBERS),
+  webhooks: namespaceEntry(
+    WEBHOOKS_MEMBERS,
+    "Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings.",
+    // Internal schema source only. The catalog projects these method schemas as
+    // runtime:webhooks.* entries; the raw transport remains non-agent-facing.
+    "webhookIngress"
+  ),
   extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
   approvals: namespaceEntry(APPROVALS_MEMBERS),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),

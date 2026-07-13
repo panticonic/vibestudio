@@ -991,6 +991,24 @@ describe("ExtensionHost activation", () => {
     );
   });
 
+  it("accepts the shortName advertised by extensions.list on invocation", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, extensionNode } = makeHost({ extensionTransport });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(host.invoke(panelCtx("panel-1"), "git-tools", "blame", [])).resolves.toBe(
+      "transport-result"
+    );
+
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      "blame",
+      [],
+      expect.objectContaining({ extensionName: extensionNode.name })
+    );
+  });
+
   it("records extension invocation failures with stack context", async () => {
     const err = new Error("boom");
     (err as NodeJS.ErrnoException).code = "EBOOM";

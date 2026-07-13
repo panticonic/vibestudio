@@ -1092,7 +1092,7 @@ describe("runtimeService session entities", () => {
     const resolved = await service.handler({ caller: shellCaller }, "resolveContext", [handle.id]);
     expect(resolved).toBe(handle.contextId);
 
-    const all = (await service.handler({ caller: shellCaller }, "listEntities", [{}])) as Array<{
+    const all = (await service.handler({ caller: shellCaller }, "listEntities", [])) as Array<{
       id: string;
       kind: string;
     }>;
@@ -1193,6 +1193,19 @@ describe("runtimeService session entities", () => {
     expect(context).toEqual({ contextId: "ctx-branch" });
     expect(pinContext).toHaveBeenCalledWith("ctx-branch");
     expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith("ctx-branch");
+  });
+
+  it("does not silently create a context when its VCS branch cannot be pinned", async () => {
+    const pinContext = vi.fn(async () => {
+      throw new Error("gad store unavailable");
+    });
+    const { service, contextFolders } = await buildDeps({ vcsContexts: { pinContext } });
+
+    await expect(
+      service.handler({ caller: serverCaller }, "createContext", [{ contextId: "ctx-broken" }])
+    ).rejects.toThrow("gad store unavailable");
+    expect(pinContext).toHaveBeenCalledWith("ctx-broken");
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("createContext mints a context id when omitted", async () => {

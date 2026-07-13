@@ -320,6 +320,9 @@ function createFsClient() {
     async realpath(filePath: string) {
       return rpcCall("fs.realpath", [filePath]);
     },
+    async ensureMaterialized(scope: string | string[] | "all") {
+      await rpcCall("fs.ensureMaterialized", [scope]);
+    },
     async open(filePath: string, flags?: string, mode?: number) {
       const { handleId } = await rpcCall<{ handleId: number }>("fs.open", [filePath, flags, mode]);
       return {
@@ -360,14 +363,11 @@ function createFsClient() {
     async readlink(filePath: string) {
       return rpcCall("fs.readlink", [filePath]);
     },
-    async symlink(target: string, filePath: string) {
-      await rpcCall("fs.symlink", [target, filePath]);
+    async symlink(target: string, filePath: string, type?: "file" | "dir" | "junction") {
+      await rpcCall("fs.symlink", [target, filePath, type]);
     },
     async chmod(filePath: string, mode: number) {
       await rpcCall("fs.chmod", [filePath, mode]);
-    },
-    async chown(filePath: string, uid: number, gid: number) {
-      await rpcCall("fs.chown", [filePath, uid, gid]);
     },
     async utimes(filePath: string, atime: number | Date, mtime: number | Date) {
       await rpcCall("fs.utimes", [filePath, atime, mtime]);

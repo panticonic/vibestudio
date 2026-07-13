@@ -26,6 +26,11 @@ const demo: ServiceDefinition = {
       policy: { allowed: ["do", "worker"] },
       access: { sensitivity: "read" },
     },
+    internalTransport: {
+      description: "Implementation detail.",
+      args: z.tuple([]),
+      agentFacing: false,
+    },
   },
   handler: async () => undefined,
 };
@@ -58,10 +63,93 @@ describe("buildCatalog", () => {
     runtimeSurfaces: { panel: panelSurface, workerRuntime: workerSurface },
   });
 
-  it("emits a service parent + one entry per method", () => {
+  it("emits a service parent + one entry per agent-facing method", () => {
     expect(byId(entries, "service:demo").surface).toBe("service");
     expect(byId(entries, "service:demo.get").parent).toBe("service:demo");
     expect(byId(entries, "service:demo.admin.wipe").qualifiedName).toBe("demo.admin.wipe");
+    expect(entries.some((entry) => entry.id === "service:demo.internalTransport")).toBe(false);
+  });
+
+  it("omits a transport-only service parent when every method has a modern wrapper", () => {
+    const transportOnly: ServiceDefinition = {
+      name: "transportOnly",
+      description: "Internal transport",
+      policy: { allowed: ["panel", "worker", "do"] },
+      methods: {
+        call: { args: z.tuple([]), agentFacing: false },
+      },
+      handler: async () => undefined,
+    };
+    const transportEntries = buildCatalog({ definitions: [transportOnly] });
+    expect(transportEntries).toEqual([]);
+  });
+
+  it("projects hidden transport schemas under the modern runtime namespace", () => {
+    const projected = buildCatalog({
+      definitions: [demo],
+      runtimeSurfaces: {
+        workerRuntime: {
+          target: "workerRuntime",
+          description: "worker runtime",
+          exports: {
+            modern: {
+              kind: "namespace",
+              members: ["internalTransport"],
+              schemaRef: "demo",
+            },
+          },
+        },
+      },
+    });
+
+    expect(projected.some((entry) => entry.id === "service:demo.internalTransport")).toBe(false);
+    const method = byId(projected, "runtime:workerRuntime.modern.internalTransport");
+    expect(method).toMatchObject({
+      surface: "runtime",
+      qualifiedName: "modern.internalTransport",
+      parent: "runtime:workerRuntime.modern",
+      access: { callers: ["worker", "do"] },
+    });
+    expect(method.argsSchema).toBeTruthy();
+    expect(byId(projected, "runtime:workerRuntime.modern").description).not.toContain(
+      "service:demo"
+    );
+  });
+
+  it("projects generated runtime method schemas without importing userland code", () => {
+    const projected = buildCatalog({
+      definitions: [],
+      runtimeSurfaces: {
+        workerRuntime: {
+          target: "workerRuntime",
+          description: "worker runtime",
+          exports: {
+            gad: {
+              kind: "namespace",
+              members: ["query"],
+              methodCatalog: {
+                query: {
+                  description: "Run a parameterized query.",
+                  access: { sensitivity: "read" },
+                  argsSchema: { type: "array" },
+                  returnsSchema: { type: "object" },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(byId(projected, "runtime:workerRuntime.gad.query")).toMatchObject({
+      description: "Run a parameterized query.",
+      access: { sensitivity: "read", callers: ["worker", "do"] },
+      argsSchema: { type: "array" },
+      returnsSchema: { type: "object" },
+    });
+    expect(byId(projected, "runtime:workerRuntime.gad").description).toContain(
+      'docs_open("runtime:workerRuntime.gad.query")'
+    );
   });
 
   it("serializes args/returns JSON Schema and carries description/examples", () => {

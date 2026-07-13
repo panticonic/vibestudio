@@ -179,6 +179,29 @@ export function splitRepoPath(
   };
 }
 
+/**
+ * Expand a file-looking path that would otherwise collide with a container
+ * repo root into one canonical repo + file path.
+ *
+ * `projects/note.txt` cannot be represented literally because
+ * `projects/<name>` is a repo identity. Treating the dotted segment as a file
+ * is nevertheless the natural user intent, so every high-level file/VCS
+ * surface resolves it to `projects/note/note.txt`. Hidden dotted repo names are
+ * left untouched because they are commonly intentional platform/repo ids.
+ */
+export function canonicalizeWorkspaceFilePath(wsRelPath: string): string {
+  const normalized = wsRelPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const split = splitRepoPath(normalized);
+  if (!split || split.repoRelPath || split.repoPath.split("/").length !== 2) {
+    return normalized;
+  }
+  const [section, leaf] = split.repoPath.split("/") as [string, string];
+  if (leaf.startsWith(".")) return normalized;
+  const match = /^(.+)\.([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(leaf);
+  if (!match?.[1]) return normalized;
+  return `${section}/${match[1]}/${leaf}`;
+}
+
 export interface EntityRecord {
   // ── Identity (immutable after first write) ──
   id: string;

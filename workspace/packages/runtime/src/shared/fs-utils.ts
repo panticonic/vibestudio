@@ -27,14 +27,23 @@ export function toFileStats(stats: unknown): FileStats {
 
   const isSymlinkFn = s?.["isSymbolicLink"];
   const isSymlinkBool = typeof isSymlinkFn === "function" ? (isSymlinkFn as () => boolean).call(s) : !!isSymlinkFn;
+  const toDate = (value: unknown): Date => {
+    if (value instanceof Date) return new Date(value.getTime());
+    const parsed = new Date(typeof value === "number" ? value : String(value ?? ""));
+    return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
+  };
+  const mtime = toDate(mtimeVal);
+  const ctime = toDate(ctimeVal);
 
   return {
     isFile: () => isFileBool,
     isDirectory: () => isDirBool,
     isSymbolicLink: () => isSymlinkBool,
     size: typeof sizeVal === "number" ? sizeVal : 0,
-    mtime: mtimeVal instanceof Date ? mtimeVal.toISOString() : String(mtimeVal ?? ""),
-    ctime: ctimeVal instanceof Date ? ctimeVal.toISOString() : String(ctimeVal ?? ""),
+    mtime,
+    ctime,
+    mtimeMs: mtime.getTime(),
+    ctimeMs: ctime.getTime(),
     mode: typeof modeVal === "number" ? modeVal : defaultMode,
   };
 }

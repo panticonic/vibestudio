@@ -681,6 +681,9 @@ importers:
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/typecheck:
     dependencies:

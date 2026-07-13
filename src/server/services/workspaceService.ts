@@ -91,9 +91,11 @@ export interface WorkspaceCatalogClient {
 
 export interface WorkspaceServiceDeps {
   workspace: Workspace;
+  /** User-facing catalog name. Falls back to config.id for standalone tests/hosts. */
+  activeWorkspaceName?: string;
   treeScanner?: WorkspaceTreeScanner;
   getConfig: () => WorkspaceConfig;
-  setConfigField: (key: string, value: unknown) => void;
+  setConfigField: (key: string, value: unknown, ctx: ServiceContext) => void | Promise<void>;
   /** Required hub-owned catalog proxy; children never mutate the catalog. */
   workspaceCatalog: WorkspaceCatalogClient;
   /**
@@ -504,6 +506,7 @@ async function requireWorkspaceApproval(
 }
 
 export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefinition {
+  const activeWorkspaceName = () => deps.activeWorkspaceName ?? deps.getConfig().id;
   const { workspace } = deps;
   const actorUserId = (ctx: ServiceContext): string => {
     const userId = ctx.caller.subject?.userId;
@@ -538,10 +541,10 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           return await deps.workspaceCatalog.list(actorUserId(ctx));
 
         case "getActive":
-          return deps.getConfig().id;
+          return activeWorkspaceName();
 
         case "getActiveEntry": {
-          const active = deps.getConfig().id;
+          const active = activeWorkspaceName();
           const entries = await deps.workspaceCatalog.list(actorUserId(ctx));
           const listedEntry = entries.find(
             (entry) => isWorkspaceEntry(entry) && entry.name === active
@@ -623,7 +626,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
               { label: "Init panels", value: describeJson(initPanels), format: "markdown" },
             ],
           });
-          deps.setConfigField("initPanels", initPanels);
+          await deps.setConfigField("initPanels", initPanels, ctx);
           return;
         }
 
@@ -639,7 +642,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
               { label: "New value", value: describeJson(value), format: "markdown" },
             ],
           });
-          deps.setConfigField(key, value);
+          await deps.setConfigField(key, value, ctx);
           return;
         }
 
@@ -783,7 +786,6 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         case "units.versions": {
           if (!deps.listAppVersions) return { current: null, previous: [], retentionLimit: 0 };
           const [name] = args as [string];
-          await requireAppUnitManagementAccess(deps, ctx, method, name);
           return await deps.listAppVersions(name);
         }
 

@@ -48,9 +48,10 @@ describe("createGadClient", () => {
   });
 
   it("keeps semantic envelope reads hydrated while inspection stays compact", async () => {
+    const digest = "a".repeat(64);
     const ref = {
       protocol: "vibestudio.blob-ref.v1",
-      digest: "digest-1",
+      digest,
       size: 15,
       encoding: "json",
       originalBytes: 15,
@@ -69,21 +70,61 @@ describe("createGadClient", () => {
         if (target === "main" && method === "blobstore.getText") {
           return JSON.stringify({ hydrated: true });
         }
-        if (method === "listChannelEnvelopes") {
-          return [
-            {
-              envelopeId: "env-1",
-              channelId: "channel-1",
-              seq: 1,
-              from: { kind: "panel", id: "panel:user" },
-              payloadKind: "custom.kind",
-              payload: ref,
-              publishedAt: "2026-05-20T12:00:00.000Z",
+        if (method === "readChannelEnvelopes") {
+          return {
+            pageInfo: {
+              request: { window: { kind: "tail" }, limit: 50 },
+              returnedCount: 1,
+              totalCount: 1,
+              firstSeq: 1,
+              lastSeq: 1,
+              snapshotLastSeq: 1,
+              returnedFromSeq: 1,
+              returnedToSeq: 1,
+              hasMoreBefore: false,
+              hasMoreAfter: false,
             },
-          ];
+            items: [
+              {
+                envelopeId: "env-1",
+                channelId: "channel-1",
+                seq: 1,
+                from: { kind: "panel", id: "panel:user" },
+                payloadKind: "custom.kind",
+                payload: ref,
+                publishedAt: "2026-05-20T12:00:00.000Z",
+              },
+            ],
+          };
         }
         if (method === "inspectChannelEnvelopes") {
-          return { rows: [{ envelopeId: "env-1", payloadSummary: ref }] };
+          return {
+            pageInfo: {
+              request: { window: { kind: "tail" }, limit: 50 },
+              returnedCount: 1,
+              totalCount: 1,
+              firstSeq: 1,
+              lastSeq: 1,
+              snapshotLastSeq: 1,
+              returnedFromSeq: 1,
+              returnedToSeq: 1,
+              hasMoreBefore: false,
+              hasMoreAfter: false,
+            },
+            items: [
+              {
+                envelopeId: "env-1",
+                channelId: "channel-1",
+                seq: 1,
+                payloadKind: "custom.kind",
+                from: { kind: "panel", id: "panel:user" },
+                bytes: { from: 1, to: 0, payload: 1, metadata: 0, attachments: 0 },
+                payloadSummary: ref,
+                storedRefs: [],
+                publishedAt: "2026-05-20T12:00:00.000Z",
+              },
+            ],
+          };
         }
         return { rows: [] };
       }),
@@ -91,11 +132,11 @@ describe("createGadClient", () => {
     };
     const gad = createGadClient(rpc as never);
 
-    await expect(gad.listChannelEnvelopes({ channelId: "channel-1" })).resolves.toMatchObject([
-      { payload: { hydrated: true } },
-    ]);
-    await expect(gad.inspectChannelEnvelopes({ channelId: "channel-1" })).resolves.toEqual({
-      rows: [{ envelopeId: "env-1", payloadSummary: ref }],
+    await expect(
+      gad.readChannelEnvelopes({ channelId: "channel-1", window: { kind: "tail" } })
+    ).resolves.toMatchObject({ items: [{ payload: { hydrated: true } }] });
+    await expect(gad.inspectChannelEnvelopes({ channelId: "channel-1" })).resolves.toMatchObject({
+      items: [{ envelopeId: "env-1", payloadSummary: ref }],
     });
   });
 

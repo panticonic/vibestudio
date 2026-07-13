@@ -90,6 +90,8 @@ import {
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import { assertPresent } from "../../lintHelpers";
 import { getRelayOrigin, RELAY_URL_ENV } from "./relayBackhaulClient.js";
+import { serializeGitHttpResponse } from "./gitHttpRpc.js";
+import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
 
 const log = createDevLogger("CredentialService");
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
@@ -503,6 +505,7 @@ interface CredentialServiceDeps {
     } | null;
   };
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
+  disposableGitHttp?: Pick<DisposableGitRemoteManager, "matches" | "handle">;
   approvalQueue?: ApprovalQueue;
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
@@ -3684,10 +3687,20 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     ctx: ServiceContext,
     params: ProxyGitHttpParams
   ): Promise<ProxyGitHttpResponse> {
+    const request = params as ProxyGitHttpRequest;
+    if (deps.disposableGitHttp?.matches(request.url)) {
+      return serializeGitHttpResponse(
+        await deps.disposableGitHttp.handle({
+          url: request.url,
+          method: request.method ?? "GET",
+          headers: request.headers ?? {},
+          body: request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined,
+        })
+      );
+    }
     if (!egressProxy) {
       throw new Error("Egress proxy is unavailable");
     }
-    const request = params as ProxyGitHttpRequest;
     const result = await egressProxy.forwardGitHttp({
       caller: ctx.caller,
       url: request.url,
@@ -3697,10 +3710,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credentialId: request.credentialId,
       gitIntent: request.gitIntent,
     });
-    return {
-      ...result,
-      bodyBase64: Buffer.from(result.body).toString("base64"),
-    };
+    return serializeGitHttpResponse(result);
   }
 
   async function audit(params: AuditParams): Promise<AuditEntry[]> {

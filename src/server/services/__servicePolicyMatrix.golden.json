@@ -126,8 +126,10 @@
     "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "cancel": null,
+      "deleteScopeValue": null,
       "forceReset": null,
       "getRun": null,
+      "readScopeTextPage": null,
       "reset": null,
       "run": null,
       "startRun": null
@@ -166,6 +168,7 @@
       "rm": null,
       "rmdir": null,
       "stat": null,
+      "symlink": null,
       "truncate": null,
       "unlink": null,
       "utimes": null,
@@ -181,13 +184,21 @@
   "gitInterop": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
+      "commitMapping": null,
       "completeWorkspaceDependencies": null,
+      "createDisposableRemote": null,
+      "detachUpstream": null,
       "importProject": null,
+      "inspectDisposableRemote": null,
       "publishRepo": null,
+      "publishToDisposableRemote": null,
       "pullUpstream": null,
+      "pushDisposableRemote": null,
       "pushUpstream": null,
+      "removeDisposableRemote": null,
       "removeSharedRemote": null,
       "removeUpstream": null,
+      "resetExportMarker": null,
       "setAutoPush": null,
       "setSharedRemote": null,
       "setUpstream": null,
@@ -239,8 +250,8 @@
     "methods": {
       "dismiss": null,
       "reportAction": null,
-      "signalUserInbox": ["do", "server"],
-      "show": null
+      "show": null,
+      "signalUserInbox": ["do", "server"]
     }
   },
   "panelCdp": {
@@ -409,9 +420,11 @@
       "contextDiff": null,
       "contextStatus": null,
       "diff": null,
+      "diffContent": null,
       "discardEdits": null,
       "edit": null,
       "listFiles": null,
+      "log": null,
       "merge": null,
       "pendingMerge": null,
       "pick": null,

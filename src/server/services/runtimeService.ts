@@ -329,7 +329,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     // Pin the context's base view (a per-context VCS ref) so its reads are a
     // consistent snapshot and never drift as `main` advances under it. Idempotent:
     // a second entity joining the context inherits the existing pin.
-    await deps.vcsContexts?.pinContext?.(contextId).catch(() => undefined);
+    await deps.vcsContexts?.pinContext?.(contextId);
     return buildWorkspaceContext(contextId);
   }
 
@@ -1060,7 +1060,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           return;
         }
         case "listEntities": {
-          const [{ kind }] = args as [{ kind?: string }];
+          const [{ kind } = {}] = args as [{ kind?: string }?];
           return await listEntities(kind);
         }
         case "resolveContext": {

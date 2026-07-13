@@ -35,6 +35,24 @@ describe("createTypedServiceClient", () => {
     expect(call).toHaveBeenCalledWith("demo", "echo", ["hello"]);
   });
 
+  it("rejects invalid outbound arguments before invoking the transport", async () => {
+    const call = vi.fn(async () => null);
+    const client = createTypedServiceClient("demo", methods, call);
+
+    await expect(client.echo(42 as never)).rejects.toThrow(
+      'method "echo" arguments failed schema validation'
+    );
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid inbound return values with the service and method name", async () => {
+    const client = createTypedServiceClient("demo", methods, async () => "not-pong");
+
+    await expect(client.ping()).rejects.toThrow(
+      'method "ping" return value failed schema validation'
+    );
+  });
+
   it("rejects method names that collide with a group prefix", () => {
     const colliding = defineServiceMethods({
       "units.list": { args: z.tuple([]) },

@@ -54,7 +54,26 @@ function recordingRpc(): {
   const captured: Array<{ target: string; method: string; args: unknown[] }> = [];
   const callImpl = async (target: string, method: string, args: unknown[]): Promise<unknown> => {
     captured.push({ target, method, args });
-    return undefined;
+    switch (method) {
+      case "workspace.list":
+      case "workspace.units.list":
+      case "workspace.units.logs":
+      case "workspace.recurring.list":
+        return [];
+      case "workspace.getActive":
+        return "test-ws";
+      case "workspace.getActiveEntry":
+      case "workspace.create":
+        return { workspaceId: "ws_test", name: "test-ws", lastOpened: 1 };
+      case "workspace.getConfig":
+        return { id: "test-ws", initPanels: [] };
+      case "workspace.units.inspector":
+        return null;
+      case "workspace.units.versions":
+        return { current: null, previous: [], retentionLimit: 5 };
+      default:
+        return undefined;
+    }
   };
   const rpc = { call: callImpl } as unknown as RpcCaller;
   return { rpc, captured };
@@ -186,11 +205,10 @@ const shellCtx: ServiceContext = {
 // ─── Contract: client/server method-name alignment ───────────────────────────
 
 describe("workspace service ↔ client contract", () => {
-  it("client and server agree on the service name (`workspace`)", () => {
+  it("client and server agree on the service name (`workspace`)", async () => {
     const { rpc, captured } = recordingRpc();
     const client = createWorkspaceClient(rpc);
-    void client.list();
-    void client.getActive();
+    await Promise.all([client.list(), client.getActive()]);
 
     expect(captured.length).toBeGreaterThan(0);
     for (const { target, method } of captured) {
@@ -234,29 +252,31 @@ describe("workspace service ↔ client contract", () => {
     }
   });
 
-  it("the runtime client's interface keys map 1:1 to server method names", () => {
+  it("the runtime client's interface keys map 1:1 to server method names", async () => {
     // Build a recording RPC and call EVERY method on the client interface.
     // This catches drift in either direction: a server method that no client
     // uses, or a client method that hits an unregistered server method.
     const { rpc, captured } = recordingRpc();
     const client = createWorkspaceClient(rpc);
 
-    void client.list();
-    void client.getActive();
-    void client.getActiveEntry();
-    void client.getConfig();
-    void client.create("x");
-    void client.delete("old");
-    void client.setInitPanels([]);
-    void client.setConfigField("title", "Test");
-    void client.switchTo("x");
-    void client.units.list();
-    void client.units.inspector("extensions/foo");
-    void client.units.restart("extensions/foo");
-    void client.units.logs("extensions/foo");
-    void client.units.versions("apps/shell");
-    void client.units.rollback("apps/shell");
-    void client.recurring.list();
+    await Promise.all([
+      client.list(),
+      client.getActive(),
+      client.getActiveEntry(),
+      client.getConfig(),
+      client.create("x"),
+      client.delete("old"),
+      client.setInitPanels([]),
+      client.setConfigField("title", "Test"),
+      client.switchTo("x"),
+      client.units.list(),
+      client.units.inspector("extensions/foo"),
+      client.units.restart("extensions/foo"),
+      client.units.logs("extensions/foo"),
+      client.units.versions("apps/shell"),
+      client.units.rollback("apps/shell"),
+      client.recurring.list(),
+    ]);
 
     // The server should have a method handler for each captured wire name.
     const service = makeService();
@@ -314,6 +334,20 @@ describe("workspace service handler", () => {
     const service = makeService();
     const result = await service.handler(panelCtx, "getActive", []);
     expect(result).toBe("test-ws");
+  });
+
+  it("getActive reports the catalog name when an ephemeral disk name/id differs", async () => {
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      activeWorkspaceName: "dev",
+      getConfig: () => makeConfig({ id: "ws_opaque" }),
+      setConfigField: vi.fn(),
+      workspaceCatalog: makeCentralData(),
+      roleOf: () => "root",
+      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
+    });
+
+    expect(await service.handler(panelCtx, "getActive", [])).toBe("dev");
   });
 
   it("getActiveEntry returns the catalog entry for the active workspace", async () => {
@@ -424,6 +458,7 @@ describe("workspace service handler", () => {
   });
 
   it("allows app callers to manage only their own app unit", async () => {
+    const listAppVersions = vi.fn(() => ({ current: null, previous: [], retentionLimit: 5 }));
     const rollbackAppVersion = vi.fn(() => ({ ok: true }));
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
@@ -445,6 +480,7 @@ describe("workspace service handler", () => {
           status: "running" as const,
         },
       ]),
+      listAppVersions,
       rollbackAppVersion,
     });
     const selfCtx: ServiceContext = {
@@ -457,12 +493,16 @@ describe("workspace service handler", () => {
     };
 
     await expect(
+      service.handler(selfCtx, "units.versions", ["@workspace-apps/other"])
+    ).resolves.toEqual({ current: null, previous: [], retentionLimit: 5 });
+    await expect(
       service.handler(selfCtx, "units.rollback", ["@workspace-apps/self"])
     ).resolves.toEqual({ ok: true });
     await expect(
       service.handler(selfCtx, "units.rollback", ["@workspace-apps/other"])
     ).rejects.toThrow(/can only manage the calling app/);
     expect(rollbackAppVersion).toHaveBeenCalledTimes(1);
+    expect(listAppVersions).toHaveBeenCalledWith("@workspace-apps/other");
   });
 
   it("create delegates to the createWorkspace dep", async () => {
@@ -525,7 +565,11 @@ describe("workspace service handler", () => {
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setInitPanels", [[{ source: "panels/chat" }]]);
-    expect(setConfigField).toHaveBeenCalledWith("initPanels", [{ source: "panels/chat" }]);
+    expect(setConfigField).toHaveBeenCalledWith(
+      "initPanels",
+      [{ source: "panels/chat" }],
+      panelCtx
+    );
   });
 
   it("setConfigField delegates to setConfigField after approval", async () => {
@@ -539,7 +583,7 @@ describe("workspace service handler", () => {
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
-    expect(setConfigField).toHaveBeenCalledWith("title", "Test");
+    expect(setConfigField).toHaveBeenCalledWith("title", "Test", panelCtx);
   });
 
   it("recurring.list returns declarative scheduled job diagnostics", async () => {

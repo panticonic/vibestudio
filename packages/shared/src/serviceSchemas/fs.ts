@@ -10,9 +10,9 @@
  * - extension callers: chained caller context (or explicit host-fs capability).
  * - server/shell callers: explicit contextId as the first argument.
  *
- * `symlink` and `chown` are deliberately absent (audit findings #38/#39):
- * they are sandbox-escape primitives and nothing on the service surface
- * needs them.
+ * `chown` is deliberately absent. `symlink` is restricted to context-local
+ * scratch and rewrites targets to contained relative paths; traversal remains
+ * checked again whenever another fs method follows the link.
  */
 
 import { z } from "zod";
@@ -42,6 +42,13 @@ export const fsBinaryEnvelopeSchema = z.object({
 export type FsBinaryEnvelope = z.infer<typeof fsBinaryEnvelopeSchema>;
 
 const fsDataSchema = z.union([z.string(), fsBinaryEnvelopeSchema]);
+const fsReadEncodingSchema = z.preprocess(
+  (value) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as { encoding?: unknown }).encoding
+      : value,
+  z.string()
+);
 const voidSchema = z.void();
 const statSchema = z.object({
   isFile: z.boolean().describe("True if the entry is a regular file."),
@@ -129,14 +136,18 @@ export const fsMethods = defineServiceMethods({
   // File content
   readFile: {
     description:
-      "Read a file's contents. Overloaded: with an `encoding` argument the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.)",
+      "Read a file's contents. Overloaded: with an encoding string (or Node-style `{ encoding: \"utf8\" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.)",
     args: z.union([
-      z.tuple([z.string(), z.string().optional()]),
-      z.tuple([z.string(), z.string(), z.string().optional()]),
+      z.tuple([z.string(), fsReadEncodingSchema.optional()]),
+      z.tuple([z.string(), z.string(), fsReadEncodingSchema.optional()]),
     ]),
     returns: z.union([z.string(), fsBinaryEnvelopeSchema]),
     access: READ_ACCESS,
-    examples: [{ args: ["/notes/todo.md", "utf8"] }, { args: ["/assets/logo.png"] }],
+    examples: [
+      { args: ["/notes/todo.md", "utf8"] },
+      { args: ["/notes/todo.md", { encoding: "utf8" }] },
+      { args: ["/assets/logo.png"] },
+    ],
   },
   writeFile: {
     description:
@@ -299,6 +310,22 @@ export const fsMethods = defineServiceMethods({
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: z.string(),
     access: READ_ACCESS,
+  },
+  symlink: {
+    description:
+      "Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Workspace-repo link paths are rejected because GAD does not represent symlink entries.",
+    args: z.union([
+      z.tuple([z.string(), z.string(), z.enum(["file", "dir", "junction"]).optional()]),
+      z.tuple([
+        z.string(),
+        z.string(),
+        z.string(),
+        z.enum(["file", "dir", "junction"]).optional(),
+      ]),
+    ]),
+    returns: voidSchema,
+    access: WRITE_ACCESS,
+    examples: [{ args: ["/.tmp/target.txt", "/.tmp/target-link.txt", "file"] }],
   },
   chmod: {
     description:

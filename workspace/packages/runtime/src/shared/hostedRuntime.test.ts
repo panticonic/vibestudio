@@ -49,7 +49,10 @@ function recordingHost() {
     selfId: "test",
     call: async (target: string, method: string, args: unknown[]) => {
       calls.push({ target, method, args });
-      return null;
+      if (method === "blobstore.putBase64") {
+        return { digest: "a".repeat(64), size: 1 };
+      }
+      return undefined;
     },
     stream: async () => new Response(),
     emit: async () => {},

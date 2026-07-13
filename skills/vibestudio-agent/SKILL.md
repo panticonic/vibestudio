@@ -107,11 +107,8 @@ it over stringing together CLI calls for anything programmatic. Canonical shapes
 vibestudio eval run -e 'return await services.docs.listServices()'
 # VCS operations against your own context tree:
 vibestudio eval run -e 'return await services.vcs.status("panels/notes","ctx:"+contextId)'
-# Post to the bound conversation channel from inside the system:
-vibestudio eval run -e '
-  await chat.send("done - see the diff");
-  return { channelId };
-'
+# CLI-owned eval has no chat binding. Use `vibestudio channel send` when the
+# current workflow needs to post to a conversation channel.
 ```
 
 State survives across invocations within a session, so you can build up
@@ -191,10 +188,11 @@ context branch, pass both `contextId` and an explicit build ref such as
 
 ## Files in this skill
 
-| File                       | Read when                                                                                                                                                                                                                     |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [FILES.md](FILES.md)       | Doing file or VCS operations (`fs`/`vcs` flags, binary handling, repo paths, the edit→commit→push loop, `vcs.edit`/`vcs.commit`/`vcs.merge`/`vcs.discardEdits`, provenance queries, creating/forking a repo, `VcsPushResult`) |
-| [BUILDING.md](BUILDING.md) | A push returned `build-failed` or `diverged`, or you need a dev preview (`vcs.previewBuild`) or to read a package's multi-target report — how the push gate builds, esbuild vs tsc diagnostics, group pushes, first push      |
-| [EVAL.md](EVAL.md)         | Running code with `vibestudio eval` (bindings, imports, persistent scope)                                                                                                                                                     |
-| [API.md](API.md)           | Looking up which RPC services/methods exist (generated reference)                                                                                                                                                             |
-| [RECIPES.md](RECIPES.md)   | End-to-end workflows (edit→push→fix loop, data analysis, debugging units)                                                                                                                                                     |
+| File                                   | Read when                                                                                                                                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [FILES.md](FILES.md)                   | Doing file or VCS operations (`fs`/`vcs` flags, binary handling, repo paths, the edit→commit→push loop, `vcs.edit`/`vcs.commit`/`vcs.merge`/`vcs.discardEdits`, provenance queries, creating/forking a repo, `VcsPushResult`) |
+| [BUILDING.md](BUILDING.md)             | A push returned `build-failed` or `diverged`, or you need a dev preview (`vcs.previewBuild`) or to read a package's multi-target report — how the push gate builds, esbuild vs tsc diagnostics, group pushes, first push      |
+| [EVAL.md](EVAL.md)                     | Running code with `vibestudio eval` (bindings, imports, persistent scope)                                                                                                                                                     |
+| [API.md](API.md)                       | Looking up which RPC services/methods exist (generated reference)                                                                                                                                                             |
+| [RECIPES.md](RECIPES.md)               | End-to-end workflows (edit→push→fix loop, data analysis, debugging units)                                                                                                                                                     |
+| [SYSTEM_TESTING.md](SYSTEM_TESTING.md) | Running exact headless agentic tests, inspecting trajectories, and iterating through the automatic repair loop                                                                                                                |
