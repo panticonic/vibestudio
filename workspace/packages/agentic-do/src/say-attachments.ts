@@ -35,13 +35,43 @@ export function inferAttachmentMimeType(path: string): string {
     return mimeType;
 }
 
+function sniffImageMimeType(bytes: Uint8Array): string | undefined {
+    if (
+        bytes.length >= 4 &&
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47
+    ) return "image/png";
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+        return "image/jpeg";
+    }
+    if (bytes.length >= 6) {
+        const gif = String.fromCharCode(...bytes.slice(0, 6));
+        if (gif === "GIF87a" || gif === "GIF89a") return "image/gif";
+    }
+    if (bytes.length >= 12) {
+        const riff = String.fromCharCode(...bytes.slice(0, 4));
+        const webp = String.fromCharCode(...bytes.slice(8, 12));
+        if (riff === "RIFF" && webp === "WEBP") return "image/webp";
+    }
+    return undefined;
+}
+
+function attachmentMimeType(path: string, bytes: Uint8Array): string {
+    // Scratch helpers such as mkdtemp append uniqueness after the caller's
+    // prefix (`shot.png-abc123`), so a valid generated image does not always
+    // end in its conventional extension. Prefer the content signature; retain
+    // extension inference as a compatibility fallback for existing callers.
+    return sniffImageMimeType(bytes) ?? inferAttachmentMimeType(path);
+}
+
 export async function readSayAttachments(
     fs: AttachmentFs,
     paths: string[]
 ): Promise<Array<Required<Pick<ChannelAttachment, "id" | "data" | "mimeType" | "size">> & { name: string }>> {
     const loaded = await Promise.all(
         paths.map(async (path, index) => {
-            const mimeType = inferAttachmentMimeType(path);
             let contents: string | Uint8Array;
             try {
                 contents = await fs.readFile(path);
@@ -53,6 +83,7 @@ export async function readSayAttachments(
             if (typeof contents === "string") {
                 throw new Error(`say attachment "${path}": expected binary image data, got text`);
             }
+            const mimeType = attachmentMimeType(path, contents);
             const name = path.split("/").filter(Boolean).pop() ?? path;
             return { id: `att_${index}`, bytes: contents, mimeType, name };
         })

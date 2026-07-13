@@ -177,6 +177,10 @@ describe("per-agent settings seeding from STATE_ARGS.agentConfig", () => {
         agentConfig: {
           model: "openai:gpt-5.3",
           thinkingLevel: "max",
+          fallbackModel: "openai-codex:gpt-5.6-luna",
+          fallbackThinkingLevel: "minimal",
+          fallbackOn: ["usage_limit_terminal"],
+          fallbackScope: "all-turns",
           approvalLevel: 1,
           // invalid + non-settings keys must be dropped by the sanitizer:
           thinkingLevelTypo: "ultra",
@@ -191,7 +195,13 @@ describe("per-agent settings seeding from STATE_ARGS.agentConfig", () => {
     expect(settings.model).toBe("openai:gpt-5.3");
     expect(settings.thinkingLevel).toBe("max");
     expect(settings.approvalLevel).toBe(1);
-    // getAgentSettings only ever returns the 7 known settings — never presentation/junk.
+    expect(settings).toMatchObject({
+      fallbackModel: "openai-codex:gpt-5.6-luna",
+      fallbackThinkingLevel: "minimal",
+      fallbackOn: ["usage_limit_terminal"],
+      fallbackScope: "all-turns",
+    });
+    // getAgentSettings only returns known behavior settings — never presentation/junk.
     expect(settings).not.toHaveProperty("handle");
     expect(settings).not.toHaveProperty("bogus");
   });

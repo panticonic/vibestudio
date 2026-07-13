@@ -51,6 +51,7 @@ import {
   type EffectExecutor,
   type EphemeralEmit,
   type ExecutorDeps,
+  type ModelExecutionAttemptEvent,
 } from "./effect-executors/index.js";
 import { modelCredentialReconnectOutcome } from "./model-credential-suspension.js";
 
@@ -72,10 +73,6 @@ export interface DriverDeps {
   onEphemeral(emit: EphemeralEmit): void;
   now(): number;
   scheduleAlarm(atMs: number): void;
-  /** Run work as a background continuation of the current execution context
-   *  (DO waitUntil). The pump uses it as the low-latency dispatch path; the
-   *  alarm remains the durable backstop. */
-  runBackground?(fn: () => Promise<unknown>): void;
   /** Live fan-out for GAD-created channel publication rows. The trajectory log
    *  append is authoritative; this only wakes channel subscribers in-process. */
   broadcastStoredEnvelopes?(channelId: string, envelopeIds: string[]): Promise<void>;
@@ -106,19 +103,94 @@ const textEncoder = new TextEncoder();
 /** Head conflicts mean our events are NEW and the fold is merely behind —
  *  worth more persistence than the divergence errors. */
 const HEAD_CONFLICT_RETRIES = 3;
+const MODEL_EXECUTION_EVIDENCE_PAGE = 500;
+const MODEL_EXECUTION_EVIDENCE_LIMIT = 100;
 
-/** Effect kinds whose dispatch can run long — a model_call up to its 10-min
- *  lease, a channel_call waiting on the user (feedback form), eval/http I/O.
- *  `dispatchDue` runs these in a background continuation instead of awaiting
- *  them in its `Promise.all`, so one slow dispatch never head-of-line-blocks
- *  other channels' or freshly-due effects. publish_envelope (fast, fire-and-
- *  forget) and credential_wait (deadline-only, periodic redrive) stay inline. */
-const DETACHABLE_EFFECT_KINDS = new Set<OutboxRow["kind"]>([
-  "model_call",
-  "channel_call",
-  "http_call",
-  "local_tool",
-]);
+export interface ModelExecutionCallEvidence {
+  attemptId?: string;
+  messageId: string;
+  startedSeq?: number;
+  completedSeq?: number;
+  startedAt?: string;
+  completedAt?: string;
+  provider: string;
+  model: string;
+  ref: string;
+  api: string;
+  baseUrl: string;
+  auth: string;
+  outcome?: string;
+  usage?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface ModelExecutionEvidence {
+  totalCalls: number;
+  truncated: boolean;
+  calls: ModelExecutionCallEvidence[];
+}
+
+/**
+ * Reduce raw trajectory envelopes to the exact model descriptors that were
+ * journaled and executed. This is deliberately derived from message.started /
+ * message.completed rather than live settings: settings prove intent, while
+ * the journal proves which provider/model request actually ran.
+ */
+export function summarizeModelExecutionEnvelopes(
+  envelopes: readonly LogEnvelope[],
+  selfId: string,
+  limit = MODEL_EXECUTION_EVIDENCE_LIMIT
+): ModelExecutionEvidence {
+  // This historical journal fold only creates entries from message.started,
+  // so every entry has a concrete sequence even though the public evidence
+  // shape also represents the newer SQL attempt ledger (which orders by its
+  // own monotonic sequence and exposes timestamps instead).
+  const calls = new Map<string, ModelExecutionCallEvidence & { startedSeq: number }>();
+  for (const envelope of envelopes) {
+    if (envelope.actor.id !== selfId) continue;
+    const payload = recordPayload(envelope.payload);
+    const messageId = String(envelope.causality?.messageId ?? "");
+    if (!messageId) continue;
+    if (envelope.payloadKind === "message.started" && payload["role"] === "assistant") {
+      const request = recordPayload(payload["modelRequest"]);
+      const spec = recordPayload(request["modelSpec"]);
+      const provider = String(request["provider"] ?? spec["provider"] ?? "");
+      const model = String(request["model"] ?? spec["id"] ?? "");
+      if (!provider || !model) continue;
+      calls.set(messageId, {
+        messageId,
+        startedSeq: envelope.seq,
+        provider,
+        model,
+        ref: `${provider}:${model}`,
+        api: String(spec["api"] ?? ""),
+        baseUrl: String(request["modelBaseUrl"] ?? spec["baseUrl"] ?? ""),
+        auth: String(request["auth"] ?? "url-bound"),
+      });
+      continue;
+    }
+    if (envelope.payloadKind !== "message.completed" && envelope.payloadKind !== "message.failed") {
+      continue;
+    }
+    const call = calls.get(messageId);
+    if (!call) continue;
+    call.completedSeq = envelope.seq;
+    call.outcome = String(
+      payload["outcome"] ?? (envelope.payloadKind === "message.failed" ? "failed" : "completed")
+    );
+    const usage = payload["usage"];
+    if (usage && typeof usage === "object" && !Array.isArray(usage)) {
+      call.usage = usage as Record<string, unknown>;
+    }
+  }
+  const ordered = [...calls.values()].sort((a, b) => a.startedSeq - b.startedSeq);
+  const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
+  return {
+    totalCalls: ordered.length,
+    truncated: ordered.length > normalizedLimit,
+    calls: ordered.slice(-normalizedLimit),
+  };
+}
 
 interface ScheduledModelResumeRow {
   channelId: string;
@@ -185,6 +257,32 @@ function ensureScheduledModelResumeSchema(sql: SqlStorage): void {
   `);
 }
 
+function ensureModelExecutionAttemptSchema(sql: SqlStorage): void {
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS model_execution_attempts (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      attempt_id TEXT NOT NULL UNIQUE,
+      channel_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      api TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      outcome TEXT,
+      usage_json TEXT,
+      error TEXT
+    )
+  `);
+  sql.exec(`
+    CREATE INDEX IF NOT EXISTS idx_model_execution_attempts_channel_sequence
+      ON model_execution_attempts(channel_id, sequence)
+  `);
+}
+
 function mapScheduledModelResumeRow(row: Record<string, unknown>): ScheduledModelResumeRow {
   return {
     channelId: String(row["channel_id"]),
@@ -227,6 +325,7 @@ export class AgentLoopDriver {
   constructor(private readonly deps: DriverDeps) {
     this.outbox = new EffectOutbox(deps.sql);
     ensureScheduledModelResumeSchema(deps.sql);
+    ensureModelExecutionAttemptSchema(deps.sql);
     this.foldCache = new FoldCache(deps.sql, deps.gad);
   }
 
@@ -299,6 +398,121 @@ export class AgentLoopDriver {
     };
     this.loops.set(channelId, instance);
     return instance;
+  }
+
+  /**
+   * Durable proof of the model calls made by this agent on a channel. The
+   * result is safe to persist in diagnostics: it contains model routing and
+   * aggregate usage, never prompts, response content, or credentials.
+   */
+  async modelExecutionEvidence(
+    channelId: string,
+    limit = MODEL_EXECUTION_EVIDENCE_LIMIT
+  ): Promise<ModelExecutionEvidence> {
+    const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
+    const countRow = this.deps.sql
+      .exec(
+        `SELECT COUNT(*) AS count FROM model_execution_attempts WHERE channel_id = ?`,
+        channelId
+      )
+      .toArray()[0];
+    const totalCalls = Number(countRow?.["count"] ?? 0);
+    if (totalCalls > 0) {
+      const rows = this.deps.sql
+        .exec(
+          `SELECT * FROM model_execution_attempts
+           WHERE channel_id = ?
+           ORDER BY sequence DESC
+           LIMIT ?`,
+          channelId,
+          normalizedLimit
+        )
+        .toArray()
+        .reverse();
+      return {
+        totalCalls,
+        truncated: totalCalls > normalizedLimit,
+        calls: rows.map((row) => ({
+          attemptId: String(row["attempt_id"]),
+          messageId: String(row["message_id"]),
+          startedAt: String(row["started_at"]),
+          ...(typeof row["completed_at"] === "string"
+            ? { completedAt: row["completed_at"] as string }
+            : {}),
+          provider: String(row["provider"]),
+          model: String(row["model"]),
+          ref: String(row["ref"]),
+          api: String(row["api"]),
+          baseUrl: String(row["base_url"]),
+          auth: String(row["auth"]),
+          ...(typeof row["outcome"] === "string" ? { outcome: row["outcome"] as string } : {}),
+          ...(typeof row["usage_json"] === "string"
+            ? { usage: JSON.parse(row["usage_json"] as string) as Record<string, unknown> }
+            : {}),
+          ...(typeof row["error"] === "string" ? { error: row["error"] as string } : {}),
+        })),
+      };
+    }
+
+    // Historical trajectories created before the local attempt ledger still
+    // have descriptor-level evidence. New executions never use this lossy
+    // message-id fold, which cannot distinguish provider retries.
+    const loop = await this.loop(channelId);
+    const envelopes: LogEnvelope[] = [];
+    let cursor = 0;
+    for (;;) {
+      const page = await this.deps.gad.call<LogEnvelope[]>("readLog", {
+        logId: loop.logId,
+        head: loop.head,
+        afterSeq: cursor,
+        limit: MODEL_EXECUTION_EVIDENCE_PAGE,
+      });
+      if (page.length === 0) break;
+      envelopes.push(...page);
+      cursor = page[page.length - 1]!.seq;
+      if (page.length < MODEL_EXECUTION_EVIDENCE_PAGE) break;
+    }
+    return summarizeModelExecutionEnvelopes(envelopes, loop.state.selfId, limit);
+  }
+
+  private recordModelExecutionAttempt(event: ModelExecutionAttemptEvent): void {
+    if (event.phase === "started") {
+      this.deps.sql.exec(
+        `INSERT INTO model_execution_attempts
+           (attempt_id, channel_id, message_id, provider, model, ref, api, base_url, auth, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        event.attemptId,
+        event.channelId,
+        event.messageId,
+        event.provider,
+        event.model,
+        event.ref,
+        event.api,
+        event.baseUrl,
+        event.auth,
+        event.startedAt
+      );
+      return;
+    }
+    const existing = this.deps.sql
+      .exec(
+        `SELECT 1 AS present FROM model_execution_attempts WHERE attempt_id = ?`,
+        event.attemptId
+      )
+      .toArray()[0];
+    if (!existing) {
+      throw new Error(`model execution attempt ${event.attemptId} finished without a start row`);
+    }
+    this.deps.sql.exec(
+      `UPDATE model_execution_attempts
+       SET completed_at = ?, outcome = ?, usage_json = ?, error = ?
+       WHERE attempt_id = ?`,
+      event.completedAt,
+      event.outcome,
+      event.usage ? JSON.stringify(event.usage) : null,
+      event.error ?? null,
+      event.attemptId
+    );
   }
 
   dropLoop(channelId: string): void {
@@ -820,34 +1034,16 @@ export class AgentLoopDriver {
           (row.descriptor as import("@workspace/agent-loop").CredentialWaitEffect).expiresAt
         );
         if (Number.isFinite(expiresAt) && expiresAt <= now) {
+          this.outbox.lease(row.branchId, row.effectId, now);
           work.push(this.failEffect(row, { message: "credential wait expired" }));
           continue;
         }
       }
-      // Long-running effects (a model_call can run up to its 10-min lease; a
-      // channel_call to a feedback form waits on the user; eval/http can be
-      // slow) must NOT be `await`ed inside the pump: `dispatchDue` runs every
-      // loop's due rows in ONE `Promise.all`, so one channel's slow dispatch
-      // would head-of-line-block EVERY other channel's effects (and freshly-due
-      // effects on the same channel) for its whole duration. Run them in a
-      // background continuation instead — the lease (set eagerly here, so a
-      // re-pump can't re-snapshot the row before the detached dispatchRow leases
-      // it) + reconcile's INSERT-OR-IGNORE prevent re-dispatch, and the outcome
-      // routes back via applyOutcome. Falls back to inline await when the host
-      // gives no background runner (tests / no waitUntil), keeping the
-      // alarm-driven harness deterministic.
-      if (this.deps.runBackground && DETACHABLE_EFFECT_KINDS.has(row.kind)) {
-        this.outbox.lease(row.branchId, row.effectId, now);
-        this.deps.runBackground(async () => {
-          try {
-            await this.dispatchRow(row);
-          } catch (error) {
-            this.scheduleEarliest();
-            throw error;
-          }
-        });
-        continue;
-      }
+      // Lease synchronously before the first await. Durable Objects may accept
+      // another alarm/RPC event while this dispatch is awaiting I/O; that event
+      // can run a concurrent pump for a different channel, but cannot snapshot
+      // and execute this same row.
+      this.outbox.lease(row.branchId, row.effectId, now);
       work.push(this.dispatchRow(row));
     }
     await Promise.all(work);
@@ -938,6 +1134,7 @@ export class AgentLoopDriver {
         signal: controller.signal,
         deps: this.executorDeps(loop.channelId),
         onEphemeral: (emit) => this.emitEphemeral(loop, emit),
+        onModelExecutionAttempt: (event) => this.recordModelExecutionAttempt(event),
       });
     } catch (err) {
       // A superseded run must not touch the row: a lease-expiry redispatch owns
@@ -985,6 +1182,28 @@ export class AgentLoopDriver {
           return;
         }
         if (!failure.recoverable) {
+          if (failure.code === "context_overflow_terminal") {
+            // A tool-heavy turn can legitimately outgrow a model's context before
+            // it reaches the normal idle compaction point. Compact the live turn
+            // (the exact-entry compactor preserves tool-call/result pairs), then
+            // journal this attempt as recoverable so the step machine dispatches
+            // a fresh model call against the smaller fold.
+            await this.runStep(
+              loop,
+              { type: "command", command: { kind: "compact" } },
+              APPEND_RETRIES
+            );
+            await this.applyOutcome(row, {
+              kind: "model",
+              blocks: [],
+              stopReason: "error",
+              errorReason: message,
+              recoverable: true,
+              failure: { ...failure, recoverable: true },
+            });
+            releaseAbort();
+            return;
+          }
           await this.applyOutcome(row, {
             kind: "model",
             blocks: [],
@@ -1015,6 +1234,33 @@ export class AgentLoopDriver {
       // this deferred ack; otherwise redrive later as a backstop.
       this.deferRedrive(row, 60_000);
       return;
+    }
+    if (row.kind === "model_call") {
+      const modelOutcome = outcome as EffectOutcome;
+      if (modelOutcome.kind === "model" && modelOutcome.stopReason === "error") {
+        const request = row.descriptor.kind === "model_call" ? row.descriptor.request : undefined;
+        const failure =
+          modelOutcome.failure ??
+          classifyModelFailure({
+            provider: request?.provider,
+            model: request?.model,
+            rawReason: modelOutcome.errorReason,
+            message: modelOutcome.errorReason,
+            now: new Date(this.deps.now()).toISOString(),
+          });
+        if (failure.code === "context_overflow_terminal") {
+          await this.runStep(
+            loop,
+            { type: "command", command: { kind: "compact" } },
+            APPEND_RETRIES
+          );
+          outcome = {
+            ...modelOutcome,
+            recoverable: true,
+            failure: { ...failure, recoverable: true },
+          };
+        }
+      }
     }
     dispatchProgress.phase = "apply-outcome";
     await this.applyOutcome(row, outcome as EffectOutcome);
@@ -1441,45 +1687,23 @@ export class AgentLoopDriver {
     return { scheduled: true, wakeAt: new Date(wakeAtMs).toISOString() };
   }
 
-  private pumping = false;
-  private repump = false;
-
-  /** Ask for a pump. Hot path: run it NOW in a background continuation of
-   *  the current execution (no inbound RPC is blocked — callers already
-   *  journaled and returned). Durable backstop: arm the alarm so the pump
-   *  still happens if this isolate is evicted first — alarm delivery is a
-   *  server round-trip, far too slow to be the primary dispatch path. */
+  /** Persist a wake for the durable effect pump. Incoming requests only
+   * journal effects and arm this alarm; they never detach correctness-critical
+   * work into an isolate-local continuation. */
   private requestPump(): void {
-    if (this.pumping) {
-      this.repump = true;
-      return;
-    }
     this.deps.scheduleAlarm(this.deps.now() + 1);
-    // Only when the host provides a background continuation (production DO
-    // waitUntil). Without it (tests), the alarm is the sole pump trigger —
-    // deterministic for crash-injection harnesses.
-    this.deps.runBackground?.(() => this.pump().catch(() => {}));
   }
 
-  /** The single effect executor. Drains immediately-due work (outcomes make
-   *  new work due, hence the loop), then arms the alarm for the earliest
-   *  future deadline (retry backoff, credential expiry, lease recovery). */
+  /** Reconcile and dispatch one alarm-owned snapshot. Rows are claimed in
+   * durable storage before external I/O, so a later alarm can recover expired
+   * work after hibernation/restart without relying on in-memory state. */
   private async pump(): Promise<void> {
-    if (this.pumping) {
-      this.repump = true;
-      return;
-    }
-    this.pumping = true;
     try {
-      do {
-        this.repump = false;
-        for (const loop of this.loops.values()) {
-          await this.reconcile(loop);
-        }
-        await this.dispatchDue();
-      } while (this.repump);
+      for (const loop of this.loops.values()) {
+        await this.reconcile(loop);
+      }
+      await this.dispatchDue();
     } finally {
-      this.pumping = false;
       this.scheduleEarliest();
     }
   }

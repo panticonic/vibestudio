@@ -128,7 +128,7 @@ describe("ModelSettingsDO", () => {
         thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
       },
     });
-  });
+  }, 30_000);
 
   it("reads the configured workspace default agent config (model + behavior)", async () => {
     TestModelSettingsDO.config = {

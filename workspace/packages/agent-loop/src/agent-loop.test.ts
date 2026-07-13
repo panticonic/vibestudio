@@ -76,12 +76,12 @@ function scenario(
     policies?: StepPolicy[];
     forkSeq?: number;
     roster?: AgentLoopConfig["roster"];
-    maxModelCallsPerTurn?: number | null;
     publishPolicy?: AgentLoopConfig["publishPolicy"];
     model?: string;
     modelSpec?: AgentModelSpec;
     modelAuth?: AgentLoopConfig["modelAuth"];
     fallback?: boolean;
+    fallbackConfig?: Partial<AgentLoopConfig>;
   } = {}
 ): Scenario {
   return createScenario({
@@ -96,9 +96,7 @@ function scenario(
         roster: opts.roster ?? baseConfig.roster,
         ...(opts.modelAuth ? { modelAuth: opts.modelAuth } : {}),
         ...(opts.fallback ? { fallbackModelRef, fallbackModelSpec } : {}),
-        ...(opts.maxModelCallsPerTurn !== undefined
-          ? { maxModelCallsPerTurn: opts.maxModelCallsPerTurn }
-          : {}),
+        ...opts.fallbackConfig,
         ...(opts.publishPolicy !== undefined ? { publishPolicy: opts.publishPolicy } : {}),
       },
       forkSeq: opts.forkSeq,
@@ -362,44 +360,7 @@ describe("agent-loop core lifecycle", () => {
     expect((completed.payload as { tier?: string }).tier).toBe("primary");
   });
 
-  it("uses a configured per-turn model-call budget", () => {
-    const s = scenario({ maxModelCallsPerTurn: 1 });
-    prompt(s);
-    resolveEffect(s, ids.modelEffect(msg0), {
-      kind: "model",
-      blocks: [{ type: "toolCall", id: "tc-1", name: "read", arguments: { path: "a.ts" } }],
-      stopReason: "completed",
-    });
-    resolveEffect(s, ids.invocationEffect("tc-1"), {
-      kind: "tool",
-      result: "file contents",
-      isError: false,
-    });
-
-    expect(s.state.openTurn).toBeNull();
-    expect(pendingEffectIds(s)).toEqual([]);
-    const diagnostic = s.log.find(
-      (row) => row.envelopeId === `diag:${turn1}:max-model-calls-per-turn`
-    );
-    expect(diagnostic?.payload).toMatchObject({
-      blocks: [
-        {
-          metadata: {
-            code: "max_model_calls_per_turn",
-            severity: "error",
-            configKey: "maxModelCallsPerTurn",
-            limit: 1,
-            modelCallCount: 1,
-            turnId: turn1,
-          },
-        },
-      ],
-    });
-    const closed = s.log.find((row) => row.payloadKind === "turn.closed")!;
-    expect(closed.payload).toMatchObject({ reason: "max_model_calls_per_turn" });
-  });
-
-  it("does not cap model calls by default", () => {
+  it("continues model/tool rounds without a model-call cap", () => {
     const s = scenario();
     prompt(s);
 
@@ -422,10 +383,6 @@ describe("agent-loop core lifecycle", () => {
     const msg35 = ids.messageId(turn1, 35);
     expect(s.state.openTurn?.modelCallCount).toBe(36);
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg35)]);
-    expect(s.log.some((row) => row.envelopeId === `diag:${turn1}:max-model-calls-per-turn`)).toBe(
-      false
-    );
-
     resolveEffect(s, ids.modelEffect(msg35), {
       kind: "model",
       blocks: [{ type: "text", content: "done" }],
@@ -642,7 +599,7 @@ describe("agent-loop core lifecycle", () => {
     expect(started).toHaveLength(2);
   });
 
-  it("stops after repeated consecutive recoverable model failures", () => {
+  it("reports a terminal diagnostic after repeated recoverable model failures", () => {
     const s = scenario();
     prompt(s);
 
@@ -677,6 +634,7 @@ describe("agent-loop core lifecycle", () => {
         },
       ],
     });
+    expect(diagnostic?.publish).toBe(true);
     const closed = s.log.find((row) => row.payloadKind === "turn.closed")!;
     expect(closed.payload).toMatchObject({ reason: "model_retry_limit_exceeded" });
   });
@@ -701,10 +659,17 @@ describe("agent-loop core lifecycle", () => {
     const notice = s.log.find(
       (row) =>
         row.payloadKind === "system.event" &&
-        (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+        (row.payload as { kind?: string }).kind === "model.fallback_continued"
     );
     expect(notice?.publish).toBe(true);
-    expect(notice?.payload).toMatchObject({ summary: "continued on local fallback" });
+    expect(notice?.payload).toMatchObject({
+      kind: "model.fallback_continued",
+      details: {
+        failedModelRef: "anthropic:claude-sonnet-4-6",
+        failureCode: "auth_or_credentials",
+        fallbackModelRef,
+      },
+    });
     const fallbackStarted = s.log.find((row) => row.envelopeId === ids.messageStarted(msg1))!;
     const request = (fallbackStarted.payload as { modelRequest: Record<string, unknown> })
       .modelRequest;
@@ -740,13 +705,96 @@ describe("agent-loop core lifecycle", () => {
         s.log.some(
           (row) =>
             row.payloadKind === "system.event" &&
-            (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+            (row.payload as { kind?: string }).kind === "model.fallback_continued"
         )
       ).toBe(false);
       expect(s.state.openTurn).toBeNull();
       expect(pendingEffectIds(s)).toEqual([]);
     }
   );
+
+  it("uses an explicitly scoped cloud fallback at its own effort on a user usage limit", () => {
+    const lunaSpec: AgentModelSpec = {
+      ...primaryModelSpec,
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+    };
+    const s = scenario({
+      fallbackConfig: {
+        fallbackModelRef: "openai-codex:gpt-5.6-luna",
+        fallbackModelSpec: lunaSpec,
+        fallbackModelAuth: "url-bound",
+        fallbackThinkingLevel: "minimal",
+        fallbackFailureCodes: ["usage_limit_terminal"],
+        fallbackScope: "all-turns",
+      },
+    });
+    prompt(s);
+
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      failure: {
+        code: "usage_limit_terminal",
+        reason: "Spark limit reached",
+        recoverable: false,
+        resetAt: "2026-06-15T18:35:01.000Z",
+      },
+    });
+
+    const msg1 = ids.messageId(turn1, 1);
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg1)]);
+    const started = s.log.find((row) => row.envelopeId === ids.messageStarted(msg1))!;
+    expect(
+      (started.payload as { modelRequest: Record<string, unknown> }).modelRequest
+    ).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.6-luna",
+      auth: "url-bound",
+      thinkingLevel: "minimal",
+    });
+    const notice = s.log.find(
+      (row) =>
+        row.payloadKind === "system.event" &&
+        (row.payload as { kind?: string }).kind === "model.fallback_continued"
+    );
+    expect(notice?.payload).toMatchObject({
+      details: {
+        failureCode: "usage_limit_terminal",
+        fallbackModelRef: "openai-codex:gpt-5.6-luna",
+        fallbackThinkingLevel: "minimal",
+      },
+    });
+    expect(s.log.some((row) => row.payloadKind === "turn.waiting")).toBe(false);
+
+    resolveEffect(s, ids.modelEffect(msg1), {
+      kind: "model",
+      blocks: [
+        { type: "toolCall", id: "tc-fallback", name: "read", arguments: { path: "a.ts" } },
+      ],
+      stopReason: "completed",
+    });
+    resolveEffect(s, ids.invocationEffect("tc-fallback"), {
+      kind: "tool",
+      result: "contents",
+      isError: false,
+    });
+
+    const msg2 = ids.messageId(turn1, 2);
+    const continued = s.log.find((row) => row.envelopeId === ids.messageStarted(msg2))!;
+    expect(
+      (continued.payload as { modelRequest: Record<string, unknown> }).modelRequest
+    ).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.6-luna",
+      auth: "url-bound",
+      thinkingLevel: "minimal",
+    });
+  });
 
   it("does not auto-failover twice in the same unattended turn", () => {
     const s = scenario({ fallback: true });
@@ -780,7 +828,7 @@ describe("agent-loop core lifecycle", () => {
       s.log.filter(
         (row) =>
           row.payloadKind === "system.event" &&
-          (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+          (row.payload as { kind?: string }).kind === "model.fallback_continued"
       )
     ).toHaveLength(1);
     expect(s.state.openTurn).toBeNull();
@@ -812,7 +860,7 @@ describe("agent-loop core lifecycle", () => {
       s.log.some(
         (row) =>
           row.payloadKind === "system.event" &&
-          (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+          (row.payload as { kind?: string }).kind === "model.fallback_continued"
       )
     ).toBe(false);
     expect(s.state.openTurn).toBeNull();

@@ -40,6 +40,7 @@ const GENERIC_RATE_LIMIT_MESSAGE = "The model provider rate limit has been reach
 const GENERIC_OVERLOADED_MESSAGE = "The model provider is temporarily overloaded.";
 const DEFAULT_RATE_LIMIT_RETRY_MS = 30_000;
 const DEFAULT_OVERLOAD_RETRY_MS = 10_000;
+const DEFAULT_UNKNOWN_RETRY_MS = 1_000;
 const MAX_AUTOMATIC_RATE_LIMIT_RETRY_MS = 5 * 60_000;
 const UTC_MONTHS = [
   "Jan",
@@ -190,7 +191,15 @@ export function classifyModelFailure(
     return terminal("request_invalid_terminal", readable);
   }
 
-  return retryable("unknown_retryable", readable || GENERIC_MODEL_ERROR_MESSAGE, undefined);
+  // Transport failures often arrive without an HTTP status/code (for example a
+  // provider WebSocket closing cleanly before its terminal result). They are
+  // not user/model errors and should exercise the bounded effect retry path,
+  // rather than terminally failing an otherwise untouched turn.
+  return retryable(
+    "unknown_retryable",
+    readable || GENERIC_MODEL_ERROR_MESSAGE,
+    DEFAULT_UNKNOWN_RETRY_MS
+  );
 }
 
 export function modelFailureInputFromUnknown(

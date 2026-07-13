@@ -11,6 +11,7 @@
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
+import type { AgenticEvent } from "@workspace/agentic-protocol";
 
 export type SubagentRunStatus =
   | "starting"
@@ -47,6 +48,56 @@ export interface SubagentRunRow {
   externalSessionEntityId: string | null;
 }
 
+export type SubagentRunReferenceResolution =
+  | { kind: "exact" | "abbreviated"; run: SubagentRunRow }
+  | { kind: "ambiguous" }
+  | null;
+
+const MIN_ABBREVIATED_RUN_ID_LENGTH = 16;
+
+function stripTrailingEllipsis(reference: string): string | null {
+  const trimmed = reference.trim();
+  if (trimmed.endsWith("...")) return trimmed.slice(0, -3).trimEnd();
+  if (trimmed.endsWith("…")) return trimmed.slice(0, -1).trimEnd();
+  return null;
+}
+
+/** Return edit distance when it is within `limit`, otherwise stop early. */
+function boundedEditDistance(left: string, right: string, limit: number): number | null {
+  if (Math.abs(left.length - right.length) > limit) return null;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    let rowMinimum = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      const distance = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! + substitutionCost
+      );
+      current.push(distance);
+      rowMinimum = Math.min(rowMinimum, distance);
+    }
+    if (rowMinimum > limit) return null;
+    previous = current;
+  }
+  const distance = previous[right.length]!;
+  return distance <= limit ? distance : null;
+}
+
+function abbreviatedReferenceScore(reference: string, runId: string): number | null {
+  const maxDistance = reference.length >= 32 ? 2 : 1;
+  let best: number | null = null;
+  const shortest = Math.max(1, reference.length - maxDistance);
+  const longest = Math.min(runId.length, reference.length + maxDistance);
+  for (let length = shortest; length <= longest; length += 1) {
+    const distance = boundedEditDistance(reference, runId.slice(0, length), maxDistance);
+    if (distance !== null && (best === null || distance < best)) best = distance;
+  }
+  return best;
+}
+
 interface SubagentRunSqlRow {
   run_id: string;
   task_channel_id: string;
@@ -65,6 +116,65 @@ interface SubagentRunSqlRow {
   agent_kind: string | null;
   external_session_entity_id: string | null;
   process_id?: string | null;
+}
+
+interface SubagentProgressOutboxSqlRow {
+  sequence: number;
+  idempotency_key: string;
+  run_id: string;
+  message_seq: number;
+  parent_channel_id: string;
+  participant_id: string;
+  event_json: string;
+  attempts: number;
+  next_attempt_at: number;
+  last_error: string | null;
+  created_at: number;
+}
+
+export interface SubagentProgressOutboxEntry {
+  sequence: number;
+  idempotencyKey: string;
+  runId: string;
+  messageSeq: number;
+  parentChannelId: string;
+  participantId: string;
+  event: AgenticEvent<"invocation.progress">;
+  attempts: number;
+  nextAttemptAt: number;
+  lastError: string | null;
+  createdAt: number;
+}
+
+export interface SubagentProgressOutboxDiagnostics {
+  pending: number;
+  oldestCreatedAt: number | null;
+  failures: Array<{
+    idempotencyKey: string;
+    runId: string;
+    messageSeq: number;
+    attempts: number;
+    nextAttemptAt: number;
+    lastError: string;
+  }>;
+}
+
+function toProgressOutboxEntry(
+  row: SubagentProgressOutboxSqlRow
+): SubagentProgressOutboxEntry {
+  return {
+    sequence: Number(row.sequence),
+    idempotencyKey: row.idempotency_key,
+    runId: row.run_id,
+    messageSeq: Number(row.message_seq),
+    parentChannelId: row.parent_channel_id,
+    participantId: row.participant_id,
+    event: JSON.parse(row.event_json) as AgenticEvent<"invocation.progress">,
+    attempts: Number(row.attempts),
+    nextAttemptAt: Number(row.next_attempt_at),
+    lastError: row.last_error,
+    createdAt: Number(row.created_at),
+  };
 }
 
 function toRow(row: SubagentRunSqlRow): SubagentRunRow {
@@ -123,6 +233,25 @@ export class SubagentRunStore {
         last_seq INTEGER NOT NULL
       )
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS subagent_progress_outbox (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL,
+        message_seq INTEGER NOT NULL,
+        parent_channel_id TEXT NOT NULL,
+        participant_id TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        last_error TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS subagent_progress_outbox_run_sequence
+      ON subagent_progress_outbox (run_id, sequence)
+    `);
     try {
       this.sql.exec(`ALTER TABLE subagent_runs ADD COLUMN external_session_entity_id TEXT`);
     } catch {
@@ -161,6 +290,33 @@ export class SubagentRunStore {
       .exec(`SELECT * FROM subagent_runs WHERE run_id = ?`, runId)
       .toArray() as unknown as SubagentRunSqlRow[];
     return rows.length > 0 ? toRow(rows[0]!) : null;
+  }
+
+  /**
+   * Resolve the durable id first, then an explicitly abbreviated display copy.
+   * Abbreviations must end in an ellipsis, be long enough to be meaningful,
+   * and identify one best run in the caller's parent channel. A tiny edit
+   * allowance covers display/model truncation at the boundary without turning
+   * arbitrary strings into run handles.
+   */
+  resolveReference(reference: string, parentChannelId?: string): SubagentRunReferenceResolution {
+    const exact = this.get(reference);
+    if (exact) return { kind: "exact", run: exact };
+
+    const abbreviated = stripTrailingEllipsis(reference);
+    if (!abbreviated || abbreviated.length < MIN_ABBREVIATED_RUN_ID_LENGTH) return null;
+
+    const candidates = this.listAll()
+      .filter((run) => !parentChannelId || run.parentChannelId === parentChannelId)
+      .map((run) => ({ run, score: abbreviatedReferenceScore(abbreviated, run.runId) }))
+      .filter(
+        (candidate): candidate is { run: SubagentRunRow; score: number } => candidate.score !== null
+      );
+    if (candidates.length === 0) return null;
+    const bestScore = Math.min(...candidates.map((candidate) => candidate.score));
+    const best = candidates.filter((candidate) => candidate.score === bestScore);
+    if (best.length !== 1) return { kind: "ambiguous" };
+    return { kind: "abbreviated", run: best[0]!.run };
   }
 
   listAll(): SubagentRunRow[] {
@@ -265,5 +421,124 @@ export class SubagentRunStore {
 
   deleteWakeCursor(channelId: string): void {
     this.sql.exec(`DELETE FROM subagent_wake_cursors WHERE channel_id = ?`, channelId);
+  }
+
+  /**
+   * Durably enqueue a parent-card progress event. The idempotency key is also
+   * the target channel publication key, so losing the acknowledgement after a
+   * successful publish is safe: the retry resolves to the same channel event.
+   */
+  enqueueProgress(input: {
+    idempotencyKey: string;
+    runId: string;
+    messageSeq: number;
+    parentChannelId: string;
+    participantId: string;
+    event: AgenticEvent<"invocation.progress">;
+    now: number;
+  }): void {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO subagent_progress_outbox
+         (idempotency_key, run_id, message_seq, parent_channel_id, participant_id,
+          event_json, attempts, next_attempt_at, last_error, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)`,
+      input.idempotencyKey,
+      input.runId,
+      input.messageSeq,
+      input.parentChannelId,
+      input.participantId,
+      JSON.stringify(input.event),
+      input.now,
+      input.now
+    );
+  }
+
+  /**
+   * Return due queue heads only. Later events for a run remain blocked behind
+   * its oldest outstanding event, while unrelated runs can continue.
+   */
+  dueProgress(now: number, limit: number): SubagentProgressOutboxEntry[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT current.*
+           FROM subagent_progress_outbox AS current
+           WHERE current.next_attempt_at <= ?
+             AND NOT EXISTS (
+               SELECT 1 FROM subagent_progress_outbox AS earlier
+               WHERE earlier.run_id = current.run_id
+                 AND earlier.sequence < current.sequence
+             )
+           ORDER BY current.sequence ASC
+           LIMIT ?`,
+          now,
+          limit
+        )
+        .toArray() as unknown as SubagentProgressOutboxSqlRow[]
+    ).map(toProgressOutboxEntry);
+  }
+
+  nextProgressWakeAt(): number | null {
+    const row = this.sql
+      .exec(
+        `SELECT MIN(current.next_attempt_at) AS due
+         FROM subagent_progress_outbox AS current
+         WHERE NOT EXISTS (
+           SELECT 1 FROM subagent_progress_outbox AS earlier
+           WHERE earlier.run_id = current.run_id
+             AND earlier.sequence < current.sequence
+         )`
+      )
+      .toArray()[0];
+    const value = row?.["due"];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+
+  completeProgress(sequence: number): void {
+    this.sql.exec(`DELETE FROM subagent_progress_outbox WHERE sequence = ?`, sequence);
+  }
+
+  failProgress(sequence: number, error: string, nextAttemptAt: number): void {
+    this.sql.exec(
+      `UPDATE subagent_progress_outbox
+       SET attempts = attempts + 1, last_error = ?, next_attempt_at = ?
+       WHERE sequence = ?`,
+      error,
+      nextAttemptAt,
+      sequence
+    );
+  }
+
+  progressDiagnostics(): SubagentProgressOutboxDiagnostics {
+    const summary = this.sql
+      .exec(
+        `SELECT COUNT(*) AS pending, MIN(created_at) AS oldest_created_at
+         FROM subagent_progress_outbox`
+      )
+      .toArray()[0];
+    const failures = this.sql
+      .exec(
+        `SELECT idempotency_key, run_id, message_seq, attempts, next_attempt_at, last_error
+         FROM subagent_progress_outbox
+         WHERE last_error IS NOT NULL
+         ORDER BY sequence ASC
+         LIMIT 25`
+      )
+      .toArray() as Array<Record<string, unknown>>;
+    return {
+      pending: Number(summary?.["pending"] ?? 0),
+      oldestCreatedAt:
+        typeof summary?.["oldest_created_at"] === "number"
+          ? Number(summary["oldest_created_at"])
+          : null,
+      failures: failures.map((row) => ({
+        idempotencyKey: String(row["idempotency_key"]),
+        runId: String(row["run_id"]),
+        messageSeq: Number(row["message_seq"]),
+        attempts: Number(row["attempts"]),
+        nextAttemptAt: Number(row["next_attempt_at"]),
+        lastError: String(row["last_error"]),
+      })),
+    };
   }
 }

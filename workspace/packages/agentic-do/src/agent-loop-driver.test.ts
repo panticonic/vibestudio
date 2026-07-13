@@ -67,7 +67,6 @@ async function makeHarness(opts: {
   policies?: StepPolicy[];
   ephemeral?: EphemeralEmit;
   executorOverride?: DriverDeps["executorOverride"];
-  runBackground?: DriverDeps["runBackground"];
   killPoint?: (point: string) => void;
   selfRefFor?: DriverDeps["selfRefFor"];
   gad?: Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
@@ -151,7 +150,6 @@ async function makeHarness(opts: {
     },
     now: () => (now += 7),
     scheduleAlarm: (at) => alarms.push(at),
-    ...(opts.runBackground ? { runBackground: opts.runBackground } : {}),
     executorOverride: (descriptor) => {
       const override = opts.executorOverride?.(descriptor);
       if (override) return override;
@@ -248,6 +246,79 @@ function deferred<T>() {
 }
 
 describe("AgentLoopDriver", () => {
+  it("records distinct provider attempts even when a retry reuses the message id", async () => {
+    const harness = await makeHarness({ script: { model: [], tool: [] } });
+    const record = (
+      harness.driver as unknown as {
+        recordModelExecutionAttempt(event: Record<string, unknown>): void;
+      }
+    ).recordModelExecutionAttempt.bind(harness.driver);
+    for (const [attemptId, startedAt] of [
+      ["attempt-a", "2026-07-13T10:00:00.000Z"],
+      ["attempt-b", "2026-07-13T10:00:01.000Z"],
+    ] as const) {
+      record({
+        phase: "started",
+        attemptId,
+        channelId: CHANNEL,
+        messageId: "same-message",
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        ref: "openai-codex:gpt-5.3-codex-spark",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        auth: "url-bound",
+        startedAt,
+      });
+      record({
+        phase: "finished",
+        attemptId,
+        completedAt: startedAt,
+        outcome: attemptId === "attempt-a" ? "failed" : "completed",
+        ...(attemptId === "attempt-a"
+          ? { error: "retryable provider failure" }
+          : { usage: { input: 10, output: 5, totalTokens: 15 } }),
+      });
+    }
+
+    expect(await harness.driver.modelExecutionEvidence(CHANNEL)).toMatchObject({
+      totalCalls: 2,
+      truncated: false,
+      calls: [
+        { attemptId: "attempt-a", messageId: "same-message", outcome: "failed" },
+        {
+          attemptId: "attempt-b",
+          messageId: "same-message",
+          outcome: "completed",
+          usage: { totalTokens: 15 },
+        },
+      ],
+    });
+  });
+
+  it("reports journal-derived model execution routing and usage", async () => {
+    const harness = await makeHarness({ script: { model: [textReply("done")], tool: [] } });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
+
+    expect(await harness.driver.modelExecutionEvidence(CHANNEL)).toMatchObject({
+      totalCalls: 1,
+      truncated: false,
+      calls: [
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          ref: "anthropic:claude-sonnet-4-6",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          auth: "url-bound",
+          outcome: "completed",
+        },
+      ],
+    });
+  });
+
   it("publishes a read-ack EAGERLY at step time, not behind the (pending) model call", async () => {
     // Regression for the steer-read-ack delay: a fire-and-forget publish_envelope
     // (read-ack) co-emitted with a long model_call used to wait in the effect
@@ -288,18 +359,13 @@ describe("AgentLoopDriver", () => {
   });
 
   it("a long model_call on one channel does NOT pin the shared pump (other channels still dispatch)", async () => {
-    // Regression: dispatchDue used to `await Promise.all` every loop's due rows,
-    // so one channel's minutes-long model_call head-of-line-blocked every other
-    // channel. With detached dispatch, channel A's hung model must not stop
-    // channel B's turn from dispatching.
+    // Long effects are awaited by their alarm event. A later alarm delivery can
+    // still lease and dispatch another channel while channel A is awaiting I/O.
     const CHANNEL_B = "chan-d2";
     const hung = deferred<EffectOutcome>();
     let bModelCalls = 0;
     const harness = await makeHarness({
       script: { model: [], tool: [] },
-      runBackground: (fn) => {
-        void fn(); // simulate waitUntil: run the detached dispatch in the background
-      },
       executorOverride: (descriptor) => {
         if (descriptor.kind !== "model_call") return null;
         if (descriptor.channelId === CHANNEL) {
@@ -314,8 +380,12 @@ describe("AgentLoopDriver", () => {
         } as EffectExecutor;
       },
     });
-    // Channel A: model call hangs (detached — must not pin the pump).
+    // Channel A's first alarm owns a model call that remains pending.
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-a"));
+    const alarmA = harness.driver.alarm();
+    alarmA.catch(() => undefined);
+    await Promise.resolve();
+    await Promise.resolve();
     // Channel B: a different channel's turn must still dispatch + complete.
     await harness.driver.handleIncoming(CHANNEL_B, {
       type: "command",
@@ -327,21 +397,17 @@ describe("AgentLoopDriver", () => {
         senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
       },
     });
-    await settle(harness.driver, 6);
+    await harness.driver.alarm();
     // Channel B got its model call despite channel A's model hanging.
     expect(bModelCalls).toBe(1);
+    hung.resolve(textReply("A recovered"));
+    await alarmA;
   });
 
-  it("propagates detached dispatch driver failures to the background runner", async () => {
-    const background: Promise<unknown>[] = [];
+  it("does not execute effects outside the alarm owner and propagates alarm failures", async () => {
     let failAppends = false;
     const harness = await makeHarness({
       script: { model: [], tool: [] },
-      runBackground: (fn) => {
-        const promise = fn();
-        promise.catch(() => {});
-        background.push(promise);
-      },
       executorOverride: (descriptor) =>
         descriptor.kind === "model_call"
           ? ({
@@ -357,10 +423,9 @@ describe("AgentLoopDriver", () => {
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-bg-fail"));
-    await Promise.resolve();
-    await Promise.resolve();
+    expect(failAppends).toBe(false);
 
-    await expect(Promise.all(background)).rejects.toThrow("append down");
+    await expect(harness.driver.alarm()).rejects.toThrow("append down");
     expect(harness.driver.outbox.all()[0]?.leaseExpiresAt).not.toBeNull();
   });
 
@@ -910,7 +975,7 @@ describe("AgentLoopDriver", () => {
       []
     );
     expect(notices.rows.map((row) => JSON.parse(row.payload_ref_json))).toContainEqual(
-      expect.objectContaining({ kind: "model.local_fallback_continued" })
+      expect.objectContaining({ kind: "model.fallback_continued" })
     );
     const starts = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
       "query",
@@ -959,9 +1024,6 @@ describe("AgentLoopDriver", () => {
       script: { model: [], tool: [] },
       gad,
       driverSql: host,
-      runBackground: (fn) => {
-        void fn();
-      },
       executorOverride: (descriptor) =>
         descriptor.kind === "model_call"
           ? ({
@@ -975,7 +1037,7 @@ describe("AgentLoopDriver", () => {
     });
 
     await first.driver.handleIncoming(CHANNEL, promptIncoming());
-    await first.driver.alarm();
+    void first.driver.alarm().catch(() => undefined);
     await started.promise;
     const leasedRow = first.driver.outbox.all()[0];
     expect(leasedRow).toEqual(
@@ -1614,6 +1676,39 @@ describe("AgentLoopDriver", () => {
     expect(await logKinds(harness.gad)).not.toContain("system.compaction_recorded");
     const loop = await harness.driver.loop(CHANNEL);
     expect(loop.state.openTurn).not.toBeNull();
+  });
+
+  it("compacts an overflowing open turn and retries the model call", async () => {
+    const overflow: EffectOutcome = {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      errorReason: "Your input exceeds the context window of this model.",
+    };
+    const harness = await makeHarness({
+      script: { model: [overflow, textReply("recovered")], tool: [] },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
+
+    expect(await logKinds(harness.gad)).toContain("system.compaction_recorded");
+    const failures = await harness.gad.call<{
+      rows: Array<{ payload_ref_json: string }>;
+    }>(
+      "query",
+      `SELECT payload_ref_json FROM log_events
+        WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
+      []
+    );
+    expect(failures.rows.map((row) => JSON.parse(row.payload_ref_json))).toContainEqual({
+      protocol: expect.any(String),
+      reason: expect.any(String),
+      recoverable: true,
+      code: "context_overflow_terminal",
+    });
+    expect(await logKinds(harness.gad)).toContain("turn.closed");
+    expect(await harness.driver.modelExecutionEvidence(CHANNEL)).toMatchObject({ totalCalls: 2 });
   });
 });
 

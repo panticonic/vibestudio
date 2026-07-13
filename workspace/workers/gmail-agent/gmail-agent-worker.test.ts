@@ -197,7 +197,9 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     }
     if (method === "credentials.connect") return { id: "cred-1" };
     if (method === "credentials.resolveCredential") return { id: "cred-1" };
-    if (method === "workspace-state.alarmSet") return undefined;
+    if (method === "workspace-state.alarmSet" || method === "workspace-state.alarmClear") {
+      return undefined;
+    }
     if (method === "fs.readFile") {
       if (this.unreadableRendererSources) {
         throw new Error("test renderer source unavailable");
@@ -287,9 +289,9 @@ class TestGmailAgentWorker extends GmailAgentWorker {
       },
       getConfig: async () => null,
       getParticipants: async () => [],
-      getReplayAfter: async (cursor: number) => ({
+      getReplayAfter: async (request: { after: number }) => ({
         mode: "after",
-        logEvents: this.replayEvents.filter((event) => event.id > cursor),
+        logEvents: this.replayEvents.filter((event) => event.id > request.after),
         snapshots: [],
         ready: { totalCount: this.replayEvents.length, envelopeCount: this.replayEvents.length },
       }),

@@ -85,6 +85,9 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     }
     if (method === "workspace.getAgentsMd") return "";
     if (method === "workspace.listSkills") return [];
+    if (method === "workspace-state.alarmSet" || method === "workspace-state.alarmClear") {
+      return undefined;
+    }
     if (method === "fs.readFile") {
       const filePath = String(args?.[0] ?? "");
       if (filePath === "skills/news/renderers/news-setup.tsx") {

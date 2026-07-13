@@ -153,6 +153,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           ? {
               ...state.openTurn,
               modelCallCount: state.openTurn.modelCallCount + 1,
+              activeModelRequest: request,
               // A new model call consumes any soft flush intent.
               ...(state.openTurn.pendingFlush ? { pendingFlush: undefined } : {}),
               ...(state.openTurn.lastFailedModelRequest
@@ -551,7 +552,10 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           ? { ...state, openTurn: { ...state.openTurn, pendingFlush: "steers" } }
           : state;
       }
-      if (detailKind === "model.local_fallback_continued") {
+      if (
+        detailKind === "model.fallback_continued" ||
+        detailKind === "model.local_fallback_continued"
+      ) {
         return state.openTurn
           ? { ...state, openTurn: { ...state.openTurn, failedOverToFallback: true } }
           : state;

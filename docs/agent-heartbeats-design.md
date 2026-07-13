@@ -118,9 +118,7 @@ interface AgentHeartbeatLoopDeps {
   scheduleWakeAt: (sourceId: string, timeMs: number) => void | Promise<void>;
   clearWake?: (sourceId: string) => void | Promise<void>;
   isTurnInFlight?: () => boolean;
-  evaluate: (ctx: HeartbeatEvaluationContext) =>
-    | HeartbeatDecision
-    | Promise<HeartbeatDecision>;
+  evaluate: (ctx: HeartbeatEvaluationContext) => HeartbeatDecision | Promise<HeartbeatDecision>;
   enqueueTurn: (turn: HeartbeatTurnRequest) => void | Promise<void>;
   now?: () => number;
   log?: Pick<Console, "warn" | "info">;
@@ -142,7 +140,6 @@ interface HeartbeatDecision {
   digest?: string;
   promptText?: string;
   silentOk?: boolean;
-  maxModelCalls?: number;
   delivery?: "none" | "channel" | "last-contact";
 }
 ```
@@ -214,7 +211,7 @@ This keeps the policy in the agent DO, where state and permissions already live.
 The existing `submitAgentInitiatedTurn(channelId, { content }, { steeringId,
 mode })` is not enough for heartbeat context/cost controls. It always uses the
 normal prompt artifacts and the normal loop config. Without extending this API,
-`context.mode`, `tokenBudget`, `maxModelCalls`, `ackToken`, and
+`context.mode`, `tokenBudget`, `ackToken`, and
 `origin: "heartbeat"` are only documentation.
 
 Add an explicit turn options surface:
@@ -231,10 +228,6 @@ interface AgentInitiatedTurnOptions {
     promptFile?: string;
     tokenBudget?: number;
   };
-  loopConfigPatch?: {
-    maxModelCallsPerTurn?: number | null;
-    modelStreamIdleTimeoutMs?: number | null;
-  };
   delivery?: "none" | "channel" | "last-contact";
   ackToken?: string;
 }
@@ -242,8 +235,7 @@ interface AgentInitiatedTurnOptions {
 
 Implementation should use a normal `prompt` command with durable metadata, not a
 new agent-loop command kind at first. The prompt command already represents
-external intent, and `AgentLoopConfig` already carries per-turn limits such as
-`maxModelCallsPerTurn`.
+external intent.
 
 The metadata cannot be only an ephemeral argument to
 `submitAgentInitiatedTurn`. It must be journaled before any model effect is
@@ -289,7 +281,6 @@ heartbeats:
       skipWhenBusy: true
       delivery: none
       ackToken: HEARTBEAT_OK
-      maxModelCalls: 1
       failureBackoff:
         base: 5m
         max: 4h
@@ -350,7 +341,6 @@ export interface WorkspaceHeartbeatDecl {
     skipWhenBusy?: boolean;
     delivery?: "none" | "channel" | "last-contact";
     ackToken?: string;
-    maxModelCalls?: number;
     failureBackoff?: { base?: string; max?: string };
   };
 }
@@ -362,14 +352,14 @@ Validation should mirror `recurring:`:
 - target source/class is valid and resolves to a singleton or declared worker;
 - duration strings parse;
 - `at` only applies to day-multiple intervals;
-- `tokenBudget`, `maxModelCalls`, and intervals have safe minimums/maximums.
+- `tokenBudget` and intervals have safe minimums/maximums.
 
 Meta approval should add a `unitKind: "agent-heartbeat"` entry with capabilities
 like:
 
 ```text
 unattended agent wake every 5m, may invoke tools through BgkitSupervisorWorker,
-delivery none, maxModelCalls 1, tokenBudget 12000
+delivery none, tokenBudget 12000
 ```
 
 ### 7. Durable State
@@ -448,10 +438,11 @@ Heartbeat turns need a dedicated prompt/context policy:
   writing a summary into heartbeat state.
 - `tokenBudget` caps prompt assembly before the model call.
 - `ackToken` or structured `silentOk` drops no-op replies.
-- `maxModelCalls` defaults to `1` for unattended heartbeats.
 - Whole-turn `maxDuration` is out of scope for this atomic heartbeat cut. It is
-  a separate agent-loop deadline/abort feature over open turns; this heartbeat
-  cut supports `maxModelCalls` and `modelStreamIdleTimeoutMs` as runtime caps.
+  a separate agent-loop deadline/abort feature over open turns. Heartbeats do
+  not impose an arbitrary model-round cap; normal tool/reasoning loops run to a
+  terminal answer, while repeated transport/model failures use the shared
+  retry policy and publish their terminal diagnostic when retries are exhausted.
 
 For bgkit, the heartbeat prompt should be mostly generated from current metrics,
 current hyperparameters, firing Playbook rules, and a compact last-action

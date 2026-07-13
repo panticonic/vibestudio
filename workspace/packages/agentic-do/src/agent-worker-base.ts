@@ -65,9 +65,9 @@ type StandardAgentMethodName =
   | "setThinkingLevel"
   | "setApprovalLevel"
   | "setRespondPolicy"
-  | "setModelStreamIdleTimeoutMs"
   | "refreshPromptArtifacts"
   | "getAgentSettings"
+  | "getModelExecutionEvidence"
   | "getDebugState"
   | "inspectMethodSuspensions";
 
@@ -77,7 +77,6 @@ type StandardAgentMethodOptions = {
 };
 
 const PROMPT_RESOURCE_CACHE_TTL_MS = 5_000;
-const DEFAULT_WORKSPACE_AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 export abstract class AgentWorkerBase extends AgentVesselBase {
   private promptResourceCache: { value: AgentPromptResources; expiresAt: number } | null = null;
@@ -101,10 +100,6 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
 
   protected override getDefaultRespondPolicy(): RespondPolicy {
     return DEFAULT_RESPOND_POLICY as RespondPolicy;
-  }
-
-  protected override getDefaultModelStreamIdleTimeoutMs(): number | null {
-    return DEFAULT_WORKSPACE_AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS;
   }
 
   protected override getModelCredentialSetupProps(
@@ -188,9 +183,6 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             delivery: turn.decision.delivery ?? "none",
             ...(turn.decision.ackToken ? { ackToken: turn.decision.ackToken } : {}),
             ...(turn.decision.silentOk !== undefined ? { silentOk: turn.decision.silentOk } : {}),
-            ...(turn.decision.maxModelCalls !== undefined
-              ? { loopConfigPatch: { maxModelCallsPerTurn: turn.decision.maxModelCalls } }
-              : { loopConfigPatch: { maxModelCallsPerTurn: 1 } }),
             contextPolicy,
           }
         );
@@ -358,6 +350,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     };
     const base = [
       createReadTool(cwd, fs, {
+        rpc: this.rpc,
         provenance: {
           provenanceForFile,
           head: headFor,
@@ -374,10 +367,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         sessionHead: sessionLogId,
       }),
       createLsTool(cwd, fs),
-      createGrepTool(cwd, fs),
-      createFindTool(cwd, fs),
-      createEditTool(cwd, vcs),
-      createWriteTool(cwd, vcs),
+      createGrepTool(cwd, fs, { rpc: this.rpc }),
+      createFindTool(cwd, fs, { rpc: this.rpc }),
+      createEditTool(cwd, vcs, fs),
+      createWriteTool(cwd, vcs, fs),
       createCommitTool(vcs, knowledge),
       createRecordClaimTool(knowledge),
       createRelateClaimsTool(knowledge),
@@ -514,7 +507,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then merge/pick/close. Progress is pushed; do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
+          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId exactly, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then merge/pick/close. Progress is pushed; do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {
@@ -564,7 +557,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         parameters: {
           type: "object",
           properties: {
-            runId: { type: "string", description: "The subagent run id." },
+            runId: {
+              type: "string",
+              description:
+                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+            },
             message: { type: "string", description: "Message to send to the subagent." },
           },
           required: ["runId", "message"],
@@ -587,7 +584,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         parameters: {
           type: "object",
           properties: {
-            runId: { type: "string", description: "The subagent run id." },
+            runId: {
+              type: "string",
+              description:
+                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+            },
             query: {
               type: "string",
               description: "'status' | 'diff' | 'log' | a file path (default 'status').",
@@ -611,7 +612,13 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           "Take EVERYTHING from a subagent by merging its child context into yours. Inspect status/diff first. Merge is commit-gated on both sides; if parent or child is dirty, commit deliberately, then retry. This does not push main.",
         parameters: {
           type: "object",
-          properties: { runId: { type: "string", description: "The subagent run id." } },
+          properties: {
+            runId: {
+              type: "string",
+              description:
+                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+            },
+          },
           required: ["runId"],
         } as never,
         execute: async (_toolCallId, params) => {
@@ -627,7 +634,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         parameters: {
           type: "object",
           properties: {
-            runId: { type: "string", description: "The subagent run id." },
+            runId: {
+              type: "string",
+              description:
+                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+            },
             picks: {
               type: "array",
               description:
@@ -650,7 +661,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         parameters: {
           type: "object",
           properties: {
-            runId: { type: "string", description: "The subagent run id." },
+            runId: {
+              type: "string",
+              description:
+                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+            },
             afterSeq: {
               type: "number",
               description: "Return messages after this channel seq (default 0).",
@@ -675,7 +690,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         parameters: {
           type: "object",
           properties: {
-            runId: { type: "string", description: "The subagent run id." },
+            runId: {
+              type: "string",
+              description:
+                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+            },
             discard: {
               type: "boolean",
               description: "Discard the child's work (record it as discarded).",
@@ -797,17 +816,18 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         description: "Set live chattiness policy and optional participant allow-list",
       },
       {
-        name: "setModelStreamIdleTimeoutMs",
-        description: "Set model stream idle watchdog milliseconds, or null to disable",
-      },
-      {
         name: "refreshPromptArtifacts",
         description: "Reload workspace prompt resources and refresh model prompt/tool artifacts",
       },
       {
         name: "getAgentSettings",
         description:
-          "Read effective model, effort, approval, chattiness, and stream watchdog settings",
+          "Read effective primary/fallback model routing, effort, approval, and chattiness settings",
+      },
+      {
+        name: "getModelExecutionEvidence",
+        description:
+          "Read durable provider/model routing and aggregate usage evidence for this channel",
       },
       { name: "getDebugState", description: "Read agent DO persisted and in-memory debug state" },
       {

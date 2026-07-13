@@ -4,6 +4,20 @@ import { classifyModelFailure, modelFailureInputFromUnknown } from "./model-erro
 const now = "2026-06-15T18:00:00.000Z";
 
 describe("classifyModelFailure", () => {
+  it("retries premature provider WebSocket closes through the bounded effect policy", () => {
+    expect(
+      classifyModelFailure({
+        provider: "openai-codex",
+        rawReason: "WebSocket closed 1000",
+        now,
+      })
+    ).toMatchObject({
+      code: "unknown_retryable",
+      recoverable: true,
+      retryAfterMs: 1_000,
+    });
+  });
+
   it("treats Codex usage limits as terminal and readable", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",

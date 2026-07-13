@@ -5,7 +5,11 @@
  * channel service DO via the server's userland service resolver.
  */
 import type { RpcCaller } from "@vibestudio/rpc";
-import type { ChannelReplayEnvelope } from "@workspace/pubsub";
+import {
+  iterateChannelReplayAfterPages,
+  type ChannelReplayAfterRequest,
+  type ChannelReplayEnvelope,
+} from "@workspace/pubsub";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -236,8 +240,19 @@ export class ChannelClient {
   async timeoutCall(callId: string, reason?: string): Promise<void> {
     await this.call("timeoutMethodCall", callId, reason);
   }
-  async getReplayAfter(sinceId: number): Promise<ChannelReplayEnvelope> {
-    return this.call("getReplayAfter", sinceId) as Promise<ChannelReplayEnvelope>;
+  async getReplayAfter(request: ChannelReplayAfterRequest): Promise<ChannelReplayEnvelope> {
+    return this.call("getReplayAfter", request) as Promise<ChannelReplayEnvelope>;
+  }
+  /** Iterate a stable forward snapshot without ever assembling it into one RPC
+   * payload. Appends after the first page's watermark belong to the next read. */
+  async *replayAfterPages(
+    request: ChannelReplayAfterRequest
+  ): AsyncGenerator<ChannelReplayEnvelope, void, void> {
+    yield* iterateChannelReplayAfterPages((page) => this.getReplayAfter(page), request);
+  }
+  /** Look up one durable channel envelope by its stable id. */
+  async getEnvelope(envelopeId: string): Promise<unknown | null> {
+    return this.call("getEnvelope", envelopeId) as Promise<unknown | null>;
   }
   async getMessageType(typeId: string): Promise<Record<string, unknown> | null> {
     return this.call("getMessageType", typeId) as Promise<Record<string, unknown> | null>;

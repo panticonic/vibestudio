@@ -11,6 +11,7 @@ type VibestudioModelFetchProxyGlobals = typeof globalThis & {
     url: string,
     headers: Headers | Record<string, string>
   ) => { url: string } | null;
+  __vibestudioShouldReuseCodexWebSocket?: () => boolean;
 };
 
 const originalFetch = globalThis.fetch;
@@ -21,6 +22,7 @@ function resetModelFetchProxyGlobals(): void {
   delete globals.__vibestudioModelFetchProxyState;
   delete globals.__vibestudioModelFetchProxyInstalled;
   delete globals.__vibestudioPrepareModelWebSocket;
+  delete globals.__vibestudioShouldReuseCodexWebSocket;
 }
 
 function decodeWebSocketMetadata(url: string): Record<string, string> {
@@ -37,17 +39,19 @@ describe("model fetch proxy websocket preparation", () => {
     vi.restoreAllMocks();
   });
 
-  it("encodes ChatGPT Codex websocket headers with the required origin", () => {
+  it("encodes ChatGPT Codex websocket headers with the matching OAuth originator", () => {
     globalThis.fetch = vi.fn(async () => new Response("ok")) as unknown as typeof fetch;
     installUrlBoundModelFetchProxy("https://chatgpt.com/backend-api", vi.fn());
 
     const globals = globalThis as VibestudioModelFetchProxyGlobals;
+    expect(globals.__vibestudioShouldReuseCodexWebSocket?.()).toBe(true);
     const prepared = globals.__vibestudioPrepareModelWebSocket?.(
       "wss://chatgpt.com/backend-api/codex/responses",
       {
         Authorization: `Bearer ${createModelCredentialSentinel()}`,
         "OpenAI-Beta": "responses_websockets=2026-02-06",
         "chatgpt-account-id": "acct-1",
+        originator: "pi",
         "session-id": "session-1",
       }
     );
@@ -58,6 +62,7 @@ describe("model fetch proxy websocket preparation", () => {
       "openai-beta": "responses_websockets=2026-02-06",
       "chatgpt-account-id": "acct-1",
       origin: "https://chatgpt.com",
+      originator: "codex_cli_rs",
       "session-id": "session-1",
     });
     expect(metadata).not.toHaveProperty("authorization");
@@ -75,6 +80,7 @@ describe("model fetch proxy websocket preparation", () => {
         Authorization: `Bearer ${createModelCredentialSentinel()}`,
         Upgrade: "websocket",
         "OpenAI-Beta": "responses_websockets=2026-02-06",
+        originator: "pi",
         "session-id": "session-1",
       },
     });
@@ -87,9 +93,34 @@ describe("model fetch proxy websocket preparation", () => {
     expect(metadata).toMatchObject({
       "openai-beta": "responses_websockets=2026-02-06",
       origin: "https://chatgpt.com",
+      originator: "codex_cli_rs",
       "session-id": "session-1",
     });
     expect(metadata).not.toHaveProperty("authorization");
     expect(new Headers(init?.headers).get("authorization")).toBeNull();
+  });
+
+  it("aligns ChatGPT Codex SSE requests with the credential's OAuth client", async () => {
+    globalThis.fetch = vi.fn(async () => new Response("direct")) as unknown as typeof fetch;
+    const routeFetcher = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response("proxied")
+    );
+    installUrlBoundModelFetchProxy("https://chatgpt.com/backend-api", routeFetcher);
+
+    await globalThis.fetch("https://chatgpt.com/backend-api/codex/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${createModelCredentialSentinel()}`,
+        "content-type": "application/json",
+        originator: "pi",
+      },
+      body: JSON.stringify({ model: "gpt-5.6-luna" }),
+    });
+
+    expect(routeFetcher).toHaveBeenCalledTimes(1);
+    const [, init] = routeFetcher.mock.calls[0]!;
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("originator")).toBe("codex_cli_rs");
   });
 });

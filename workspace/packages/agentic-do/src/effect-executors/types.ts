@@ -155,6 +155,29 @@ export interface ExecutorDeps {
   env?: Record<string, unknown>;
 }
 
+export type ModelExecutionAttemptEvent =
+  | {
+      phase: "started";
+      attemptId: string;
+      channelId: string;
+      messageId: string;
+      provider: string;
+      model: string;
+      ref: string;
+      api: string;
+      baseUrl: string;
+      auth: string;
+      startedAt: string;
+    }
+  | {
+      phase: "finished";
+      attemptId: string;
+      completedAt: string;
+      outcome: "completed" | "failed" | "aborted";
+      usage?: Record<string, unknown>;
+      error?: string;
+    };
+
 export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
   kind: EffectKind;
   execute(args: {
@@ -163,5 +186,8 @@ export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
     signal: AbortSignal;
     deps: ExecutorDeps;
     onEphemeral(emit: EphemeralEmit): void;
+    /** Synchronous local durability hook. A thrown `started` write prevents
+     * the provider call; a thrown terminal write surfaces as a system error. */
+    onModelExecutionAttempt?(event: ModelExecutionAttemptEvent): void;
   }): Promise<EffectOutcome | { deferred: true }>;
 }

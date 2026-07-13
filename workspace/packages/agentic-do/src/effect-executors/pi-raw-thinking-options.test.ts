@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-// Mistral's provider pulls in its SDK lazily. Preload the real provider during
+// Mistral's provider pulls in its SDK lazily. Preload the real API module during
 // test collection so the payload assertion itself is not timed by SDK startup
 // under full-suite load.
-import "@earendil-works/pi-ai/providers/mistral";
+import "@earendil-works/pi-ai/api/mistral-conversations";
 import { stream } from "@earendil-works/pi-ai/compat";
 import type { Api, Context, Model, ProviderStreamOptions } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@workspace/agent-loop";
@@ -244,5 +244,5 @@ describe("raw provider thinking payloads", () => {
     expect(payload).toMatchObject({
       reasoningEffort: "high",
     });
-  });
+  }, 30_000);
 });

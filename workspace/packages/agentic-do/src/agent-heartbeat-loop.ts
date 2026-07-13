@@ -91,7 +91,6 @@ export interface HeartbeatDecision {
   promptText?: string;
   digest?: string;
   silentOk?: boolean;
-  maxModelCalls?: number;
   delivery?: "none" | "channel" | "last-contact";
   ackToken?: string;
   contextPolicy?: AgentTurnContextPolicy;
@@ -535,8 +534,7 @@ export class AgentHeartbeatLoop {
   private nextBackoff(now: number, failCount: number): number {
     const config = this.configObject(this.getState().configJson);
     const configured = heartbeatFailureBackoff(config);
-    const base =
-      configured.baseMs ?? this.deps.failureBackoff?.baseMs ?? DEFAULT_BACKOFF_BASE_MS;
+    const base = configured.baseMs ?? this.deps.failureBackoff?.baseMs ?? DEFAULT_BACKOFF_BASE_MS;
     const max = configured.maxMs ?? this.deps.failureBackoff?.maxMs ?? DEFAULT_BACKOFF_MAX_MS;
     const delay = Math.min(max, base * 2 ** Math.max(0, failCount - 1));
     return now + delay;
@@ -609,12 +607,11 @@ export class AgentHeartbeatLoop {
         ? (config as Record<string, unknown>)
         : this.configObject();
     const atMinutes = parseClock(recordValue(recordValue(obj, "schedule"), "at"));
-    let at = atMinutes === null
-      ? now + clampCadence(cadenceMs)
-      : nextAnchoredRunAt(now, clampCadence(cadenceMs), atMinutes);
-    const jitterMs = parseDurationMaybe(
-      recordValue(recordValue(obj, "schedule"), "jitter")
-    );
+    let at =
+      atMinutes === null
+        ? now + clampCadence(cadenceMs)
+        : nextAnchoredRunAt(now, clampCadence(cadenceMs), atMinutes);
+    const jitterMs = parseDurationMaybe(recordValue(recordValue(obj, "schedule"), "jitter"));
     if (jitterMs !== null && jitterMs > 0) {
       at += Math.floor(Math.random() * (jitterMs + 1));
     }
@@ -691,9 +688,10 @@ function parseDurationMaybe(value: unknown): number | null {
   return Math.round(amount * scale);
 }
 
-function heartbeatFailureBackoff(
-  config: Record<string, unknown> | null
-): { baseMs?: number; maxMs?: number } {
+function heartbeatFailureBackoff(config: Record<string, unknown> | null): {
+  baseMs?: number;
+  maxMs?: number;
+} {
   const failureBackoff = recordValue(recordValue(config, "behavior"), "failureBackoff");
   const baseMs = parseDurationMaybe(recordValue(failureBackoff, "base"));
   const maxMs = parseDurationMaybe(recordValue(failureBackoff, "max"));

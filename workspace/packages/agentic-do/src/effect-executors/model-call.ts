@@ -7,6 +7,7 @@
  */
 
 import { stream } from "@earendil-works/pi-ai/compat";
+import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import type { Context, Message } from "@earendil-works/pi-ai";
 import {
   buildModelContext,
@@ -31,7 +32,6 @@ import {
 } from "./types.js";
 import { modelCredentialReconnectOutcome } from "../model-credential-suspension.js";
 
-const DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const PI_REPLAY_METADATA_KEY = "pi";
 const MAX_PROVIDER_SESSION_ID_LENGTH = 64;
 const LOCAL_MODEL_SIGNAL_CONTENT_TYPE = "vibestudio-ext-working";
@@ -43,15 +43,6 @@ type PiReplayMetadata = {
   thoughtSignature?: string;
   redacted?: boolean;
 };
-
-class ModelStreamIdleTimeoutError extends Error {
-  constructor(timeoutMs: number, phase: ModelStreamIdlePhase) {
-    super(`model stream idle timeout after ${timeoutMs}ms while waiting for ${phase}`);
-    this.name = "ModelStreamIdleTimeoutError";
-  }
-}
-
-type ModelStreamIdlePhase = "stream event" | "stream result";
 
 type OnEphemeral = (emit: EphemeralEmit) => void;
 
@@ -191,67 +182,6 @@ function normalizePercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
-async function withModelStreamIdleTimeout<T>(
-  promise: Promise<T>,
-  input: {
-    timeoutMs: number | null;
-    outerSignal: AbortSignal;
-    streamAbort: AbortController;
-    phase: ModelStreamIdlePhase;
-    onIdleTimeout?: () => void;
-  }
-): Promise<T> {
-  if (input.outerSignal.aborted) {
-    input.streamAbort.abort(input.outerSignal.reason);
-    throw input.outerSignal.reason ?? new Error("model stream aborted");
-  }
-
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  let abortListener: (() => void) | null = null;
-  const races: Array<Promise<T>> = [promise];
-  const timeoutMs = input.timeoutMs;
-  if (timeoutMs !== null) {
-    races.push(
-      new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          const err = new ModelStreamIdleTimeoutError(timeoutMs, input.phase);
-          input.onIdleTimeout?.();
-          input.streamAbort.abort(err);
-          reject(err);
-        }, timeoutMs);
-      })
-    );
-  }
-  const abort = new Promise<T>((_resolve, reject) => {
-    abortListener = () => {
-      input.streamAbort.abort(input.outerSignal.reason);
-      reject(input.outerSignal.reason ?? new Error("model stream aborted"));
-    };
-    input.outerSignal.addEventListener("abort", abortListener, { once: true });
-  });
-  races.push(abort);
-
-  try {
-    return await Promise.race(races);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    if (abortListener) input.outerSignal.removeEventListener("abort", abortListener);
-  }
-}
-
-function modelStreamIdleTimeoutMs(request: ModelCallEffect["request"]): number | null {
-  const configured = request.streamOptions?.idleTimeoutMs;
-  if (configured === null) return null;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return configured;
-  }
-  return DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
-}
-
-function modelStreamIdleTimeoutReason(timeoutMs: number, phase: ModelStreamIdlePhase): string {
-  return `model_stream_idle_timeout: no ${phase} within ${timeoutMs}ms`;
-}
-
 function isUnattendedModelRequest(request: ModelCallEffect["request"]): boolean {
   return (
     request.turnMetadata?.origin === "heartbeat" || request.turnMetadata?.origin === "scheduled"
@@ -344,7 +274,28 @@ function modelStreamSessionId(
   descriptor: ModelCallEffect,
   selfRef: { id: string; participantId?: string }
 ): string {
-  return providerSafeSessionId(`${descriptor.channelId}:${selfRef.participantId ?? selfRef.id}`);
+  // This is a transport reuse scope, not an agent identity. A turn can make
+  // several sequential model requests around tool calls, but a different
+  // turn or fallback model must never inherit the prior connection's
+  // provider-side continuation state.
+  return providerSafeSessionId(
+    [
+      descriptor.channelId,
+      selfRef.participantId ?? selfRef.id,
+      descriptor.turnId,
+      descriptor.request.provider,
+      descriptor.request.model,
+    ].join(":")
+  );
+}
+
+function hasToolCallBlock(blocks: readonly unknown[]): boolean {
+  return blocks.some(
+    (block) =>
+      !!block &&
+      typeof block === "object" &&
+      (block as Record<string, unknown>)["type"] === "toolCall"
+  );
 }
 
 function providerSafeSessionId(raw: string): string {
@@ -718,6 +669,7 @@ async function executeModelCall(
     signal,
     deps,
     onEphemeral,
+    onModelExecutionAttempt,
   }: Parameters<EffectExecutor<ModelCallEffect>["execute"]>[0],
   progress: ModelCallProgress
 ): Promise<EffectOutcome | { deferred: true }> {
@@ -857,9 +809,25 @@ async function executeModelCall(
     { getText: (digest) => deps.blobstore.getText(digest) }
   )) as ModelMessage[];
   const immediatePrompt = request.immediatePrompt?.trim();
-  const messages = immediatePrompt
+  const unboundedMessages = immediatePrompt
     ? [...hydratedMessages, { role: "user" as const, content: immediatePrompt }]
     : hydratedMessages;
+  const boundedInput = boundModelInput({
+    messages: unboundedMessages,
+    systemPrompt,
+    tools,
+    contextWindow: modelSpec.contextWindow,
+    policyTokenBudget: request.turnMetadata?.contextPolicy?.tokenBudget,
+  });
+  const messages = boundedInput.messages;
+  if (boundedInput.trimmed) {
+    trace("context.trimmed", {
+      originalChars: boundedInput.originalChars,
+      finalChars: boundedInput.finalChars,
+      removedMessages: boundedInput.removedMessages,
+      windowedToolResults: boundedInput.windowedToolResults,
+    });
+  }
   const context: Context = {
     ...(systemPrompt ? { systemPrompt } : {}),
     messages: toPiMessages(messages),
@@ -871,7 +839,6 @@ async function executeModelCall(
   });
 
   const streamAbort = new AbortController();
-  let idleTimedOut = false;
   if (signal.aborted) {
     streamAbort.abort(signal.reason);
   }
@@ -886,13 +853,54 @@ async function executeModelCall(
   // option (verified against 0.78.0) — with a journaled loopback
   // placeholder port, passing the spec unmodified dials a dead endpoint.
   const effectiveSpec = liveBaseUrl ? { ...modelSpec, baseUrl: liveBaseUrl } : modelSpec;
-  const eventStream = stream(effectiveSpec as never, context, {
-    apiKey: credentials.apiKey,
-    ...(credentials.headers ? { headers: credentials.headers } : {}),
-    signal: streamAbort.signal,
-    sessionId: modelStreamSessionId(descriptor, deps.selfRef),
-    ...buildRawThinkingOptions(modelSpec as unknown as RawThinkingModel, request.thinkingLevel),
-  } as never);
+  const providerSessionId = modelStreamSessionId(descriptor, deps.selfRef);
+  const closeProviderSession = () => closeOpenAICodexWebSocketSessions(providerSessionId);
+  const attemptId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  onModelExecutionAttempt?.({
+    phase: "started",
+    attemptId,
+    channelId: descriptor.channelId,
+    messageId: descriptor.messageId,
+    provider: request.provider,
+    model: request.model,
+    ref: `${request.provider}:${request.model}`,
+    api: String(effectiveSpec.api ?? ""),
+    baseUrl: String(effectiveSpec.baseUrl ?? modelBaseUrl ?? ""),
+    auth: request.auth ?? "url-bound",
+    startedAt,
+  });
+  let attemptFinished = false;
+  const finishAttempt = (
+    outcome: "completed" | "failed" | "aborted",
+    options: { usage?: Record<string, unknown>; error?: string } = {}
+  ) => {
+    if (attemptFinished) return;
+    attemptFinished = true;
+    onModelExecutionAttempt?.({
+      phase: "finished",
+      attemptId,
+      completedAt: new Date().toISOString(),
+      outcome,
+      ...(options.usage ? { usage: options.usage } : {}),
+      ...(options.error ? { error: options.error } : {}),
+    });
+  };
+  let eventStream: ReturnType<typeof stream>;
+  try {
+    eventStream = stream(effectiveSpec as never, context, {
+      apiKey: credentials.apiKey,
+      ...(credentials.headers ? { headers: credentials.headers } : {}),
+      signal: streamAbort.signal,
+      sessionId: providerSessionId,
+      ...buildRawThinkingOptions(modelSpec as unknown as RawThinkingModel, request.thinkingLevel),
+    } as never);
+  } catch (error) {
+    signal.removeEventListener("abort", forwardAbort);
+    closeProviderSession();
+    finishAttempt("failed", { error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
   let stopPrefillSignals: (() => void) | null =
     isLoopback && liveBaseUrl
       ? startLocalModelPrefillSignals({
@@ -910,26 +918,12 @@ async function executeModelCall(
   >();
   let deltaCounter = 0;
   let sawFirstStreamEvent = false;
-  const idleTimeoutMs = modelStreamIdleTimeoutMs(request);
-  let idleTimeoutPhase: ModelStreamIdlePhase | null = null;
   try {
     const iterator = (eventStream as AsyncIterable<Record<string, unknown>>)[
       Symbol.asyncIterator
     ]();
     for (;;) {
-      const next = await withModelStreamIdleTimeout(iterator.next(), {
-        timeoutMs: idleTimeoutMs,
-        outerSignal: signal,
-        streamAbort,
-        phase: "stream event",
-        onIdleTimeout: () => {
-          idleTimedOut = true;
-          idleTimeoutPhase = "stream event";
-        },
-      }).catch((err) => {
-        if (err instanceof ModelStreamIdleTimeoutError) idleTimedOut = true;
-        throw err;
-      });
+      const next = await iterator.next();
       if (next.done) break;
       const event = next.value;
       // Direct progress update (not `trace` — per-event tracing would spam):
@@ -1049,27 +1043,9 @@ async function executeModelCall(
     stopPrefillSignals = null;
     signal.removeEventListener("abort", forwardAbort);
     if (signal.aborted) {
+      closeProviderSession();
+      finishAttempt("aborted", { error: String(signal.reason ?? "aborted") });
       return { kind: "model", blocks: [], stopReason: "aborted" };
-    }
-    if (idleTimedOut || err instanceof ModelStreamIdleTimeoutError) {
-      const timeoutMs = idleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
-      const phase = idleTimeoutPhase ?? "stream event";
-      const errorReason = modelStreamIdleTimeoutReason(timeoutMs, phase);
-      console.warn("[model-call] stream idle watchdog fired:", {
-        channelId: descriptor.channelId,
-        messageId: descriptor.messageId,
-        provider: request.provider,
-        model: request.model,
-        timeoutMs,
-        phase,
-      });
-      trace("stream.idle-timeout", { timeoutMs, phase });
-      return {
-        kind: "model",
-        blocks: [],
-        stopReason: "error",
-        errorReason,
-      };
     }
     // The journaled message.failed only keeps the message — log the stack
     // here so a deterministic crash in the request path is traceable.
@@ -1080,6 +1056,8 @@ async function executeModelCall(
     trace("stream.failed", {
       error: err instanceof Error ? err.message : String(err),
     });
+    closeProviderSession();
+    finishAttempt("failed", { error: err instanceof Error ? err.message : String(err) });
     return modelFailureOutcome(err, request, { modelBaseUrl });
   }
   void deltaCounter;
@@ -1089,43 +1067,16 @@ async function executeModelCall(
   let result: Record<string, unknown>;
   try {
     trace("stream.result.start");
-    result = await withModelStreamIdleTimeout(
-      (eventStream as unknown as { result(): Promise<Record<string, unknown>> }).result(),
-      {
-        timeoutMs: idleTimeoutMs,
-        outerSignal: signal,
-        streamAbort,
-        phase: "stream result",
-        onIdleTimeout: () => {
-          idleTimedOut = true;
-          idleTimeoutPhase = "stream result";
-        },
-      }
-    );
+    result = await (
+      eventStream as unknown as { result(): Promise<Record<string, unknown>> }
+    ).result();
   } catch (err) {
+    closeProviderSession();
     if (signal.aborted) {
+      finishAttempt("aborted", { error: String(signal.reason ?? "aborted") });
       return { kind: "model", blocks: [], stopReason: "aborted" };
     }
-    if (idleTimedOut || err instanceof ModelStreamIdleTimeoutError) {
-      const timeoutMs = idleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
-      const phase = idleTimeoutPhase ?? "stream result";
-      const errorReason = modelStreamIdleTimeoutReason(timeoutMs, phase);
-      console.warn("[model-call] stream idle watchdog fired:", {
-        channelId: descriptor.channelId,
-        messageId: descriptor.messageId,
-        provider: request.provider,
-        model: request.model,
-        timeoutMs,
-        phase,
-      });
-      trace("stream.idle-timeout", { timeoutMs, phase });
-      return {
-        kind: "model",
-        blocks: [],
-        stopReason: "error",
-        errorReason,
-      };
-    }
+    finishAttempt("failed", { error: err instanceof Error ? err.message : String(err) });
     return modelFailureOutcome(
       err instanceof Error ? err : new Error("model stream failed"),
       request,
@@ -1135,19 +1086,30 @@ async function executeModelCall(
     signal.removeEventListener("abort", forwardAbort);
   }
   const content = Array.isArray(result["content"]) ? (result["content"] as unknown[]) : [];
+  const blocks = toProtocolBlocks(content, descriptor.messageId);
   const stopReason = String(result["stopReason"] ?? "stop");
+  const usage =
+    result["usage"] && typeof result["usage"] === "object" && !Array.isArray(result["usage"])
+      ? (result["usage"] as Record<string, unknown>)
+      : undefined;
   trace("stream.result.completed", {
     stopReason,
     blockCount: content.length,
   });
   if (signal.aborted || stopReason === "aborted") {
+    closeProviderSession();
+    finishAttempt("aborted", {
+      ...(usage ? { usage } : {}),
+      error: String(signal.reason ?? result["errorMessage"] ?? "aborted"),
+    });
     return {
       kind: "model",
-      blocks: toProtocolBlocks(content, descriptor.messageId),
+      blocks,
       stopReason: "aborted",
     };
   }
   if (stopReason === "error") {
+    closeProviderSession();
     // Provider-reported terminal error (e.g. a WS close mid-generation).
     // This path throws nothing, so without this log the failure is invisible
     // in worker logs — only the journaled message.failed records it.
@@ -1160,17 +1122,21 @@ async function executeModelCall(
       provider: request.provider,
       model: request.model,
     });
-    return modelFailureOutcomeFromMessage(
-      String(result["errorMessage"] ?? "model error"),
-      request,
-      { modelBaseUrl }
-    );
+    const errorMessage = String(result["errorMessage"] ?? "model error");
+    finishAttempt("failed", { ...(usage ? { usage } : {}), error: errorMessage });
+    return modelFailureOutcomeFromMessage(errorMessage, request, { modelBaseUrl });
   }
+  // Tool calls continue the same turn, so keep the connection-scoped Codex
+  // context for the immediately following model request. Final assistant
+  // output ends the reuse scope explicitly; no idle socket is required for
+  // correctness and no socket is left behind to impede DO hibernation.
+  if (!hasToolCallBlock(blocks)) closeProviderSession();
+  finishAttempt("completed", usage ? { usage } : {});
   return {
     kind: "model",
-    blocks: toProtocolBlocks(content, descriptor.messageId),
+    blocks,
     stopReason: "completed",
-    usage: (result["usage"] as Record<string, unknown>) ?? undefined,
+    usage,
   };
 }
 
@@ -1205,7 +1171,7 @@ function modelContextForPolicy(
   policy?: AgentTurnContextPolicy
 ): ModelMessage[] {
   if (!policy || policy.mode === "full") {
-    return trimMessagesToBudget(buildModelContext(state, contextThroughSeq), policy?.tokenBudget);
+    return buildModelContext(state, contextThroughSeq);
   }
   const entries = state.entries.filter((entry) => entry.seq <= contextThroughSeq);
   const targetOrigin = state.openTurn?.metadata?.origin ?? "heartbeat";
@@ -1226,20 +1192,177 @@ function modelContextForPolicy(
     }
   }
   const selectedEntries = startIndex >= 0 ? entries.slice(startIndex) : entries.slice(-1);
-  return trimMessagesToBudget(
-    buildModelContext({ ...state, entries: selectedEntries }, contextThroughSeq),
-    policy.tokenBudget
-  );
+  return buildModelContext({ ...state, entries: selectedEntries }, contextThroughSeq);
 }
 
-function trimMessagesToBudget(messages: ModelMessage[], tokenBudget?: number): ModelMessage[] {
-  if (tokenBudget === undefined || tokenBudget <= 0 || messages.length <= 1) return messages;
-  const charBudget = tokenBudget * 4;
-  const trimmed = [...messages];
-  while (trimmed.length > 1 && JSON.stringify(trimmed).length > charBudget) {
-    trimmed.shift();
+interface BoundedModelInput {
+  messages: ModelMessage[];
+  trimmed: boolean;
+  originalChars: number;
+  finalChars: number;
+  removedMessages: number;
+  windowedToolResults: number;
+}
+
+/**
+ * Bound the actual provider input after blob hydration. Stored-value pointers
+ * are intentionally tiny, so budgeting before hydration can underestimate a
+ * tool result by megabytes and let an otherwise recoverable turn hit the
+ * provider's hard context limit.
+ *
+ * Old complete interactions are removed as assistant+tool-result units so the
+ * provider transcript invariant is preserved. If the newest result alone is
+ * huge, only the provider-facing copy is windowed; the journal and inspection
+ * trajectory retain the full value and the model receives an explicit recovery
+ * notice instead of a terminal context-overflow error.
+ */
+function boundModelInput(input: {
+  messages: ModelMessage[];
+  systemPrompt?: string;
+  tools?: Context["tools"];
+  contextWindow: number;
+  policyTokenBudget?: number;
+}): BoundedModelInput {
+  const fixedChars = JSON.stringify({
+    systemPrompt: input.systemPrompt ?? "",
+    tools: input.tools ?? [],
+  }).length;
+  const reserveTokens = Math.min(
+    16_384,
+    Math.max(1_024, Math.floor(input.contextWindow * 0.15)),
+    Math.max(1, Math.floor(input.contextWindow * 0.4))
+  );
+  const safeInputTokens = Math.max(1_024, input.contextWindow - reserveTokens);
+  const requestedTokens =
+    input.policyTokenBudget && input.policyTokenBudget > 0
+      ? Math.min(safeInputTokens, input.policyTokenBudget)
+      : safeInputTokens;
+  // Three serialized characters per token is deliberately conservative for
+  // code/JSON-heavy tool transcripts and leaves room for provider framing.
+  const messageCharBudget = Math.max(4_000, requestedTokens * 3 - fixedChars);
+  const originalChars = serializedMessageChars(input.messages);
+  if (originalChars <= messageCharBudget) {
+    return {
+      messages: input.messages,
+      trimmed: false,
+      originalChars,
+      finalChars: originalChars,
+      removedMessages: 0,
+      windowedToolResults: 0,
+    };
   }
-  return trimmed;
+
+  const messages = [...input.messages];
+  let removedMessages = 0;
+  let windowedToolResults = 0;
+
+  // Prior turns are the cheapest context to discard. Preserve the newest user
+  // request and everything after it.
+  const lastUser = findLastUserMessageIndex(messages);
+  if (lastUser > 0) {
+    removedMessages += lastUser;
+    messages.splice(0, lastUser);
+  }
+
+  // Within a tool-heavy current turn, discard oldest completed interactions
+  // while retaining at least the newest assistant/result unit.
+  while (serializedMessageChars(messages) > messageCharBudget) {
+    const assistantIndexes = messages
+      .map((message, index) => (message.role === "assistant" ? index : -1))
+      .filter((index) => index >= 0);
+    if (assistantIndexes.length <= 1) break;
+    const start = assistantIndexes[0]!;
+    const end = assistantIndexes[1]!;
+    removedMessages += end - start;
+    messages.splice(start, end - start);
+  }
+
+  // A single returned artifact can still exceed the whole model budget. Keep
+  // head+tail evidence and an explicit recovery instruction in the provider
+  // input without mutating the authoritative trajectory.
+  for (let index = 0; index < messages.length; index += 1) {
+    if (serializedMessageChars(messages) <= messageCharBudget) break;
+    const message = messages[index]!;
+    if (message.role !== "toolResult") continue;
+    const text = safeText(message.content);
+    if (text.length <= 8_000) continue;
+    const excess = serializedMessageChars(messages) - messageCharBudget;
+    const target = Math.max(4_000, Math.min(32_000, text.length - excess - 1_000));
+    messages[index] = {
+      ...message,
+      content: windowModelInputText(text, target, "tool result"),
+    };
+    windowedToolResults += 1;
+  }
+
+  // Last resort: discard the remaining completed interaction and let the
+  // capable agent re-run a narrower operation. A provider context error gives
+  // it no opportunity to recover at all.
+  while (serializedMessageChars(messages) > messageCharBudget) {
+    const assistant = messages.findIndex((message) => message.role === "assistant");
+    if (assistant < 0) break;
+    let end = assistant + 1;
+    while (messages[end]?.role === "toolResult") end += 1;
+    removedMessages += end - assistant;
+    messages.splice(assistant, end - assistant);
+  }
+
+  if (removedMessages > 0 && messages.length > 0) {
+    const notice: ModelMessage = {
+      role: "user",
+      content:
+        `[Context safety: ${removedMessages} older completed transcript message(s) were omitted ` +
+        "to fit this model's context window. Re-run any narrower inspection you still need.]",
+    };
+    const insertAt = messages[0]?.role === "user" ? 1 : 0;
+    messages.splice(insertAt, 0, notice);
+  }
+
+  // A huge user attachment/request is rare but must still fail recoverably.
+  if (serializedMessageChars(messages) > messageCharBudget) {
+    const userIndex = findLastUserMessageIndex(messages);
+    const user = messages[userIndex];
+    if (user && typeof user.content === "string") {
+      const excess = serializedMessageChars(messages) - messageCharBudget;
+      const target = Math.max(2_000, user.content.length - excess - 1_000);
+      messages[userIndex] = {
+        ...user,
+        content: windowModelInputText(user.content, target, "user content"),
+      };
+    }
+  }
+
+  const finalChars = serializedMessageChars(messages);
+  return {
+    messages,
+    trimmed: true,
+    originalChars,
+    finalChars,
+    removedMessages,
+    windowedToolResults,
+  };
+}
+
+function serializedMessageChars(messages: ModelMessage[]): number {
+  return JSON.stringify(messages).length;
+}
+
+function findLastUserMessageIndex(messages: ModelMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return index;
+  }
+  return -1;
+}
+
+function windowModelInputText(text: string, maxChars: number, label: string): string {
+  if (text.length <= maxChars) return text;
+  const notice =
+    `\n[${label} windowed for model context: ${text.length - maxChars} of ${text.length} chars ` +
+    "omitted. The full value remains in the trajectory; re-run or page the source narrowly if needed.]\n";
+  const contentBudget = Math.max(0, maxChars - notice.length);
+  const head = Math.floor(contentBudget * 0.7);
+  const tail = contentBudget - head;
+  return `${text.slice(0, head)}${notice}${tail > 0 ? text.slice(-tail) : ""}`;
 }
 
 /** Block content is class-INLINE (the fold and step read block structure;

@@ -6,10 +6,15 @@ import {
   type InitialStateInput,
   type ModelCallEffect,
 } from "@workspace/agent-loop";
-import { CredentialApprovalDeferredError, type ExecutorDeps } from "./types.js";
+import {
+  CredentialApprovalDeferredError,
+  type ExecutorDeps,
+  type ModelExecutionAttemptEvent,
+} from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   clampThinkingLevel: vi.fn((_model: unknown, level: unknown) => level),
+  closeOpenAICodexWebSocketSessions: vi.fn(),
   getModel: vi.fn(),
   stream: vi.fn(),
 }));
@@ -21,6 +26,10 @@ vi.mock("@earendil-works/pi-ai", () => ({
 
 vi.mock("@earendil-works/pi-ai/compat", () => ({
   stream: mocks.stream,
+}));
+
+vi.mock("@earendil-works/pi-ai/api/openai-codex-responses", () => ({
+  closeOpenAICodexWebSocketSessions: mocks.closeOpenAICodexWebSocketSessions,
 }));
 
 const { modelCallExecutor, toPiAssistantBlocks, toProtocolBlocks } =
@@ -74,7 +83,6 @@ function descriptor(requestOverrides: Partial<ModelCallEffect["request"]> = {}):
       activeToolNames: [],
       contextThroughSeq: 0,
       attemptId: "attempt-1",
-      streamOptions: { idleTimeoutMs: 25 },
       ...requestOverrides,
     },
   };
@@ -154,6 +162,7 @@ describe("modelCallExecutor", () => {
     let streamedModel: Record<string, unknown> | undefined;
     let streamOptions: Record<string, unknown> | undefined;
     const ephemerals: unknown[] = [];
+    const attempts: ModelExecutionAttemptEvent[] = [];
     mocks.stream.mockImplementation(
       (model: Record<string, unknown>, _context, options: Record<string, unknown>) => {
         streamedModel = model;
@@ -193,11 +202,27 @@ describe("modelCallExecutor", () => {
       signal: new AbortController().signal,
       deps: inputDeps,
       onEphemeral: (event) => ephemerals.push(event),
+      onModelExecutionAttempt: (event) => attempts.push(event),
     });
 
     expect(outcome).toMatchObject({ kind: "model", stopReason: "completed" });
     expect(getApiKey).not.toHaveBeenCalled();
     expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b");
+    expect(attempts).toMatchObject([
+      {
+        phase: "started",
+        channelId: "channel-1",
+        messageId: "msg-1",
+        provider: "local",
+        model: "lfm2.5-1.2b",
+        ref: "local:lfm2.5-1.2b",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:43117/v1",
+        auth: "loopback",
+      },
+      { phase: "finished", outcome: "completed" },
+    ]);
+    expect(attempts[0]?.attemptId).toBe(attempts[1]?.attemptId);
     expect(
       ephemerals
         .filter((event) => (event as { kind?: unknown }).kind === "signal-message")
@@ -229,54 +254,6 @@ describe("modelCallExecutor", () => {
     expect(outcome).toMatchObject({ kind: "model", stopReason: "error" });
     expect(getApiKey).not.toHaveBeenCalled();
     expect(mocks.stream).not.toHaveBeenCalled();
-  });
-
-  it("returns a model error and aborts the stream after an idle timeout", async () => {
-    vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let streamSignal: AbortSignal | undefined;
-    mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
-    mocks.stream.mockImplementation((_model, _context, options: { signal?: AbortSignal }) => {
-      streamSignal = options.signal;
-      return {
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => new Promise<IteratorResult<Record<string, unknown>>>(() => {}),
-          };
-        },
-        result: async () => ({ content: [], stopReason: "stop" }),
-      };
-    });
-
-    const outcome = modelCallExecutor.execute({
-      descriptor: descriptor(),
-      state: initialAgentState({ channelId: "channel-1", config }),
-      signal: new AbortController().signal,
-      deps: deps(),
-      onEphemeral: () => {},
-    });
-
-    for (let i = 0; i < 25 && mocks.stream.mock.calls.length === 0; i += 1) {
-      await Promise.resolve();
-    }
-    expect(mocks.stream).toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(26);
-
-    await expect(outcome).resolves.toMatchObject({
-      kind: "model",
-      stopReason: "error",
-      errorReason: expect.stringContaining("model_stream_idle_timeout"),
-    });
-    expect(streamSignal?.aborted).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      "[model-call] stream idle watchdog fired:",
-      expect.objectContaining({
-        channelId: "channel-1",
-        messageId: "msg-1",
-        timeoutMs: 25,
-        phase: "stream event",
-      })
-    );
   });
 
   it("returns retry-later for retryable provider rate limits", async () => {
@@ -448,7 +425,7 @@ describe("modelCallExecutor", () => {
     mocks.stream.mockImplementation((_model, _context, options) => {
       expect(options).toMatchObject({
         apiKey: "test-key",
-        sessionId: "channel-1:agent:self",
+        sessionId: "channel-1:agent:self:turn-1:test:model",
         thinkingEnabled: true,
         thinkingBudgetTokens: 8192,
         maxTokens: 64_000,
@@ -520,6 +497,34 @@ describe("modelCallExecutor", () => {
         },
       ],
     });
+    expect(mocks.closeOpenAICodexWebSocketSessions).toHaveBeenCalledWith(
+      "channel-1:agent:self:turn-1:test:model"
+    );
+  });
+
+  it("reuses a provider session only while tool calls keep the same turn active", async () => {
+    mocks.stream.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {},
+      result: async () => ({
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      }),
+    }));
+
+    const outcome = await modelCallExecutor.execute({
+      descriptor: descriptor(),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: deps(),
+      onEphemeral: () => {},
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "model",
+      stopReason: "completed",
+      blocks: [expect.objectContaining({ type: "toolCall", name: "read" })],
+    });
+    expect(mocks.closeOpenAICodexWebSocketSessions).not.toHaveBeenCalled();
   });
 
   it("bounds long provider session IDs before streaming", async () => {
@@ -620,6 +625,86 @@ describe("modelCallExecutor", () => {
         },
       ],
     });
+  });
+
+  it("budgets hydrated tool results and preserves complete tool-call/result units", async () => {
+    const tinySpec = { ...modelSpec, contextWindow: 4_000, maxTokens: 2_000 };
+    const inputDescriptor = descriptor({ modelSpec: tinySpec });
+    inputDescriptor.request.contextThroughSeq = 5;
+    const inputDeps = deps();
+    inputDeps.blobstore.getText = async (digest) => {
+      if (digest === "sys") return "BASE SYSTEM";
+      if (digest === "large-result") return "x".repeat(30_000);
+      return "";
+    };
+    let streamedContext: { messages?: unknown[] } | undefined;
+    mocks.stream.mockImplementation((_model, context) => {
+      streamedContext = context;
+      return {
+        async *[Symbol.asyncIterator]() {},
+        result: async () => ({
+          content: [{ type: "text", text: "ok" }],
+          stopReason: "stop",
+          usage: { input: 1, output: 1 },
+        }),
+      };
+    });
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: inputDescriptor,
+        state: {
+          ...initialAgentState({ channelId: "channel-1", config }),
+          entries: [
+            { kind: "user", seq: 1, envelopeId: "env-1", content: "Inspect the package" },
+            {
+              kind: "assistant",
+              seq: 2,
+              messageId: "msg-old",
+              blocks: [{ type: "toolCall", id: "call-old", name: "read", arguments: {} }],
+            },
+            {
+              kind: "tool-result",
+              seq: 3,
+              invocationId: "call-old",
+              name: "read",
+              result: "old result",
+              isError: false,
+            },
+            {
+              kind: "assistant",
+              seq: 4,
+              messageId: "msg-new",
+              blocks: [{ type: "toolCall", id: "call-new", name: "read", arguments: {} }],
+            },
+            {
+              kind: "tool-result",
+              seq: 5,
+              invocationId: "call-new",
+              name: "read",
+              result: {
+                protocol: "vibestudio.blob-ref.v1",
+                digest: "large-result",
+                size: 30_000,
+                encoding: "text",
+                originalBytes: 30_000,
+              },
+              isError: false,
+            },
+          ],
+        },
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({ kind: "model", stopReason: "completed" });
+
+    const messages = streamedContext?.messages ?? [];
+    expect(JSON.stringify(messages).length).toBeLessThan(9_000);
+    expect(JSON.stringify(messages)).toContain("older completed transcript message");
+    expect(JSON.stringify(messages)).toContain("tool result windowed for model context");
+    expect(JSON.stringify(messages)).not.toContain("call-old");
+    expect(JSON.stringify(messages)).toContain("call-new");
   });
 
   it("rejects orphaned tool results before provider submission", async () => {

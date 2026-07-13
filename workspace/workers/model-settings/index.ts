@@ -293,11 +293,12 @@ export function pickFallbackModel(catalog: ModelCatalog): {
 export class ModelSettingsDO extends DurableObjectBase {
   protected createTables(): void {}
 
+  @rpc({ callers: ["panel", "worker", "do", "agent", "app", "extension", "shell", "server"] })
   async listCatalog(): Promise<ModelCatalog> {
     return this.assembleCatalog();
   }
 
-  @rpc({ callers: ["panel", "server"] })
+  @rpc({ callers: ["panel", "worker", "do", "agent", "app", "extension", "shell", "server"] })
   async getSettings(): Promise<ModelSettingsSnapshot> {
     const [catalog, config] = await Promise.all([
       this.assembleCatalog(),
@@ -306,6 +307,7 @@ export class ModelSettingsDO extends DurableObjectBase {
     return this.resolveSettings(catalog, config);
   }
 
+  @rpc({ callers: ["panel", "worker", "do", "agent", "app", "extension", "shell", "server"] })
   async getDefaultModel(): Promise<ModelSettingsSnapshot> {
     return this.getSettings();
   }

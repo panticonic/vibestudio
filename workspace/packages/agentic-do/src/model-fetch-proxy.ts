@@ -32,6 +32,7 @@ interface ProxyState {
 type ProxyGlobals = typeof globalThis & {
   __vibestudioModelFetchProxyState?: ProxyState;
   __vibestudioModelFetchProxyInstalled?: boolean;
+  __vibestudioShouldReuseCodexWebSocket?: () => boolean;
 };
 
 function base64UrlJson(value: unknown): string {
@@ -142,17 +143,25 @@ function wsMatchUrl(url: URL): URL | null {
   return match;
 }
 
-function isChatGptCodexWebSocketTarget(target: URL): boolean {
+const OPENAI_CODEX_ORIGINATOR = "codex_cli_rs";
+
+function isChatGptCodexTarget(target: URL): boolean {
   return (
     target.protocol === "https:" &&
     target.hostname === "chatgpt.com" &&
-    (target.pathname === "/backend-api/codex" ||
-      target.pathname.startsWith("/backend-api/codex/"))
+    (target.pathname === "/backend-api/codex" || target.pathname.startsWith("/backend-api/codex/"))
   );
 }
 
-function prepareModelWebSocketHeaders(target: URL, headers: Headers): void {
-  if (isChatGptCodexWebSocketTarget(target) && !headers.has("origin")) {
+function prepareModelRequestHeaders(target: URL, headers: Headers, webSocket: boolean): void {
+  if (!isChatGptCodexTarget(target)) return;
+  // The stored credential is issued through the Codex CLI OAuth client. Keep
+  // the request's originator aligned with that client: ChatGPT uses this field
+  // when selecting the account's model route. Leaving pi-ai's generic `pi`
+  // value in place can select a free-tier internal alias that does not exist
+  // even though the same account and public model work through Codex CLI.
+  headers.set("originator", OPENAI_CODEX_ORIGINATOR);
+  if (webSocket && !headers.has("origin")) {
     headers.set("origin", target.origin);
   }
 }
@@ -173,6 +182,11 @@ export function installUrlBoundModelFetchProxy(
       headers: Headers | Record<string, string>
     ) => { url: string } | null;
   };
+  // The model executor scopes cache keys to a single turn/provider/model and
+  // closes them on final output, abort, or failure. Reuse between tool calls
+  // avoids repeatedly consuming outbound connection slots while remaining a
+  // performance optimization: a hibernation/restart may discard it safely.
+  globals.__vibestudioShouldReuseCodexWebSocket = () => true;
   let state = globals.__vibestudioModelFetchProxyState;
   if (!state) {
     state = { originalFetch: globalThis.fetch.bind(globalThis), routes: new Map() };
@@ -195,7 +209,7 @@ export function installUrlBoundModelFetchProxy(
       ? isModelCredentialSentinel(authorization.slice("Bearer ".length))
       : false;
     if (!sentinel) return null;
-    prepareModelWebSocketHeaders(target, headers);
+    prepareModelRequestHeaders(target, headers, true);
     const proxyUrl = new URL(url);
     return { url: prepareModelWebSocketUrl(proxyUrl, headers).toString() };
   };
@@ -225,7 +239,7 @@ export function installUrlBoundModelFetchProxy(
       // proxyFetch stream cannot carry an upgrade; encode the provider
       // headers in the URL metadata used by the egress proxy and send the
       // sentinel-free request through the runtime's attributed egress path.
-      prepareModelWebSocketHeaders(targetUrl, headers);
+      prepareModelRequestHeaders(targetUrl, headers, true);
       const proxyUrl = prepareModelWebSocketUrl(targetUrl, headers);
       return proxyState.originalFetch(proxyUrl.toString(), {
         method: request.method,
@@ -237,6 +251,7 @@ export function installUrlBoundModelFetchProxy(
       request.method === "GET" || request.method === "HEAD"
         ? undefined
         : new Uint8Array(await request.arrayBuffer());
+    prepareModelRequestHeaders(targetUrl, headers, false);
     return route(targetUrl.toString(), {
       method: request.method,
       headers,

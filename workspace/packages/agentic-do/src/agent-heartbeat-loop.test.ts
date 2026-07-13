@@ -71,7 +71,11 @@ describe("AgentHeartbeatLoop", () => {
 
     const result = await h.loop.runNow("operator");
 
-    expect(result).toMatchObject({ action: "skip", enqueued: false, skippedReason: "decision_skip" });
+    expect(result).toMatchObject({
+      action: "skip",
+      enqueued: false,
+      skippedReason: "decision_skip",
+    });
     expect(h.enqueued).toHaveLength(0);
     expect(h.loop.getState().lastObservedDigest).toBe("abc");
   });
@@ -82,7 +86,6 @@ describe("AgentHeartbeatLoop", () => {
       reason: "changed",
       digest: "def",
       promptText: "review state",
-      maxModelCalls: 1,
     });
     await h.loop.start();
 

@@ -75,9 +75,15 @@ export interface AgentLoopConfig {
   modelSpec: AgentModelSpec;
   modelAuth?: ModelAuthMode;
   /** Unattended provider-failure fallback (design §8). When present, the pure
-   *  loop can journal exactly one local retry without consulting a registry. */
+   *  loop can journal exactly one retry without consulting a registry. */
   fallbackModelRef?: string;
   fallbackModelSpec?: AgentModelSpec;
+  fallbackModelAuth?: ModelAuthMode;
+  fallbackThinkingLevel?: ThinkingLevel;
+  /** Absent preserves the provider-failure fallback set. */
+  fallbackFailureCodes?: string[];
+  /** Absent preserves the background-only fallback behavior. */
+  fallbackScope?: "unattended" | "all-turns";
   thinkingLevel: ThinkingLevel;
   approvalLevel: 0 | 1 | 2;
   respondPolicy: RespondPolicy;
@@ -91,10 +97,6 @@ export interface AgentLoopConfig {
   activeToolNames: string[];
   roster: RosterSnapshot;
   agentHopLimit?: number;
-  /** Optional cap for model rounds in one turn. Null/undefined means unlimited. */
-  maxModelCallsPerTurn?: number | null;
-  /** Idle watchdog for model streams. `null` intentionally disables it. */
-  modelStreamIdleTimeoutMs?: number | null;
   /** Channel publication discipline (gated by `publishPolicyPolicy`, appended
    *  last in `defaultPolicies`). "all" = today's behavior (every model outcome
    *  publishes). "turn-final" = only the end-of-turn (tier "primary") message
@@ -122,10 +124,6 @@ export interface AgentTurnContextPolicy {
 export interface AgentTurnMetadata {
   origin?: "agent-initiated" | "heartbeat" | "scheduled";
   contextPolicy?: AgentTurnContextPolicy;
-  loopConfigPatch?: {
-    maxModelCallsPerTurn?: number | null;
-    modelStreamIdleTimeoutMs?: number | null;
-  };
   delivery?: "none" | "channel" | "last-contact";
   ackToken?: string;
   silentOk?: boolean;
@@ -203,6 +201,10 @@ export interface OpenTurn {
   pendingFlush?: "steers";
   /** True once this turn has auto-switched to the local fallback. */
   failedOverToFallback?: boolean;
+  /** Most recently journaled model route for this turn. Once failover occurs,
+   *  post-tool continuation calls reuse this complete request descriptor so
+   *  they cannot drift back to an unavailable primary model. */
+  activeModelRequest?: ModelRequestDescriptor;
   /** Captured by the fold when a model failure clears inFlightModelCall, so the
    *  post-fold step can still apply provider/local guards. */
   lastFailedModelRequest?: ModelRequestDescriptor;

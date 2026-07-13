@@ -22,9 +22,11 @@ import type {
   RegisterMessageTypeInput,
   RpcChannelMessage,
 } from "@workspace/pubsub";
+import { iterateChannelReplayAfterPages } from "@workspace/pubsub";
 import {
   composeSystemPrompt,
   formatEvalResult,
+  normalizeEvalToolSource,
   type ChannelEvent,
   type EvalRunResult,
   type ParticipantDescriptor,
@@ -108,7 +110,6 @@ import {
 
 const DELTA_BATCH_MS = 100;
 const CHANNEL_STATE_CACHE_MS = 5_000;
-const DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const BLOB_TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 /** ~256KB of serialized session entries before compaction — comfortably
  *  under modern model context windows while keeping plenty of recent
@@ -160,19 +161,48 @@ export type CustomMessageReducer = (state: unknown, update: unknown) => unknown;
 export interface AgentSettings {
   model: string;
   thinkingLevel: ThinkingLevel;
+  fallbackModel?: string;
+  fallbackThinkingLevel?: ThinkingLevel;
+  fallbackOn?: string[];
+  fallbackScope?: "unattended" | "all-turns";
   approvalLevel: ApprovalLevel;
   respondPolicy: RespondPolicy;
   respondFrom: string[];
-  /** Optional cap for model rounds in one turn. `null` means unlimited. */
-  maxModelCallsPerTurn: number | null;
-  /** Idle watchdog for model streams. `null` intentionally disables it. */
-  modelStreamIdleTimeoutMs: number | null;
 }
 
 /** Per-channel settings — a Ref-kind KV value; every model call journals the
  *  values it actually used in its request descriptor, so the audit trail is
  *  the log, not this pointer. */
 interface StoredSettings extends Partial<AgentSettings> {}
+
+const CONFIGURABLE_FALLBACK_FAILURE_CODES = new Set([
+  "usage_limit_terminal",
+  "quota_exhausted_terminal",
+  "rate_limited_retryable",
+  "provider_overloaded_retryable",
+  "auth_or_credentials",
+  "circuit_breaker_open_terminal",
+  "unknown_retryable",
+]);
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return (
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  );
+}
+
+function isFallbackOn(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((code) => typeof code === "string" && CONFIGURABLE_FALLBACK_FAILURE_CODES.has(code))
+  );
+}
 
 /**
  * The agent's settings record is PER-AGENT (channel-independent): one model,
@@ -392,6 +422,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         await this.driver.alarm();
       },
     });
+    this.registerAgentAlarmSource({
+      id: "subagent-progress-outbox",
+      nextWakeAt: () => this.subagentRuns.nextProgressWakeAt(),
+      fire: async (now) => {
+        await this.drainSubagentProgress(now);
+      },
+    });
   }
 
   protected createTables(): void {
@@ -415,10 +452,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected getDefaultRespondFrom(): string[] {
     return [];
   }
-  protected getDefaultModelStreamIdleTimeoutMs(): number | null {
-    return DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
-  }
-
   /** Idle-history byte budget that triggers compaction. Subclasses with a
    *  known model context window should override this to ~0.7× the window
    *  (in serialized-entry bytes). */
@@ -688,10 +721,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       compaction: { triggerBytes: this.getCompactionTriggerBytes() },
       scheduleAlarm: (at) => {
         this.scheduleAgentAlarm("agent-loop-driver", Math.max(at, Date.now() + 50));
-      },
-      runBackground: (fn) => {
-        const promise = fn();
-        this.ctx.waitUntil?.(promise);
       },
       executorOverride: this.getDriverExecutorOverride(),
     });
@@ -1150,29 +1179,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const seed: StoredSettings = {};
     if (typeof c["model"] === "string" && c["model"]) seed.model = c["model"];
     const tl = c["thinkingLevel"];
-    if (
-      tl === "minimal" ||
-      tl === "low" ||
-      tl === "medium" ||
-      tl === "high" ||
-      tl === "xhigh" ||
-      tl === "max"
-    )
-      seed.thinkingLevel = tl;
+    if (isThinkingLevel(tl)) seed.thinkingLevel = tl;
+    if (typeof c["fallbackModel"] === "string" && c["fallbackModel"]) {
+      seed.fallbackModel = c["fallbackModel"];
+    }
+    if (isThinkingLevel(c["fallbackThinkingLevel"])) {
+      seed.fallbackThinkingLevel = c["fallbackThinkingLevel"];
+    }
+    if (isFallbackOn(c["fallbackOn"])) seed.fallbackOn = [...c["fallbackOn"]];
+    if (c["fallbackScope"] === "unattended" || c["fallbackScope"] === "all-turns") {
+      seed.fallbackScope = c["fallbackScope"];
+    }
     const al = c["approvalLevel"];
     if (al === 0 || al === 1 || al === 2) seed.approvalLevel = al;
     if (isRespondPolicy(c["respondPolicy"])) seed.respondPolicy = c["respondPolicy"];
     const rf = c["respondFrom"];
     if (Array.isArray(rf) && rf.every((x) => typeof x === "string"))
       seed.respondFrom = rf as string[];
-    const mc = c["maxModelCallsPerTurn"];
-    if (mc === null || (typeof mc === "number" && Number.isFinite(mc))) {
-      seed.maxModelCallsPerTurn = mc;
-    }
-    const to = c["modelStreamIdleTimeoutMs"];
-    if (to === null || (typeof to === "number" && Number.isFinite(to))) {
-      seed.modelStreamIdleTimeoutMs = to;
-    }
     return seed;
   }
 
@@ -1182,6 +1205,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return {
       model: stored.model ?? this.getDefaultModel(),
       thinkingLevel: stored.thinkingLevel ?? this.getDefaultThinkingLevel(),
+      ...(stored.fallbackModel ? { fallbackModel: stored.fallbackModel } : {}),
+      ...(stored.fallbackThinkingLevel
+        ? { fallbackThinkingLevel: stored.fallbackThinkingLevel }
+        : {}),
+      ...(stored.fallbackOn ? { fallbackOn: [...stored.fallbackOn] } : {}),
+      ...(stored.fallbackScope ? { fallbackScope: stored.fallbackScope } : {}),
       approvalLevel:
         approval === 0 || approval === 1 || approval === 2
           ? approval
@@ -1190,16 +1219,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ? stored.respondPolicy
         : this.getRespondPolicy(),
       respondFrom: stored.respondFrom ?? this.getDefaultRespondFrom(),
-      maxModelCallsPerTurn: this.maxModelCallsPerTurnFrom(
-        stored.maxModelCallsPerTurn,
-        undefined,
-        null
-      ),
-      modelStreamIdleTimeoutMs: this.modelStreamIdleTimeoutMsFrom(
-        stored.modelStreamIdleTimeoutMs,
-        undefined,
-        this.getDefaultModelStreamIdleTimeoutMs()
-      ),
     };
   }
 
@@ -1229,7 +1248,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           "select a model present in the current catalog before starting the agent"
       );
     }
-    const fallbackMaterialized = this.materializedModel(channelId, LOCAL_FALLBACK_MODEL_REF);
+    const fallbackModelRef = settings.fallbackModel ?? LOCAL_FALLBACK_MODEL_REF;
+    const fallbackMaterialized = this.materializedModel(channelId, fallbackModelRef);
+    if (settings.fallbackModel && !fallbackMaterialized) {
+      throw new Error(
+        `Agent fallback model ${JSON.stringify(settings.fallbackModel)} could not be materialized; ` +
+          "select a fallback model present in the current catalog before starting the agent"
+      );
+    }
     const toolSchemasHash =
       // Tool-capability gate (design §6.4): omit tool schemas at the source
       // for models whose chat template can't parse them.
@@ -1242,8 +1268,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       modelAuth: materialized.auth,
       ...(fallbackMaterialized
         ? {
-            fallbackModelRef: LOCAL_FALLBACK_MODEL_REF,
+            fallbackModelRef,
             fallbackModelSpec: fallbackMaterialized.spec,
+            fallbackModelAuth: fallbackMaterialized.auth,
+            ...(settings.fallbackThinkingLevel
+              ? { fallbackThinkingLevel: settings.fallbackThinkingLevel }
+              : {}),
+            ...(settings.fallbackOn ? { fallbackFailureCodes: settings.fallbackOn } : {}),
+            ...(settings.fallbackScope ? { fallbackScope: settings.fallbackScope } : {}),
           }
         : {}),
       thinkingLevel: settings.thinkingLevel,
@@ -1256,8 +1288,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         this.getStateValue(`agent:toolNames:${channelId}`) ?? "[]"
       ) as string[],
       roster: { participants: [] }, // roster snapshots fold from system.event
-      maxModelCallsPerTurn: settings.maxModelCallsPerTurn,
-      modelStreamIdleTimeoutMs: settings.modelStreamIdleTimeoutMs,
       maxSubagentDepth: this.getMaxSubagentDepth(),
       maxConcurrentSubagents: this.getMaxConcurrentSubagents(),
       ...(publishPolicy ? { publishPolicy } : {}),
@@ -1588,9 +1618,29 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     envelope: ChannelReplayEnvelope | undefined,
     wakeAfterReplay: boolean
   ): Promise<void> {
-    if (envelope?.logEvents?.length) {
-      for (const event of envelope.logEvents) {
-        await this.processChannelEvent(channelId, {
+    let page = envelope;
+    for (;;) {
+      if (page?.logEvents?.length) {
+        for (const event of page.logEvents) {
+          await this.processSubscriptionReplayEvent(channelId, event);
+        }
+      }
+      if (page?.mode !== "after" || !page.ready.hasMoreAfter) break;
+      const after = page.ready.replayToId;
+      const throughSeq = page.ready.snapshotLastSeq;
+      if (after === undefined || throughSeq === undefined) {
+        throw new Error("subscription replay claims more history without a stable cursor");
+      }
+      page = await this.createChannelClient(channelId).getReplayAfter({ after, throughSeq });
+    }
+    if (wakeAfterReplay) await this.driver.wake(channelId);
+  }
+
+  private async processSubscriptionReplayEvent(
+    channelId: string,
+    event: ChannelReplayEnvelope["logEvents"][number]
+  ): Promise<void> {
+    await this.processChannelEvent(channelId, {
           id: event.id,
           messageId: event.messageId,
           type: event.type,
@@ -1607,9 +1657,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               }
             : {}),
         });
-      }
-    }
-    if (wakeAfterReplay) await this.driver.wake(channelId);
   }
 
   @rpc({ callers: ["panel", "do"] })
@@ -1671,6 +1718,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         await this.ensurePromptArtifacts(channelId).catch(() => undefined);
       }
     }
+    // A supervisor's task-channel progress mirror observes the raw agentic
+    // stream before specialized routing consumes invocation traffic. In
+    // particular, routeInvocationTerminal intentionally swallows
+    // invocation.started/output events so they never become prompts; observing
+    // only after that gate made child tools permanently invisible on the
+    // parent card.
+    const observedAgentic =
+      event.type === AGENTIC_EVENT_PAYLOAD_KIND ? (event.payload as AgenticEvent | null) : null;
+    this.publishSubagentProgress(channelId, event, observedAgentic);
     if (await this.onChannelEvent(channelId, event)) return;
     if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return;
     const maybeFeedback = event.payload as AgenticEvent | null;
@@ -2209,6 +2265,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
   }
 
+  /**
+   * Journal-derived model route/usage evidence for headless orchestration.
+   * This direct RPC remains available when channel presence has already gone
+   * stale, which is precisely when timeout/cancellation diagnostics need it.
+   * The response contains no prompt, tool argument, credential, or secret.
+   */
+  @rpc({ callers: ["server", "do"] })
+  async getModelExecutionEvidence(channelId: string): Promise<unknown> {
+    return this.driver.modelExecutionEvidence(channelId);
+  }
+
   protected async handleStandardAgentMethodCall(
     channelId: string,
     methodName: string,
@@ -2418,27 +2485,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           }),
         };
       }
-      case "setModelStreamIdleTimeoutMs": {
-        const input = args as { timeoutMs?: unknown } | null;
-        const timeoutMs = input?.timeoutMs;
-        if (
-          timeoutMs !== null &&
-          (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0)
-        ) {
-          return {
-            result: {
-              error:
-                "setModelStreamIdleTimeoutMs requires timeoutMs as a positive number of milliseconds, or null to disable",
-            },
-            isError: true,
-          };
-        }
-        return {
-          result: this.updateSettings({
-            modelStreamIdleTimeoutMs: timeoutMs,
-          }),
-        };
-      }
       case "refreshPromptArtifacts": {
         this.invalidatePromptResources(channelId);
         await this.ensurePromptArtifacts(channelId);
@@ -2452,6 +2498,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       case "getAgentSettings":
         return { result: this.getAgentSettings() };
+      case "getModelExecutionEvidence":
+        return { result: await this.driver.modelExecutionEvidence(channelId) };
       case "getDebugState":
         return { result: await this.getDebugState(channelId) };
       case "inspectMethodSuspensions":
@@ -2555,6 +2603,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       case "getMessageTypes":
         return channel.getMessageTypes();
+      case "replayEnvelope": {
+        const [envelopeId] = a as [string];
+        if (typeof envelopeId !== "string" || envelopeId.length === 0) return null;
+        return channel.getEnvelope(envelopeId);
+      }
       case "callMethod": {
         const [targetPid, method, callArgs, options] = a as [
           string,
@@ -2924,18 +2977,26 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const p = (args ?? {}) as {
       code?: string;
       path?: string;
-      syntax?: "typescript" | "jsx" | "tsx";
+      sourcePath?: string;
+      reset?: boolean;
+      syntax?: "javascript" | "typescript" | "jsx" | "tsx";
       imports?: Record<string, string>;
     };
-    if ((p.code === undefined) === (p.path === undefined)) {
-      return { result: "[eval] requires exactly one of code or path", isError: true };
+    let source;
+    try {
+      source = normalizeEvalToolSource(p);
+    } catch (error) {
+      return {
+        result: `[eval] ${error instanceof Error ? error.message : String(error)}`,
+        isError: true,
+      };
     }
     await this.rpc.call("main", "eval.startRun", [
       {
         subKey: channelId, // the agent's eval subKey IS its channelId
         channelId,
-        code: p.code,
-        path: p.path,
+        reset: p.reset === true,
+        ...source,
         syntax: p.syntax,
         imports: p.imports,
         runId: invocationId,
@@ -2967,7 +3028,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const formatted = formatEvalResult(status.result);
       return {
         result: { protocolContent: formatted.content, details: formatted.details },
-        isError: !status.result.success,
+        // Preserve the structured diagnostic, but do not lie about its
+        // terminal outcome. A user-code exception is still a failed eval tool
+        // invocation; callers (and the system-test harness) must be able to
+        // distinguish it from a successful execution and explicitly classify
+        // deliberate failures when appropriate.
+        isError: status.result.success !== true,
       };
     }
     if (status.status === "cancelled") {
@@ -3024,7 +3090,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       {
         kind: "tool",
         result: { protocolContent: formatted.content, details: formatted.details },
-        isError: !payload.result.success,
+        isError: payload.result.success !== true,
       },
       { channelId: payload.channelId }
     );
@@ -3044,14 +3110,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
     const byMessageId = new Map<string, { typeId: string; state: unknown }>();
     const channel = this.createChannelClient(channelId);
-    let cursor = 0;
-    for (;;) {
-      const envelope = await channel.getReplayAfter(cursor);
+    for await (const envelope of iterateChannelReplayAfterPages(
+      (request) => channel.getReplayAfter(request),
+      { after: 0 }
+    )) {
       const events = envelope.logEvents;
-      if (events.length === 0) break;
-      let nextCursor = cursor;
       for (const event of events) {
-        nextCursor = Math.max(nextCursor, event.id ?? 0);
         if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
         const agentic = event.payload as {
           kind?: string;
@@ -3086,8 +3150,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           });
         }
       }
-      if (nextCursor <= cursor) break;
-      cursor = nextCursor;
     }
 
     const byType = new Map<string, Map<string, unknown>>();
@@ -3106,43 +3168,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return hydrateStoredValueRefs(value, {
       getText: (digest) => this.rpc.call<string | null>("main", "blobstore.getText", [digest]),
     });
-  }
-
-  private modelStreamIdleTimeoutMsFrom(
-    storedValue: unknown,
-    configValue: unknown,
-    fallback: number | null
-  ): number | null {
-    const stored = this.parseModelStreamIdleTimeoutMs(storedValue);
-    if (stored !== undefined) return stored;
-    const configured = this.parseModelStreamIdleTimeoutMs(configValue);
-    if (configured !== undefined) return configured;
-    return fallback;
-  }
-
-  private parseModelStreamIdleTimeoutMs(value: unknown): number | null | undefined {
-    if (value === null) return null;
-    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-  }
-
-  private maxModelCallsPerTurnFrom(
-    storedValue: unknown,
-    configValue: unknown,
-    fallback: number | null
-  ): number | null {
-    const stored = this.parseMaxModelCallsPerTurn(storedValue);
-    if (stored !== undefined) return stored;
-    const configured = this.parseMaxModelCallsPerTurn(configValue);
-    if (configured !== undefined) return configured;
-    return fallback;
-  }
-
-  private parseMaxModelCallsPerTurn(value: unknown): number | null | undefined {
-    if (value === null) return null;
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-      return undefined;
-    }
-    return Math.floor(value);
   }
 
   // ── Subclass conveniences ────────────────────────────────────────────────
@@ -3184,7 +3209,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const metadata: AgentTurnMetadata = {
       origin: opts?.origin ?? "agent-initiated",
       ...(opts?.contextPolicy ? { contextPolicy: opts.contextPolicy } : {}),
-      ...(opts?.loopConfigPatch ? { loopConfigPatch: opts.loopConfigPatch } : {}),
       ...(opts?.delivery ? { delivery: opts.delivery } : {}),
       ...(opts?.ackToken ? { ackToken: opts.ackToken } : {}),
       ...(opts?.silentOk !== undefined ? { silentOk: opts.silentOk } : {}),
@@ -3595,10 +3619,46 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           : mode === "fork"
             ? "forked subagent"
             : "subagent";
-      const childConfig =
+      const requestedChildConfig =
         p.config && typeof p.config === "object"
           ? (p.config as Record<string, unknown>)
           : undefined;
+      // A Pi subagent is a child of THIS agent, so its behavioral defaults
+      // should be the parent's effective settings rather than whichever model
+      // happens to be the worker-wide default. Besides being the unsurprising
+      // product behavior, this keeps unattended/headless trees uniform: a
+      // parent pinned to a model, approval posture, or stream watchdog cannot
+      // silently spawn a differently configured child. Explicit child config
+      // remains an override. External launcher config is provider-specific CLI
+      // input, so it intentionally does not receive Pi settings.
+      const parentChannelConfig =
+        (this.subscriptions.getConfig(channelId) as Record<string, unknown> | null) ?? {};
+      const inheritedPromptConfig = Object.fromEntries(
+        ["systemPrompt", "systemPromptMode"].flatMap((key) =>
+          parentChannelConfig[key] === undefined ? [] : [[key, parentChannelConfig[key]]]
+        )
+      );
+      const childConfig =
+        agentKind === "pi"
+          ? {
+              model: loopConfig.model,
+              thinkingLevel: loopConfig.thinkingLevel,
+              ...(loopConfig.fallbackModelRef
+                ? { fallbackModel: loopConfig.fallbackModelRef }
+                : {}),
+              ...(loopConfig.fallbackThinkingLevel
+                ? { fallbackThinkingLevel: loopConfig.fallbackThinkingLevel }
+                : {}),
+              ...(loopConfig.fallbackFailureCodes
+                ? { fallbackOn: [...loopConfig.fallbackFailureCodes] }
+                : {}),
+              ...(loopConfig.fallbackScope ? { fallbackScope: loopConfig.fallbackScope } : {}),
+              approvalLevel: loopConfig.approvalLevel,
+              respondPolicy: loopConfig.respondPolicy,
+              ...inheritedPromptConfig,
+              ...(requestedChildConfig ?? {}),
+            }
+          : requestedChildConfig;
       const source =
         typeof p.source === "string" && p.source
           ? p.source
@@ -3969,9 +4029,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     runId: string,
     parentChannelId?: string
   ): Promise<SubagentRunRow | null> {
-    const existing = this.subagentRuns.get(runId);
-    if (existing) return this.hydrateSubagentParentContext(existing);
-    if (!parentChannelId) return null;
+    const existing = this.subagentRuns.resolveReference(runId, parentChannelId);
+    if (existing?.kind === "ambiguous") {
+      throw new Error(
+        `ambiguous subagent run reference ${runId}; use a longer abbreviation or the exact runId`
+      );
+    }
+    if (existing) return this.hydrateSubagentParentContext(existing.run);
+    // Recovery scans durable lifecycle cards by their exact causality id. An
+    // abbreviated reference can only identify an already indexed run.
+    if (!parentChannelId || runId.trim().endsWith("...") || runId.trim().endsWith("…")) {
+      return null;
+    }
     return this.recoverSubagentRunFromParentChannel(runId, parentChannelId);
   }
 
@@ -4001,15 +4070,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<SubagentRunRow | null> {
     // The subagent lifecycle card is durably published on the parent channel.
     // Rebuild this local index from that stream after hibernation or teardown.
-    let cursor = 0;
     let recovered: SubagentRunRow | null = null;
     const channel = this.createChannelClient(parentChannelId);
-    for (;;) {
-      const page = await channel.getReplayAfter(cursor);
-      if (page.logEvents.length === 0) break;
-      let maxSeq = cursor;
+    for await (const page of iterateChannelReplayAfterPages(
+      (request) => channel.getReplayAfter(request),
+      { after: 0 }
+    )) {
       for (const event of page.logEvents) {
-        maxSeq = Math.max(maxSeq, Number(event.id) || cursor);
         if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
         const agentic =
           event.payload && typeof event.payload === "object"
@@ -4092,8 +4159,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           recovered = { ...recovered, status: "abandoned" };
         }
       }
-      if (maxSeq <= cursor) break;
-      cursor = maxSeq;
     }
     if (!recovered) return null;
     this.subagentRuns.insert(recovered);
@@ -4140,8 +4205,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.createChannelClient(run.taskChannelId).send(participantId, messageId, message, {
       senderMetadata: { type: "agent", name: participantId },
     });
-    this.subagentRuns.touch(runId, Date.now());
-    return this.toolText(`sent to subagent ${runId}`, { runId, messageId });
+    this.subagentRuns.touch(run.runId, Date.now());
+    return this.toolText(`sent to subagent ${run.runId}`, { runId: run.runId, messageId });
   }
 
   /** Inspect a subagent's CHILD-CONTEXT working tree via the host vcs.* read
@@ -4185,7 +4250,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       result = await this.rpc.call<unknown>("main", "vcs.readFile", ["", q, undefined, context]);
     }
     return this.toolText(typeof result === "string" ? result : JSON.stringify(result, null, 2), {
-      runId,
+      runId: run.runId,
       query: q,
     });
   }
@@ -4202,10 +4267,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       { source: this.subagentContextScope(run) },
     ]);
     const merge = this.mergeStatusFromResult(result);
-    this.subagentRuns.setMerge(runId, merge);
-    this.subagentRuns.touch(runId, Date.now());
-    return this.toolText(`merged subagent ${runId}: ${merge}`, {
-      runId,
+    this.subagentRuns.setMerge(run.runId, merge);
+    this.subagentRuns.touch(run.runId, Date.now());
+    return this.toolText(`merged subagent ${run.runId}: ${merge}`, {
+      runId: run.runId,
       merge,
       result: result as Record<string, unknown>,
     });
@@ -4225,10 +4290,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const result = await this.rpc.call<unknown>("main", "vcs.pick", [
       { source: this.subagentContextScope(run), picks },
     ]);
-    this.subagentRuns.setMerge(runId, "merged");
-    this.subagentRuns.touch(runId, Date.now());
-    return this.toolText(`picked from subagent ${runId}`, {
-      runId,
+    this.subagentRuns.setMerge(run.runId, "merged");
+    this.subagentRuns.touch(run.runId, Date.now());
+    return this.toolText(`picked from subagent ${run.runId}`, {
+      runId: run.runId,
       result: result as Record<string, unknown>,
     });
   }
@@ -4242,9 +4307,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
-    const envelope = await this.createChannelClient(run.taskChannelId).getReplayAfter(
-      Number.isFinite(afterSeq) ? afterSeq : 0
-    );
+    const envelope = await this.createChannelClient(run.taskChannelId).getReplayAfter({
+      after: Number.isFinite(afterSeq) ? afterSeq : 0,
+    });
     let nextSeq = Number.isFinite(afterSeq) ? afterSeq : 0;
     const messages: Array<{ seq: number; author: string; text: string }> = [];
     for (const event of envelope.logEvents) {
@@ -4265,17 +4330,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           },
         ],
         details: {
-          runId,
+          runId: run.runId,
           nextSeq,
           messages,
           empty: true,
           waitForPush: true,
+          hasMore: envelope.ready.hasMoreAfter === true,
           tokenWaste: "polling_without_new_subagent_messages",
         },
       };
     }
     const rendered = messages.map((m) => `[#${m.seq} ${m.author}]\n${m.text}`).join("\n\n");
-    return this.toolText(rendered, { runId, nextSeq, messages, empty: false });
+    return this.toolText(rendered, {
+      runId: run.runId,
+      nextSeq,
+      messages,
+      empty: false,
+      hasMore: envelope.ready.hasMoreAfter === true,
+    });
   }
 
   /** Close a subagent run: cancel it if still open, tear down its context
@@ -4287,8 +4359,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) return this.toolText(`subagent ${runId} already closed`, { runId });
-    if (discard && run.merge === null) this.subagentRuns.setMerge(runId, "discarded");
-    const refreshed = this.subagentRuns.get(runId)!;
+    if (discard && run.merge === null) this.subagentRuns.setMerge(run.runId, "discarded");
+    const refreshed = this.subagentRuns.get(run.runId)!;
     if (refreshed.status === "starting" || refreshed.status === "running") {
       await this.settleSubagentTerminal(
         refreshed,
@@ -4298,7 +4370,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       );
     }
     await this.teardownRun(refreshed);
-    return this.toolText(`closed subagent ${runId}`, { runId, discarded: discard });
+    return this.toolText(`closed subagent ${run.runId}`, {
+      runId: run.runId,
+      discarded: discard,
+    });
   }
 
   /** CHILD side of the terminal trigger: notify the owning parent that this run
@@ -4611,11 +4686,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return null;
   }
 
-  private async publishSubagentProgress(
+  private publishSubagentProgress(
     channelId: string,
     event: ChannelEvent,
     agentic: AgenticEvent | null
-  ): Promise<void> {
+  ): void {
     const run = this.subagentRuns.getByTaskChannel(channelId);
     if (!run || event.senderId === this.participantId()) return;
     const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
@@ -4634,14 +4709,43 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
       createdAt: new Date().toISOString(),
     };
-    await this.createChannelClient(run.parentChannelId)
-      .publishAgenticEvent(participantId, progressEvent, {
-        idempotencyKey: `subagent-progress:${run.runId}:${messageSeq}:${(agentic as { kind?: string } | null)?.kind ?? "event"}`,
-        senderMetadata: actor.metadata,
-      })
-      .catch((err) => {
-        console.error(`[AgentVessel] subagent progress emit failed for ${run.runId}:`, err);
-      });
+    const idempotencyKey = `subagent-progress:${run.runId}:${messageSeq}:${(agentic as { kind?: string } | null)?.kind ?? "event"}`;
+    this.subagentRuns.enqueueProgress({
+      idempotencyKey,
+      runId: run.runId,
+      messageSeq,
+      parentChannelId: run.parentChannelId,
+      participantId,
+      event: progressEvent,
+      now: Date.now(),
+    });
+    // The alarm is the authoritative delivery mechanism. No asynchronous
+    // publication escapes this source event, so hibernation cannot drop it.
+    this.scheduleAgentAlarm("subagent-progress-outbox", Date.now() + 1);
+  }
+
+  private async drainSubagentProgress(now: number): Promise<void> {
+    const entries = this.subagentRuns.dueProgress(now, 50);
+    for (const entry of entries) {
+      try {
+        await this.createChannelClient(entry.parentChannelId).publishAgenticEvent(
+          entry.participantId,
+          entry.event,
+          {
+            idempotencyKey: entry.idempotencyKey,
+            senderMetadata: entry.event.actor.metadata,
+          }
+        );
+        this.subagentRuns.completeProgress(entry.sequence);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Retry forever with bounded exponential backoff. The persisted error
+        // is intentionally exposed by getDebugState rather than silently lost.
+        const retryDelay = Math.min(30_000, 250 * 2 ** Math.min(entry.attempts, 7));
+        this.subagentRuns.failProgress(entry.sequence, message, Date.now() + retryDelay);
+        console.error(`[AgentVessel] subagent progress publish failed for ${entry.runId}:`, error);
+      }
+    }
   }
 
   private eventAddressesSelf(
@@ -4683,7 +4787,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (event.senderId === this.participantId()) return true; // our own traffic never wakes us
     const agentic = event.payload as AgenticEvent | null;
     const kind = (agentic as { kind?: string } | null)?.kind ?? "";
-    await this.publishSubagentProgress(channelId, event, agentic);
     if (kind === "message.completed") {
       const payload =
         ((agentic as AgenticEvent).payload as {
@@ -4724,27 +4827,38 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  a single prompt and drive one parent turn. Log-derived + replay-safe. */
   private async wakeTurnFinal(channelId: string): Promise<void> {
     const cursor = this.subagentRuns.getWakeCursor(channelId);
-    let envelope: ChannelReplayEnvelope;
-    try {
-      envelope = await this.createChannelClient(channelId).getReplayAfter(cursor);
-    } catch {
-      return;
-    }
     let maxId = cursor;
     const parts: string[] = [];
     let senderRef: ParticipantRef | undefined;
     let lastMessageId: string | undefined;
-    for (const event of envelope.logEvents) {
-      maxId = Math.max(maxId, event.id ?? 0);
-      if (event.senderId === this.participantId()) continue;
-      if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
-      const agentic = event.payload as AgenticEvent | null;
-      if ((agentic as { kind?: string } | null)?.kind !== "message.completed") continue;
-      const text = this.extractMessageText(agentic);
-      if (text) parts.push(text);
-      senderRef = participantRefFromActor((agentic as AgenticEvent).actor);
-      lastMessageId =
-        ((agentic as AgenticEvent).causality?.messageId as string | undefined) ?? event.messageId;
+    try {
+      const channel = this.createChannelClient(channelId);
+      const pages = iterateChannelReplayAfterPages(
+        (request) => channel.getReplayAfter(request),
+        { after: cursor }
+      );
+      for await (const envelope of pages) {
+        for (const event of envelope.logEvents) {
+          maxId = Math.max(maxId, event.id ?? 0);
+          if (event.senderId === this.participantId()) continue;
+          if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
+          const agentic = event.payload as AgenticEvent | null;
+          if ((agentic as { kind?: string } | null)?.kind !== "message.completed") continue;
+          const text = this.extractMessageText(agentic);
+          if (text) parts.push(text);
+          senderRef = participantRefFromActor((agentic as AgenticEvent).actor);
+          lastMessageId =
+            ((agentic as AgenticEvent).causality?.messageId as string | undefined) ??
+            event.messageId;
+        }
+      }
+    } catch (error) {
+      console.error("[AgentVessel] failed to replay task-channel output for parent wake", {
+        channelId,
+        cursor,
+        error,
+      });
+      return;
     }
     this.subagentRuns.setWakeCursor(channelId, maxId);
     if (parts.length === 0 || !senderRef) return;
@@ -4801,7 +4915,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         loops[id] = { error: err instanceof Error ? err.message : String(err) };
       }
     }
-    return { participantId: this.participantId(), loops, outbox: this.driver.outbox.all() };
+    return {
+      participantId: this.participantId(),
+      loops,
+      outbox: this.driver.outbox.all(),
+      subagentProgressOutbox: this.subagentRuns.progressDiagnostics(),
+    };
   }
 
   /**
@@ -4854,17 +4973,40 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
     if ("thinkingLevel" in patch) {
       const l = patch["thinkingLevel"];
-      if (
-        l !== "minimal" &&
-        l !== "low" &&
-        l !== "medium" &&
-        l !== "high" &&
-        l !== "xhigh" &&
-        l !== "max"
-      ) {
+      if (!isThinkingLevel(l)) {
         throw new Error("thinkingLevel must be minimal|low|medium|high|xhigh|max");
       }
       next.thinkingLevel = l;
+    }
+    if ("fallbackModel" in patch) {
+      if (typeof patch["fallbackModel"] !== "string" || !patch["fallbackModel"]) {
+        throw new Error("fallbackModel must be a non-empty 'provider:model' string");
+      }
+      next.fallbackModel = patch["fallbackModel"];
+    }
+    if ("fallbackThinkingLevel" in patch) {
+      const level = patch["fallbackThinkingLevel"];
+      if (!isThinkingLevel(level)) {
+        throw new Error("fallbackThinkingLevel must be minimal|low|medium|high|xhigh|max");
+      }
+      next.fallbackThinkingLevel = level;
+    }
+    if ("fallbackOn" in patch) {
+      if (!isFallbackOn(patch["fallbackOn"])) {
+        throw new Error(
+          `fallbackOn must be a non-empty array containing only ${[
+            ...CONFIGURABLE_FALLBACK_FAILURE_CODES,
+          ].join("|")}`
+        );
+      }
+      next.fallbackOn = [...patch["fallbackOn"]];
+    }
+    if ("fallbackScope" in patch) {
+      const scope = patch["fallbackScope"];
+      if (scope !== "unattended" && scope !== "all-turns") {
+        throw new Error("fallbackScope must be unattended|all-turns");
+      }
+      next.fallbackScope = scope;
     }
     if ("approvalLevel" in patch) {
       const l = patch["approvalLevel"];
@@ -4881,20 +5023,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         throw new Error("respondFrom must be an array of handle/participant strings");
       }
       next.respondFrom = from as string[];
-    }
-    if ("maxModelCallsPerTurn" in patch) {
-      const n = patch["maxModelCallsPerTurn"];
-      if (n !== null && (typeof n !== "number" || !Number.isFinite(n) || n <= 0)) {
-        throw new Error("maxModelCallsPerTurn must be a positive number or null");
-      }
-      next.maxModelCallsPerTurn = n as number | null;
-    }
-    if ("modelStreamIdleTimeoutMs" in patch) {
-      const n = patch["modelStreamIdleTimeoutMs"];
-      if (n !== null && (typeof n !== "number" || !Number.isFinite(n) || n <= 0)) {
-        throw new Error("modelStreamIdleTimeoutMs must be a positive number or null");
-      }
-      next.modelStreamIdleTimeoutMs = n as number | null;
     }
     return this.updateSettings(next);
   }

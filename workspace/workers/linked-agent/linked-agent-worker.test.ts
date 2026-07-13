@@ -49,7 +49,7 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
     if (target === "main" && method === "userlandApproval.settleExternal") {
       return { settled: true };
     }
-    if (target === "main" && method.startsWith("workspace-state.alarm")) return { ok: true };
+    if (target === "main" && method.startsWith("workspace-state.alarm")) return undefined;
     throw new Error(`unexpected rpc ${target}.${method}`);
   });
 

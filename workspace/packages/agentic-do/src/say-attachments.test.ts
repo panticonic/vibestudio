@@ -43,6 +43,23 @@ describe("readSayAttachments", () => {
     ]);
   });
 
+  it("recognizes generated images whose scratch suffix follows the extension", async () => {
+    const path = "/.tmp/spectrolite-panel.png-51aac5d798e92a7dd8354759b61a71cd";
+    const attachments = await readSayAttachments(makeFs({ [path]: PNG_BYTES }), [path]);
+
+    expect(attachments[0]).toMatchObject({
+      mimeType: "image/png",
+      name: "spectrolite-panel.png-51aac5d798e92a7dd8354759b61a71cd",
+    });
+  });
+
+  it("prefers the image signature over a misleading extension", async () => {
+    const attachments = await readSayAttachments(makeFs({ "/shots/page.jpg": PNG_BYTES }), [
+      "/shots/page.jpg",
+    ]);
+    expect(attachments[0]?.mimeType).toBe("image/png");
+  });
+
   it("wraps fs errors with the offending path", async () => {
     const fs = makeFs({});
     await expect(readSayAttachments(fs, ["/missing.png"])).rejects.toThrow(

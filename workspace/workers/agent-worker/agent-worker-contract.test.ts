@@ -17,6 +17,7 @@ const STANDARD_METHODS = [
   "setApprovalLevel",
   "setRespondPolicy",
   "getAgentSettings",
+  "getModelExecutionEvidence",
   "getDebugState",
 ];
 

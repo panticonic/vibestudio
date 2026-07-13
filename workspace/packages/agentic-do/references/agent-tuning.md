@@ -11,8 +11,10 @@ Cold-start choices live in `src/agent-config.ts`:
 - `PROVIDER_CREDENTIAL_SETUPS` wires OAuth or API-key credential collection and
   is derived from the shared provider presets in
   `@workspace/model-catalog/providerConnect`.
-- These choices apply when a worker boots or when a channel subscribes with an
-  `extraConfig.model` override. Do not expect a live `setModel` toggle.
+- These choices apply when a worker boots or when an agent is created with an
+  `extraConfig.model` override. `setModel({ model })` changes the persisted live
+  agent setting afterward; behavior settings belong to the agent, not to one
+  channel subscription.
 
 To inspect configured provider credential presets from eval, import the small
 model-catalog surface rather than the full agent DO package:
@@ -26,6 +28,8 @@ Session knobs are method calls on the agent participant:
 
 - `setThinkingLevel({ level })` where `level` is `minimal`, `low`, `medium`, or
   `high`.
+- `setModel({ model })` where `model` is a current `provider:modelId` catalog
+  entry.
 - `setApprovalLevel({ level })` where `level` is `0`, `1`, or `2`.
 - `setRespondPolicy({ policy, from? })` where `policy` is `all`, `mentioned`,
   `mentioned-strict`, or `from-participants`.
@@ -108,6 +112,10 @@ Headless/session subscribers may pass `extraConfig`:
 {
   model: "anthropic:claude-sonnet-4-6",
   thinkingLevel: "high",
+  fallbackModel: "openai-codex:gpt-5.6-luna",
+  fallbackThinkingLevel: "minimal",
+  fallbackOn: ["usage_limit_terminal"],
+  fallbackScope: "all-turns",
   approvalLevel: 1,
   respondPolicy: "mentioned",
   systemPrompt: "Extra instructions...",
@@ -117,9 +125,21 @@ Headless/session subscribers may pass `extraConfig`:
 
 Lookup order:
 
-- `model`: subscription config, then default.
-- `thinkingLevel`: live state, subscription config, then default.
-- `approvalLevel`: live state, subscription config/channel config, then
-  default.
-- `respondPolicy` and `respondFrom`: live state, subscription config, then
-  default.
+- `model` and `thinkingLevel`: persisted live setting (initially seeded from
+  the agent-creation config), then default.
+- `fallbackModel`, `fallbackThinkingLevel`, `fallbackOn`, and `fallbackScope`:
+  persisted live setting seeded from agent creation. Failover activates once,
+  then every post-tool continuation in that turn stays on the journaled
+  fallback route; a fallback failure closes the turn instead of creating an
+  unbounded retry loop. `fallbackScope: "all-turns"`
+  includes direct user turns; `"unattended"` limits it to background work.
+- `approvalLevel`: channel consent config when set, otherwise the persisted
+  per-agent value, then default.
+- `respondPolicy` and `respondFrom`: persisted live setting seeded from agent
+  creation, then default.
+
+`fallbackOn` contains durable model failure codes. For example,
+`["usage_limit_terminal"]` switches only after an actual terminal usage-limit
+failure; ordinary provider failures remain visible and do not silently change
+models. The fallback call records both the failed and selected model refs in the
+trajectory.

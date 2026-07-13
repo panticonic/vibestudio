@@ -45,7 +45,7 @@ export interface StepOutput {
 export type StepFn = (state: AgentState, incoming: Incoming, ctx: StepContext) => StepOutput;
 
 const EMPTY: StepOutput = { append: [], effects: [] };
-const LOCAL_FALLBACK_NOTICE_KIND = "model.local_fallback_continued";
+const FALLBACK_NOTICE_KIND = "model.fallback_continued";
 
 const PROVIDER_LEVEL_FAILURE_CODES = new Set<ModelFailureInfo["code"]>([
   "usage_limit_terminal",
@@ -87,11 +87,12 @@ function modelStartItems(
     modelRef: string;
     modelSpec: AgentModelSpec;
     auth: ModelAuthMode;
+    thinkingLevel?: AgentLoopConfig["thinkingLevel"];
   }
 ): { item: AppendItem; effect: ModelCallEffect } {
   const messageId = ids.messageId(turnId, modelCallCount);
   const attemptId = ids.attemptId(messageId);
-  const config = turnConfig(state);
+  const config = state.config;
   const { provider, model } = parseModel(override?.modelRef ?? config.model);
   const modelSpec = override?.modelSpec ?? config.modelSpec;
   const auth = override?.auth ?? config.modelAuth;
@@ -103,7 +104,7 @@ function modelStartItems(
     // of the installed model registry.
     modelSpec,
     ...(auth ? { auth } : {}),
-    thinkingLevel: config.thinkingLevel,
+    thinkingLevel: override?.thinkingLevel ?? config.thinkingLevel,
     systemPromptHash: config.systemPromptHash,
     ...(config.immediatePrompt ? { immediatePrompt: config.immediatePrompt } : {}),
     ...(config.skillIndexHash ? { skillIndexHash: config.skillIndexHash } : {}),
@@ -111,9 +112,6 @@ function modelStartItems(
     activeToolNames: config.activeToolNames,
     contextThroughSeq: state.lastSeq + itemsBefore,
     attemptId,
-    ...(config.modelStreamIdleTimeoutMs !== undefined
-      ? { streamOptions: { idleTimeoutMs: config.modelStreamIdleTimeoutMs } }
-      : {}),
     ...(state.openTurn?.metadata ? { turnMetadata: state.openTurn.metadata } : {}),
   };
   const item: AppendItem = {
@@ -135,12 +133,6 @@ function modelStartItems(
       request,
     },
   };
-}
-
-function turnConfig(state: AgentState): AgentLoopConfig {
-  const patch = state.openTurn?.metadata?.loopConfigPatch;
-  if (!patch) return state.config;
-  return { ...state.config, ...patch };
 }
 
 function turnMetadata(
@@ -687,20 +679,7 @@ function hasFreshInput(state: AgentState): boolean {
   return lastEntry?.kind === "tool-result";
 }
 
-/** Optional per-turn model-call budget. Null means unlimited. */
-export const DEFAULT_MAX_MODEL_CALLS_PER_TURN: number | null = null;
 export const DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES = 3;
-
-function maxModelCallsPerTurn(state: AgentState): number | null {
-  const configured = state.config.maxModelCallsPerTurn;
-  if (configured === null || configured === undefined) {
-    return DEFAULT_MAX_MODEL_CALLS_PER_TURN;
-  }
-  if (typeof configured !== "number" || !Number.isFinite(configured) || configured <= 0) {
-    return DEFAULT_MAX_MODEL_CALLS_PER_TURN;
-  }
-  return Math.floor(configured);
-}
 
 function modelRetryLimitExceeded(turn: OpenTurn): boolean {
   return turn.consecutiveModelFailureCount >= DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES;
@@ -750,53 +729,28 @@ function nextModelCall(
   freshSourceMessageIds: string[] = []
 ): StepOutput {
   const turn = state.openTurn!;
-  const maxModelCalls = maxModelCallsPerTurn(state);
-  if (maxModelCalls !== null && turn.modelCallCount >= maxModelCalls) {
-    return {
-      append: [
-        {
-          envelopeId: `diag:${turn.turnId}:max-model-calls-per-turn`,
-          payloadKind: "message.completed",
-          payload: {
-            protocol: AGENTIC_PROTOCOL_VERSION,
-            role: "assistant",
-            blocks: [
-              {
-                type: "diagnostic",
-                content:
-                  `Configured maxModelCallsPerTurn reached for ${turn.turnId}: ` +
-                  `${turn.modelCallCount} model call(s) have already run, ` +
-                  `and the configured limit is ${maxModelCalls}.`,
-                metadata: {
-                  code: "max_model_calls_per_turn",
-                  severity: "error",
-                  configKey: "maxModelCallsPerTurn",
-                  limit: maxModelCalls,
-                  modelCallCount: turn.modelCallCount,
-                  turnId: turn.turnId,
-                },
-              },
-            ],
-            outcome: "completed",
-          },
-          causality: {
-            messageId: `diag:${turn.turnId}:max-model-calls-per-turn` as never,
-            turnId: turn.turnId,
-          },
-          publish: turn.metadata?.delivery !== "none",
-        },
-        turnClosedItem(turn.turnId, { reason: "max_model_calls_per_turn" }),
-      ],
-      effects: [],
-    };
-  }
   if (modelRetryLimitExceeded(turn)) {
     return {
       append: modelRetryLimitItems(turn),
       effects: [],
     };
   }
-  const { item, effect } = modelStartItems(state, turn.turnId, turn.modelCallCount, itemsBefore);
+  const activeFallback =
+    turn.failedOverToFallback && turn.activeModelRequest
+      ? {
+          modelRef: `${turn.activeModelRequest.provider}:${turn.activeModelRequest.model}`,
+          modelSpec: turn.activeModelRequest.modelSpec,
+          auth: turn.activeModelRequest.auth ?? state.config.fallbackModelAuth ?? "loopback",
+          thinkingLevel: turn.activeModelRequest.thinkingLevel,
+        }
+      : undefined;
+  const { item, effect } = modelStartItems(
+    state,
+    turn.turnId,
+    turn.modelCallCount,
+    itemsBefore,
+    activeFallback
+  );
   const readAcks = readAckEffects({
     state,
     contextThroughSeq: effect.request.contextThroughSeq,
@@ -815,20 +769,30 @@ function fallbackNoticeItem(
   state: AgentState,
   turn: OpenTurn,
   failedMessageId: string,
-  fallbackModelRef: string
+  fallbackModelRef: string,
+  failureCode: string,
+  fallbackThinkingLevel: AgentLoopConfig["thinkingLevel"]
 ): AppendItem {
+  const failedRequest = turn.lastFailedModelRequest;
+  const failedModelRef = failedRequest
+    ? `${failedRequest.provider}:${failedRequest.model}`
+    : state.config.model;
+  const summary = `continued on ${fallbackModelRef} after ${failureCode}`;
   return {
-    envelopeId: ids.systemEvent(turn.turnId, "local-fallback", state.lastSeq),
+    envelopeId: ids.systemEvent(turn.turnId, "model-fallback", state.lastSeq),
     payloadKind: "system.event",
     payload: {
       protocol: AGENTIC_PROTOCOL_VERSION,
-      kind: LOCAL_FALLBACK_NOTICE_KIND,
-      summary: "continued on local fallback",
+      kind: FALLBACK_NOTICE_KIND,
+      summary,
       details: {
-        kind: LOCAL_FALLBACK_NOTICE_KIND,
+        kind: FALLBACK_NOTICE_KIND,
         failedMessageId,
+        failedModelRef,
+        failureCode,
         fallbackModelRef,
-        summary: "continued on local fallback",
+        fallbackThinkingLevel,
+        summary,
       },
     },
     causality: { turnId: turn.turnId, messageId: failedMessageId as never },
@@ -841,13 +805,27 @@ function shouldFailOverToFallback(
   turn: OpenTurn,
   payload: Record<string, unknown>
 ): { fallbackModelRef: string; fallbackModelSpec: AgentModelSpec } | null {
-  if (!isUnattendedTurn(turn)) return null;
+  if (state.config.fallbackScope !== "all-turns" && !isUnattendedTurn(turn)) return null;
   if (turn.failedOverToFallback) return null;
-  if (!isProviderLevelFailureCode(payload["code"])) return null;
-  if (turn.lastFailedModelRequest?.provider === "local") return null;
+  const code = payload["code"];
+  const configuredCodes = state.config.fallbackFailureCodes;
+  if (
+    configuredCodes
+      ? typeof code !== "string" || !configuredCodes.includes(code)
+      : !isProviderLevelFailureCode(code)
+  ) {
+    return null;
+  }
   const fallbackModelRef = state.config.fallbackModelRef;
   const fallbackModelSpec = state.config.fallbackModelSpec;
   if (!fallbackModelRef || !fallbackModelSpec) return null;
+  const fallbackRequest = parseModel(fallbackModelRef);
+  if (
+    turn.lastFailedModelRequest?.provider === fallbackRequest.provider &&
+    turn.lastFailedModelRequest.model === fallbackRequest.model
+  ) {
+    return null;
+  }
   return { fallbackModelRef, fallbackModelSpec };
 }
 
@@ -856,13 +834,23 @@ function fallbackModelCall(
   ctx: StepContext,
   turn: OpenTurn,
   failedMessageId: string,
+  failureCode: string,
   fallback: { fallbackModelRef: string; fallbackModelSpec: AgentModelSpec }
 ): StepOutput {
-  const notice = fallbackNoticeItem(state, turn, failedMessageId, fallback.fallbackModelRef);
+  const fallbackThinkingLevel = state.config.fallbackThinkingLevel ?? state.config.thinkingLevel;
+  const notice = fallbackNoticeItem(
+    state,
+    turn,
+    failedMessageId,
+    fallback.fallbackModelRef,
+    failureCode,
+    fallbackThinkingLevel
+  );
   const { item, effect } = modelStartItems(state, turn.turnId, turn.modelCallCount, 1, {
     modelRef: fallback.fallbackModelRef,
     modelSpec: fallback.fallbackModelSpec,
-    auth: "loopback",
+    auth: state.config.fallbackModelAuth ?? "loopback",
+    thinkingLevel: fallbackThinkingLevel,
   });
   const readAcks = readAckEffects({
     state,
@@ -1340,7 +1328,16 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     if (!turn || turn.interrupted) return EMPTY;
     const failedMessageId = String(causality["messageId"] ?? "");
     const fallback = shouldFailOverToFallback(state, turn, payload);
-    if (fallback) return fallbackModelCall(state, ctx, turn, failedMessageId, fallback);
+    if (fallback) {
+      return fallbackModelCall(
+        state,
+        ctx,
+        turn,
+        failedMessageId,
+        String(payload["code"] ?? "model_failure"),
+        fallback
+      );
+    }
     if (turn.failedOverToFallback && isProviderLevelFailureCode(payload["code"])) {
       return { append: [turnClosedItem(turn.turnId, { reason: "work_failed" })], effects: [] };
     }

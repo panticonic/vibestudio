@@ -207,9 +207,9 @@ export class EffectOutbox {
   }
 
   all(): OutboxRow[] {
-    return (this.sql.exec(`SELECT * FROM effect_outbox`).toArray() as Record<string, unknown>[]).map(
-      mapRow
-    );
+    return (
+      this.sql.exec(`SELECT * FROM effect_outbox`).toArray() as Record<string, unknown>[]
+    ).map(mapRow);
   }
 
   /** Rows due for dispatch: unleased (or expired lease) and past nextAttemptAt. */
@@ -265,9 +265,10 @@ export class EffectOutbox {
     const row = this.get(branchId, effectId);
     if (!row) return null;
     const attempts = row.attempts + 1;
-    const delay = typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs >= 0
-      ? delayMs
-      : backoffMs(attempts);
+    const delay =
+      typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs >= 0
+        ? delayMs
+        : backoffMs(attempts);
     this.sql.exec(
       `UPDATE effect_outbox
        SET attempts = ?,

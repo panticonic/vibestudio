@@ -266,9 +266,6 @@ describe("AiChatWorker", () => {
     const worker = await makeWorker();
     const before = await worker.onMethodCall("ch-1", "tc-1", "getAgentSettings", {});
     expect((before.result as { model: string }).model).toBe(DEFAULT_MODEL);
-    expect((before.result as { modelStreamIdleTimeoutMs: number }).modelStreamIdleTimeoutMs).toBe(
-      90_000
-    );
 
     const switched = await worker.onMethodCall("ch-1", "tc-2", "setModel", {
       model: "anthropic:claude-sonnet-4-6",

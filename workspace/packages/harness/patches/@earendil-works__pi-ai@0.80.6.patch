@@ -1,8 +1,22 @@
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index 803c76a..33dafef 100644
+index 803c76a..204edec 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -265,6 +265,19 @@ export const stream = (model, context, options) => {
+@@ -160,9 +160,10 @@
+             if (nextBody !== undefined) {
+                 body = nextBody;
+             }
+-            const websocketRequestId = options?.sessionId || createCodexRequestId();
+-            const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+-            const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, websocketRequestId);
++            const requestId = createCodexRequestId();
++            const transportSessionId = options?.sessionId || requestId;
++            const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, transportSessionId, requestId);
++            const websocketHeaders = buildWebSocketHeaders(model.headers, options?.headers, accountId, apiKey, transportSessionId, requestId);
+             const bodyJson = JSON.stringify(body);
+             const httpTimeoutMs = normalizeTimeoutMs(options?.timeoutMs);
+             const websocketConnectTimeoutMs = normalizeTimeoutMs(options?.websocketConnectTimeoutMs);
+@@ -265,6 +266,19 @@
                              : response.status === 429
                                  ? capRetryDelayMs(retryAfterDelayMs, options)
                                  : retryAfterDelayMs;
@@ -22,7 +36,7 @@ index 803c76a..33dafef 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -286,6 +299,20 @@ export const stream = (model, context, options) => {
+@@ -286,6 +300,20 @@
                      // Network errors are retryable
                      if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
                          const delayMs = BASE_DELAY_MS * 2 ** attempt;
@@ -43,7 +57,7 @@ index 803c76a..33dafef 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -699,6 +726,86 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
+@@ -699,6 +727,86 @@
      }
      catch { }
  }
@@ -130,7 +144,7 @@ index 803c76a..33dafef 100644
  function scheduleSessionWebSocketExpiry(sessionId, entry) {
      if (entry.idleTimer) {
          clearTimeout(entry.idleTimer);
-@@ -713,16 +820,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
+@@ -713,16 +821,23 @@
  async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS, env) {
      const WebSocketCtor = await getWebSocketConstructor(env);
      if (!WebSocketCtor) {
@@ -155,7 +169,7 @@ index 803c76a..33dafef 100644
          }
          catch (error) {
              reject(error instanceof Error ? error : new Error(String(error)));
-@@ -779,7 +893,7 @@ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT
+@@ -779,7 +894,7 @@
      });
  }
  async function acquireWebSocket(url, headers, sessionId, signal, connectTimeoutMs, env) {
@@ -164,7 +178,7 @@ index 803c76a..33dafef 100644
          const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
          return {
              socket,
-@@ -1100,6 +1214,10 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
+@@ -1100,6 +1215,10 @@
          }
      }
      try {
@@ -175,8 +189,35 @@ index 803c76a..33dafef 100644
          socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
          await processResponsesStream(startWebSocketOutputOnFirstEvent(mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs)), output, stream, onStart), output, stream, model, {
              serviceTier: options?.serviceTier,
-@@ -1220,4 +1338,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
-     headers.set("session-id", requestId);
+@@ -1198,18 +1317,16 @@
+     headers.set("User-Agent", userAgent);
+     return headers;
+ }
+-function buildSSEHeaders(initHeaders, additionalHeaders, accountId, token, sessionId) {
++function buildSSEHeaders(initHeaders, additionalHeaders, accountId, token, sessionId, requestId) {
+     const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
+     headers.set("OpenAI-Beta", "responses=experimental");
+     headers.set("accept", "text/event-stream");
+     headers.set("content-type", "application/json");
+-    if (sessionId) {
+-        headers.set("session-id", sessionId);
+-        headers.set("x-client-request-id", sessionId);
+-    }
++    headers.set("session-id", sessionId);
++    headers.set("x-client-request-id", requestId);
+     return headers;
+ }
+-function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token, requestId) {
++function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token, sessionId, requestId) {
+     const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
+     headers.delete("accept");
+     headers.delete("content-type");
+@@ -1217,7 +1334,7 @@
+     headers.delete("openai-beta");
+     headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
+     headers.set("x-client-request-id", requestId);
+-    headers.set("session-id", requestId);
++    headers.set("session-id", sessionId);
      return headers;
  }
 -//# sourceMappingURL=openai-codex-responses.js.map

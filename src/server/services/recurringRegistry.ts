@@ -622,7 +622,6 @@ export function createRecurringMetaChangeProvider(
         if (currentHeartbeats.get(decl.name) === hash) continue;
         const target = `${decl.target.source}:${decl.target.className}/${decl.target.objectKey ?? decl.name}`;
         const delivery = decl.behavior?.delivery ?? "none";
-        const maxModelCalls = decl.behavior?.maxModelCalls ?? 1;
         const tokenBudget = decl.context?.tokenBudget ?? 12_000;
         const label = decl.schedule.at
           ? `every ${decl.schedule.every} at ${decl.schedule.at}`
@@ -633,7 +632,7 @@ export function createRecurringMetaChangeProvider(
           displayName: `${decl.name} (${label})`,
           source: { kind: "workspace-repo", repo: "meta", ref: commit },
           capabilities: [
-            `unattended agent wake ${label}, may invoke tools through ${target}, delivery ${delivery}, maxModelCalls ${maxModelCalls}, tokenBudget ${tokenBudget}`,
+            `unattended agent wake ${label}, may invoke tools through ${target}, delivery ${delivery}, tokenBudget ${tokenBudget}`,
           ],
         });
         identityKeys.push(`agent-heartbeat:${decl.name}:${hash}`);
