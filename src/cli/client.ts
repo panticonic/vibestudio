@@ -37,6 +37,7 @@ import { evalCommands } from "./agent/evalCommand.js";
 import { channelCommands } from "./channelCommands.js";
 import { contextCommands } from "./contextCommands.js";
 import { panelCommands } from "./panelCommands.js";
+import { systemTestCommands } from "./systemTestCommands.js";
 import { runClaudeGroup } from "./claude/index.js";
 import {
   findCommand,
@@ -65,8 +66,8 @@ const qrcode = require("qrcode-terminal") as {
   generate(value: string, options?: { small?: boolean }): void;
 };
 const NOT_PAIRED_GUIDANCE =
-  'not paired — run `vibestudio remote pair "vibestudio://connect?..."` ' +
-  "(get an invite from the desktop app or `vibestudio remote invite` on the host)";
+  'not paired — run `vibestudio remote pair "<pair-link>"` ' +
+  "(ask a paired administrator to run `vibestudio remote pair-device`)";
 
 // ───────────────────────────────────────────────────────────────────────────
 // remote commands
@@ -82,7 +83,9 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
       (!positional.startsWith("vibestudio://") &&
         !positional.startsWith("https://vibestudio.app/pair"))
     ) {
-      throw new UsageError("pass a vibestudio://connect link");
+      throw new UsageError(
+        "pass a Vibestudio pairing link (https://vibestudio.app/pair#... or vibestudio://connect?...)"
+      );
     }
     const creds = await pairRemoteServer({ link: positional, ...(label ? { label } : {}) });
     saveCliCredentials(creds);
@@ -588,7 +591,7 @@ const remoteCommands: CliCommand[] = [
     }
   ),
   scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
-    usage: "vibestudio remote serve [--port 3030]",
+    usage: "vibestudio remote serve [--port 3030] [--dev --auto-approve]",
     // The pair server's own help documents the resolved server entry.
     passthroughHelp: true,
   }),
@@ -596,7 +599,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "pair",
     summary: "Save a CLI device credential without launching Electron",
-    usage: 'vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"',
+    usage: 'vibestudio remote pair "<pair-link>"',
     flags: [
       { name: "label", takesValue: true, description: "Device label shown on the server" },
       JSON_FLAG,
@@ -721,7 +724,7 @@ const remoteCommands: CliCommand[] = [
       {
         name: "pair",
         takesValue: true,
-        description: "Pair from a vibestudio://connect link before starting",
+        description: "Pair from a Vibestudio pairing link before starting",
       },
       { name: "label", takesValue: true, description: "Device label used while pairing" },
       { name: "workspace", takesValue: true, description: "Remote workspace to open" },
@@ -794,7 +797,7 @@ const terminalCommands: CliCommand[] = [
       {
         name: "pair",
         takesValue: true,
-        description: "Pair from a vibestudio://connect link before starting",
+        description: "Pair from a Vibestudio pairing link before starting",
       },
       { name: "label", takesValue: true, description: "Device label used while pairing" },
       { name: "workspace", takesValue: true, description: "Remote workspace to open" },
@@ -1090,6 +1093,7 @@ const commandRegistry: CliCommand[] = [
   ...channelCommands,
   ...contextCommands,
   ...panelCommands,
+  ...systemTestCommands,
 ];
 
 const GROUP_ORDER = [
@@ -1103,6 +1107,7 @@ const GROUP_ORDER = [
   "channel",
   "context",
   "panel",
+  "system-test",
 ];
 
 export async function main(argv: string[]): Promise<number> {
@@ -1263,7 +1268,7 @@ ${claudeSection}
 
 Getting started:
   1. Get a pairing invite from the desktop app or the server host.
-  2. vibestudio remote pair "vibestudio://connect?..."
+  2. vibestudio remote pair "https://vibestudio.app/pair#..."
   3. vibestudio remote status
 
 Run \`vibestudio <group> --help\` for a group's commands and
@@ -1306,7 +1311,27 @@ function packageVersion(): string {
   return "0.0.0";
 }
 
+export function installBrokenPipeHandler(
+  stream: NodeJS.EventEmitter,
+  terminate: () => void = () => process.exit(0)
+): () => void {
+  const onError = (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") {
+      terminate();
+      return;
+    }
+    throw error;
+  };
+  stream.on("error", onError);
+  return () => stream.off("error", onError);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  // Unix consumers such as `head` may intentionally close a pipe before a
+  // large JSON response finishes. Treat that as successful consumption rather
+  // than crashing with an unhandled stdout/stderr EPIPE.
+  installBrokenPipeHandler(process.stdout);
+  installBrokenPipeHandler(process.stderr);
   main(process.argv.slice(2))
     .then((code) => {
       // Let stdout/stderr drain before Node exits. Calling process.exit here

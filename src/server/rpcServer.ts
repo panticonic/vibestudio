@@ -573,6 +573,7 @@ export class RpcServer {
   private ensureDOFn:
     | ((source: string, className: string, objectKey: string) => Promise<void>)
     | null = null;
+  private resolveWorkerInstanceNameFn: ((targetId: string) => string | null) | null = null;
 
   /**
    * Tracks DO/worker-initiated service calls that complete out-of-band. Settled
@@ -983,6 +984,10 @@ export class RpcServer {
 
   setEnsureDO(fn: (source: string, className: string, objectKey: string) => Promise<void>): void {
     this.ensureDOFn = fn;
+  }
+
+  setWorkerInstanceResolver(fn: (targetId: string) => string | null): void {
+    this.resolveWorkerInstanceNameFn = fn;
   }
 
   /**
@@ -3490,8 +3495,8 @@ export class RpcServer {
     args: unknown[],
     meta?: RelayCallMeta
   ): Promise<unknown> {
-    // targetId format: "worker:{workerName}"
-    const workerName = targetId.slice(7); // Remove "worker:"
+    const workerName = this.resolveWorkerInstanceNameFn?.(targetId) ?? null;
+    if (!workerName) throw new Error(`Worker not found: ${targetId}`);
     if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
     const caller = { callerId, callerKind };
@@ -3511,7 +3516,7 @@ export class RpcServer {
       },
     });
 
-    const url = `${this.workerdUrl}/${workerName}/__rpc`;
+    const url = `${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`;
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -3630,7 +3635,8 @@ export class RpcServer {
 
     // Worker?
     if (targetId.startsWith("worker:")) {
-      const workerName = targetId.slice(7);
+      const workerName = this.resolveWorkerInstanceNameFn?.(targetId) ?? null;
+      if (!workerName) throw new Error(`Worker not found: ${targetId}`);
       if (!this.workerdUrl) throw new Error("workerdUrl not configured");
 
       const eventEnvelope = envelopeFromMessage({
@@ -3640,7 +3646,7 @@ export class RpcServer {
         caller: { callerId: fromId, callerKind: fromKind },
         message: { type: "event", fromId, event, payload },
       });
-      const res = await fetch(`${this.workerdUrl}/${workerName}/__rpc`, {
+      const res = await fetch(`${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

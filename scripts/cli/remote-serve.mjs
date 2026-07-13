@@ -7,7 +7,12 @@ try {
     logPrefix: "pair",
     portEnv: ["VIBESTUDIO_PAIR_PORT"],
     devEnv: "VIBESTUDIO_PAIR_DEV",
-    usage: ["vibestudio remote serve", "vibestudio remote serve --dev", "vibestudio remote serve --port 3030"],
+    usage: [
+      "vibestudio remote serve",
+      "vibestudio remote serve --dev",
+      "vibestudio remote serve --dev --auto-approve",
+      "vibestudio remote serve --port 3030",
+    ],
     startupHint:
       "[pair] Scan with the Vibestudio mobile app or paste the pairing code in Connection Settings.",
     bannerTitle: "Pair a Vibestudio device",

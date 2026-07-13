@@ -1223,7 +1223,9 @@ async function main() {
   }
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
-      throw new Error("iOS smoke requires macOS with Xcode and a booted simulator.");
+      throw new Error(
+        "iOS end-to-end smoke is unsupported on this platform. Refusing to report a partial install/launch as a pass; run it on macOS with Xcode and a booted simulator."
+      );
     }
     await runCommand(
       process.execPath,

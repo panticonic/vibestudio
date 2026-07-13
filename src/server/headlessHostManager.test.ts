@@ -119,6 +119,33 @@ describe("HeadlessHostManager keep-alive", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  it("terminates the detached host and Chromium process group together", async () => {
+    const child = new MockChild() as MockChild & { pid: number };
+    child.pid = 4_321;
+    const signalProcessGroup = vi.fn();
+    const manager = new HeadlessHostManager({
+      tokenManager,
+      coordinator,
+      isHostAvailable: () => true,
+      getServerUrl: () => "http://127.0.0.1:0",
+      config: {
+        enabled: true,
+        entryPath: "/fake/entry.js",
+      },
+      spawnFn: () => {
+        registerHeadless("headless-tree");
+        return child as unknown as ChildProcess;
+      },
+      signalProcessGroup,
+    });
+
+    await manager.ensureDefaultHost();
+    await manager.stop();
+
+    expect(signalProcessGroup).toHaveBeenCalledWith(4_321, "SIGTERM");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("keeps a registered child alive past the registration timeout while waiting for CDP readiness", async () => {
     const spawnFn = vi.fn((_entry: string): ChildProcess => {
       const child = new MockChild();

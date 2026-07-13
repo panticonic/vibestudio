@@ -81,7 +81,10 @@ export function parseConnectLink(rawUrl) {
   const afterScheme = rawUrl.slice(prefix.length);
   const isSchemeLink =
     rawUrl.startsWith(prefix) &&
-    (afterScheme === "" || afterScheme[0] === "?" || afterScheme[0] === "/" || afterScheme[0] === "#");
+    (afterScheme === "" ||
+      afterScheme[0] === "?" ||
+      afterScheme[0] === "/" ||
+      afterScheme[0] === "#");
   let rawParams;
   if (isSchemeLink) {
     const queryStart = rawUrl.indexOf("?");
@@ -90,7 +93,10 @@ export function parseConnectLink(rawUrl) {
     }
     // Strip any `#fragment` so it can't fold into the last query value.
     const fragmentStart = rawUrl.indexOf("#", queryStart);
-    rawParams = fragmentStart >= 0 ? rawUrl.slice(queryStart + 1, fragmentStart) : rawUrl.slice(queryStart + 1);
+    rawParams =
+      fragmentStart >= 0
+        ? rawUrl.slice(queryStart + 1, fragmentStart)
+        : rawUrl.slice(queryStart + 1);
   } else if (rawUrl.startsWith(`${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}`)) {
     let url;
     try {
@@ -115,7 +121,7 @@ export function parseConnectLink(rawUrl) {
   if (params.values.get("v") !== String(PAIRING_PROTOCOL_VERSION)) {
     return {
       kind: "error",
-      reason: `Unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION})`,
+      reason: `Old or unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION}); re-pair this device with a fresh link`,
     };
   }
 

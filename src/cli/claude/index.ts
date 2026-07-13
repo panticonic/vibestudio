@@ -74,9 +74,7 @@ async function runLauncher(argv: string[]): Promise<number> {
 
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError(
-      'not paired — run `vibestudio remote pair "vibestudio://connect?..."` first'
-    );
+    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
   }
   const client = new RpcClient(creds);
 

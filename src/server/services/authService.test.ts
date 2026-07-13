@@ -551,7 +551,11 @@ describe("createPairingRedeemer (hub-directed pairing)", () => {
     const { deviceAuthStore, rootId, redeem } = fixture(touchDevice);
     const issued = deviceAuthStore.issueDevice({ userId: rootId!, label: "phone" });
     const result = await redeem("refresh:" + issued.deviceId + ":" + issued.refreshToken, {});
-    expect(result).toMatchObject({ callerId: "shell:" + issued.deviceId, callerKind: "shell" });
+    expect(result).toMatchObject({
+      callerId: "shell:" + issued.deviceId,
+      callerKind: "shell",
+      subject: { userId: rootId, handle: "root" },
+    });
     expect(result?.deviceCredential).toBeUndefined();
     expect(touchDevice).toHaveBeenCalledWith(issued.deviceId);
   });
@@ -568,6 +572,7 @@ describe("createPairingRedeemer (hub-directed pairing)", () => {
     expect(result).toMatchObject({
       callerId: "agent:session:s1",
       agentBinding: { userId: rootId, contextId: "ctx", channelId: "channel" },
+      subject: { userId: rootId, handle: "root" },
     });
   });
 });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createConnectDeepLink } from "@vibestudio/shared/connect";
+import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { clearShellTokenCache } from "./rpcClient.js";
 
 const TEST_SERVER_ID = `srv_${"S".repeat(24)}`;
@@ -183,16 +183,18 @@ function pairing(code: string) {
 }
 
 function pairingInvite(code = "P".repeat(32)) {
-  return {
-    code,
-    deepLink: createConnectDeepLink(pairing(code)),
-    pairUrl: "https://vibestudio.app/pair#invite",
+  const coordinates = {
     room: "invite-room",
     fp: FP,
+    code,
     sig: "wss://signal.example/",
     v: 2 as const,
     ice: "all" as const,
-    serverUrl: "webrtc://invite-room/_workspace/dev",
+  };
+  return {
+    ...coordinates,
+    deepLink: createConnectDeepLink(coordinates),
+    pairUrl: createConnectPairUrl(coordinates),
     expiresAt: Date.now() + 60_000,
     expiresInMs: 60_000,
     serverId: TEST_SERVER_ID,
@@ -403,7 +405,7 @@ describe("vibestudio CLI", () => {
       .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("vibestudio://connect link");
+    expect(output).toContain("Vibestudio pairing link");
     expect(output).toContain('exitCode":2');
   });
 
@@ -415,7 +417,8 @@ describe("vibestudio CLI", () => {
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
     expect(output).toContain("vibestudio remote pair");
-    expect(output).toContain("desktop app");
+    expect(output).toContain("paired administrator");
+    expect(output).toContain("vibestudio remote pair-device");
   });
 
   it("rejects old top-level remote commands", async () => {

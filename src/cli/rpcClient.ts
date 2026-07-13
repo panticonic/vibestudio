@@ -181,6 +181,7 @@ export class RpcClient {
   private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
   private keepPushOpen = false;
+  private retainedConnections = 0;
 
   constructor(creds: RpcClientCredential) {
     this.url = creds.url;
@@ -358,6 +359,25 @@ export class RpcClient {
     if (ws) await (await ws).close();
   }
 
+  /**
+   * Keep the push transport alive across a bounded batch of ordinary calls.
+   * Pollers use this so WebRTC pairing/ICE is paid once per command, not once
+   * per poll. The returned async release is idempotent and closes when the last
+   * batch holder leaves (unless an event subscriber owns the connection).
+   */
+  retainConnection(): () => Promise<void> {
+    this.retainedConnections += 1;
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      this.retainedConnections = Math.max(0, this.retainedConnections - 1);
+      if (this.retainedConnections === 0 && !this.keepPushOpen) {
+        await this.close().catch(() => undefined);
+      }
+    };
+  }
+
   /** Build an `RpcEnvelope` and POST it to the envelope-native `/rpc`. */
   private async dispatch<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
     const token = await this.ensureBearerToken();
@@ -436,7 +456,9 @@ export class RpcClient {
     } catch (error) {
       throw toRpcError(error);
     } finally {
-      if (!this.keepPushOpen) await this.close().catch(() => undefined);
+      if (!this.keepPushOpen && this.retainedConnections === 0) {
+        await this.close().catch(() => undefined);
+      }
     }
   }
 

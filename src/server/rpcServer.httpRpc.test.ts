@@ -786,6 +786,9 @@ describe("RpcServer HTTP POST /rpc", () => {
     it("propagates readOnly metadata when relaying HTTP calls to workers", async () => {
       setup.server.setWorkerdUrl("http://127.0.0.1:8787");
       setup.server.setWorkerdGatewayToken("gateway-token");
+      setup.server.setWorkerInstanceResolver((targetId) =>
+        targetId === "worker:docs" ? "docs" : null
+      );
       const realFetch = globalThis.fetch.bind(globalThis);
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url =

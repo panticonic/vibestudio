@@ -4,6 +4,8 @@ import {
   checkSignaling,
   gatewayPortFromUnit,
   inspectIdentity,
+  pairedSignalingUrl,
+  parseArgs,
   runDoctor,
   signalingRoomWsUrl,
 } from "../scripts/cli/remote-doctor.mjs";
@@ -35,6 +37,15 @@ afterEach(() => {
 });
 
 describe("remote-doctor", () => {
+  it("supports the documented workspace identity selector", () => {
+    const parsed = parseArgs(["--workspace", "dev_one"]);
+    expect(parsed.workspace).toBe("dev_one");
+    expect(parsed.identity).toContain(path.join("workspaces", "dev_one", "state", "webrtc"));
+    expect(() => parseArgs(["--workspace", "dev", "--identity", "/tmp/id.pem"])).toThrow(
+      /not both/
+    );
+  });
+
   it("dials a per-room ws URL with role=answerer (never the endpoint root)", () => {
     const url = new URL(signalingRoomWsUrl("https://signal.example/", "abc-123"));
     expect(url.protocol).toBe("wss:");
@@ -71,6 +82,36 @@ describe("remote-doctor", () => {
     const result = await checkSignaling("wss://signal.example/", factory);
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/cannot connect/);
+  });
+
+  it("reads the signaling endpoint from the canonical paired credential", () => {
+    const file = tmpFile(
+      "cli-credentials.json",
+      JSON.stringify({ workspacePairing: { sig: "ws://127.0.0.1:8790/" } })
+    );
+    expect(pairedSignalingUrl(file)).toBe("ws://127.0.0.1:8790/");
+  });
+
+  it("probes a paired credential's signaling endpoint when no override is supplied", async () => {
+    const socket = new FakeSocket();
+    let dialed = "";
+    const result = await runDoctor(
+      { signalUrl: null, identity: null },
+      {
+        require: () => ({}),
+        unitPath: "/nonexistent/unit.service",
+        pairedSignalUrl: "ws://127.0.0.1:8790/",
+        wsFactory: (url: string) => {
+          dialed = url;
+          queueMicrotask(() => socket.emit("open"));
+          return socket;
+        },
+      }
+    );
+    expect(dialed).toContain("127.0.0.1:8790");
+    expect(result.checks.find((entry: { name: string }) => entry.name === "signaling")).toMatchObject(
+      { ok: true, source: "paired-credential" }
+    );
   });
 
   it("passes a well-formed 0600 identity file", () => {

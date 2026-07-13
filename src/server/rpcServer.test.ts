@@ -546,12 +546,13 @@ describe("RpcServer attachWebRtcPipe — negative handshake fails closed (un-aut
     });
   });
 
-  it("an open with an INVALID (unknown) token yields open-result success:false terminal:true", () => {
+  it("an open with an INVALID (unknown) token yields open-result success:false terminal:true", async () => {
     const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
     const p = createFakePipe();
     server.attachWebRtcPipe(p.pipe);
 
     p.sendControl({ t: "open", sid: "s1", token: "not-a-real-grant" });
+    await flushAsync();
     expect(p.controlOfType("open-result")[0]!.frame).toMatchObject({
       success: false,
       terminal: true,
@@ -749,6 +750,45 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
 });
 
 describe("RpcServer relay behavior", () => {
+  it("routes canonical worker handles through their loader instance name", async () => {
+    const { server } = createServer();
+    server.setWorkerdUrl("http://127.0.0.1:8787");
+    server.setWorkerInstanceResolver((targetId) =>
+      targetId === "worker:workers/hello:key-with-source" ? "key-with-source" : null
+    );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: { type: "response", requestId: "req", fromId: "worker", result: "ok" },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    await expect(
+      testServer(server).relayCall(
+        "panel:nav-a",
+        "panel",
+        "worker:workers/hello:key-with-source",
+        "probe",
+        []
+      )
+    ).resolves.toBe("ok");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8787/key-with-source/__rpc",
+      expect.objectContaining({ method: "POST" })
+    );
+    await expect(
+      testServer(server).relayCall(
+        "panel:nav-a",
+        "panel",
+        "worker:workers/hello:retired",
+        "probe",
+        []
+      )
+    ).rejects.toThrow("Worker not found: worker:workers/hello:retired");
+  });
+
   it("allows authenticated panels to relay to panel, DO, and worker targets", () => {
     const { server } = createServer();
 
@@ -809,11 +849,11 @@ describe("RpcServer relay behavior", () => {
         from: "panel:nav-a",
         target: "panel:nav-b",
         delivery: {
-          caller: { callerId: "panel:nav-a", callerKind: "panel" },
+          caller: { callerId: "panel:nav-a", callerKind: "panel", userId: "user-1" },
           idempotencyKey: "idem-forged-route",
           readOnly: true,
         },
-        provenance: [{ callerId: "panel:nav-a", callerKind: "panel" }],
+        provenance: [{ callerId: "panel:nav-a", callerKind: "panel", userId: "user-1" }],
         message: {
           type: "request",
           requestId: "req-forged-route",

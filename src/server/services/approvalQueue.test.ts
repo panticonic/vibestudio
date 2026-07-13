@@ -232,6 +232,60 @@ describe("approvalQueue", () => {
     expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
   });
 
+  it("auto-denies field-input prompts that unattended mode cannot fill", async () => {
+    const emit = vi.fn();
+    const queue = createApprovalQueue({
+      eventService: { emit } as never,
+      autoApprove: true,
+    });
+    const principal = {
+      callerId: "worker:alpha",
+      callerKind: "worker" as const,
+      repoPath: "workers/alpha",
+      effectiveVersion: "hash-1",
+    };
+
+    await expect(
+      queue.requestClientConfig({
+        ...principal,
+        kind: "client-config",
+        configId: "example",
+        authorizeUrl: "https://auth.example.test/authorize",
+        tokenUrl: "https://auth.example.test/token",
+        title: "Configure Example OAuth",
+        fields: [{ name: "clientSecret", label: "Client secret", type: "secret", required: true }],
+      })
+    ).resolves.toEqual({ decision: "deny" });
+    await expect(
+      queue.requestCredentialInput({
+        ...principal,
+        kind: "credential-input",
+        title: "Add Example API",
+        credentialLabel: "Example API",
+        audience: [{ url: "https://api.example.test/", match: "origin" }],
+        injection: {
+          type: "header",
+          name: "authorization",
+          valueTemplate: "Bearer {token}",
+        },
+        accountIdentity: { providerUserId: "example" },
+        scopes: [],
+        fields: [{ name: "token", label: "Token", type: "secret", required: true }],
+      })
+    ).resolves.toEqual({ decision: "deny" });
+    await expect(
+      queue.requestSecretInput({
+        ...principal,
+        kind: "secret-input",
+        title: "Enter secret",
+        fields: [{ name: "secret", label: "Secret", type: "secret", required: true }],
+      })
+    ).resolves.toEqual({ decision: "deny" });
+
+    expect(queue.listPending()).toEqual([]);
+    expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
+  });
+
   it("preserves severe capability approval tone in pending state", async () => {
     const { queue } = createQueue();
     const promise = queue.request({

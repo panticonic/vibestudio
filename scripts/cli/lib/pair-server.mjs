@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +13,68 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 // carries room/fp/sig); there is no LAN/Tailscale/public-URL origin anymore.
 const LOOPBACK_HOST = "127.0.0.1";
 const SIGNAL_ENV = ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
+
+/**
+ * Signal the complete server process tree. POSIX children are spawned as
+ * process-group leaders, so targeting the negative pid reaches package-manager
+ * and workerd descendants as one lifecycle unit. ESRCH falls back to the
+ * ChildProcess API for injected/non-detached children and test doubles.
+ */
+export function signalProcessTree(
+  childProcess,
+  signal,
+  { platform = process.platform, killProcess = process.kill } = {}
+) {
+  if (!childProcess) return false;
+  if (platform !== "win32" && Number.isInteger(childProcess.pid) && childProcess.pid > 0) {
+    try {
+      killProcess(-childProcess.pid, signal);
+      return true;
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+  }
+  return childProcess.kill?.(signal) ?? false;
+}
+
+/** Signal only the supervised hub. The hub owns ordered workspace-child and
+ * workerd shutdown; broadcasting a graceful signal to the whole process group
+ * races that ordering. When ChildProcess.kill() already marked the handle as
+ * killed, address the same pid directly so a repeated Ctrl-C still reaches the
+ * hub's explicit escalation handler. */
+export function signalHubGracefully(childProcess, signal, { killProcess = process.kill } = {}) {
+  if (!childProcess) return false;
+  if (childProcess.killed && Number.isInteger(childProcess.pid) && childProcess.pid > 0) {
+    try {
+      killProcess(childProcess.pid, signal);
+      return true;
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+      return false;
+    }
+  }
+  return childProcess.kill?.(signal) ?? false;
+}
+
+/** Reap descendants after an abnormal hub exit without signaling the already
+ * exited ChildProcess handle (which is meaningless and can recursively emit
+ * `exit` in process adapters/test doubles). */
+function reapExitedProcessGroup(childProcess) {
+  if (
+    process.platform === "win32" ||
+    !Number.isInteger(childProcess?.pid) ||
+    childProcess.pid <= 0
+  ) {
+    return false;
+  }
+  try {
+    process.kill(-childProcess.pid, "SIGKILL");
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
 
 function parsePort(value, label) {
   const port = Number(value);
@@ -30,9 +92,11 @@ export function parsePairArgs(argv, config) {
     ),
     appRoot: null,
     dev: process.env[config.devEnv] === "1",
+    autoApprove: false,
     help: false,
     signalUrl: undefined,
     signalSource: "default",
+    readyFile: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -57,8 +121,13 @@ export function parsePairArgs(argv, config) {
     } else if (arg === "--signal-url") {
       options.signalUrl = argv[++i] ?? "";
       options.signalSource = "flag";
+    } else if (arg === "--ready-file") {
+      options.readyFile = argv[++i] ?? "";
+      if (!options.readyFile) throw new Error("--ready-file requires a path");
     } else if (arg === "--dev") {
       options.dev = true;
+    } else if (arg === "--auto-approve") {
+      options.autoApprove = true;
     } else if (arg === "--no-init") {
       throw new Error(
         "--no-init is no longer supported; choose or create a workspace after pairing"
@@ -71,6 +140,9 @@ export function parsePairArgs(argv, config) {
   }
 
   if (!options.help) {
+    if (options.autoApprove && !options.dev) {
+      throw new Error("--auto-approve is development-only; pass --dev as well");
+    }
     const resolved = resolveSignalingEndpoint(options.signalUrl);
     options.signalUrl = resolved.url;
     options.signalSource = resolved.source;
@@ -98,9 +170,17 @@ Options:
       WebRTC signaling endpoint. Resolution: flag > ${SIGNAL_ENV[0]} > hosted default.
       Use wss:// or https:// for remote endpoints; ws:// and http:// are only
       accepted for loopback development.
+  --ready-file <path>
+      Write the structured hub-ready payload to this path. Useful for unattended
+      pairing; protect and delete it because initial root invites are one-time secrets.
   --dev
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
+  --auto-approve
+      In --dev mode, use the host's existing approval-queue auto-approver. This
+      covers tool, credential-use, userland, and startup decisions and is
+      intended for unattended system tests only. Prompts that require a human
+      to supply a secret or client-config value are denied immediately.
   --help
       Show this help message.
 
@@ -115,6 +195,32 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   if (options.help) {
     printPairHelp(config);
     return;
+  }
+
+  // A source-mode server still imports infrastructure package dist exports,
+  // loads internal Durable Objects from a compact bundle, and auto-spawns the
+  // compiled headless host. Rebuild all three at one boundary so live server
+  // source can never silently run against stale transport/runtime binaries.
+  if (serverEntryArg() === "src/server/index.ts") {
+    if (hooks.prepareSourceServer) {
+      hooks.prepareSourceServer({ repoRoot });
+    } else {
+      const prepared = spawnSync(
+        process.execPath,
+        [path.join(repoRoot, "build.mjs"), "--source-server-prereqs"],
+        {
+          cwd: repoRoot,
+          env: process.env,
+          stdio: "inherit",
+        }
+      );
+      if (prepared.error) throw prepared.error;
+      if (prepared.status !== 0) {
+        throw new Error(
+          `Could not build live source-server prerequisites (exit ${prepared.status ?? "unknown"})`
+        );
+      }
+    }
   }
 
   let serverArgs = hooks.buildServerArgs
@@ -149,7 +255,17 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     VIBESTUDIO_HOST: LOOPBACK_HOST,
     VIBESTUDIO_GATEWAY_PORT: String(options.port),
     VIBESTUDIO_WEBRTC_SIGNAL_URL: options.signalUrl,
-    ...(options.dev ? { NODE_ENV: "development", VIBESTUDIO_WORKSPACE_EPHEMERAL: "1" } : {}),
+    ...(options.dev
+      ? {
+          NODE_ENV: "development",
+          VIBESTUDIO_WORKSPACE_EPHEMERAL: "1",
+          // `remote serve --dev` promises a disposable copy. pnpm's desktop
+          // dev loop intentionally mirrors commits back to the template, but
+          // unattended/system-test hosts must never mutate the source checkout.
+          VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR: "1",
+        }
+      : {}),
+    ...(options.autoApprove ? { VIBESTUDIO_AUTO_APPROVE: "1" } : {}),
   };
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 
@@ -165,6 +281,12 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   // re-raising a child's fatal signal (otherwise the forwarder catches the
   // re-raised signal and the parent lingers / exits 0 instead of dying by signal).
   const signalForwarders = new Map();
+  let shutdownSignal = null;
+
+  const deinstallSignalForwarders = () => {
+    for (const [sig, handler] of signalForwarders) process.removeListener(sig, handler);
+    signalForwarders.clear();
+  };
 
   const cleanupReadyState = () => {
     if (readyPoll !== null) {
@@ -204,6 +326,11 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           cwd: repoRoot,
           stdio: ["inherit", "pipe", "inherit"],
           env,
+          // Keep the child out of the wrapper terminal's foreground process
+          // group on POSIX. Otherwise Ctrl-C reaches child and wrapper at the
+          // same instant, so workerd can stop before the hub's ordered
+          // lifecycle drain. The wrapper remains the sole signal forwarder.
+          detached: process.platform !== "win32",
         });
     wireChild(child);
     startReadyPoll();
@@ -233,10 +360,9 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       if (!readinessWarningPrinted && Date.now() - readyPollStartedAt >= 60_000) {
         readinessWarningPrinted = true;
         const missing = [
-          !pairing.room && "room",
-          !pairing.fp && "fingerprint",
-          !pairing.sig && "signaling URL",
-          !pairingCode && "pairing code",
+          !fs.existsSync(readyFile) && "hub ready file",
+          !desktopInvite && "desktop root invite",
+          !mobileInvite && "mobile root invite",
         ].filter(Boolean);
         console.warn(
           `[${config.logPrefix}] Still waiting for pairing material (${missing.join(", ")}). Run \`vibestudio remote doctor\` to check signaling and native WebRTC support.`
@@ -258,7 +384,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           );
           clearInterval(readyPoll);
           readyPoll = null;
-          child?.kill("SIGTERM");
+          signalHubGracefully(child, "SIGTERM");
         }
       }
     }, 100);
@@ -297,24 +423,12 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
         await beforeRestart?.();
         await new Promise((resolve) => {
           const current = child;
-          if (!current || current.killed) {
+          if (!current) {
             resolve(undefined);
             return;
           }
-          let done = false;
-          const finish = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(termTimer);
-            clearTimeout(killTimer);
-            resolve(undefined);
-          };
-          const termTimer = setTimeout(() => {
-            current.kill("SIGKILL");
-          }, hooks.shutdownTimeoutMs ?? 5_000);
-          const killTimer = setTimeout(finish, (hooks.shutdownTimeoutMs ?? 5_000) + 2_000);
-          current.once("exit", finish);
-          current.kill("SIGTERM");
+          current.once("exit", () => resolve(undefined));
+          signalHubGracefully(current, "SIGTERM");
         });
         restarting = false;
         spawnChild();
@@ -332,22 +446,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     if (handled) return;
     if (hooks.onServerLine) process.stdout.write(`${line}\n`);
 
-    const roomMatch = line.match(/VIBESTUDIO_PAIRING_ROOM=(\S+)/);
-    if (roomMatch) pairing.room = roomMatch[1];
-    const fpMatch = line.match(/VIBESTUDIO_PAIRING_FP=(\S+)/);
-    if (fpMatch) pairing.fp = fpMatch[1];
-    const sigMatch = line.match(/VIBESTUDIO_PAIRING_SIG=(\S+)/);
-    if (sigMatch) pairing.sig = sigMatch[1];
-    const pairingMatch = line.match(
-      /(?:VIBESTUDIO_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/
-    );
-    if (pairingMatch) pairingCode = pairingMatch[1];
-    const qrPairingMatch = line.match(
-      /(?:VIBESTUDIO_QR_PAIRING_CODE=|QR pairing code:\s+)([A-Za-z0-9_-]+)/
-    );
-    if (qrPairingMatch) qrPairingCode = qrPairingMatch[1];
-
-    tryPrintBanner();
+    // Pairing state is consumed exclusively from the structured ready file.
+    // Server output remains diagnostic text, never a second protocol.
   };
 
   const wireChild = (childProcess) => {
@@ -376,15 +476,27 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
     childProcess.on("exit", (code, signal) => {
       if (restarting) return;
+      // A clean hub has already drained its children. An abnormal exit may
+      // leave descendants in the detached hub group, so reap only that crash
+      // path; signaling an already-clean test/process handle can itself emit a
+      // second exit event.
+      if (signal !== null || code !== 0) {
+        try {
+          reapExitedProcessGroup(childProcess);
+        } catch (error) {
+          console.warn(
+            `[${config.logPrefix}] Failed to reap crashed server process group: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
       cleanupReadyState();
+      deinstallSignalForwarders();
       if (stderrBuffer) stderrLines.push(stderrBuffer);
       if (hooks.onChildExit?.({ code, signal, stderrLines }, control)) return;
       if (signal) {
         // Re-raise so our exit status reflects the child's fatal signal. Deinstall
         // our forwarders first (documented default-action pattern) so the signal
         // performs its default terminate action instead of being swallowed.
-        for (const [sig, handler] of signalForwarders) process.removeListener(sig, handler);
-        signalForwarders.clear();
         process.kill(process.pid, signal);
       } else {
         process.exit(code ?? 0);
@@ -397,7 +509,16 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   for (const sig of ["SIGINT", "SIGTERM"]) {
     const handler = () => {
       cleanupReadyState();
-      child?.kill(sig);
+      const repeated = shutdownSignal !== null;
+      shutdownSignal ??= sig;
+      console.log(
+        `[${config.logPrefix}] ${repeated ? "Repeating" : "Requesting"} ordered hub shutdown (${sig})`
+      );
+      // The spawned command is the hub itself (server-entry.mjs deliberately
+      // avoids package-manager/shell ancestors). A repeated signal reaches the
+      // hub's child-tree escalation path; no elapsed-time cutoff substitutes
+      // for actual process ownership.
+      signalHubGracefully(child, sig);
     };
     signalForwarders.set(sig, handler);
     process.on(sig, handler);
@@ -416,6 +537,7 @@ function buildServerArgs(options, config = {}) {
 
   if (options.dev) args.push("--ephemeral");
   if (options.appRoot) args.push("--app-root", options.appRoot);
+  if (options.readyFile) args.push("--ready-file", path.resolve(options.readyFile));
   if (config.requireMobileReady) args.push("--require-mobile-ready");
   if (config.requireElectronReady) args.push("--require-electron-ready");
   return args;

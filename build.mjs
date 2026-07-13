@@ -644,4 +644,43 @@ async function build() {
   }
 }
 
-build();
+async function buildInternalDoOnly() {
+  try {
+    fs.mkdirSync("dist", { recursive: true });
+    await esbuild.build(internalDoBundleConfig);
+    console.log("Internal Durable Object bundle built successfully!");
+  } catch (error) {
+    console.error("Internal Durable Object bundle build failed:", error);
+    process.exitCode = 1;
+  }
+}
+
+async function buildSourceServerPrerequisites() {
+  try {
+    // Source-mode servers import infrastructure packages through their public
+    // dist exports, and auto-spawn the compiled headless host. Rebuilding only
+    // the internal DO bundle can therefore combine live server source with
+    // stale RPC/runtime binaries. Keep this boundary equivalent to the
+    // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
+    await buildVibestudioPackages();
+    await buildHeadlessHost();
+    fs.mkdirSync("dist", { recursive: true });
+    // Injected into every non-Electron/headless panel by PanelHttpServer. It
+    // embeds the RPC WebSocket client, so leaving it stale can make panels use
+    // an older wire protocol even when packages/rpc/dist is current.
+    await esbuild.build(browserTransportConfig);
+    await esbuild.build(internalDoBundleConfig);
+    console.log("Source server prerequisites built successfully!");
+  } catch (error) {
+    console.error("Source server prerequisite build failed:", error);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv.includes("--internal-do-only")) {
+  await buildInternalDoOnly();
+} else if (process.argv.includes("--source-server-prereqs")) {
+  await buildSourceServerPrerequisites();
+} else {
+  await build();
+}

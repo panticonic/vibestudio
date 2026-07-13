@@ -161,6 +161,44 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(releaseAndUnload).toHaveBeenCalledWith("panel-1", "load failed");
   });
 
+  it("drops a queued load after its lease was released", async () => {
+    const host = new HeadlessHost(config());
+    const tracker = new LeaseTracker("headless-test");
+    tracker.reconcile({
+      version: { epoch: "boot", counter: 1 },
+      leases: [
+        {
+          slotId: "panel-1",
+          runtimeEntityId: "panel:entry-1",
+          clientSessionId: "headless-test",
+          hostConnectionId: "headless-test",
+          connectionId: "lease-1",
+          holderLabel: "Headless",
+          acquiredAt: 1,
+        },
+      ],
+    });
+    tracker.drop("panel-1");
+    const getPanelLoadInfo = vi.fn();
+    Object.assign(host as unknown as Record<string, unknown>, {
+      tracker,
+      stopped: false,
+      pages: { unloadPanel: vi.fn() },
+      panelInit: { getPanelLoadInfo },
+    });
+
+    await (
+      host as unknown as { processIntent(intent: unknown): Promise<void> }
+    ).processIntent({
+      kind: "load",
+      slotId: "panel-1",
+      runtimeEntityId: "panel:entry-1",
+      connectionId: "lease-1",
+    });
+
+    expect(getPanelLoadInfo).not.toHaveBeenCalled();
+  });
+
   it("never capacity-evicts a panel pinned by an active CDP client", async () => {
     const host = new HeadlessHost({ ...config(), maxPanels: 2 });
     const tracker = new LeaseTracker("headless-test");

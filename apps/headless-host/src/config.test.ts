@@ -30,4 +30,27 @@ describe("headless-host config authentication", () => {
       ).auth
     ).toEqual({ kind: "injected" });
   });
+
+  it("uses a separate Chromium profile for every host session by default", () => {
+    const first = resolveConfig(
+      {
+        serverUrl: "http://127.0.0.1:3030",
+        ipcToken: "secret",
+        clientSessionId: "headless-one",
+      },
+      {} as NodeJS.ProcessEnv
+    );
+    const second = resolveConfig(
+      {
+        serverUrl: "http://127.0.0.1:3030",
+        ipcToken: "secret",
+        clientSessionId: "headless-two",
+      },
+      {} as NodeJS.ProcessEnv
+    );
+
+    expect(first.profileDir).toMatch(/headless-host\/instance-headless-one$/);
+    expect(second.profileDir).toMatch(/headless-host\/instance-headless-two$/);
+    expect(first.profileDir).not.toBe(second.profileDir);
+  });
 });

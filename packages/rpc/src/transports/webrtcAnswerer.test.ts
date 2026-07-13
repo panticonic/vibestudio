@@ -592,10 +592,16 @@ describe("WebRTC answerer pipe (v2)", () => {
   });
 
   it("drops the pipe on channel close/error, and later writes settle silently", async () => {
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const h = makeHarness();
     const { control } = await pairUp(h);
     control.close(); // remote teardown
     expect(h.downs).toEqual(["control channel closed"]);
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("pipe down: control channel closed"));
+    expect(warning).not.toHaveBeenCalledWith(
+      expect.stringContaining("pipe down: control channel closed")
+    );
 
     // Writes after down settle without sending (pipe-down is the signal).
     const sentBefore = control.sent.length;
@@ -608,7 +614,12 @@ describe("WebRTC answerer pipe (v2)", () => {
     const { bulk } = await pairUp(h2);
     bulk.fireError(new Error("boom"));
     expect(h2.downs).toEqual(["bulk channel error: boom"]);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("pipe down: bulk channel error: boom")
+    );
     await h2.pipe.close();
+    info.mockRestore();
+    warning.mockRestore();
   });
 
   it("re-pairs on a new offer, flushing buffered candidates AFTER the new description", async () => {

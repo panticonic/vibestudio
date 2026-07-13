@@ -124,6 +124,8 @@ export function createPairingRedeemer(deps: {
       if (!parsed) return null;
       const binding = deps.deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret);
       if (!binding) return null;
+      const user = deps.resolveUser(binding.userId);
+      if (!user || user.revokedAt !== undefined) return null;
       const callerId = agentCallerId(binding.entityId);
       const agentBinding = {
         entityId: binding.entityId,
@@ -139,6 +141,7 @@ export function createPairingRedeemer(deps: {
         callerId,
         callerKind: "agent" as const,
         agentBinding,
+        subject: { userId: user.id, handle: user.handle },
       };
     }
     if (token.startsWith(REFRESH_PREFIX)) {
@@ -151,13 +154,19 @@ export function createPairingRedeemer(deps: {
         return null;
       }
       try {
-        deps.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+        const device = deps.deviceAuthStore.validateRefresh(deviceId, refreshToken);
+        const user = deps.resolveUser(device.userId);
+        if (!user || user.revokedAt !== undefined) return null;
         await deps.touchDevice?.(deviceId);
+        deps.tokenManager.ensureToken(shellCallerId(deviceId), "shell");
+        return {
+          callerId: shellCallerId(deviceId),
+          callerKind: "shell" as const,
+          subject: { userId: user.id, handle: user.handle },
+        };
       } catch {
         return null;
       }
-      deps.tokenManager.ensureToken(shellCallerId(deviceId), "shell");
-      return { callerId: shellCallerId(deviceId), callerKind: "shell" as const };
     }
     // Neither an agent nor a refresh credential: treat the token as a QR pairing
     // code and attempt redemption directly. A stale/unknown code throws

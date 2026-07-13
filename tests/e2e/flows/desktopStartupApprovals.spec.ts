@@ -500,7 +500,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `(() => globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [0]).then((replay) => ({
+            `(() => globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }]).then((replay) => ({
               ready: replay?.ready,
               snapshots: replay?.snapshots,
               logEvents: (replay?.logEvents ?? []).map((event) => ({
@@ -668,7 +668,7 @@ async function collectStartupAgentCompletion(
         };
         return Promise.all([
           rpc.call(${JSON.stringify(targetId)}, "getParticipants", []),
-          rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [0]),
+          rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }]),
         ]).then(([participants, replay]) => ({
           participants,
           events: (replay?.logEvents ?? []).map(normalize),

@@ -448,10 +448,20 @@ describe("SignalingRoom", () => {
   });
 
   it("arms the ping auto-response on construction so dead sockets reap without waking the DO", () => {
-    const { state } = makeRoom();
+    const { state } = makeRoom({ ENVIRONMENT: "production" });
     expect(state.autoResponse).toBeDefined();
     expect(state.autoResponse!.request).toBe('{"t":"ping"}');
     expect(state.autoResponse!.response).toBe('{"t":"pong"}');
+  });
+
+  it("uses an explicit ping/pong handler in the local test runtime", async () => {
+    const { room, state } = makeRoom({ ENVIRONMENT: "test" });
+    await room.fetch(upgradeRequest("answerer"));
+    const [answerer] = createdServers;
+
+    expect(state.autoResponse).toBeUndefined();
+    await deliver(room, answerer!, '{"t":"ping"}');
+    expect(answerer!.sent).toContain('{"t":"pong"}');
   });
 
   it("never relays a frame it does not understand (stays a dumb SDP/ICE pipe)", async () => {
@@ -585,6 +595,8 @@ describe("SignalingRoom", () => {
     await expect(res.json()).resolves.toMatchObject({
       error: expect.stringContaining("non-empty `iceServers` array"),
     });
+  });
+
   it("gates TURN minting: one cold grace for the offerer's pre-join fetch, then denies the unpaired room", async () => {
     stubTurnMint();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -625,6 +637,15 @@ describe("SignalingRoom", () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(a.headers.get("x-signaling-turn")).toBe("stun-only");
+  });
+
+  it("does not rate-limit STUN-only reconnect loops", async () => {
+    const { room } = makeRoom({ ENVIRONMENT: "test" });
+    for (let i = 0; i < 40; i++) {
+      const response = await room.fetch(iceRequestFrom("9.9.9.9"));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-signaling-turn")).toBe("stun-only");
+    }
   });
 
   it("rate-limits ice-servers past the per-IP window with 429", async () => {

@@ -441,12 +441,13 @@ describe("createSignalingClient", () => {
       });
       sock.fireOpen();
 
-      // Five 20s intervals, each answered with a pong: the socket stays alive.
+      // One immediate proof plus five 20s intervals, each answered with a pong:
+      // the socket stays alive.
       for (let i = 0; i < 5; i++) {
         vi.advanceTimersByTime(20_000);
         sock.deliver(JSON.stringify({ t: "pong" }));
       }
-      expect(sock.sent.filter((s) => s === PING)).toHaveLength(5);
+      expect(sock.sent.filter((s) => s === PING)).toHaveLength(6);
       expect(closed).toBe(false);
       client.close();
     } finally {

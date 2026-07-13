@@ -39,7 +39,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CallerKind, ServiceContext, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { parseConnectLink } from "@vibestudio/shared/connect";
+import {
+  createConnectDeepLink,
+  PAIRING_PROTOCOL_VERSION,
+  parseConnectLink,
+} from "@vibestudio/shared/connect";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { IdentityDb } from "@vibestudio/shared/users/identityDb";
+import { UserStore } from "@vibestudio/shared/users/userStore";
 import { createRpcClient } from "@vibestudio/rpc";
 import {
   createPairedConnection,
@@ -49,7 +56,6 @@ import {
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
-import { mintPairingInvite, type MintedPairingInvite } from "../src/server/services/auth/model.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
 import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
@@ -60,6 +66,12 @@ const SIGNAL_PORT = 8798;
 const SIG = `ws://127.0.0.1:${SIGNAL_PORT}`;
 
 let wrangler: ChildProcess | null = null;
+
+interface MintedPairingInvite {
+  room: string;
+  code: string;
+  deepLink: string;
+}
 
 async function startSignaling(): Promise<void> {
   wrangler = spawn(
@@ -80,12 +92,24 @@ async function startSignaling(): Promise<void> {
 }
 
 /** Minimal real RpcServer whose dispatcher echoes the call (proves the dispatch path). */
-function makeServer(authStorePath: string): {
+function makeServer(
+  databasePath: string,
+  onRedeemed: (code: string, credential: DeviceCredential) => Promise<void>
+): {
   server: RpcServer;
   tokenManager: TokenManager;
   deviceAuthStore: DeviceAuthStore;
+  identityDb: IdentityDb;
+  userStore: UserStore;
+  workspaceId: string;
   dispatched: Array<{ service: string; method: string; args: unknown[] }>;
 } {
+  const central = new CentralDataManager({ databasePath });
+  const workspaceId = central.addWorkspace("test").workspaceId;
+  central.close();
+  const identityDb = new IdentityDb({ path: databasePath, readOnly: false });
+  const userStore = new UserStore(identityDb);
+  const root = userStore.createRoot({ handle: "root", displayName: "Root" });
   const tokenManager = new TokenManager();
   const dispatched: Array<{ service: string; method: string; args: unknown[] }> = [];
   const dispatcher = {
@@ -100,14 +124,41 @@ function makeServer(authStorePath: string): {
   } as unknown as ServiceDispatcher;
   // Real device-auth store + the over-the-pipe pairing redeemer, so a fresh
   // device can present an invite code (and a returning one a refresh credential).
-  const deviceAuthStore = new DeviceAuthStore(authStorePath);
+  const deviceAuthStore = new DeviceAuthStore({
+    db: identityDb,
+    serverIdPath: path.join(path.dirname(databasePath), "server-id.json"),
+  });
   const server = new RpcServer({
     tokenManager,
     dispatcher,
     entityCache: new EntityCache(),
-    redeemPairingCredential: createPairingRedeemer({ deviceAuthStore, tokenManager }),
+    redeemPairingCredential: createPairingRedeemer({
+      deviceAuthStore,
+      tokenManager,
+      redeemPairingCode: async (code, input) => {
+        const credential = deviceAuthStore.completePairing({
+          code,
+          expectedWorkspaceId: workspaceId,
+          ...input,
+        });
+        await onRedeemed(code, credential);
+        return credential;
+      },
+      resolveUser: (userId) => userStore.getUser(userId),
+    }),
   });
-  return { server, tokenManager, deviceAuthStore, dispatched };
+  // Keep the root binding explicit: every test invite represents the normal
+  // pair-another-device flow, not the one-time root-bootstrap flow.
+  expect(root.role).toBe("root");
+  return {
+    server,
+    tokenManager,
+    deviceAuthStore,
+    identityDb,
+    userStore,
+    workspaceId,
+    dispatched,
+  };
 }
 
 let clientSeq = 0;
@@ -170,19 +221,34 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
     identityPemFile: path.join(tmp, "identity.pem"),
   });
   let deviceAuthStore: DeviceAuthStore;
+  let identityDb: IdentityDb;
+  let userStore: UserStore;
+  let workspaceId: string;
   let dispatched: Array<{ service: string; method: string; args: unknown[] }> = [];
   let ingress: WebRtcIngress;
   const openConnections = new Set<PairedConnection>();
+  const inviteRooms = new Map<string, string>();
 
-  const mintInvite = (): MintedPairingInvite => {
-    const invite = mintPairingInvite({
-      deviceAuthStore,
-      pairing: { fp: cert.fingerprint, sig: SIG },
-      ingress,
+  const mintInvite = async (): Promise<MintedPairingInvite> => {
+    const root = userStore.getByHandle("root");
+    if (!root) throw new Error("test root user is missing");
+    const code = deviceAuthStore.createPairingCode(undefined, {
+      workspaceId,
+      userId: root.id,
     });
-    expect(invite.room).not.toBeNull(); // per-invite room, armed on the pool
-    expect(invite.deepLink).toContain("v=2");
-    return invite;
+    const room = randomUUID();
+    inviteRooms.set(code, room);
+    await ingress.armRoom(room, {});
+    const deepLink = createConnectDeepLink({
+      room,
+      fp: cert.fingerprint,
+      code,
+      sig: SIG,
+      v: PAIRING_PROTOCOL_VERSION,
+      ice: "all",
+    });
+    expect(deepLink).toContain("v=2");
+    return { room, code, deepLink };
   };
 
   const track = (conn: PairedConnection): PairedConnection => {
@@ -197,9 +263,16 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
 
   beforeAll(async () => {
     await startSignaling();
-    const s = makeServer(path.join(tmp, "auth", "devices.json"));
+    const s = makeServer(path.join(tmp, "identity.db"), async (code, credential) => {
+      const room = inviteRooms.get(code);
+      if (!room) throw new Error("redeemed test invite has no routed room");
+      await ingress.armRoom(room, { deviceId: credential.deviceId });
+    });
     dispatched = s.dispatched;
     deviceAuthStore = s.deviceAuthStore;
+    identityDb = s.identityDb;
+    userStore = s.userStore;
+    workspaceId = s.workspaceId;
     // The EXACT wiring src/server/index.ts runs: the pool over the live
     // RpcServer, invite redemption re-tagging rooms, releases disarming them.
     ingress = startWebRtcIngress({
@@ -209,19 +282,18 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
       keyPemFile: cert.keyPemFile,
       fingerprint: cert.fingerprint,
     });
-    deviceAuthStore.onPairingRoomRedeemed((room, deviceId) => ingress.armRoom(room, { deviceId }));
-    deviceAuthStore.onPairingRoomReleased((room) => void ingress.disarmRoom(room));
   }, 120_000);
 
   afterAll(async () => {
     for (const conn of openConnections) await conn.close().catch(() => {});
     await ingress?.close().catch(() => {});
+    identityDb?.close();
     wrangler?.kill("SIGTERM");
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
   it("pairs a fresh device via a minted invite (per-invite room) and round-trips a real RPC dispatch", async () => {
-    inviteA = mintInvite();
+    inviteA = await mintInvite();
     let paired: DeviceCredential | null = null;
     connA = track(
       await dial(inviteA, {
@@ -245,7 +317,7 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
     // Redemption persisted the invite's room onto the device record (§2.1) and
     // the pool's status surfaces the connected pipe with its selected path.
     const device = deviceAuthStore.listDevices().find((d) => d.deviceId === credentialA.deviceId);
-    expect(device?.room).toBe(inviteA.room);
+    expect(device?.userId).toBe(userStore.getByHandle("root")?.id);
     const room = ingress.status().find((r) => r.room === inviteA.room);
     expect(room).toMatchObject({ status: "connected", deviceId: credentialA.deviceId });
     expect(["host", "srflx", "prflx"]).toContain(room!.candidateType); // loopback: never TURN
@@ -282,8 +354,7 @@ describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingres
   }, 60_000);
 
   it("runs TWO clients concurrently on two invite rooms with independent sessions (§9.5)", async () => {
-    const inviteB = mintInvite();
-    const inviteC = mintInvite();
+    const [inviteB, inviteC] = await Promise.all([mintInvite(), mintInvite()]);
     expect(inviteB.room).not.toBe(inviteC.room);
 
     const credentials: Record<string, DeviceCredential | null> = { b: null, c: null };

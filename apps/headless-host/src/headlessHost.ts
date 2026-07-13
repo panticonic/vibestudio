@@ -270,6 +270,8 @@ export class HeadlessHost implements PanelHost {
     switch (action) {
       case "accessibilityTree":
         return this.pages!.accessibilityTree(slotId);
+      case "domSnapshot":
+        return this.pages!.domSnapshot(slotId);
       case "consoleHistory":
         return this.consoleHistory.query(
           slotId,
@@ -398,6 +400,20 @@ export class HeadlessHost implements PanelHost {
       return;
     }
 
+    // Intent processing is serialized, but lease events keep updating the
+    // tracker while an earlier page load is in flight. A queued load can
+    // therefore be obsolete by the time it reaches this boundary. Re-check
+    // ownership before asking the server for a single-use load token; otherwise
+    // a normal close/navigate race becomes a noisy "Panel not found" failure.
+    const currentLease = this.tracker.heldLease(intent.slotId);
+    if (
+      !currentLease ||
+      currentLease.connectionId !== intent.connectionId ||
+      currentLease.runtimeEntityId !== intent.runtimeEntityId
+    ) {
+      return;
+    }
+
     await this.enforcePanelCap();
     // Fetch init fresh each load — the embedded gateway token is single-use.
     const info = await this.panelInit!.getPanelLoadInfo(intent.slotId, intent.connectionId);
@@ -410,7 +426,10 @@ export class HeadlessHost implements PanelHost {
       tabId,
     });
     this.tabIds.set(intent.slotId, tabId);
-    this.bridge?.registerTarget(intent.slotId, tabId);
+    this.bridge?.registerTarget(intent.slotId, tabId, {
+      kind: info.source.startsWith("browser:") ? "browser" : "workspace",
+      source: info.source,
+    });
   }
 
   /**

@@ -58,7 +58,7 @@ async function withControl<T>(
 }
 
 export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
-  if (!options.link) throw new AuthError("pair requires a vibestudio://connect link");
+  if (!options.link) throw new AuthError("pair requires a Vibestudio pairing link");
   const pairing = parsePairingLink(options.link);
   const issuedRef: { current: { deviceId: string; refreshToken: string } | null } = {
     current: null,

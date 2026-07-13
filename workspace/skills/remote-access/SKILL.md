@@ -14,7 +14,7 @@ connectivity.
 - `vibestudio remote deploy status|logs|update|remove <user@host>`
 - `vibestudio remote doctor [--signal-url <url>] [--workspace <name> | --identity <identity.pem>]`
 - `vibestudio remote repair-identity --yes [--workspace <name> | --identity <identity.pem>]`
-- `vibestudio remote serve [--signal-url <url>]`
+- `vibestudio remote serve [--signal-url <url>] [--dev --auto-approve]`
 - `vibestudio remote pair "https://vibestudio.app/pair#..."`
 - `vibestudio remote invite-user --handle <handle> --workspace <name> [--workspace <name>...]`
 - `vibestudio remote pair-device [--workspace <name>]`

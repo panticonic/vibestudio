@@ -69,6 +69,8 @@ export interface HeadlessHostManagerDeps {
   config: HeadlessHostManagerConfig;
   /** Test seam. */
   spawnFn?: (entryPath: string) => ChildProcess;
+  /** Test seam for POSIX process-group signaling. */
+  signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 function defaultEntryPath(): string {
@@ -248,7 +250,13 @@ export class HeadlessHostManager {
     try {
       child =
         this.deps.spawnFn?.(entryPath) ??
-        fork(entryPath, [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+        fork(entryPath, [], {
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
+          // Give the host and the Chromium it spawns their own process group.
+          // The manager can then terminate the whole renderer tree on shutdown
+          // instead of orphaning Chromium under the user service manager.
+          detached: process.platform !== "win32",
+        });
     } catch (error) {
       log.warn(`headless host spawn failed: ${String(error)}`);
       this.recordFailure();
@@ -404,10 +412,32 @@ export class HeadlessHostManager {
     const child = this.child;
     this.child = null;
     this.spawnedClientSessionId = null;
-    child.kill("SIGTERM");
+    this.signalChildTree(child, "SIGTERM");
     const killTimer = setTimeout(() => {
-      if (child.exitCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null) this.signalChildTree(child, "SIGKILL");
     }, 5_000);
     killTimer.unref?.();
+  }
+
+  private signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
+    if (typeof child.pid === "number" && this.deps.signalProcessGroup) {
+      try {
+        this.deps.signalProcessGroup(child.pid, signal);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        log.warn(`failed to signal headless host process group ${child.pid}: ${String(error)}`);
+      }
+    }
+    if (process.platform !== "win32" && typeof child.pid === "number") {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+        log.warn(`failed to signal headless host process group ${child.pid}: ${String(error)}`);
+      }
+    }
+    child.kill(signal);
   }
 }

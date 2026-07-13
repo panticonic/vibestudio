@@ -32,4 +32,24 @@ describe("resolveChromiumProfileDir", () => {
       })
     ).toBe(path.join("/home/alice", "snap", "chromium", "common", "vibestudio", "headless-host"));
   });
+
+  it("preserves the host instance beneath the snap-accessible profile root", () => {
+    expect(
+      resolveChromiumProfileDir({
+        executablePath: "/snap/bin/chromium",
+        profileDir: "/home/alice/.local/state/vibestudio/headless-host/instance-headless-one",
+        homeDir: "/home/alice",
+      })
+    ).toBe(
+      path.join(
+        "/home/alice",
+        "snap",
+        "chromium",
+        "common",
+        "vibestudio",
+        "headless-host",
+        "instance-headless-one"
+      )
+    );
+  });
 });

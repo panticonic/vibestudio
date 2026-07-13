@@ -7,6 +7,7 @@ import type {
 import type { WsClientMessage, WsServerMessage } from "../protocol/wsProtocol.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
 import type { WsLike, WsTransportAdapter } from "../protocol/wsAdapter.js";
+import { TERMINAL_CLOSE_CODES } from "../protocol/closeCodes.js";
 
 export interface WsClientTransportConfig {
   selfId: string;
@@ -287,7 +288,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     nextSocket.onclose = (event) => {
       if (socketGeneration !== generation || socket !== nextSocket) return;
       authenticated = false;
-      const terminalCodes = new Set(config.terminalCloseCodes ?? []);
+      const terminalCodes = config.terminalCloseCodes
+        ? new Set(config.terminalCloseCodes)
+        : TERMINAL_CLOSE_CODES;
       if (closed || terminalCodes.has(event.code ?? 0) || config.reconnect === false) {
         setStatus("disconnected");
         return;
@@ -358,8 +361,13 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       }
       const target = config.routeTarget?.(envelope.target) ?? envelope.target;
       const routedEnvelope = target === envelope.target ? envelope : { ...envelope, target };
+      // Server-initiated RPC envelopes use `from: "server"`, so their
+      // responses naturally target `server`. Both `main` and `server` are the
+      // server endpoint and must ride ws:rpc. Sending `server` via ws:route
+      // makes a valid response look like a caller-to-caller relay and the host
+      // correctly rejects it as a protocol error.
       const message: WsClientMessage =
-        target === "main"
+        target === "main" || target === "server"
           ? { type: "ws:rpc", envelope: routedEnvelope }
           : { type: "ws:route", envelope: routedEnvelope };
       current.send(JSON.stringify(message));

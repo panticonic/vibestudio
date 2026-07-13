@@ -27,12 +27,11 @@ standalone server from `src/server/index.ts`.
 pnpm server:live --help
 ```
 
-Electron local mode spawns the bundled `dist/server-electron.cjs` as a **detached
-workspace server** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
-`src/main/localServerManager.ts`); rebuild it after Electron or local-server
-changes. The desktop shell is a paired device of that server — it attaches to a
-healthy recorded server on launch and spawns a fresh one otherwise, so there is no
-separate Electron⇄server IPC mode.
+Electron local mode spawns the bundled `dist/server-electron.cjs` as one
+**detached machine hub** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
+`src/main/hubProcessManager.ts`). The desktop shell pairs one global device with
+that hub and asks it to route into the selected workspace child; it never starts
+or authenticates a workspace child directly.
 
 ## Install
 
@@ -63,9 +62,17 @@ Start a phone/laptop pairing server:
 vibestudio remote serve --port 3030
 # or, during source development:
 pnpm cli remote serve --port 3030
+# disposable unattended host with structured pairing handoff:
+pnpm --silent cli remote serve --dev --auto-approve --ready-file /tmp/vibestudio-ready.json
 ```
 
-Pair this terminal, choose a workspace, start the terminal app, and mint new invites:
+The ready file contains one-time root pairing secrets; protect it and delete it
+after redemption. Source-mode `remote serve` rebuilds the internal Durable
+Object bundle before startup. Its disposable `--dev` workspace does not mirror
+test commits back into the source checkout.
+
+Pair this terminal, choose a workspace, start the terminal app, and mint
+account-bound device links:
 
 ```sh
 vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"
@@ -73,18 +80,16 @@ vibestudio remote workspaces
 vibestudio remote select dev
 vibestudio terminal start --pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"
 vibestudio terminal start
-vibestudio remote invite
+vibestudio remote pair-device --workspace dev
+vibestudio remote invite-user --handle alice --workspace dev
 vibestudio remote status
 vibestudio remote logout
 ```
 
-`remote invite` has two modes:
-
-- With a stored CLI credential, it asks the paired server to mint a workspace
-  invite.
-- On the server host, with no stored CLI credential, it uses the local admin
-  token against `http://127.0.0.1:<port>`; use `--port`, `--workspace`,
-  `--url`, or `--admin-token` when the defaults do not match the running server.
+`pair-device` creates another device link for the current account.
+`invite-user` creates or selects an account, grants explicit workspace access,
+and creates that account's first device link. Both commands require an existing
+paired administrator credential.
 
 Pairing saves a durable device credential. After pairing, desktop, mobile, and
 terminal hosts all choose a workspace, ask the server to launch their selected
@@ -107,7 +112,7 @@ same configuration root.
 Deploy or manage a remote server over SSH/systemd:
 
 ```sh
-vibestudio remote deploy user@host --port 3030 --workspace default --signal-url wss://signaling.example.workers.dev
+vibestudio remote deploy user@host --port 3030 --signal-url wss://signaling.example.workers.dev
 vibestudio remote deploy status user@host
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
@@ -168,6 +173,34 @@ vibestudio agent services [NAME]
 vibestudio agent logs UNIT
 vibestudio agent diag UNIT
 ```
+
+### Headless agentic system tests
+
+Run the canonical workspace system-test catalog directly from a paired CLI
+session. Runs execute asynchronously in the session's durable EvalDO, so a
+detached run can be polled or cancelled from a later CLI invocation:
+
+```sh
+vibestudio system-test doctor
+vibestudio system-test list --json
+vibestudio system-test run eval-return-value
+vibestudio system-test run --category smoke
+vibestudio system-test run --all --detach
+vibestudio system-test runs
+vibestudio system-test status <run-id> --wait
+vibestudio system-test wait <run-id>
+vibestudio system-test inspect <run-id> --json
+vibestudio system-test trajectory <run-id> <test-name> --full --json
+vibestudio system-test rerun <run-id>
+vibestudio system-test cancel <run-id>
+```
+
+Completed runs exit nonzero for validation failures, session errors, or
+unexpected tool failures while still returning the run ID. Local metadata and
+mode-`0600` artifacts default to
+`${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/`; pass
+`--out-dir` to choose another artifact root; each run gets its own subdirectory.
+Exact test names are used to avoid accidental substring expansion.
 
 ## Mobile
 

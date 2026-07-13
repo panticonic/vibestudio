@@ -1286,19 +1286,7 @@ export async function handleRpc(
       const active = state.runtimes.get(name);
       if (active) {
         const runtime = "promise" in active ? await active.promise : active;
-        if (runtime.child.exitCode === null) {
-          runtime.child.kill("SIGTERM");
-          await new Promise<void>((resolve) => {
-            const timeout = setTimeout(() => {
-              if (runtime.child.exitCode === null) runtime.child.kill("SIGKILL");
-              resolve();
-            }, 5_000);
-            runtime.child.once("exit", () => {
-              clearTimeout(timeout);
-              resolve();
-            });
-          });
-        }
+        await terminateWorkspaceChild(runtime.child);
         state.runtimes.delete(name);
         state.workspacePresence.delete(workspaceId);
       }
@@ -1879,8 +1867,10 @@ async function ensureWorkspaceRuntime(
  *
  * Identity is one hub-owned store (WP0 §2): the child opens `identity.db`
  * query-only via `VIBESTUDIO_IDENTITY_DB_PATH` to resolve subjects and rosters.
- * The child keeps its own DTLS identity and WebRTC ingress under its workspace
- * state directory, so every child presents a distinct fingerprint.
+ * Each advertised workspace keeps its own DTLS identity and routed-room state
+ * under the canonical advertised workspace directory. A replacement process
+ * (including a fresh ephemeral dev checkout) therefore preserves its pinned
+ * fingerprint, while different advertised workspaces remain isolated.
  *
  * `workspaceId` is the registry's OPAQUE stable id (WP2) — the child gates
  * connections with `membershipStore.has(subject.userId, workspaceId)`, so it
@@ -1889,6 +1879,7 @@ async function ensureWorkspaceRuntime(
 export function buildWorkspaceChildEnv(input: {
   baseEnv: NodeJS.ProcessEnv;
   appRoot: string;
+  advertisedWorkspaceName: string;
   childWorkspaceName: string;
   workspaceId: string;
   hubUrl: string;
@@ -1897,20 +1888,32 @@ export function buildWorkspaceChildEnv(input: {
   ephemeral: boolean;
   autoApproveStartupUnits: boolean;
 }): NodeJS.ProcessEnv {
-  const childStateDir = path.join(getWorkspaceDir(input.childWorkspaceName), "state");
+  const advertisedStateDir = path.join(getWorkspaceDir(input.advertisedWorkspaceName), "state");
   const env: NodeJS.ProcessEnv = {
     ...input.baseEnv,
     VIBESTUDIO_APP_ROOT: input.appRoot,
     VIBESTUDIO_HOST: "127.0.0.1",
     VIBESTUDIO_BIND_HOST: "127.0.0.1",
     VIBESTUDIO_WORKSPACE: input.childWorkspaceName,
+    // The disk coordinate can differ from the user-facing catalog name (the
+    // ephemeral dev workspace is the canonical example). Child RPCs must
+    // report the catalog name so clients can route back through the hub.
+    VIBESTUDIO_ADVERTISED_WORKSPACE: input.advertisedWorkspaceName,
     VIBESTUDIO_WORKSPACE_ID: input.workspaceId,
+    // Routed signaling rooms are a property of the advertised workspace, not
+    // of one child process's disk checkout. This is identical for persistent
+    // workspaces and crucial for ephemeral dev, whose random checkout is
+    // deleted on every restart while paired devices must retain their room.
+    VIBESTUDIO_ROUTED_ROOM_STATE_PATH: routedRoomStatePath(input.advertisedWorkspaceName),
     VIBESTUDIO_IDENTITY_DB_PATH: input.identityDbPath,
     VIBESTUDIO_HUB_CONTROL_TOKEN: input.hubControlToken,
     // Every child gets a distinct loopback-management capability. Never pass
     // through the hub's operator token from baseEnv.
     VIBESTUDIO_ADMIN_TOKEN: randomBytes(32).toString("hex"),
-    VIBESTUDIO_WEBRTC_IDENTITY: path.join(childStateDir, "webrtc", "identity.pem"),
+    // The certificate identifies the advertised logical workspace. Ephemeral
+    // dev may replace its random checkout on every launch, but paired clients
+    // must continue to see the fingerprint they pinned for `dev`.
+    VIBESTUDIO_WEBRTC_IDENTITY: path.join(advertisedStateDir, "webrtc", "identity.pem"),
     VIBESTUDIO_PROCESS_ROLE: "workspace-child",
     VIBESTUDIO_HUB_URL: input.hubUrl,
   };
@@ -1927,6 +1930,23 @@ export function buildWorkspaceChildEnv(input: {
     delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
   }
   return env;
+}
+
+/** Rotate the ephemeral dev checkout at the point a replacement runtime is
+ * actually started. A crashed child's disk stays available until then so its
+ * durable test trajectories and logs remain inspectable; normal hub shutdown
+ * still removes the currently recorded checkout. */
+export function prepareEphemeralWorkspaceDisk(
+  centralData: CentralDataManager,
+  workspaceId: string,
+  nextDiskName: string,
+  removeWorkspace: typeof deleteUnregisteredWorkspace = deleteUnregisteredWorkspace
+): void {
+  const previous = centralData.getEphemeralWorkspace();
+  if (previous?.diskName && previous.diskName !== nextDiskName) {
+    removeWorkspace(previous.diskName, centralData);
+  }
+  centralData.setEphemeralWorkspaceDiskName(workspaceId, nextDiskName);
 }
 
 async function startWorkspaceRuntime(
@@ -1950,7 +1970,7 @@ async function startWorkspaceRuntime(
   // creates catalog state as a routing side effect. Ephemeral dev children use
   // a random disk name but retain the registered advertised workspace id.
   if (isEphemeralDevWorkspace) {
-    state.centralData.setEphemeralWorkspaceDiskName(workspaceId, childWorkspaceName);
+    prepareEphemeralWorkspaceDisk(state.centralData, workspaceId, childWorkspaceName);
   }
   const readyDir = fs.mkdtempSync(
     path.join(os.tmpdir(), `vibestudio-workspace-${advertisedName}-`)
@@ -1979,6 +1999,7 @@ async function startWorkspaceRuntime(
   const childEnv = buildWorkspaceChildEnv({
     baseEnv: process.env,
     appRoot: state.appRoot,
+    advertisedWorkspaceName: advertisedName,
     childWorkspaceName,
     workspaceId,
     hubUrl: state.connectUrl,
@@ -1995,14 +2016,48 @@ async function startWorkspaceRuntime(
     cwd: state.appRoot,
     env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
+    // The hub owns this complete runtime tree. A distinct POSIX process group
+    // lets graceful shutdown reach the child first and lets an explicit
+    // repeated signal stop workerd/extension-host descendants as one unit.
+    detached: process.platform !== "win32",
   });
   onSpawn(child);
 
+  // A supervising CLI/PTY may close stdout while several workspace children
+  // are still draining final shutdown output. Node emits EPIPE both to the
+  // write callback and as a stream `error`; guard the latter once per stream so
+  // a normal closed consumer cannot crash the hub.
+  for (const destination of [process.stdout, process.stderr]) {
+    const tagged = destination as NodeJS.WriteStream & { __vibestudioEpipeGuard?: boolean };
+    if (tagged.__vibestudioEpipeGuard) continue;
+    tagged.__vibestudioEpipeGuard = true;
+    destination.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") {
+        // The stream is already in an error path; avoid recursively writing to
+        // stderr. Retain the failure for debuggers without turning it into an
+        // unhandled process-level exception.
+        process.exitCode = 1;
+      }
+    });
+  }
+
+  const forwardOutput = (destination: NodeJS.WriteStream, prefix: string, chunk: unknown) => {
+    if (destination.destroyed || !destination.writable) return;
+    destination.write(`${prefix}${String(chunk)}`, (error) => {
+      // The wrapper CLI can close its pipe while the workspace child emits its
+      // final shutdown lines. A broken parent pipe is a completed output path,
+      // not a fatal hub error. Supplying the callback consumes that async write
+      // failure; non-EPIPE errors remain visible through the normal stream.
+      if (error && (error as NodeJS.ErrnoException).code !== "EPIPE") {
+        console.error(`[Hub] Failed to forward workspace output:`, error);
+      }
+    });
+  };
   child.stdout?.on("data", (chunk) =>
-    process.stdout.write(`[workspace:${advertisedName}] ${chunk}`)
+    forwardOutput(process.stdout, `[workspace:${advertisedName}] `, chunk)
   );
   child.stderr?.on("data", (chunk) =>
-    process.stderr.write(`[workspace:${advertisedName}:err] ${chunk}`)
+    forwardOutput(process.stderr, `[workspace:${advertisedName}:err] `, chunk)
   );
   child.on("exit", () => {
     state.childControlTokens.delete(controlToken);
@@ -2011,13 +2066,10 @@ async function startWorkspaceRuntime(
     if (current?.child === child) {
       state.runtimes.delete(advertisedName);
     }
-    if (isEphemeralDevWorkspace) {
-      try {
-        deleteUnregisteredWorkspace(childWorkspaceName, state.centralData);
-      } catch (error) {
-        console.error(`[Hub] Failed to clean ephemeral workspace "${childWorkspaceName}":`, error);
-      }
-    }
+    // Preserve a crashed ephemeral checkout until the replacement runtime is
+    // requested. It contains the evidence needed to inspect the crash. The
+    // next start rotates it via prepareEphemeralWorkspaceDisk; clean shutdown
+    // removes the currently recorded checkout below.
   });
 
   let ready: Record<string, unknown>;
@@ -2053,28 +2105,49 @@ async function startWorkspaceRuntime(
   };
 }
 
-async function terminateWorkspaceChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  const exited = await new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), 5_000);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-  if (exited || child.exitCode !== null) return;
-  child.kill("SIGKILL");
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, 5_000);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-  if (child.exitCode === null) {
-    throw new Error(`Workspace child ${child.pid ?? "unknown"} did not exit after SIGKILL`);
+type ProcessSignalDeps = {
+  platform?: NodeJS.Platform;
+  killProcess?: typeof process.kill;
+};
+
+function workspaceChildExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+/** Signal the workspace runtime and every process it owns. */
+export function signalWorkspaceChildTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  deps: ProcessSignalDeps = {}
+): boolean {
+  const platform = deps.platform ?? process.platform;
+  const killProcess = deps.killProcess ?? process.kill;
+  if (platform !== "win32" && Number.isInteger(child.pid) && (child.pid ?? 0) > 0) {
+    try {
+      killProcess(-(child.pid as number), signal);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
   }
+  return child.kill(signal);
+}
+
+/**
+ * Request ordered workspace shutdown and wait for the OS exit event. The first
+ * signal goes only to the workspace server because it owns workerd and service
+ * drain ordering. A repeated hub signal separately calls
+ * signalWorkspaceChildTree(SIGKILL). There is deliberately no elapsed-time
+ * cutoff between those explicit lifecycle actions.
+ */
+export async function terminateWorkspaceChild(child: ChildProcess): Promise<void> {
+  if (workspaceChildExited(child)) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const delivered = child.kill("SIGTERM");
+  if (!delivered && !workspaceChildExited(child)) {
+    throw new Error(`Could not signal workspace child ${child.pid ?? "unknown"}`);
+  }
+  await exited;
 }
 
 async function waitForReadyFile(
@@ -2126,9 +2199,107 @@ export function openHubDataStores(databasePath: string): {
   }
 }
 
+/**
+ * Claim the hub's externally visible ownership boundary before opening or
+ * mutating central state. A second hub must fail at listen(2), while the first
+ * still owns its ephemeral lifecycle, rather than treating that live state as
+ * crash residue and deleting it.
+ */
+async function startHubGateway(input: {
+  requestedPort?: number;
+  bindHost: string;
+  getState(): HubRuntimeState | null;
+}): Promise<{ server: http.Server; port: number }> {
+  const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
+    void (async () => {
+      const state = input.getState();
+      if (!state) {
+        sendText(res, 503, "Hub starting");
+        return;
+      }
+      const rawUrl = req.url ?? "/";
+      const proxied = parseWorkspaceProxyUrl(rawUrl);
+      if (proxied) {
+        await proxyHttpRequest(state, proxied, req, res);
+        return;
+      }
+      const url = new URL(rawUrl, "http://hub.local");
+      if (req.method === "GET" && url.pathname === "/healthz") {
+        sendJson(res, 200, {
+          ok: true,
+          mode: "hub",
+          serverId: state.deviceAuthStore.getServerId(),
+          serverBootId: state.serverBootId,
+          gatewayPort: state.gatewayPort,
+          pid: process.pid,
+          version: state.version,
+        });
+        return;
+      }
+      if (url.pathname.startsWith("/_r/s/auth/")) {
+        await handleAuthRoute(state, url.pathname.slice("/_r/s/auth/".length), req, res);
+        return;
+      }
+      if (url.pathname.startsWith("/_r/s/internal/")) {
+        await handleInternalRoute(state, url.pathname.slice("/_r/s/internal/".length), req, res);
+        return;
+      }
+      if (url.pathname === "/rpc") {
+        await handleRpc(state, req, res);
+        return;
+      }
+      sendText(res, 404, "Not Found");
+    })().catch((error) => {
+      if (!res.headersSent) sendJson(res, 500, remoteErrorPayload(error));
+      else res.destroy(error);
+    });
+  };
+
+  const server = http.createServer(requestHandler);
+  server.on("upgrade", (req, socket, head) => {
+    const state = input.getState();
+    if (!state) {
+      socket.destroy();
+      return;
+    }
+    const proxied = parseWorkspaceProxyUrl(req.url ?? "/");
+    if (!proxied) {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    void proxyUpgrade(state, proxied, req, socket, head);
+  });
+
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(input.requestedPort ?? 0, input.bindHost, () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") reject(new Error("Hub listen failed"));
+      else resolve(address.port);
+    });
+  });
+  return { server, port };
+}
+
 export async function runHubServer(input: { args: HubServerArgs; appRoot: string }): Promise<void> {
   const args = input.args;
   const appRoot = input.appRoot;
+  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
+  const hostConfig = resolveHostConfig({
+    workerdPort: 0,
+    gatewayPort: requestedGatewayPort ?? 0,
+    host: args.host,
+    bindHost: args.bindHost,
+  });
+  let state: HubRuntimeState | null = null;
+  const { server, port: gatewayPort } = await startHubGateway({
+    requestedPort: requestedGatewayPort,
+    bindHost: hostConfig.bindHost,
+    getState: () => state,
+  });
+
   const centralPaths = getCentralConfigPaths();
   // CentralDataManager owns workspace registry rows referenced by identity DB
   // foreign keys, so an identity-path override must move both stores together.
@@ -2194,86 +2365,6 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
       })
     : null;
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
-  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
-  const hostConfig = resolveHostConfig({
-    workerdPort: 0,
-    gatewayPort: requestedGatewayPort ?? 0,
-    host: args.host,
-    bindHost: args.bindHost,
-  });
-
-  let state: HubRuntimeState | null = null;
-  const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
-    void (async () => {
-      if (!state) {
-        sendText(res, 503, "Hub starting");
-        return;
-      }
-      const rawUrl = req.url ?? "/";
-      const proxied = parseWorkspaceProxyUrl(rawUrl);
-      if (proxied) {
-        await proxyHttpRequest(state, proxied, req, res);
-        return;
-      }
-      const url = new URL(rawUrl, "http://hub.local");
-      if (req.method === "GET" && url.pathname === "/healthz") {
-        sendJson(res, 200, {
-          ok: true,
-          mode: "hub",
-          serverId: state.deviceAuthStore.getServerId(),
-          serverBootId: state.serverBootId,
-          gatewayPort: state.gatewayPort,
-          pid: process.pid,
-          version: state.version,
-        });
-        return;
-      }
-      if (url.pathname.startsWith("/_r/s/auth/")) {
-        await handleAuthRoute(state, url.pathname.slice("/_r/s/auth/".length), req, res);
-        return;
-      }
-      if (url.pathname.startsWith("/_r/s/internal/")) {
-        await handleInternalRoute(state, url.pathname.slice("/_r/s/internal/".length), req, res);
-        return;
-      }
-      if (url.pathname === "/rpc") {
-        await handleRpc(state, req, res);
-        return;
-      }
-      sendText(res, 404, "Not Found");
-    })().catch((error) => {
-      if (!res.headersSent) sendJson(res, 500, remoteErrorPayload(error));
-      else res.destroy(error);
-    });
-  };
-
-  // Loopback HTTP only — the public/TLS ingress is decommissioned.
-  const server = http.createServer(requestHandler);
-
-  server.on("upgrade", (req, socket, head) => {
-    if (!state) {
-      socket.destroy();
-      return;
-    }
-    const proxied = parseWorkspaceProxyUrl(req.url ?? "/");
-    if (!proxied) {
-      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    void proxyUpgrade(state, proxied, req, socket, head);
-  });
-
-  const gatewayPort = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(requestedGatewayPort ?? 0, hostConfig.bindHost, () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") reject(new Error("Hub listen failed"));
-      else resolve(address.port);
-    });
-  });
-
   // No public ingress: the hub is loopback HTTP only. connectUrl is the loopback
   // gateway URL; remote reach is the per-workspace WebRTC pipe (answerer seam).
   const gatewayUrl = `${hostConfig.protocol}://${hostConfig.externalHost}:${gatewayPort}`;
@@ -2317,7 +2408,10 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   // without first reaching an in-memory hub session to re-route themselves.
   const restartableWorkspaces = centralData.listWorkspaces().filter((entry) => {
     const routeFile = routedRoomStatePath(entry.name);
-    return fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0;
+    return (
+      (args.ephemeral && entry.name === bootstrapWorkspace) ||
+      (fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0)
+    );
   });
   await Promise.all(
     restartableWorkspaces.map((entry) => ensureWorkspaceRuntime(activeState, entry.name))
@@ -2400,19 +2494,21 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     writeFileAtomicSync(args.readyFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   }
 
+  const workspaceChildren = (): ChildProcess[] => [
+    ...new Set(
+      [...state!.runtimes.values()]
+        .map((runtime) => runtime.child)
+        .filter((child): child is ChildProcess => child !== undefined)
+    ),
+  ];
+
   async function shutdown(): Promise<void> {
     if (!state || state.shuttingDown) return;
     state.shuttingDown = true;
     clearInterval(revocationCleanupTimer);
     console.log("[Hub] Shutting down...");
-    const childProcesses = [
-      ...new Set(
-        [...state.runtimes.values()]
-          .map((runtime) => runtime.child)
-          .filter((child): child is ChildProcess => child !== undefined)
-      ),
-    ];
-    await Promise.all(childProcesses.map(terminateWorkspaceChild));
+    const childProcesses = workspaceChildren();
+    await Promise.all(childProcesses.map((child) => terminateWorkspaceChild(child)));
     if (state.args.ephemeral) {
       try {
         const ephemeral = state.centralData.getEphemeralWorkspace();
@@ -2433,6 +2529,19 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     process.exit(0);
   }
 
-  process.on("SIGTERM", () => void shutdown());
-  process.on("SIGINT", () => void shutdown());
+  const onShutdownSignal = (signal: NodeJS.Signals): void => {
+    if (state?.shuttingDown) {
+      console.error(
+        `[Hub] Received ${signal} during shutdown; force-stopping workspace process trees`
+      );
+      for (const child of workspaceChildren()) {
+        if (!workspaceChildExited(child)) signalWorkspaceChildTree(child, "SIGKILL");
+      }
+      return;
+    }
+    console.log(`[Hub] Received ${signal}; starting ordered shutdown`);
+    void shutdown();
+  };
+  process.on("SIGTERM", () => onShutdownSignal("SIGTERM"));
+  process.on("SIGINT", () => onShutdownSignal("SIGINT"));
 }

@@ -474,12 +474,14 @@ class MobilePanels implements PanelHost {
         findUnitForPath: (path) => this.workspaceRpc.findUnitForPath(path),
         unitStatus: async (unitPath) => {
           // Per-repo VCS: `unitStatus` is replaced by repo-native `status(repoPath)`
-          // (the unit path IS the repo path). Status no longer returns a head.
+          // (the unit path IS the repo path). Address resolution uses the
+          // committed buildable state; uncommitted working content remains
+          // visible through the status dirty/working fields but is not a build ref.
           const status = await this.vcs.status(unitPath);
           return {
             unitPath,
             head: null,
-            stateHash: status.stateHash,
+            stateHash: status.committedStateHash,
             dirty: status.dirty,
           } satisfies PanelRepoState & { unitPath: string };
         },

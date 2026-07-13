@@ -91,6 +91,20 @@ describe("wsClientTransport", () => {
     expect(settled).toBe(true);
   });
 
+  it("does not reconnect after a terminal invalid-token close by default", async () => {
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await Promise.resolve();
+    sockets[0]?.open();
+    sockets[0]?.authenticate();
+    await connected;
+
+    sockets[0]?.close(4006, "Authentication failed");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(sockets).toHaveLength(1);
+  });
+
   it("delivers pushed ws:event frames to the server-event callback", async () => {
     const events: Array<{ event: string; payload: unknown }> = [];
     const sockets: FakeSocket[] = [];
@@ -185,5 +199,27 @@ describe("wsClientTransport", () => {
     });
 
     expect(delivered).toEqual([]);
+  });
+
+  it("returns server-initiated responses through ws:rpc", async () => {
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await Promise.resolve();
+    sockets[0]?.open();
+    sockets[0]?.authenticate();
+    await connected;
+
+    await transport.send({
+      from: "panel:test",
+      target: "server",
+      delivery: { caller: { callerId: "panel:test", callerKind: "panel" } },
+      provenance: [],
+      message: { type: "response", requestId: "server-request-1", result: { ok: true } },
+    });
+
+    expect(JSON.parse(sockets[0]!.sent.at(-1)!)).toMatchObject({
+      type: "ws:rpc",
+      envelope: { target: "server", message: { requestId: "server-request-1" } },
+    });
   });
 });

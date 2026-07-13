@@ -16,6 +16,7 @@ const UNIT_NAME = "vibestudio-server.service";
 export function parseArgs(argv) {
   const options = {
     signalUrl: null,
+    workspace: null,
     identity: process.env.VIBESTUDIO_WEBRTC_IDENTITY ?? null,
     identityExplicit: Boolean(process.env.VIBESTUDIO_WEBRTC_IDENTITY),
     json: false,
@@ -27,9 +28,13 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--signal-url") {
       options.signalUrl = argv[++i] ?? "";
+    } else if (arg === "--workspace") {
+      options.workspace = argv[++i] ?? "";
+      workspaceExplicit = true;
     } else if (arg === "--identity") {
       options.identity = path.resolve(argv[++i] ?? "");
       options.identityExplicit = true;
+      identityExplicit = true;
     } else if (arg === "--json") {
       options.json = true;
     } else if (arg === "--help") {
@@ -41,10 +46,10 @@ export function parseArgs(argv) {
   if (identityExplicit && workspaceExplicit) {
     throw new Error("pass --workspace or --identity, not both");
   }
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
+  if (options.workspace !== null && !/^[A-Za-z0-9_-]{1,64}$/.test(options.workspace)) {
     throw new Error("--workspace must contain only letters, numbers, hyphens, and underscores");
   }
-  options.identity ??= identityDefaultPath(options.workspace);
+  options.identity ??= identityDefaultPath(options.workspace ?? "default");
   return options;
 }
 
@@ -59,8 +64,27 @@ Checks:
   node-datachannel native addon, deleted legacy WebRTC cert/key env vars, the
   identity.pem layout (present, 0600, cert+key), signaling reachability, and —
   when a deployed systemd unit is present — the unit's active state and gateway
-  port. Server-only checks are skipped (not failed) off the deployed host.
+  port. Server-only checks are skipped (not failed) off the deployed host. If
+  paired, signaling defaults to the endpoint in the active CLI credential;
+  --signal-url and VIBESTUDIO_WEBRTC_SIGNAL_URL still take precedence.
 `);
+}
+
+export function pairedSignalingUrl(credentialFile = cliCredentialFile()) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
+    const sig = parsed?.workspacePairing?.sig;
+    return typeof sig === "string" && sig.length > 0 ? sig : null;
+  } catch {
+    return null;
+  }
+}
+
+function cliCredentialFile() {
+  const configRoot = process.env.XDG_CONFIG_HOME
+    ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
+    : path.join(os.homedir(), ".config", "vibestudio");
+  return path.join(configRoot, "cli-credentials.json");
 }
 
 export function check(condition, name, ok, fail, meta = {}) {
@@ -143,11 +167,17 @@ export function signalingRoomWsUrl(resolvedUrl, room = randomUUID()) {
   return url.toString();
 }
 
-export async function checkSignaling(signalUrl, wsFactory = (u) => new WebSocket(u)) {
-  const resolved = resolveSignalingUrl({
-    flag: signalUrl ?? undefined,
-    defaultUrl: DEFAULT_SIGNAL_URL,
-  });
+export async function checkSignaling(
+  signalUrl,
+  wsFactory = (u) => new WebSocket(u),
+  resolution = undefined
+) {
+  const resolved =
+    resolution ??
+    resolveSignalingUrl({
+      flag: signalUrl ?? undefined,
+      defaultUrl: DEFAULT_SIGNAL_URL,
+    });
   const url = signalingRoomWsUrl(resolved.url);
   return new Promise((resolve) => {
     let settled = false;
@@ -280,7 +310,18 @@ export async function runDoctor(options, deps = {}) {
       ? skip("identity", "no server identity expected on a client host")
       : inspectIdentity(options.identity)
   );
-  checks.push(await checkSignaling(options.signalUrl, deps.wsFactory));
+  const pairedSignal =
+    options.signalUrl || process.env.VIBESTUDIO_WEBRTC_SIGNAL_URL
+      ? null
+      : (deps.pairedSignalUrl ?? pairedSignalingUrl(deps.credentialFile));
+  const signalingResolution = resolveSignalingUrl({
+    flag: options.signalUrl ?? undefined,
+    defaultUrl: pairedSignal ?? DEFAULT_SIGNAL_URL,
+  });
+  if (pairedSignal && signalingResolution.source === "default") {
+    signalingResolution.source = "paired-credential";
+  }
+  checks.push(await checkSignaling(undefined, deps.wsFactory, signalingResolution));
   return { ok: checks.filter((entry) => !entry.skipped).every((entry) => entry.ok), checks };
 }
 

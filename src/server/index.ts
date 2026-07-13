@@ -20,6 +20,7 @@ import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/shared/serviceSch
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
@@ -368,6 +369,7 @@ async function main() {
 
   const wsDir = args.workspaceDir ?? process.env["VIBESTUDIO_WORKSPACE_DIR"];
   const wsName = args.workspaceName ?? process.env["VIBESTUDIO_WORKSPACE"];
+  const advertisedWorkspaceName = process.env["VIBESTUDIO_ADVERTISED_WORKSPACE"] ?? wsName;
   const childWorkspaceId = process.env["VIBESTUDIO_WORKSPACE_ID"];
   if (!childWorkspaceId) {
     throw new Error("Workspace runtime requires its authoritative workspace id from the hub");
@@ -410,6 +412,8 @@ async function main() {
   const workspacePath = workspace.path;
   const workspaceConfig = workspace.config;
   const statePath = workspace.statePath;
+  const { DisposableGitRemoteManager } = await import("./services/disposableGitRemoteManager.js");
+  const disposableGitRemotes = new DisposableGitRemoteManager(statePath);
 
   // Parse workspace declarations (singletonObjects + services + routes).
   // Validation (every DO-backed service/route has a matching singleton row)
@@ -856,7 +860,11 @@ async function main() {
   // pnpm dev mode: mirror committed workspace changes back to the template
   // checkout so edits persist. Hooked onto vcs state advances (see below).
   const devTemplateMirrorDir =
-    isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive
+    isPnpmDevMode &&
+    process.env["VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR"] !== "1" &&
+    workspaceIsEphemeral &&
+    hasDevTemplate &&
+    templateDiffersFromActive
       ? templateDir
       : null;
   const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(appRoot, workspacePath);
@@ -1381,7 +1389,22 @@ async function main() {
     blobsDir: path.join(getUserDataPath(), "blobs"),
     refs: refService,
     vcs: workspaceVcs,
+    publishMain: ({ ctx, expectedOld, files, summary, operation }) =>
+      workspaceVcs.publishHostMutation({
+        ctx,
+        repoPath: "meta",
+        expectedOld,
+        files,
+        summary,
+        operation,
+      }),
   });
+  const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void => {
+    for (const key of Object.keys(workspaceConfig)) {
+      if (!(key in next)) Reflect.deleteProperty(workspaceConfig, key);
+    }
+    Object.assign(workspaceConfig, next);
+  };
   const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
   const gitInteropDefinition = createGitInteropService({
     treeScanner,
@@ -1390,15 +1413,32 @@ async function main() {
     invokeGitProvider: invokeGitInteropProvider,
     approvalQueue,
     grantStore: capabilityGrantStore,
+    disposableRemotes: disposableGitRemotes,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     workspaceConfigMutationWouldChange: (mutate) => workspaceConfigWriter.wouldMutate(mutate),
-    persistWorkspaceConfigMutation: (input) => workspaceConfigWriter.applyMutation(input),
-    onWorkspaceSourceChanged: async (_ctx, _summary) => {
+    persistWorkspaceConfigMutation: async (input) => {
+      const result = await workspaceConfigWriter.applyMutation(input);
+      replaceLiveWorkspaceConfig(result.nextConfig);
+      return result;
+    },
+    onWorkspaceSourceChanged: async (ctx, _summary, importedRepoPath) => {
       // The extension-owned clone path imports the checkout into GAD itself.
       // The host only refreshes source-tree bookkeeping so a freshly cloned
       // dependency is visible to existing workspace-unit queries.
       await workspaceVcs.ensureRepoLogsFromDisk();
+      if (!importedRepoPath) return;
+      const effectiveCallerId =
+        ctx.caller.runtime.kind === "extension" && ctx.chainCaller
+          ? ctx.chainCaller.callerId
+          : ctx.caller.runtime.id;
+      const contextId =
+        ctx.caller.runtime.kind === "agent"
+          ? (ctx.caller.agentBinding?.contextId ?? null)
+          : await getEntityStore().resolveContext(effectiveCallerId);
+      if (contextId) {
+        await workspaceVcs.adoptMainRepoIntoContext(contextId, importedRepoPath);
+      }
     },
   });
   container.registerRpc(gitInteropDefinition);
@@ -1540,6 +1580,7 @@ async function main() {
         return createVcsService({
           workspaceVcs,
           entityCache,
+          getDefaultRepo: () => workspaceConfig.defaultRepo,
           getBuildSystem: () => buildSystemForVcs,
           mainAdvanceGate,
           hasAppCapability: (callerId, capability) =>
@@ -1887,6 +1928,7 @@ async function main() {
           rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
       },
       egressProxy,
+      disposableGitHttp: disposableGitRemotes,
       approvalQueue,
       sessionGrantStore: credentialSessionGrantStore,
       credentialUseGrantStore,
@@ -2208,13 +2250,17 @@ async function main() {
   // ── Generic public webhook ingress ──
   {
     const { createWebhookIngressService } = await import("./services/webhookIngressService.js");
+    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.registerManaged({
       name: "webhookIngress",
-      dependencies: ["rpcServer"],
+      dependencies: ["rpcServer", "doDispatch"],
       async start(resolve) {
         const rpcServer = assertPresent(
           resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+        );
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
         webhookIngress = createWebhookIngressService({
           relaySigningSecret,
@@ -2223,6 +2269,36 @@ async function main() {
           // No public ingress: direct-mode webhooks only resolve co-located (loopback).
           // Remote webhooks ride the multi-tenant callback relay over the backhaul.
           directPublicBaseUrl: getLocalGatewayUrl("webhook direct base URL"),
+          doDispatch,
+          resolveDelegatedCaller: async (callerId) => {
+            const store = getEntityStore();
+            const record = store.cache.resolve(callerId) ?? (await store.resolveRecord(callerId));
+            const stateArgs =
+              record?.stateArgs && typeof record.stateArgs === "object"
+                ? (record.stateArgs as Record<string, unknown>)
+                : null;
+            const ownerPrincipalId = stateArgs?.["ownerPrincipalId"];
+            // Only the host-created, owner-scoped internal EvalDO delegates its
+            // ergonomic runtime calls. Both the class/source and owner lineage
+            // are server-authored entity state; no request value participates.
+            if (
+              record?.source.repoPath !== INTERNAL_DO_SOURCE ||
+              record.className !== "EvalDO" ||
+              typeof ownerPrincipalId !== "string" ||
+              record.parentId !== ownerPrincipalId
+            ) {
+              return null;
+            }
+            const owner =
+              store.cache.resolve(ownerPrincipalId) ??
+              (await store.resolveRecord(ownerPrincipalId));
+            if (!owner || owner.status !== "active" || !isCallerKind(owner.kind)) return null;
+            return {
+              callerId: owner.id,
+              callerKind: owner.kind,
+              repoPath: owner.source.repoPath,
+            };
+          },
           rpc: {
             call: (targetId, method, ...args) =>
               rpcServer.server.callTarget(targetId, method, ...args),
@@ -2295,7 +2371,10 @@ async function main() {
   const { RoutedRoomStore, replaceRoutedRoom, routedRoomKey } =
     await import("./services/routedRoomStore.js");
   const { PairingActivationStore } = await import("./services/pairingActivationStore.js");
-  const routedRoomStore = new RoutedRoomStore(path.join(statePath, "webrtc", "routes.json"));
+  const routedRoomStore = new RoutedRoomStore(
+    process.env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"] ??
+      path.join(statePath, "webrtc", "routes.json")
+  );
   const pairingActivationStore = new PairingActivationStore(
     path.join(statePath, "webrtc", "pairing-activations.json")
   );
@@ -3679,8 +3758,23 @@ async function main() {
     entityCache,
     connectionGrants,
     workspace,
+    activeWorkspaceName: advertisedWorkspaceName ?? workspaceName,
     workspacePath,
     workspaceConfig,
+    getWorkspaceConfig: () => workspaceConfig,
+    persistWorkspaceConfigField: async (
+      ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
+      key: string,
+      value: unknown
+    ) => {
+      const result = await workspaceConfigWriter.applyMutation({
+        ctx,
+        mutate: (current) => ({ ...current, [key]: value }),
+        summary: `update workspace config field ${key}`,
+        operation: "push",
+      });
+      replaceLiveWorkspaceConfig(result.nextConfig);
+    },
     treeScanner,
     adminToken,
     workspaceCatalog,
@@ -4531,6 +4625,9 @@ async function main() {
   }
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
   rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
+  rpcServerInstance.setWorkerInstanceResolver((targetId) =>
+    workerdManager.resolveWorkerInstanceName(targetId)
+  );
   rpcServerInstance.setEnsureDO((source, className, objectKey) => {
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
     const record = entityCache.resolveActive(targetId);

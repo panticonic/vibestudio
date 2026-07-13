@@ -202,7 +202,7 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
 
   function startKeepalive(): void {
     lastPongAt = Date.now();
-    pingTimer = setInterval(() => {
+    const ping = (): void => {
       if (closed) return;
       if (ws.readyState !== READY_STATE_OPEN) return;
       if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
@@ -223,7 +223,13 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
       } catch {
         /* a broken send surfaces via the error/close handlers */
       }
-    }, PING_INTERVAL_MS);
+    };
+    // Prove the accepted socket can exchange frames immediately. Besides
+    // detecting a half-open upgrade sooner, this wakes local Durable Object
+    // runtimes whose hibernation auto-response cannot faithfully model the
+    // deployed Worker until their first application frame.
+    ping();
+    pingTimer = setInterval(ping, PING_INTERVAL_MS);
     // Don't hold the Node event loop open just to ping an otherwise idle room.
     (pingTimer as unknown as { unref?: () => void }).unref?.();
   }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
 
 const mocks = vi.hoisted(() => ({
@@ -242,7 +243,23 @@ describe("remoteCredService", () => {
   });
 
   it("creates same-account device invites through hubControl", async () => {
-    const pairing = { code: "C".repeat(32), pairUrl: "https://vibestudio.app/pair#invite" };
+    const coordinates = {
+      room: `room_${"i".repeat(24)}`,
+      fp: "AA".repeat(32),
+      code: "C".repeat(32),
+      sig: "wss://sig.example/",
+      v: 2 as const,
+      ice: "all" as const,
+    };
+    const pairing = {
+      ...coordinates,
+      deepLink: createConnectDeepLink(coordinates),
+      pairUrl: createConnectPairUrl(coordinates),
+      expiresAt: Date.now() + 60_000,
+      expiresInMs: 60_000,
+      serverId: sampleStored.serverId,
+      serverBootId: `boot_${"b".repeat(24)}`,
+    };
     const call = vi.fn(async (service: string, method: string, args: unknown[]) => {
       expect([service, method, args]).toEqual([
         "hubControl",

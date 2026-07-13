@@ -151,9 +151,15 @@ export class SignalingRoom implements DurableObject {
     // proves liveness and a dead one is reaped in seconds (the client pings every
     // 20s and treats 40s of silence as death). ping/pong stay off the relay path
     // (not in RELAYED_TYPES) — they never reach the peer.
-    this.state.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}')
-    );
+    // Miniflare's hibernation auto-response has historically accepted the
+    // socket but failed to deliver later peer frames until that socket rejoins.
+    // Local/system tests therefore exercise the explicit handler below. The
+    // deployed Worker keeps the zero-wake auto-response economics.
+    if (this.env.ENVIRONMENT !== "test") {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}')
+      );
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -199,16 +205,19 @@ export class SignalingRoom implements DurableObject {
       return jsonResponse({ error: "method not allowed" }, 405);
     }
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-    if (!this.allowIceRate(ip)) {
-      console.warn(`[signaling] room=${this.roomId} ice-servers rate-limited ip=${ip}`);
-      return jsonResponse({ error: "too many ice-servers requests" }, 429);
-    }
 
-    // STUN-only deploys mint nothing, so there is nothing to gate — always serve.
+    // STUN-only deploys mint nothing, so there is nothing billable to gate or
+    // rate-limit. Local CLI/test loops also share one synthetic IP and may
+    // legitimately reconnect more than 30 times per minute.
     if (!turnIsProvisioned(this.env)) {
       const { iceServers } = await mintIceServers(this.env);
       console.log(`[signaling] room=${this.roomId} ice-servers stun-only`);
       return this.iceResponse(iceServers, false);
+    }
+
+    if (!this.allowIceRate(ip)) {
+      console.warn(`[signaling] room=${this.roomId} ice-servers rate-limited ip=${ip}`);
+      return jsonResponse({ error: "too many ice-servers requests" }, 429);
     }
 
     // Gate: an occupied or armed room is a genuine pairing; otherwise grant a
@@ -330,6 +339,12 @@ export class SignalingRoom implements DurableObject {
       type = (JSON.parse(text) as { t?: unknown }).t;
     } catch {
       console.warn("[signaling] dropping non-JSON frame");
+      return;
+    }
+    if (type === "ping") {
+      // Explicit local-runtime fallback for the production hibernation
+      // auto-response. Keep it off the relay path and reply only to the sender.
+      sendRaw(ws, '{"t":"pong"}');
       return;
     }
     if (typeof type !== "string" || !RELAYED_TYPES.has(type)) {

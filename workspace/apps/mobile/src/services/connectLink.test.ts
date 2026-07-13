@@ -12,7 +12,7 @@ const storage = AsyncStorage as jest.Mocked<typeof AsyncStorage>;
 const VALID_LINK =
   "vibestudio://connect?room=room-1234-5678&fp=" +
   "a".repeat(64) +
-  "&code=abcdefghijklmnop&sig=wss%3A%2F%2Fsignal.example%2F&v=2&ice=all";
+  "&code=abcdefghijklmnopqrstuvwxyzABCDEF&sig=wss%3A%2F%2Fsignal.example%2F&v=2&ice=all";
 
 describe("connectLink", () => {
   beforeEach(() => {
@@ -55,29 +55,23 @@ describe("connectLink", () => {
         JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 })
       );
 
-      storage.getItem.mockResolvedValueOnce(
-        JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 })
-      );
+      storage.getItem.mockResolvedValueOnce(JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 }));
       await expect(consumeConnectLinkReplay(VALID_LINK, 2_000)).resolves.toBe(true);
       expect(storage.removeItem).not.toHaveBeenCalled();
     });
 
     it("does not suppress a different link", async () => {
-      storage.getItem.mockResolvedValueOnce(
-        JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 })
-      );
+      storage.getItem.mockResolvedValueOnce(JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 }));
       await expect(
         consumeConnectLinkReplay("vibestudio://connect?room=other", 2_000)
       ).resolves.toBe(false);
     });
 
     it("does not suppress (and clears) a stale consumed link", async () => {
-      storage.getItem.mockResolvedValueOnce(
-        JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 })
+      storage.getItem.mockResolvedValueOnce(JSON.stringify({ url: VALID_LINK, consumedAt: 1_000 }));
+      await expect(consumeConnectLinkReplay(VALID_LINK, 1_000 + 11 * 60 * 1_000)).resolves.toBe(
+        false
       );
-      await expect(
-        consumeConnectLinkReplay(VALID_LINK, 1_000 + 11 * 60 * 1_000)
-      ).resolves.toBe(false);
       expect(storage.removeItem).toHaveBeenCalledWith("vibestudio:connect:consumed-url");
     });
 

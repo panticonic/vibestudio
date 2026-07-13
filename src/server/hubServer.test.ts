@@ -2,10 +2,11 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -23,9 +24,109 @@ import {
   HubDeviceCredentialBodySchema,
   HubRootCompletePairingBodySchema,
   openHubDataStores,
+  prepareEphemeralWorkspaceDisk,
+  signalWorkspaceChildTree,
+  terminateWorkspaceChild,
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
+
+describe("workspace child process-tree ownership", () => {
+  function fakeChild(overrides: Partial<ChildProcess> = {}): ChildProcess {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      pid: 4321,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      kill: vi.fn(() => true),
+      ...overrides,
+    }) as unknown as ChildProcess;
+  }
+
+  it("signals only the owning server for graceful shutdown and waits for its exit", async () => {
+    const child = fakeChild();
+    child.kill = vi.fn(() => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return true;
+    });
+
+    await terminateWorkspaceChild(child);
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("signals the complete POSIX runtime group for explicit forced shutdown", () => {
+    const child = fakeChild();
+    const killProcess = vi.fn((): true => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return true;
+    });
+
+    expect(signalWorkspaceChildTree(child, "SIGKILL", { platform: "linux", killProcess })).toBe(
+      true
+    );
+    expect(killProcess).toHaveBeenCalledWith(-4321, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the child handle when no POSIX process group exists", () => {
+    const child = fakeChild();
+    const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
+    const killProcess = vi.fn((): true => {
+      throw missing;
+    });
+
+    expect(signalWorkspaceChildTree(child, "SIGKILL", { platform: "linux", killProcess })).toBe(
+      true
+    );
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("does not signal a child whose OS exit is already recorded", async () => {
+    const child = fakeChild({ exitCode: 0 });
+
+    await terminateWorkspaceChild(child);
+
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("ephemeral workspace evidence retention", () => {
+  it("deletes the previous checkout only when its replacement starts", () => {
+    const calls: string[] = [];
+    let record: { workspaceId: string; diskName: string | null } | null = {
+      workspaceId: "ws_dev",
+      diskName: "dev-crashed",
+    };
+    const centralData = {
+      getEphemeralWorkspace: () => record,
+      setEphemeralWorkspaceDiskName: (workspaceId: string, diskName: string) => {
+        record = { workspaceId, diskName };
+      },
+    } as unknown as CentralDataManager;
+
+    prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-replacement", (name) => {
+      calls.push(name);
+      return true;
+    });
+
+    expect(calls).toEqual(["dev-crashed"]);
+    expect(record).toEqual({ workspaceId: "ws_dev", diskName: "dev-replacement" });
+  });
+
+  it("does not remove a checkout when re-registering the same disk name", () => {
+    const remove = vi.fn(() => true);
+    const centralData = {
+      getEphemeralWorkspace: () => ({ workspaceId: "ws_dev", diskName: "dev-current" }),
+      setEphemeralWorkspaceDiskName: vi.fn(),
+    } as unknown as CentralDataManager;
+
+    prepareEphemeralWorkspaceDisk(centralData, "ws_dev", "dev-current", remove);
+
+    expect(remove).not.toHaveBeenCalled();
+  });
+});
 
 const servers: http.Server[] = [];
 afterEach(async () => {
@@ -53,6 +154,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
     } as NodeJS.ProcessEnv,
     appRoot: "/app",
+    advertisedWorkspaceName: "base",
     hubUrl: "http://127.0.0.1:3030",
     identityDbPath: "/hub/state/identity.db",
     hubControlToken: "hub-child-capability",
@@ -73,7 +175,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       workspaceId: "ws_beta",
     });
 
-    const stateA = path.join(getWorkspaceDir("alpha"), "state");
+    const advertisedState = path.join(getWorkspaceDir("base"), "state");
     // Every child reads the hub's ONE identity DB (WP0 §2) — same path for all.
     expect(envA["VIBESTUDIO_IDENTITY_DB_PATH"]).toBe("/hub/state/identity.db");
     expect(envB["VIBESTUDIO_IDENTITY_DB_PATH"]).toBe("/hub/state/identity.db");
@@ -81,11 +183,14 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     // gate (VIBESTUDIO_WORKSPACE_ID, WP2) — keyed on the id, never the name.
     expect(envA["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_alpha");
     expect(envB["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_beta");
-    // DTLS identity is per-child under its own state dir; the hub's is not leaked.
-    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(path.join(stateA, "webrtc", "identity.pem"));
+    // DTLS identity belongs to the advertised logical workspace, so replacing
+    // an ephemeral child checkout preserves the pinned workspace fingerprint.
+    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(
+      path.join(advertisedState, "webrtc", "identity.pem")
+    );
+    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(envB["VIBESTUDIO_WEBRTC_IDENTITY"]);
 
-    // Distinct per child; never the hub's identity.
-    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).not.toBe(envB["VIBESTUDIO_WEBRTC_IDENTITY"]);
+    // It is still distinct from the hub's own identity.
     expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).not.toBe(base.baseEnv["VIBESTUDIO_WEBRTC_IDENTITY"]);
     expect(envB["VIBESTUDIO_WEBRTC_IDENTITY"]).not.toBe(base.baseEnv["VIBESTUDIO_WEBRTC_IDENTITY"]);
     expect(envA["VIBESTUDIO_ADMIN_TOKEN"]).toMatch(/^[a-f0-9]{64}$/);
@@ -99,7 +204,11 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_HUB_URL"]).toBe("http://127.0.0.1:3030");
     expect(env["VIBESTUDIO_HUB_CONTROL_TOKEN"]).toBe("hub-child-capability");
     expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
+    expect(env["VIBESTUDIO_ADVERTISED_WORKSPACE"]).toBe("base");
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
+    expect(env["VIBESTUDIO_ROUTED_ROOM_STATE_PATH"]).toBe(
+      path.join(getWorkspaceDir("base"), "state", "webrtc", "routes.json")
+    );
     expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();

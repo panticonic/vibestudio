@@ -21,6 +21,7 @@ import {
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { acquireWebRtcConnectionLock } from "./webrtcConnectionLock.js";
 
 export type CliWebRtcPairing = Omit<ConnectPairing, "code"> & { code?: string };
 
@@ -46,6 +47,7 @@ interface ConnectedClient {
 
 export class WebRtcRpcClient {
   private connected: Promise<ConnectedClient> | null = null;
+  private releaseConnectionLock: (() => void) | null = null;
 
   constructor(private readonly config: WebRtcClientConfig) {}
 
@@ -99,8 +101,15 @@ export class WebRtcRpcClient {
   async close(): Promise<void> {
     const connected = this.connected;
     this.connected = null;
-    if (!connected) return;
-    await (await connected).paired.close();
+    if (!connected) {
+      this.releaseLock();
+      return;
+    }
+    try {
+      await (await connected).paired.close();
+    } finally {
+      this.releaseLock();
+    }
   }
 
   private ensureConnected(): Promise<ConnectedClient> {
@@ -114,36 +123,55 @@ export class WebRtcRpcClient {
   }
 
   private async connect(): Promise<ConnectedClient> {
-    const { createNodeDatachannelProvider } = await import("../main/webrtc/nodeDatachannelPeer.js");
-    const { default: WS } = (await import("ws")) as unknown as {
-      default: new (url: string) => unknown;
-    };
-    const paired = await createPairedConnection({
-      provider: createNodeDatachannelProvider({ peerName: "cli" }),
-      webSocketImpl: WS,
-      fetchImpl: fetch,
-      pairing: {
-        room: this.config.pairing.room,
-        fingerprint: this.config.pairing.fp,
-        iceTransportPolicy: this.config.pairing.ice,
+    const releaseLock = await acquireWebRtcConnectionLock(this.config.pairing.room, {
+      onWait: (owner) => {
+        const detail = owner ? ` (process ${owner.pid})` : "";
+        console.warn(`[cli-webrtc] waiting for another CLI connection${detail} to finish`);
       },
-      sig: this.config.pairing.sig,
-      getShellToken: this.config.getToken,
-      connectionId: this.config.connectionId ?? randomUUID(),
-      clientLabel: this.config.clientLabel ?? "Vibestudio CLI",
-      clientPlatform: "headless",
-      platform: "headless",
-      logPrefix: this.config.logPrefix ?? "[cli-webrtc]",
-      ...(this.config.onPaired ? { onPaired: this.config.onPaired } : {}),
-      ...(this.config.onPersistError ? { onPersistError: this.config.onPersistError } : {}),
     });
-    const callerId = paired.mainSession.callerId() ?? this.config.callerId;
-    const core = createRpcClient({
-      selfId: callerId,
-      callerKind: this.config.callerKind ?? "shell",
-      transport: paired.mainSession,
-      onRecovery: (handler) => paired.onRecovery(handler),
-    });
-    return { paired, core, callerId };
+    this.releaseConnectionLock = releaseLock;
+    try {
+      const { createNodeDatachannelProvider } =
+        await import("../main/webrtc/nodeDatachannelPeer.js");
+      const { default: WS } = (await import("ws")) as unknown as {
+        default: new (url: string) => unknown;
+      };
+      const paired = await createPairedConnection({
+        provider: createNodeDatachannelProvider({ peerName: "cli" }),
+        webSocketImpl: WS,
+        fetchImpl: fetch,
+        pairing: {
+          room: this.config.pairing.room,
+          fingerprint: this.config.pairing.fp,
+          iceTransportPolicy: this.config.pairing.ice,
+        },
+        sig: this.config.pairing.sig,
+        getShellToken: this.config.getToken,
+        connectionId: this.config.connectionId ?? randomUUID(),
+        clientLabel: this.config.clientLabel ?? "Vibestudio CLI",
+        clientPlatform: "headless",
+        platform: "headless",
+        logPrefix: this.config.logPrefix ?? "[cli-webrtc]",
+        ...(this.config.onPaired ? { onPaired: this.config.onPaired } : {}),
+        ...(this.config.onPersistError ? { onPersistError: this.config.onPersistError } : {}),
+      });
+      const callerId = paired.mainSession.callerId() ?? this.config.callerId;
+      const core = createRpcClient({
+        selfId: callerId,
+        callerKind: this.config.callerKind ?? "shell",
+        transport: paired.mainSession,
+        onRecovery: (handler) => paired.onRecovery(handler),
+      });
+      return { paired, core, callerId };
+    } catch (error) {
+      this.releaseLock();
+      throw error;
+    }
+  }
+
+  private releaseLock(): void {
+    const release = this.releaseConnectionLock;
+    this.releaseConnectionLock = null;
+    release?.();
   }
 }

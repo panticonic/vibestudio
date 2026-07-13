@@ -2646,6 +2646,10 @@ app.on("ready", async () => {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           return cdpHostProvider.getAccessibilityTree(panelId);
         }
+        if (action === "domSnapshot") {
+          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
+          return cdpHostProvider.getDomSnapshot(panelId);
+        }
         if (action === "consoleHistory") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           return cdpHostProvider.getConsoleHistory(

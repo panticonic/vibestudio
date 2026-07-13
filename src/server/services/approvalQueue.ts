@@ -1163,6 +1163,12 @@ export function createApprovalQueue(deps: {
     },
 
     requestClientConfig(req) {
+      // Auto-approval is an unattended mode. Field-input prompts cannot be
+      // truthfully approved because the host has no value to submit; leaving
+      // them pending would deadlock the caller, while fabricating sensitive
+      // material would violate the prompt contract. Deny immediately so the
+      // requesting workflow receives its normal explicit rejection path.
+      if (autoApproveDecision) return Promise.resolve({ decision: "deny" });
       return enqueueFieldInputRequest(
         req,
         "client-config",
@@ -1171,6 +1177,7 @@ export function createApprovalQueue(deps: {
     },
 
     requestCredentialInput(req) {
+      if (autoApproveDecision) return Promise.resolve({ decision: "deny" });
       return enqueueFieldInputRequest(
         req,
         "credential-input",
@@ -1179,6 +1186,7 @@ export function createApprovalQueue(deps: {
     },
 
     requestSecretInput(req) {
+      if (autoApproveDecision) return Promise.resolve({ decision: "deny" });
       return enqueueFieldInputRequest(
         req,
         "secret-input",

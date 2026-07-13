@@ -48,6 +48,49 @@ export interface WsTransportConfig {
   wsUrl?: string;
 }
 
+export function translateWsServerEvent(
+  event: string,
+  payload: unknown,
+  config: Pick<WsTransportConfig, "eventPanelId" | "viewId">,
+  deliver: (message: RpcMessage) => void
+): boolean {
+  if (event !== "panel:event") {
+    // General server pushes (VCS head/working advances, workspace watches,
+    // notifications, approvals, etc.) are already named RPC events. Feed them
+    // into the normal RpcClient event path instead of dropping them through an
+    // unset transport-only callback.
+    deliver({ type: "event", fromId: "main", event, payload });
+    return true;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record["panelId"] !== (config.eventPanelId ?? config.viewId)) return true;
+  if (record["type"] === "focus") {
+    deliver({ type: "event", fromId: "main", event: "runtime:focus", payload: null });
+  } else if (record["type"] === "theme") {
+    deliver({
+      type: "event",
+      fromId: "main",
+      event: "runtime:theme",
+      payload: record["theme"],
+    });
+  } else if (record["type"] === "child-created") {
+    deliver({
+      type: "event",
+      fromId: "main",
+      event: "runtime:child-created",
+      payload: { childId: record["childId"], url: record["url"] },
+    });
+  } else if (record["type"] === "child-creation-error") {
+    deliver({
+      type: "event",
+      fromId: "main",
+      event: "runtime:child-creation-error",
+      payload: { url: record["url"], error: record["error"] },
+    });
+  }
+  return true;
+}
+
 class BrowserWsLike implements WsLike {
   constructor(private readonly ws: WebSocket) {}
   get readyState(): number {
@@ -117,36 +160,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     event: string,
     payload: unknown,
     baseDeliver: (message: RpcMessage) => void
-  ): boolean => {
-    if (event !== "panel:event") return false;
-    const record = payload as Record<string, unknown>;
-    if (record["panelId"] !== (config.eventPanelId ?? config.viewId)) return true;
-    if (record["type"] === "focus") {
-      baseDeliver({ type: "event", fromId: "main", event: "runtime:focus", payload: null });
-    } else if (record["type"] === "theme") {
-      baseDeliver({
-        type: "event",
-        fromId: "main",
-        event: "runtime:theme",
-        payload: record["theme"],
-      });
-    } else if (record["type"] === "child-created") {
-      baseDeliver({
-        type: "event",
-        fromId: "main",
-        event: "runtime:child-created",
-        payload: { childId: record["childId"], url: record["url"] },
-      });
-    } else if (record["type"] === "child-creation-error") {
-      baseDeliver({
-        type: "event",
-        fromId: "main",
-        event: "runtime:child-creation-error",
-        payload: { url: record["url"], error: record["error"] },
-      });
-    }
-    return true;
-  };
+  ): boolean => translateWsServerEvent(event, payload, config, baseDeliver);
 
   const refreshAuthToken = async (): Promise<string> => {
     const globals = globalThis as vibestudioTransportGlobals;

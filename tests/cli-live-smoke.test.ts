@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
@@ -13,10 +14,16 @@ import type {
 } from "@vibestudio/shared/serviceDispatcher";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import {
+  createConnectDeepLink,
+  PAIRING_PROTOCOL_VERSION,
+} from "@vibestudio/shared/connect";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { IdentityDb } from "@vibestudio/shared/users/identityDb";
+import { UserStore } from "@vibestudio/shared/users/userStore";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
-import { mintPairingInvite } from "../src/server/services/auth/model.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
@@ -45,10 +52,19 @@ async function startCliSmokeSignaling(): Promise<ChildProcess> {
   throw new Error("wrangler dev (CLI smoke signaling) did not become healthy");
 }
 
-function makeCliSmokeServer(authStorePath: string): {
+function makeCliSmokeServer(databasePath: string): {
   server: RpcServer;
   deviceAuthStore: DeviceAuthStore;
+  identityDb: IdentityDb;
+  userStore: UserStore;
+  workspaceId: string;
 } {
+  const central = new CentralDataManager({ databasePath });
+  const workspaceId = central.addWorkspace("dev").workspaceId;
+  central.close();
+  const identityDb = new IdentityDb({ path: databasePath, readOnly: false });
+  const userStore = new UserStore(identityDb);
+  userStore.createRoot({ handle: "root", displayName: "Root" });
   const tokenManager = new TokenManager();
   const dispatcher = {
     initialized: true,
@@ -65,15 +81,31 @@ function makeCliSmokeServer(authStorePath: string): {
         : undefined,
     getMethodPolicy: () => undefined,
   } as unknown as ServiceDispatcher;
-  const deviceAuthStore = new DeviceAuthStore(authStorePath);
+  const deviceAuthStore = new DeviceAuthStore({
+    db: identityDb,
+    serverIdPath: path.join(path.dirname(databasePath), "server-id.json"),
+  });
   return {
     server: new RpcServer({
       tokenManager,
       dispatcher,
       entityCache: new EntityCache(),
-      redeemPairingCredential: createPairingRedeemer({ deviceAuthStore, tokenManager }),
+      redeemPairingCredential: createPairingRedeemer({
+        deviceAuthStore,
+        tokenManager,
+        redeemPairingCode: async (code, input) =>
+          deviceAuthStore.completePairing({
+            code,
+            expectedWorkspaceId: workspaceId,
+            ...input,
+          }),
+        resolveUser: (userId) => userStore.getUser(userId),
+      }),
     }),
     deviceAuthStore,
+    identityDb,
+    userStore,
+    workspaceId,
   };
 }
 
@@ -102,14 +134,15 @@ describe("live CLI smoke", () => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-live-"));
       let wrangler: ChildProcess | null = null;
       let ingress: WebRtcIngress | null = null;
+      let identityDb: IdentityDb | null = null;
       try {
         wrangler = await startCliSmokeSignaling();
         const cert = ensurePersistentCert({
           identityPemFile: path.join(tmp, "identity.pem"),
         });
-        const { server, deviceAuthStore } = makeCliSmokeServer(
-          path.join(tmp, "auth", "devices.json")
-        );
+        const smoke = makeCliSmokeServer(path.join(tmp, "identity.db"));
+        const { server, deviceAuthStore, userStore, workspaceId } = smoke;
+        identityDb = smoke.identityDb;
         ingress = startWebRtcIngress({
           rpcServer: server,
           signalUrl: CLI_SIGNAL_URL,
@@ -117,16 +150,22 @@ describe("live CLI smoke", () => {
           keyPemFile: cert.keyPemFile,
           fingerprint: cert.fingerprint,
         });
-        deviceAuthStore.onPairingRoomRedeemed((room, deviceId) =>
-          ingress!.armRoom(room, { deviceId })
-        );
-        deviceAuthStore.onPairingRoomReleased((room) => void ingress!.disarmRoom(room));
-        const invite = mintPairingInvite({
-          deviceAuthStore,
-          pairing: { fp: cert.fingerprint, sig: CLI_SIGNAL_URL },
-          ingress,
+        const root = userStore.getByHandle("root");
+        if (!root) throw new Error("CLI smoke root user is missing");
+        const code = deviceAuthStore.createPairingCode(undefined, {
+          workspaceId,
+          userId: root.id,
         });
-        expect(invite.deepLink).toBeTypeOf("string");
+        const room = randomUUID();
+        await ingress.armRoom(room, {});
+        const deepLink = createConnectDeepLink({
+          room,
+          fp: cert.fingerprint,
+          code,
+          sig: CLI_SIGNAL_URL,
+          v: PAIRING_PROTOCOL_VERSION,
+          ice: "all",
+        });
 
         const childEnv = {
           ...process.env,
@@ -135,11 +174,11 @@ describe("live CLI smoke", () => {
         };
         const pair = await execFileAsync(
           "pnpm",
-          ["cli", "remote", "pair", invite.deepLink!, "--label", "CLI live smoke", "--json"],
+          ["cli", "remote", "pair", deepLink, "--label", "CLI live smoke", "--json"],
           { cwd: repoRoot, env: childEnv, timeout: 60_000, maxBuffer: 2 * 1024 * 1024 }
         );
         const pairJson = parseCliJson(pair.stdout);
-        expect(pairJson["url"]).toBe(`webrtc://${invite.room}/_workspace/dev`);
+        expect(pairJson["url"]).toBe(`webrtc://${room}/_workspace/dev`);
 
         const credentialPath = path.join(
           childEnv.HOME,
@@ -152,7 +191,7 @@ describe("live CLI smoke", () => {
           pairing?: { room?: string };
         };
         expect(stored.workspaceName).toBe("dev");
-        expect(stored.pairing?.room).toBe(invite.room);
+        expect(stored.pairing?.room).toBe(room);
 
         const status = await execFileAsync("pnpm", ["cli", "remote", "status", "--json"], {
           cwd: repoRoot,
@@ -161,12 +200,13 @@ describe("live CLI smoke", () => {
           maxBuffer: 2 * 1024 * 1024,
         });
         expect(parseCliJson(status.stdout)).toMatchObject({
-          url: `webrtc://${invite.room}/_workspace/dev`,
+          url: `webrtc://${room}/_workspace/dev`,
           workspaceId: "ws_dev",
           serverId: "srv_cli_live",
         });
       } finally {
         await ingress?.close().catch(() => undefined);
+        identityDb?.close();
         wrangler?.kill("SIGTERM");
         fs.rmSync(tmp, { recursive: true, force: true });
       }

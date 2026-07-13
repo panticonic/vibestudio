@@ -922,7 +922,12 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
   function pipeDown(reason: string): void {
     if (closed) return;
     if (!peer && status === "disconnected") return; // nothing up, nothing to drop
-    console.warn(`${log} pipe down: ${reason}`);
+    // A DataChannel close is a transport lifecycle transition, not evidence of
+    // a fault: short-lived CLI clients intentionally close it after their RPC
+    // batch. Errors, protocol violations, liveness loss, and failed ICE remain
+    // warnings. Down handlers still receive every reason in either case.
+    const report = reason.endsWith("channel closed") ? console.log : console.warn;
+    report(`${log} pipe down: ${reason}`);
     teardownPeer();
     status = "disconnected";
     notifyDown(reason);
@@ -987,7 +992,11 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       await controlScheduler.enqueue(lane, parts);
     },
 
-    async writeBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void> {
+    async writeBulkFrame(
+      streamId: number,
+      type: StreamFrameType,
+      payload: Uint8Array
+    ): Promise<void> {
       await bulkScheduler.enqueue(streamId, encodeBulkFrameParts(streamId, type, payload));
     },
 

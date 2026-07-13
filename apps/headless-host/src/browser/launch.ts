@@ -39,7 +39,21 @@ export function resolveChromiumProfileDir(opts: {
   const homeDir = opts.homeDir ?? os.homedir();
   const snapName = snapNameFromExecutablePath(opts.executablePath);
   if (!snapName || !isHiddenHomePath(opts.profileDir, homeDir)) return opts.profileDir;
-  return path.join(homeDir, "snap", snapName, "common", "vibestudio", "headless-host");
+  const defaultRoot = path.join(homeDir, ".local", "state", "vibestudio", "headless-host");
+  const relativeInstance = path.relative(defaultRoot, path.resolve(opts.profileDir));
+  const safeRelativeInstance =
+    relativeInstance && !relativeInstance.startsWith("..") && !path.isAbsolute(relativeInstance)
+      ? relativeInstance
+      : "";
+  return path.join(
+    homeDir,
+    "snap",
+    snapName,
+    "common",
+    "vibestudio",
+    "headless-host",
+    safeRelativeInstance
+  );
 }
 
 export async function launchChromium(opts: {
@@ -76,7 +90,11 @@ export async function launchChromium(opts: {
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`Chromium did not report a DevTools endpoint within ${LAUNCH_TIMEOUT_MS}ms:\n${stderr.slice(-2000)}`));
+      reject(
+        new Error(
+          `Chromium did not report a DevTools endpoint within ${LAUNCH_TIMEOUT_MS}ms:\n${stderr.slice(-2000)}`
+        )
+      );
     }, LAUNCH_TIMEOUT_MS);
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
@@ -88,7 +106,11 @@ export async function launchChromium(opts: {
     });
     child.once("exit", (code) => {
       clearTimeout(timer);
-      reject(new Error(`Chromium exited (code ${code}) before reporting an endpoint:\n${stderr.slice(-2000)}`));
+      reject(
+        new Error(
+          `Chromium exited (code ${code}) before reporting an endpoint:\n${stderr.slice(-2000)}`
+        )
+      );
     });
     child.once("error", (error) => {
       clearTimeout(timer);

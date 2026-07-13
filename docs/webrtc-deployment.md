@@ -204,7 +204,7 @@ VIBESTUDIO_WEBRTC_ICE=relay vibestudio remote serve --port 3030
 For a managed SSH/systemd host:
 
 ```bash
-vibestudio remote deploy user@host --port 3030 --workspace default --signal-url wss://signal.vibestudio.app/
+vibestudio remote deploy user@host --port 3030 --signal-url wss://signal.vibestudio.app/
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 vibestudio remote deploy remove user@host --purge
