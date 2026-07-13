@@ -2739,6 +2739,17 @@ async function main() {
       await instance?.server?.stop();
     },
   });
+  {
+    const { createPhoneProvisioningProxyService } =
+      await import("./services/phoneProvisioningService.js");
+    container.registerRpc(
+      createPhoneProvisioningProxyService({
+        getUserConnections: (userId) =>
+          assertPresent(rpcServerForGateway).getUserConnections(userId),
+        getClientBridge: (callerId) => assertPresent(rpcServerForGateway).getClientBridge(callerId),
+      })
+    );
+  }
 
   // Strict, idempotent child half of the durable hub revocation cascade.
   const scheduleAfterControlAck = (work: () => Promise<void>): void => {

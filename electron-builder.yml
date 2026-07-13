@@ -7,12 +7,16 @@ directories:
 
 files:
   - "dist/**/*"
+  - "scripts/cli/**/*"
   - "packages/**/*"
   - "node_modules/**/*"
   - "package.json"
 
 asar: true
 asarUnpack:
+  # Desktop phone provisioning executes the canonical CLI primitives locally.
+  - "scripts/cli/**/*"
+  - "package.json"
   # utilityProcess.fork() needs a physical server entry point.
   - "dist/server-electron.cjs"
   # Server auto-spawn uses child_process.fork() for the standalone headless host.

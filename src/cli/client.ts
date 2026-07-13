@@ -1054,6 +1054,14 @@ const mobileCommands: CliCommand[] = [
   scriptCommand("mobile", "install", "mobile-install.mjs", "Install the internal APK", {
     usage: "vibestudio mobile install [--platform android|ios] [--device <serial>] [--launch]",
   }),
+  scriptCommand("mobile", "devices", "mobile-device.mjs", "Discover phones and app compatibility", {
+    usage: "vibestudio mobile devices [--platform android|ios] [--json]",
+    prependArgs: ["devices"],
+  }),
+  scriptCommand("mobile", "connect", "mobile-device.mjs", "Open a secure pairing link on a phone", {
+    usage: "vibestudio mobile connect --pair <link> [--platform android|ios] [--device <serial>]",
+    prependArgs: ["connect"],
+  }),
   scriptCommand("mobile", "logs", "mobile-logs.mjs", "Tail app logs from a device", {
     usage: "vibestudio mobile logs [--platform android|ios] [--device <serial>]",
   }),

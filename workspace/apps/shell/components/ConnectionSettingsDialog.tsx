@@ -216,6 +216,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
           <PairedDevicesSection
             currentDeviceId={current.deviceId}
             workspaceName={current.workspaceName}
+            onStartPhoneSetup={() => onOpenChange(false)}
           />
         ) : null}
         <AppUpdatesSection />
