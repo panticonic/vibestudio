@@ -6,7 +6,7 @@ platform-agnostic `PeerConnectionProvider` contract
 before this work (plan §5); both stacks below are net-new.
 
 - **Desktop + server:** `node-datachannel` (libdatachannel) —
-  `src/main/webrtc/nodeDatachannelPeer.ts`.
+  `src/node/webrtc/nodeDatachannelPeer.ts`.
 - **Mobile:** `react-native-webrtc` (bare RN 0.79) — adapter lives in the mobile
   app (separate workstream/unit); its linking is recorded here for completeness.
 

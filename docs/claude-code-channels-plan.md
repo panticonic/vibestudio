@@ -362,7 +362,7 @@ human `cd`-ing into a context folder gets the same.
 ### 6.3 New command group: `channel`
 
 Fills the messaging gap for humans and agents alike. Host-facing wire schemas live in
-`packages/shared/src/serviceSchemas/channel.ts` — the defined interface the boundary
+`packages/service-schemas/src/channel.ts` — the defined interface the boundary
 allows — relayed to the resolved channel DO; the host still never imports workspace
 code:
 

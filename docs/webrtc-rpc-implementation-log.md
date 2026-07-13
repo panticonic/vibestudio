@@ -97,7 +97,7 @@ Kept the load-bearing manual (non-`new URL()`) parse for the vibestudio: custom
 scheme. `isTrustedCleartextHost` + `isPrivateIPv4`/`isTailscaleIPv4`/
 `isSingleLabelHostname` DELETED → one `isLoopbackHost` (127/8, ::1, localhost,
 10.0.2.2). `parseConnectServerUrl` kept, gate swapped to `isLoopbackHost`. Tests:
-`connect.test.ts` (15 + 1 `it.todo` flagging the `connect-utils.mjs` lockstep
+`connect.test.ts` (15 + 1 `it.todo` flagging the generated raw-node grammar
 rewrite, which is entangled with the Tailscale CLI deletion in §8a).
 
 ## Remaining integration (the coupled cutover)
@@ -123,7 +123,7 @@ This is the work that makes the repo build green end-to-end. Ordered:
   so ALL non-electron-local RPC rides the **shell bridge** (`__vibestudioShell`)
   instead of `globalThis.__vibestudioTransport` (the direct WS). The host forwards
   each panel's envelopes onto the pipe as that panel's logical session.
-- Rewrite `src/server/browserTransportEntry.ts` + `configLoader.ts:107-110` to
+- Rewrite `src/server/browserTransportEntry.ts` + `panelBootstrapScript.ts:107-110` to
   stop building `__vibestudioGatewayRpcWsUrl`/opening a direct `/rpc` WS.
 - Loopback façade: split `panelHttpServer.ts` so the build authority stays
   server-side and the client serves **non-secret assets only** over the bulk
@@ -146,10 +146,10 @@ rebuild` + `asarUnpack` for the `.node`. `react-native-webrtc` bare-RN linking
 - The `connect.ts` grammar change breaks ~13 remote-mode callers — ALL in F's
   scope: `src/server/hubServer.ts`, `src/cli/remoteClient.ts`,
   `workspace/apps/remote-cli/index.ts`, `src/server/pairingBanner.ts`,
-  `src/server/services/auth/model.ts`, `src/main/protocolHandler.ts`,
+  `src/server/hostCore/auth/model.ts`, `src/main/protocolHandler.ts`,
   `workspace/apps/shell/components/ConnectionSettingsDialog.tsx`,
   `src/main/startupMode.ts`, `src/main/services/remoteCredService.ts`, plus the
-  `scripts/cli/lib/connect-utils.mjs` lockstep mirror (delete Tailscale
+  `scripts/cli/lib/connect-grammar.generated.mjs` raw-node artifact (delete Tailscale
   `pickMobileHost`). Update or delete each per §8.
 - Delete: `src/server/publicUrl.ts`, `src/server/vpnDetect.ts`,
   `src/server/tailscaleServe.ts`, `src/main/tlsPinning.ts`,

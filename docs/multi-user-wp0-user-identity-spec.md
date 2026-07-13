@@ -94,7 +94,7 @@ remote client ──(WebRTC to the child's ingress, device credential)──► 
 ### 3.1 `User` + `UserStore` (new, hub-owned)
 
 ```ts
-// packages/shared/src/users/types.ts
+// packages/identity/src/types.ts
 export type UserRole = "root" | "admin" | "member";
 
 export interface User {
@@ -149,7 +149,7 @@ class UserStore {
 ### 3.2 `DeviceRecord.userId` (extend existing)
 
 ```ts
-// src/server/services/deviceAuthStore.ts:8-21 — add:
+// src/server/hostCore/deviceAuthStore.ts:8-21 — add:
 export interface DeviceRecord {
   deviceId: string;
   refreshTokenHash: string;
@@ -442,13 +442,13 @@ is attached purely for attribution/routing and never widens a grant.
 
 | File                                       | Change                                                                                                                                                                  |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/shared/src/users/types.ts`       | **new** — `User`, `UserRole`, `UserSubject`                                                                                                                             |
-| `packages/shared/src/users/userStore.ts`   | **new** — hub `UserStore` (file-backed, atomic)                                                                                                                         |
-| `packages/shared/src/users/membership.ts`  | **new** — `WorkspaceMembership` + store                                                                                                                                 |
+| `packages/identity/src/types.ts`       | **new** — `User`, `UserRole`, `UserSubject`                                                                                                                             |
+| `packages/identity/src/userStore.ts`   | **new** — hub `UserStore` (file-backed, atomic)                                                                                                                         |
+| `packages/identity/src/membership.ts`  | **new** — `WorkspaceMembership` + store                                                                                                                                 |
 | `packages/shared/src/serviceDispatcher.ts` | `VerifiedCaller.subject`; `createVerifiedCaller` param; `AgentBinding.userId`                                                                                           |
-| `packages/shared/src/users/identityDb.ts`  | **new** — hub-owned SQLite identity DB; hub opens read-write, children open read-only (WAL)                                                                             |
-| `src/server/services/deviceAuthStore.ts`   | `DeviceRecord.userId`, `AgentCredentialRecord.userId`, pairing-code `userId` binding, guards, issue/complete signatures                                                 |
-| `src/server/services/auth/model.ts`        | `responseForCredential`/`DeviceCredentialResponse` carry `userId`; split invite intents                                                                                 |
+| `packages/identity/src/identityDb.ts`  | **new** — hub-owned SQLite identity DB; hub opens read-write, children open read-only (WAL)                                                                             |
+| `src/server/hostCore/deviceAuthStore.ts`   | `DeviceRecord.userId`, `AgentCredentialRecord.userId`, pairing-code `userId` binding, guards, issue/complete signatures                                                 |
+| `src/server/hostCore/auth/model.ts`        | `responseForCredential`/`DeviceCredentialResponse` carry `userId`; split invite intents                                                                                 |
 | `src/server/hubServer.ts`                  | `hubControl.inviteUser` (root/admin), `pairDevice` (member), first-redemption root bootstrap; resolve current role from the identity DB                                 |
 | `src/server/services/principalIdentity.ts` | **new** `resolveUserSubject(entityCache, callerId)` sibling to `resolveCodeIdentity`                                                                                    |
 | `src/server/rpcServer.ts`                  | `userSubjectSource` dep; `handleAuth` device-credential→identity-DB subject on each path; `verifiedCallerFor` + `redeemPairingCredential` return `subject`              |

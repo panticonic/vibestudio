@@ -126,7 +126,7 @@ The new `extension` build kind is a node-target ESM build modeled on the worker 
 
 Runtime dependency layout is separate from the existing shared `external-deps` cache used during bundling. Build-time `ensureExternalDeps(...)` continues to install with scripts disabled so panels/workers remain safe. Extension builds first resolve an extension dependency lock/materialization record; that record is persisted with the active bundle. Activation runs an extension-specific dependency materialization step for that exact lock. That step may run package lifecycle scripts because the user has already granted the extension native-code trust; its result is linked into the bundle directory as `node_modules` (or the process is launched with an equivalent resolver hook) so Node's ESM resolver can satisfy imports that esbuild left external. A failed runtime dependency install leaves the extension in `error` with the install log attached to `lastError`.
 
-The stale `agent` build kind described in `BUILD_SYSTEM.md` was never actually implemented in `builder.ts` and never reached `GraphNode["kind"]`. It corresponded to a removed `workspace/agents/` directory. The `extension` kind takes the slot the docs reserved for "node-target ESM", and stale references in `BUILD_SYSTEM.md` and the comment header of `packageGraph.ts` are removed in the same change.
+The stale `agent` build kind described in `WORKSPACE_BUILD_SYSTEM.md` was never actually implemented in `builder.ts` and never reached `GraphNode["kind"]`. It corresponded to a removed `workspace/agents/` directory. The `extension` kind takes the slot the docs reserved for "node-target ESM", and stale references in `WORKSPACE_BUILD_SYSTEM.md` and the comment header of `packageGraph.ts` are removed in the same change.
 
 ## Activation contract
 
@@ -928,7 +928,7 @@ Out of scope for v1, kept as forward-compat anchors:
 
 The same change set removes stale `agent` build-kind references:
 
-- `BUILD_SYSTEM.md` removes the "Agent build (node target)" subsection and the `workspace/agents/` directory entry.
+- `WORKSPACE_BUILD_SYSTEM.md` removes the "Agent build (node target)" subsection and the `workspace/agents/` directory entry.
 - `src/server/buildV2/packageGraph.ts` header comment (lines 1–7) drops the `workspace/agents/` reference.
 - `STATE_DIRECTORY.md` removes the "agents only" qualifier on the `package.json` entry in the build-store sentinel.
 
@@ -937,4 +937,4 @@ The same change set removes stale `agent` build-kind references:
 - [PANEL_SYSTEM.md](PANEL_SYSTEM.md) — panel architecture
 - [STATE_DIRECTORY.md](STATE_DIRECTORY.md) — `{userData}/` layout
 - [PERMISSIONS.md](PERMISSIONS.md) — userland permission requirements (extensions are subject to these for userland-runtime calls; their full-Node access is granted by the elevated install approval)
-- [BUILD_SYSTEM.md](BUILD_SYSTEM.md) — buildV2 pipeline (extensions are a node-target ESM build kind alongside panel and worker)
+- [WORKSPACE_BUILD_SYSTEM.md](WORKSPACE_BUILD_SYSTEM.md) — buildV2 pipeline (extensions are a node-target ESM build kind alongside panel and worker)

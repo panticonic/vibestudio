@@ -637,7 +637,7 @@ index.ts:4752-4753`totalCount: all.length, firstEnvelopeSeq: all.length > 0 ? al
 
 - **Verifier evidence:** src/server/panelHttpServer.ts:412 `const ref = url.searchParams.get("ref") || this.refFromReferer(req) || undefined;`
   src/server/panelHttpServer.ts:418 `const build = this.servingCache.get(this.buildCacheKey(parsed.source, ref));`
-  src/server/panelHttpServer.ts:543-545 `private buildCacheKey(source: string, ref?: string): string { return ref ? \`${source}@${ref}\` : source; }`src/server/panelHttpServer.ts:744-748 (asset-404 guard, only fires when artifact absent in the *resolved* build):`if (isPanelAssetRequest(resource)) { res.writeHead(404, ...); res.end("Not found"); return; }`src/server/buildV2/builder.ts:1888-1890`assetNames: "assets/[name]-[hash]", entryNames: "[name]", chunkNames: "chunk-[hash]",`src/server/configLoader.ts:136`bundle.src = "./bundle.js";`(entry bundle URL has no ?ref)
+  src/server/panelHttpServer.ts:543-545 `private buildCacheKey(source: string, ref?: string): string { return ref ? \`${source}@${ref}\` : source; }`src/server/panelHttpServer.ts:744-748 (asset-404 guard, only fires when artifact absent in the *resolved* build):`if (isPanelAssetRequest(resource)) { res.writeHead(404, ...); res.end("Not found"); return; }`src/server/buildV2/builder.ts:1888-1890`assetNames: "assets/[name]-[hash]", entryNames: "[name]", chunkNames: "chunk-[hash]",`src/server/panelBootstrapScript.ts:136`bundle.src = "./bundle.js";`(entry bundle URL has no ?ref)
 src/server/buildV2/builder.ts:1298`const baseHref = usePanelLoader ? \`/${relativePath}/\` : null;`(base href carries no ref query)
 grep`findResourceInAnySourceBuild` over src/ → NOT FOUND (deleted, confirming the fix did not adopt the content-hash altitude path and instead retained referer heuristics).
 
@@ -825,7 +825,7 @@ Read commands ARE unit-scoped (the asymmetry): src/cli/agent/vcsCommands.ts:65 `
 
 - **Suggested fix:** Either (a) have web_read call blobstore.getRangeBytes and decode with a streaming TextDecoder that tolerates/snaps boundaries, returning the actual byte count consumed; or (b) add a codepoint-snapping mode to getByteRange so the returned slice never splits a UTF-8 sequence (and report the true byte span consumed). Do not toString('utf8') an arbitrary byte window.
 
-- **Verifier evidence:** web/index.ts:313-315: `const slice = await deps.rpc.call<string | null>("main", "blobstore.getRange", [digest, off, len]);` (off computed as arbitrary byte offset at web/index.ts:311). blobstoreService.ts:227: `await handle.read(buf, 0, cappedLength, offset);` then blobstoreService.ts:415-422 getRange case: `const bytes = await getByteRange(...); return bytes ? bytes.toString("utf8") : null;`. getRangeBytes (byte-exact, unused by web_read) at blobstoreService.ts:424-431. Documented-intentional lossiness at serviceSchemas/blobstore.ts:62-66: "partial codepoints at slice boundaries become U+FFFD replacement chars ... Use getRangeBytes if you need a raw binary slice." Byte-addressed advertisement at web/index.ts:100 ("Byte offset to start reading from") and :105 ("Maximum number of bytes to read").
+- **Verifier evidence:** web/index.ts:313-315: `const slice = await deps.rpc.call<string | null>("main", "blobstore.getRange", [digest, off, len]);` (off computed as arbitrary byte offset at web/index.ts:311). blobstoreService.ts:227: `await handle.read(buf, 0, cappedLength, offset);` then blobstoreService.ts:415-422 getRange case: `const bytes = await getByteRange(...); return bytes ? bytes.toString("utf8") : null;`. getRangeBytes (byte-exact, unused by web_read) at blobstoreService.ts:424-431. Documented-intentional lossiness at packages/service-schemas/src/blobstore.ts:62-66: "partial codepoints at slice boundaries become U+FFFD replacement chars ... Use getRangeBytes if you need a raw binary slice." Byte-addressed advertisement at web/index.ts:100 ("Byte offset to start reading from") and :105 ("Maximum number of bytes to read").
 
 ### P2-37 — web_read reports UTF-16 string length as the byte count, breaking byte-offset pagination
 
@@ -916,19 +916,19 @@ export function recomputeFromNode(
 grep `recomputeFromNode\b` (single-node) hits only: effectiveVersion.ts:139 (def), effectiveVersion.test.ts:9 (import), effectiveVersion.test.ts:106 (call) — no production callers.
 Production uses the batch form instead: src/server/buildV2/stateTrigger.ts:270 and :316 `const result = recomputeFromNodes(...)`, imported at stateTrigger.ts:19 and index.ts:23.
 
-### P3-42 — Stale BUILD_SYSTEM.md directory tree lists deleted about/dirty-repo panel
+### P3-42 — Stale WORKSPACE_BUILD_SYSTEM.md directory tree lists deleted about/dirty-repo panel
 
 - **Subsystem:** cross-cutting: dangling references to deleted modules
 - **Category:** cleanup
 - **Prior finding:** CL-9 (prior-fix-incomplete)
-- **Locations:** `BUILD_SYSTEM.md:242`
-- **What:** The illustrative workspace directory tree in BUILD_SYSTEM.md still lists `dirty-repo/` under `about/` as a shipped shell panel. The `workspace/about/dirty-repo/` directory was deleted in this changeset. Doc-only (no build/runtime impact), but it advertises a panel that no longer exists, which is misleading given the unified-log rewrite removed the git-based dirty-repo/git-init about panels.
+- **Locations:** `WORKSPACE_BUILD_SYSTEM.md:242`
+- **What:** The illustrative workspace directory tree in WORKSPACE_BUILD_SYSTEM.md still lists `dirty-repo/` under `about/` as a shipped shell panel. The `workspace/about/dirty-repo/` directory was deleted in this changeset. Doc-only (no build/runtime impact), but it advertises a panel that no longer exists, which is misleading given the unified-log rewrite removed the git-based dirty-repo/git-init about panels.
 
-- **Impact:** Documentation drift; a developer reading BUILD_SYSTEM.md would expect a dirty-repo about panel to exist and could try to wire to it.
+- **Impact:** Documentation drift; a developer reading WORKSPACE_BUILD_SYSTEM.md would expect a dirty-repo about panel to exist and could try to wire to it.
 
-- **Suggested fix:** Remove the `dirty-repo/` line from the about/ tree in BUILD_SYSTEM.md (or replace with the current VCS panel name if one exists).
+- **Suggested fix:** Remove the `dirty-repo/` line from the about/ tree in WORKSPACE_BUILD_SYSTEM.md (or replace with the current VCS panel name if one exists).
 
-- **Verifier evidence:** BUILD_SYSTEM.md:240-244 (current file): `├── about/                 ← shell panels (browser target, shell service access)` / `│   ├── about/` / `│   ├── dirty-repo/` ← line 242 / `│   ├── model-provider-config/` / `│   └── ...`. The directory was deleted: `git status --short` shows `D workspace/about/dirty-repo/DirtyRepoView.tsx`, `D workspace/about/dirty-repo/index.tsx`, `D workspace/about/dirty-repo/package.json`, and `ls workspace/about/dirty-repo/` returns "No such file or directory". The current workspace/about/ contains only: about, adblock, help, keyboard-shortcuts, new. `git diff HEAD -- BUILD_SYSTEM.md | grep dirty-repo` returns no match (exit 1), confirming the stale line was not corrected in this changeset.
+- **Verifier evidence:** WORKSPACE_BUILD_SYSTEM.md:240-244 (current file): `├── about/                 ← shell panels (browser target, shell service access)` / `│   ├── about/` / `│   ├── dirty-repo/` ← line 242 / `│   ├── model-provider-config/` / `│   └── ...`. The directory was deleted: `git status --short` shows `D workspace/about/dirty-repo/DirtyRepoView.tsx`, `D workspace/about/dirty-repo/index.tsx`, `D workspace/about/dirty-repo/package.json`, and `ls workspace/about/dirty-repo/` returns "No such file or directory". The current workspace/about/ contains only: about, adblock, help, keyboard-shortcuts, new. `git diff HEAD -- WORKSPACE_BUILD_SYSTEM.md | grep dirty-repo` returns no match (exit 1), confirming the stale line was not corrected in this changeset.
 
 ### P3-43 — knowledge theory/edge/contradiction projection tables are created and cleared but never written or read (dead feature)
 
@@ -1039,7 +1039,7 @@ handles.ts:399: `rpcTargetId: metadata.rpcTargetId ?? null,` (was `?? metadata.i
 
 packages/rpc/src/client.ts:597-608 — rpc.on is a global per-event-name listener set, no caller filtering at transport.
 
-packages/shared/src/shell/panelManager.ts:1271-1273 — getCurrentEntityId resolves slot.current_entity_id (present for existing panels; throws if absent), so refresh yields a non-null runtimeEntityId for real panels, switching on() to the sync fast path. createRuntime.ts:97 / durable-base.ts:512 map `rpcTargetId: item.runtimeEntityId ?? null`.
+packages/shell-core/src/panelManager.ts:1271-1273 — getCurrentEntityId resolves slot.current_entity_id (present for existing panels; throws if absent), so refresh yields a non-null runtimeEntityId for real panels, switching on() to the sync fast path. createRuntime.ts:97 / durable-base.ts:512 map `rpcTargetId: item.runtimeEntityId ?? null`.
 
 src/server/panelRuntimeRegistration.ts:415 — metadata RPC returns null (-> rpcTargetId stays null) only for missing/closed panels.
 
@@ -1048,7 +1048,7 @@ src/server/panelRuntimeRegistration.ts:415 — metadata RPC returns null (-> rpc
 - **Subsystem:** runtime wiring (context folders, fsService, vcsClient, durable-base)
 - **Category:** cleanup
 - **Prior finding:** none (new-issue)
-- **Locations:** `packages/shared/src/events.ts:197`, `packages/shared/src/serviceSchemas/vcs.ts:182-212`, `src/server/index.ts:927-928`
+- **Locations:** `packages/shared/src/events.ts:197`, `packages/service-schemas/src/vcs.ts:182-212`, `src/server/index.ts:927-928`
 - **What:** `events.ts:197` declares the `vcs:head:${string}` event payload as `{ head: string; stateHash: string; changedPaths: string[] }`, but the server actually emits the full `StateAdvancedEvent` (transitionKind, fileChanges, editOps, sinceStateHash, eventId, headHash, actor, ...) and the vcsClient casts the received payload to the much richer `VcsHeadAdvance`. The runtime payload is correct (full object is emitted); only the TypeScript declaration is wrong/narrow, which gives false type-safety to any consumer that trusts the EventPayloads map.
 
 - **Impact:** No runtime break; consumers reading via vcsClient get the full object. A consumer reading the typed EventPayloads map directly would see a too-narrow type and miss fields, or a maintainer could 'optimize' the emit to match the narrow type and silently break vcsClient consumers.
@@ -1063,7 +1063,7 @@ src/server/buildV2/stateTrigger.ts:33-66 — `StateAdvancedEvent` has head, stat
 
 workspace/packages/runtime/src/shared/vcsClient.ts:65 — `const off = events.on(`event:${topic}`, (ev) => onAdvance(ev.payload as VcsHeadAdvance));` casts to the richer VcsHeadAdvance.
 
-packages/shared/src/serviceSchemas/vcs.ts:182-212 — `vcsHeadAdvanceSchema` / `VcsHeadAdvance` mirrors the full StateAdvancedEvent shape.
+packages/service-schemas/src/vcs.ts:182-212 — `vcsHeadAdvanceSchema` / `VcsHeadAdvance` mirrors the full StateAdvancedEvent shape.
 
 ### P3-48 — Dangling JSDoc comment for removed getGitHandler in GatewayDeps
 

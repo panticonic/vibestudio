@@ -1,6 +1,6 @@
 # Audit 06 — HTTP Endpoints, Webhooks & External Surfaces
 
-**Scope:** gateway, panel HTTP, RPC HTTP, webhook verifiers/relay, well-known app, push service, image service, meta service, audit service, OAuth callbacks, TLS pinning, egress proxy.
+**Scope:** gateway, panel HTTP, RPC HTTP, webhook verifiers/relay, apex well-known routes, push service, image service, meta service, audit service, OAuth callbacks, TLS pinning, egress proxy.
 
 **Audit date:** 2026-04-23
 **Branch:** `audit` (HEAD `bafe7bc8`)
@@ -27,7 +27,7 @@ That said, the audit found **several exploitable or latent weaknesses** that war
    headers are stripped before any workerd proxying.
 9. **Egress proxy CONNECT tunnel (`EgressProxy.handleConnect`) has no provider-matching / consent check** — only requires the two attribution headers to be present. Any worker that can set those headers (which every worker can, via the proxy-auth wiring) tunnels arbitrary TLS traffic without consent enforcement, bypassing the capability/rate-limit/audit path that HTTP requests take. **Severity: High** if workers are untrusted.
 10. **Audit log entries include full request URL** (including query strings, which for many providers carry access tokens). Log records are JSONL files; log injection is blocked by `JSON.stringify`, but secrets landing in logs is the real concern. **Severity: Medium.**
-11. **Default `apple-app-site-association` path pattern `/oauth/callback/*`** and Android assetlinks don't yet have real fingerprints in `config.json` (TODO placeholders). A released build with placeholder values would bind universal links to no apps / wrong apps. **Severity: Build-time — blocker if shipped.**
+11. **Historical universal-link placeholder configuration has been removed.** The apex relay now derives both well-known documents from deployment environment variables and returns 503 when they are incomplete, rather than publishing placeholder identifiers. **Severity: Remediated.**
 12. **`/rpc` HTTP endpoint has a 200 MB body limit**, error responses return HTTP 200 with `{ error }` (semantic errors encoded in JSON — OK), but the **200MB cap is 200× typical bodies** and enables memory pressure / DoS. **Severity: Medium.**
 13. **Panel error page renders the build error in a `<pre>` block**; `escapeHtml` escapes `<>"&` but NOT the single-quote `'`. An HTML attribute-context injection in an upstream concatenation could still be crafted. Not exploitable as written (error only ever appears in `<pre>`). **Severity: Info/hardening.**
 
@@ -79,14 +79,18 @@ CORS on `/api/*`: `Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS
 
 Wrangler config has `[vars] ENVIRONMENT = "production"` — no `[[kv_namespaces]]` or secrets. The relay is a scaffold; it does not actually verify or forward anything.
 
-### Well-known app — `apps/well-known`
+### Apex well-known routes — `apps/webhook-relay`
 
-Cloudflare Worker serving a static site bucket. Exposes:
+The apex relay Worker owns the two stateless mobile association routes:
 
 - `/.well-known/apple-app-site-association`
 - `/.well-known/assetlinks.json`
 
-Both generated at build time from `config.json` with placeholder values (`teamId: "XXXXXXXXXX"`, `sha256CertFingerprints: ["TODO:REPLACE_WITH_ACTUAL_FINGERPRINT"]`).
+Both are generated from `VIBESTUDIO_APPLE_APP_ID`,
+`VIBESTUDIO_ANDROID_PACKAGE_NAME`, and
+`VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS`. Incomplete configuration fails
+loud with HTTP 503. The former standalone `apps/well-known` source was removed;
+`apps/webhook-relay` is the single apex owner.
 
 ### Egress proxy (loopback only) — `src/server/services/egressProxy.ts`
 
@@ -359,19 +363,15 @@ This is only a concern on the _client_ side (console-log), not the server, but a
 
 ---
 
-### F-15 — INFO — Well-known app ships with placeholder fingerprints
+### F-15 — REMEDIATED — Universal-link configuration fails loud
 
-**File:** `apps/well-known/config.json`
+**Files:** `apps/webhook-relay/src/oauthLanding.ts`, `apps/webhook-relay/src/index.ts`
 
-```json
-{
-  "android": { "sha256CertFingerprints": ["TODO:REPLACE_WITH_ACTUAL_FINGERPRINT"] }
-}
-```
-
-Shipping a public build with this file broken means universal links won't bind to any real app — but worse, if the file is published once with real fingerprints and later overwritten with TODOs by a misconfigured CI, every Android app-handoff breaks silently.
-
-**Remediation:** fail the build if the fingerprint array contains `TODO` or placeholder values. Easy 5-line guard in `apps/well-known/build.ts`.
+The former static app and placeholder `config.json` no longer exist. The apex
+relay parses deployment-owned identifiers and signing fingerprints, normalizes
+Android fingerprints, and returns HTTP 503 instead of an invalid association
+document when required values are absent. Route tests cover both configured and
+unconfigured behavior.
 
 ---
 
@@ -511,14 +511,12 @@ res.setHeader("X-Frame-Options", "DENY");
 - `src/main/serverClient.ts` / `serverClient.tls.test.ts`
 - `apps/webhook-relay/src/index.ts`
 - `apps/webhook-relay/wrangler.toml`
-- `apps/well-known/build.ts`
-- `apps/well-known/wrangler.toml`
-- `apps/well-known/config.json`
-- `apps/well-known/src/*.template.json`
+- `apps/webhook-relay/src/oauthLanding.ts`
+- `apps/webhook-relay/src/index.test.ts`
 - `packages/shared/src/webhooks/verifier.ts` (+ test)
 - `packages/shared/src/webhooks/ingress.ts`
-- `packages/shared/src/credentials/audit.ts`
-- `packages/shared/src/credentials/types.ts`
+- `packages/credential-client/src/audit.ts`
+- `packages/credential-client/src/types.ts`
 - `packages/shared/src/credentials/flows/loopbackPkce.ts`
 - `packages/shared/src/tokenManager.ts`
 - `packages/shared/src/constants.ts`

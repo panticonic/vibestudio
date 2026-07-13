@@ -8,7 +8,7 @@
 Current note (2026-07-03): this report is historical. Browser data no longer
 uses the reviewed `src/main/services/browserDataService.ts` main-service shape;
 current access goes through the manifest-declared browser-data broker
-(`providers.browserData.extension`) and `@workspace/panel-browser`. Findings
+(`providers.browserData.extension`) and the canonical `browserData` runtime client. Findings
 below are retained for audit traceability.
 
 ---
@@ -58,7 +58,7 @@ Files read end-to-end:
 - `src/preload/index.ts`, `panelPreload.ts`, `browserPreload.ts`, `autofillPreload.ts`, `autofillOverlayPreload.ts`, `ipcTransport.ts`
 - `src/renderer/index.tsx`
 - `packages/shared/src/servicePolicy.ts`, `serviceDispatcher.ts`
-- `packages/shared/src/shell/urlParsing.ts`
+- `packages/shell-core/src/urlParsing.ts`
 - `packages/shared/src/contextIdToPartition.ts`
 
 Methods:
@@ -665,6 +665,6 @@ With `contextIsolation: false`, `globalThis` is shared with the page. Any shell-
 
 - `packages/shared/src/serviceDispatcher.ts`
 - `packages/shared/src/servicePolicy.ts`
-- `packages/shared/src/shell/urlParsing.ts`
+- `packages/shell-core/src/urlParsing.ts`
 - `packages/shared/src/contextIdToPartition.ts`
 - `packages/rpc/src/types.ts` (for Electron-local routing exceptions)

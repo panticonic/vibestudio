@@ -171,8 +171,8 @@ pnpm smoke:full -- --android-avd NatStack_Test
 ```
 
 These commands start the normal `vibestudio remote serve` hub in an isolated
-home, run `vibestudio remote invite --workspace default`, and assert that the
-workspace child's invite contains `wss://signal.vibestudio.app/`. Android
+home, consume its one-time root-device invite from the strict ready file, and
+assert that the invite contains `wss://signal.vibestudio.app/`. Android
 emulators attempt normal host/STUN/TURN ICE by default. Add `--require-turn` for
 a relay-readiness pass that fails during preflight when the service is still
 STUN-only. Use `--local-signaling` only for an offline Miniflare/coturn run.

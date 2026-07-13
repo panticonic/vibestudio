@@ -160,7 +160,7 @@ mirroring what `sendAsCaller` already does for authenticated callers
 | `workspace/packages/agentic-chat/hooks/useAgenticChat.ts`, `hooks/core/useChatCore.ts` | retire hardcoded `@user`/"Chat Panel"; pass account subject |
 | `workspace/packages/agentic-core/src/connection.ts` | stop asserting human handle; rely on host-verified subject |
 | `workspace/packages/pubsub/src/rpc-client.ts` | human participant id = `user:<userId>` |
-| `packages/shared/src/users/*` (WP0) | `account.getProfile`/`updateProfile` RPC surface |
+| `packages/identity/src/*` (WP0) | `account.getProfile`/`updateProfile` RPC surface |
 | shell chat components | render avatar/color from profile |
 
 ---

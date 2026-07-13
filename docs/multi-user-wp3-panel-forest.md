@@ -67,7 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_slots_owner ON slots(owner_user_id) WHERE closed_
 The single "all null-parent slots = one tree" collapse becomes "group null-parent slots by
 owner = a forest of N trees":
 
-- **`PanelManager.fetchPanelTree()`** (`packages/shared/src/shell/panelManager.ts:936-1027`;
+- **`PanelManager.fetchPanelTree()`** (`packages/shell-core/src/panelManager.ts:936-1027`;
   null-parent→root at `:1005-1011`) groups roots by `owner_user_id` into
   `Map<userId, Panel[]>`. Non-root slots still attach by `parent_slot_id` regardless of owner
   (a subtree stays whole).
@@ -183,7 +183,7 @@ first-run; each invited user's tree seeds on first attach.
 | File | Change |
 |---|---|
 | `src/server/internalDOs/workspaceDO.ts` | `slots.owner_user_id` (+ index), `DbSlotRow`/`DbEntityRow`, `slotListOpen` owner-tag, schemaVersion bump; stamp owner on slot create |
-| `packages/shared/src/shell/panelManager.ts` | `fetchPanelTree` groups roots by owner into a forest |
+| `packages/shell-core/src/panelManager.ts` | `fetchPanelTree` groups roots by owner into a forest |
 | `packages/shared/src/panelRegistry.ts` | owner-grouped snapshot |
 | `packages/shared/src/types.ts` | `Panel.owner`; `PanelTreeSnapshot.forest` (replaces `rootPanels`) |
 | `src/server/services/panelTreeService.ts` | stamp `owner` from `subject.userId`; authz stays permissive |

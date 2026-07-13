@@ -406,7 +406,7 @@ Deleted outright, no shims, no deprecation period:
 
 | What                                                                    | Where                                                                                           | Replaced by                                                     |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Per-server singleton room + `ensurePersistentRoom`                      | `src/main/webrtc/cert.ts:94`, `index.ts:3365`                                                   | Per-invite rooms (§2.1)                                         |
+| Per-server singleton room + `ensurePersistentRoom`                      | `src/node/webrtc/cert.ts:94`, `index.ts:3365`                                                   | Per-invite rooms (§2.1)                                         |
 | Single-pipe bootstrap `startWebRtcAnswerer`                             | `src/server/webrtcAnswererBootstrap.ts`                                                         | Ingress pool (§2.1)                                             |
 | `bulkWriteChain` / `controlWriteChain` FIFO chains                      | `webrtcAnswerer.ts`, `webrtcClient.ts`                                                          | Schedulers (§1.3, §1.4)                                         |
 | `StreamFrameDecoderV2` byte-stream parser + frame contiguity constraint | `protocol/streamCodec.ts`                                                                       | Message mux (§1.2)                                              |

@@ -80,7 +80,7 @@ read-only-blocked.
 ## Propagation path
 
 ```
-eval.run({readOnly:true})            serviceSchemas/eval.ts (evalRunArgsSchema.readOnly)
+eval.run({readOnly:true})            packages/service-schemas/src/eval.ts (evalRunArgsSchema.readOnly)
   → evalService.prepareRun           → assembledArgs.readOnly
   → EvalDO.runLocked                  → currentRunReadOnly (host-rpc Proxy + callOptions + callMainService)
   → rpc.call(…, {readOnly:true})     packages/rpc: RpcCallOptions.readOnly

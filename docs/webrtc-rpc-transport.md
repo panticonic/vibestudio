@@ -254,7 +254,7 @@ in a webview and cannot touch the host's `RTCPeerConnection` directly, so its RP
 crosses the webview boundary over the **shell bridge that already exists and
 already delivers the grant token** (`__vibestudioShell` — Electron `contextBridge`
 IPC on desktop, the React-Native `postMessage` bridge on mobile;
-`configLoader.ts:75`). The panel's `EnvelopeRpcTransport` posts envelopes over
+`panelBootstrapScript.ts:75`). The panel's `EnvelopeRpcTransport` posts envelopes over
 that bridge to the host; the host runs each panel's transport-agnostic
 `SessionNegotiation` (§1) over its **own logical session** on the control channel,
 redeeming its own grant — preserving per-panel principal isolation, leases, and
@@ -286,7 +286,7 @@ channel** and caching results. Panel RPC never touches it (§3).
   gated (`panelHttpServer.ts:648`). No façade HTTP response carries a secret: the
   grant token reaches the panel **out-of-band via the shell bridge**
   (`__vibestudioShell.getPanelInit()` → `globalThis.__vibestudioGatewayToken`,
-  `configLoader.ts:77,109`), never in an HTTP body, and panel **RPC also rides the
+  `panelBootstrapScript.ts:77,109`), never in an HTTP body, and panel **RPC also rides the
   shell bridge** (§3), not a loopback socket. So there is no `/rpc` port to reach,
   no cookie, no Service Worker, no host-isolation, and no per-asset token — the
   whole question dissolved once we checked nothing secret is in the HTTP plane. The
@@ -473,7 +473,7 @@ against the tree, in three groups.
   `TrustFingerprintPrompt` (trust-on-first-use) dialog; plus the
   `fetchPeerFingerprint`/`pickCaFile` wrappers in `shell/client.ts`.
 - **Delete schema/type fields:** `caPath`/`fingerprint` from
-  `serviceSchemas/remoteCred.ts` and `workspace/types.ts` remote options — removed,
+  `packages/service-schemas/src/remoteCred.ts` and `packages/workspace-contracts/src/types.ts` remote options — removed,
   not deprecated. `remoteCredentialStore.ts` is deleted entirely (§8c), so there is
   no stored state to migrate.
 - **`packages/shared/src/connect.ts` — keep the file, rewrite the contents:** keep
@@ -619,10 +619,10 @@ relay, persistent ECDSA P-256 cert via `certificatePemFile`/`keyPemFile`:
 - `src/server/rpcServer.ts`, `src/server/wsServerTransport.ts` — make auth/session + server→client bridge per-logical-session, not per-socket.
 - `workspace/packages/runtime/src/shared/gatewayFetch.ts` — rewrite to tunnel over the bridge (no loopback HTTP); `src/server/serviceWithHttpRoutes.ts` — panel-facing routes retired for RPC, third-party-facing routes move to the relay.
 - `src/server/panelHttpServer.ts` — split server build authority from a client loopback façade serving non-secret assets only (no per-request token gate).
-- `src/server/browserTransportEntry.ts`, `src/server/configLoader.ts`, desktop preload bridge — panel `EnvelopeRpcTransport` rides the shell bridge (replaces the panel's direct `ws://…/rpc`).
+- `src/server/browserTransportEntry.ts`, `src/server/panelBootstrapScript.ts`, desktop preload bridge — panel `EnvelopeRpcTransport` rides the shell bridge (replaces the panel's direct `ws://…/rpc`).
 - `src/main/serverClient.ts`, `workspace/apps/mobile/src/services/mobileTransport.ts` — transport selection.
 - `workspace/apps/mobile/src/components/PanelWebView.tsx`, `services/panelUrls.ts` — loopback origin + bridge.
-- `packages/shared/src/connect.ts`, `scripts/cli/lib/connect-utils.mjs` — extended pairing link.
+- `packages/shared/src/connect.ts`, `scripts/cli/lib/connect-grammar.generated.mjs` — canonical pairing grammar and its generated raw-node artifact.
 - `src/server/services/credentialService.ts`, `services/webhookIngressService.ts` — OAuth `state`-keyed relay handoff (universal-link / backhaul-forward, reusing `client-forwarded`); webhook backhaul + buffering + registration.
 - `apps/webhook-relay/` (or a shared `apps/callback-relay/`) — shared backhaul + registration; webhook buffering profile + OAuth ephemeral landing/universal-link host profile.
 - New `apps/signaling/` — CF signaling DO (UUID rooms, persistent).

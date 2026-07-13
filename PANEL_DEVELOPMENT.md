@@ -564,7 +564,7 @@ There is no panel-facing `db` API. Persistent SQL storage lives inside Durable
 Objects: every DO has a `this.sql` handle on its own private SQLite-backed
 storage. To persist state from a panel, dispatch to a worker DO that owns the
 schema. See `docs/architecture/storage.md` for the storage primitive and
-`workspace/workers/sample-do/index.ts` for a minimal example.
+`workspace/skills/workspace-dev/WORKERS.md` for the canonical worker/DO pattern.
 
 For ephemeral or per-panel state, prefer `useStateArgs`/`panel.stateArgs.set` (above)
 or the panel scope persistence (`scope` RPC service) used by the agentic-chat

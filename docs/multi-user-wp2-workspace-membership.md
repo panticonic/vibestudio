@@ -66,7 +66,7 @@ nothing to "refuse to mint"; the gate is the child's membership check.
 
 ## 2. `MembershipStore` (implements WP0 §3.5)
 
-New `packages/shared/src/users/membership.ts`. The `WorkspaceMembership` record and the method
+New `packages/identity/src/membership.ts`. The `WorkspaceMembership` record and the method
 list are **defined in WP0 §3.5** (`add` / `remove` / `list(userId)` / `listMembers(workspaceId)`
 / `has(userId, workspaceId)`); WP2 implements them as a **`membership` table in the shared
 hub-owned identity DB** (WP0 §2/§7). The **hub opens it read-write** and is the sole writer;
@@ -76,7 +76,7 @@ no cache-replication. This is why membership works identically whether checked a
 child: there is one table, one writer, many readers.
 
 ```ts
-// packages/shared/src/users/membership.ts
+// packages/identity/src/membership.ts
 export class MembershipStore {
   constructor(
     private readonly db: IdentityDb, // shared DB; hub read-write, child read-only
@@ -277,7 +277,7 @@ There is no `data.json` registry or compatibility reader. The two tables join by
 
 | File                                                                 | Change                                                                                                                                                                                                                                                  |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/shared/src/users/membership.ts`                            | **implement** `MembershipStore` over the shared identity DB (WP0 §3.5 methods) — hub read-write / child read-only, `has()` root rule, `list`, `listMembers`, `add`/`remove`, `removeWorkspace`/`removeUser` cascades; all keys are opaque `workspaceId` |
+| `packages/identity/src/membership.ts`                            | **implement** `MembershipStore` over the shared identity DB (WP0 §3.5 methods) — hub read-write / child read-only, `has()` root rule, `list`, `listMembers`, `add`/`remove`, `removeWorkspace`/`removeUser` cascades; all keys are opaque `workspaceId` |
 | `packages/shared/src/centralData.ts`, `packages/shared/src/types.ts` | mint + store opaque `WorkspaceEntry.workspaceId` at `addWorkspace`; `removeWorkspace` (136) triggers `membershipStore.removeWorkspace(workspaceId)` cascade (wired at `workspaceService.ts:581`)                                                        |
 | `src/server/hubServer.ts`                                            | Resolve `workspace`→opaque id; implement typed `hubControl` membership methods; enforce member pre-filter on `routeWorkspace`; filter `listWorkspaces`; narrow invite defaults to visible workspaces                                                    |
 | `src/server/index.ts` (child)                                        | child membership entry gate: `membershipStore.has(subject.userId, thisWorkspaceId)` on connect (reads the shared DB read-only)                                                                                                                          |

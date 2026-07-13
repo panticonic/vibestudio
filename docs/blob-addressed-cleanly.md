@@ -5,7 +5,7 @@ Landed pieces:
 - Shared canonical tree hashing: `packages/shared/src/contentTree/` (`buildWorktreeManifest`, tree objects, golden-vector cross-implementation tests against the DO's SQL hashing).
 - Content store tree APIs: `src/server/services/blobstoreService.ts` — tree objects, `resolveTreePath`, `listTree`, `diffTrees`, `materializeTree`. The content store is the tree authority.
 - State mirroring invariant: every state hash the system hands out resolves to a full mirrored tree in the content store (eager on scan/snapshot via `mirrorWorktreeTree`, lazy via `GadVcs.ensureStateMirrored`).
-- Protected refs + gating: `src/server/services/refService.ts` is the sole `main`-ref authority (durable group CAS/delete via `refs.updateMains`, approval-gated, wired in `index.ts`); the gad-store DO is the only public writer and publishes through it.
+- Protected refs + gating: `src/server/services/protectedRefStore.ts` is the sole `main`-ref authority (durable group CAS/delete via `refs.updateMains`, approval-gated, wired in `index.ts`); the gad-store DO is the only public writer and publishes through it.
 - Host/workspace boundary enforcement: `scripts/check-host-workspace-imports.mjs` (`pnpm check:host-boundary`) statically forbids host code (`src/`, `packages/`, `apps/`, `scripts/`, `tests/`, `build.mjs`) from importing `@workspace*` scopes or paths that resolve into `workspace/` — static/dynamic/`require`/type-only imports plus string-literal references, with generated bundle dirs (`dist`/`dist-publish`) excluded. As of 2026-07-03 it is GATING: wired into CI (`.github/workflows/ci.yml`) and the `.husky/pre-commit` hook. Allowlist: `scripts/host-boundary-allowlist.json` (currently zero import-violations; only host-owned scope-name contracts and smoke tooling references).
 - Build-from-content-store: buildV2 reads trees, unit hashes, and build sources exclusively from the content store (tree-hash keyed; no GAD manifest reads).
 - Server-computed diffs: `vcs.diff` / change detection use content-store `diffTrees` (`WorkspaceVcs.diffStates`); callers never supply changed paths.
@@ -25,7 +25,7 @@ Landed pieces:
   DO semantics until the userland move.
 
 - P5b (partial — refs surface + merge semantics userland, landed): the protected-ref store is now
-  RPC-exposed to userland as the `refs` service (`packages/shared/src/serviceSchemas/refs.ts`:
+  RPC-exposed to userland as the `refs` service (`packages/service-schemas/src/refs.ts`:
   `readMain`/`listMains`/`readMainLog` plus DO-only `updateMains`; `updateMains`
   flows through the SAME main-advance approval gate with host-resolved
   on-behalf-of attribution) — the host primitive a userland VCS uses to request
@@ -142,7 +142,7 @@ Userland `vcs.log`defaults to`main` — caller-context head defaulting does not 
     - `mergeIntoMainHead` reduced to a THIN DO dispatcher (the merge-to-main advance
       flows through the DO's push path → `refs.updateMains`).
   - READ SURFACE DECISION: `vcs.readFile`/`listFiles`/`diff`/`resolveHead` stay a SLIM
-    HOST READ SURFACE over the content store + RefService — per the Target Shape these
+    HOST READ SURFACE over the content store + ProtectedRefStore — per the Target Shape these
     are content/tree/ref reads (not VCS semantics), they must work pre-workerd (the
     build system builds the gad-store worker itself), and a workerd hop per hot-path
     read would buy zero authority.
@@ -307,7 +307,7 @@ Migration Plan
    General repos use normal repo-write approval. Meta repo gets the richer semantic prompt.
 
 7. Shrink WorkspaceVcs.
-   It should stop being the privileged mega-owner and eventually become either a thin projection service or disappear behind ContentStore + RefService + BuildService.
+   It should stop being the privileged mega-owner and eventually become either a thin projection service or disappear behind ContentStore + ProtectedRefStore + BuildService.
 
 Caveats
 

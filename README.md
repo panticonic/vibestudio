@@ -93,7 +93,7 @@ See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
 for the operational runbook.
 
 The real-client smoke tests use that deployed route, the normal `remote serve`
-hub, and a workspace-scoped `remote invite` by default. Use
+hub, and its one-time root-device invite from the strict ready file. Use
 `pnpm smoke:full -- --local-signaling` only for an offline Miniflare/coturn run.
 
 ### Develop (contributors)

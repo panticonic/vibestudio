@@ -1,12 +1,14 @@
 # Narrow-Host Boundary Refactor — collapse the host to dumb primitives
 
-**Status:** PLAN (2026-07-03). Authoritative for the boundary refactor that follows the
-committed narrow-host VCS work (`02fb07e7`, `808facb8`). Builds on
-`docs/narrow-host-vcs-plan.md`.
+**Status:** PARTIALLY IMPLEMENTED design record. The listed commits landed major
+parts of phases 0–6, but the strict phase-6 boundary has not landed. Last
+reconciled 2026-07-13; current follow-on VCS status lives in
+[narrow-host-vcs-plan.md](narrow-host-vcs-plan.md).
 
-## Goal
+## Target goal
 
-The host process must provide only **dumb primitives** and hold **no VCS semantics**.
+The host process should provide only **dumb primitives** and ultimately hold
+**no VCS semantics**. This is the target, not a description of the current tree.
 It does not know what a commit, a merge, a fast-forward, an operation (push/merge/
 import/delete/restore), or a lineage is. Everything semantic lives in the userland
 gad-store Durable Object.
@@ -23,7 +25,7 @@ The host's entire legitimate surface is:
 6. **Identity stamping** — mint/verify the on-behalf-of correlation nonce at the RPC
    relay (who the caller is), with no VCS-operation awareness.
 7. **Host-enforced approval prompt** — gate a main-ref advance on user consent, with the
-   prompt bound to a host-computed `diffTrees(old, next)`. This is the *one* place the
+   prompt bound to a host-computed `diffTrees(old, next)`. This is the _one_ place the
    host stays in the write path, and it carries a content diff + a trust prompt, never
    VCS workflow semantics.
 
@@ -31,22 +33,42 @@ Everything else — heads, commits, merges (context-local only), fast-forward
 enforcement, build gating, operation classification, provenance/lineage, delete/restore
 sagas, freshness-adopt of out-of-band disk edits — moves to or already lives in the DO.
 
+## Current implementation deviation
+
+`WorkspaceVcs` is materially narrower than when this plan was written, and
+memory indexing plus repository-view composition now have explicit
+collaborators. Delete/restore/fork sagas are DO-owned and their former host test
+shims are gone. The host nevertheless still owns part of conflicted-merge
+resolution:
+
+- it interprets pending-merge records during `commitHead` to select merge
+  parents and the merge-resolution transition kind;
+- it repairs/acknowledges provisional conflict materialization;
+- it decides projection and reactive-event effects for merge/rebase outcomes;
+- it synchronizes and clears the worktree conflict summary on resolve/abort.
+
+This means the literal "no VCS semantics" goal and phase 6 remain open. The
+correct next seam is not another pass-through class. It is a single contract in
+which the DO returns the authoritative pending-merge transition plus explicit
+projection/event instructions, allowing the host to execute dumb effects
+without interpreting lifecycle state.
+
 ## Locked design decisions (user rulings, 2026-07-03)
 
 - **D1 — No `main` checkout.** `main` is a pure ref. Context materialization already
   hardlinks trees out of the CAS (`materializeTree`), so a `main`-on-disk tree gives no
   materialization speedup. Delete the workspace-root `main` projection and the
-  `project({head:"main"})` reaction. Disk is only ever a *context's* working checkout.
+  `project({head:"main"})` reaction. Disk is only ever a _context's_ working checkout.
   (Verify no non-build consumer reads the `main` directory before deleting — the build
   path is confirmed CAS-only: `materializeForBuild` ignores the workspace root.)
 
 - **D2 — The workspace-root disk is the active context, not a distinct human/disk
-  context.** Out-of-band disk edits and agent `vcs.edit` calls target *one* context head
+  context.** Out-of-band disk edits and agent `vcs.edit` calls target _one_ context head
   through two channels (disk-scan and DO working rows). See "Single-context sync rule".
 
 - **D3 — The host keeps the approval prompt, semantics-free.** `updateMains` stays
   approval-gated (NOT unconditional). The gate computes `diffTrees(currentRefValue,
-  proposedNext)` itself, classifies a removal from `next === null`, and raises the trust
+proposedNext)` itself, classifies a removal from `next === null`, and raises the trust
   prompt. Any DO-supplied summary is untrusted display copy the host does not rely on.
   The DO is out-of-process untrusted userland and cannot self-certify consent, so this
   boundary must stay host-enforced. Operation classification and the delete/restore saga
@@ -57,16 +79,16 @@ sagas, freshness-adopt of out-of-band disk edits — moves to or already lives i
 The DO already holds a callback channel to host primitives via
 `this.rpc.call("main", <service>.<method>)`, exposed as `contentStore()` (blobstore),
 `refsStore()` (refs), and `buildStore()` (build.validate). So "DO owns semantics, host
-provides primitives" is *already* the shape for content, refs, build, fast-forward
+provides primitives" is _already_ the shape for content, refs, build, fast-forward
 (DO-computed ancestry), and build gating (DO decides). The gaps:
 
-- **Disk projection** is currently a host *reaction* to `updateMains` (`onMainsUpdated`),
+- **Disk projection** is currently a host _reaction_ to `updateMains` (`onMainsUpdated`),
   not a DO-called primitive. It suffices for ref-driven advances; keep it as a reaction
   for now, but strip its semantic shard (the `operation → transitionKind` branch).
-- **Disk scan** has **no** RPC — the DO can only *receive* `ingestWorktreeState`. This is
+- **Disk scan** has **no** RPC — the DO can only _receive_ `ingestWorktreeState`. This is
   the one new primitive: expose `worktreeStore.localState` (already a pure, DO-free
   scan+hash+mirror) as `blobstore`/`worktree`-service RPC `scan(repoPath, head) →
-  {stateHash, files}` the DO calls.
+{stateHash, files}` the DO calls.
 
 ## Single-context sync rule (consequence of D2)
 
@@ -74,7 +96,7 @@ One context head, two input channels — must not clobber:
 
 - The **DO working state is authoritative** for a context's uncommitted content.
 - **Projection** (DO working state → disk) keeps the checkout in sync with the DO.
-- **Scan** captures only genuine *external* drift: files on disk that differ from the
+- **Scan** captures only genuine _external_ drift: files on disk that differ from the
   last projected DO working state become additional working edits on the same context
   head (adopted via the DO, not a main advance). The scan diffs disk against the
   projected baseline (sidecar), so re-adopting already-projected DO edits is a no-op.
@@ -83,7 +105,8 @@ One context head, two input channels — must not clobber:
 
 ## Keep / Move / Delete register (condensed; see per-phase for detail)
 
-**KEEP (host primitives):** `refService` CAS core (stripped to `repoPath→stateHash` map +
+**KEEP (host primitives):** `ProtectedRefStore` CAS core (stripped to
+`repoPath→stateHash` map +
 atomic replace + compare-and-swap); all of `blobstoreService` (incl. `diffTrees`);
 `diskProjector.project`/`removeRepo`/`writeConflictSummary`/`dirForRepoHead`;
 `worktreeStore.localState`/`materializeState` + content helpers; `paths.ts`,
@@ -91,7 +114,7 @@ atomic replace + compare-and-swap); all of `blobstoreService` (incl. `diffTrees`
 awareness); the host-enforced approval prompt built on `diffTrees`.
 
 **MOVE to the DO:** operation classification + ref `log[]` + provenance/`seq`/`priorDeleted`
-in `refService`/`refsService`/`vcsInvocationTable`; the delete/restore/fork sagas
+in `ProtectedRefStore`/`refsRpcService`/`vcsInvocationTable`; the delete/restore/fork sagas
 (the `updateMains` CAS calls stay primitive); freshness-adopt orchestration
 (`commitHead`/`commitMainHead`/`prepareMainScan`/`ensureFresh`, using the KEEP scan
 primitive); host/DO-duplicated composition (`composeRepoStatesLocal`/`workspaceView`)
@@ -107,6 +130,7 @@ suite (`syncMainProvenance`/`recordMainAdvance`/`enqueueMainRecord`/durable-reco
 projection (D1).
 
 ## Phased implementation (each phase ends green: host typecheck, `pnpm --dir workspace
+
 type-check` ×3 programs, host + workspace VCS suites)
 
 **Phase 0 — Delete main-target merge.** Independent, fully settled. Remove
@@ -160,18 +184,19 @@ overlap; 2 is the largest and riskiest.
 - Host `vcs` service continues to shed methods as semantics move to the DO.
 
 ## Downstream: provenance-graph workstream impact
+
 (`docs/gad-provenance-handoff-2026-07.md` — simplification takes precedence; the
 downstream adapts.)
 
 - **Aligned / preserved:** the provenance contract (items 1–7) is entirely DO-side —
   `gad_worktree_edit_ops` semantics, ingest `editOps`, event-keyed ancestry, history
   reads, per-repo logs + `ctx:` restriction, claims/FTS, `invocationId` threading. Our
-  refactor consolidates these *into* the DO and never deletes them. The "no-intent
+  refactor consolidates these _into_ the DO and never deletes them. The "no-intent
   crash-heal → fail closed" stance (handoff A2) is already ours.
 - **CLASH — the host main-ref `log[]` is removed (Phase 5).** Handoff "new signal #1"
   wants to consume the host main-ref log (`writer`/`onBehalfOf`/`reason`/`operation`/
-  nullable `new`) as *host-verified* main-movement attribution. Phase 5 strips that log
-  (provenance moves to the DO). **Resolution:** the host-verified *principal* survives —
+  nullable `new`) as _host-verified_ main-movement attribution. Phase 5 strips that log
+  (provenance moves to the DO). **Resolution:** the host-verified _principal_ survives —
   it rides the `VcsInvocationTable` on-behalf-of token, which is KEEP (identity stamping).
   The DO records each main advance stamped with that host-minted token, so the provenance
   graph re-sources main-movement attribution from the DO's advance records (token-carried)
@@ -180,7 +205,7 @@ downstream adapts.)
 - **Relocation — freshness-adopt now targets a context (Phase 2), not `main`.** Handoff
   A2's "main-advance ingests carry `editOps`" partly assumed the freshness scan feeds
   `main`. Now out-of-band disk edits adopt into the active context (with full edit-op
-  provenance) and `main` advances only via push — strictly *better* for blame (attributable
+  provenance) and `main` advances only via push — strictly _better_ for blame (attributable
   context edits), but the downstream must expect main-movement provenance only from
   push/merge, not from scan.
 - **Main-target merge deleted (Phase 0)** removes one provenance case; ctx-merge

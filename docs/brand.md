@@ -38,7 +38,7 @@ Generated surfaces include:
 - `build-resources/dmg-background.png`
 - `build-resources/brand/favicon-*`
 - `build-resources/brand/vibestudio-mark*.svg`
-- `workspace/packages/brand-assets/src/*`
+- `workspace/packages/ui/src/assets/*`
 - `workspace/apps/mobile/src/assets/*`
 - `apps/mobile/assets/*`
 - `apps/mobile/android/app/src/main/res/mipmap-*`
@@ -54,17 +54,17 @@ Use the shared components instead of importing PNGs directly in product UI:
 - Workspace mobile app: `VibestudioLogo` from `workspace/apps/mobile/src/components/VibestudioLogo`
 - Shipped native host fallback: `VibestudioLogo` from `apps/mobile/VibestudioLogo.js`
 
-The web component imports assets from the declared `@workspace/brand-assets`
-package. Do not add filesystem escapes such as `../../../assets/...` to
-`@workspace/ui`; panel build materialization checks out packages through their
-declared dependency graph.
+The web component and its four raster assets are owned together by
+`@workspace/ui`. Product UI should consume `VibestudioLogo`; the PNGs are an
+internal implementation detail rather than a second public asset package.
 
 Prefer `variant="tile"` for onboarding, splash-adjacent, and prominent brand
 surfaces. Prefer `variant="mark"` for title bars, empty states, loading states,
 and compact chrome.
 
-The SVG mark files are hand-authored fallbacks for vector/favicon contexts. The
-cropped PNG source tiles remain canonical for generated packaging assets.
+SVG mark and favicon files are generated only under `build-resources/brand/`,
+where host packaging and HTTP surfaces consume them. The cropped PNG source
+tiles remain canonical for every generated asset.
 
 Brand color direction:
 

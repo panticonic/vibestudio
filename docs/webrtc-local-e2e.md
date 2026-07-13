@@ -56,14 +56,14 @@ They also run nightly in CI (`.github/workflows/webrtc-e2e-nightly.yml`).
 | ----------------------------- | ----------------------------------------------------------------------------------------- |
 | Signaling DO + `wrangler dev` | `apps/signaling/` (Miniflare-local)                                                       |
 | Signaling client              | `@vibestudio/rpc/transports/webrtcSignalingClient` (`ws` in Node; `role` required)        |
-| Native peer adapter           | `src/main/webrtc/nodeDatachannelPeer.ts` (lazy-loads `node-datachannel`)                  |
-| Persistent DTLS cert          | `src/main/webrtc/cert.ts` (`ensurePersistentCert` → stable QR `fp`)                       |
+| Native peer adapter           | `src/node/webrtc/nodeDatachannelPeer.ts` (lazy-loads `node-datachannel`)                  |
+| Persistent DTLS cert          | `src/node/webrtc/cert.ts` (`ensurePersistentCert` → stable QR `fp`)                       |
 | Client transport              | `@vibestudio/rpc/transports/webrtcClient`                                                 |
 | Shared client bootstrap       | `@vibestudio/rpc/transports/pairedConnection` (`createPairedConnection` — desktop/mobile) |
 | Server answerer pipe          | `@vibestudio/rpc/transports/webrtcAnswerer`                                               |
 | Server attach                 | `RpcServer.attachWebRtcPipe` + `src/server/webrtcSessionShim.ts`                          |
 | Server ingress pool           | `src/server/webrtcIngress.ts` (`startWebRtcIngress`, wired env-gated in `index.ts`)       |
-| Per-invite rooms              | `src/server/services/auth/model.ts` (`mintPairingInvite` → room + deep link)              |
+| Per-invite rooms              | `src/server/hostCore/auth/model.ts` (`mintPairingInvite` → room + deep link)              |
 
 ## Running the REAL server as a WebRTC answerer
 

@@ -329,4 +329,4 @@ Export contracts for cross-panel imports:
 - Panels built on-demand with esbuild
 - Cached by effective version (content hash + transitive dependency hashes)
 - Build store: `{userData}/builds/{build_key}/`
-- See [BUILD_SYSTEM.md](BUILD_SYSTEM.md) for full details
+- See [WORKSPACE_BUILD_SYSTEM.md](WORKSPACE_BUILD_SYSTEM.md) for workspace build details

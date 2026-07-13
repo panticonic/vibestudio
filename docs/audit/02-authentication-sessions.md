@@ -153,7 +153,7 @@ this service — a thin defense.
 
 ### 2.2 [Critical] Path traversal in `CredentialStore`
 
-**File:** `packages/shared/src/credentials/store.ts:225-231`
+**File:** `packages/credential-client/src/store.ts:225-231`
 
 ```ts
 private getProviderPath(providerId: string): string {
@@ -884,7 +884,7 @@ in before this worker ships.
 - `packages/shared/src/serviceDispatcher.ts`
 - `packages/shared/src/contextMiddleware.ts`
 - `packages/shared/src/redact.ts`
-- `packages/shared/src/credentials/store.ts`
+- `packages/credential-client/src/store.ts`
 - `packages/shared/src/credentials/flows/deviceCode.ts`
 - `packages/shared/src/webhooks/verifier.ts`
 

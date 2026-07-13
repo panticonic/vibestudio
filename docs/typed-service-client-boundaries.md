@@ -1,6 +1,10 @@
 # Typed Service Client Boundaries
 
-Shared service schema tables under `packages/shared/src/serviceSchemas` are the source of truth for main-process RPC contracts. Production host, shell, mobile, shared, and extension-client code should call those services through `createTypedServiceClient` or a domain wrapper built on it.
+Status: current migration policy; last reconciled 2026-07-13 against
+`92e4aefe`. The guard currently permits five documented generic-boundary calls,
+not a broad migration allowlist.
+
+Shared service schema tables under `packages/service-schemas/src` are the source of truth for main-process RPC contracts. Production host, shell, mobile, shared, and extension-client code should call those services through `createTypedServiceClient` or a domain wrapper built on it.
 
 Allowed generic dispatch boundaries:
 

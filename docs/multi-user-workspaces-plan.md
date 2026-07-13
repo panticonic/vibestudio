@@ -1,7 +1,9 @@
 # Multi-User, Multi-Workspace, Multi-Session Server — Architecture Plan
 
-**Status:** design (pre-implementation). Ambitious target-state plan authored against a
-full seven-subsystem investigation of the current codebase.
+**Status:** IMPLEMENTED design record. The account-backed multi-user workspace
+hub cutover landed in `2a0adeee`; last reconciled 2026-07-13 against
+`92e4aefe`. This document records the delivered architecture and its original
+big-bang constraints.
 
 **Delivery constraints (non-negotiable, govern every WP spec in this set):**
 
@@ -59,7 +61,7 @@ the "user"-shaped slots that do exist mean something _different_ from an account
   `shell | panel | app | worker | do | extension | server | agent`
   (`packages/shared/src/principalKinds.ts:3-35`, `packages/rpc/src/types.ts:218-231`).
 - A "user" today is a **paired device** (`shell:<deviceId>`,
-  `src/server/services/deviceAuthStore.ts:8-21`) or, de-facto, **the machine-wide admin
+  `src/server/hostCore/deviceAuthStore.ts:8-21`) or, de-facto, **the machine-wide admin
   token** (`src/server/index.ts:2014-2039`, "one token per machine, not per workspace").
 - The product is explicitly single-user: _"whole-file last-writer-wins is accepted for
   this single-user product"_ (`src/server/index.ts:337-339`), and **every paired shell
@@ -205,7 +207,7 @@ Introduce a `User` / account entity that the whole system can attribute to. This
 keystone; everything else depends on it.
 
 ```ts
-// New: packages/shared/src/users/types.ts
+// New: packages/identity/src/types.ts
 interface User {
   id: string; // stable, e.g. "usr_<random>"; the principal subject
   handle: string; // unique, /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/, personalization anchor
@@ -395,7 +397,7 @@ security boundary (§0.0, §8).
 
 | Area                        | Change                                                                                                                                                                                                            | Anchor                                                                                                |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **User entity**             | New `User`, `UserStore` (hub-owned, persisted), root bootstrap                                                                                                                                                    | new `packages/shared/src/users/`, hub                                                                 |
+| **User entity**             | New `User`, `UserStore` (hub-owned, persisted), root bootstrap                                                                                                                                                    | new `packages/identity/src/`, hub                                                                 |
 | **Device→User**             | `DeviceRecord.userId` FK; `issueDevice`/`completePairing`/`validateRefresh` carry user                                                                                                                            | `deviceAuthStore.ts:8-61`                                                                             |
 | **Principal kind**          | Keep the 8 runtime kinds; add `subject.userId` to `VerifiedCaller` (do **not** add a `user` _runtime_ kind — humans still connect as `shell`/`panel`, now with a subject)                                         | `serviceDispatcher.ts:181-191`, `principalKinds.ts`                                                   |
 | **Auth binding**            | Populate `subject` at `handleAuth` from each credential path; agents/workers inherit spawner's `userId` via `parentId` lineage                                                                                    | `rpcServer.ts:845-917`, `workspaceDO.ts` entities                                                     |

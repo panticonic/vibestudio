@@ -328,7 +328,7 @@ Export `panelTree` + `PanelHandle` from `workspace/packages/runtime/src/panel/in
 - **Privileged tracking** (severity input, not exclusion): add `privileged?: boolean` to
   `PanelSnapshot` (`packages/shared/src/types.ts:~217`) and `createSnapshot`
   (`packages/shared/src/panel/accessors.ts:116`), set from `manifest.shell` where the snapshot
-  is built (`packages/shared/src/shell/panelManager.ts:236-243`, mirroring
+  is built (`packages/shell-core/src/panelManager.ts:236-243`, mirroring
   `autoArchiveWhenEmpty`; also `packages/shared/src/panelFactory.ts:182`).
 - **Registration / root:** `registerBrowser`→`registerTarget(panelId, wcId, { privileged })`
   (`src/main/cdpServer.ts:126`, called from `src/main/panelView.ts:156/235`); keep a

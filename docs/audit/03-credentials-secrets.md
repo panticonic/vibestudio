@@ -47,11 +47,11 @@ sweep for `AKIA…`, `sk_live_…`, `BEGIN PRIVATE KEY`, `ghp_…` came back cle
 
 ### F-01 — Plaintext on-disk storage of OAuth access / refresh tokens  [**Critical**]
 
-**File / Line:** `packages/shared/src/credentials/store.ts:17-61` (+ `types.ts:48-57`).
+**File / Line:** `packages/credential-client/src/store.ts:17-61` (+ `types.ts:48-57`).
 
 **Snippet:**
 ```ts
-// packages/shared/src/credentials/store.ts:17-23
+// packages/credential-client/src/store.ts:17-23
 function getDefaultBasePath(): string {
   return path.join(getCentralDataPath(), "credentials");
 }
@@ -259,7 +259,7 @@ secret header. Vibestudio mints that secret and then forgets to check it.
 
 ### F-04 — `.secrets.yml` written with default (world-readable) file mode  [**High**]
 
-**File / Line:** `packages/shared/src/workspace/loader.ts:204-212`.
+**File / Line:** `packages/workspace/src/loader.ts:204-212`.
 
 **Snippet:**
 ```ts
@@ -454,7 +454,7 @@ workers with attacker-controlled input — a remote-command-on-webhook vector.
 ### F-08 — Audit log persists full URLs and runs with default file mode  [**Medium**]
 
 **Files:**
-- `packages/shared/src/credentials/audit.ts:44-66` — `AuditLog.append`.
+- `packages/credential-client/src/audit.ts:44-66` — `AuditLog.append`.
 - `src/server/services/egressProxy.ts:254-270, 299` — every forwarded URL,
   including query string, is captured into `AuditEntry.url`.
 
@@ -498,7 +498,7 @@ async append(entry: AuditEntry): Promise<void> {
 
 ### F-09 — Panel gateway token exposed via `sessionStorage` and `globalThis`  [**Medium**]
 
-**File / Line:** `src/server/configLoader.ts:10-50`.
+**File / Line:** `src/server/panelBootstrapScript.ts:10-50`.
 
 ```js
 sessionStorage.setItem("__vibestudioPanelInit", JSON.stringify(cfg));   // :26
@@ -721,7 +721,7 @@ if (pathname === "/__loader.js") {
 }
 ```
 
-The loader script as shipped (see `configLoader.ts`) is identical for all
+The loader script as shipped (see `panelBootstrapScript.ts`) is identical for all
 callers and contains no secret material. `Cache-Control: public` is
 acceptable. However, the existence of `sessionStorage.setItem` inside
 `__loader.js` combined with an intermediary HTTP cache could mean the
@@ -756,7 +756,7 @@ the thrown Error; log the body internally (with redaction) for debugging.
 
 ### F-17 — Non-crypto RNG in credential temp-filename  [**Low**]
 
-**File / Line:** `packages/shared/src/credentials/store.ts:35-38`.
+**File / Line:** `packages/credential-client/src/store.ts:35-38`.
 
 ```ts
 const tempPath = path.join(
@@ -840,22 +840,22 @@ is the standard to measure other secret-bearing files against.
 | `src/server/services/webhookService.ts` | Webhook subscription RPC |
 | `src/server/services/oauthProviders/codexTokenProvider.ts` | ChatGPT refresh/getApiKey |
 | `src/server/workerdManager.ts` | `PROXY_AUTH_TOKEN` minting |
-| `src/server/configLoader.ts` | Panel bootstrap loader script |
+| `src/server/panelBootstrapScript.ts` | Panel bootstrap loader script |
 | `src/server/panelHttpServer.ts` | Loader + bundle serving + cache headers |
 | `src/main/remoteCredentialStore.ts` | Remote admin-token `safeStorage` |
 | `src/main/services/remoteCredService.ts` | Remote-server creds RPC / TOFU |
 | `src/main/tlsPinning.ts` | Fingerprint pinning primitives |
 | `src/main/serverClient.ts` | WebSocket client with TLS pinning |
-| `packages/shared/src/credentials/store.ts` | Plaintext JSON credential store |
+| `packages/credential-client/src/store.ts` | Plaintext JSON credential store |
 | `packages/shared/src/credentials/consent.ts` | Consent grant records |
-| `packages/shared/src/credentials/audit.ts` | Append-only JSONL audit log |
+| `packages/credential-client/src/audit.ts` | Append-only JSONL audit log |
 | `packages/shared/src/credentials/registry.ts` | Provider manifest registry |
 | `packages/shared/src/credentials/refresh.ts` | Token refresh scheduler |
 | `packages/shared/src/credentials/flows/loopbackPkce.ts` | PKCE flow runner |
 | `packages/shared/src/credentials/providers/google.ts` | Google manifest |
 | `packages/shared/src/credentials/providers/github.ts` | GitHub manifest |
 | `packages/shared/src/centralAuth.ts` | Admin-token on disk |
-| `packages/shared/src/workspace/loader.ts` | `.secrets.yml` / central config |
+| `packages/workspace/src/loader.ts` | `.secrets.yml` / central config |
 | `packages/shared/src/redact.ts` | Token redaction helper |
 | `packages/auth-flow/src/providers/openaiCodex.ts` | Client-side OAuth |
 | `packages/auth-flow/src/index.ts` | Auth-flow package surface |

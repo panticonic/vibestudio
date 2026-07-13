@@ -41,7 +41,7 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 
 ## E. Refs & main advancement (P1b + P3 + P5d)
 
-26. RefService is the sole authority for `repo → main`: durable server store (`{userData}/refs/refs.json`), atomic `refs.updateMains` group CAS/delete through the approval gate, append-only main ref log. DO heads are downstream provenance.
+26. ProtectedRefStore is the sole authority for `repo → main`: durable server store (`{userData}/refs/refs.json`), atomic `refs.updateMains` group CAS/delete through the approval gate, append-only main ref log. DO heads are downstream provenance.
 27. Approval prompts show **server-computed** diffs (`diffTrees` inside the gate); callers are never trusted for changed-paths. Prompt detail shows `Repo:` instead of `Head: main`.
 28. Push conflicts surface as typed retryable `REF_CONFLICT`; approval-pending holds the repo's mutation locks (reads never block); mid-group denial rolls back the advanced prefix.
 29. `vcs.abortMerge` on main is no longer approval-gated (nothing to gate — a pending merge never moved the ref).

@@ -133,7 +133,7 @@ Two separate IPC surfaces:
 ### 2.8 Browser/mobile/panel transport (`src/preload/wsTransport.ts`, `src/server/browserTransportEntry.ts`)
 
 - `createWsTransport({viewId, wsPort, authToken, callerKind, wsUrl?})` opens a WebSocket, sends `ws:auth`, reconnects with jittered exponential backoff on non-terminal closes. `callerKind` in the config is ignored by the server — the server derives caller kind from the token's entry.
-- `browserTransportEntry.ts` exposes `globalThis.__vibestudioTransport` into panel pages served by the gateway. It reads `__vibestudioGatewayToken` / `__vibestudioGatewayRpcWsUrl` that `configLoader.js` populates from sessionStorage or the `__vibestudioShell.getPanelInit()` IPC call.
+- `browserTransportEntry.ts` exposes `globalThis.__vibestudioTransport` into panel pages served by the gateway. It reads `__vibestudioGatewayToken` / `__vibestudioGatewayRpcWsUrl` that `panelBootstrapScript.js` populates from sessionStorage or the `__vibestudioShell.getPanelInit()` IPC call.
 
 ---
 
@@ -141,7 +141,7 @@ Two separate IPC surfaces:
 
 | Assumption                                                                          | Where it is made                                                          | Where it is checked                                                       | Result                                                                                                                                                                                                       |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The bearer token only lives in authenticated panel pages and the Electron renderer. | `configLoader.ts` stores it in `sessionStorage`.                          | Not rechecked anywhere.                                                   | Any XSS on any panel page exfiltrates the token and impersonates that caller.                                                                                                                                |
+| The bearer token only lives in authenticated panel pages and the Electron renderer. | `panelBootstrapScript.ts` stores it in `sessionStorage`.                          | Not rechecked anywhere.                                                   | Any XSS on any panel page exfiltrates the token and impersonates that caller.                                                                                                                                |
 | `callerKind` in the `ServiceContext` is always produced by the transport.           | `rpcServer.ts handleAuth` uses the token entry.                           | `dispatcher.dispatch` never re-validates.                                 | In IPC mode, `vibestudio:serviceCall` passes an attacker-friendly heuristic kind directly to dispatch.                                                                                                         |
 | The WS frame has already been authenticated.                                        | `handleMessage` dispatches on `msg.type`.                                 | Yes — any message before `ws:auth` is discarded and the socket is closed. | OK.                                                                                                                                                                                                          |
 | The event `fromId` of relayed messages is trustworthy.                              | Consumers of `ws:routed`/`runtime:*` events treat `fromId` as the origin. | Neither WS nor HTTP relay paths overwrite `fromId` with the caller's id.  | Sender can impersonate any other caller on events.                                                                                                                                                           |
@@ -438,7 +438,7 @@ are routed only by the server-owned workerd relay.
 
 ### 4.27 LOW — Browser transport caches token in `sessionStorage`
 
-- File: `src/server/configLoader.ts`. `sessionStorage.setItem("__vibestudioPanelInit", JSON.stringify(cfg))` stores the full panel init (including `gatewayConfig.token`) in the panel's sessionStorage. Any XSS on the panel exfiltrates it.
+- File: `src/server/panelBootstrapScript.ts`. `sessionStorage.setItem("__vibestudioPanelInit", JSON.stringify(cfg))` stores the full panel init (including `gatewayConfig.token`) in the panel's sessionStorage. Any XSS on the panel exfiltrates it.
 - Remediation: avoid persisting the token: re-fetch via `__vibestudioShell.getPanelInit()` on each page load (already the code path when the shell is present). For gateway-served panels, consider a short-lived, HttpOnly cookie bound to the gateway origin plus a server-side mapping keyed by panelId, rather than injecting the bearer into JS globals.
 
 ### 4.28 LOW — Legacy worker DO dispatch handler logs `doMethod` and `objectKey`
@@ -497,7 +497,7 @@ are routed only by the server-owned workerd relay.
 
 9. **CSP on panel HTML.** `default-src 'none'; script-src 'self'; connect-src <gateway-url>; img-src 'self' data:; style-src 'self' 'unsafe-inline';` — at minimum `script-src 'self'` to frustrate token exfil via injected JS.
 
-10. **Stop persisting the bearer in `sessionStorage`.** The `configLoader` already re-fetches from `__vibestudioShell` when available; make that the only path. For gateway-served panels, issue a per-page ephemeral ticket that is swapped for the real bearer via a single-use XHR the panel JS can't re-read.
+10. **Stop persisting the bearer in `sessionStorage`.** The `panel bootstrap script` already re-fetches from `__vibestudioShell` when available; make that the only path. For gateway-served panels, issue a per-page ephemeral ticket that is swapped for the real bearer via a single-use XHR the panel JS can't re-read.
 
 11. **Rate-limit the RPC server.** Per-caller token bucket at the WS layer; tighter bucket on writes to `webhooks.subscribe`, `push.register`, `build.recompute`, and unified DO-target calls.
 
@@ -546,7 +546,7 @@ Gateway / route registry / panel HTTP:
 - `/home/werg/vibestudio/src/server/browserTransportEntry.ts`
 - `/home/werg/vibestudio/src/server/headlessServiceRegistration.ts`
 - `/home/werg/vibestudio/src/server/panelRuntimeRegistration.ts`
-- `/home/werg/vibestudio/src/server/configLoader.ts`
+- `/home/werg/vibestudio/src/server/panelBootstrapScript.ts`
 
 Service policy / dispatcher / token manager:
 
