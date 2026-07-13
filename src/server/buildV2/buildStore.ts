@@ -138,6 +138,10 @@ export function getCentralBuildArtifactPoolDir(): string {
   return centralBlobCasDir(getCentralDataPath());
 }
 
+export function getCentralBuildResultCacheDir(): string {
+  return path.join(getCentralDataPath(), "build-cache");
+}
+
 function getSharedArtifactPoolDir(): string | null {
   const override = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
   if (override) return path.resolve(override);
@@ -151,6 +155,24 @@ function getSharedArtifactPoolDir(): string | null {
   return getCentralBuildArtifactPoolDir();
 }
 
+function getSharedBuildResultCacheDir(): string | null {
+  const override = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+  if (override) return path.resolve(override);
+
+  const userDataPath = path.resolve(getUserDataPath());
+  const workspaceDir = path.dirname(userDataPath);
+  const workspacesDir = path.resolve(getCentralDataPath(), "workspaces");
+  if (path.basename(userDataPath) !== "state" || path.dirname(workspaceDir) !== workspacesDir) {
+    return null;
+  }
+  return getCentralBuildResultCacheDir();
+}
+
+function getSharedBuildDir(key: string): string | null {
+  const cacheDir = getSharedBuildResultCacheDir();
+  return cacheDir ? path.join(cacheDir, key) : null;
+}
+
 function isFileSystemErrorCode(error: unknown, codes: readonly string[]): boolean {
   if (!(error instanceof Error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -161,6 +183,53 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   console.warn(
     `[buildStore] Failed to remove ${pathName}: ${error instanceof Error ? error.message : String(error)}`
   );
+}
+
+function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      linkBuildTreeSync(sourcePath, targetPath);
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new Error(`Unsupported build cache entry: ${sourcePath}`);
+    }
+    try {
+      fs.linkSync(sourcePath, targetPath);
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
+      fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+    }
+  }
+}
+
+function publishSharedBuild(key: string, sourceDir: string): void {
+  const sharedDir = getSharedBuildDir(key);
+  if (!sharedDir || fs.existsSync(path.join(sharedDir, "metadata.json"))) return;
+
+  const tmpDir = `${sharedDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
+  try {
+    fs.mkdirSync(path.dirname(sharedDir), { recursive: true });
+    linkBuildTreeSync(sourceDir, tmpDir);
+    try {
+      fs.renameSync(tmpDir, sharedDir);
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      warnCleanupFailure(tmpDir, cleanupError);
+    }
+    console.warn(
+      `[buildStore] Failed to publish shared build ${key}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 export function contentTypeForPath(filePath: string): string {
@@ -292,12 +361,12 @@ function metadataForEntries(
 }
 
 export function has(key: string): boolean {
-  const dir = getBuildDir(key);
-  return fs.existsSync(path.join(dir, "metadata.json"));
+  if (fs.existsSync(path.join(getBuildDir(key), "metadata.json"))) return true;
+  const sharedDir = getSharedBuildDir(key);
+  return sharedDir !== null && fs.existsSync(path.join(sharedDir, "metadata.json"));
 }
 
-export function get(key: string): BuildResult | null {
-  const dir = getBuildDir(key);
+function readBuildDir(dir: string): BuildResult | null {
   const metadataPath = path.join(dir, "metadata.json");
 
   if (!fs.existsSync(metadataPath)) return null;
@@ -327,6 +396,26 @@ export function get(key: string): BuildResult | null {
   } catch {
     return null;
   }
+}
+
+const reportedSharedBuildHits = new Set<string>();
+
+export function get(key: string): BuildResult | null {
+  const localDir = getBuildDir(key);
+  const local = readBuildDir(localDir);
+  if (local) {
+    publishSharedBuild(key, localDir);
+    return local;
+  }
+
+  const sharedDir = getSharedBuildDir(key);
+  if (!sharedDir) return null;
+  const shared = readBuildDir(sharedDir);
+  if (shared && !reportedSharedBuildHits.has(key)) {
+    reportedSharedBuildHits.add(key);
+    console.info(`[BuildCache] Reused shared build ${shared.metadata.name} (${key.slice(0, 12)})`);
+  }
+  return shared;
 }
 
 export function primaryArtifact(
@@ -466,7 +555,9 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     }
   }
 
-  return assertPresent(get(key));
+  const stored = assertPresent(readBuildDir(dir));
+  publishSharedBuild(key, dir);
+  return stored;
 }
 
 export function gc(activeKeys: Set<string>): { freed: number } {

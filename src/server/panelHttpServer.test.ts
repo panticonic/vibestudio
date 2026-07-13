@@ -283,22 +283,27 @@ describe("PanelHttpServer build cache", () => {
     expect(getBuild).toHaveBeenCalledWith("panels/my-app", "state:abc123");
   });
 
-  it("serves a light-first building page with a dark appearance override", async () => {
+  it("reuses an entity-primed build flight and waits for the requested artifact", async () => {
     const server = new PanelHttpServer();
+    let resolveBuild!: (result: typeof buildResult) => void;
+    const primedBuild = new Promise<typeof buildResult>((resolve) => {
+      resolveBuild = resolve;
+    });
+    const getBuild = vi.fn(() => primedBuild);
     server.setCallbacks({
       onBuildComplete: vi.fn(),
-      getBuild: vi.fn(
-        () => new Promise<import("./buildV2/buildStore.js").BuildResult>(() => undefined)
-      ),
+      getBuild: vi.fn(async () => buildResult),
     });
+    server.primeBuild("panels/my-app", undefined, getBuild);
 
-    const response = await handlePanelRequest(server, "/panels/my-app/bundle.js");
-    const body = String(response.body);
+    const responsePending = handlePanelRequest(server, "/panels/my-app/bundle.js");
+    await Promise.resolve();
+    expect(getBuild).toHaveBeenCalledOnce();
+    resolveBuild(buildResult);
+    const response = await responsePending;
 
-    expect(response.statusCodeWritten).toBe(202);
-    expect(body).toContain("--page-bg: radial-gradient(circle at top, #fffbeb");
-    expect(body).toContain("@media (prefers-color-scheme: dark)");
-    expect(body).toContain("--mark-filter: brightness(0) saturate(100%)");
+    expect(response.statusCodeWritten).toBe(200);
+    expect(response.body).toBe("console.log('hi')");
   });
 
   it("serves a theme-adaptive build error page", async () => {

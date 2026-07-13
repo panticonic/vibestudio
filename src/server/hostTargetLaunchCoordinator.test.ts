@@ -36,6 +36,7 @@ function makeCoordinator(opts: {
   launch?: HostTargetLaunchResult;
   trustedUnits?: Array<{ kind: string; name: string; source: string; status: string }>;
   awaitStartupUnitReconcile?: () => Promise<void> | void;
+  requiredExtensionSources?: string[];
   /** The app source the AppHost resolves for react-native (manifest-driven
    *  selection); null mimics a workspace with no declared/selectable app. */
   rnAppSource?: string | null;
@@ -65,6 +66,7 @@ function makeCoordinator(opts: {
     eventService: { emit },
     startupApprovals: { publishPending },
     awaitStartupUnitReconcile: opts.awaitStartupUnitReconcile,
+    getRequiredExtensionSources: () => opts.requiredExtensionSources ?? [],
     getAppHost: () =>
       ({
         launchHostTarget,
@@ -121,7 +123,7 @@ describe("HostTargetLaunchCoordinator", () => {
     const result = await resultPromise;
 
     expect(result.status).toBe("approval-required");
-    expect(publishPending).toHaveBeenCalledOnce();
+    expect(publishPending).not.toHaveBeenCalled();
     expect(launchHostTarget).not.toHaveBeenCalled();
   });
 
@@ -158,6 +160,32 @@ describe("HostTargetLaunchCoordinator", () => {
     });
     expect(publishPending).toHaveBeenCalledTimes(2);
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("keeps React Native preparing while a required running extension registers its provider", async () => {
+    const { coordinator } = makeCoordinator({
+      launch: {
+        status: "unavailable",
+        launched: false,
+        target: "react-native",
+        reason: "React Native build provider is not active",
+        details: [],
+      },
+      requiredExtensionSources: ["extensions/react-native"],
+      trustedUnits: [
+        {
+          kind: "extension",
+          name: "@workspace-extensions/react-native",
+          source: "extensions/react-native",
+          status: "running",
+        },
+      ],
+    });
+
+    expect(await coordinator.launch("react-native")).toMatchObject({
+      status: "preparing",
+      details: ["@workspace-extensions/react-native (extensions/react-native) status: running"],
+    });
   });
 
   it("recognizes the building react-native app via the AppHost-resolved source, not a hardcoded name", async () => {
@@ -250,7 +278,7 @@ describe("HostTargetLaunchCoordinator", () => {
       });
       await vi.runAllTimersAsync();
 
-      expect(coordinator.getLaunchSession(session.sessionId)).toMatchObject({
+      expect(await coordinator.getLaunchSession(session.sessionId)).toMatchObject({
         status: "ready",
         settled: true,
         launch: expect.objectContaining({

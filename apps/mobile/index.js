@@ -61,7 +61,14 @@ import { VibestudioLogo } from "./VibestudioLogo";
 
 const nativeHost = NativeModules.VibestudioMobileHost;
 
+let lastSmokePhase = null;
+let lastSmokePhaseAt = 0;
+
 function smokePhase(phase) {
+  const now = Date.now();
+  if (phase === lastSmokePhase && now - lastSmokePhaseAt < 5000) return;
+  lastSmokePhase = phase;
+  lastSmokePhaseAt = now;
   console.log(`[VibestudioMobileSmoke] phase=${phase}`);
 }
 
@@ -382,6 +389,8 @@ function VibestudioMobileHostBootstrap() {
         }
         if (session?.status === "preparing" || session?.status === "starting") {
           smokePhase("embedded-host-target-preparing");
+          const previousStatus = session.status;
+          const previousUpdatedAt = session.updatedAt;
           if (!eventClient) {
             eventClient = await createLaunchReadinessEventClient(grant).catch(() => null);
           }
@@ -404,7 +413,16 @@ function VibestudioMobileHostBootstrap() {
           );
           if (!isCurrent()) return;
           if (refreshed) {
+            const unchanged =
+              refreshed.status === previousStatus && refreshed.updatedAt === previousUpdatedAt;
             session = refreshed;
+            if (unchanged) {
+              const remainingMs = deadline - Date.now();
+              if (remainingMs <= 0) {
+                throw new Error("Timed out waiting for the React Native workspace app to start");
+              }
+              await new Promise((resolve) => setTimeout(resolve, Math.min(750, remainingMs)));
+            }
             continue;
           }
         }

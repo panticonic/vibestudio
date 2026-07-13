@@ -19,7 +19,11 @@ import {
   resolveWorkspaceTrustGrants,
 } from "./configParser.js";
 import { setWorkspaceAppTrust } from "../chromeTrust.js";
-export { resolveDeclaredApps, resolveDeclaredExtensions } from "./configParser.js";
+export {
+  resolveDeclaredApps,
+  resolveDeclaredExtensions,
+  resolveHostTargetRequiredExtensions,
+} from "./configParser.js";
 
 const log = createDevLogger("Workspace");
 import type {

@@ -2478,13 +2478,10 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const candidate = this.listHostTargetCandidates("react-native").find(
       (item) => item.source === normalizeRepoPath(source) || item.name === source
     );
-    const existing = candidate ? this.registry.get(candidate.name) : null;
-    if (
-      this.deps.buildSystem.getBuildProviderDetails?.("react-native") &&
-      !existing?.activeBundleKey
-    ) {
-      await this.ensureReactNativeReady(source, { waitForApproval: false });
-    }
+    // Provider activation invalidates readiness but must not implicitly build
+    // the mobile app during a desktop or terminal launch. Active React Native
+    // launch sessions are refreshed by the coordinator and explicitly call
+    // ensureReactNativeReady() themselves.
     this.emitDevStatusDiagnostic("provider-change");
     const entry = candidate ? this.registry.get(candidate.name) : null;
     if (entry) this.emitStatus(entry.name, entry.status, entry.lastError);
@@ -2512,11 +2509,10 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     await this.unitHost.reconcileDeclared([{ ...declared }], {
       trigger: "startup",
       removeUndeclared: false,
+      waitFor: opts.waitForApproval === false ? "staged" : "applied",
     });
     if (opts.waitForApproval !== false) {
       await this.whenSettled();
-    } else {
-      await this.whenReconciled();
     }
     this.emitDevStatusDiagnostic(`launch:${target}`);
   }

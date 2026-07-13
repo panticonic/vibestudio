@@ -426,7 +426,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
    */
   async reconcileDeclared(
     declared: Array<{ source: string; ref: string }>,
-    opts: { trigger?: UnitReconcileTrigger } = {}
+    opts: {
+      trigger?: UnitReconcileTrigger;
+      removeUndeclared?: boolean;
+      waitFor?: "staged" | "applied";
+    } = {}
   ): Promise<void> {
     await this.unitHost.reconcileDeclared(declared, opts);
   }

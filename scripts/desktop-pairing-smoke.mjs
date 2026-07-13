@@ -490,6 +490,106 @@ async function getPanelTree(app) {
   });
 }
 
+async function waitForRenderedPanel(app, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = [];
+  while (Date.now() < deadline) {
+    latest = await app.evaluate(async ({ webContents }) => {
+      const inspections = [];
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed()) continue;
+        const url = contents.getURL();
+        if (!url.includes("/panels/")) continue;
+        try {
+          const dom = await contents.executeJavaScript(
+            `(() => {
+                const body = document.body;
+                const text = body?.innerText?.replace(/\\s+/g, " ").trim() ?? "";
+                return {
+                  readyState: document.readyState,
+                  text,
+                  childCount: body?.querySelectorAll("*").length ?? 0,
+                  hasHostChrome: Boolean(
+                    document.querySelector(".titlebar-breadcrumb-scroll")
+                      || document.querySelector('[aria-label="Menu"]')
+                  ),
+                  hasLaunchGateApproval: Boolean(
+                    document.querySelector('[data-bootstrap-launch-gate="true"]')
+                  ),
+                };
+              })()`,
+            true
+          );
+          if (
+            dom.hasHostChrome
+            || dom.hasLaunchGateApproval
+            || dom.readyState !== "complete"
+            || dom.childCount < 4
+            || dom.text.length < 12
+          ) {
+            continue;
+          }
+
+          const image = await Promise.race([
+            contents.capturePage(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`panel capture timed out: ${url}`)), 2_000)
+            ),
+          ]);
+          const size = image.getSize();
+          if (size.width < 200 || size.height < 120) continue;
+          const bitmap = image.toBitmap();
+          const step = Math.max(1, Math.floor(Math.min(size.width, size.height) / 180));
+          const buckets = new Map();
+          let sampled = 0;
+          let lumaSum = 0;
+          let lumaSquaredSum = 0;
+          for (let y = 0; y < size.height; y += step) {
+            for (let x = 0; x < size.width; x += step) {
+              const offset = (y * size.width + x) * 4;
+              const b = bitmap[offset] ?? 0;
+              const g = bitmap[offset + 1] ?? 0;
+              const r = bitmap[offset + 2] ?? 0;
+              const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+              const bucket = `${r >> 4}:${g >> 4}:${b >> 4}`;
+              buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+              sampled += 1;
+              lumaSum += luma;
+              lumaSquaredSum += luma * luma;
+            }
+          }
+          const dominant = Math.max(...buckets.values());
+          const meanLuma = lumaSum / sampled;
+          const variance = Math.max(0, lumaSquaredSum / sampled - meanLuma * meanLuma);
+          inspections.push({
+            url,
+            text: dom.text.slice(0, 240),
+            childCount: dom.childCount,
+            width: size.width,
+            height: size.height,
+            uniqueBuckets: buckets.size,
+            dominantRatio: dominant / sampled,
+            lumaStdDev: Math.sqrt(variance),
+          });
+        } catch {
+          // Ignore non-DOM and shutting-down webContents.
+        }
+      }
+      return inspections;
+    });
+
+    const rendered = latest.find(
+      (entry) =>
+        entry.uniqueBuckets >= 8 && entry.dominantRatio < 0.995 && entry.lumaStdDev >= 3
+    );
+    if (rendered) return rendered;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(
+    `Timed out waiting for a rendered panel surface. Last candidates: ${JSON.stringify(latest)}`
+  );
+}
+
 async function saveScreenshot(app) {
   const pages = app.windows();
   const page = pages[0] ?? (await app.firstWindow({ timeout: 5_000 }));
@@ -671,11 +771,20 @@ async function main() {
     const hostView = result.hostView;
     const hostedShellUrl = String(hostView?.hostedShellUrl ?? "");
     const panels = await getPanelTree(electronApp).catch(() => []);
+    const dismissedRemotePane = await clickDesktopButton(electronApp, "^Cancel$");
+    if (!dismissedRemotePane) {
+      throw new Error("Desktop shell paired, but the Remote server pane could not be dismissed");
+    }
+    const renderedPanel = await waitForRenderedPanel(
+      electronApp,
+      Math.max(1_000, deadlineMs - Date.now())
+    );
     const screenshotPath = await saveScreenshot(electronApp).catch(() => null);
     console.log(
       `[desktop-smoke] PASS paired desktop app over WebRTC; ` +
         `approvals=${result.clickedApprovals}; hostedShell=${hostedShellUrl}; ` +
-        `panels=${Array.isArray(panels) ? panels.length : "unknown"}` +
+        `panels=${Array.isArray(panels) ? panels.length : "unknown"}; ` +
+        `renderedPanel=${JSON.stringify(renderedPanel)}` +
         (screenshotPath ? `; screenshot=${path.relative(repoRoot, screenshotPath)}` : "")
     );
     await cleanup();

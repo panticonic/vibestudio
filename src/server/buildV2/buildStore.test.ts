@@ -9,6 +9,7 @@ import {
   artifactFilePath,
   dedupeBuildArtifacts,
   get,
+  has,
   primaryArtifact,
   primaryArtifactFilePath,
   primaryTextArtifactContent,
@@ -252,6 +253,43 @@ describe("build artifact helpers", () => {
     } finally {
       if (previousPool === undefined) delete process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
       else process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"] = previousPool;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses complete immutable builds across workspace stores", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+    try {
+      const sharedCache = path.join(root, "shared-builds");
+      const stateA = path.join(root, "workspaces", "a", "state");
+      const stateB = path.join(root, "workspaces", "b", "state");
+      process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = sharedCache;
+
+      setUserDataPath(stateA);
+      const original = put(
+        "same-build-key",
+        { entries: build().artifacts },
+        { ...build().metadata, sourceStateHash: "state:a" }
+      );
+      expect(original.dir).toBe(path.join(stateA, "builds", "same-build-key"));
+
+      setUserDataPath(stateB);
+      expect(has("same-build-key")).toBe(true);
+      const reused = get("same-build-key");
+
+      expect(reused).toMatchObject({
+        dir: path.join(sharedCache, "same-build-key"),
+        sourceStateHash: "state:a",
+      });
+      expect(reused?.artifacts[0]?.content).toBe("export default {};");
+      expect(fs.existsSync(path.join(stateB, "builds", "same-build-key"))).toBe(false);
+    } finally {
+      if (previousSharedCache === undefined) {
+        delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+      } else {
+        process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
+      }
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

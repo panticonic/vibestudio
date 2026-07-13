@@ -77,9 +77,7 @@ interface BuildDepsOptions {
   >["prepareDurableObject"];
   prepareWorker?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["prepareWorker"];
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
-  resolvePanelEffectiveVersion?: NonNullable<
-    Parameters<typeof createRuntimeService>[0]["hooks"]
-  >["resolvePanelEffectiveVersion"];
+  preparePanel?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["preparePanel"];
   resolveAppEffectiveVersion?: NonNullable<
     Parameters<typeof createRuntimeService>[0]["hooks"]
   >["resolveAppEffectiveVersion"];
@@ -129,8 +127,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     }));
   const contextFolders = contextFoldersFake();
   const onRetire = opts.onRetire ?? vi.fn(async () => {});
-  const resolvePanelEffectiveVersion =
-    opts.resolvePanelEffectiveVersion ?? vi.fn(async () => "ev-panel");
+  const preparePanel = opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel" }));
   const resolveAppEffectiveVersion = opts.resolveAppEffectiveVersion ?? vi.fn(async () => "ev-app");
   const cloneDurableStorage = opts.cloneDurableStorage ?? vi.fn(async () => {});
   const destroyDurableStorage = opts.destroyDurableStorage ?? vi.fn(async () => {});
@@ -146,7 +143,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     hooks: {
       prepareDurableObject,
       prepareWorker,
-      resolvePanelEffectiveVersion,
+      preparePanel,
       resolveAppEffectiveVersion,
       onRetire,
       cloneDurableStorage,
@@ -176,7 +173,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     prepareDurableObject,
     prepareWorker,
     onRetire,
-    resolvePanelEffectiveVersion,
+    preparePanel,
     resolveAppEffectiveVersion,
     cloneDurableStorage,
     destroyDurableStorage,
@@ -395,11 +392,11 @@ describe("runtimeService.createEntity (do kind)", () => {
   });
 
   it("reactivates a retired panel row without changing its effective version", async () => {
-    const resolvePanelEffectiveVersion = vi
+    const preparePanel = vi
       .fn()
-      .mockResolvedValueOnce("ev-panel-v1")
-      .mockResolvedValueOnce("ev-panel-v2");
-    const { service, instance } = await buildDeps({ resolvePanelEffectiveVersion });
+      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v1" })
+      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v2" });
+    const { service, instance } = await buildDeps({ preparePanel });
     const spec: RuntimeEntityCreateSpec = {
       kind: "panel",
       source: "panels/example",
@@ -669,6 +666,25 @@ describe("runtimeService.createEntity context policy", () => {
 });
 
 describe("runtimeService.createEntity build refs", () => {
+  it("starts the exact panel runtime image selected by an explicit ref", async () => {
+    const { service, preparePanel } = await buildDeps();
+
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        source: "panels/chat",
+        key: "chat",
+        contextId: "ctx-branch",
+        ref: "state:panel-commit",
+      } satisfies RuntimeEntityCreateSpec,
+    ]);
+
+    expect(preparePanel).toHaveBeenCalledWith({
+      source: "panels/chat",
+      ref: "state:panel-commit",
+    });
+  });
+
   it("keeps context identity separate from worker build ref", async () => {
     const { service, prepareWorker } = await buildDeps();
 

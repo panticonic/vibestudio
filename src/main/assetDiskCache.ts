@@ -136,9 +136,9 @@ export class AssetDiskCache {
   /**
    * Serve `cacheKey`, fetching over the pipe only on a miss.
    *  - Disk hit (index → digest → blob) → `{kind:"asset"}`, `fetcher` NOT called.
-   *  - Miss → single-flighted `fetcher()`. If the response is `cacheable`, its body
-   *    is buffered, hashed/keyed, persisted, and returned as an asset. Otherwise the
-   *    live response is returned for the façade to stream through untouched.
+   *  - Miss → single-flighted `fetcher()`. A cacheable body is teed so the first
+   *    caller can stream immediately while hashing and persistence finish in the
+   *    background. Otherwise the live response is streamed through untouched.
    */
   async serve(cacheKey: string, fetcher: () => Promise<FetchedResponse>): Promise<ServeOutcome> {
     if (!this.ready) throw new Error("AssetDiskCache.init() not called");
@@ -167,6 +167,7 @@ export class AssetDiskCache {
       const response = await fetcher();
       if (!response.cacheable || !response.body) {
         settle(null);
+        this.inflight.delete(cacheKey);
         return { kind: "passthrough", response };
       }
       const [cacheBody, passthroughBody] = response.body.tee();
@@ -175,26 +176,27 @@ export class AssetDiskCache {
         cacheable: false,
         body: passthroughBody,
       };
-      let asset: ServedAsset;
-      try {
-        asset = await this.persist(cacheKey, { ...response, body: cacheBody });
-      } catch (err) {
-        if (err instanceof CachePopulationTooLargeError) {
+      // Do not hold the renderer behind hashing, disk I/O, index persistence,
+      // or pruning. Concurrent callers still join `populated` and receive the
+      // completed cache entry once the background branch settles.
+      void this.persist(cacheKey, { ...response, body: cacheBody })
+        .then((asset) => settle(asset))
+        .catch((err: unknown) => {
+          if (err instanceof CachePopulationTooLargeError) {
+            console.warn(`[AssetDiskCache] ${err.message}; serving ${cacheKey} without caching`);
+          } else {
+            console.warn(`[AssetDiskCache] Failed to cache ${cacheKey}:`, err);
+          }
           settle(null);
-          console.warn(`[AssetDiskCache] ${err.message}; serving ${cacheKey} without caching`);
-          return { kind: "passthrough", response: passthroughResponse };
-        }
-        void passthroughBody.cancel(err).catch(() => {});
-        throw err;
-      }
-      void passthroughBody.cancel().catch(() => {});
-      settle(asset);
-      return { kind: "asset", asset };
+        })
+        .finally(() => {
+          this.inflight.delete(cacheKey);
+        });
+      return { kind: "passthrough", response: passthroughResponse };
     } catch (err) {
       settle(null);
-      throw err;
-    } finally {
       this.inflight.delete(cacheKey);
+      throw err;
     }
   }
 

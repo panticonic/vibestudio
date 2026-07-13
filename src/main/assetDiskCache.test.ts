@@ -60,17 +60,54 @@ describe("AssetDiskCache", () => {
     const fetcher = vi.fn(async () => immutableResponse("console.log(1)"));
 
     const first = await cache.serve("/assets/app-abc.js", fetcher);
-    expect(first.kind).toBe("asset");
-    if (first.kind === "asset") {
-      expect(first.asset.body.toString()).toBe("console.log(1)");
-      expect(first.asset.contentType).toBe("text/javascript; charset=utf-8");
+    expect(first.kind).toBe("passthrough");
+    if (first.kind === "passthrough") {
+      expect((await readStream(first.response.body!)).toString()).toBe("console.log(1)");
     }
     expect(fetcher).toHaveBeenCalledTimes(1);
 
     // Second request: served from disk, fetcher NOT called again.
     const second = await cache.serve("/assets/app-abc.js", fetcher);
     expect(second.kind).toBe("asset");
-    if (second.kind === "asset") expect(second.asset.body.toString()).toBe("console.log(1)");
+    if (second.kind === "asset") {
+      expect(second.asset.body.toString()).toBe("console.log(1)");
+      expect(second.asset.contentType).toBe("text/javascript; charset=utf-8");
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams the first immutable miss before cache population finishes", async () => {
+    const cache = await newCache();
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>;
+    const fetcher = vi.fn(async () =>
+      immutableResponse("unused", {
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            sourceController = controller;
+          },
+        }),
+      })
+    );
+
+    const first = await cache.serve("/assets/streaming-abc.js", fetcher);
+    expect(first.kind).toBe("passthrough");
+    if (first.kind !== "passthrough") return;
+
+    const reader = first.response.body!.getReader();
+    sourceController.enqueue(Buffer.from("first "));
+    const head = await reader.read();
+    expect(Buffer.from(head.value!).toString()).toBe("first ");
+    expect(head.done).toBe(false);
+
+    sourceController.enqueue(Buffer.from("response"));
+    sourceController.close();
+    const tail = await reader.read();
+    expect(Buffer.from(tail.value!).toString()).toBe("response");
+    expect((await reader.read()).done).toBe(true);
+
+    const hit = await cache.serve("/assets/streaming-abc.js", fetcher);
+    expect(hit.kind).toBe("asset");
+    if (hit.kind === "asset") expect(hit.asset.body.toString()).toBe("first response");
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
@@ -95,9 +132,14 @@ describe("AssetDiskCache", () => {
 
   it("persists across instances (index + blobs survive a reopen)", async () => {
     const cache = await newCache();
-    await cache.serve(
+    const first = await cache.serve(
       "/assets/x-1.js",
       vi.fn(async () => immutableResponse("A"))
+    );
+    if (first.kind === "passthrough") await readStream(first.response.body!);
+    await cache.serve(
+      "/assets/x-1.js",
+      vi.fn(async () => immutableResponse("unexpected"))
     );
 
     const reopened = await newCache();
@@ -111,9 +153,14 @@ describe("AssetDiskCache", () => {
     const cache = await newCache();
     const siblingSidecar = `${dir}.json`;
     try {
-      await cache.serve(
+      const first = await cache.serve(
         "/assets/unsafe.js",
         vi.fn(async () => immutableResponse("safe bytes", { digest: ".." }))
+      );
+      if (first.kind === "passthrough") await readStream(first.response.body!);
+      await cache.serve(
+        "/assets/unsafe.js",
+        vi.fn(async () => immutableResponse("unexpected"))
       );
 
       const digest = cache.digestFor("/assets/unsafe.js");
@@ -128,7 +175,7 @@ describe("AssetDiskCache", () => {
 
   it("keeps response metadata per cache key when bodies share a digest", async () => {
     const cache = await newCache();
-    await cache.serve(
+    const firstA = await cache.serve(
       "/assets/shared-a.js",
       vi.fn(async () =>
         immutableResponse("same bytes", {
@@ -138,7 +185,12 @@ describe("AssetDiskCache", () => {
         })
       )
     );
+    if (firstA.kind === "passthrough") await readStream(firstA.response.body!);
     await cache.serve(
+      "/assets/shared-a.js",
+      vi.fn(async () => immutableResponse("unexpected"))
+    );
+    const firstB = await cache.serve(
       "/assets/shared-b.css",
       vi.fn(async () =>
         immutableResponse("same bytes", {
@@ -147,6 +199,11 @@ describe("AssetDiskCache", () => {
           replayHeaders: { "x-asset": "b" },
         })
       )
+    );
+    if (firstB.kind === "passthrough") await readStream(firstB.response.body!);
+    await cache.serve(
+      "/assets/shared-b.css",
+      vi.fn(async () => immutableResponse("unexpected"))
     );
 
     expect(cache.digestFor("/assets/shared-a.js")).toBe(cache.digestFor("/assets/shared-b.css"));
@@ -185,11 +242,13 @@ describe("AssetDiskCache", () => {
     const [ra, rb] = await Promise.all([a, b]);
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(ra.kind).toBe("asset");
-    expect(rb.kind).toBe("asset");
-    if (ra.kind === "asset" && rb.kind === "asset") {
-      expect(ra.asset.body.toString()).toBe("shared");
-      expect(rb.asset.body.toString()).toBe("shared");
+    expect([ra.kind, rb.kind].sort()).toEqual(["asset", "passthrough"]);
+    if (ra.kind === "passthrough") {
+      expect((await readStream(ra.response.body!)).toString()).toBe("shared");
+    } else if (rb.kind === "passthrough") {
+      expect((await readStream(rb.response.body!)).toString()).toBe("shared");
+    } else {
+      throw new Error("expected one concurrent caller to receive the live response");
     }
   });
 
@@ -213,8 +272,18 @@ describe("AssetDiskCache", () => {
 
     expect(fetchA).toHaveBeenCalledTimes(1);
     expect(fetchB).toHaveBeenCalledTimes(1);
-    expect(ra.kind).toBe("asset");
-    expect(rb.kind).toBe("asset");
+    expect(ra.kind).toBe("passthrough");
+    expect(rb.kind).toBe("passthrough");
+    if (ra.kind === "passthrough") await readStream(ra.response.body!);
+    if (rb.kind === "passthrough") await readStream(rb.response.body!);
+    const hitA = await cache.serve(
+      "/assets/concurrent-a.txt",
+      vi.fn(async () => immutableResponse("unexpected"))
+    );
+    const hitB = await cache.serve(
+      "/assets/concurrent-b.txt",
+      vi.fn(async () => immutableResponse("unexpected"))
+    );
     expect(cache.digestFor("/assets/concurrent-a.txt")).toBe(
       cache.digestFor("/assets/concurrent-b.txt")
     );
@@ -222,17 +291,22 @@ describe("AssetDiskCache", () => {
       /^[a-f0-9]{64}$/.test(name)
     );
     expect(blobNames).toHaveLength(1);
-    if (ra.kind === "asset" && rb.kind === "asset") {
-      expect(ra.asset.contentType).toBe("text/plain; a");
-      expect(rb.asset.contentType).toBe("text/plain; b");
+    if (hitA.kind === "asset" && hitB.kind === "asset") {
+      expect(hitA.asset.contentType).toBe("text/plain; a");
+      expect(hitB.asset.contentType).toBe("text/plain; b");
     }
   });
 
   it("rewrites the index for a path when its content digest changes", async () => {
     const cache = await newCache();
-    await cache.serve(
+    const first = await cache.serve(
       "/assets/rev.js",
       vi.fn(async () => immutableResponse("v1"))
+    );
+    if (first.kind === "passthrough") await readStream(first.response.body!);
+    await cache.serve(
+      "/assets/rev.js",
+      vi.fn(async () => immutableResponse("unexpected"))
     );
     const digest1 = cache.digestFor("/assets/rev.js");
     expect(digest1).toBeTruthy();
@@ -245,8 +319,11 @@ describe("AssetDiskCache", () => {
     const fetcher = vi.fn(async () => immutableResponse("v2-longer-bytes"));
     const out = await cache.serve("/assets/rev.js", fetcher);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(out.kind).toBe("asset");
-    if (out.kind === "asset") expect(out.asset.body.toString()).toBe("v2-longer-bytes");
+    expect(out.kind).toBe("passthrough");
+    if (out.kind === "passthrough") {
+      expect((await readStream(out.response.body!)).toString()).toBe("v2-longer-bytes");
+    }
+    await cache.serve("/assets/rev.js", fetcher);
 
     const digest2 = cache.digestFor("/assets/rev.js");
     expect(digest2).toBeTruthy();
@@ -277,19 +354,34 @@ describe("AssetDiskCache", () => {
     // digests → distinct blobs (identical content would content-address to one).
     const cache = await newCache(250);
 
-    await cache.serve(
+    const firstA = await cache.serve(
       "/assets/a-1.js",
       vi.fn(async () => immutableResponse("a".repeat(100)))
     );
-    await new Promise((r) => setTimeout(r, 15));
+    if (firstA.kind === "passthrough") await readStream(firstA.response.body!);
     await cache.serve(
+      "/assets/a-1.js",
+      vi.fn(async () => immutableResponse("unexpected"))
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    const firstB = await cache.serve(
       "/assets/b-2.js",
       vi.fn(async () => immutableResponse("b".repeat(100)))
     );
-    await new Promise((r) => setTimeout(r, 15));
+    if (firstB.kind === "passthrough") await readStream(firstB.response.body!);
     await cache.serve(
+      "/assets/b-2.js",
+      vi.fn(async () => immutableResponse("unexpected"))
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    const firstC = await cache.serve(
       "/assets/c-3.js",
       vi.fn(async () => immutableResponse("c".repeat(100)))
+    );
+    if (firstC.kind === "passthrough") await readStream(firstC.response.body!);
+    await cache.serve(
+      "/assets/c-3.js",
+      vi.fn(async () => immutableResponse("unexpected"))
     );
 
     // Total 300 > 250 → the oldest (a) is evicted; its index entry is dropped.
@@ -303,6 +395,8 @@ describe("AssetDiskCache", () => {
     expect(fetcher).not.toHaveBeenCalled();
 
     // a is a miss now → refetch.
+    const refetchedA = await cache.serve("/assets/a-1.js", fetcher);
+    if (refetchedA.kind === "passthrough") await readStream(refetchedA.response.body!);
     await cache.serve("/assets/a-1.js", fetcher);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });

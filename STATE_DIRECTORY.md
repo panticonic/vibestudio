@@ -14,6 +14,13 @@ These paths are determined by `getUserDataPath()` from `@vibestudio/env-paths`.
 
 ## Contents
 
+### `build-cache/`
+
+Complete immutable build results shared by managed workspaces and addressed by
+the normal Build V2 key. Artifact files are hardlinks into `cas/`; the small
+manifest and metadata files make a cached result immediately activatable in a
+new workspace without rebuilding it.
+
 ### `cas/`
 
 Global physical SHA-256 content store shared by all managed workspaces. Workspace

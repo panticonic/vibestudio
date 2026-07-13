@@ -14,9 +14,6 @@ export interface FrameworkAdapter {
   /** Packages to deduplicate across chunks (e.g., react, react-dom) */
   readonly dedupePackages: readonly string[];
 
-  /** Packages to force-split into separate chunks */
-  readonly forcedSplitPackages: readonly string[];
-
   /** esbuild jsx mode */
   readonly jsx?: "automatic" | "preserve" | "transform";
 

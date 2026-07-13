@@ -17,6 +17,8 @@ type SchedulerVcs = Pick<
 
 export interface VcsGcSchedulerDeps {
   workspaceVcs: SchedulerVcs;
+  /** Defers all maintenance until the interactive startup window is complete. */
+  startupBarrier?: Promise<void>;
   minAgeMs?: number;
   intervalMs?: number;
   initialDelayMs?: number;
@@ -28,6 +30,7 @@ export class VcsGcScheduler {
   private readonly minAgeMs: number;
   private readonly intervalMs: number;
   private readonly initialDelayMs: number;
+  private readonly startupBarrier: Promise<void> | null;
   private readonly logger: { warn: (msg: string, ...args: unknown[]) => void };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = true;
@@ -35,6 +38,7 @@ export class VcsGcScheduler {
 
   constructor(deps: VcsGcSchedulerDeps) {
     this.workspaceVcs = deps.workspaceVcs;
+    this.startupBarrier = deps.startupBarrier ?? null;
     this.minAgeMs = deps.minAgeMs ?? DEFAULT_VCS_GC_MIN_AGE_MS;
     this.intervalMs = deps.intervalMs ?? DEFAULT_VCS_GC_INTERVAL_MS;
     this.initialDelayMs = deps.initialDelayMs ?? DEFAULT_VCS_GC_INITIAL_DELAY_MS;
@@ -44,7 +48,15 @@ export class VcsGcScheduler {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    this.schedule(this.initialDelayMs);
+    if (!this.startupBarrier) {
+      this.schedule(this.initialDelayMs);
+      return;
+    }
+    void this.startupBarrier
+      .catch((err) => this.logger.warn("[VcsGcScheduler] startup barrier failed:", err))
+      .then(() => {
+        if (!this.stopped) this.schedule(this.initialDelayMs);
+      });
   }
 
   stop(): void {

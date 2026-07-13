@@ -6,8 +6,6 @@ export const reactAdapter: FrameworkAdapter = {
 
   dedupePackages: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
 
-  forcedSplitPackages: ["@radix-ui/react-icons"],
-
   jsx: "automatic",
   tsconfigJsx: "react-jsx",
 
