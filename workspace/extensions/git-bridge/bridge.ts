@@ -95,6 +95,23 @@ export interface VcsTransition {
   outputStateHash: string | null;
 }
 
+/**
+ * Upstream commit authorship gathered from the imported git range so external
+ * authors survive an import as provenance (instead of everything collapsing to
+ * "synthetic"). `byPath` maps each changed path to the NEWEST upstream commit
+ * that touched it within the walked (bounded) range.
+ */
+export interface UpstreamAuthorship {
+  commits: Array<{
+    sha: string;
+    authorName: string;
+    authorEmail: string;
+    summary: string;
+    committedAt: number;
+  }>;
+  byPath: Record<string, string>;
+}
+
 export interface BridgeVcsStore {
   /** Snapshot/merge transitions for a repo head, NEWEST first (`vcsLog`). */
   vcsLog(repoPath: string, limit: number | null, head: string | null): Promise<VcsTransition[]>;
@@ -114,6 +131,7 @@ export interface BridgeVcsStore {
     repoPath: string;
     sourceHead: string;
     message?: string;
+    upstreamAuthorship?: UpstreamAuthorship;
   }): Promise<{ status: "published" | "up-to-date"; repoPath: string; stateHash: string }>;
 }
 
@@ -140,6 +158,7 @@ export interface BridgeRefs {
 export interface BridgeStateStore {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 export interface BridgeHost {
@@ -153,6 +172,9 @@ export interface BridgeHost {
 export interface ExportResult {
   exported: number;
   headCommit: string | null;
+  /** Checkout paths whose local (non-gad) edits the export overwrote from the
+   *  content store. Empty when the checkout matched what the bridge last wrote. */
+  clobberedLocalEdits: string[];
 }
 
 export interface ImportResult {
@@ -160,7 +182,14 @@ export interface ImportResult {
   changed: boolean;
 }
 
+/**
+ * Incremental export cursor. Keyed on `envelopeId` — the log event id, which is
+ * UNIQUE per transition — never on stateHash: repeated states (commit → revert
+ * back to the same tree) would match the oldest occurrence and re-export the
+ * tail forever.
+ */
 interface ExportMarker {
+  envelopeId: string;
   stateHash: string;
   commitSha: string;
 }
@@ -219,9 +248,11 @@ function sha256Hex(bytes: Uint8Array): string {
 function parseStoredExportMarker(value: unknown): ExportMarker | null {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["version", "kind", "stateHash", "commitSha"]) ||
+    !hasExactKeys(value, ["version", "kind", "envelopeId", "stateHash", "commitSha"]) ||
     value["version"] !== BRIDGE_STATE_VERSION ||
     value["kind"] !== "export-marker" ||
+    typeof value["envelopeId"] !== "string" ||
+    value["envelopeId"].length === 0 ||
     typeof value["stateHash"] !== "string" ||
     !STATE_HASH_RE.test(value["stateHash"]) ||
     typeof value["commitSha"] !== "string" ||
@@ -229,7 +260,11 @@ function parseStoredExportMarker(value: unknown): ExportMarker | null {
   ) {
     return null;
   }
-  return { stateHash: value["stateHash"], commitSha: value["commitSha"] };
+  return {
+    envelopeId: value["envelopeId"],
+    stateHash: value["stateHash"],
+    commitSha: value["commitSha"],
+  };
 }
 
 function parseStoredCheckoutMap(value: unknown): CheckoutMap | null {
@@ -377,6 +412,17 @@ export class GitBridge {
     return path.join(await this.host.workspaceRoot(), ...repoPath.split("/"));
   }
 
+  /** Whether the repo's checkout dir exists at all (a declared-but-never-
+   *  cloned import has no dir — surfaced as `not-materialized` upstream). */
+  async checkoutExists(repoPath: string): Promise<boolean> {
+    try {
+      await fsp.access(await this.repoGitDir(repoPath));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Export: repo `main` lineage → git commits with GAD trailers.
   // -------------------------------------------------------------------------
@@ -410,8 +456,6 @@ export class GitBridge {
     repo = normalizeWorkspaceRepoPath(repo);
     const gitDir = await this.repoGitDir(repo);
     const logId = `vcs:repo:${repo}`;
-    const newestFirst = await this.host.store.vcsLog(repo, Number.MAX_SAFE_INTEGER, VCS_MAIN_HEAD);
-    const ordered = [...newestFirst].reverse(); // oldest first
 
     // Initialize the checkout when absent.
     let initialized = true;
@@ -426,21 +470,28 @@ export class GitBridge {
     }
 
     const marker = await this.getMarker(repo);
-    const markerIndex = marker
-      ? ordered.findIndex((entry) => entry.outputStateHash === marker.stateHash)
-      : -1;
-    if (marker && markerIndex < 0) {
+    // Incremental, BOUNDED walk: only the transitions after the marker's
+    // envelopeId are fetched (growing pages, not a full-log scan every export).
+    const { pending, markerFound } = await this.logSinceMarker(repo, marker);
+    if (marker && !markerFound) {
       throw new Error(
-        `Git bridge marker state ${marker.stateHash} is not present in ${logId}#${VCS_MAIN_HEAD}; ` +
-          `export into an empty checkout or reset the marker`
+        `Git bridge marker event ${marker.envelopeId} is not present in ${logId}#${VCS_MAIN_HEAD}; ` +
+          `run \`vibestudio vcs git reset-marker --repo ${repo}\` (then export into a clean checkout)`
       );
     }
-    const startIndex = marker ? markerIndex + 1 : 0;
 
     let exported = 0;
     let lastSha = marker?.commitSha ?? null;
     let tracked = await this.getCheckoutMap(repo);
-    for (const entry of ordered.slice(Math.max(0, startIndex))) {
+    // Local-edit protection: before the first materialization overwrites the
+    // checkout, record every tracked path whose disk content no longer matches
+    // what the bridge last wrote. The export still wins (the checkout is a main
+    // projection), but the caller is TOLD what it overwrote.
+    const clobberedLocalEdits =
+      pending.some((entry) => entry.outputStateHash) && Object.keys(tracked).length > 0
+        ? await this.detectLocalDrift(gitDir, tracked)
+        : [];
+    for (const entry of pending) {
       if (!entry.outputStateHash) continue;
       // Materialize this transition's tree over the checkout from the content
       // store (tracked files only; `.git` and untracked paths are untouched
@@ -474,9 +525,106 @@ export class GitBridge {
       lastSha = sha;
       exported += 1;
       await this.setCheckoutMap(repo, tracked);
-      await this.setMarker(repo, { stateHash: entry.outputStateHash, commitSha: sha });
+      await this.setMarker(repo, {
+        envelopeId: entry.envelopeId,
+        stateHash: entry.outputStateHash,
+        commitSha: sha,
+      });
     }
-    return { exported, headCommit: lastSha };
+    return { exported, headCommit: lastSha, clobberedLocalEdits };
+  }
+
+  /**
+   * Fetch the main-log transitions strictly AFTER the marker's envelopeId,
+   * oldest first, paging newest-first reads with a growing limit so routine
+   * exports touch only the log tail. With no marker the full log is returned
+   * (initial export legitimately replays everything).
+   */
+  private async logSinceMarker(
+    repo: string,
+    marker: ExportMarker | null
+  ): Promise<{ pending: VcsTransition[]; markerFound: boolean }> {
+    let limit = 50;
+    for (;;) {
+      const newestFirst = await this.host.store.vcsLog(repo, limit, VCS_MAIN_HEAD);
+      if (marker) {
+        const idx = newestFirst.findIndex((entry) => entry.envelopeId === marker.envelopeId);
+        if (idx >= 0) {
+          return { pending: newestFirst.slice(0, idx).reverse(), markerFound: true };
+        }
+      }
+      if (newestFirst.length < limit) {
+        return { pending: [...newestFirst].reverse(), markerFound: false };
+      }
+      limit *= 4;
+    }
+  }
+
+  /** Tracked paths whose on-disk content/mode differ from the last-written map
+   *  (including tracked files deleted from disk). */
+  private async detectLocalDrift(gitDir: string, tracked: CheckoutMap): Promise<string[]> {
+    const drifted: string[] = [];
+    for (const [relPath, expected] of Object.entries(tracked)) {
+      const absPath = safeCheckoutJoin(gitDir, relPath);
+      try {
+        const bytes = await fsp.readFile(absPath);
+        const stat = await fsp.stat(absPath);
+        const mode = stat.mode & 0o111 ? TREE_EXEC_MODE : TREE_FILE_MODE;
+        if (sha256Hex(bytes) !== expected.contentHash || mode !== expected.mode) {
+          drifted.push(relPath);
+        }
+      } catch {
+        drifted.push(relPath); // deleted (or unreadable) locally — will be rewritten
+      }
+    }
+    return drifted.sort();
+  }
+
+  /** Clear the repo's export marker + checkout map (recovery path for a marker
+   *  that no longer matches the log, e.g. after an archive/restore rewrite). */
+  async resetExportMarker(repoPath: string): Promise<{ repoPath: string; cleared: boolean }> {
+    return withRepoLock(repoPath, async (repo) => {
+      const existing = await this.getMarker(repo);
+      await this.host.state.delete(`marker:${repo}`);
+      await this.host.state.delete(`checkout:${repo}`);
+      return { repoPath: repo, cleared: existing !== null };
+    });
+  }
+
+  /**
+   * gad↔git mapping for a repo's checkout, newest first, parsed from the
+   * GAD-State/GAD-Event trailers this bridge stamps on every exported commit.
+   * The current imported head is represented by the bridge marker because an
+   * external commit must not be rewritten merely to add Vibestudio trailers.
+   * Other hand-made commits without either source are skipped.
+   */
+  async commitMapping(
+    repoPath: string,
+    opts: { limit?: number } = {}
+  ): Promise<Array<{ gitSha: string; gadState: string; gadEvent: string; summary: string }>> {
+    return withRepoLock(repoPath, async (repo) => {
+      const gitDir = await this.repoGitDir(repo);
+      const commits = await this.git.log(gitDir, { depth: opts.limit ?? 100 });
+      const marker = await this.getMarker(repo);
+      const rows: Array<{ gitSha: string; gadState: string; gadEvent: string; summary: string }> =
+        [];
+      for (const commit of commits) {
+        const gadState =
+          /^GAD-State: (\S+)$/m.exec(commit.message)?.[1] ??
+          (marker?.commitSha === commit.oid ? marker.stateHash : undefined);
+        const gadEvent =
+          /^GAD-Event: (\S+)$/m.exec(commit.message)?.[1] ??
+          (marker?.commitSha === commit.oid ? marker.envelopeId : undefined);
+        if (!gadState || !gadEvent) continue;
+        rows.push({
+          gitSha: commit.oid,
+          gadState,
+          gadEvent,
+          summary: commit.message.split(/\r?\n/, 1)[0] ?? "",
+        });
+      }
+      return rows;
+    });
   }
 
   /** Full file listing of a state from the canonical content-tree authority. */
@@ -574,11 +722,17 @@ export class GitBridge {
    * of {@link exportRepoHead}. No-ops when the scanned tree already equals the
    * repo's protected `main` ref.
    */
-  async importRepoTree(repoPath: string, opts: { summary?: string } = {}): Promise<ImportResult> {
+  async importRepoTree(
+    repoPath: string,
+    opts: { summary?: string; upstreamAuthorship?: UpstreamAuthorship } = {}
+  ): Promise<ImportResult> {
     return withRepoLock(repoPath, (repo) => this.importLockedInner(repo, opts));
   }
 
-  async importLockedInner(repo: string, opts: { summary?: string }): Promise<ImportResult> {
+  async importLockedInner(
+    repo: string,
+    opts: { summary?: string; upstreamAuthorship?: UpstreamAuthorship }
+  ): Promise<ImportResult> {
     repo = normalizeWorkspaceRepoPath(repo);
     const gitDir = await this.repoGitDir(repo);
     const logId = `vcs:repo:${repo}`;
@@ -638,10 +792,29 @@ export class GitBridge {
       repoPath: repo,
       sourceHead: IMPORT_STAGING_HEAD,
       message: summary,
+      ...(opts.upstreamAuthorship ? { upstreamAuthorship: opts.upstreamAuthorship } : {}),
     });
 
     if (commitSha) {
-      await this.setMarker(repo, { stateHash: result.stateHash, commitSha });
+      // The marker must carry the MAIN-log event id of the published import so
+      // the next export resumes from it; the ingest eventId names the staging
+      // transition, not the main one.
+      const [newest] = await this.host.store.vcsLog(repo, 1, VCS_MAIN_HEAD);
+      if (newest && newest.outputStateHash === published.stateHash) {
+        await this.setMarker(repo, {
+          envelopeId: newest.envelopeId,
+          stateHash: published.stateHash,
+          commitSha,
+        });
+      }
+      // The scanned tree IS what the checkout now holds — sync the tracked map
+      // so the next export's deletion/drift detection starts from reality.
+      await this.setCheckoutMap(
+        repo,
+        Object.fromEntries(
+          files.map((file) => [file.path, { contentHash: file.contentHash, mode: file.mode }])
+        )
+      );
     }
     this.trace("import published", {
       repo,

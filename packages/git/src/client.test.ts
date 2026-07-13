@@ -7,6 +7,9 @@
 
 import type { HttpClient, StatusRow } from "isomorphic-git";
 import git from "isomorphic-git";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { GitAuthError } from "./client.js";
 import { GitClient, type FsPromisesLike } from "./client.js";
 
@@ -56,6 +59,44 @@ describe("GitClient", () => {
     symlink: vi.fn(),
     chmod: vi.fn(),
   } satisfies FsPromisesLike;
+
+  it("supports no-argument local repository inspection while keeping network adapter-gated", async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "git-client-local-"));
+    try {
+      const client = new GitClient();
+      await client.init(dir, "main");
+      await expect(client.getCurrentBranch(dir)).resolves.toBe("main");
+      await expect(
+        client.clone({ url: "https://example.com/repo.git", dir: path.join(dir, "clone") })
+      ).rejects.toThrow("host-mediated HTTP adapter");
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("supports an explicit full-history clone for re-publishable imports", async () => {
+    const clone = vi.spyOn(git, "clone").mockResolvedValueOnce(undefined);
+    const checkout = vi.spyOn(git, "checkout").mockResolvedValueOnce(undefined);
+    const client = new GitClient(fs, { http });
+
+    await client.clone({
+      url: "https://example.com/source.git",
+      dir: "/repo",
+      ref: "main",
+      fullHistory: true,
+    });
+
+    expect(clone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: "/repo",
+        ref: "main",
+        depth: undefined,
+      })
+    );
+    expect(checkout).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: "/repo", ref: "main" })
+    );
+  });
 
   it("exposes the raw isomorphic-git status matrix", async () => {
     const matrix: StatusRow[] = [["src/app.ts", 1, 2, 1]];
@@ -167,6 +208,7 @@ describe("GitClient", () => {
       remote: "vibestudio-token",
       ref: "local",
       remoteRef: "main",
+      author: { name: "Test User", email: "test@example.com" },
     });
     await client.fastForward({
       dir: "/repo",

@@ -45,14 +45,22 @@ export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
         const text = await blobstore.getText(digest).catch(() => null);
         if (text !== null) return text;
       }
-      const file = await vcs.readFile("", mapping.toVcsPath(relPath)).catch(() => null);
+      const file = await vcs.readFile({ path: mapping.toVcsPath(relPath) }).catch(() => null);
       return file && file.content.kind === "text" ? file.content.text : null;
     };
     void findBacklinks(root, activePath, paths, { concurrency: 96, readFile })
-      .then((bl) => { if (!cancelled) setBacklinks(bl); })
-      .catch(() => { if (!cancelled) setBacklinks([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((bl) => {
+        if (!cancelled) setBacklinks(bl);
+      })
+      .catch(() => {
+        if (!cancelled) setBacklinks([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [app, root, activePath, paths, pathContentHashes]);
 
   if (!activePath) {
@@ -64,16 +72,28 @@ export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
   }
 
   return (
-    <Flex direction="column" gap="1" p="2" style={{ height: "100%", minHeight: 0 }} data-testid="spectrolite-backlinks">
+    <Flex
+      direction="column"
+      gap="1"
+      p="2"
+      style={{ height: "100%", minHeight: 0 }}
+      data-testid="spectrolite-backlinks"
+    >
       <Flex align="center" gap="1" px="1">
         <Link2Icon />
-        <Text size="1" weight="bold" color="gray" style={{ letterSpacing: "0.06em" }}>BACKLINKS</Text>
-        <Text size="1" color="gray">· {backlinks.length}</Text>
+        <Text size="1" weight="bold" color="gray" style={{ letterSpacing: "0.06em" }}>
+          BACKLINKS
+        </Text>
+        <Text size="1" color="gray">
+          · {backlinks.length}
+        </Text>
       </Flex>
       <Box style={{ flex: 1, minHeight: 0 }}>
         <ScrollArea>
           {loading ? (
-            <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>Scanning…</Text>
+            <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>
+              Scanning…
+            </Text>
           ) : backlinks.length === 0 ? (
             <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>
               Nothing links here yet. Reference this note with [[{basenameNoExt(activePath)}]].
@@ -92,7 +112,9 @@ export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
                   }}
                 >
                   <span className="spectrolite-file-row-name">{bl.fromPath}</span>
-                  {bl.snippet ? <span className="spectrolite-backlink-snippet">{bl.snippet}</span> : null}
+                  {bl.snippet ? (
+                    <span className="spectrolite-backlink-snippet">{bl.snippet}</span>
+                  ) : null}
                 </button>
               ))}
             </Flex>

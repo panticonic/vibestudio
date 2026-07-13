@@ -11,6 +11,7 @@
 
 import * as path from "node:path";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import { withPrivateAccountSubject } from "@vibestudio/shared/actorIdentity";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -129,7 +130,6 @@ export const SNAPSHOT_IGNORE_PATTERNS = [
   ".env",
   ".env.*",
   "*.log",
-  "*.tmp",
   "*.swp",
   "*.swo",
   "*.sublime-workspace",
@@ -232,7 +232,10 @@ export async function isWritableVcsPath(p: string): Promise<boolean> {
   }
 }
 
-export type VcsActor = { id: string; kind: string };
+/** A provenance actor: the verified runtime principal plus, when the caller
+ *  crossed an authenticated boundary, the host-verified account subject
+ *  (WP0 §3.4) — so blame/log answer "which USER", not just "which device". */
+export type VcsActor = { id: string; kind: string; subject?: { userId: string } };
 type VcsLogActor = {
   id: string;
   kind:
@@ -251,6 +254,11 @@ type VcsLogActor = {
 };
 
 export function vcsLogActor(actor: VcsActor): VcsLogActor {
+  // ActorRef is deliberately a strict, shared wire envelope. Domain-specific
+  // and private identity claims belong in metadata, whose public projection is
+  // already allowlisted by publicActorRef(). Keeping the verified account
+  // subject here preserves VCS attribution without adding a one-off actor
+  // envelope field or leaking the account id through channel publications.
   if (
     actor.kind === "user" ||
     actor.kind === "agent" ||
@@ -264,7 +272,10 @@ export function vcsLogActor(actor: VcsActor): VcsLogActor {
     actor.kind === "server" ||
     actor.kind === "extension"
   ) {
-    return { id: actor.id, kind: actor.kind };
+    return withPrivateAccountSubject({ id: actor.id, kind: actor.kind }, actor.subject);
   }
-  return { id: actor.id, kind: "external", metadata: { type: actor.kind } };
+  return withPrivateAccountSubject(
+    { id: actor.id, kind: "external", metadata: { type: actor.kind } },
+    actor.subject
+  );
 }

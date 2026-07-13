@@ -85,7 +85,6 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
       "editsByActor",
       "editsByTurn",
       "editsByInvocation",
-      "log",
       // Publishing is no longer a public host RPC: push dispatches userland to
       // the gad-store DO's vcsPush (runtime VcsClient.push / `vibestudio vcs push`).
       "push",
@@ -98,7 +97,7 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
       expect(hostMethods.has(moved)).toBe(false);
     }
     // The host remnant keeps the operations that need host resources.
-    for (const kept of ["edit", "commit"]) {
+    for (const kept of ["edit", "commit", "log"]) {
       expect(hostMethods.has(kept)).toBe(true);
     }
   });

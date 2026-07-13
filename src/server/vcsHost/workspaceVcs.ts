@@ -65,6 +65,7 @@ import { WorktreeStore, collectTreeFiles } from "./worktreeStore.js";
 import { discoverRepos } from "./repoDiscovery.js";
 import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { DiskProjector } from "./diskProjector.js";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 
 /** Narrow call surface onto the gad-store DO. */
 interface GadCaller {
@@ -236,6 +237,9 @@ interface CommitEditsResult {
   editCount: number;
   status: "committed" | "unchanged";
   changedPaths: string[];
+  /** Actors other than the committer whose working edits this commit sealed
+   *  (shared context heads) — provenance keeps both parties. */
+  coAuthors?: Array<{ id: string; kind: string; subject?: { userId?: string } }>;
 }
 
 /** A commit on the source head not yet on the target — the upstream-commit shape
@@ -550,10 +554,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * DO round trip. The gad-store DO drives it to capture external disk drift and
    * owns every VCS decision made from the result.
    *
-   * Single-context sync rule (D2): for the active context head this resolves to
-   * the workspace root — the context's ONE checkout. `updateSidecar` refreshes
-   * the `.gad` baseline against which the NEXT scan diffs, so the scan reports
-   * only genuine external drift. Un-projected DO working edits must be projected
+   * Head → dir mapping: every `ctx:*` head resolves through
+   * {@link DiskProjector.dirForRepoHead} to its `.contexts/{id}/{repoPath}`
+   * subtree checkout (there is no workspace-root mapping for context heads;
+   * `main` has no checkout at all — D1). `updateSidecar` refreshes the `.gad`
+   * baseline against which the NEXT scan diffs, so the scan reports only
+   * genuine external drift. Un-projected DO working edits must be projected
    * to disk BEFORE a scan (the DO working state is authoritative); otherwise the
    * scan would read stale disk and misattribute the projected-but-not-yet-written
    * edits as deletions.
@@ -564,10 +570,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ): Promise<{
     stateHash: string;
     files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
+    /** Non-regular directory entries the scan skipped (symlinks, sockets, …)
+     *  — NOT captured in the state; surfaced so callers can warn. */
+    skipped: Array<{ path: string; kind: string }>;
+    /** The scan found an existing-but-empty tree where the head previously had
+     *  files — a whole-repo wipe. Drift adoption must not adopt this silently. */
+    wipedRepo: boolean;
   }> {
     const dir = this.dirForRepoHead(repoPath, head);
-    const { stateHash, files } = await this.worktrees.localState(dir, { updateSidecar: true });
-    return { stateHash, files };
+    const { stateHash, files, skipped } = await this.worktrees.localState(dir, {
+      updateSidecar: true,
+    });
+    const priorState = await this.worktrees.resolveWorktreeRef(head, this.repoLogId(repoPath));
+    const wipedRepo = files.length === 0 && priorState !== null && priorState !== EMPTY_STATE_HASH;
+    return { stateHash, files, skipped, wipedRepo };
   }
 
   /**
@@ -1082,6 +1098,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /**
+   * Make a newly-created main repo immediately visible in one existing
+   * context without moving that context's pins for any other repo.
+   */
+  async adoptMainRepoIntoContext(contextId: string, repoPath: string): Promise<void> {
+    await this.gad().call("vcsAdoptMainRepoIntoContext", { contextId, repoPath });
+    await this.materializeContextRepos(contextId, [repoPath]);
+  }
+
+  /**
    * Fork a context's FILE state, LINEAGE-TRUE, for {@link runtime.cloneContext}
    * and subagent spawns — a thin wrapper over the gad-store DO `vcsForkContext`.
    *
@@ -1154,19 +1179,40 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async materializeContextRepos(contextId: string, repos: string[] | "all"): Promise<void> {
     const targets = await this.contextRepoTargets(contextId, repos);
     const mat = this.materializedFor(contextId);
-    for (const { repoPath, stateHash } of targets) {
-      const norm = normalizeRepoPathForLog(repoPath);
-      if (mat.get(norm) === stateHash) continue; // already on disk at the right state
-      await this.locked(this.stateKey(this.repoLogId(repoPath), `mat:${contextId}`), () =>
-        this.projector.project({
-          repoPath,
-          head: vcsContextHead(contextId),
-          stateHash,
-          clean: true,
-        })
-      );
-      mat.set(norm, stateHash);
-    }
+    // A workspace-root grep/find legitimately asks for every repo. Projection
+    // is repo-isolated, so serially materializing a large workspace turns a
+    // simple search into a 30s+ tool call. Use bounded concurrency while
+    // retaining the existing per-repo lock. Re-check INSIDE that lock so two
+    // parallel root searches coalesce instead of projecting every repo twice.
+    const queue = targets.filter(
+      ({ repoPath, stateHash }) => mat.get(normalizeRepoPathForLog(repoPath)) !== stateHash
+    );
+    const concurrency = Math.min(8, Math.max(1, queue.length));
+    let cursor = 0;
+    await Promise.all(
+      Array.from({ length: concurrency }, async () => {
+        for (;;) {
+          const index = cursor++;
+          const target = queue[index];
+          if (!target) return;
+          const { repoPath, stateHash } = target;
+          const norm = normalizeRepoPathForLog(repoPath);
+          await this.locked(
+            this.stateKey(this.repoLogId(repoPath), `mat:${contextId}`),
+            async () => {
+              if (mat.get(norm) === stateHash) return;
+              await this.projector.project({
+                repoPath,
+                head: vcsContextHead(contextId),
+                stateHash,
+                clean: true,
+              });
+              mat.set(norm, stateHash);
+            }
+          );
+        }
+      })
+    );
   }
 
   async ensureContextFolder(contextId: string): Promise<{ dir: string; head: string }> {
@@ -1307,9 +1353,52 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ahead: boolean;
       behind: boolean;
       deleted: boolean;
+      pendingMerge: { source: string; conflictPaths: string[]; startedAt: string | null } | null;
     }>
   > {
     return this.gad().call("vcsContextStatus", { contextId });
+  }
+
+  /**
+   * Publish a host-authored metadata snapshot through the same GAD-owned
+   * write-ahead intent protocol as user pushes/imports. This is intentionally
+   * narrow: callers provide a complete repo file set already mirrored into the
+   * CAS; the writer DO creates the state, advances the protected ref, and
+   * records provenance before returning.
+   */
+  async publishHostMutation(input: {
+    ctx: ServiceContext;
+    repoPath: string;
+    expectedOld: string;
+    files: Array<{ path: string; contentHash: string; mode: number }>;
+    summary: string;
+    operation: "push" | "import";
+  }): Promise<{ stateHash: string }> {
+    const via = this.deps.getVcsWriterIdentity?.() ?? "vcs-writer";
+    const invocation = this.deps.vcsInvocations?.mint({
+      caller: input.ctx.caller,
+      via,
+      method: "vcsPublishHostMutation",
+    });
+    try {
+      return await this.gad().call(
+        "vcsPublishHostMutation",
+        {
+          repoPath: normalizeRepoPathForLog(input.repoPath),
+          expectedOld: input.expectedOld,
+          files: input.files,
+          message: input.summary,
+          operation: input.operation,
+          actor: vcsLogActor({
+            id: input.ctx.caller.runtime.id,
+            kind: input.ctx.caller.runtime.kind,
+          }),
+        },
+        invocation ? { invocationToken: invocation.token } : undefined
+      );
+    } finally {
+      invocation?.release();
+    }
   }
 
   /**
@@ -1513,13 +1602,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ): Promise<{
     theirsHead: string;
     conflicts: Array<{ path: string; kind: string }>;
+    startedAt: string | null;
   } | null> {
     const pending = (
       await this.gad().call<{
-        info: { theirsHead: string; conflicts: Array<{ path: string; kind: string }> } | null;
+        info: {
+          theirsHead: string;
+          conflicts: Array<{ path: string; kind: string }>;
+          startedAt?: string | null;
+        } | null;
       }>("getPendingMerge", { logId: this.repoLogId(repoPath), head: targetHead })
     ).info;
-    return pending ? { theirsHead: pending.theirsHead, conflicts: pending.conflicts } : null;
+    return pending
+      ? {
+          theirsHead: pending.theirsHead,
+          conflicts: pending.conflicts,
+          startedAt: pending.startedAt ?? null,
+        }
+      : null;
   }
 
   // -------------------------------------------------------------------------
@@ -1653,6 +1753,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     repoPath: string;
     message: string;
     exclude?: string[];
+    /** Include selector (`git add <paths>`): seal ONLY these repo-relative
+     *  paths' working edits. Mutually exclusive with `exclude`. */
+    paths?: string[];
     actor: { id: string; kind: string };
     invocationId?: string;
     turnId?: string;
@@ -1679,6 +1782,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         previousStateHash: string;
         editOps: StateAdvanceEditOp[];
         transitionKind: "snapshot" | "merge-resolution";
+        coAuthors?: Array<{ id: string; kind: string; subject?: { userId?: string } }>;
       }>("commitWorking", {
         logId,
         head: input.head,
@@ -1687,6 +1791,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         invocationId: input.invocationId ?? null,
         turnId: input.turnId ?? null,
         exclude: input.exclude ?? null,
+        paths: input.paths ?? null,
       });
       if (result.status === "unchanged") {
         return {
@@ -1723,6 +1828,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         editCount: result.editCount,
         status: "committed",
         changedPaths: event.changedPaths,
+        ...(result.coAuthors && result.coAuthors.length > 0 ? { coAuthors: result.coAuthors } : {}),
       };
     });
   }
@@ -1822,6 +1928,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   // vcsCommitAncestors / vcsEditsBy* / vcsLog) is dispatched to directly via
   // the `vcs` manifest service — no host wrappers remain.
   // -------------------------------------------------------------------------
+
+  /** Host compatibility route for the same userland commit-log traversal. */
+  async readVcsLog(
+    repoPath: string,
+    limit = 50,
+    head = VCS_MAIN_HEAD
+  ): Promise<
+    Array<{
+      seq: number;
+      envelopeId: string;
+      actor: unknown;
+      summary: string | null;
+      outputStateHash: string | null;
+      appendedAt: string;
+    }>
+  > {
+    return this.gad().call("vcsLog", { repoPath, limit, head });
+  }
 
   /**
    * On-demand build of a head's WORKING content scoped to repos/units, WITHOUT
@@ -1948,7 +2072,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     mainStateHash: string | null;
     ahead: number;
     uncommitted: number;
+    uncommittedPaths: string[];
     diverged: boolean;
+    behind: boolean;
     /** The repo was deleted from the workspace (its `main` is archived/gone). A
      *  push will be refused — restore or drop the context rather than re-push. */
     deleted: boolean;
@@ -2603,18 +2729,61 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     head: string,
     repoPath: string
   ): Promise<{
-    stateHash: string | null;
+    committedStateHash: string | null;
+    workingStateHash: string | null;
     dirty: boolean;
+    committed: { added: string[]; removed: string[]; changed: string[] };
+    working: { added: string[]; removed: string[]; changed: string[] };
     uncommitted: number;
-    added: string[];
-    removed: string[];
-    changed: string[];
+    diverged: boolean;
+    behind: boolean;
     /** The repo was deleted from the workspace (its `main` is archived/gone). */
     deleted: boolean;
+    pendingMerge: { source: string; conflictPaths: string[]; startedAt: string | null } | null;
   }> {
     return await this.gad().call("vcsStatus", {
       repoPath: normalizeRepoPathForLog(repoPath),
       head,
+    });
+  }
+
+  /**
+   * Content diff with real hunks — the SEMANTICS (endpoint resolution per
+   * scope, text diffing via the shared vcs-engine, binary detection) live in
+   * the gad-store DO (`vcsDiffContent`); this is a pure dispatch.
+   */
+  async diffContent(input: {
+    repoPath?: string;
+    head: string;
+    scope: "committed" | "working" | "all";
+    left?: string;
+    right?: string;
+    paths?: string[];
+    contextLines?: number;
+  }): Promise<{
+    left: string;
+    right: string;
+    files: Array<{
+      path: string;
+      status: "added" | "removed" | "changed";
+      binary: boolean;
+      oldMode: number | null;
+      newMode: number | null;
+      oldSize: number | null;
+      newSize: number | null;
+      hunks: Array<{
+        oldStart: number;
+        oldLines: number;
+        newStart: number;
+        newLines: number;
+        lines: string[];
+      }>;
+    }>;
+    unified: string;
+  }> {
+    return await this.gad().call("vcsDiffContent", {
+      ...input,
+      ...(input.repoPath ? { repoPath: normalizeRepoPathForLog(input.repoPath) } : {}),
     });
   }
 }

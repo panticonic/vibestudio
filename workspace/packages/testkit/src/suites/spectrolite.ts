@@ -19,7 +19,7 @@
  * keyboard editing flows (Electron input events), mobile-viewport variant
  * (covered generically by the panel-viewport suite).
  */
-import { vcs } from "@workspace/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 import { suite } from "../run.js";
 import { expect } from "../expect.js";
 import { evalInPanel, panelText, waitFor, waitForText, withPanel } from "../panels.js";
@@ -28,21 +28,14 @@ import { profilePanel } from "../profile.js";
 const VAULT = "/projects/testkit-vault";
 const LARGE_VAULT = "/projects/testkit-vault-large";
 
-/** The vault's durable ctx head — mirrors `spectrolite/app/vaultContext.ts`
- *  (`vault-<fnv1a36>` of the workspace-relative vault root). Kept in sync by
- *  the unit test in that package; replicated here to address the panel's head
- *  from the privileged testkit caller. */
-function vaultCtxHead(vaultPath: string): string {
-  const input = vaultPath.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
-  let h1 = 0x811c9dc5 >>> 0;
-  let h2 = 0x01000193 >>> 0;
-  for (let i = 0; i < input.length; i += 1) {
-    const c = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
-    h2 = Math.imul(h2 ^ c, 0x85ebca77) >>> 0;
-    h2 = (h2 + i + 1) >>> 0;
-  }
-  return `ctx:vault-${h1.toString(36)}${h2.toString(36)}`;
+const testHead = `ctx:${contextId}`;
+
+function vaultPanelOptions(repoRoot: string, openPath: string, timeoutMs?: number) {
+  return {
+    contextId,
+    stateArgs: { contextId, repoRoot, openPath },
+    ...(timeoutMs ? { timeoutMs } : {}),
+  };
 }
 
 const FIXTURES: Record<string, string> = {
@@ -57,9 +50,16 @@ const FIXTURES: Record<string, string> = {
     "A simple note for end-to-end editor interactions.",
     "",
   ].join("\n"),
-  "Linked.mdx": ["---", "title: Linked", "---", "", "# Linked", "", "This note points at [[E2E]].", ""].join(
-    "\n"
-  ),
+  "Linked.mdx": [
+    "---",
+    "title: Linked",
+    "---",
+    "",
+    "# Linked",
+    "",
+    "This note points at [[E2E]].",
+    "",
+  ].join("\n"),
   "Broken.mdx": [
     "---",
     "title: Broken",
@@ -81,7 +81,7 @@ async function ensureVault(dir: string, files: Record<string, string>): Promise<
   // working content from (disk is projected from the head). No commit needed for
   // the panel to see them on load.
   await vcs.edit({
-    head: vaultCtxHead(dir),
+    head: testHead,
     edits: Object.entries(files).map(([name, content]) => ({
       kind: "write" as const,
       path: `${root}/${name}`,
@@ -92,7 +92,9 @@ async function ensureVault(dir: string, files: Record<string, string>): Promise<
 
 function largeVaultFiles(): Record<string, string> {
   const files: Record<string, string> = {
-    "Hub.mdx": ["---", "title: Large Hub", "---", "", "# Large Hub", "", "Central node.", ""].join("\n"),
+    "Hub.mdx": ["---", "title: Large Hub", "---", "", "# Large Hub", "", "Central node.", ""].join(
+      "\n"
+    ),
   };
   for (let index = 0; index < 60; index += 1) {
     files[`Bulk-${index}.mdx`] = [
@@ -124,7 +126,7 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
         const text = await panelText(handle);
         expect(text, "vault placeholder leakage").not.toContain("/projects/<not-selected-yet>");
       },
-      { stateArgs: { repoRoot: VAULT, openPath: "E2E.mdx" } }
+      vaultPanelOptions(VAULT, "E2E.mdx")
     );
   })
   .test("follows wikilinks between notes", async () => {
@@ -150,7 +152,7 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
         expect(clicked, "wikilink clickable").toBe(true);
         await waitForText(handle, "E2E Note", { timeoutMs: 30_000 });
       },
-      { stateArgs: { repoRoot: VAULT, openPath: "Linked.mdx" } }
+      vaultPanelOptions(VAULT, "Linked.mdx")
     );
   })
   .test("stays usable around malformed MDX", async (t) => {
@@ -172,7 +174,7 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
         );
         expect(editable, "editor interactive with broken MDX open").toBe(true);
       },
-      { stateArgs: { repoRoot: VAULT, openPath: "Broken.mdx" } }
+      vaultPanelOptions(VAULT, "Broken.mdx")
     );
   })
   .test("reconciles a co-editor's edit into the open document (no banner)", async () => {
@@ -188,10 +190,10 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
       async (handle) => {
         await waitForText(handle, "E2E Note", { timeoutMs: 60_000 });
         const stamp = `co-editor-${Date.now()}`;
-        const head = vaultCtxHead(VAULT);
+        const head = testHead;
         const repoPath = VAULT.replace(/^\/+/, "");
         const docPath = `${repoPath}/E2E.mdx`;
-        const current = await vcs.readFile(head, docPath);
+        const current = await vcs.readFile({ ref: head, path: docPath });
         await vcs.edit({
           head,
           baseStateHash: current?.stateHash,
@@ -212,23 +214,49 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
         const text = await panelText(handle);
         expect(text, "no disk-conflict banner").not.toContain("changed on disk");
       },
-      { stateArgs: { repoRoot: VAULT, openPath: "E2E.mdx" } }
+      vaultPanelOptions(VAULT, "E2E.mdx")
     );
   })
-  .test("tracks working edits with provenance, then commit folds them (no per-keystroke commits)", async () => {
-    // Edit → commit → push provenance: a tracked working `vcs.edit` shows up as
-    // UNCOMMITTED on the head (status.uncommitted > 0) WITHOUT a commit-log entry
-    // or an `ahead` count; the deliberate `vcs.commit` then folds the working
-    // edits into ONE snapshot (uncommitted → 0, ahead rises), and `fileHistory`
-    // surfaces the working tail before commit and the committed op after.
-    await ensureVault(VAULT, FIXTURES);
-    const head = vaultCtxHead(VAULT);
-    const repoPath = VAULT.replace(/^\/+/, "");
-    const docPath = `${repoPath}/E2E.mdx`;
+  .test(
+    "tracks working edits with provenance, then commit folds them (no per-keystroke commits)",
+    async () => {
+      // Edit → commit → push provenance: a tracked working `vcs.edit` shows up as
+      // UNCOMMITTED on the head (status.uncommitted > 0) WITHOUT a commit-log entry
+      // or an `ahead` count; the deliberate `vcs.commit` then folds the working
+      // edits into ONE snapshot (uncommitted → 0, ahead rises), and `fileHistory`
+      // surfaces the working tail before commit and the committed op after.
+      await ensureVault(VAULT, FIXTURES);
+      const head = testHead;
+      const repoPath = VAULT.replace(/^\/+/, "");
+      const docPath = `${repoPath}/E2E.mdx`;
 
-    // Three separate working edits simulate debounced typing — none commits.
-    for (let i = 0; i < 3; i += 1) {
-      const cur = await vcs.readFile(head, docPath);
+      // Three separate working edits simulate debounced typing — none commits.
+      for (let i = 0; i < 3; i += 1) {
+        const cur = await vcs.readFile({ ref: head, path: docPath });
+        const base = cur?.content.kind === "text" ? cur.content.text : "";
+        await vcs.edit({
+          head,
+          baseStateHash: cur?.stateHash,
+          edits: [
+            {
+              kind: "write",
+              path: docPath,
+              content: { kind: "text", text: `${base}\nedit ${i}\n` },
+            },
+          ],
+        });
+      }
+
+      const beforeStatus = await vcs.status(repoPath, head);
+      expect(beforeStatus.uncommitted > 0, "working edits are tracked as uncommitted").toBe(true);
+      const beforePush = await vcs.pushStatus([repoPath]);
+      const beforeAhead = beforePush.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
+
+      // More working edits must not change the committed-ahead delta. This vault
+      // is shared by the suite, so earlier cases may already have deliberately
+      // committed fixture/co-editor changes; compare to that baseline instead of
+      // assuming a globally pristine head.
+      const cur = await vcs.readFile({ ref: head, path: docPath });
       const base = cur?.content.kind === "text" ? cur.content.text : "";
       await vcs.edit({
         head,
@@ -237,33 +265,37 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
           {
             kind: "write",
             path: docPath,
-            content: { kind: "text", text: `${base}\nedit ${i}\n` },
+            content: { kind: "text", text: `${base}\nuncommitted baseline check\n` },
           },
         ],
       });
+      const stillWorking = await vcs.pushStatus([repoPath]);
+      const workingAhead = stillWorking.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
+      expect(workingAhead, "working edits are NOT committed-ahead").toBe(beforeAhead);
+
+      // Working edits carry provenance and appear as the working tail in history.
+      const working = await vcs.fileHistory({ repoPath, path: "E2E.mdx", head });
+      expect(working.length > 0, "fileHistory surfaces working edit ops").toBe(true);
+
+      // The deliberate commit folds them into one messaged snapshot.
+      const committed = await vcs.commit({
+        head,
+        repoPaths: [repoPath],
+        message: "Fold working edits",
+      });
+      expect(committed.length, "one repo committed").toBe(1);
+      expect(committed[0]!.status, "commit folded the edits").toBe("committed");
+
+      const afterStatus = await vcs.status(repoPath, head);
+      expect(afterStatus.uncommitted, "no uncommitted edits remain after commit").toBe(0);
+      const afterPush = await vcs.pushStatus([repoPath]);
+      const afterAhead = afterPush.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
+      expect(
+        afterAhead >= beforeAhead,
+        "the commit preserves or increases unpublished changes"
+      ).toBe(true);
     }
-
-    const beforeStatus = await vcs.status(repoPath, head);
-    expect(beforeStatus.uncommitted > 0, "working edits are tracked as uncommitted").toBe(true);
-    const beforePush = await vcs.pushStatus([repoPath]);
-    const beforeAhead = beforePush.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
-    expect(beforeAhead, "working edits are NOT committed-ahead").toBe(0);
-
-    // Working edits carry provenance and appear as the working tail in history.
-    const working = await vcs.fileHistory(repoPath, "E2E.mdx", head);
-    expect(working.length > 0, "fileHistory surfaces working edit ops").toBe(true);
-
-    // The deliberate commit folds them into one messaged snapshot.
-    const committed = await vcs.commit({ head, repoPaths: [repoPath], message: "Fold working edits" });
-    expect(committed.length, "one repo committed").toBe(1);
-    expect(committed[0]!.status, "commit folded the edits").toBe("committed");
-
-    const afterStatus = await vcs.status(repoPath, head);
-    expect(afterStatus.uncommitted, "no uncommitted edits remain after commit").toBe(0);
-    const afterPush = await vcs.pushStatus([repoPath]);
-    const afterAhead = afterPush.find((s) => s.repoPath === repoPath)?.ahead ?? 0;
-    expect(afterAhead > 0, "the commit is now ahead of main (push to publish)").toBe(true);
-  })
+  )
   .test("stays responsive in a larger vault (with CPU profile attached)", async (t) => {
     await ensureVault(LARGE_VAULT, largeVaultFiles());
     await withPanel(
@@ -284,6 +316,6 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
         });
         t.log(`cpu profile: ${ref.path} (${ref.summary.totalSamples} samples)`);
       },
-      { stateArgs: { repoRoot: LARGE_VAULT, openPath: "Hub.mdx" }, timeoutMs: 90_000 }
+      vaultPanelOptions(LARGE_VAULT, "Hub.mdx", 90_000)
     );
   });

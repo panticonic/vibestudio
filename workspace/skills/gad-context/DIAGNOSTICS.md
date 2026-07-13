@@ -92,7 +92,12 @@ returns local suspension rows joined with `gad.inspectInvocationState(...)` for
 the matching branch, invocation id, and transport call id.
 
 ```ts
-const joined = await chat.callMethod(agentParticipantId, "inspectMethodSuspensions", {});
+const joined = await chat.callMethod(
+  agentParticipantId,
+  "inspectMethodSuspensions",
+  {},
+  { timeoutMs: 15_000 }
+);
 ```
 
 `chat.callMethod` only works for participants in `chat.channelId`. To inspect a
@@ -111,12 +116,18 @@ const suspensions = await rpc.call(channel.targetId, "inspectAgent", [
 ]);
 ```
 
+The channel DO target is an RPC target, not a channel participant. Do not pass
+`channel.targetId` to `chat.callMethod(...)`: that API is intentionally scoped
+to live participants in `chat.channelId` and will reject the channel DO with a
+"not joined to channel" error. Use the direct `rpc.call(...)` form above for a
+different channel.
+
 `inspectAgent` is intentionally limited to standard read-only debug methods:
 `getDebugState`, `getAgentSettings`, and `inspectMethodSuspensions`.
 
 ### Channel Envelope Inspection
 
-Use `gad.inspectChannelEnvelopes({ channelId, cursor, limit, payloadKind })` for
+Use `gad.inspectChannelEnvelopes({ channelId, window, limit, payloadKind })` for
 normal log inspection. It returns:
 
 - compact payload summaries
@@ -124,9 +135,36 @@ normal log inspection. It returns:
 - stored blob-ref digests and sizes
 - sender metadata summaries
 
-Use `gad.listChannelEnvelopes(...)` only after you know you need hydrated
+Use `gad.readChannelEnvelopes(...)` only after you know you need hydrated
 semantic envelopes. Broad hydrated reads can pull large blob refs back into eval
 returns and obscure the useful diagnostic data.
+
+Both projections intentionally use the same paging contract:
+
+- Omit `window` or use `{ kind: "tail" }` for the newest page.
+- Use `{ kind: "after", seq }` for ascending forward paging.
+- The first forward page reports `snapshotLastSeq`; pass it back as
+  `{ kind: "after", seq: returnedToSeq, throughSeq: snapshotLastSeq }` on every
+  continuation page. This keeps the read on one stable high-water mark while
+  newer envelopes remain on the live channel path.
+- Use `{ kind: "before", seq }` for the page immediately before a sequence.
+- `limit` is the exact requested page size: it defaults to 50, may be zero for
+  metadata-only reads, and must not exceed 500. Oversized requests fail instead
+  of returning a silently truncated page.
+- Both calls return `{ items, pageInfo }`; `pageInfo` includes `totalCount`,
+  `firstSeq?`, `lastSeq?`, `snapshotLastSeq?`, `returnedFromSeq?`, `returnedToSeq?`,
+  `hasMoreBefore`, and `hasMoreAfter`. It also echoes the normalized
+  `{ window, limit, payloadKind? }` under `pageInfo.request` and reports
+  `returnedCount`, so callers can verify the page contract directly.
+- `payloadKind` filters both items and paging statistics.
+
+Follow `returnedToSeq` plus the original `snapshotLastSeq` with an `after`
+window, or `returnedFromSeq` with a `before` window, while the corresponding
+`hasMore*` flag is true. A true flag without a returned cursor is an integrity
+error, not an instruction to retry the same request.
+
+Use `(await call()).items`, not `await call().items`; JavaScript member access
+binds before `await`, so the latter reads `items` from the Promise.
 
 ### Storage Diagnostics
 
@@ -158,12 +196,32 @@ summary for a channel. It combines:
 The `summary.ok` flag is false when durable publication, turn, invocation, or
 storage invariants need attention.
 
+The more specific fields are the decision boundary:
+
+- `durableIntegrityOk` covers publication, duplicate-turn, and storage
+  integrity.
+- `activity` is `idle` or `in-flight`.
+- `inFlightOnly` is true when activity exists but no durable integrity problem
+  was found.
+
+The combined health response contains only compact evidence: problematic/open
+turn and invocation rows, active roster rows, a small recent-envelope sample,
+and storage issues. Use the dedicated inspector only after that evidence names
+the exact artifact needing follow-up.
+
 When an agent calls this inspector during its own active turn,
 `summary.openTurns` and `summary.nonterminalInvocations` can make `summary.ok`
 false even though publication/storage/hash issue counters are all zero. That is
 an expected in-flight observation, not durable corruption. Judge the named
 issue counters and the specific turn/invocation rows; do not treat the aggregate
 boolean alone as a failure while the inspecting turn is still open.
+
+For that self-observation case, take exactly one health snapshot. If
+`summary.inFlightOnly` is true and the only open evidence is the currently
+executing diagnostic turn/invocation, stop and report “pending / expected
+in-flight.” Do not poll it: the invocation cannot become terminal until the eval
+returns, and each poll appends another diagnostic invocation. Do not use raw SQL
+or hydrate blobs to re-prove the same fact.
 
 ### Branch And State Lookups
 

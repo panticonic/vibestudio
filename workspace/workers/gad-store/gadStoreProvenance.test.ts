@@ -653,6 +653,24 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
     expect(metric("drilldown", "deepen")).toBeGreaterThanOrEqual(1);
   });
 
+  it("does not fail a claim drill-down when attach-rate instrumentation fails", () => {
+    const u = untyped() as unknown as {
+      bumpActionRateIfRendered: (handle: string) => void;
+    };
+    const claimId = recordClaim("provenance remains available when optional metrics fail");
+    u.bumpActionRateIfRendered = () => {
+      throw new Error("LIKE or GLOB pattern too complex");
+    };
+
+    expect(() =>
+      doi.provenanceForClaim({
+        claimId,
+        sessionLogId: SESSION_LOG,
+        sessionHead: SESSION_HEAD,
+      })
+    ).not.toThrow();
+  });
+
   it("attach→action rate counts a drill-down on a recently pushed handle (§12 #4)", () => {
     const x = recordClaim("attach action seed overview");
     const a = recordClaim("the retryquota belongs to the caller layer");

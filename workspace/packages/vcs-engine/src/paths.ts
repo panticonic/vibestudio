@@ -23,7 +23,9 @@ export const VCS_IGNORED_DIRS: ReadonlySet<string> = new Set([
   ".vibestudio",
   ".turbo",
   ".vite",
-  ".tmp",
+  // `.tmp/` stays scratch for host filesystem routing and snapshot scans, but
+  // this engine is the explicit/force-add seam: deliberate vcs.edit calls may
+  // track it. Ordinary fs temp writes never reach this engine.
   ".testkit",
   "node_modules",
   "dist",
@@ -55,7 +57,6 @@ const IGNORED_SEGMENT_PATTERNS: readonly RegExp[] = [
   /^\.env$/,
   /^\.env\..*$/,
   /^.*\.log$/,
-  /^.*\.tmp$/,
   /^.*\.swp$/,
   /^.*\.swo$/,
   /^.*\.sublime-workspace$/,
@@ -99,8 +100,22 @@ function segmentIgnored(segment: string): boolean {
   return IGNORED_SEGMENT_PATTERNS.some((re) => re.test(segment));
 }
 
+/** True when an otherwise-safe workspace-relative path belongs to platform
+ * metadata, generated output, or a secret/scratch file class that VCS must not
+ * track. This is the non-throwing policy seam for callers that want to offer a
+ * recoverable alternative before invoking the edit boundary. */
+export function isPlatformIgnoredVcsPath(p: string): boolean {
+  const segs = p.split("/");
+  if (segs.length === 0) return false;
+  if (segs.slice(0, -1).some((seg) => VCS_IGNORED_DIRS.has(seg) || segmentIgnored(seg))) {
+    return true;
+  }
+  const base = segs.at(-1) ?? "";
+  return VCS_IGNORED_DIRS.has(base) || VCS_IGNORED_FILES.has(base) || segmentIgnored(base);
+}
+
 /**
- * Reject a new state path that the snapshot scan would itself exclude — VCS
+ * Reject a new state path that must never enter VCS — VCS
  * internals (`.git`, `.gad`), generated dirs (`node_modules`, `dist`), and
  * secret/env files. Without this, an edit-ingress caller could write such a
  * path into VCS state (the scan denylist only runs disk→state, not

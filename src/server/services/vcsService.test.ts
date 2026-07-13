@@ -520,9 +520,7 @@ describe("vcsService", () => {
   });
 
   describe("abortMerge authorization", () => {
-    it("aborts a pending main merge WITHOUT a main-advance gate (no ref moves)", async () => {
-      // Aborting a pending merge restores the pre-merge tree; the main ref
-      // never moved while the merge was parked, so there is nothing to gate.
+    it("rejects abortMerge on main because pending merges only live on context heads", async () => {
       const abortMerge = vi.fn(async () => ({ aborted: true }));
       const approve = vi.fn(async () => {});
       const service = createVcsService({
@@ -534,18 +532,11 @@ describe("vcsService", () => {
       });
       const shell = createVerifiedCaller("shell:dev_cli", "shell");
 
-      const result = (await service.handler({ caller: shell }, "abortMerge", [
-        "panels/source",
-        "main",
-      ])) as {
-        aborted: boolean;
-      };
+      await expect(
+        service.handler({ caller: shell }, "abortMerge", ["panels/source", "main"])
+      ).rejects.toThrow(/main is a pure ref.*pending merges live on ctx:\*/s);
 
-      expect(result.aborted).toBe(true);
-      expect(abortMerge).toHaveBeenCalledWith("main", {
-        actor: { id: "shell:dev_cli", kind: "shell" },
-        repoPath: "panels/source",
-      });
+      expect(abortMerge).not.toHaveBeenCalled();
       expect(approve).not.toHaveBeenCalled();
     });
 
@@ -562,7 +553,290 @@ describe("vcsService", () => {
     });
   });
 
+  describe("ergonomic VCS reads", () => {
+    it("resolves a bare path through the workspace's declared default repo", async () => {
+      const contextRepoState = vi.fn(async () => "state:repo");
+      const readFile = vi.fn(async () => ({
+        content: { kind: "text" as const, text: "hello\n" },
+        stateHash: "state:repo",
+        contentHash: "blob:hello",
+        mode: 0o644,
+        size: 6,
+      }));
+      const service = createVcsService({
+        workspaceVcs: { contextRepoState, readFile } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        getDefaultRepo: () => "projects/notes",
+      });
+
+      const result = await service.handler({ caller: panelCaller() }, "readFile", [
+        { path: "note.txt" },
+      ]);
+
+      expect(contextRepoState).toHaveBeenCalledWith("ctx-1", "projects/notes");
+      expect(readFile).toHaveBeenCalledWith("state:repo", "note.txt");
+      expect(result).toMatchObject({ content: { kind: "text", text: "hello\n" } });
+    });
+
+    it("requires a declared base for a bare tracked path", async () => {
+      const service = createVcsService({
+        workspaceVcs: {} as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "readFile", [{ path: "note.txt" }])
+      ).rejects.toThrow(/does not declare defaultRepo/i);
+    });
+
+    it("accepts an explicit repo-relative address on the caller's current head", async () => {
+      const contextRepoState = vi.fn(async () => "state:repo");
+      const readFile = vi.fn(async () => ({
+        content: { kind: "text" as const, text: "hello\n" },
+        stateHash: "state:repo",
+        contentHash: "blob:hello",
+        mode: 0o644,
+        size: 6,
+      }));
+      const service = createVcsService({
+        workspaceVcs: { contextRepoState, readFile } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await service.handler({ caller: panelCaller() }, "readFile", [
+        { path: "note.txt", repoPath: "projects/default" },
+      ]);
+
+      expect(contextRepoState).toHaveBeenCalledWith("ctx-1", "projects/default");
+      expect(readFile).toHaveBeenCalledWith("state:repo", "note.txt");
+    });
+
+    it("accepts a repo-scoped historical file address", async () => {
+      const readFile = vi.fn(async () => ({
+        content: { kind: "text" as const, text: "old\n" },
+        stateHash: "state:old",
+        contentHash: "blob:old",
+        mode: 0o644,
+        size: 4,
+      }));
+      const service = createVcsService({
+        workspaceVcs: { readFile } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await service.handler({ caller: panelCaller() }, "readFile", [
+        { path: "note.txt", repoPath: "meta", ref: "state:old" },
+      ]);
+
+      expect(readFile).toHaveBeenCalledWith("state:old", "note.txt", "meta");
+    });
+
+    it("accepts an explicit repo-scoped file listing", async () => {
+      const contextRepoState = vi.fn(async () => "state:repo");
+      const listFiles = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { contextRepoState, listFiles } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await service.handler({ caller: panelCaller() }, "listFiles", [
+        { repoPath: "projects/default" },
+      ]);
+
+      expect(contextRepoState).toHaveBeenCalledWith("ctx-1", "projects/default");
+      expect(listFiles).toHaveBeenCalledWith("state:repo");
+    });
+  });
+
   describe("edit authorization (working edits, not commits)", () => {
+    it("treats an identical retried create as an idempotent write", async () => {
+      const contextRepoState = vi.fn(async () => "state:working");
+      const readFile = vi.fn(async () => ({
+        content: { kind: "text" as const, text: "already here\n" },
+        stateHash: "state:working",
+        contentHash: "blob:same",
+        mode: 0o644,
+        size: 13,
+      }));
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:working",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 2,
+        changedPaths: [],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { contextRepoState, readFile, recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+
+      await service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "edit", [
+        {
+          repoPath: "meta",
+          edits: [{ kind: "create", path: "note.txt", content: "already here\n" }],
+        },
+      ]);
+
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoPath: "meta",
+          edits: [
+            {
+              kind: "write",
+              path: "note.txt",
+              content: { kind: "text", text: "already here\n" },
+            },
+          ],
+        })
+      );
+      expect(contextRepoState).toHaveBeenCalledWith("ctx-1", "meta");
+      expect(readFile).toHaveBeenCalledWith("state:working", "note.txt", "meta");
+    });
+
+    it("creates the first files in a brand-new context repo without resolving a missing head", async () => {
+      const contextRepoState = vi.fn(async () => null);
+      const readFile = vi.fn();
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:first-working",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["panels/new-panel/index.ts"],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { contextRepoState, readFile, recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+
+      await service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "edit", [
+        {
+          repoPath: "panels/new-panel",
+          edits: [{ kind: "create", path: "index.ts", content: "export {};\n" }],
+        },
+      ]);
+
+      expect(contextRepoState).toHaveBeenCalledWith("ctx-1", "panels/new-panel");
+      expect(readFile).not.toHaveBeenCalled();
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          head: "ctx:ctx-1",
+          repoPath: "panels/new-panel",
+          edits: [
+            {
+              kind: "create",
+              path: "index.ts",
+              content: { kind: "text", text: "export {};\n" },
+            },
+          ],
+        })
+      );
+    });
+
+    it("routes a bare tracked filename through the declared default repo", async () => {
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:next",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["projects/default/probe.txt"],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+        getDefaultRepo: () => "projects/default",
+      });
+
+      await service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "edit", [
+        { edits: [{ path: "probe.txt", content: "tracked\n" }] },
+      ]);
+
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoPath: "projects/default",
+          edits: [
+            {
+              kind: "write",
+              path: "probe.txt",
+              content: { kind: "text", text: "tracked\n" },
+            },
+          ],
+        })
+      );
+    });
+
+    it("does not reinterpret a dotted repo root as a file in another repo", async () => {
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:next",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["projects/default/.tmp-provenance-marker.txt"],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+
+      await expect(
+        service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "edit", [
+          {
+            edits: [
+              {
+                kind: "write",
+                path: "projects/.tmp-provenance-marker.txt",
+                content: { kind: "text", text: "probe\n" },
+              },
+            ],
+          },
+        ])
+      ).rejects.toThrow(/names a workspace repo root/i);
+      expect(recordEdit).not.toHaveBeenCalled();
+    });
+
+    it("canonicalizes a file-looking container-root path across inferred edits", async () => {
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:next",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["projects/file-tools-smoke/file-tools-smoke.txt"],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+
+      await service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "edit", [
+        {
+          edits: [
+            {
+              kind: "write",
+              path: "projects/file-tools-smoke.txt",
+              content: { kind: "text", text: "probe\n" },
+            },
+          ],
+        },
+      ]);
+
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoPath: "projects/file-tools-smoke",
+          edits: [
+            {
+              kind: "write",
+              path: "file-tools-smoke.txt",
+              content: { kind: "text", text: "probe\n" },
+            },
+          ],
+        })
+      );
+    });
+
     it("allows do callers to record a working edit on their own context head", async () => {
       // `edit` records an UNCOMMITTED working edit via recordEdit — no commit,
       // no build, not in vcs.log. The result is { committed:false, uncommitted }.
@@ -691,6 +965,63 @@ describe("vcsService", () => {
       );
     });
 
+    it("resolves exact-text replacement shorthand against the current working state", async () => {
+      const contextRepoState = vi.fn(async () => "state:working");
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:next",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["note.txt"],
+      }));
+      const readFile = vi.fn(async () => ({
+        content: { kind: "text" as const, text: "alpha\nunique old text\nomega\n" },
+        stateHash: "state:working",
+        contentHash: "blob:old",
+        mode: 0o644,
+        size: 28,
+      }));
+      const service = createVcsService({
+        workspaceVcs: { contextRepoState, recordEdit, readFile } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+
+      await service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "edit", [
+        {
+          edits: [
+            {
+              path: "projects/example/note.txt",
+              oldText: "unique old text",
+              newText: "replacement",
+            },
+          ],
+        },
+      ]);
+
+      expect(contextRepoState).toHaveBeenCalledWith("ctx-1", "projects/example");
+      expect(readFile).toHaveBeenCalledWith("state:working", "note.txt", "projects/example");
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoPath: "projects/example",
+          edits: [
+            {
+              kind: "replace",
+              path: "note.txt",
+              hunks: [
+                {
+                  start: 6,
+                  end: 21,
+                  oldText: "unique old text",
+                  newText: "replacement",
+                },
+              ],
+            },
+          ],
+        })
+      );
+    });
+
     it("rejects a panel caller editing a foreign context head", async () => {
       const recordEdit = vi.fn();
       const service = createVcsService({
@@ -807,30 +1138,39 @@ describe("vcsService", () => {
       expect(recordEdit).not.toHaveBeenCalled();
     });
 
-    it("suggests a repo-shaped path for dotted project filenames at repo root", async () => {
-      const recordEdit = vi.fn();
+    it("routes dotted bare filenames through the declared default repo", async () => {
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:next",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["projects/default/file-roundtrip-test.txt"],
+      }));
       const service = createVcsService({
         workspaceVcs: { recordEdit } as never,
         entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+        getDefaultRepo: () => "projects/default",
       });
       const caller = createVerifiedCaller("do:agent", "do");
 
-      await expect(
-        service.handler({ caller }, "edit", [
-          {
-            edits: [
-              {
-                kind: "write",
-                path: "projects/file-roundtrip-test.txt",
-                content: { kind: "text", text: "nope\n" },
-              },
-            ],
-          },
-        ])
-      ).rejects.toThrow(
-        /repo-shaped path.*projects\/file-roundtrip-test\/file-roundtrip-test\.txt/s
+      await service.handler({ caller }, "edit", [
+        {
+          edits: [
+            {
+              kind: "write",
+              path: "file-roundtrip-test.txt",
+              content: { kind: "text", text: "ok\n" },
+            },
+          ],
+        },
+      ]);
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoPath: "projects/default",
+          edits: [expect.objectContaining({ path: "file-roundtrip-test.txt" })],
+        })
       );
-      expect(recordEdit).not.toHaveBeenCalled();
     });
   });
 
@@ -919,8 +1259,16 @@ describe("vcsService", () => {
       expect(commit).not.toHaveBeenCalled();
     });
 
-    it("rejects explicit repo commits when any target repo has no uncommitted edits", async () => {
-      const commit = vi.fn();
+    it("reports unchanged for an explicit repo with nothing to seal", async () => {
+      const commit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:same",
+        eventId: null,
+        headHash: null,
+        editCount: 0,
+        status: "unchanged" as const,
+        changedPaths: [],
+      }));
       const contextStatus = vi.fn(async () => [
         {
           repoPath: "panels/source",
@@ -936,12 +1284,13 @@ describe("vcsService", () => {
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
-      await expect(
-        service.handler({ caller: panelCaller() }, "commit", [
-          { message: "seal", repoPaths: ["panels/source"] },
-        ])
-      ).rejects.toThrow(/no uncommitted VCS working edits in panels\/source/);
-      expect(commit).not.toHaveBeenCalled();
+      const result = (await service.handler({ caller: panelCaller() }, "commit", [
+        { message: "seal", repoPaths: ["panels/source"] },
+      ])) as Array<{ repoPath: string; status: string }>;
+      expect(result).toEqual([
+        expect.objectContaining({ repoPath: "panels/source", status: "unchanged" }),
+      ]);
+      expect(commit).toHaveBeenCalledOnce();
     });
 
     it("rejects duplicate commit repoPaths before committing", async () => {
@@ -1022,7 +1371,44 @@ describe("vcsService", () => {
       expect(commit).not.toHaveBeenCalled();
     });
 
-    it("rejects lower-layer unchanged commit results instead of reporting success", async () => {
+    it("rejects explicit target repos that have no selected commit path", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "packages/selected",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+        {
+          repoPath: "packages/unrelated",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          {
+            message: "seal selected file",
+            repoPaths: ["packages/selected", "packages/unrelated"],
+            paths: ["packages/selected/index.ts"],
+          },
+        ])
+      ).rejects.toThrow(/packages\/unrelated.*no selected paths/s);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("preserves lower-layer unchanged as an explicit per-repo outcome", async () => {
       const commit = vi.fn(async () => ({
         head: "ctx:ctx-1",
         stateHash: "state:same",
@@ -1047,13 +1433,48 @@ describe("vcsService", () => {
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
-      await expect(
-        service.handler({ caller: panelCaller() }, "commit", [{ message: "seal" }])
-      ).rejects.toThrow(/refused to report a no-op success.*panels\/source/s);
+      const result = (await service.handler({ caller: panelCaller() }, "commit", [
+        { message: "seal" },
+      ])) as Array<{ repoPath: string; status: string }>;
+      expect(result).toEqual([
+        expect.objectContaining({ repoPath: "panels/source", status: "unchanged" }),
+      ]);
     });
   });
 
   describe("revert (lands as a working edit)", () => {
+    it("infers the latest commit when the revert target is omitted", async () => {
+      const readVcsLog = vi.fn(async () => [
+        {
+          seq: 4,
+          envelopeId: "evt-latest",
+          actor: {},
+          summary: "latest",
+          outputStateHash: "state:latest",
+          appendedAt: new Date(0).toISOString(),
+        },
+      ]);
+      const revert = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:reverted",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 3,
+        changedPaths: ["panels/source/a.txt"],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { readVcsLog, revert } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await service.handler({ caller: panelCaller() }, "revert", [{ repoPath: "panels/source" }]);
+
+      expect(readVcsLog).toHaveBeenCalledWith("panels/source", 1, "ctx:ctx-1");
+      expect(revert).toHaveBeenCalledWith(
+        expect.objectContaining({ target: { stateHash: undefined, eventId: "evt-latest" } })
+      );
+    });
+
     it("reverts a change as a working edit on the caller's own head", async () => {
       // revert now returns a VcsEditResult — a tracked WORKING edit, not a commit.
       const revert = vi.fn(async () => ({
@@ -1098,6 +1519,20 @@ describe("vcsService", () => {
         ])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(revert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("commit log compatibility", () => {
+    it("exposes vcs.log through the host service on the caller's context head", async () => {
+      const readVcsLog = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { readVcsLog } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await service.handler({ caller: panelCaller() }, "log", ["panels/source", 10]);
+
+      expect(readVcsLog).toHaveBeenCalledWith("panels/source", 10, "ctx:ctx-1");
     });
   });
 

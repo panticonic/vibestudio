@@ -64,7 +64,7 @@ describe("worktree.scan primitive", () => {
       scan: async (repoPath, head) => {
         const dir = projector.dirForRepoHead(repoPath, head);
         const { stateHash, files } = await worktrees.localState(dir, { updateSidecar: true });
-        return { stateHash, files };
+        return { stateHash, files, skipped: [], wipedRepo: false };
       },
       project: async (_repoPath, _head, stateHash) => ({ stateHash }),
       dependentRepos: async () => [],
@@ -95,7 +95,12 @@ describe("worktree.scan primitive", () => {
 
   it("rejects an unknown method", async () => {
     const service = createWorktreeService({
-      scan: async () => ({ stateHash: "state:" + "0".repeat(64), files: [] }),
+      scan: async () => ({
+        stateHash: "state:" + "0".repeat(64),
+        files: [],
+        skipped: [],
+        wipedRepo: false,
+      }),
       project: async (_repoPath, _head, stateHash) => ({ stateHash }),
       dependentRepos: async () => [],
       getVcsWriterIdentity: () => WRITER_ID,
@@ -105,7 +110,12 @@ describe("worktree.scan primitive", () => {
 
   it("allows shell callers for host-side diagnostics", async () => {
     const service = createWorktreeService({
-      scan: async () => ({ stateHash: "state:" + "0".repeat(64), files: [] }),
+      scan: async () => ({
+        stateHash: "state:" + "0".repeat(64),
+        files: [],
+        skipped: [],
+        wipedRepo: false,
+      }),
       project: async (_repoPath, _head, stateHash) => ({ stateHash }),
       dependentRepos: async () => [],
       getVcsWriterIdentity: () => WRITER_ID,
@@ -115,7 +125,12 @@ describe("worktree.scan primitive", () => {
   });
 
   it("rejects non-writer DO callers before reaching disk primitives", async () => {
-    const scan = vi.fn(async () => ({ stateHash: "state:" + "0".repeat(64), files: [] }));
+    const scan = vi.fn(async () => ({
+      stateHash: "state:" + "0".repeat(64),
+      files: [],
+      skipped: [],
+      wipedRepo: false,
+    }));
     const service = createWorktreeService({
       scan,
       project: async (_repoPath, _head, stateHash) => ({ stateHash }),

@@ -155,7 +155,7 @@ export class VaultController {
     const mapping = vaultPathMapping(root);
     const vcsPath = mapping.toVcsPath(finalPath);
 
-    const existing = await vcs.readFile("", vcsPath).catch(() => null);
+    const existing = await vcs.readFile({ path: vcsPath }).catch(() => null);
     if (existing) return finalPath; // already exists — caller just opens it
 
     await vcs.edit({

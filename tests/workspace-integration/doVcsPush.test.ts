@@ -798,7 +798,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
         pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c2", {
           repoPaths: ["packages/a"],
           sourceHead: vcsContextHead("c1"),
-          actor: USER,
         })
       ).rejects.toThrow(/may only push their own context head \(ctx:c2\)/);
       expect(readMain("packages/a")).toBe(null);
@@ -808,7 +807,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
       const result = await pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
         repoPaths: ["packages/a"],
-        actor: USER,
       });
       expect(result.status).toBe("pushed");
       expect(readMain("packages/a")).toBe(stateHash);
@@ -819,7 +817,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       await expect(
         pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, undefined, {
           repoPaths: ["packages/a"],
-          actor: USER,
         })
       ).rejects.toThrow(/sourceHead is required.*no registered context/);
       expect(readMain("packages/a")).toBe(null);
@@ -831,7 +828,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
         pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
           repoPaths: ["packages/a"],
           sourceHead: "",
-          actor: USER,
         })
       ).rejects.toThrow(/sourceHead must be a non-empty string/);
       expect(readMain("packages/a")).toBe(null);
@@ -843,7 +839,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
         pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, undefined, {
           repoPaths: ["packages/a"],
           sourceHead: vcsContextHead("c1"),
-          actor: USER,
         })
       ).rejects.toThrow(/has no registered context/);
       expect(readMain("packages/a")).toBe(null);
@@ -854,7 +849,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       const result = await pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
         repoPaths: ["packages/a"],
         sourceHead: vcsContextHead("c1"),
-        actor: USER,
       });
       expect(result.status).toBe("pushed");
       expect(readMain("packages/a")).toBe(stateHash);

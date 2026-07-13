@@ -133,7 +133,7 @@ Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `code` | string | Yes | Code to execute |
-| `syntax` | `"typescript"` \| `"tsx"` \| `"jsx"` | No | Syntax mode (default: `"tsx"`) |
+| `syntax` | `"javascript"` \| `"typescript"` \| `"tsx"` \| `"jsx"` | No | Syntax mode (default: `"tsx"`) |
 | `imports` | `Record<string, string>` | No | Packages to build on-demand. Workspace packages: `"latest"` or a git ref. npm packages: `"npm:<version>"` (e.g. `"npm:^4.17.21"`, `"npm:latest"`) |
 
 ### Panel APIs
@@ -224,22 +224,21 @@ a convenience namespace for non-colliding service names, but rich runtime
 bindings win on collision: `services.workers` is the same ergonomic `workers`
 client, not the raw `workers` service catalog.
 
-#### Worker lifecycle (runtime entity API)
+#### Worker lifecycle (portable typed client)
 
-Launch, list, and retire workers through the **runtime entity API**. Available to
-panels, workers, and server callers. The raw form is
-`rpc.call("main", "runtime.<method>", [...])`.
+Launch, list, and retire regular workers through the portable typed `workers`
+client. It is available to panels, workers, DOs, and eval and delegates to the
+canonical runtime entity API. Raw `runtime.*` calls remain available for
+advanced and non-worker entity operations.
 
 ```
 // Launch a worker — `key` names the instance
 eval({ code: `
-  const handle = await rpc.call("main", "runtime.createEntity", [{
-    kind: "worker",
-    source: "workers/my-worker",
+  const handle = await workers.create("workers/my-worker", {
     key: "my-worker",
     contextId: ctx.contextId,
     ref: \`ctx:${ctx.contextId}\`, // for worker code created/edited in this context
-  }]);
+  });
   scope.workerId = handle.id; // e.g. "worker:workers/my-worker:my-worker"
   console.log("Worker started:", handle.id, "→ target", handle.targetId);
 `
@@ -247,14 +246,14 @@ eval({ code: `
 
 // List running workers
 eval({ code: `
-  const list = await rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
+  const list = await workers.list();
   console.log(list.map(w => w.id + " (" + w.source + ")"));
 `
 })
 
 // Retire (stop) a worker — pass the id from the launch handle (or listEntities)
 eval({ code: `
-  await rpc.call("main", "runtime.retireEntity", [{ id: scope.workerId }]);
+  await workers.destroy(scope.workerId);
 `
 })
 ```
@@ -264,7 +263,7 @@ select the code build. Pass `ref: \`ctx:${ctx.contextId}\`` when launching a
 worker you just created or edited on the current context head. Omit `ref` only
 when you intentionally want the main workspace build.
 
-Launch/list/retire: `runtime.createEntity({ kind: "worker", source, key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `runtime.listEntities({ kind: "worker" })`; `runtime.retireEntity({ id })`. Discover sources with `workers.listSources()`; use each row's `entry` instead of guessing `index.ts`. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
+Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `workers.list()` lists live regular worker **instances**; `workers.destroy(handleOrId)` retires one. `workspace.units.list()` is the unified **registered-unit/build-health** view (workers, panels, apps, extensions, jobs), so it is also the right answer to workspace-level questions such as “which worker units are running/available?”—but it does not replace instance handles. Discover sources with `workers.listSources()`; use each row's `entry` instead of guessing `index.ts`. The raw `runtime.createEntity/listEntities/retireEntity` methods are the canonical entity-lifecycle lower layer, not redundant aliases for `workspace.units`. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
 
 For app data, prefer a Durable Object service over eval `db` or ad hoc files:
 the DO owns SQLite through `this.sql`, the manifest service declares
@@ -373,10 +372,10 @@ cwd values:
 | How far a repo is ahead of main + uncommitted/diverged flags | `await vcs.pushStatus(["panels/my-app"])` |
 | A repo's commit history | `await vcs.log("panels/my-app", 50)` |
 | The edit-ops a commit owns | `await vcs.commitEdits("panels/my-app", { eventId })` |
-| File history / blame (commit-lineage order) | `await vcs.fileHistory("panels/my-app", "index.tsx")` |
+| File history / blame (commit-lineage order) | `await vcs.fileHistory({ repoPath: "panels/my-app", path: "index.tsx" })` |
 | Walk a commit's ancestry (event DAG) | `await vcs.commitAncestors("panels/my-app", eventId)` |
 | Resolve a repo's head to a state hash | `(await vcs.resolveHead("main", "panels/my-app")).stateHash` |
-| Read a file from a repo's head (working content) | `await vcs.readFile("", "index.tsx", "panels/my-app")` |
+| Read a file from a repo's head (working content) | `await vcs.readFile({ path: "index.tsx", repoPath: "panels/my-app" })` |
 | Compare two committed states | `await vcs.diff(leftStateHash, rightStateHash)` |
 | Build-gate committed changes into main (ff-only) | `await vcs.push({ repoPaths: ["panels/my-app"] })` |
 | Preview-build working content (no commit, no main) | `await vcs.previewBuild({ repoPaths: ["panels/my-app"] })` |

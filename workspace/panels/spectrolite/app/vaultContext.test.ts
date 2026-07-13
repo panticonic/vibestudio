@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { vaultContextId, vaultPathMapping, normalizeVaultPath } from "./vaultContext.js";
+import {
+  vaultContextId,
+  vaultPathMapping,
+  normalizeVaultPath,
+  shouldRebindToVaultContext,
+} from "./vaultContext.js";
 
 // Mirrors contextFolderManager's validateContextId grammar (must stay in sync).
 const CONTEXT_ID_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -19,6 +24,17 @@ describe("vaultContextId", () => {
   it("distinguishes different vaults", () => {
     expect(vaultContextId("projects/a")).not.toBe(vaultContextId("projects/b"));
     expect(vaultContextId("projects/notes")).not.toBe(vaultContextId("projects/notes2"));
+  });
+});
+
+describe("shouldRebindToVaultContext", () => {
+  it("rebinds an ordinary initial mount but respects an explicit shared context", () => {
+    expect(shouldRebindToVaultContext("projects/default", "agent-context", undefined)).toBe(true);
+    expect(
+      shouldRebindToVaultContext("projects/default", "agent-context", "agent-context")
+    ).toBe(false);
+    const stable = vaultContextId("projects/default");
+    expect(shouldRebindToVaultContext("projects/default", stable, undefined)).toBe(false);
   });
 });
 

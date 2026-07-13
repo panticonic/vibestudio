@@ -1,13 +1,18 @@
 /**
  * Per-vault context binding + path mapping.
  *
- * A vault binds to a STABLE per-vault context head: `contextId = vault-<hash>`
+ * By default a vault binds to a STABLE per-vault context head: `contextId = vault-<hash>`
  * derived from the vault's workspace-relative root. Opening a panel under that
  * contextId resolves every `vcs.*` call (and the scribe it spawns) to the same
  * durable `ctx:vault-<hash>` head — so reopening a vault resumes its notes, and
  * `main` is touched only by an explicit Publish. Switching vault = reopening the
  * panel under the new vault's contextId (`reopen({ contextId })`), never a
  * runtime `repoRoot` swap (which can't move the head).
+ *
+ * An embedding caller may deliberately pin a vault to a shared context by
+ * supplying the same explicit `contextId` in panel stateArgs. That is useful
+ * for collaborative/testing hosts which already own the context and must not
+ * be silently moved to a different head.
  *
  * The vault is a *subdirectory* of the single workspace tree, but `vcs.*` paths
  * are workspace-root-relative. So a note shown as `E2E.mdx` in a vault rooted at
@@ -46,6 +51,16 @@ function hashVaultPath(input: string): string {
 /** Stable per-vault context id (`vault-<hash>`) for a workspace-relative root. */
 export function vaultContextId(vaultWorkspaceRoot: string): string {
   return `vault-${hashVaultPath(normalizeVaultPath(vaultWorkspaceRoot))}`;
+}
+
+/** Whether initial mounting should move an unpinned panel to its stable vault context. */
+export function shouldRebindToVaultContext(
+  repoRoot: string,
+  runtimeContextId: string | undefined,
+  explicitlyPinnedContextId: string | undefined
+): boolean {
+  if (!runtimeContextId || explicitlyPinnedContextId) return false;
+  return runtimeContextId !== vaultContextId(repoRoot);
 }
 
 export interface VaultPathMapping {

@@ -37,6 +37,7 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { buildMdxConfig, type BuiltMdxConfig, type MdxConfigOptions } from "./mdxConfig.js";
 import { splitMdxBlocks } from "./parseBlocks.js";
 import { reconcileBlocks, type Block } from "../coedit/blockReconcile.js";
+import { wikilinksFromJsx, wikilinksToJsx } from "../mdx/wikilink.js";
 import type {
   CoEditEditor,
   ContainedApply,
@@ -92,7 +93,7 @@ export class MdxEditorCore implements CoEditEditor {
   // -------------------------------------------------------------------------
 
   getCanonical(): string {
-    return this.editor.getEditorState().read(() =>
+    const jsx = this.editor.getEditorState().read(() =>
       exportMarkdownFromLexical({
         root: $getRoot(),
         visitors: this.config.assembled.exportVisitors,
@@ -103,16 +104,18 @@ export class MdxEditorCore implements CoEditEditor {
         jsxIsAvailable: true,
       })
     );
+    return wikilinksFromJsx(jsx);
   }
 
   setCanonical(markdown: string): void {
+    const editorMarkdown = wikilinksToJsx(markdown);
     this.editor.update(
       () => {
         const root = $getRoot();
         root.clear();
         importMarkdownToLexical({
           root,
-          markdown,
+          markdown: editorMarkdown,
           visitors: this.config.assembled.importVisitors,
           syntaxExtensions: this.config.assembled.syntaxExtensions,
           mdastExtensions: this.config.assembled.mdastExtensions,
@@ -243,7 +246,7 @@ export class MdxEditorCore implements CoEditEditor {
   private importFragment(markdown: string): LexicalNode[] {
     const root = $getRoot();
     const before = root.getChildrenSize();
-    const mdastRoot = fromMarkdown(markdown, {
+    const mdastRoot = fromMarkdown(wikilinksToJsx(markdown), {
       extensions: this.config.assembled.syntaxExtensions,
       mdastExtensions: this.config.assembled.mdastExtensions,
     });

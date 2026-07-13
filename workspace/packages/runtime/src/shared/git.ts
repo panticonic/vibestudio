@@ -18,6 +18,11 @@ export type GitClient = GitInteropClient;
 export type {
   GitCompleteWorkspaceDependenciesOptions,
   GitCompleteWorkspaceDependenciesResult,
+  GitCreateDisposableRemoteOptions,
+  GitDisposableRemote,
+  GitDisposableRemoteInspection,
+  GitPublishToDisposableRemoteResult,
+  GitPushDisposableRemoteResult,
   GitImportedWorkspaceRepo,
   GitImportProjectRequest,
   GitOverwritePreview,

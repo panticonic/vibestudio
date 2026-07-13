@@ -30,6 +30,7 @@
 import { reconcileBlocks, type Block, type Collision } from "./blockReconcile.js";
 import { buildEditOps, type ReplaceEditOp } from "./commitEdits.js";
 import { liftLegacyViewState, type ViewStateStore } from "./viewState.js";
+import type { VcsReadFileInput } from "@vibestudio/shared/serviceSchemas/vcs";
 
 /** A single top-level editor block for reconciliation (registry view). */
 export interface EditorBlock {
@@ -122,16 +123,16 @@ export interface EditResult {
 /** A per-repo commit result (`vcs.commit`) — folds working edits into a snapshot. */
 export interface CommitResultRow {
   repoPath: string;
-  stateHash: string;
-  status: "committed" | "unchanged";
+  stateHash: string | null;
+  status: "committed" | "unchanged" | "refused";
+  refusedReason?: string;
   changedPaths: string[];
 }
 
 /** Minimal vcs surface the controller needs (structurally a subset of VcsClient). */
 export interface DocVcs {
   readFile(
-    ref: string,
-    path: string
+    input: VcsReadFileInput
   ): Promise<{
     content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
     stateHash: string;
@@ -224,7 +225,7 @@ export class DocController {
   async load(vcsPath: string): Promise<void> {
     this.detachSubscriptions();
     this.vcsPath = vcsPath;
-    const file = await this.deps.vcs.readFile("", vcsPath);
+    const file = await this.deps.vcs.readFile({ path: vcsPath });
     const original = file && file.content.kind === "text" ? file.content.text : "";
     this.baseStateHash = file?.stateHash ?? null;
 
@@ -403,7 +404,8 @@ export class DocController {
     // Flush any pending debounced working edit first so the commit folds the
     // latest typed content (the debounce may not have fired yet).
     if (this.editTimer != null) {
-      const clear = this.deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+      const clear =
+        this.deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
       clear(this.editTimer);
       this.editTimer = null;
     }
@@ -424,10 +426,16 @@ export class DocController {
     }
 
     const row = rows.find((r) => r.repoPath === this.deps.vaultRepo) ?? rows[0] ?? null;
+    if (row?.status === "refused") {
+      throw new Error(row.refusedReason ?? `Commit refused for ${this.deps.vaultRepo}`);
+    }
     if (!row || row.status === "unchanged") {
       // Nothing to commit — the working copy already equals the committed head.
       this.emitDirty();
       return { stateHash: row?.stateHash ?? this.baseStateHash, changed: false };
+    }
+    if (!row.stateHash) {
+      throw new Error(`Committed ${this.deps.vaultRepo} without a state hash`);
     }
 
     // Remember the commit's repo state hash so its head-advance echo is a no-op,
@@ -484,7 +492,7 @@ export class DocController {
     const isHistoric = this.historicAdvances.delete(advanceHash);
     if (!changedPaths.includes(this.vcsPath)) return;
 
-    const file = await this.deps.vcs.readFile("", this.vcsPath);
+    const file = await this.deps.vcs.readFile({ path: this.vcsPath });
     if (!file || file.content.kind !== "text") return;
     const incomingText = file.content.text;
 
@@ -540,7 +548,8 @@ export class DocController {
     // the latest content before the editor goes away. Must run BEFORE `disposed`
     // is set (disposed short-circuits recordEdit).
     if (this.editTimer != null) {
-      const clear = this.deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+      const clear =
+        this.deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
       clear(this.editTimer);
       this.editTimer = null;
     }

@@ -6,6 +6,53 @@ import type {
   DeleteChannelMembershipInput,
   PutChannelMembershipInput,
 } from "@vibestudio/shared/channelInvites";
+import { withPrivateAccountSubject } from "@vibestudio/shared/actorIdentity";
+import {
+  channelEnvelopePageInfo,
+  normalizeChannelEnvelopePageRequest,
+  type ChannelEnvelopePage,
+  type ChannelEnvelopePageRequest,
+} from "@vibestudio/shared/channelEnvelopePaging";
+import type {
+  AgentHealthInspection,
+  ChannelEnvelopeInspection,
+  ChannelMessageTypeDefinition,
+  ChannelPublication,
+  ChannelRosterInspection,
+  EnvelopeLineage,
+  InvocationStateInspection,
+  InspectAgentHealthInput,
+  InspectChannelRosterInput,
+  InspectInvocationStateInput,
+  InspectPublicationIntegrityInput,
+  InspectStorageDiagnosticsInput,
+  InspectTurnStateInput,
+  PrivateLineageForPublishedEnvelope,
+  PublicationIntegrityInspection,
+  PublishedArtifact,
+  RegistryMutationInput,
+  TurnStateInspection,
+} from "@workspace/runtime/gad-schema";
+export type {
+  AgentHealthInspection,
+  ChannelEnvelopeInspection,
+  ChannelMessageTypeDefinition,
+  ChannelPublication,
+  ChannelRosterInspection,
+  EnvelopeLineage,
+  InvocationStateInspection,
+  InspectAgentHealthInput,
+  InspectChannelRosterInput,
+  InspectInvocationStateInput,
+  InspectPublicationIntegrityInput,
+  InspectStorageDiagnosticsInput,
+  InspectTurnStateInput,
+  PrivateLineageForPublishedEnvelope,
+  PublicationIntegrityInspection,
+  PublishedArtifact,
+  RegistryMutationInput,
+  TurnStateInspection,
+} from "@workspace/runtime/gad-schema";
 import {
   CHANNEL_INVITE_NOTIFICATION_KIND,
   channelInviteFromNotification,
@@ -60,12 +107,14 @@ import {
   MergeEngine,
   blameChain,
   decodeUtf8Text,
+  diffChunks,
   discoverRepoPaths,
   hasConflictMarkers,
   normalizeWorkspaceRepoPath,
   VCS_CONTAINER_SECTIONS,
   type BlameOpRow,
   type BlameResolution,
+  type Chunk as DiffChunk,
   type EditOp as VcsEditOp,
   type MergeComputation,
   type MergeHunk,
@@ -83,7 +132,23 @@ type ProvenanceEditOp = {
   hunks?: unknown;
   mode?: number | null;
   synthetic?: boolean;
+  /** Upstream git authorship for an import-synthetic op — blame's `synthetic`
+   *  stop surfaces it so imported lines still name their git author. */
+  importedAuthor?: { sha: string; authorName?: string; authorEmail?: string } | null;
 };
+
+/** Upstream git authorship handed along by the git-bridge on import publish:
+ *  the walked commit metadata plus a per-path last-touching-commit map. */
+interface UpstreamAuthorshipInput {
+  commits: Array<{
+    sha: string;
+    authorName: string;
+    authorEmail: string;
+    summary: string;
+    committedAt: number;
+  }>;
+  byPath?: Record<string, string>;
+}
 
 /** One repo's slice of a write-ahead publish intent (§6): everything needed to
  *  reconstruct the provenance commit for a main advance whose ref CAS already
@@ -102,6 +167,9 @@ interface PublishIntentEntry {
   editOps: ProvenanceEditOp[];
   /** Provenance ops are synthetic (for example import snapshots) — skip chain checks. */
   synthetic?: boolean;
+  /** Extra envelope metadata for the provenance commit (e.g. import upstream
+   *  authorship). */
+  metadata?: Record<string, unknown>;
 }
 
 interface PublishIntent {
@@ -545,6 +613,8 @@ export interface IngestWorktreeStateInput {
     /** U1: the op's NEW content is binary (no line structure) — hunks are
      *  legitimately absent and blame chain-restarts. */
     binary?: boolean | null;
+    /** Upstream git authorship for a synthetic import op. */
+    importedAuthor?: { sha: string; authorName?: string; authorEmail?: string } | null;
   }> | null;
   /** P3/A2 (blame invariant U2): when true, validate that each non-synthetic
    *  editOp's `oldContentHash` matches the file's content in the FIRST-PARENT
@@ -556,123 +626,6 @@ export interface IngestWorktreeStateInput {
    *  the edit-op rows so VCS provenance ties to the agentic trajectory. */
   invocationId?: string | null;
   turnId?: string | null;
-}
-
-export interface ChannelPublication {
-  eventId: string;
-  trajectoryId: string;
-  branchId: string;
-  channelId: string;
-  channelSeq: number;
-  envelopeId: string;
-  publishedAt: string;
-}
-
-export interface EnvelopeLineage {
-  publication: ChannelPublication;
-  envelope: ChannelEnvelope;
-  trajectoryEvent: TrajectoryEvent;
-}
-
-export interface PublishedArtifact {
-  lineage: EnvelopeLineage;
-}
-
-export interface PrivateLineageForPublishedEnvelope {
-  lineage: EnvelopeLineage;
-  branchEvents: TrajectoryEvent[];
-}
-
-export interface ChannelReplayWindow {
-  envelopes: ChannelEnvelope[];
-  totalCount: number;
-  firstEnvelopeSeq?: number;
-  replayFromId?: number;
-  replayToId?: number;
-  hasMoreBefore?: boolean;
-}
-
-export interface ChannelEnvelopeInspection {
-  envelopeId: string;
-  channelId: string;
-  seq: number;
-  payloadKind?: string;
-  from: JsonRecord;
-  metadata?: JsonRecord;
-  bytes: {
-    from: number;
-    to: number;
-    payload: number;
-    metadata: number;
-    attachments: number;
-  };
-  payloadSummary: unknown;
-  storedRefs: JsonRecord[];
-  publishedAt: string;
-}
-
-export interface PublicationIntegrityInspection {
-  summary: {
-    expectedMappings: number;
-    missingMappings: number;
-    orphanMappings: number;
-    missingPublicationEvents: number;
-    missingPublicationEnvelopes: number;
-    sequenceMismatches: number;
-    channelOriginAgenticEnvelopes: number;
-  };
-  rows: JsonRecord[];
-}
-
-export interface TurnStateInspection {
-  summary: {
-    branches: number;
-    openTurns: number;
-    streamingMessages: number;
-    nonterminalInvocations: number;
-    duplicateOpenedTurns: number;
-  };
-  rows: JsonRecord[];
-}
-
-export interface InvocationStateInspection {
-  summary: {
-    projected: number;
-    startedEvents: number;
-    terminalEvents: number;
-    openProjectedInvocations: number;
-  };
-  rows: JsonRecord[];
-}
-
-export interface ChannelRosterInspection {
-  summary: {
-    rows: number;
-    activeParticipants: number;
-    inactiveParticipants: number;
-  };
-  rows: JsonRecord[];
-}
-
-export interface AgentHealthInspection {
-  channelId: string;
-  branchId: string;
-  generatedAt: string;
-  summary: {
-    ok: boolean;
-    publicationIssues: number;
-    openTurns: number;
-    streamingMessages: number;
-    nonterminalInvocations: number;
-    activeParticipants: number;
-    storageIssues: number;
-  };
-  publicationIntegrity: PublicationIntegrityInspection;
-  turnState: TurnStateInspection;
-  invocationState: InvocationStateInspection;
-  roster: ChannelRosterInspection;
-  envelopes: { rows: ChannelEnvelopeInspection[] };
-  storage: { rows: JsonRecord[] };
 }
 
 export interface ForkTrajectoryBranchInput {
@@ -706,26 +659,6 @@ export interface ForkTrajectoryBranchResult {
     forkEventHash: string;
   }>;
 }
-
-export interface ChannelMessageTypeDefinition {
-  typeId: string;
-  displayMode: "inline" | "row";
-  source: { type: "code"; code: string } | { type: "file"; path: string };
-  imports?: Record<string, string>;
-  stateSchema?: Record<string, unknown>;
-  updateSchema?: Record<string, unknown>;
-  registeredBy?: Record<string, unknown>;
-  updatedAtSeq: number;
-  clearedAtSeq?: number;
-}
-
-export type RegistryMutationInput =
-  | {
-      kind: "upsertMessageType";
-      typeId: string;
-      row: Omit<ChannelMessageTypeDefinition, "typeId" | "updatedAtSeq" | "clearedAtSeq">;
-    }
-  | { kind: "clearMessageType"; typeId: string };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1470,6 +1403,9 @@ interface VcsBlameLineWire {
    *  edit: `create` (line born here), `binary`, `synthetic` (snapshot take), or
    *  `older-than-log`. Absent when a real op authored the lines. */
   degraded: "create" | "binary" | "synthetic" | "older-than-log" | null;
+  /** For `synthetic` import stops: the upstream git author of the last commit
+   *  that touched the path, when the import recorded it. */
+  importedAuthor: { sha: string; authorName?: string; authorEmail?: string } | null;
 }
 
 interface LineageSegment {
@@ -1482,6 +1418,7 @@ interface LineageSegment {
 interface LineageEventStats {
   count: number;
   firstSeq?: number;
+  lastSeq?: number;
 }
 
 interface ProjectionKey {
@@ -1545,7 +1482,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // identical content states don't conflate).
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  static override schemaVersion = 30;
+  // v31: agentic-ergonomics/provenance sweep — trajectory_turns.opened_by_json
+  // (the prompting actor, for commit→turn→human joins via vcsCommitProvenance
+  // + the commit_provenance view), gad_worktree_edit_ops.imported_author_json
+  // (upstream git authorship on import-synthetic ops, surfaced by blame), and
+  // pending-merge infos carry startedAt.
+  static override schemaVersion = 31;
 
   /**
    * IntentIds of publish intents this live instance is actively driving — added
@@ -1772,6 +1714,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
         -- §6.3 turn-decay basis: the turn's per-branch ordinal (count of prior
         -- turns on this (log_id, head) at turn.opened). Wall-clock is display-only.
         ordinal INTEGER,
+        -- v31: the PROMPTING actor — the turn.opened envelope's actor (in a
+        -- multi-human channel, the human whose message opened the turn). The
+        -- commit→invocation→turn join reads this to answer "whose request
+        -- produced commit X".
+        opened_by_json TEXT,
         PRIMARY KEY (log_id, head, turn_id)
       )
     `);
@@ -2059,7 +2006,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
         -- v24: cherry-pick provenance — the source a working row was picked
         -- from (JSON {kind:"commit",logId,eventId} or {kind:"paths",
         -- sourceContextId}). UX breadcrumb only, never load-bearing for replay.
-        picked_from_json TEXT
+        picked_from_json TEXT,
+        -- v31: upstream git authorship for an IMPORT-synthetic op (JSON
+        -- {sha, authorName, authorEmail}). Blame's synthetic stop surfaces it
+        -- so imported lines still answer "who wrote this" with the git author.
+        imported_author_json TEXT
       )
     `);
     // Two sequencing orders: edit_seq is per edit CALL on a (log_id, head) and
@@ -3038,11 +2989,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
   private lineageEventStats(input: ReadLogInput): LineageEventStats {
     let count = 0;
     let firstSeq: number | undefined;
+    let lastSeq: number | undefined;
     for (const segment of this.logLineage(input.logId, input.head)) {
       const { where, bindings } = this.logEventWhereForSegment(segment, input);
       const row = this.sql
         .exec(
-          `SELECT COUNT(*) AS cnt, MIN(seq) AS first_seq FROM log_events WHERE ${where}`,
+          `SELECT COUNT(*) AS cnt, MIN(seq) AS first_seq, MAX(seq) AS last_seq
+           FROM log_events WHERE ${where}`,
           ...bindings
         )
         .one();
@@ -3050,17 +3003,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
       count += segmentCount;
       if (segmentCount > 0) {
         const segmentFirst = asNumber(row["first_seq"]);
+        const segmentLast = asNumber(row["last_seq"]);
         firstSeq = firstSeq === undefined ? segmentFirst : Math.min(firstSeq, segmentFirst);
+        lastSeq = lastSeq === undefined ? segmentLast : Math.max(lastSeq, segmentLast);
       }
     }
-    return { count, ...(firstSeq !== undefined ? { firstSeq } : {}) };
+    return {
+      count,
+      ...(firstSeq !== undefined ? { firstSeq } : {}),
+      ...(lastSeq !== undefined ? { lastSeq } : {}),
+    };
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   readLog(input: ReadLogInput): LogEnvelope[] {
     this.ensureReady();
-    const limit =
-      input.limit != null && input.limit > 0 ? Math.max(Math.trunc(input.limit), 0) : null;
+    const limit = input.limit == null ? null : Math.max(Math.trunc(input.limit), 0);
+    if (limit === 0) return [];
     const segments = this.logLineage(input.logId, input.head);
     const collected: LogEnvelope[] = [];
     // Ancestors hold the lowest seqs: walk root-first.
@@ -3677,7 +3636,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const inherited = this.readLog({
         logId: input.toLogId,
         head: input.toHead,
-        limit: 0,
       });
       for (const envelope of inherited) {
         this.applyProjections(logKind, {
@@ -3846,14 +3804,18 @@ export class GadWorkspaceDO extends DurableObjectBase {
           .one()["n"]
       );
       this.sql.exec(
-        `INSERT OR IGNORE INTO trajectory_turns (log_id, head, turn_id, opened_at, summary, ordinal)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO trajectory_turns
+           (log_id, head, turn_id, opened_at, summary, ordinal, opened_by_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         envelope.logId,
         envelope.head,
         turnId,
         envelope.appendedAt,
         asString(payload["summary"]),
-        priorTurns
+        priorTurns,
+        // The PROMPTING actor: whoever authored the turn.opened event (in a
+        // multi-human channel, the human whose message opened this turn).
+        envelope.actor ? JSON.stringify(envelope.actor) : null
       );
       // §7.3 speculative warm: precompute moderate blocks for the session's
       // likely-next files into the disposable cache. Best-effort, never authority.
@@ -5385,6 +5347,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   readGadFileAtState(input: { stateHash: string; path: string }): JsonRecord | null {
     this.ensureReady();
+    if (!this.hasWorktreeState(input.stateHash)) return null;
     const path = normalizePath(input.path);
     const segments = path.split("/");
     const dirHash = this.manifestDirAtPath(input.stateHash, segments.slice(0, -1).join("/"));
@@ -5584,7 +5547,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *  mismatches into `errors`. Returns the recomputed hash or null. */
   private recomputeManifestHashDeep(
     manifestHash: string,
-    errors: JsonRecord[],
+    errors: Array<Record<string, unknown>>,
     seen: Map<string, string | null>
   ): string | null {
     const cached = seen.get(manifestHash);
@@ -5815,8 +5778,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
                event_id, log_id, head, committed_event_id, committed_seq,
                edit_seq, output_state_hash, ordinal, kind, path,
                old_content_hash, new_content_hash, hunks_json, mode,
-               actor_id, actor_json, invocation_id, turn_id, created_at, synthetic, binary
-             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               actor_id, actor_json, invocation_id, turn_id, created_at, synthetic, binary,
+               imported_author_json
+             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           eventId,
           input.logId,
           input.head,
@@ -5836,7 +5800,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
           input.turnId ?? null,
           now,
           op.synthetic ? 1 : null,
-          op.binary ? 1 : 0
+          op.binary ? 1 : 0,
+          op.importedAuthor ? JSON.stringify(op.importedAuthor) : null
         );
       });
     }
@@ -7149,10 +7114,30 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // history/read methods that used to live on the HOST vcs service; the raw
   // input-object methods above remain the store-internal primitives.
 
+  /** Edit rows can be persisted before the asynchronous trajectory projector
+   * records invocation → turn. Repair that soft join on reads so provenance
+   * becomes complete once trajectory ingestion catches up. */
+  private resolveEditTurnId(row: JsonRecord, invocationId?: string | null): string | null {
+    const stored = asString(row["turn_id"]);
+    if (stored) return stored;
+    const id = invocationId ?? asString(row["invocation_id"]);
+    if (!id) return null;
+    const linked = this.sql
+      .exec(
+        `SELECT turn_id FROM trajectory_invocations
+          WHERE invocation_id = ? AND turn_id IS NOT NULL
+          ORDER BY updated_at DESC LIMIT 1`,
+        id
+      )
+      .toArray()[0] as { turn_id?: string | null } | undefined;
+    return asString(linked?.turn_id ?? null);
+  }
+
   /** Map a raw edit-op row to the camelCase VCS provenance shape. */
   private mapVcsEditOpRow(row: JsonRecord): VcsEditOpRowWire {
     const s = (v: unknown): string | null => (v == null ? null : String(v));
     const n = (v: unknown): number | null => (v == null ? null : Number(v));
+    const invocationId = s(row["invocation_id"]);
     return {
       id: Number(row["id"]),
       eventId: String(row["event_id"]),
@@ -7167,8 +7152,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       newContentHash: s(row["new_content_hash"]),
       mode: n(row["mode"]),
       actorId: s(row["actor_id"]),
-      invocationId: s(row["invocation_id"]),
-      turnId: s(row["turn_id"]),
+      invocationId,
+      turnId: this.resolveEditTurnId(row, invocationId),
       createdAt: s(row["created_at"]),
       hunksJson: s(row["hunks_json"]),
       synthetic: Number(row["synthetic"]) === 1,
@@ -7447,6 +7432,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       turnId: null,
       actorId: null,
       degraded: reason,
+      importedAuthor: null,
     };
   }
 
@@ -7459,19 +7445,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
     invocationId: string | null;
     turnId: string | null;
     actorId: string | null;
+    importedAuthor: { sha: string; authorName?: string; authorEmail?: string } | null;
   } {
     const commitEventId = asString(row["committed_event_id"]);
     const invocationId = asString(row["invocation_id"]);
-    let turnId = asString(row["turn_id"]);
-    if (!turnId && invocationId) {
-      const t = this.sql
-        .exec(
-          `SELECT turn_id FROM trajectory_invocations WHERE invocation_id = ? LIMIT 1`,
-          invocationId
-        )
-        .toArray()[0] as { turn_id?: string | null } | undefined;
-      turnId = asString(t?.turn_id ?? null);
-    }
+    const turnId = this.resolveEditTurnId(row, invocationId);
     let commitMessage: string | null = null;
     if (commitEventId) {
       const s = this.sql
@@ -7480,6 +7458,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const summary = asString(s?.summary ?? null);
       commitMessage = summary ? (summary.split("\n")[0] ?? null) : null;
     }
+    const importedAuthorJson = asString(row["imported_author_json"]);
+    let importedAuthor: { sha: string; authorName?: string; authorEmail?: string } | null = null;
+    if (importedAuthorJson) {
+      try {
+        importedAuthor = JSON.parse(importedAuthorJson);
+      } catch {
+        importedAuthor = null;
+      }
+    }
     return {
       kind: String(row["kind"]),
       commitEventId,
@@ -7487,6 +7474,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       invocationId,
       turnId,
       actorId: asString(row["actor_id"]),
+      importedAuthor,
     };
   }
 
@@ -7549,7 +7537,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // recently pushed is an attach→action hit (§12 counter #4).
     if (drilldown) {
       this.bumpProvMetric("drilldown", input.after ? "page" : "deepen");
-      this.bumpActionRateIfRendered(`file:${fileHandlePath(logId, norm)}`);
+      // Attach→action accounting is disposable instrumentation. A malformed or
+      // engine-limited LIKE query must never make the provenance read itself
+      // fail (workerd SQLite can reject complex historical render-log rows).
+      try {
+        this.bumpActionRateIfRendered(`file:${fileHandlePath(logId, norm)}`);
+      } catch {
+        // Best-effort metric only; native edit/commit provenance remains usable.
+      }
     }
 
     // §7.3 warm-cache serve: the disposable cache holds the DENSITY/recall leg
@@ -7586,16 +7581,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // a budget miss).
     if (density === null) {
       const started = Date.now();
-      density = this.fileDensityBlock({
-        logId,
-        path: norm,
-        head: input.head,
-        tier,
-        sessionLogId: input.sessionLogId,
-        sessionHead: input.sessionHead,
-        turnSeq,
-        recallKeywords: input.recallKeywords ?? null,
-      });
+      try {
+        density = this.fileDensityBlock({
+          logId,
+          path: norm,
+          head: input.head,
+          tier,
+          sessionLogId: input.sessionLogId,
+          sessionHead: input.sessionHead,
+          turnSeq,
+          recallKeywords: input.recallKeywords ?? null,
+        });
+      } catch {
+        // The density/recall leg is explicitly disposable. Preserve live
+        // exception items and return a successful bounded hint so callers can
+        // continue with authoritative vcs.fileHistory instead of receiving a
+        // tool error from an optional FTS/LIKE implementation detail.
+        this.bumpProvMetric("degrade", "query-error");
+        density = [this.degradeHintItem(input.repoPath, norm)];
+      }
       if (!drilldown && Date.now() - started > PROV_BUDGET_MS) {
         // §7.4/§7.3 ordering: write the observed touch (it does NOT bump the
         // version), THEN stash the density leg at that same version so the
@@ -7760,7 +7764,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
       turnSeq: turnSeq < 0 ? null : turnSeq,
     });
     this.bumpProvMetric("drilldown", "deepen");
-    this.bumpActionRateIfRendered(`claim#${input.claimId}`);
+    // Attach→action accounting is disposable instrumentation. Large or
+    // adversarial render histories can exceed SQLite's LIKE-pattern limits;
+    // metrics must never make the authoritative provenance lookup fail.
+    try {
+      this.bumpActionRateIfRendered(`claim#${input.claimId}`);
+    } catch {
+      // Best-effort metric only (same contract as file provenance).
+    }
 
     const items = this.claimNeighborhoodItems(input.claimId);
     const total = items.length;
@@ -8899,7 +8910,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *  `main` — userland dispatch carries no caller-context head resolution. */
   @rpc({ callers: ["panel", "shell", "do", "worker", "server", "extension"] })
   vcsLog(
-    repoPath: string,
+    repoPathOrInput: string | { repoPath: string; limit?: number | null; head?: string | null },
     limit?: number | null,
     head?: string | null
   ): Array<{
@@ -8911,11 +8922,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
     appendedAt: string;
   }> {
     this.ensureReady();
+    const repoPath =
+      typeof repoPathOrInput === "string" ? repoPathOrInput : repoPathOrInput.repoPath;
+    if (typeof repoPathOrInput !== "string") {
+      limit = repoPathOrInput.limit;
+      head = repoPathOrInput.head;
+    }
     const max = limit && limit > 0 ? limit : 50;
     const events = this.readLog({
       logId: logIdForRepoPath(repoPath),
       head: head ?? "main",
-      limit: 0,
     });
     return events
       .filter(
@@ -9013,7 +9029,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   ): Promise<{
     headStateHash: string | null;
     baseStateHash: string | null;
+    /** A TRUE fork: main advanced past the merge-base AND the head has its own
+     *  commits — a fast-forward push is impossible without a merge. */
     diverged: boolean;
+    /** Main advanced but the head is a pure ancestor of it: nothing to push,
+     *  no merge required. NOT divergence. */
+    behind: boolean;
     added: string[];
     removed: string[];
     changed: string[];
@@ -9021,7 +9042,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const headStateHash = await this.committedHeadState(logId, repoPath, head);
     const baseStateHash = (await this.refsStore().readMain(repoPath))?.stateHash ?? null;
     if (!headStateHash || headStateHash === baseStateHash) {
-      return { headStateHash, baseStateHash, diverged: false, added: [], removed: [], changed: [] };
+      return {
+        headStateHash,
+        baseStateHash,
+        diverged: false,
+        behind: false,
+        added: [],
+        removed: [],
+        changed: [],
+      };
     }
 
     let diffBaseStateHash: string;
@@ -9032,35 +9061,97 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const mergeBase =
         this.getMergeBase({ leftStateHash: baseStateHash, rightStateHash: headStateHash })
           .baseStateHash ?? EMPTY_STATE_HASH;
-      diverged = mergeBase !== baseStateHash;
-      // Upstream-only drift: the head is already contained in main.
+      // Pure ancestor of main → merely BEHIND (upstream-only drift), never
+      // diverged: reporting it as diverged sends agents into pointless
+      // merge/rebase loops when there is nothing to push at all.
       if (mergeBase === headStateHash) {
-        return { headStateHash, baseStateHash, diverged, added: [], removed: [], changed: [] };
+        return {
+          headStateHash,
+          baseStateHash,
+          diverged: false,
+          behind: true,
+          added: [],
+          removed: [],
+          changed: [],
+        };
       }
+      diverged = mergeBase !== baseStateHash;
       diffBaseStateHash = mergeBase;
     }
 
     const diff = await this.diffStatePaths(store, diffBaseStateHash, headStateHash);
-    return { headStateHash, baseStateHash, diverged, ...diff };
+    return { headStateHash, baseStateHash, diverged, behind: diverged, ...diff };
   }
 
-  /**
-   * Status of a repo head: its unpublished changes against the repo's
-   * protected `main` (a pure state-diff, never a worktree scan), its
-   * uncommitted working-edit count, and whether the repo was deleted
-   * (archived). `dirty` iff ahead of main or carrying uncommitted edits;
-   * `main` is always clean (it is the baseline). `head` defaults to `main` —
-   * userland dispatch carries no caller-context head resolution.
-   */
-  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
-  async vcsStatus(input: { repoPath: string; head?: string | null }): Promise<{
-    stateHash: string | null;
-    dirty: boolean;
-    uncommitted: number;
+  /** The wire shape of a parked merge for status surfaces, or null. */
+  private pendingMergeInfo(
+    logId: string,
+    head: string
+  ): { source: string; conflictPaths: string[]; startedAt: string | null } | null {
+    const pending = this.getPendingMerge({ logId, head }).info as
+      | (ReturnType<GadWorkspaceDO["getPendingMerge"]>["info"] & { startedAt?: string | null })
+      | null;
+    if (!pending) return null;
+    return {
+      source: pending.theirsHead,
+      conflictPaths: pending.conflicts.map((c) => c.path),
+      startedAt: pending.startedAt ?? null,
+    };
+  }
+
+  /** The WORKING delta of a ctx head: working content (committed head +
+   *  uncommitted ops) vs the committed head — the paths a commit would seal.
+   *  Empty for `main` (a pure ref carries no working rows). */
+  private async workingDelta(
+    store: HostContentStore,
+    logId: string,
+    head: string,
+    committedStateHash: string | null
+  ): Promise<{
+    workingStateHash: string | null;
     added: string[];
     removed: string[];
     changed: string[];
+  }> {
+    if (head === "main" || this.workingEditRows(logId, head).length === 0) {
+      return { workingStateHash: committedStateHash, added: [], removed: [], changed: [] };
+    }
+    const workingStateHash = (await this.resolveWorkingState({ logId, head })).stateHash;
+    // A fresh ctx head has no explicit committed row yet, but it still inherits
+    // the repo's protected main (or pinned context base). Diff working content
+    // against that effective committed base, not EMPTY_STATE_HASH, otherwise
+    // the first edit falsely reports every inherited file as newly added.
+    const effectiveCommittedStateHash =
+      committedStateHash ?? (await this.resolveCommittedBaseState(store, logId, head));
+    if (!workingStateHash || workingStateHash === effectiveCommittedStateHash) {
+      return { workingStateHash, added: [], removed: [], changed: [] };
+    }
+    const diff = await this.diffStatePaths(store, effectiveCommittedStateHash, workingStateHash);
+    return { workingStateHash, ...diff };
+  }
+
+  /**
+   * Status of a repo head against BOTH baselines: the COMMITTED delta (ctx
+   * committed head vs the repo's protected `main` — what a push would carry)
+   * and the WORKING delta (working content vs the committed head — what a
+   * commit would seal), each with full path lists (nothing is count-only).
+   * Plus diverged/behind classification, deletion, and any pending merge.
+   * `dirty` iff either delta is non-empty; `main` is always clean (it is the
+   * baseline). `head` defaults to `main` — userland dispatch carries no
+   * caller-context head resolution.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async vcsStatus(input: { repoPath: string; head?: string | null }): Promise<{
+    committedStateHash: string | null;
+    workingStateHash: string | null;
+    dirty: boolean;
+    committed: { added: string[]; removed: string[]; changed: string[] };
+    working: { added: string[]; removed: string[]; changed: string[] };
+    uncommitted: number;
+    diverged: boolean;
+    behind: boolean;
     deleted: boolean;
+    pendingMerge: { source: string; conflictPaths: string[]; startedAt: string | null } | null;
   }> {
     this.ensureReady();
     const norm = normalizeRepoPathArg(input.repoPath);
@@ -9068,21 +9159,30 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const resolvedHead = input.head ?? "main";
     const store = this.contentStore();
     const delta = await this.unpublishedDelta(store, logId, norm, resolvedHead);
+    const working = await this.workingDelta(store, logId, resolvedHead, delta.headStateHash);
     const deleted = delta.baseStateHash === null && this.repoLogWasArchived(logId);
     const uncommitted =
       resolvedHead === "main" ? 0 : this.workingEditRows(logId, resolvedHead).length;
+    const pendingMerge =
+      resolvedHead === "main" ? null : this.pendingMergeInfo(logId, resolvedHead);
     return {
-      stateHash: delta.headStateHash,
+      committedStateHash: delta.headStateHash,
+      workingStateHash: working.workingStateHash,
       dirty:
         delta.added.length > 0 ||
         delta.removed.length > 0 ||
         delta.changed.length > 0 ||
+        working.added.length > 0 ||
+        working.removed.length > 0 ||
+        working.changed.length > 0 ||
         uncommitted > 0,
+      committed: { added: delta.added, removed: delta.removed, changed: delta.changed },
+      working: { added: working.added, removed: working.removed, changed: working.changed },
       uncommitted,
-      added: delta.added,
-      removed: delta.removed,
-      changed: delta.changed,
+      diverged: delta.diverged,
+      behind: delta.behind,
       deleted,
+      pendingMerge,
     };
   }
 
@@ -9101,7 +9201,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     mainStateHash: string | null;
     ahead: number;
     uncommitted: number;
+    uncommittedPaths: string[];
     diverged: boolean;
+    behind: boolean;
     /** The repo was deleted from the workspace (its `main` is archived/gone).
      *  A push will be refused — restore or drop the context, don't re-push. */
     deleted: boolean;
@@ -9113,6 +9215,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const resolvedHead = input.head ?? "main";
     const store = this.contentStore();
     const delta = await this.unpublishedDelta(store, logId, norm, resolvedHead);
+    const working = await this.workingDelta(store, logId, resolvedHead, delta.headStateHash);
     const files = [
       ...delta.added.map((path) => ({ path, kind: "added" as const })),
       ...delta.removed.map((path) => ({ path, kind: "removed" as const })),
@@ -9121,6 +9224,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const deleted = delta.baseStateHash === null && this.repoLogWasArchived(logId);
     const uncommitted =
       resolvedHead === "main" ? 0 : this.workingEditRows(logId, resolvedHead).length;
+    const uncommittedPaths = Array.from(
+      new Set([...working.added, ...working.removed, ...working.changed])
+    ).sort();
     return {
       repoPath: norm,
       head: resolvedHead,
@@ -9128,7 +9234,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       mainStateHash: delta.baseStateHash,
       ahead: files.length,
       uncommitted,
+      uncommittedPaths,
       diverged: delta.diverged,
+      behind: delta.behind,
       deleted,
       files,
     };
@@ -9601,10 +9709,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // any of them across an await boundary.
     const invocationToken = this.invocationToken;
     const confinement = this.pushSourceConfinement();
-    // `actor` is derived from the verified caller (client-side flip: userland
-    // callers no longer thread it). An explicit actor (in-process host callers)
-    // still wins for parity with the pre-flip contract.
-    const actor = input.actor ?? this.callerActor();
+    // `actor` is derived from the verified caller; an explicit actor is
+    // honored only for privileged in-process callers (see lifecycleActor).
+    const actor = this.lifecycleActor(input.actor, "vcsPush");
     this.ensureReady();
     const sourceHead = this.resolvePushSourceHead(input.sourceHead, confinement);
     // Structural source-head confinement (register row 11): a sandboxed caller
@@ -9694,7 +9801,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       expectedOld: mainState,
       next: null,
       detail: { archiveHead, logCursor },
-      actor: input.actor ?? null,
+      actor: this.lifecycleActor(input.actor, "vcsDeleteRepo"),
     };
     // Mark in-flight + record durably, THEN archive (DO-internal), THEN the CAS.
     // Archive after the intent so a crash before the archive still leaves the DO
@@ -9809,7 +9916,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       expectedOld: null,
       next: newest.stateHash,
       detail: { archiveHead: newest.head, logCursor },
-      actor: input.actor ?? null,
+      actor: this.lifecycleActor(input.actor, "vcsRestoreRepo"),
     };
     this.inFlightLifecycleIntents.add(intent.intentId);
     this.transaction(() => this.recordLifecycleIntent(intent));
@@ -9883,7 +9990,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }): Promise<{ repoPath: string; head: string; inherited: number; stateHash: string }> {
     const invocationToken = this.invocationToken;
     this.ensureReady();
-    const actor = input.actor ?? this.callerActor();
+    const actor = this.lifecycleActor(input.actor, "vcsForkRepo");
     const from = normalizeRepoPathArg(input.fromPath);
     const to = normalizeRepoPathArg(input.toPath);
     if (from === to) throw new Error(`forkRepo: source and destination are the same (${from})`);
@@ -10091,13 +10198,38 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** The verified caller as a provenance actor, read synchronously at
-   *  handler entry (the invocation-token contract). Falls back to the system
-   *  actor when there is no active RPC caller (alarm/lifecycle). */
+   *  handler entry (the invocation-token contract). Carries the host-verified
+   *  account subject (WP0 §3.4, mirrored onto the dispatch caller as `userId`)
+   *  so lifecycle records attribute to the HUMAN, not just the device/panel.
+   *  Falls back to the system actor when there is no active RPC caller
+   *  (alarm/lifecycle). */
   private callerActor(): ActorRef {
     const caller = this.caller;
-    return caller
-      ? ({ id: caller.callerId, kind: caller.callerKind } as unknown as ActorRef)
-      : SYSTEM_ACTOR;
+    if (!caller) return SYSTEM_ACTOR;
+    const userId = (caller as { userId?: string }).userId;
+    return withPrivateAccountSubject(
+      { id: caller.callerId, kind: caller.callerKind } as ActorRef,
+      userId ? { userId } : undefined
+    );
+  }
+
+  /**
+   * Actor for the lifecycle/publish RPCs (push / fork / import / delete /
+   * restore). ALWAYS derived from the verified caller for userland callers —
+   * a sandboxed caller cannot record an arbitrary actor into publish or
+   * lifecycle provenance. An explicit `actor` is honored ONLY on the
+   * privileged in-process paths (host bridge / DO internals: null, "do", or
+   * "server" callers); anyone else passing one gets a loud refusal instead of
+   * a silent spoof-or-ignore.
+   */
+  private lifecycleActor(inputActor: ActorRef | null | undefined, method: string): ActorRef {
+    if (!inputActor) return this.callerActor();
+    const kind = this.caller?.callerKind ?? null;
+    if (kind === null || kind === "do" || kind === "server") return inputActor;
+    throw new Error(
+      `${method}: actor is derived from the verified caller — remove the explicit actor ` +
+        `(only host internals may act on behalf)`
+    );
   }
 
   private async runVcsPush(
@@ -10342,6 +10474,158 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /**
+   * Publish a complete host-authored metadata repo snapshot. Host services such
+   * as the workspace-config writer already operate on a full CAS-backed file
+   * set, but must never advance a protected ref directly: that would leave the
+   * GAD main lineage behind with no recoverable intent. This method stages the
+   * snapshot as a first-class source commit, records the write-ahead publish
+   * intent, performs the gated CAS, and completes provenance before returning.
+   * It is server/DO-only and still requires the host-minted invocation token at
+   * refs.updateMains, so approval attribution is identical to ordinary pushes.
+   */
+  @rpc({ callers: ["server", "do"] })
+  async vcsPublishHostMutation(input: {
+    repoPath: string;
+    expectedOld: string;
+    files: Array<{ path: string; contentHash: string; mode: number }>;
+    message: string;
+    operation: "push" | "import";
+    actor?: ActorRef | null;
+  }): Promise<{ stateHash: string }> {
+    const invocationToken = this.invocationToken;
+    const actor = this.lifecycleActor(input.actor, "vcsPublishHostMutation");
+    this.ensureReady();
+    try {
+      await this.healPublishDrift();
+    } catch (error) {
+      throw new Error(
+        `vcsPublishHostMutation failed while reconciling main: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
+
+    const store = this.contentStore();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    const logId = logIdForRepoPath(repoPath);
+    const current = (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+    if (current !== input.expectedOld) {
+      throw new Error(
+        `compare-and-swap conflict for ${repoPath}: expected ${input.expectedOld}, current ${current}`
+      );
+    }
+
+    const files = input.files.map((file) => ({
+      path: normalizePath(file.path),
+      contentHash: file.contentHash,
+      mode: file.mode,
+    }));
+    let oldFiles: StateFileEntry[];
+    let editOps: ProvenanceEditOp[];
+    try {
+      oldFiles = current === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, current);
+      editOps = this.mergeEditOps(oldFiles, files);
+    } catch (error) {
+      throw new Error(
+        `vcsPublishHostMutation failed while preparing ${repoPath}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
+    const sourceHead = `host:${crypto.randomUUID()}`;
+    let staged: ReturnType<GadWorkspaceDO["ingestWorktreeStateInTxn"]>;
+    try {
+      staged = this.transaction(() =>
+        this.ingestWorktreeStateInTxn({
+          logId,
+          head: sourceHead,
+          logKind: "vcs",
+          files,
+          baseStateHash: current,
+          parentStateHashes: current === EMPTY_STATE_HASH ? [] : [current],
+          actor,
+          summary: input.message,
+          eventKind: "state.snapshot_ingested",
+        })
+      );
+    } catch (error) {
+      throw new Error(
+        `vcsPublishHostMutation failed while staging ${repoPath}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
+    if (staged.stateHash === current) return { stateHash: current };
+
+    const intent: PublishIntent = {
+      intentId: crypto.randomUUID(),
+      operation: input.operation,
+      entries: [
+        {
+          repoPath,
+          logId,
+          expectedOld: current === EMPTY_STATE_HASH ? null : current,
+          next: staged.stateHash,
+          parentEventId: staged.eventId,
+          parentStateHash: staged.stateHash,
+          files,
+          editOps,
+        },
+      ],
+      message: input.message,
+      actor,
+      sourceHead,
+    };
+    this.inFlightPublishIntents.add(intent.intentId);
+    try {
+      this.transaction(() => this.recordPublishIntent(intent));
+    } catch (error) {
+      this.inFlightPublishIntents.delete(intent.intentId);
+      throw new Error(
+        `vcsPublishHostMutation failed while recording intent for ${repoPath}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
+    try {
+      try {
+        await this.refsStore().updateMains({
+          entries: [
+            {
+              repoPath,
+              expectedOld: current === EMPTY_STATE_HASH ? null : current,
+              next: staged.stateHash,
+            },
+          ],
+          reason: input.message,
+          operation: input.operation,
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        throw new Error(
+          `vcsPublishHostMutation failed while advancing ${repoPath}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      try {
+        this.completePublishIntent(intent);
+      } catch (error) {
+        throw new Error(
+          `vcsPublishHostMutation failed while completing provenance for ${repoPath}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      try {
+        await this.mirrorStateToContentStore(store, files, staged.stateHash);
+      } catch (error) {
+        throw new Error(
+          `vcsPublishHostMutation failed while mirroring ${repoPath}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      return { stateHash: staged.stateHash };
+    } finally {
+      this.inFlightPublishIntents.delete(intent.intentId);
+    }
+  }
+
+  /**
    * Publish an imported repo tree onto its protected `main`. The git-bridge
    * ingests the outside-world git history onto a NON-MAIN `import:*` staging
    * head (preserving commit messages/authors), then calls this method; the
@@ -10359,17 +10643,27 @@ export class GadWorkspaceDO extends DurableObjectBase {
     sourceHead: string;
     message?: string | null;
     actor?: ActorRef | null;
+    /** Upstream git authorship (per-path last-touching commit + commit meta) —
+     *  recorded on the import envelope and per-op so blame can name the git
+     *  author instead of a bare "synthetic import". */
+    upstreamAuthorship?: UpstreamAuthorshipInput | null;
   }): Promise<VcsImportPublishResultDo> {
     // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
     // and verified caller synchronously, before any await.
     const invocationToken = this.invocationToken;
-    const actor = input.actor ?? this.callerActor();
+    const actor = this.lifecycleActor(input.actor, "vcsImportPublish");
     this.ensureReady();
     return this.runVcsImportPublish({ ...input, actor }, invocationToken);
   }
 
   private async runVcsImportPublish(
-    input: { repoPath: string; sourceHead: string; message?: string | null; actor: ActorRef },
+    input: {
+      repoPath: string;
+      sourceHead: string;
+      message?: string | null;
+      actor: ActorRef;
+      upstreamAuthorship?: UpstreamAuthorshipInput | null;
+    },
     invocationToken: string | undefined
   ): Promise<VcsImportPublishResultDo> {
     const store = this.contentStore();
@@ -10409,11 +10703,29 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // Import provenance ops (main → imported tree). True per-line hunks are
     // unavailable for an external git snapshot, so the ops are stamped SYNTHETIC
     // (blame treats them as a chain restart, A2) and skip first-parent
-    // chain-continuity validation at completion.
-    const editOps = this.mergeEditOps(oursFiles, files).map((op) => ({
-      ...op,
-      synthetic: true as const,
-    }));
+    // chain-continuity validation at completion. Upstream authorship (when the
+    // bridge walked it) rides per-op: blame's synthetic stop then names the git
+    // author of the last upstream commit that touched the path.
+    const authorship = input.upstreamAuthorship ?? null;
+    const commitBySha = new Map((authorship?.commits ?? []).map((c) => [c.sha, c] as const));
+    const importedAuthorFor = (
+      path: string
+    ): { sha: string; authorName?: string; authorEmail?: string } | null => {
+      const sha = authorship?.byPath?.[path];
+      if (!sha) return null;
+      const commit = commitBySha.get(sha);
+      return commit
+        ? { sha, authorName: commit.authorName, authorEmail: commit.authorEmail }
+        : { sha };
+    };
+    const editOps = this.mergeEditOps(oursFiles, files).map((op) => {
+      const importedAuthor = importedAuthorFor(op.path);
+      return {
+        ...op,
+        synthetic: true as const,
+        ...(importedAuthor ? { importedAuthor } : {}),
+      };
+    });
     const sourceEventId = this.commitEventIdOf(stagingRef, `${repoPath}:${input.sourceHead}`);
     const entry: PublishIntentEntry = {
       repoPath,
@@ -10425,6 +10737,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
       files,
       editOps,
       synthetic: true,
+      // Envelope metadata (bounded): the walked upstream commits, so the import
+      // event itself records where the imported history came from.
+      ...(authorship
+        ? { metadata: { upstreamAuthorship: { commits: authorship.commits.slice(0, 500) } } }
+        : {}),
     };
     const intent: PublishIntent = {
       intentId: crypto.randomUUID(),
@@ -10574,6 +10891,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           ...(e.editOps.length > 0
             ? { editOps: e.editOps, validateFirstParentChain: !e.synthetic }
             : {}),
+          ...(e.metadata ? { metadata: e.metadata } : {}),
         });
       }
       this.deletePublishIntent(intent.intentId);
@@ -11367,6 +11685,56 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { baseView };
   }
 
+  /**
+   * Add one newly-created protected-main repo to an existing context's pinned
+   * base without rebasing or advancing any of its other repo pins. Used by
+   * import/create flows so the initiating context can read the new repo
+   * immediately while preserving isolation for every pre-existing repo.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsAdoptMainRepoIntoContext(input: {
+    contextId: string;
+    repoPath: string;
+  }): Promise<{ baseView: string; repoStateHash: string; adopted: boolean }> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    const main = await this.refsStore().readMain(repoPath);
+    const repoStateHash = main?.stateHash ?? null;
+    if (!repoStateHash || repoStateHash === EMPTY_STATE_HASH) {
+      throw new Error(`vcs adopt context repo: protected main is absent for ${repoPath}`);
+    }
+    const existingBase = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
+    if (!existingBase) {
+      const baseView = await this.workspaceViewFromRefs(store);
+      this.setContextBase({ contextId: input.contextId, stateHash: baseView });
+      this.contextComposedViewCache.delete(input.contextId);
+      return { baseView, repoStateHash, adopted: true };
+    }
+    const repos = await this.decomposePinnedViewLocal(store, existingBase);
+    const normalized = normalizeRepoPathArg(repoPath);
+    const current = repos.find((repo) => normalizeRepoPathArg(repo.repoPath) === normalized);
+    if (current) {
+      return { baseView: existingBase, repoStateHash: current.stateHash, adopted: false };
+    }
+    // A context-created overlay at the same path already resolves independently
+    // of its base. Do not rewrite that lineage merely because main gained a
+    // repo with the same name.
+    const contextHead = `ctx:${input.contextId}`;
+    const contextState = this.resolveWorktreeHeadInternal(logIdForRepoPath(repoPath), contextHead);
+    const hasWorking = this.workingEditRows(logIdForRepoPath(repoPath), contextHead).length > 0;
+    if (contextState || hasWorking) {
+      return { baseView: existingBase, repoStateHash, adopted: false };
+    }
+    const baseView = await this.composeRepoStatesMirrored(store, [
+      ...repos,
+      { repoPath, stateHash: repoStateHash },
+    ]);
+    this.setContextBase({ contextId: input.contextId, stateHash: baseView });
+    this.contextComposedViewCache.delete(input.contextId);
+    return { baseView, repoStateHash, adopted: true };
+  }
+
   /** Record (or refresh) a child context's fork breadcrumb — UX lineage only,
    *  never consulted by merge. Idempotent upsert on `context_id`. */
   private recordContextForkProvenance(
@@ -11647,6 +12015,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
       ahead: boolean;
       behind: boolean;
       deleted: boolean;
+      pendingMerge: {
+        source: string;
+        conflictPaths: string[];
+        startedAt: string | null;
+      } | null;
     }>
   > {
     this.ensureReady();
@@ -11679,6 +12052,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
       ahead: boolean;
       behind: boolean;
       deleted: boolean;
+      pendingMerge: {
+        source: string;
+        conflictPaths: string[];
+        startedAt: string | null;
+      } | null;
     }> = [];
     for (const key of repoKeys) {
       const ctx = ctxByRepo.get(key) ?? null;
@@ -11693,6 +12071,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
       // was archived — retired via deleteRepo (not a brand-new unpushed repo,
       // which also lacks a main but has no archive head).
       const deleted = mainState === null && this.repoLogWasArchived(logIdForRepoPath(repoPath));
+      const pendingMerge = this.pendingMergeInfo(
+        logIdForRepoPath(repoPath),
+        `ctx:${input.contextId}`
+      );
       let ahead = false;
       if (forked) {
         if (mainState === null) {
@@ -11706,8 +12088,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
           ahead = mergeBase !== ctx!.stateHash;
         }
       }
-      if (forked || uncommitted || behind || deleted) {
-        out.push({ repoPath, forked, uncommitted, ahead, behind, deleted });
+      if (forked || uncommitted || behind || deleted || pendingMerge) {
+        out.push({ repoPath, forked, uncommitted, ahead, behind, deleted, pendingMerge });
       }
     }
     return out.sort((a, b) => a.repoPath.localeCompare(b.repoPath));
@@ -12007,6 +12389,42 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.memoryIndexMode;
   }
 
+  /** The memory index is a disposable projection. Reconcile commit summaries
+   * from authoritative transition/log rows before commit recall so a missed
+   * projector write, cache reset, or partial migration self-heals on read. */
+  private ensureCommitMemoryIndex(): void {
+    this.ensureMemoryIndex();
+    const missing = this.sql
+      .exec(
+        `SELECT DISTINCT e.log_id, e.head, st.event_id, st.output_state_hash, st.summary
+           FROM gad_state_transitions st
+           JOIN log_events e ON e.envelope_id = st.event_id
+          WHERE TRIM(COALESCE(st.summary, '')) <> ''
+            AND NOT EXISTS (
+              SELECT 1 FROM gad_memory_fts m
+               WHERE m.kind = 'commit'
+                 AND m.event_id = st.event_id
+                 AND COALESCE(m.log_id, '') = COALESCE(e.log_id, '')
+                 AND COALESCE(m.head, '') = COALESCE(e.head, '')
+            )`
+      )
+      .toArray() as JsonRecord[];
+    for (const row of missing) {
+      const summary = asString(row["summary"]);
+      const eventId = asString(row["event_id"]);
+      const outputStateHash = asString(row["output_state_hash"]);
+      if (!summary || !eventId || !outputStateHash) continue;
+      this.indexMemoryRow({
+        text: summary,
+        kind: "commit",
+        logId: asString(row["log_id"]),
+        head: asString(row["head"]),
+        eventId,
+        anchor: { commitEventId: eventId, outputStateHash },
+      });
+    }
+  }
+
   private indexMemoryRow(row: {
     text: string;
     kind: "message" | "claim" | "file" | "commit";
@@ -12139,6 +12557,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // otherwise duplicates eat slots and the caller's page under-fills (§8.1/C6).
     const fetchLimit = Math.min(limit * 3, 150);
     const kinds = input.kinds && input.kinds.length > 0 ? input.kinds : null;
+    if (kinds === null || kinds.includes("commit")) this.ensureCommitMemoryIndex();
     const pathPrefixes =
       input.pathPrefixes && input.pathPrefixes.length > 0 ? input.pathPrefixes : null;
     // (path IS NULL OR path = pre OR path LIKE 'pre/%') for each prefix, OR-ed.
@@ -13188,139 +13607,62 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  getChannelReplayWindow(input: {
-    channelId: string;
-    mode: "initial" | "after" | "before";
-    sinceSeq?: number | null;
-    beforeSeq?: number | null;
-    limit?: number | null;
-  }): ChannelReplayWindow {
+  readChannelEnvelopes(input: ChannelEnvelopePageRequest): ChannelEnvelopePage<ChannelEnvelope> {
     this.ensureReady();
-    const rawLimit = input.limit ?? 50;
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 0), 500) : 50;
-    const stats = this.lineageEventStats({ logId: input.channelId, head: CHANNEL_LOG_HEAD });
+    const request = normalizeChannelEnvelopePageRequest(input);
+    const stats = this.lineageEventStats({
+      logId: request.channelId,
+      head: CHANNEL_LOG_HEAD,
+      payloadKind: request.payloadKind,
+    });
     let rows: LogEnvelope[];
-    if (input.mode === "after") {
-      const sinceSeq = input.sinceSeq ?? 0;
+    if (request.limit === 0) {
+      rows = [];
+    } else if (request.window.kind === "after") {
       rows = this.readLog({
-        logId: input.channelId,
+        logId: request.channelId,
         head: CHANNEL_LOG_HEAD,
-        afterSeq: sinceSeq,
-        limit,
+        afterSeq: request.window.seq,
+        ...(request.window.throughSeq !== undefined
+          ? { beforeSeq: request.window.throughSeq + 1 }
+          : {}),
+        limit: request.limit,
+        payloadKind: request.payloadKind,
       });
-    } else if (input.mode === "before") {
-      if (input.beforeSeq == null) throw new Error("beforeSeq required for before replay");
+    } else if (request.window.kind === "before") {
       rows = this.readLogTail({
-        logId: input.channelId,
+        logId: request.channelId,
         head: CHANNEL_LOG_HEAD,
-        beforeSeq: input.beforeSeq,
-        limit,
+        beforeSeq: request.window.seq,
+        limit: request.limit,
+        payloadKind: request.payloadKind,
       });
     } else {
       rows = this.readLogTail({
-        logId: input.channelId,
+        logId: request.channelId,
         head: CHANNEL_LOG_HEAD,
-        limit,
+        limit: request.limit,
+        payloadKind: request.payloadKind,
       });
     }
-    const replayFromId = rows.length > 0 ? rows[0]!.seq : undefined;
-    const replayToId = rows.length > 0 ? rows[rows.length - 1]!.seq : undefined;
-    let hasMoreBefore: boolean | undefined;
-    if (input.mode === "initial") {
-      hasMoreBefore =
-        replayFromId !== undefined && stats.firstSeq !== undefined && stats.firstSeq < replayFromId;
-    } else if (input.mode === "before") {
-      const anchor = replayFromId ?? input.beforeSeq ?? 0;
-      hasMoreBefore = anchor > 0 && stats.firstSeq !== undefined && stats.firstSeq < anchor;
-    }
     return {
-      envelopes: rows.map((envelope) => this.channelEnvelopeView(envelope, input.channelId)),
-      totalCount: stats.count,
-      firstEnvelopeSeq: stats.firstSeq,
-      replayFromId,
-      replayToId,
-      ...(hasMoreBefore !== undefined ? { hasMoreBefore } : {}),
+      items: rows.map((envelope) => this.channelEnvelopeView(envelope, request.channelId)),
+      pageInfo: channelEnvelopePageInfo(
+        request,
+        { totalCount: stats.count, firstSeq: stats.firstSeq, lastSeq: stats.lastSeq },
+        rows.map((envelope) => envelope.seq)
+      ),
     };
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  listChannelEnvelopesAfter(input: {
-    channelId: string;
-    seq?: number | null;
-    limit?: number | null;
-  }): ChannelEnvelope[] {
-    return this.getChannelReplayWindow({
-      channelId: input.channelId,
-      mode: "after",
-      sinceSeq: input.seq ?? 0,
-      limit: input.limit,
-    }).envelopes;
-  }
-
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  listChannelEnvelopesBefore(input: {
-    channelId: string;
-    seq: number;
-    limit?: number | null;
-  }): ChannelEnvelope[] {
-    return this.getChannelReplayWindow({
-      channelId: input.channelId,
-      mode: "before",
-      beforeSeq: input.seq,
-      limit: input.limit,
-    }).envelopes;
-  }
-
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  getInitialChannelWindow(input: {
-    channelId: string;
-    limit?: number | null;
-  }): ChannelReplayWindow {
-    return this.getChannelReplayWindow({
-      channelId: input.channelId,
-      mode: "initial",
-      limit: input.limit,
-    });
-  }
-
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  listChannelEnvelopes(input: {
-    channelId: string;
-    cursor?: number | null;
-    limit?: number | null;
-    payloadKind?: string | null;
-  }): ChannelEnvelope[] {
-    this.ensureReady();
-    const limit = input.limit ?? 500;
-    if (limit <= 0) return [];
-    return this.readLog({
-      logId: input.channelId,
-      head: CHANNEL_LOG_HEAD,
-      afterSeq: input.cursor ?? 0,
-      payloadKind: input.payloadKind ?? null,
-      limit,
-    }).map((envelope) => this.channelEnvelopeView(envelope, input.channelId));
-  }
-
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  inspectChannelEnvelopes(input: {
-    channelId: string;
-    cursor?: number | null;
-    limit?: number | null;
-    payloadKind?: string | null;
-  }): { rows: ChannelEnvelopeInspection[] } {
-    this.ensureReady();
-    const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
-    const envelopes = this.readLog({
-      logId: input.channelId,
-      head: CHANNEL_LOG_HEAD,
-      afterSeq: input.cursor ?? 0,
-      payloadKind: input.payloadKind ?? null,
-      limit,
-    });
+  inspectChannelEnvelopes(
+    input: ChannelEnvelopePageRequest
+  ): ChannelEnvelopePage<ChannelEnvelopeInspection> {
+    const page = this.readChannelEnvelopes(input);
     return {
-      rows: envelopes.map((envelope) => {
-        const annotations = envelope.annotations ?? {};
+      pageInfo: page.pageInfo,
+      items: page.items.map((envelope) => {
         const refs = this.sql
           .exec(
             `SELECT field_path, digest, purpose, size, created_at
@@ -13335,26 +13677,24 @@ export class GadWorkspaceDO extends DurableObjectBase {
           channelId: input.channelId,
           seq: envelope.seq,
           payloadKind: envelope.payloadKind,
-          from: summarizeJsonForInspection(envelope.actor) as JsonRecord,
-          ...(annotations["metadata"] !== undefined
-            ? { metadata: summarizeJsonForInspection(annotations["metadata"]) as JsonRecord }
+          from: summarizeJsonForInspection(envelope.from) as JsonRecord,
+          ...(envelope.metadata !== undefined
+            ? { metadata: summarizeJsonForInspection(envelope.metadata) as JsonRecord }
             : {}),
           bytes: {
-            from: utf8Bytes(JSON.stringify(envelope.actor)),
+            from: utf8Bytes(JSON.stringify(envelope.from)),
             to: utf8Bytes(envelope.to !== undefined ? JSON.stringify(envelope.to) : ""),
             payload: utf8Bytes(payloadText),
             metadata: utf8Bytes(
-              annotations["metadata"] !== undefined ? JSON.stringify(annotations["metadata"]) : ""
+              envelope.metadata !== undefined ? JSON.stringify(envelope.metadata) : ""
             ),
             attachments: utf8Bytes(
-              annotations["attachments"] !== undefined
-                ? JSON.stringify(annotations["attachments"])
-                : ""
+              envelope.attachments !== undefined ? JSON.stringify(envelope.attachments) : ""
             ),
           },
           payloadSummary: summarizeJsonForInspection(envelope.payload),
           storedRefs: refs,
-          publishedAt: envelope.appendedAt,
+          publishedAt: envelope.publishedAt,
         };
       }),
     };
@@ -13673,7 +14013,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (!lineage) return null;
     const trajectoryId = lineage.publication.trajectoryId;
     const branchId = lineage.publication.branchId;
-    const events = this.readLog({ logId: trajectoryId, head: branchId, limit: 0 }).filter(
+    const events = this.readLog({ logId: trajectoryId, head: branchId }).filter(
       (envelope) => envelope.seq <= lineage.trajectoryEvent.seq
     );
     return {
@@ -13709,7 +14049,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectPublicationIntegrity(
-    input: { channelId?: string | null; branchId?: string | null; limit?: number | null } = {}
+    input: InspectPublicationIntegrityInput = {}
   ): PublicationIntegrityInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -13773,14 +14113,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  inspectTurnState(
-    input: {
-      trajectoryId?: string | null;
-      branchId?: string | null;
-      channelId?: string | null;
-      limit?: number | null;
-    } = {}
-  ): TurnStateInspection {
+  inspectTurnState(input: InspectTurnStateInput = {}): TurnStateInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
     const clauses: string[] = [];
@@ -13820,9 +14153,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
         limit
       )
       .toArray() as JsonRecord[];
-    const scopedRows = input.channelId
-      ? rows.filter((row) => String(row["head"]).includes(input.channelId!))
-      : rows;
+    // An explicit branch is already an exact scope. The channel-name heuristic
+    // exists only for channel-only calls; applying both made valid custom
+    // branch names disappear merely because they did not embed the channel id.
+    const scopedRows =
+      input.channelId && !input.branchId
+        ? rows.filter((row) => String(row["head"]).includes(input.channelId!))
+        : rows;
     return {
       summary: {
         branches: new Set(
@@ -13845,15 +14182,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  inspectInvocationState(
-    input: {
-      trajectoryId?: string | null;
-      branchId?: string | null;
-      invocationId?: string | null;
-      transportCallId?: string | null;
-      limit?: number | null;
-    } = {}
-  ): InvocationStateInspection {
+  inspectInvocationState(input: InspectInvocationStateInput = {}): InvocationStateInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
     const clauses: string[] = [];
@@ -13920,10 +14249,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  inspectChannelRoster(input: {
-    channelId: string;
-    limit?: number | null;
-  }): ChannelRosterInspection {
+  inspectChannelRoster(input: InspectChannelRosterInput): ChannelRosterInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
     const rows = this.sql
@@ -13959,34 +14285,60 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  async inspectAgentHealth(input: {
-    channelId: string;
-    branchId?: string | null;
-    limit?: number | null;
-    envelopeLimit?: number | null;
-    storageLimit?: number | null;
-    rowByteLimit?: number | null;
-  }): Promise<AgentHealthInspection> {
+  async inspectAgentHealth(input: InspectAgentHealthInput): Promise<AgentHealthInspection> {
     this.ensureReady();
-    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    // This API is the incident *summary*. Keep it compact even when a caller
+    // passes the broad limits used by the detailed inspectors; exact follow-up
+    // calls remain available once the summary identifies an artifact.
+    const limit = Math.min(Math.max(input.limit ?? 25, 1), 50);
     const branchId = input.branchId ?? `branch:channel:${input.channelId}`;
     const publicationIntegrity = this.inspectPublicationIntegrity({
       channelId: input.channelId,
       branchId,
       limit,
     });
-    const turnState = this.inspectTurnState({ channelId: input.channelId, branchId, limit });
-    const invocationState = this.inspectInvocationState({ branchId, limit });
-    const roster = this.inspectChannelRoster({ channelId: input.channelId, limit });
+    const fullTurnState = this.inspectTurnState({ channelId: input.channelId, branchId, limit });
+    const fullInvocationState = this.inspectInvocationState({ branchId, limit });
+    const fullRoster = this.inspectChannelRoster({ channelId: input.channelId, limit });
+    const turnState: TurnStateInspection = {
+      summary: fullTurnState.summary,
+      rows: fullTurnState.rows
+        .filter(
+          (row) =>
+            row["closed_at"] == null ||
+            asNumber(row["streaming_messages"]) > 0 ||
+            asNumber(row["nonterminal_invocations"]) > 0 ||
+            asNumber(row["duplicate_open_events"]) > 1
+        )
+        .slice(0, 10),
+    };
+    const terminalInvocationStatuses = new Set(["completed", "failed", "cancelled", "abandoned"]);
+    const invocationState: InvocationStateInspection = {
+      summary: fullInvocationState.summary,
+      rows: fullInvocationState.rows
+        .filter((row) => {
+          const terminal = terminalInvocationStatuses.has(String(row["status"]));
+          return (
+            !terminal ||
+            asNumber(row["started_events"]) !== 1 ||
+            asNumber(row["terminal_events"]) !== 1
+          );
+        })
+        .slice(0, 10),
+    };
+    const roster: ChannelRosterInspection = {
+      summary: fullRoster.summary,
+      rows: fullRoster.rows.filter((row) => row["left_at"] == null).slice(0, 10),
+    };
     const envelopes = this.inspectChannelEnvelopes({
       channelId: input.channelId,
-      limit: input.envelopeLimit ?? Math.min(limit, 25),
+      limit: input.envelopeLimit ?? Math.min(limit, 5),
     });
     const storage = this.inspectStorageDiagnostics({
       branchId,
       channelId: input.channelId,
       rowByteLimit: input.rowByteLimit,
-      limit: input.storageLimit ?? Math.min(limit, 25),
+      limit: input.storageLimit ?? Math.min(limit, 10),
     });
     const publicationIssues =
       asNumber(publicationIntegrity.summary.missingMappings) +
@@ -13995,19 +14347,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const openTurns = asNumber(turnState.summary.openTurns);
     const streamingMessages = asNumber(turnState.summary.streamingMessages);
     const nonterminalInvocations = asNumber(turnState.summary.nonterminalInvocations);
+    const turnIntegrityIssues = asNumber(turnState.summary.duplicateOpenedTurns);
     const storageIssues = storage.rows.length;
+    const activity: "idle" | "in-flight" =
+      openTurns > 0 || streamingMessages > 0 || nonterminalInvocations > 0 ? "in-flight" : "idle";
+    const durableIntegrityOk =
+      publicationIssues === 0 && turnIntegrityIssues === 0 && storageIssues === 0;
     return {
       channelId: input.channelId,
       branchId,
       generatedAt: nowIso(),
       summary: {
-        ok:
-          publicationIssues === 0 &&
-          openTurns === 0 &&
-          streamingMessages === 0 &&
-          nonterminalInvocations === 0 &&
-          storageIssues === 0,
+        ok: durableIntegrityOk && activity === "idle",
+        durableIntegrityOk,
+        inFlightOnly: durableIntegrityOk && activity === "in-flight",
+        activity,
         publicationIssues,
+        turnIntegrityIssues,
         openTurns,
         streamingMessages,
         nonterminalInvocations,
@@ -14024,14 +14380,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  inspectStorageDiagnostics(
-    input: {
-      rowByteLimit?: number | null;
-      limit?: number | null;
-      branchId?: string | null;
-      channelId?: string | null;
-    } = {}
-  ): { rows: JsonRecord[] } {
+  inspectStorageDiagnostics(input: InspectStorageDiagnosticsInput = {}): { rows: JsonRecord[] } {
     this.ensureReady();
     const rowByteLimit = input.rowByteLimit ?? 512 * 1024;
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -14758,10 +15107,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  async checkGadIntegrity(): Promise<{ ok: boolean; errors: JsonRecord[] }> {
+  async checkGadIntegrity(): Promise<{ ok: boolean; errors: Array<Record<string, unknown>> }> {
     this.ensureReady();
-    const errors: JsonRecord[] = [];
-    const addError = (type: string, message: string, details: JsonRecord = {}) =>
+    const errors: Array<Record<string, unknown>> = [];
+    const addError = (type: string, message: string, details: Record<string, unknown> = {}) =>
       errors.push({ type, message, ...details });
 
     const logIntegrity = await this.checkLogIntegrity({});

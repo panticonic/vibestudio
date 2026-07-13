@@ -15,7 +15,13 @@ export {
   type StateFileEntry,
   type MergeHunk,
 } from "./mergeEngine.js";
-export { mergeHunksVsOurs, diff3Merge, computeReplaceHunks } from "./diff3.js";
+export {
+  mergeHunksVsOurs,
+  diff3Merge,
+  computeReplaceHunks,
+  diffChunks,
+  type Chunk,
+} from "./diff3.js";
 export {
   EditEngine,
   decodeUtf8Text,
@@ -30,7 +36,11 @@ export {
   type BlameResolution,
   type BlameResult,
 } from "./blame.js";
-export { VCS_IGNORED_DIRS, VCS_IGNORED_FILES } from "./paths.js";
+export {
+  VCS_IGNORED_DIRS,
+  VCS_IGNORED_FILES,
+  isPlatformIgnoredVcsPath,
+} from "./paths.js";
 export {
   VCS_CONTAINER_SECTIONS,
   VCS_FLAT_SECTIONS,

@@ -242,6 +242,9 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
         set: async (key, value) => {
           stateMap.set(key, value);
         },
+        delete: async (key) => {
+          stateMap.delete(key);
+        },
       },
     };
     bridge = new GitBridge(host);

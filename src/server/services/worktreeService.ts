@@ -21,6 +21,8 @@ export interface WorktreeServiceDeps {
   ): Promise<{
     stateHash: string;
     files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
+    skipped: Array<{ path: string; kind: string }>;
+    wipedRepo: boolean;
   }>;
   /** The pure CAS→disk projection primitive (WorkspaceVcs.projectWorktree). */
   project(repoPath: string, head: string, stateHash: string): Promise<{ stateHash: string }>;

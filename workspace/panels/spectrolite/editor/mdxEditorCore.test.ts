@@ -14,6 +14,14 @@ describe("MdxEditorCore (headless Lexical + vendored pipeline)", () => {
     expect(out).toContain("Second paragraph.");
   });
 
+  it("round-trips wikilinks through the internal live-JSX representation", () => {
+    const core = createMdxEditorCore();
+    core.setCanonical("# Linked\n\nThis note points at [[E2E]].");
+
+    expect(core.getCanonical()).toContain("[[E2E]]");
+    expect(core.getBlocks().map((block) => block.text).join("\n")).toContain("[[E2E]]");
+  });
+
   it("exposes top-level content blocks with stable node-key ids", () => {
     const core = createMdxEditorCore();
     core.setCanonical("# A\n\nbody one\n\nbody two");

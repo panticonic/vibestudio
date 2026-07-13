@@ -21,6 +21,7 @@ export interface ExtensionContextLike {
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
     readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
     writeFile(path: string, data: string | Uint8Array): Promise<void>;
+    rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void>;
   };
   credentials: CredentialClient;
   notifications: {

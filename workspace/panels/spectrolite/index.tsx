@@ -22,7 +22,7 @@ import "@workspace/ui/tokens.css";
 import { createSpectroliteApp } from "./app/createApp";
 import { AppProvider, useAppState } from "./app/context";
 import { Shell } from "./components/Shell";
-import { vaultContextId } from "./app/vaultContext";
+import { shouldRebindToVaultContext, vaultContextId } from "./app/vaultContext";
 import "@workspace/agentic-chat/styles.css";
 import "./style.css";
 
@@ -42,8 +42,9 @@ export default function SpectrolitePanel() {
   useEffect(() => {
     const repoRoot = app.store.getState().repoRoot;
     if (repoRoot === null) return;
+    const persisted = panel.stateArgs.get<{ contextId?: string }>();
     const want = vaultContextId(repoRoot);
-    if (runtimeContextId && runtimeContextId !== want) {
+    if (shouldRebindToVaultContext(repoRoot, runtimeContextId, persisted.contextId)) {
       const activePath = app.store.getState().activePath;
       void panel.reopen({
         contextId: want,

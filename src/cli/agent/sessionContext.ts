@@ -179,9 +179,7 @@ function resolveAgentEnvScope(contextOverride: string | undefined): SessionScope
 function requireDeviceCredential(): NonNullable<ReturnType<typeof loadCliCredentials>> {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError(
-      'not paired — run `vibestudio remote pair "vibestudio://connect?..."` first'
-    );
+    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
   }
   if (!creds.workspaceName) {
     throw new AuthError(

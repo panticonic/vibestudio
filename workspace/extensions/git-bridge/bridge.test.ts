@@ -201,6 +201,9 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
         set: async (key, value) => {
           state.set(key, value);
         },
+        delete: async (key) => {
+          state.delete(key);
+        },
       },
     };
     bridge = new GitBridge(host);
@@ -327,9 +330,11 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     const stateHash = await commitRepo({ "a.txt": "one\n" });
     const result = await bridge.exportRepoHead(REPO);
 
+    const [newest] = (await doi.vcsLog(REPO, 1, "main")) as Array<{ envelopeId: string }>;
     expect(JSON.parse(state.get(`marker:${REPO}`)!)).toEqual({
       version: 1,
       kind: "export-marker",
+      envelopeId: newest!.envelopeId,
       stateHash,
       commitSha: result.headCommit,
     });
@@ -348,19 +353,25 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
   it("discards unversioned and malformed marker state without migration", async () => {
     const stateHash = `state:${"a".repeat(64)}`;
     const commitSha = "b".repeat(40);
+    const envelopeId = "evt-1";
     const readMarker = () =>
       (
         bridge as unknown as {
-          getMarker(repoPath: string): Promise<{ stateHash: string; commitSha: string } | null>;
+          getMarker(
+            repoPath: string
+          ): Promise<{ envelopeId: string; stateHash: string; commitSha: string } | null>;
         }
       ).getMarker(REPO);
     const malformed = [
-      { stateHash, commitSha },
-      { version: 2, kind: "export-marker", stateHash, commitSha },
-      { version: 1, kind: "checkout-map", stateHash, commitSha },
-      { version: 1, kind: "export-marker", stateHash: "state:bad", commitSha },
-      { version: 1, kind: "export-marker", stateHash, commitSha: "not-a-commit" },
-      { version: 1, kind: "export-marker", stateHash, commitSha, extra: true },
+      { envelopeId, stateHash, commitSha },
+      { version: 2, kind: "export-marker", envelopeId, stateHash, commitSha },
+      { version: 1, kind: "checkout-map", envelopeId, stateHash, commitSha },
+      { version: 1, kind: "export-marker", envelopeId, stateHash: "state:bad", commitSha },
+      { version: 1, kind: "export-marker", envelopeId, stateHash, commitSha: "not-a-commit" },
+      { version: 1, kind: "export-marker", envelopeId, stateHash, commitSha, extra: true },
+      // Pre-envelopeId (stateHash-keyed) markers are rejected, not migrated.
+      { version: 1, kind: "export-marker", stateHash, commitSha },
+      { version: 1, kind: "export-marker", envelopeId: "", stateHash, commitSha },
     ];
 
     for (const candidate of malformed) {
@@ -372,9 +383,9 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
 
     state.set(
       `marker:${REPO}`,
-      JSON.stringify({ version: 1, kind: "export-marker", stateHash, commitSha })
+      JSON.stringify({ version: 1, kind: "export-marker", envelopeId, stateHash, commitSha })
     );
-    expect(await readMarker()).toEqual({ stateHash, commitSha });
+    expect(await readMarker()).toEqual({ envelopeId, stateHash, commitSha });
   });
 
   it("discards unversioned and malformed checkout-map state without migration", async () => {
@@ -560,6 +571,7 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
 
     const imported = await bridge.importRepoTree(REPO);
     expect(imported.changed).toBe(true);
+    const importedGitSha = git(repoDir, ["rev-parse", "HEAD"]).trim();
 
     // The vcs (gad-store DO) sees the imported history on the NON-MAIN staging
     // head — extensions never write the protected main lineage directly…
@@ -579,6 +591,12 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     expect(log[0]).toMatchObject({
       outputStateHash: imported.stateHash,
       summary: expect.stringContaining(`Import ${REPO} from git @ `),
+    });
+    await expect(bridge.commitMapping(REPO)).resolves.toContainEqual({
+      gitSha: importedGitSha,
+      gadState: imported.stateHash,
+      gadEvent: expect.any(String),
+      summary: "external change",
     });
 
     // Unchanged re-import no-ops against the adopted protected ref.

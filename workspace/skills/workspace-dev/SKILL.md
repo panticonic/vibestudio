@@ -95,7 +95,9 @@ For context-local scratch files under `projects/`, do not scaffold. Write inside
 a repo-shaped path such as `projects/tmp-name/note.md`; that repo remains private
 to the current context until you intentionally `vcs.commit` and `vcs.push` it.
 `createProject` is for published workspace units: it scaffolds, commits, and
-pushes immediately.
+pushes immediately. File-oriented APIs also accept a shorthand such as
+`projects/note.md`, canonicalize it to `projects/note/note.md`, and return the
+canonical path; use the full form when composing later paths.
 
 `openPanel` returns a host-mediated `PanelHandle` and is part of the portable
 runtime surface. It works from eval, panels, workers, and DOs. It does not expose

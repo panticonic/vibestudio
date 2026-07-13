@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/shared/serviceSchemas/gitInterop";
 import { activate } from "./index.js";
 import { UpstreamEngine } from "./upstream.js";
@@ -18,6 +19,16 @@ describe("git-bridge activation surface", () => {
     } as never);
 
     expect(Object.keys(api.providerContracts.gitInterop)).toEqual(
+      GIT_INTEROP_PROVIDER_METHOD_NAMES
+    );
+    const manifest = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
+      vibestudio: {
+        extension: { providerContracts: { gitInterop: { methods: string[] } } };
+      };
+    };
+    expect(manifest.vibestudio.extension.providerContracts.gitInterop.methods).toEqual(
       GIT_INTEROP_PROVIDER_METHOD_NAMES
     );
     expect(api).not.toHaveProperty("pushUpstream");

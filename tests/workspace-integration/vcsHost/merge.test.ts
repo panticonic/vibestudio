@@ -222,7 +222,7 @@ describe("WorkspaceVcs merge", () => {
     expect(await readAt(CTX_HEAD, "main-only.txt")).toBe("main\n");
 
     // The merge is a multi-parent transition on the repo's log (ctx head).
-    const events = gad.instance.readLog({ logId: REPO_LOG, head: CTX_HEAD, limit: 0 });
+    const events = gad.instance.readLog({ logId: REPO_LOG, head: CTX_HEAD, limit: 1_000 });
     const mergeEvent = events.find((e) => e.payloadKind === "state.merge_applied");
     expect(mergeEvent).toBeDefined();
     const payload = mergeEvent!.payload as { parentStateHashes?: string[] };

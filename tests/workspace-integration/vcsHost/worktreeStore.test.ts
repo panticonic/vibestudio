@@ -151,7 +151,7 @@ describe("WorktreeStore snapshot/materialize", () => {
     expect(third.unchanged).toBe(true);
     expect(third.stateHash).toBe(first.stateHash);
 
-    const events = gad.instance.readLog({ logId: FIXTURE_LOG, head: VCS_MAIN_HEAD, limit: 0 });
+    const events = gad.instance.readLog({ logId: FIXTURE_LOG, head: VCS_MAIN_HEAD, limit: 1_000 });
     expect(events.filter((e) => e.payloadKind === "state.snapshot_ingested")).toHaveLength(1);
   });
 

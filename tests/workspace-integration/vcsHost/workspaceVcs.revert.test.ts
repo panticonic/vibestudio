@@ -393,15 +393,16 @@ describe("WorkspaceVcs.listFiles / revert / pushStatus", () => {
     ]);
 
     const stale = await vcs.pushStatus(repoPath, head);
-    expect(stale.diverged).toBe(true);
+    expect(stale.diverged).toBe(false);
+    expect(stale.behind).toBe(true);
     expect(stale.ahead).toBe(0);
     expect(stale.files).toEqual([]);
 
     const status = await vcs.statusHead(head, repoPath);
     expect(status.dirty).toBe(false);
-    expect(status.added).toEqual([]);
-    expect(status.changed).toEqual([]);
-    expect(status.removed).toEqual([]);
+    expect(status.committed).toEqual({ added: [], changed: [], removed: [] });
+    expect(status.working).toEqual({ added: [], changed: [], removed: [] });
+    expect(status.behind).toBe(true);
   });
 
   it("statusHead reports a context head's unpublished changes vs main (pure GAD diff)", async () => {
@@ -415,9 +416,8 @@ describe("WorkspaceVcs.listFiles / revert / pushStatus", () => {
     // A fresh fork matches main — status is clean.
     const clean = await vcs.statusHead(head, repoPath);
     expect(clean.dirty).toBe(false);
-    expect(clean.added).toEqual([]);
-    expect(clean.changed).toEqual([]);
-    expect(clean.removed).toEqual([]);
+    expect(clean.committed).toEqual({ added: [], changed: [], removed: [] });
+    expect(clean.working).toEqual({ added: [], changed: [], removed: [] });
 
     // A WORKING edit is dirty via uncommitted, even before it commits — but the
     // committed diff (added/changed) is still empty until commit.
@@ -433,15 +433,19 @@ describe("WorkspaceVcs.listFiles / revert / pushStatus", () => {
     const working = await vcs.statusHead(head, repoPath);
     expect(working.dirty).toBe(true);
     expect(working.uncommitted).toBe(2);
+    expect(working.committed).toEqual({ added: [], changed: [], removed: [] });
+    expect(working.working.changed).toEqual(["notes.mdx"]);
+    expect(working.working.added).toEqual(["fresh.mdx"]);
 
     // Commit surfaces them as published-pending changes against main.
     await vcs.commit({ head, repoPath, message: "notes", actor: USER });
     const dirty = await vcs.statusHead(head, repoPath);
     expect(dirty.dirty).toBe(true);
     expect(dirty.uncommitted).toBe(0);
-    expect(dirty.changed).toEqual(["notes.mdx"]);
-    expect(dirty.added).toEqual(["fresh.mdx"]);
-    expect(dirty.stateHash).toBe(await vcs.resolveHead(head, repoPath));
+    expect(dirty.committed.changed).toEqual(["notes.mdx"]);
+    expect(dirty.committed.added).toEqual(["fresh.mdx"]);
+    expect(dirty.working).toEqual({ added: [], changed: [], removed: [] });
+    expect(dirty.committedStateHash).toBe(await vcs.resolveHead(head, repoPath));
 
     // main is the publish baseline — always clean.
     expect((await vcs.statusHead(VCS_MAIN_HEAD, repoPath)).dirty).toBe(false);

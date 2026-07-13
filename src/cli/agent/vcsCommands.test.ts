@@ -157,16 +157,19 @@ describe("vibestudio vcs commands", () => {
   it("status calls vcs.status with positional (repoPath, head) args", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    // Server returns a per-repo RepoStatus (added/removed/changed of the repo
-    // subtree vs its own main); the CLI passes it through under --json.
+    // Server returns committed and working deltas separately; JSON mode passes
+    // the canonical wire shape through unchanged.
     const statusResult = {
-      stateHash: "state:abc123",
+      committedStateHash: "state:abc123",
+      workingStateHash: "state:abc123",
       dirty: true,
       uncommitted: 0,
-      added: [],
-      removed: [],
-      changed: ["index.ts"],
+      committed: { added: [], removed: [], changed: ["index.ts"] },
+      working: { added: [], removed: [], changed: [] },
+      diverged: false,
+      behind: false,
       deleted: false,
+      pendingMerge: null,
     };
     const { rpcBodies } = stubServer(() => statusResult);
 
@@ -181,19 +184,32 @@ describe("vibestudio vcs commands", () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const { rpcBodies } = stubServer(() => ({
-      stateHash: "state:abc123",
-      dirty: true,
-      uncommitted: 0,
-      added: ["new.ts"],
-      changed: ["index.ts"],
-      removed: ["old.ts"],
-      deleted: false,
+      left: "state:main",
+      right: "state:working",
+      files: [
+        { path: "new.ts", status: "added", binary: false, hunks: [] },
+        { path: "index.ts", status: "changed", binary: false, hunks: [] },
+        { path: "old.ts", status: "removed", binary: false, hunks: [] },
+      ],
+      unified: "",
     }));
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "diff", "--repo", "panels/notes", "--json"])).resolves.toBe(0);
 
-    expect(rpcBodies).toEqual([{ method: "vcs.status", args: ["panels/notes", "ctx:ctx_1"] }]);
+    expect(rpcBodies).toEqual([
+      {
+        method: "vcs.diffContent",
+        args: [
+          {
+            repoPath: "panels/notes",
+            head: "ctx:ctx_1",
+            scope: "all",
+            contextLines: 0,
+          },
+        ],
+      },
+    ]);
     expect(jsonOutput()).toBe("A\tnew.ts\nM\tindex.ts\nD\told.ts");
   });
 
@@ -201,13 +217,16 @@ describe("vibestudio vcs commands", () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir, "work");
     const { rpcBodies } = stubServer(() => ({
-      stateHash: null,
+      committedStateHash: null,
+      workingStateHash: null,
       dirty: false,
       uncommitted: 0,
-      added: [],
-      removed: [],
-      changed: [],
+      committed: { added: [], removed: [], changed: [] },
+      working: { added: [], removed: [], changed: [] },
+      diverged: false,
+      behind: false,
       deleted: false,
+      pendingMerge: null,
     }));
 
     const { main } = await import("../client.js");
@@ -221,13 +240,16 @@ describe("vibestudio vcs commands", () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     stubServer(() => ({
-      stateHash: "state:working",
+      committedStateHash: "state:committed",
+      workingStateHash: "state:working",
       dirty: true,
       uncommitted: 2,
-      added: [],
-      removed: [],
-      changed: [],
+      committed: { added: [], removed: [], changed: [] },
+      working: { added: [], removed: [], changed: ["index.ts"] },
+      diverged: false,
+      behind: false,
       deleted: false,
+      pendingMerge: null,
     }));
 
     const { main } = await import("../client.js");
@@ -491,7 +513,9 @@ describe("vibestudio vcs commands", () => {
         mainStateHash: "state:main",
         ahead: 0,
         uncommitted: 2,
+        uncommittedPaths: ["draft.ts"],
         diverged: false,
+        behind: false,
         deleted: false,
         files: [],
       },
@@ -502,7 +526,9 @@ describe("vibestudio vcs commands", () => {
         mainStateHash: "state:main-lib",
         ahead: 1,
         uncommitted: 0,
+        uncommittedPaths: [],
         diverged: true,
+        behind: false,
         deleted: true,
         files: [{ path: "index.ts", kind: "changed" }],
       },

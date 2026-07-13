@@ -241,7 +241,6 @@ describe("path policy", () => {
     for (const bad of [
       "~",
       ".log",
-      ".tmp",
       ".swp",
       ".sublime-workspace",
       ".env.",
@@ -250,7 +249,14 @@ describe("path policy", () => {
     ]) {
       expect(() => assertWritableVcsEditPath(bad), bad).toThrow(/platform-ignored/);
     }
-    for (const ok of ["src/env.ts", "docs/log.md", "panels/chat/main.tsx", "environment.txt"]) {
+    for (const ok of [
+      "src/env.ts",
+      "docs/log.md",
+      "panels/chat/main.tsx",
+      "environment.txt",
+      "probe.tmp",
+      ".tmp/vcs-probe.txt",
+    ]) {
       expect(() => assertWritableVcsEditPath(ok), ok).not.toThrow();
     }
   });

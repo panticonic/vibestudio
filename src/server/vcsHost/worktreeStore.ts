@@ -96,7 +96,23 @@ interface SidecarState {
   version: 1;
   /** State hash the worktree last agreed with (after snapshot or materialize). */
   stateHash: string | null;
+  /**
+   * Wall-clock ms when this sidecar's entries were recorded — the racily-clean
+   * boundary: a file whose mtime is at/after this instant (minus the timestamp
+   * granularity window) may have been modified without changing (size, mtime),
+   * so its cached hash must not be trusted. Absent on legacy sidecars ⇒ no
+   * fast path (one full rehash, then repopulated).
+   */
+  scannedAtMs?: number;
   files: Record<string, SidecarEntry>;
+}
+
+/** A directory entry the scan skipped because it is not a regular file —
+ *  symlinks/sockets/FIFOs are NOT part of the GAD file model and are never
+ *  captured in a state. Surfaced (not silently dropped) so callers can warn. */
+interface SkippedEntry {
+  path: string;
+  kind: "symlink" | "socket" | "fifo" | "block-device" | "char-device" | "other";
 }
 
 interface SnapshotResult {
@@ -106,6 +122,8 @@ interface SnapshotResult {
   fileCount: number;
   /** True when the scan found no difference and no ingest was performed. */
   unchanged: boolean;
+  /** Non-regular entries the scan could not capture (see {@link SkippedEntry}). */
+  skipped: SkippedEntry[];
 }
 
 interface SnapshotOptions {
@@ -124,6 +142,14 @@ interface SnapshotOptions {
   parentEventIds?: string[];
   /** Transition kind override (merge-resolution commits). */
   eventKind?: "state.snapshot_ingested" | "state.merge_applied";
+  /**
+   * Explicit opt-in to snapshot an EMPTY tree over a head that currently has
+   * files (a whole-repo wipe). Without it the snapshot REFUSES — `rm -rf`ing a
+   * disposable projection must never silently delete a repo; deletion is its
+   * own approval-gated action (vcs.deleteRepo), and per-file deletes are
+   * ordinary edits.
+   */
+  allowWipe?: boolean;
 }
 
 interface MaterializeOptions {
@@ -268,7 +294,10 @@ export class WorktreeStore {
     const sidecarPath = this.sidecarPath(dir);
     await fsp.mkdir(path.dirname(sidecarPath), { recursive: true });
     const tmp = `${sidecarPath}.${process.pid}.${randomUUID()}.tmp`;
-    await fsp.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`);
+    // Stamp the recording instant — the racily-clean boundary for the NEXT
+    // scan's (size, mtime) fast path (see hashFiles).
+    const stamped: SidecarState = { ...state, scannedAtMs: Date.now() };
+    await fsp.writeFile(tmp, `${JSON.stringify(stamped, null, 2)}\n`);
     await fsp.rename(tmp, sidecarPath);
   }
 
@@ -276,9 +305,18 @@ export class WorktreeStore {
   // Scan + snapshot (commit)
   // -------------------------------------------------------------------------
 
-  private async scanDir(dir: string): Promise<ScannedFile[]> {
+  private async scanDir(dir: string): Promise<{ files: ScannedFile[]; skipped: SkippedEntry[] }> {
     const ignores = await loadIgnoreMatcher(dir);
     const out: ScannedFile[] = [];
+    const skipped: SkippedEntry[] = [];
+    const skippedKind = (entry: fs.Dirent): SkippedEntry["kind"] => {
+      if (entry.isSymbolicLink()) return "symlink";
+      if (entry.isSocket()) return "socket";
+      if (entry.isFIFO()) return "fifo";
+      if (entry.isBlockDevice()) return "block-device";
+      if (entry.isCharacterDevice()) return "char-device";
+      return "other";
+    };
     const walk = async (abs: string, rel: string): Promise<void> => {
       const entries = await fsp.readdir(abs, { withFileTypes: true });
       await Promise.all(
@@ -304,19 +342,38 @@ export class WorktreeStore {
               mtimeMs: stat.mtimeMs,
               mode: stat.mode & 0o111 ? 33261 : 33188,
             });
+          } else {
+            // Symlinks / sockets / devices are not part of the GAD file model —
+            // reported (never silently dropped) so callers can warn that the
+            // entry will not be captured, committed, or re-materialized.
+            if (ignores(childRel, false)) return;
+            skipped.push({ path: childRel, kind: skippedKind(entry) });
           }
-          // symlinks / sockets / etc. are not part of the GAD file model
         })
       );
     };
     await walk(dir, "");
-    return out.sort((a, b) => a.path.localeCompare(b.path));
+    out.sort((a, b) => a.path.localeCompare(b.path));
+    skipped.sort((a, b) => a.path.localeCompare(b.path));
+    return { files: out, skipped };
   }
 
   /**
+   * The racily-clean window (git's classic problem): a file rewritten with
+   * identical length inside the filesystem timestamp granularity of the
+   * sidecar write is indistinguishable from unchanged by (size, mtime) alone.
+   * Any cached entry whose mtime falls within this window of the sidecar's
+   * `scannedAtMs` is rehashed instead of trusted.
+   */
+  private static readonly RACY_MTIME_WINDOW_MS = 10;
+
+  /**
    * Hash every scanned file, using the sidecar's (size, mtime) fast path to
-   * skip rehashing unchanged files. Returns the full file list for ingest
-   * plus the refreshed sidecar entries.
+   * skip rehashing unchanged files — EXCEPT racily-clean entries (mtime at or
+   * after `scannedAtMs − window`), which are always rehashed: a same-size
+   * rewrite within the timestamp granularity of the previous scan would
+   * otherwise reuse a stale hash and silently drop the change. Returns the
+   * full file list for ingest plus the refreshed sidecar entries.
    */
   private async hashFiles(
     scanned: ScannedFile[],
@@ -324,10 +381,18 @@ export class WorktreeStore {
   ): Promise<{ files: VcsFileEntry[]; entries: Record<string, SidecarEntry> }> {
     const files: VcsFileEntry[] = [];
     const entries: Record<string, SidecarEntry> = {};
+    // Legacy sidecars (no scannedAtMs) get no fast path at all: without the
+    // recording instant the racily-clean boundary is unknowable.
+    const trustedBefore = (sidecar.scannedAtMs ?? 0) - WorktreeStore.RACY_MTIME_WINDOW_MS;
     for (const file of scanned) {
       const cached = sidecar.files[file.path];
       let contentHash: string;
-      if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) {
+      if (
+        cached &&
+        cached.size === file.size &&
+        cached.mtimeMs === file.mtimeMs &&
+        file.mtimeMs < trustedBefore
+      ) {
         contentHash = cached.contentHash;
       } else {
         contentHash = (await putFile(this.deps.blobsDir, file.absPath)).digest;
@@ -364,9 +429,10 @@ export class WorktreeStore {
     stateHash: string;
     files: VcsFileEntry[];
     manifest: WorktreeManifest;
+    skipped: SkippedEntry[];
   }> {
     const sidecar = await this.readSidecar(dir);
-    const scanned = await this.scanDir(dir);
+    const { files: scanned, skipped } = await this.scanDir(dir);
     const { files, entries } = await this.hashFiles(scanned, sidecar);
     const manifest = buildWorktreeManifest(files);
     // Eager half of the mirroring invariant: the scan holds the full file list
@@ -376,7 +442,7 @@ export class WorktreeStore {
     if (opts.updateSidecar) {
       await this.writeSidecar(dir, { version: 1, stateHash: manifest.stateHash, files: entries });
     }
-    return { stateHash: manifest.stateHash, files, manifest };
+    return { stateHash: manifest.stateHash, files, manifest, skipped };
   }
 
   /**
@@ -408,11 +474,27 @@ export class WorktreeStore {
         headHash: "",
         fileCount: 0,
         unchanged: true,
+        skipped: [],
       };
     }
     const sidecar = await this.readSidecar(dir);
-    const scanned = await this.scanDir(dir);
+    const { files: scanned, skipped } = await this.scanDir(dir);
     const { files, entries } = await this.hashFiles(scanned, sidecar);
+    // Whole-repo wipe guard: an EXISTING-but-empty tree over a head that has
+    // files snapshots to "delete everything". Like the missing-dir case above,
+    // that is never inferred from this disposable projection — refuse unless
+    // the caller explicitly opted in. (Per-file deletions are ordinary edits;
+    // whole-repo deletion is the approval-gated vcs.deleteRepo.)
+    if (files.length === 0 && !opts.allowWipe && !opts.force) {
+      const refStateHash = await this.resolveWorktreeRef(head, logId);
+      if (refStateHash && refStateHash !== EMPTY_STATE_HASH) {
+        throw new Error(
+          `snapshotDir: refusing to snapshot an empty tree over ${head} (${logId}) — this would ` +
+            `delete every tracked file. If the wipe is intentional, delete files individually ` +
+            `(tracked edits), use vcs.deleteRepo to retire the whole repo, or pass allowWipe.`
+        );
+      }
+    }
     const manifest = buildWorktreeManifest(files);
     // Eager half of the mirroring invariant: mirror the scanned tree into the
     // content store BEFORE any hash is handed out (covers the unchanged
@@ -436,6 +518,7 @@ export class WorktreeStore {
           headHash: "",
           fileCount: files.length,
           unchanged: true,
+          skipped,
         };
       }
     }
@@ -471,7 +554,7 @@ export class WorktreeStore {
     }
 
     await this.writeSidecar(dir, { version: 1, stateHash: result.stateHash, files: entries });
-    return { ...result, fileCount: files.length, unchanged: false };
+    return { ...result, fileCount: files.length, unchanged: false, skipped };
   }
 
   // -------------------------------------------------------------------------
@@ -577,7 +660,7 @@ export class WorktreeStore {
 
     if (opts.clean) {
       // Remove untracked files too (full clean checkout).
-      const scanned = await this.scanDir(dir);
+      const { files: scanned } = await this.scanDir(dir);
       for (const file of scanned) {
         if (!targetPaths.has(file.path)) {
           await fsp.rm(file.absPath, { force: true, recursive: true });

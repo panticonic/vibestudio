@@ -34,8 +34,9 @@
  */
 
 export interface PublishMergeResult {
-  status: "up-to-date" | "merged" | "conflicted";
+  status: "up-to-date" | "merged" | "conflicted" | "refused";
   conflicts: Array<{ path: string; kind: string }>;
+  refusedReason?: string;
 }
 
 /**
@@ -91,7 +92,9 @@ export interface PublishRepoStatus {
   mainStateHash?: string | null;
   ahead: number;
   uncommitted: number;
+  uncommittedPaths: string[];
   diverged: boolean;
+  behind: boolean;
   deleted: boolean;
   files: Array<{ path: string; kind: "added" | "removed" | "changed" }>;
 }
@@ -99,8 +102,9 @@ export interface PublishRepoStatus {
 /** A per-repo commit result from `vcs.commit`. */
 export interface PublishCommitResult {
   repoPath: string;
-  stateHash: string;
-  status: "committed" | "unchanged";
+  stateHash: string | null;
+  status: "committed" | "unchanged" | "refused";
+  refusedReason?: string;
   changedPaths: string[];
 }
 
@@ -279,12 +283,16 @@ export class PublishController {
           repoPath: this.vaultRepo,
           ahead: 0,
           uncommitted: 0,
+          uncommittedPaths: [],
           diverged: false,
+          behind: false,
           deleted: false,
           files: [],
         };
       const behind =
-        status.diverged || ctxStatus.some((s) => s.repoPath === this.vaultRepo && s.behind);
+        status.behind ||
+        status.diverged ||
+        ctxStatus.some((s) => s.repoPath === this.vaultRepo && s.behind);
       const deleted =
         status.deleted || ctxStatus.some((s) => s.repoPath === this.vaultRepo && s.deleted);
       this.set({
@@ -338,7 +346,16 @@ export class PublishController {
     }
 
     if (!committed && needsRepoCommit) {
-      await this.vcs.commit({ message, repoPaths: [this.vaultRepo] });
+      const rows = await this.vcs.commit({ message, repoPaths: [this.vaultRepo] });
+      const row = rows.find((candidate) => candidate.repoPath === this.vaultRepo) ?? rows[0];
+      if (row?.status === "refused") {
+        throw new Error(row.refusedReason ?? `Commit refused for ${this.vaultRepo}`);
+      }
+      if (!row || row.status === "unchanged") {
+        throw new Error(
+          `Publish expected uncommitted changes in ${this.vaultRepo}, but commit sealed nothing`
+        );
+      }
       committed = true;
     }
 
@@ -381,6 +398,9 @@ export class PublishController {
         // Pull main into the vault's own ctx head (scoped to the vault repo).
         // Reconciles divergence before push; read the single vault-repo element.
         const [pull] = await this.vcs.merge({ source: "main", repoPaths: [this.vaultRepo] });
+        if (pull?.status === "refused") {
+          throw new Error(pull.refusedReason ?? `Merge refused for ${this.vaultRepo}`);
+        }
         if (pull?.status === "conflicted") {
           const pending = await this.vcs.pendingMerge(this.vaultRepo);
           this.set({ pending });

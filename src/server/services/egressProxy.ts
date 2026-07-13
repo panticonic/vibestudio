@@ -991,6 +991,10 @@ export class EgressProxy {
     }
     const usage = credentialUseResource(binding, params.targetUrl, params.method);
     const callerId = params.caller?.runtime.id;
+    // Force-push detection trusts the git-bridge's SELF-LABELED gitIntent.force
+    // (trusted-extension model): the proxy cannot infer a force push from
+    // packfile contents, so an unlabeled force push from a hostile caller would
+    // pass. Acceptable because only the trusted bridge holds git credentials.
     if (
       callerId &&
       (params.gitIntent?.force ||
@@ -1654,7 +1658,8 @@ export class EgressProxy {
               closeLogged = true;
               const durationMs = Date.now() - bridgeStartedAt;
               if (durationMs < 30_000) return;
-              console.warn("[EgressProxy] long-lived WebSocket bridge closed", {
+              const logClose = side === "upstream" ? console.warn : console.info;
+              logClose("[EgressProxy] long-lived WebSocket bridge closed", {
                 firstCloseSide: side,
                 durationMs,
                 target: diagnosticWebSocketTarget(targetUrl),

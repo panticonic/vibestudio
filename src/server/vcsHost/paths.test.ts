@@ -7,6 +7,7 @@ import {
   assertWritableVcsPath,
   isWritableVcsPath,
   normalizeRepoPathForLog,
+  vcsLogActor,
 } from "./paths.js";
 
 describe("normalizeRepoPathForLog", () => {
@@ -78,5 +79,28 @@ describe("context marker (.vibestudio-context.json)", () => {
     expect(await isWritableVcsPath(`packages/foo/${CONTEXT_MARKER_FILE}`)).toBe(false);
     // A same-stem-but-different file is still trackable — the guard is exact.
     expect(await isWritableVcsPath("packages/foo/vibestudio-context.json")).toBe(true);
+  });
+});
+
+describe("vcsLogActor", () => {
+  it("keeps a verified account subject in private actor metadata", () => {
+    expect(vcsLogActor({ id: "do:agent", kind: "do", subject: { userId: "usr_alice" } })).toEqual({
+      id: "do:agent",
+      kind: "do",
+      metadata: { accountSubject: { userId: "usr_alice" } },
+    });
+  });
+
+  it("preserves unknown principal kinds without inventing actor fields", () => {
+    expect(
+      vcsLogActor({ id: "future:one", kind: "future", subject: { userId: "usr_alice" } })
+    ).toEqual({
+      id: "future:one",
+      kind: "external",
+      metadata: {
+        type: "future",
+        accountSubject: { userId: "usr_alice" },
+      },
+    });
   });
 });

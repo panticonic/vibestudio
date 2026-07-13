@@ -101,8 +101,8 @@ class FakeVcs implements DocVcs {
   private callbacks = new Set<(advance: HeadAdvance) => void>();
   private workingCallbacks = new Set<(advance: WorkingAdvance) => void>();
 
-  async readFile(_ref: string, path: string) {
-    const text = this.files.get(path);
+  async readFile(input: { path: string }) {
+    const text = this.files.get(input.path);
     if (text == null) return null;
     return { content: { kind: "text" as const, text }, stateHash: this.stateHash };
   }

@@ -37,6 +37,22 @@ export class GitAuthError extends Error {
 }
 
 /**
+ * The remote refused a non-fast-forward (or otherwise rejected) push. Thrown
+ * as a typed error so callers can classify divergence deterministically
+ * instead of regex-matching error prose.
+ */
+export class GitPushRejectedError extends Error {
+  /** isomorphic-git's per-ref rejection reasons, when available. */
+  readonly reasons: string[];
+
+  constructor(message: string, reasons: string[] = []) {
+    super(message);
+    this.name = "GitPushRejectedError";
+    this.reasons = reasons;
+  }
+}
+
+/**
  * The acting user's identity threaded to the VCS layer for commit attribution
  * (WP9 §7). `caller.subject` carries the stable `{userId, handle}`; the display
  * name and (optional) profile email come from the same identity row. The git
@@ -166,6 +182,66 @@ function wrapFsForGit(fsPromises: FsPromisesLike): FsClient {
   };
 }
 
+/**
+ * Local default for direct Node/workerd use. Loading is lazy so consumers that
+ * inject an RPC-backed/browser filesystem do not pull Node fs into their
+ * bundle. Network operations remain adapter-gated below.
+ */
+const defaultLocalFs: FsPromisesLike = {
+  async readFile(path, encoding) {
+    const fs = await import("node:fs/promises");
+    return encoding ? fs.readFile(path, encoding) : fs.readFile(path);
+  },
+  async writeFile(path, data) {
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(path, data);
+  },
+  async unlink(path) {
+    const fs = await import("node:fs/promises");
+    await fs.unlink(path);
+  },
+  async readdir(path) {
+    const fs = await import("node:fs/promises");
+    return fs.readdir(path);
+  },
+  async mkdir(path, options) {
+    const fs = await import("node:fs/promises");
+    return fs.mkdir(path, options);
+  },
+  async rmdir(path) {
+    const fs = await import("node:fs/promises");
+    await fs.rmdir(path);
+  },
+  async stat(path) {
+    const fs = await import("node:fs/promises");
+    return fs.stat(path);
+  },
+  async lstat(path) {
+    const fs = await import("node:fs/promises");
+    return fs.lstat(path);
+  },
+  async readlink(path) {
+    const fs = await import("node:fs/promises");
+    return fs.readlink(path);
+  },
+  async symlink(target, path) {
+    const fs = await import("node:fs/promises");
+    await fs.symlink(target, path);
+  },
+  async chmod(path, mode) {
+    const fs = await import("node:fs/promises");
+    await fs.chmod(path, mode);
+  },
+};
+
+const localOnlyHttp: HttpClient = {
+  request: async () => {
+    throw new Error(
+      "GitClient network operations require an explicit host-mediated HTTP adapter; use the runtime git API or pass { http }."
+    );
+  },
+};
+
 function getAuthFailureInfo(err: unknown): { statusCode: number; message: string } | null {
   const data = (
     err as { data?: { statusCode?: number; response?: string; statusMessage?: string } }
@@ -180,8 +256,37 @@ function getAuthFailureInfo(err: unknown): { statusCode: number; message: string
       ? `Authentication failed: ${detail}`
       : "Authentication failed. Please check your credentials.";
   if (maybeStatus === 401 || maybeStatus === 403) return { statusCode: maybeStatus, message };
-  if (/401|403|auth/i.test(baseMessage)) return { statusCode: maybeStatus ?? 401, message };
+  // Deliberately no bare `auth` here: it would match "author"/"Invalid author
+  // email" and misclassify commit-identity errors as credential failures.
+  if (/unauthorized|forbidden|authenticat|authoriz|credential|\b401\b|\b403\b/i.test(baseMessage)) {
+    return { statusCode: maybeStatus ?? 401, message };
+  }
   return null;
+}
+
+/** Typed detection of a remote push rejection (isomorphic-git PushRejectedError
+ *  or a per-ref rejection payload) — callers must never regex error prose. */
+function getPushRejectionInfo(err: unknown): { message: string; reasons: string[] } | null {
+  const candidate = err as {
+    code?: string;
+    name?: string;
+    message?: string;
+    data?: { reason?: string; errors?: unknown };
+  };
+  const isRejected =
+    candidate.code === "PushRejectedError" ||
+    candidate.name === "PushRejectedError" ||
+    candidate.code === "GitPushError" ||
+    candidate.name === "GitPushError";
+  if (!isRejected) return null;
+  const reasons: string[] = [];
+  if (typeof candidate.data?.reason === "string") reasons.push(candidate.data.reason);
+  if (Array.isArray(candidate.data?.errors)) {
+    for (const entry of candidate.data.errors) {
+      if (typeof entry === "string") reasons.push(entry);
+    }
+  }
+  return { message: candidate.message ?? "Push rejected by remote", reasons };
 }
 
 function assertDirString(value: unknown, method: string): string {
@@ -798,6 +903,8 @@ function parseConflictMarkers(content: string): {
  * import { promises as fsPromises } from "fs";
  * const externalGit = new GitClient(fsPromises, { http: credentials.gitHttp() });
  * ```
+ * Local-only inspection can use `new GitClient()` in Node/workerd; clone,
+ * fetch, pull, and push still require an explicit host-mediated HTTP adapter.
  */
 export class GitClient {
   private fs: FsClient;
@@ -807,8 +914,8 @@ export class GitClient {
   public readonly methods: string[];
 
   constructor(
-    fs: FsPromisesLike,
-    options: GitClientOptions & { authorIdentity?: GitAuthorIdentity }
+    fs: FsPromisesLike = defaultLocalFs,
+    options: GitClientOptions & { authorIdentity?: GitAuthorIdentity } = { http: localOnlyHttp }
   ) {
     this.fs = wrapFsForGit(fs);
     this.fsPromises = fs;
@@ -841,7 +948,8 @@ export class GitClient {
    * Clone a repository
    *
    * Handles both branch refs and commit hashes:
-   * - Branch refs: Uses shallow clone (depth: 1) for efficiency
+   * - Branch refs: Uses shallow clone (depth: 1) by default; callers that
+   *   need a self-contained/re-publishable checkout can request fullHistory
    * - Commit hashes: Must use full clone since git servers can't serve
    *   arbitrary commits via shallow clone (only branch tips are accessible)
    */
@@ -877,7 +985,9 @@ export class GitClient {
         force: true,
       });
     } else {
-      // For branch refs: use shallow clone for efficiency
+      // For branch refs, shallow is the interactive default. Import/export
+      // bridges request complete history explicitly because a shallow pack can
+      // legitimately reference objects the destination remote does not have.
       await git.clone({
         fs: this.fs,
         http: this.http,
@@ -885,7 +995,7 @@ export class GitClient {
         url,
         ref: options.ref,
         singleBranch: options.singleBranch ?? true,
-        depth: options.depth ?? 1,
+        depth: options.fullHistory === true ? undefined : (options.depth ?? 1),
         // Don't fail if ref doesn't exist - we'll checkout after
         noCheckout: !!options.ref,
       });
@@ -1034,6 +1144,10 @@ export class GitClient {
       const authFailure = getAuthFailureInfo(err);
       if (authFailure) {
         throw new GitAuthError(authFailure.message, authFailure.statusCode);
+      }
+      const rejection = getPushRejectionInfo(err);
+      if (rejection) {
+        throw new GitPushRejectedError(rejection.message, rejection.reasons);
       }
       throw describeGitOperationError("push", checked, err);
     }
@@ -1400,6 +1514,64 @@ export class GitClient {
       fs: this.fs,
       dir,
     });
+  }
+
+  /**
+   * Ask the remote which branch its HEAD points at (`ls-remote --symref`).
+   * Returns null when the remote is empty or does not advertise a HEAD.
+   */
+  async getRemoteDefaultBranch(url: string): Promise<string | null> {
+    try {
+      const info = await git.getRemoteInfo({ http: this.http, url });
+      const head = (info as { HEAD?: string }).HEAD;
+      if (typeof head === "string" && head.startsWith("refs/heads/")) {
+        return head.slice("refs/heads/".length);
+      }
+      return null;
+    } catch (err) {
+      const authFailure = getAuthFailureInfo(err);
+      if (authFailure) {
+        throw new GitAuthError(authFailure.message, authFailure.statusCode);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Paths whose content/mode differ between two commits' trees. `oldRef` may be
+   * null (everything in `newRef` counts as changed). Used by interchange layers
+   * that need per-commit change sets without shelling out.
+   */
+  async diffCommits(dir: string, oldRef: string | null, newRef: string): Promise<string[]> {
+    const trees = oldRef ? [git.TREE({ ref: oldRef }), git.TREE({ ref: newRef })] : undefined;
+    if (!trees) {
+      const listing = await git.walk({
+        fs: this.fs,
+        dir,
+        trees: [git.TREE({ ref: newRef })],
+        map: async (filepath, [entry]) =>
+          filepath !== "." && entry && (await entry.type()) === "blob" ? filepath : null,
+      });
+      return (listing as Array<string | null>).filter((p): p is string => p !== null);
+    }
+    const changed = await git.walk({
+      fs: this.fs,
+      dir,
+      trees,
+      map: async (filepath, [oldEntry, newEntry]) => {
+        if (filepath === ".") return null;
+        const oldType = oldEntry ? await oldEntry.type() : null;
+        const newType = newEntry ? await newEntry.type() : null;
+        if (oldType === "tree" || newType === "tree") return null;
+        const oldOid = oldEntry && oldType === "blob" ? await oldEntry.oid() : null;
+        const newOid = newEntry && newType === "blob" ? await newEntry.oid() : null;
+        const oldMode = oldEntry && oldType === "blob" ? await oldEntry.mode() : null;
+        const newMode = newEntry && newType === "blob" ? await newEntry.mode() : null;
+        if (oldOid === newOid && oldMode === newMode) return null;
+        return filepath;
+      },
+    });
+    return (changed as Array<string | null>).filter((p): p is string => p !== null);
   }
 
   /**

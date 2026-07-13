@@ -4,6 +4,7 @@ import type {
   VcsApplyEditsInput,
   VcsCommitResult,
   VcsEditResult,
+  VcsDiffContentResult,
   VcsPushResult,
   VcsPushStatus,
   VcsRepoDivergence,
@@ -169,12 +170,9 @@ function headForContext(contextId: string): string {
   return `ctx:${contextId}`;
 }
 
-function formatNameStatus(s: VcsStatusResult): string {
-  return [
-    ...s.added.map((p) => `A\t${p}`),
-    ...s.changed.map((p) => `M\t${p}`),
-    ...s.removed.map((p) => `D\t${p}`),
-  ].join("\n");
+function formatNameStatus(result: VcsDiffContentResult): string {
+  const code = { added: "A", changed: "M", removed: "D" } as const;
+  return result.files.map((file) => `${code[file.status]}\t${file.path}`).join("\n");
 }
 
 // ----- diagnostic rendering (W6.5 delivery surface) -----
@@ -333,14 +331,16 @@ async function pushStatus(inv: ParsedInvocation): Promise<number> {
       json,
       human: () => {
         for (const repo of result) {
-          const blocked = repo.deleted || repo.diverged || repo.uncommitted > 0;
-          if (repo.ahead === 0 && !blocked) {
+          const needsAttention =
+            repo.deleted || repo.diverged || repo.behind || repo.uncommitted > 0;
+          if (repo.ahead === 0 && !needsAttention) {
             console.log(`${repo.repoPath}: clean (in sync with main)`);
             continue;
           }
           const parts: string[] = [];
           if (repo.deleted) parts.push("DELETED");
           if (repo.diverged) parts.push("diverged");
+          if (repo.behind) parts.push("behind main");
           if (repo.uncommitted > 0) {
             parts.push(`${repo.uncommitted} uncommitted working edit(s)`);
           }
@@ -350,10 +350,16 @@ async function pushStatus(inv: ParsedInvocation): Promise<number> {
             console.log(`  ${file.kind}\t${file.path}`);
           }
           if (repo.uncommitted > 0) {
+            for (const path of repo.uncommittedPaths) {
+              console.log(`  uncommitted\t${path}`);
+            }
             console.log("  commit or discard uncommitted edits before push");
           }
           if (repo.diverged) {
             console.log("  merge/rebase this context before push");
+          }
+          if (repo.behind) {
+            console.log("  main advanced; merge/rebase to update this context");
           }
           if (repo.deleted) {
             console.log(
@@ -375,14 +381,15 @@ async function status(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client, contextId } = resolveSessionScope(inv);
     const head = headForContext(contextId);
-    // Per-repo native status: positional (repoPath, head). Returns the repo
-    // subtree's added/removed/changed vs its own main via a CAS diff.
+    // Per-repo native status separates committed-but-unpushed changes from
+    // uncommitted working changes so neither state is hidden or conflated.
     const result = await client.call<VcsStatusResult>("vcs.status", [repo, head]);
     printResult(result, {
       json,
       human: () => {
         console.log(`repo: ${repo}`);
-        console.log(`state: ${result.stateHash ?? "(none)"}`);
+        console.log(`committed state: ${result.committedStateHash ?? "(none)"}`);
+        console.log(`working state: ${result.workingStateHash ?? "(none)"}`);
         if (result.deleted) {
           console.log("DELETED\trepo removed from workspace main; push will be refused");
         }
@@ -393,9 +400,19 @@ async function status(inv: ParsedInvocation): Promise<number> {
         if (result.uncommitted > 0) {
           console.log(`U\t${result.uncommitted} uncommitted working edit(s)`);
         }
-        for (const p of result.added) console.log(`A\t${p}`);
-        for (const p of result.changed) console.log(`M\t${p}`);
-        for (const p of result.removed) console.log(`D\t${p}`);
+        for (const p of result.committed.added) console.log(`C A\t${p}`);
+        for (const p of result.committed.changed) console.log(`C M\t${p}`);
+        for (const p of result.committed.removed) console.log(`C D\t${p}`);
+        for (const p of result.working.added) console.log(`W A\t${p}`);
+        for (const p of result.working.changed) console.log(`W M\t${p}`);
+        for (const p of result.working.removed) console.log(`W D\t${p}`);
+        if (result.diverged) console.log("diverged from main; merge/rebase before push");
+        else if (result.behind) console.log("behind main; merge/rebase to update this context");
+        if (result.pendingMerge) {
+          console.log(
+            `pending merge from ${result.pendingMerge.source}: ${result.pendingMerge.conflictPaths.join(", ")}`
+          );
+        }
       },
     });
     return 0;
@@ -410,8 +427,10 @@ async function diff(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client, contextId } = resolveSessionScope(inv);
     const head = headForContext(contextId);
-    const statusResult = await client.call<VcsStatusResult>("vcs.status", [repo, head]);
-    const result = formatNameStatus(statusResult);
+    const diffResult = await client.call<VcsDiffContentResult>("vcs.diffContent", [
+      { repoPath: repo, head, scope: "all", contextLines: 0 },
+    ]);
+    const result = formatNameStatus(diffResult);
     if (json) printResult(result, { json });
     else process.stdout.write(result ? `${result}\n` : "");
     return 0;
@@ -945,9 +964,7 @@ function resolveGitRpcClient(): CliRpcClient {
   }
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError(
-      'not paired — run `vibestudio remote pair "vibestudio://connect?..."` first'
-    );
+    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
   }
   if (!creds.workspaceName) {
     throw new AuthError(
@@ -1536,7 +1553,7 @@ export const vcsCommands: CliCommand[] = [
   {
     group: "vcs",
     name: "status",
-    summary: "Show a repo's unpushed changes (context head vs its main)",
+    summary: "Show a repo's committed and working changes, drift, and pending merge",
     usage: "vibestudio vcs status --repo REPOPATH",
     flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: status,
@@ -1544,7 +1561,7 @@ export const vcsCommands: CliCommand[] = [
   {
     group: "vcs",
     name: "diff",
-    summary: "Show a name-status diff of a repo's unpushed changes",
+    summary: "Show a name-status diff of all unpushed committed and working changes",
     usage: "vibestudio vcs diff --repo REPOPATH",
     flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: diff,

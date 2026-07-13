@@ -60,7 +60,11 @@ function diskConfigPersistence(workspacePath: string) {
   const render = (nextConfig: WorkspaceConfig): string => {
     const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
     const beforeParsed = before ? ((YAML.parse(before) as Record<string, unknown>) ?? {}) : {};
-    return YAML.stringify({ ...beforeParsed, ...nextConfig });
+    const merged = { ...beforeParsed, ...nextConfig };
+    // A mutation that removed the last git declaration deletes the `git` key
+    // outright — a shallow merge must not resurrect it from the old file.
+    if (!("git" in nextConfig)) delete merged["git"];
+    return YAML.stringify(merged);
   };
   const currentConfig = (): WorkspaceConfig =>
     fs.existsSync(configPath)
@@ -95,6 +99,7 @@ describe("gitInteropService", () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     const cloneRepo = vi.fn(async () => undefined);
+    const onWorkspaceSourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
@@ -105,6 +110,7 @@ describe("gitInteropService", () => {
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       invokeGitProvider: cloneProvider(cloneRepo),
+      onWorkspaceSourceChanged,
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -120,6 +126,11 @@ describe("gitInteropService", () => {
     ]);
 
     expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
+    expect(onWorkspaceSourceChanged).toHaveBeenCalledWith(
+      expect.anything(),
+      "Import workspace project projects/bgkit",
+      "projects/bgkit"
+    );
     const config = YAML.parse(
       fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
     ) as WorkspaceConfig;
@@ -222,7 +233,7 @@ describe("gitInteropService", () => {
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
   });
 
-  it("keeps the approved config declaration when extension clone fails", async () => {
+  it("rolls the approved config declaration back when extension clone fails", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     const cloneRepo = vi.fn().mockRejectedValueOnce(new Error("network unavailable"));
@@ -256,19 +267,20 @@ describe("gitInteropService", () => {
           },
         },
       ])
-    ).rejects.toThrow("network unavailable");
+    ).rejects.toThrow(/failed during clone: network unavailable.*re-run the same import command/s);
 
+    // No phantom declaration survives a failed clone: the remote/upstream
+    // config is rolled back and the retry path is a clean re-import.
     const config = YAML.parse(
       fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
     ) as WorkspaceConfig;
-    expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toEqual({
-      url: "https://github.com/werg/bgkit.git",
-      branch: "vibestudio-bridge",
-    });
+    expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toBeUndefined();
+    expect(config.git?.upstreams?.["projects"]?.["bgkit"]).toBeUndefined();
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
     expect(sourceChanged).toHaveBeenCalledWith(
       panelServiceContext(),
-      "Record Git remote for projects/bgkit"
+      "Roll back failed Git import of projects/bgkit",
+      undefined
     );
   });
 
@@ -346,7 +358,8 @@ describe("gitInteropService", () => {
     expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
     expect(sourceChanged).toHaveBeenCalledWith(
       panelServiceContext(),
-      "Import workspace project projects/bgkit"
+      "Import workspace project projects/bgkit",
+      "projects/bgkit"
     );
   });
 
@@ -469,7 +482,29 @@ describe("gitInteropService", () => {
       {
         method: "pullUpstream",
         args: ["projects/bgkit", { dryRun: true }],
-        result: { behindBy: 1, aheadBy: 0, incoming: [{ sha: "abc123", summary: "change" }] },
+        result: {
+          behindBy: 1,
+          aheadBy: 0,
+          remoteBranchExists: true,
+          incoming: [{ sha: "abc123", summary: "change" }],
+        },
+      },
+      {
+        method: "resetExportMarker",
+        args: ["projects/bgkit"],
+        result: { repoPath: "projects/bgkit", cleared: true },
+      },
+      {
+        method: "commitMapping",
+        args: ["projects/bgkit", { limit: 5 }],
+        result: [
+          {
+            gitSha: "abc123",
+            gadState: `state:${"a".repeat(64)}`,
+            gadEvent: "evt-1",
+            summary: "change",
+          },
+        ],
       },
       {
         method: "publishRepo",
@@ -503,6 +538,109 @@ describe("gitInteropService", () => {
       );
       expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, testCase.method, testCase.args);
     }
+  });
+
+  it("publishes, verifies, and cleans a disposable remote without config mutation", async () => {
+    const ctx = serviceContext();
+    const disposableRemotes = {
+      create: vi.fn(async () => ({
+        id: "remote-1",
+        name: "publish-check",
+        url: "http://vibestudio.local/_disposable-git/remote-1/publish-check.git",
+        branch: "main",
+        expiresAt: Date.now() + 60_000,
+      })),
+      inspect: vi.fn(async () => ({
+        id: "remote-1",
+        url: "http://vibestudio.local/_disposable-git/remote-1/publish-check.git",
+        branch: "main",
+        commitCount: 3,
+        headCommit: "abc123",
+        expiresAt: Date.now() + 60_000,
+      })),
+      remove: vi.fn(async () => ({ removed: true })),
+    };
+    const invokeGitProviderMock = vi.fn(async () => ({
+      exported: 3,
+      pushed: true,
+      headCommit: "abc123",
+    }));
+    const service = createGitInteropService({
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      disposableRemotes: disposableRemotes as never,
+      invokeGitProvider: invokeGitProviderMock as never,
+    });
+
+    await expect(
+      service.handler(ctx, "publishToDisposableRemote", ["projects/bgkit"])
+    ).resolves.toMatchObject({
+      repoPath: "projects/bgkit",
+      branch: "main",
+      exported: 3,
+      pushed: true,
+      commitCount: 3,
+      headCommit: "abc123",
+    });
+    expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, "pushDisposableRemote", [
+      {
+        repoPath: "projects/bgkit",
+        url: expect.stringContaining("publish-check.git"),
+        branch: "main",
+      },
+    ]);
+    expect(disposableRemotes.remove).toHaveBeenCalledOnce();
+  });
+
+  it("pushes to an existing active disposable remote without removing it", async () => {
+    const ctx = serviceContext();
+    const url = "http://vibestudio.local/_disposable-git/remote-1/publish-check.git";
+    const disposableRemotes = {
+      create: vi.fn(),
+      inspect: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: "remote-1",
+          url,
+          branch: "main",
+          commitCount: 0,
+          headCommit: null,
+          expiresAt: Date.now() + 60_000,
+        })
+        .mockResolvedValueOnce({
+          id: "remote-1",
+          url,
+          branch: "main",
+          commitCount: 3,
+          headCommit: "abc123",
+          expiresAt: Date.now() + 60_000,
+        }),
+      remove: vi.fn(),
+    };
+    const invokeGitProviderMock = vi.fn(async () => ({
+      exported: 3,
+      pushed: true,
+      headCommit: "abc123",
+    }));
+    const service = createGitInteropService({
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      disposableRemotes: disposableRemotes as never,
+      invokeGitProvider: invokeGitProviderMock as never,
+    });
+
+    await expect(
+      service.handler(ctx, "pushDisposableRemote", ["projects/bgkit", url, "main"])
+    ).resolves.toEqual({
+      repoPath: "projects/bgkit",
+      branch: "main",
+      exported: 3,
+      pushed: true,
+      commitCount: 3,
+      headCommit: "abc123",
+    });
+    expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, "pushDisposableRemote", [
+      { repoPath: "projects/bgkit", url, branch: "main" },
+    ]);
+    expect(disposableRemotes.remove).not.toHaveBeenCalled();
   });
 
   it("fails provider operations when no gitInterop provider is available", async () => {

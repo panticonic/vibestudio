@@ -37,6 +37,14 @@ import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import { rpc } from "@workspace/runtime";
 import { mdxComponents } from "@workspace/agentic-chat";
 import { nodeToMdxSource } from "./mdastSerialize";
+import { WikiLink as SpectroliteWikiLink } from "./components";
+
+// Inline MDX is compiled as an isolated module. Publish the host component so
+// the compiled module renders the same context-aware wikilink as the rest of
+// Spectrolite instead of a preview-only imitation.
+(globalThis as typeof globalThis & {
+  __spectroliteWikiLinkComponent__?: typeof SpectroliteWikiLink;
+}).__spectroliteWikiLinkComponent__ = SpectroliteWikiLink;
 
 const sandbox = createPanelSandboxConfig(rpc);
 const BASE_LIVE_JSX_IMPORTS = { "@workspace/agentic-chat": "latest" } as const;
@@ -69,17 +77,10 @@ import { mdxComponents } from "@workspace/agentic-chat";
 // static properties intact in sandboxed inline JSX.
 const { ${importList} } = mdxComponents;
 
-function WikiLink({ target, children }) {
-  return (
-    <a
-      href="#"
-      style={{ textDecoration: "underline dotted" }}
-      onClick={(e) => { e.preventDefault(); }}
-    >
-      {children ?? target}
-    </a>
-  );
-}
+const WikiLink = globalThis.__spectroliteWikiLinkComponent__ ||
+  function WikiLinkFallback({ target, children }) {
+    return <span data-wikilink={target} className="wikilink">{children ?? target}</span>;
+  };
 
 function ActionButton({ children, message, variant = "soft", size = "1" }) {
   return (

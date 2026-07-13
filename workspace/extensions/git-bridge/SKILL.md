@@ -10,6 +10,72 @@ Vibestudio's protected GAD `main` history and external Git remotes. A checkout
 under `workspace/<repoPath>` is an interchange artifact, not the source of
 truth.
 
+## Task recipes (start here)
+
+Use the typed `git` namespace directly. These are complete calls; do not inspect
+implementation source to rediscover their argument shapes.
+
+```ts
+import { git } from "@workspace/runtime";
+
+// All configured upstreams (an empty array means all).
+const statuses = await git.upstreamStatus([]);
+
+// Import a public repository without credentials.
+const imported = await git.importProject({
+  path: `projects/import-${Date.now()}`,
+  remote: {
+    name: "origin",
+    url: "https://github.com/octocat/Hello-World.git",
+    branch: "master",
+  },
+});
+
+// GAD-to-Git mapping for an already-exported repo.
+const mapping = await git.commitMapping("projects/example", { limit: 100 });
+```
+
+`git.commitMapping` does not need shell Git or checkout inspection; it reads the
+bridge's exported commit trailers. Sandbox eval deliberately has no Node
+`child_process` or host `/tmp` access. Safe `node:fs`, `node:fs/promises`, and
+`node:path` imports are compatibility facades over the same owner-scoped runtime
+filesystem; they do not provide host filesystem or process access.
+
+For a credential-free writable remote (examples, development, or verification),
+use the one-call host-managed disposable smart-HTTP path. It exports, pushes,
+verifies the received commit count, removes the temporary remote, and leaves the
+repo's declared upstream unchanged:
+
+```ts
+const verified = await git.publishToDisposableRemote("projects/example");
+// { pushed, commitCount, headCommit, ... }
+```
+
+Use the lower-level lifecycle only when you specifically need to keep the
+remote between calls. Do not try to construct a bare repo through runtime `fs`:
+
+```ts
+const disposable = await git.createDisposableRemote({ name: "publish-check" });
+await git.setSharedRemote("projects/example", {
+  name: "origin",
+  url: disposable.url,
+  branch: disposable.branch,
+});
+await git.setUpstream("projects/example", {
+  remote: "origin",
+  branch: disposable.branch,
+  autoPush: false,
+});
+await git.pushUpstream("projects/example");
+const received = await git.inspectDisposableRemote(disposable.url);
+await git.removeDisposableRemote(disposable.url);
+```
+
+Disposable URLs are unguessable, accepted only by this host's Git transport,
+expire automatically (one hour by default, at most 24 hours), and need no real
+credential. They exercise the same export, declared-remote, upstream, and push
+path as a provider remote.
+
 ## Operating Model
 
 GAD `main` is authoritative. Agents, panels, workers, and apps write through
@@ -91,6 +157,11 @@ Public runtime methods:
 | `pushUpstream(repoPath, opts?)`                                            | Export protected `main` and push to the declared upstream.                                             |
 | `pullUpstream(repoPath, opts?)`                                            | Fetch, optionally preview, fast-forward or merge diverged refs, import the tree, and publish to GAD.   |
 | `publishRepo(input)`                                                       | Create a provider repo, declare its remote/upstream, export, and push.                                 |
+| `createDisposableRemote(options?)`                                         | Create a short-lived credential-free smart-HTTP remote for development and verification.              |
+| `publishToDisposableRemote(repoPath, options?)`                            | Export, push, verify, and clean up a disposable remote without changing declared upstream config.      |
+| `inspectDisposableRemote(url)` / `removeDisposableRemote(url)`             | Verify received commits or clean up the disposable remote early.                                      |
+| `commitMapping(repoPath, options?)`                                        | Read exported GAD↔Git commit mappings from commit trailers.                                            |
+| `resetExportMarker(repoPath)`                                              | Clear a stale export marker before rebuilding an export checkout.                                      |
 | `importProject(input)`                                                     | Record its shared remote and upstream (`autoPush: false`), then clone through the configured provider. |
 | `completeWorkspaceDependencies(options?)`                                  | Import configured workspace dependencies that are not present locally.                                 |
 

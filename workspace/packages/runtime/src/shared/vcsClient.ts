@@ -7,6 +7,8 @@
 import {
   vcsMethods,
   type VcsCommitAncestor,
+  type VcsCommitInput,
+  type VcsCommitResult,
   type VcsEditOpRow,
   type VcsHeadAdvance,
   type VcsLogEntry,
@@ -19,6 +21,7 @@ import {
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 
 export type {
   VcsApplyEditsInput,
@@ -66,12 +69,13 @@ export interface VcsHistoryClient {
   /** The edit-ops a commit owns (commit → its edits), in replay order. */
   commitEdits(repoPath: string, target: { eventId: string }): Promise<VcsEditOpRow[]>;
   /** File history / blame in commit-lineage order (+ uncommitted tail). */
-  fileHistory(
-    repoPath: string,
-    path: string,
-    head?: string,
-    limit?: number
-  ): Promise<VcsEditOpRow[]>;
+  fileHistory(input: {
+    /** Full workspace path, or repo-relative when repoPath is supplied. */
+    path: string;
+    repoPath?: string;
+    head?: string;
+    limit?: number;
+  }): Promise<VcsEditOpRow[]>;
   /** Walk a commit's ancestry in the event-keyed commit DAG. */
   commitAncestors(repoPath: string, eventId: string, limit?: number): Promise<VcsCommitAncestor[]>;
   /** Edits authored by an actor (author provenance). */
@@ -86,8 +90,12 @@ export interface VcsHistoryClient {
   log(repoPath: string, limit?: number, head?: string): Promise<VcsLogEntry[]>;
 }
 
-export type VcsClient = VcsRpcClient &
+export type VcsCommitResults = VcsCommitResult[] & Partial<VcsCommitResult>;
+
+export type VcsClient = Omit<VcsRpcClient, "commit"> &
   VcsHistoryClient & {
+    /** Per-repo results. A sole row also forwards its fields on the array. */
+    commit(input: VcsCommitInput): Promise<VcsCommitResults>;
     /**
      * Publish one or more repos from this runtime's context head to main. This is
      * userland-dispatched to the gad-store DO's `vcsPush`, not host `vcs.push`.
@@ -150,8 +158,27 @@ export function createVcsClient(
   };
   const history: VcsHistoryClient = {
     commitEdits: (repoPath, target) => userlandCall("vcsCommitEdits", repoPath, target.eventId),
-    fileHistory: (repoPath, path, head, limit) =>
-      userlandCall("vcsFileHistory", repoPath, path, head ?? null, limit ?? null),
+    fileHistory: ({ path, repoPath, head, limit }) => {
+      const split = splitRepoPath(path);
+      const resolvedRepo = repoPath ?? split?.repoPath;
+      const resolvedPath = repoPath
+        ? path.startsWith(`${repoPath}/`)
+          ? path.slice(repoPath.length + 1)
+          : path
+        : split?.repoRelPath;
+      if (!resolvedRepo || !resolvedPath) {
+        throw new Error(
+          "vcs.fileHistory requires a full workspace file path, or { path, repoPath } for a repo-relative path"
+        );
+      }
+      return userlandCall(
+        "vcsFileHistory",
+        resolvedRepo,
+        resolvedPath,
+        head ?? defaults?.logHead ?? null,
+        limit ?? null
+      );
+    },
     commitAncestors: (repoPath, eventId, limit) =>
       userlandCall("vcsCommitAncestors", repoPath, eventId, limit ?? null),
     editsByActor: (actorId, limit) => userlandCall("vcsEditsByActor", actorId, limit ?? null),
@@ -163,6 +190,11 @@ export function createVcsClient(
   return {
     ...rpcClient,
     ...history,
+    async commit(input) {
+      const rows = (await rpcClient.commit(input)) as VcsCommitResults;
+      if (rows.length === 1 && rows[0]) Object.assign(rows, rows[0]);
+      return rows;
+    },
     // Push is USERLAND-dispatched (P3 flip): the build-gated main advance runs
     // in the gad-store DO's `vcsPush`, reached via the `vcs` manifest service —
     // NOT the host `vcs.push` service. Client-side routing is mandatory: the

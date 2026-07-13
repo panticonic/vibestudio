@@ -46,7 +46,9 @@ Skip this scaffold step for throwaway project repos. To keep temporary files
 context-local, write a file inside a repo-shaped path such as
 `projects/tmp-name/note.md`. You can leave it uncommitted, commit it as a local
 snapshot, or push it later; `createProject({ projectType: "project" })`
-immediately commits and pushes a README.
+immediately commits and pushes a README. File-oriented APIs accept shorthand
+such as `projects/note.md`, canonicalize it to `projects/note/note.md`, and
+return that full path; use the full repo-shaped form when composing paths.
 
 2. Edit files with the `edit`/`write` filesystem tools, not eval. Each edit is
    recorded as an **uncommitted working edit** on your context head and projected

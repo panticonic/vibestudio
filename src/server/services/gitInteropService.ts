@@ -33,6 +33,9 @@ import {
   gitInteropProviderMethods,
   type GitCompleteWorkspaceDependenciesOptions,
   type GitCompleteWorkspaceDependenciesResult,
+  type GitCreateDisposableRemoteOptions,
+  type GitDetachUpstreamOptions,
+  type GitDetachUpstreamResult,
   type GitImportedWorkspaceRepo,
   type GitImportProjectRequest,
   type GitInteropProviderArgs,
@@ -40,6 +43,7 @@ import {
   type GitInteropProviderOperation,
   type GitInteropProviderResult,
 } from "@vibestudio/shared/serviceSchemas/gitInterop";
+import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
@@ -67,7 +71,11 @@ type GitInteropServiceDeps = {
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  onWorkspaceSourceChanged?: (ctx: ServiceContext, summary: string) => Promise<void>;
+  onWorkspaceSourceChanged?: (
+    ctx: ServiceContext,
+    summary: string,
+    importedRepoPath?: string
+  ) => Promise<void>;
   workspaceConfigMutationWouldChange?: (mutate: WorkspaceConfigMutation) => Promise<boolean>;
   persistWorkspaceConfigMutation?: (input: {
     ctx: ServiceContext;
@@ -81,6 +89,7 @@ type GitInteropServiceDeps = {
     method: M,
     args: GitInteropProviderArgs<M>
   ) => Promise<GitInteropProviderResult<M>>;
+  disposableRemotes?: Pick<DisposableGitRemoteManager, "create" | "inspect" | "remove">;
 };
 
 type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
@@ -274,6 +283,96 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           return invokeGitProviderOperation(deps, ctx, "publishRepo", args);
         }
 
+        case "createDisposableRemote": {
+          if (!deps.disposableRemotes) {
+            throw new Error("Disposable Git remotes are unavailable on this host");
+          }
+          const [options] = args as [GitCreateDisposableRemoteOptions?];
+          return deps.disposableRemotes.create(options);
+        }
+
+        case "publishToDisposableRemote": {
+          if (!deps.disposableRemotes) {
+            throw new Error("Disposable Git remotes are unavailable on this host");
+          }
+          const [repoPath, options] = args as [string, { branch?: string }?];
+          const remote = await deps.disposableRemotes.create({
+            name: "publish-check",
+            ...(options?.branch ? { branch: options.branch } : {}),
+          });
+          try {
+            const pushed = (await invokeGitProviderOperation(deps, ctx, "pushDisposableRemote", [
+              { repoPath, url: remote.url, branch: remote.branch },
+            ])) as { exported: number; pushed: boolean; headCommit: string | null };
+            const received = await deps.disposableRemotes.inspect(remote.url);
+            return {
+              repoPath: normalizeWorkspaceRepoPath(repoPath),
+              branch: remote.branch,
+              exported: pushed.exported,
+              pushed: pushed.pushed,
+              commitCount: received.commitCount,
+              headCommit: received.headCommit,
+            };
+          } finally {
+            await deps.disposableRemotes.remove(remote.url).catch(() => undefined);
+          }
+        }
+
+        case "pushDisposableRemote": {
+          if (!deps.disposableRemotes) {
+            throw new Error("Disposable Git remotes are unavailable on this host");
+          }
+          const [repoPath, url, branch] = args as [string, string, string];
+          const remote = await deps.disposableRemotes.inspect(url);
+          if (remote.branch !== branch) {
+            throw new Error(
+              `Disposable Git remote branch mismatch: requested ${branch}, remote uses ${remote.branch}`
+            );
+          }
+          const validRepoPath = normalizeWorkspaceRepoPath(repoPath);
+          const pushed = (await invokeGitProviderOperation(deps, ctx, "pushDisposableRemote", [
+            { repoPath: validRepoPath, url: remote.url, branch: remote.branch },
+          ])) as { exported: number; pushed: boolean; headCommit: string | null };
+          const received = await deps.disposableRemotes.inspect(remote.url);
+          return {
+            repoPath: validRepoPath,
+            branch: remote.branch,
+            exported: pushed.exported,
+            pushed: pushed.pushed,
+            commitCount: received.commitCount,
+            headCommit: received.headCommit,
+          };
+        }
+
+        case "inspectDisposableRemote": {
+          if (!deps.disposableRemotes) {
+            throw new Error("Disposable Git remotes are unavailable on this host");
+          }
+          const [url] = args as [string];
+          return deps.disposableRemotes.inspect(url);
+        }
+
+        case "removeDisposableRemote": {
+          if (!deps.disposableRemotes) {
+            throw new Error("Disposable Git remotes are unavailable on this host");
+          }
+          const [url] = args as [string];
+          return deps.disposableRemotes.remove(url);
+        }
+
+        case "resetExportMarker": {
+          return invokeGitProviderOperation(deps, ctx, "resetExportMarker", args);
+        }
+
+        case "commitMapping": {
+          return invokeGitProviderOperation(deps, ctx, "commitMapping", args);
+        }
+
+        case "detachUpstream": {
+          const [repoPath, options] = args as [string, GitDetachUpstreamOptions | undefined];
+          return detachUpstream(ctx, deps, repoPath, options);
+        }
+
         case "importProject": {
           const [request] = args as [GitImportProjectRequest];
           return importWorkspaceRepo(ctx, deps, request);
@@ -297,7 +396,7 @@ async function invokeGitProviderOperation<M extends GitInteropProviderOperation>
   method: M,
   args: unknown[]
 ): Promise<GitInteropProviderResult<M>> {
-  const contract = gitInteropMethods[method];
+  const contract = gitInteropProviderMethods[method];
   const parsedArgs = contract.args.safeParse(args);
   if (!parsedArgs.success) {
     throw new Error(`Invalid gitInterop.${method} arguments: ${parsedArgs.error.message}`);
@@ -335,6 +434,56 @@ async function invokeConfiguredGitProvider<M extends GitInteropProviderMethod>(
     throw new Error(`Invalid gitInterop.${method} provider result: ${parsedResult.error.message}`);
   }
   return parsedResult.data as GitInteropProviderResult<M>;
+}
+
+/**
+ * Remove upstream tracking (and optionally the declared remote) in ONE config
+ * persist — never the two-call remove-upstream-then-remove-remote sequence
+ * whose second half can be denied, leaving half-detached config reported as
+ * success.
+ */
+async function detachUpstream(
+  ctx: ServiceContext,
+  deps: GitInteropServiceDeps,
+  repoPath: string,
+  options: GitDetachUpstreamOptions | undefined
+): Promise<GitDetachUpstreamResult> {
+  if (!deps.workspacePath) throw new Error("No workspace path configured");
+  if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
+  const { normalizedRepoPath } = resolveWorkspaceRepoPath(deps.workspacePath, repoPath);
+  const validRepoPath = normalizeWorkspaceRepoPath(normalizedRepoPath);
+  let existing: ReturnType<typeof getDeclaredUpstreamForRepo> = null;
+  try {
+    existing = getDeclaredUpstreamForRepo(deps.workspaceConfig, validRepoPath);
+  } catch {
+    existing = null;
+  }
+  const forgetRemote = options?.forgetRemote === true;
+  const remoteName = forgetRemote ? (options?.remote ?? existing?.remote ?? "origin") : null;
+
+  await ensureUpstreamPermission(ctx, deps, validRepoPath, "remove", existing);
+  if (forgetRemote && remoteName) {
+    const remoteForApproval = getRemoteForApproval(deps.workspaceConfig, validRepoPath, remoteName);
+    await ensureSharedRemotePermission(ctx, deps, validRepoPath, "remove", remoteForApproval);
+  }
+  const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
+    mutate: (currentConfig) => {
+      const withoutUpstream = removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath);
+      return forgetRemote && remoteName
+        ? removeDeclaredRemoteFromConfig(withoutUpstream, validRepoPath, remoteName)
+        : withoutUpstream;
+    },
+    summary:
+      workspaceConfigUpstreamSummary(validRepoPath, existing, "remove") +
+      (forgetRemote && remoteName ? ` and removes remote ${remoteName}` : ""),
+    operation: "push",
+  });
+  await propagateSharedRemote(deps, validRepoPath);
+  return {
+    upstreams: persisted.nextConfig.git?.upstreams ?? {},
+    remotes: persisted.nextConfig.git?.remotes ?? {},
+    removedRemote: forgetRemote ? remoteName : null,
+  };
 }
 
 async function completeWorkspaceDependencies(
@@ -441,7 +590,21 @@ async function importWorkspaceRepo(
   }
   if (fs.existsSync(absolutePath)) throw new Error(`Path already exists: ${request.path}`);
   assertWorkspaceCreateTargetSafe(deps.workspacePath, absolutePath, "importProject");
-  const normalizedRemote = validateWorkspaceGitRemote(request.remote);
+  let normalizedRemote = validateWorkspaceGitRemote(request.remote);
+  if (!normalizedRemote.branch) {
+    // No branch declared: resolve the remote's ACTUAL default (ls-remote
+    // symref HEAD) instead of assuming `main`, and bake it into the declared
+    // config so every later clone/push/pull tracks the real branch.
+    const discovered = await invokeConfiguredGitProvider(deps, ctx, "remoteDefaultBranch", [
+      {
+        url: normalizedRemote.url,
+        ...(request.credentialId ? { credentialId: request.credentialId } : {}),
+      },
+    ]).catch(() => ({ branch: null }));
+    if (discovered.branch) {
+      normalizedRemote = { ...normalizedRemote, branch: discovered.branch };
+    }
+  }
   const mutateConfig: WorkspaceConfigMutation = (currentConfig) => {
     const withRemote = setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote);
     return setDeclaredUpstreamInConfig(withRemote, validRepoPath, {
@@ -467,13 +630,50 @@ async function importWorkspaceRepo(
   try {
     await invokeConfiguredGitProvider(deps, ctx, "cloneRepo", [{ repoPath: validRepoPath }]);
   } catch (err) {
+    // Never leave a phantom declaration behind a failed clone: roll the
+    // remote/upstream config back (when this call wrote it) and say exactly
+    // what happened and how to retry.
+    let rolledBack = false;
     if (persisted.changed) {
-      await notifyWorkspaceSourceChanged(ctx, deps, `Record Git remote for ${validRepoPath}`);
+      try {
+        await persistWorkspaceConfigMutation(ctx, deps, {
+          mutate: (currentConfig) =>
+            removeDeclaredRemoteFromConfig(
+              removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath),
+              validRepoPath,
+              normalizedRemote.name
+            ),
+          summary: `meta/vibestudio.yml rolls back failed import of ${validRepoPath}`,
+          operation: "import",
+        });
+        rolledBack = true;
+        await notifyWorkspaceSourceChanged(
+          ctx,
+          deps,
+          `Roll back failed Git import of ${validRepoPath}`
+        );
+      } catch {
+        await notifyWorkspaceSourceChanged(ctx, deps, `Record Git remote for ${validRepoPath}`);
+      }
     }
-    throw err;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Import of ${validRepoPath} failed during clone: ${detail}. ` +
+        (rolledBack || !persisted.changed
+          ? `Nothing was persisted — re-run the same import command to retry.`
+          : `The remote/upstream declaration WAS persisted but could not be rolled back; ` +
+            `\`vibestudio vcs git status\` will show it as not-materialized — re-run the same ` +
+            `import command to finish, or \`vibestudio vcs git disable --repo ${validRepoPath} ` +
+            `--forget-remote\` to remove it.`)
+    );
   }
   deps.treeScanner.invalidate();
-  await notifyWorkspaceSourceChanged(ctx, deps, `Import workspace project ${validRepoPath}`);
+  await notifyWorkspaceSourceChanged(
+    ctx,
+    deps,
+    `Import workspace project ${validRepoPath}`,
+    validRepoPath
+  );
   return { path: validRepoPath, remote: normalizedRemote };
 }
 
@@ -684,9 +884,10 @@ async function configMutationWouldChange(
 async function notifyWorkspaceSourceChanged(
   ctx: ServiceContext,
   deps: Pick<GitInteropServiceDeps, "onWorkspaceSourceChanged">,
-  summary: string
+  summary: string,
+  importedRepoPath?: string
 ): Promise<void> {
-  await deps.onWorkspaceSourceChanged?.(ctx, summary);
+  await deps.onWorkspaceSourceChanged?.(ctx, summary, importedRepoPath);
 }
 
 async function propagateSharedRemote(

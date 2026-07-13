@@ -18,7 +18,11 @@
             "pushUpstream",
             "pullUpstream",
             "publishRepo",
+            "resetExportMarker",
+            "commitMapping",
+            "pushDisposableRemote",
             "cloneRepo",
+            "remoteDefaultBranch",
             "onMainAdvanced"
           ]
         }

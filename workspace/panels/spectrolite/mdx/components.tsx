@@ -38,6 +38,8 @@ export function WikiLink({ target, children }: WikiLinkProps) {
     // wikilink in the doc created a matching path moments earlier).
     return (
       <Link
+        data-wikilink={target}
+        className="wikilink"
         href="#"
         onClick={(e) => {
           e.preventDefault();
@@ -57,6 +59,8 @@ export function WikiLink({ target, children }: WikiLinkProps) {
   // intent is "the link I just saw."
   return (
     <Link
+      data-wikilink={target}
+      className="wikilink"
       href="#"
       onClick={(e) => {
         e.preventDefault();

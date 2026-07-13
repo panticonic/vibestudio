@@ -24,7 +24,7 @@ import { buildMdxConfig, type BuiltMdxConfig } from "../editor/mdxConfig";
 import { MdxLexicalEditor, type LexicalUndoHandle } from "../editor/MdxLexicalEditor";
 import type { MdxEditorCore } from "../editor/mdxEditorCore";
 import { splitMdxBlocks } from "../editor/parseBlocks";
-import { DocController } from "../coedit/docController";
+import { DocController, type DocVcs, type EditResult } from "../coedit/docController";
 import { UndoCoordinator } from "../coedit/undoCoordinator";
 import { knownJsxDescriptors } from "../mdx/runtime";
 import { LiveJsxEditor } from "../mdx/LiveJsxEditor";
@@ -50,7 +50,30 @@ const RECOMPUTE_MS = 350;
 /** How long a scribe-attributed block stays highlighted. */
 const ATTRIBUTION_FLASH_MS = 2200;
 
-export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates }: DocumentEditorProps) {
+function singleRepoEditResult(
+  result: Awaited<ReturnType<typeof vcs.edit>>,
+  repoPath: string,
+  operation: string
+): EditResult {
+  const repo = result.repos?.find((candidate) => candidate.repoPath === repoPath);
+  const stateHash = result.stateHash ?? repo?.stateHash;
+  if (!stateHash) {
+    throw new Error(`${operation} returned no state hash for ${repoPath}`);
+  }
+  return {
+    stateHash,
+    committed: false,
+    status: "uncommitted",
+    changedPaths: repo?.changedPaths ?? result.changedPaths,
+  };
+}
+
+export function DocumentEditor({
+  relPath,
+  theme,
+  dependencies,
+  mentionCandidates,
+}: DocumentEditorProps) {
   const app = useApp();
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,10 +95,7 @@ export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates
 
   const config = useMemo<BuiltMdxConfig>(() => {
     const JsxEditor = (props: JsxEditorProps) => (
-      <LiveJsxEditor
-        {...props}
-        dependencies={dependenciesRef.current}
-      />
+      <LiveJsxEditor {...props} dependencies={dependenciesRef.current} />
     );
     const descriptors: JsxComponentDescriptor[] = knownJsxDescriptors().map((d) => ({
       ...d,
@@ -112,28 +132,41 @@ export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates
       const controller = controllerRef.current;
       app.setDirty(relPath, controller ? controller.isDirty() : core.getLiveBlockIds().size > 0);
     },
-    [app, relPath],
+    [app, relPath]
   );
 
   const onReady = useMemo(
     () => (core: MdxEditorCore, lexicalUndo: LexicalUndoHandle) => {
       coreRef.current = core;
+      const vaultRepo = app.publish.getRepo();
+      const docVcs: DocVcs = {
+        readFile: (input) => vcs.readFile(input),
+        edit: async (input) => singleRepoEditResult(await vcs.edit(input), vaultRepo, "vcs.edit"),
+        commit: (input) => vcs.commit(input),
+        subscribeHead: (head, onAdvance) => vcs.subscribeHead(head, onAdvance),
+        subscribeWorking: (head, onAdvance) => vcs.subscribeWorking(head, onAdvance),
+      };
 
       const undo = new UndoCoordinator({
         lexical: lexicalUndo,
         // Per-repo VCS: revert must name the vault's repo (the single repo this
         // panel edits). repoPath is required on `vcs.revert`.
-        revert: (target) => vcs.revert({ ...target, repoPath: app.publish.getRepo() }),
+        revert: async (target) =>
+          singleRepoEditResult(
+            await vcs.revert({ ...target, repoPath: vaultRepo }),
+            vaultRepo,
+            "vcs.revert"
+          ),
         onRevertIssued: (stateHash) => controllerRef.current?.expectHistoric(stateHash),
       });
       undoRef.current = undo;
 
       const controller = new DocController({
         editor: core,
-        vcs,
+        vcs: docVcs,
         vaultHead: app.vaultHead,
         // Per-repo VCS: `vcs.commit` is scoped to the vault's single repo.
-        vaultRepo: app.publish.getRepo(),
+        vaultRepo,
         viewState: app.viewState,
         splitBlocks: (markdown) => splitMdxBlocks(markdown),
         onCollisions: (collisions, path) => app.pushCollisions(collisions, path),
@@ -199,11 +232,15 @@ export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates
           const el = core.editor.getElementByKey(key);
           if (!el) continue;
           el.classList.add("spectrolite-scribe-touch");
-          window.setTimeout(() => el.classList.remove("spectrolite-scribe-touch"), ATTRIBUTION_FLASH_MS);
+          window.setTimeout(
+            () => el.classList.remove("spectrolite-scribe-touch"),
+            ATTRIBUTION_FLASH_MS
+          );
         }
       });
 
-      void controller.load(vcsPath)
+      void controller
+        .load(vcsPath)
         .then(() => {
           setReady(true);
           recompute(core);
@@ -224,7 +261,7 @@ export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates
         }, RECOMPUTE_MS);
       });
     },
-    [app, vcsPath, recompute],
+    [app, vcsPath, recompute]
   );
 
   // ⌘Z / ⇧⌘Z drive the two-tier undo coordinator.
@@ -264,7 +301,9 @@ export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates
   if (error) {
     return (
       <Flex direction="column" gap="2" p="3">
-        <Text color="red" size="2">Could not open {relPath}: {error}</Text>
+        <Text color="red" size="2">
+          Could not open {relPath}: {error}
+        </Text>
       </Flex>
     );
   }
@@ -299,7 +338,9 @@ export function DocumentEditor({ relPath, theme, dependencies, mentionCandidates
                 justify="center"
                 style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
               >
-                <Text size="2" color="gray">Loading {relPath}…</Text>
+                <Text size="2" color="gray">
+                  Loading {relPath}…
+                </Text>
               </Flex>
             ) : null}
           </Box>

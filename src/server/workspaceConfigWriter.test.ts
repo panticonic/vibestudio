@@ -87,6 +87,17 @@ describe("workspaceConfigWriter", () => {
             }));
         },
       },
+      async publishMain({ expectedOld, files, summary, operation }) {
+        const next = await mirrorWorktreeTree(blobsDir, files);
+        await refs.updateMains({
+          entries: [{ repoPath: "meta", expectedOld, next: next.stateHash }],
+          gateContext: { kind: "system", actor: { id: "test", kind: "server" } },
+          operation,
+          reason: summary,
+          writer: "test",
+        });
+        return { stateHash: next.stateHash };
+      },
     });
 
     const result = await writer.applyMutation({
@@ -171,6 +182,17 @@ describe("workspaceConfigWriter", () => {
               mode: entry.mode,
             }));
         },
+      },
+      async publishMain({ expectedOld, files, summary, operation }) {
+        const next = await mirrorWorktreeTree(blobsDir, files);
+        await refs.updateMains({
+          entries: [{ repoPath: "meta", expectedOld, next: next.stateHash }],
+          gateContext: { kind: "system", actor: { id: "test", kind: "server" } },
+          operation,
+          reason: summary,
+          writer: "test",
+        });
+        return { stateHash: next.stateHash };
       },
     });
     const ctx = { caller: createVerifiedCaller("server", "server") };

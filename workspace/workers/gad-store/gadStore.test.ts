@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { AgentHealthInspectionSchema } from "@workspace/runtime/gad-schema";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -1279,6 +1280,28 @@ describe("trajectory projection invariants", () => {
       transport_call_id: "transport-1",
       status: "started",
     });
+
+    const health = await call<any>("inspectAgentHealth", {
+      channelId: "channel-1",
+      branchId: "main",
+      // A broad detailed-inspector limit must not make the summary unbounded.
+      limit: 500,
+    });
+    expect(health.summary).toMatchObject({
+      ok: false,
+      durableIntegrityOk: true,
+      inFlightOnly: true,
+      activity: "in-flight",
+      publicationIssues: 0,
+      turnIntegrityIssues: 0,
+      openTurns: 2,
+      nonterminalInvocations: 1,
+    });
+    expect(health.invocationState.rows).toEqual([
+      expect.objectContaining({ invocation_id: "tool-1", status: "started" }),
+    ]);
+    expect(health.turnState.rows).toHaveLength(2);
+    expect(AgentHealthInspectionSchema.safeParse(health).success).toBe(true);
   });
 
   it("does not count failed terminal messages as streaming", async () => {
@@ -1366,10 +1389,21 @@ describe("channel projections (§3.4)", () => {
     });
 
     expect(
-      await call<any[]>("listChannelEnvelopesAfter", { channelId: "channel-1", seq: 1 })
+      (
+        await call<any>("readChannelEnvelopes", {
+          channelId: "channel-1",
+          window: { kind: "after", seq: 1 },
+        })
+      ).items
     ).toEqual([expect.objectContaining({ envelopeId: "env-2", seq: 2, payload: { value: 2 } })]);
     expect(
-      await call<any[]>("listChannelEnvelopesBefore", { channelId: "channel-1", seq: 2, limit: 1 })
+      (
+        await call<any>("readChannelEnvelopes", {
+          channelId: "channel-1",
+          window: { kind: "before", seq: 2 },
+          limit: 1,
+        })
+      ).items
     ).toEqual([
       expect.objectContaining({
         envelopeId: "env-1",
@@ -1388,24 +1422,27 @@ describe("channel projections (§3.4)", () => {
       seq: 1,
       publishedAt: "2026-05-20T12:00:00.000Z",
     });
-    const initial = await call<any>("getInitialChannelWindow", {
+    const initial = await call<any>("readChannelEnvelopes", {
       channelId: "channel-1",
+      window: { kind: "tail" },
       limit: 1,
     });
     expect(initial).toMatchObject({
-      totalCount: 2,
-      replayFromId: 2,
-      replayToId: 2,
-      hasMoreBefore: true,
-      envelopes: [expect.objectContaining({ envelopeId: "env-2" })],
+      pageInfo: {
+        totalCount: 2,
+        returnedFromSeq: 2,
+        returnedToSeq: 2,
+        hasMoreBefore: true,
+        hasMoreAfter: false,
+      },
+      items: [expect.objectContaining({ envelopeId: "env-2" })],
     });
-    const window = await call<any>("getChannelReplayWindow", {
+    const window = await call<any>("readChannelEnvelopes", {
       channelId: "channel-1",
-      mode: "after",
-      sinceSeq: 0,
+      window: { kind: "after", seq: 0 },
       limit: 1,
     });
-    expect(window.envelopes.map((envelope: any) => envelope.seq)).toEqual([1]);
+    expect(window.items.map((envelope: any) => envelope.seq)).toEqual([1]);
   });
 
   it("serves bounded channel replay windows without decoding out-of-window lineage rows", async () => {
@@ -1446,40 +1483,42 @@ describe("channel projections (§3.4)", () => {
       1
     );
 
-    const initial = await call<any>("getInitialChannelWindow", {
+    const initial = await call<any>("readChannelEnvelopes", {
       channelId: "channel-child",
+      window: { kind: "tail" },
       limit: 2,
     });
     expect(initial).toMatchObject({
-      totalCount: 7,
-      firstEnvelopeSeq: 1,
-      replayFromId: 6,
-      replayToId: 7,
-      hasMoreBefore: true,
+      pageInfo: {
+        totalCount: 7,
+        firstSeq: 1,
+        returnedFromSeq: 6,
+        returnedToSeq: 7,
+        hasMoreBefore: true,
+        hasMoreAfter: false,
+      },
     });
-    expect(initial.envelopes.map((envelope: any) => envelope.seq)).toEqual([6, 7]);
+    expect(initial.items.map((envelope: any) => envelope.seq)).toEqual([6, 7]);
 
-    const after = await call<any>("getChannelReplayWindow", {
+    const after = await call<any>("readChannelEnvelopes", {
       channelId: "channel-child",
-      mode: "after",
-      sinceSeq: 5,
+      window: { kind: "after", seq: 5 },
       limit: 1,
     });
-    expect(after.envelopes.map((envelope: any) => envelope.seq)).toEqual([6]);
-    expect(after).toMatchObject({ totalCount: 7, firstEnvelopeSeq: 1 });
+    expect(after.items.map((envelope: any) => envelope.seq)).toEqual([6]);
+    expect(after.pageInfo).toMatchObject({ totalCount: 7, firstSeq: 1 });
 
-    const before = await call<any>("getChannelReplayWindow", {
+    const before = await call<any>("readChannelEnvelopes", {
       channelId: "channel-child",
-      mode: "before",
-      beforeSeq: 7,
+      window: { kind: "before", seq: 7 },
       limit: 1,
     });
-    expect(before.envelopes.map((envelope: any) => envelope.seq)).toEqual([6]);
-    expect(before).toMatchObject({ totalCount: 7, firstEnvelopeSeq: 1, hasMoreBefore: true });
+    expect(before.items.map((envelope: any) => envelope.seq)).toEqual([6]);
+    expect(before.pageInfo).toMatchObject({ totalCount: 7, firstSeq: 1, hasMoreBefore: true });
 
     await expect(
-      call<any[]>("listChannelEnvelopes", { channelId: "channel-child", limit: 0 })
-    ).resolves.toEqual([]);
+      call<any>("readChannelEnvelopes", { channelId: "channel-child", limit: 0 })
+    ).resolves.toMatchObject({ items: [] });
   });
 
   it("projects channel presence envelopes into the roster", async () => {
@@ -1826,15 +1865,15 @@ describe("channel projections (§3.4)", () => {
       metadata: { name: "User" },
     });
 
-    const raw = await call<any[]>("listChannelEnvelopes", { channelId: "channel-1" });
-    const inspected = await call<{ rows: Array<Record<string, unknown>> }>(
+    const raw = await call<any>("readChannelEnvelopes", { channelId: "channel-1" });
+    const inspected = await call<{ items: Array<Record<string, unknown>> }>(
       "inspectChannelEnvelopes",
       { channelId: "channel-1" }
     );
 
-    expect(JSON.stringify(raw).length).toBeGreaterThan(4000);
+    expect(JSON.stringify(raw.items).length).toBeGreaterThan(4000);
     expect(JSON.stringify(inspected).length).toBeLessThan(2000);
-    expect(inspected.rows[0]).toMatchObject({
+    expect(inspected.items[0]).toMatchObject({
       envelopeId: "env-large",
       payloadKind: "custom.kind",
     });
@@ -2069,12 +2108,14 @@ describe("forkLog no-copy (§3.5)", () => {
       inherited: 3,
     });
 
-    const forked = await call<any[]>("listChannelEnvelopesAfter", {
-      channelId: "channel-fork",
-      seq: 0,
-      limit: 10,
-    });
-    expect(forked.map((envelope) => [envelope.seq, envelope.envelopeId])).toEqual([
+    const forked = (
+      await call<any>("readChannelEnvelopes", {
+        channelId: "channel-fork",
+        window: { kind: "after", seq: 0 },
+        limit: 10,
+      })
+    ).items;
+    expect(forked.map((envelope: any) => [envelope.seq, envelope.envelopeId])).toEqual([
       [1, "env-1"],
       [2, "env-presence"],
       [3, "env-2"],
@@ -2088,11 +2129,13 @@ describe("forkLog no-copy (§3.5)", () => {
       payload: { value: 4 },
     });
     expect(
-      await call<any[]>("listChannelEnvelopesAfter", {
-        channelId: "channel-fork",
-        seq: 3,
-        limit: 10,
-      })
+      (
+        await call<any>("readChannelEnvelopes", {
+          channelId: "channel-fork",
+          window: { kind: "after", seq: 3 },
+          limit: 10,
+        })
+      ).items
     ).toEqual([expect.objectContaining({ envelopeId: "env-fork-new", seq: 4 })]);
   });
 });
@@ -2461,6 +2504,9 @@ describe("recursive manifests (§3.8)", () => {
     expect(file).toMatchObject({ path: "src/lib/util.ts", content_hash: "blob:u1" });
     expect(
       await call<any>("readGadFileAtState", { stateHash: stateA.stateHash, path: "src/missing.ts" })
+    ).toBeNull();
+    expect(
+      await call<any>("readGadFileAtState", { stateHash: "state:missing", path: "src/lib/util.ts" })
     ).toBeNull();
 
     // diff prunes shared subtrees and reports only the changed file
@@ -3213,10 +3259,12 @@ describe("lineage queries over causality edges (§3.15)", () => {
       }),
     ]);
 
-    const envelopes = await call<any[]>("listChannelEnvelopes", {
-      channelId: "channel-1",
-      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-    });
+    const envelopes = (
+      await call<any>("readChannelEnvelopes", {
+        channelId: "channel-1",
+        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      })
+    ).items;
     expect(envelopes).toHaveLength(1);
     expect(envelopes[0]).toMatchObject({
       seq: 1,
@@ -3366,10 +3414,11 @@ describe("lineage queries over causality edges (§3.15)", () => {
     });
 
     const publishedEnvelopeId = sideEnvelopes[0].publication.envelopeId;
-    const publicChannel = await call<any[]>("listChannelEnvelopes", { channelId: "main-channel" });
-    expect(publicChannel.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)).toEqual([
-      "Side task summary for the main session",
-    ]);
+    const publicChannel = (await call<any>("readChannelEnvelopes", { channelId: "main-channel" }))
+      .items;
+    expect(
+      publicChannel.map((envelope: any) => envelope.payload.payload.blocks?.[0]?.content)
+    ).toEqual(["Side task summary for the main session"]);
     expect(JSON.stringify(publicChannel)).not.toContain("keep this out of PubSub");
 
     const privateLineage = await call<any>("getPrivateLineageForPublishedEnvelope", {
@@ -3634,7 +3683,7 @@ describe("cache amnesia (§3.17)", () => {
         trajectoryId: "traj-amnesia",
         branchId: "main",
       }),
-      channel: await call<any[]>("listChannelEnvelopes", { channelId: "channel-amnesia" }),
+      channel: (await call<any>("readChannelEnvelopes", { channelId: "channel-amnesia" })).items,
       worktreeHead: await call<any>("resolveWorktreeHead", {
         logId: "traj-amnesia",
         head: "main",
@@ -4376,7 +4425,7 @@ describe("knowledge ledger + claims (§8.1)", () => {
       "SELECT value FROM state WHERE key = 'schema_version'",
       []
     );
-    expect(version.rows[0]?.value).toBe("30");
+    expect(version.rows[0]?.value).toBe(String(GadWorkspaceDO.schemaVersion));
 
     // The ledger survived the gad_% drop sweep.
     const ledger = await second.call<{ rows: Array<{ kind: string }> }>(

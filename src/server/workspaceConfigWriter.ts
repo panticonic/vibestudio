@@ -43,8 +43,17 @@ export interface WorkspaceConfigMutationResult {
 export function createWorkspaceConfigMainWriter(deps: {
   workspacePath: string;
   blobsDir: string;
-  refs: Pick<RefService, "readMain" | "updateMains">;
+  refs: Pick<RefService, "readMain">;
   vcs: WorkspaceConfigVcs;
+  /** Publish through the GAD writer DO so protected refs and recorded main
+   * provenance advance atomically under a durable write-ahead intent. */
+  publishMain(input: {
+    ctx: ServiceContext;
+    expectedOld: string;
+    files: Array<{ path: string; contentHash: string; mode: number }>;
+    summary: string;
+    operation: Extract<MainRefOperation, "push" | "import">;
+  }): Promise<{ stateHash: string }>;
 }): WorkspaceConfigMainWriter {
   let mutationQueue = Promise.resolve();
 
@@ -119,26 +128,18 @@ export function createWorkspaceConfigMainWriter(deps: {
       }
 
       try {
-        await deps.refs.updateMains({
-          entries: [
-            {
-              repoPath: META_REPO_PATH,
-              expectedOld: rendered.currentStateHash,
-              next: nextState.stateHash,
-            },
-          ],
-          gateContext: {
-            kind: "system",
-            actor: {
-              id: input.ctx.caller.runtime.id,
-              kind: input.ctx.caller.runtime.kind,
-            },
-          },
+        const published = await deps.publishMain({
+          ctx: input.ctx,
+          expectedOld: rendered.currentStateHash,
+          files: nextFiles,
+          summary: input.summary,
           operation: input.operation,
-          reason: input.summary,
-          writer: "server:gitInterop",
-          onBehalfOf: input.ctx.caller,
         });
+        if (published.stateHash !== nextState.stateHash) {
+          throw new Error(
+            `Workspace config publish hash mismatch: staged ${nextState.stateHash}, published ${published.stateHash}`
+          );
+        }
         return { changed: true, nextConfig: rendered.nextConfig };
       } catch (error) {
         if (!isRefConflictError(error) || attempt === 4) throw error;

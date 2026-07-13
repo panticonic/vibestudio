@@ -34,14 +34,23 @@ Useful APIs:
 
 - `gad.getTrajectoryBranchHead({ trajectoryId, branchId })`
 - `gad.listTrajectoryEvents({ trajectoryId, branchId, cursor, limit })`
-- `gad.inspectChannelEnvelopes({ channelId, cursor, limit, payloadKind })` for normal debugging; it returns compact payload summaries, byte counts, and stored-ref digests.
-- `gad.listChannelEnvelopes({ channelId, cursor, limit, payloadKind })` only when code needs hydrated semantic envelopes. Do not use it for broad exploratory dumps inside an agent turn.
+- `gad.inspectChannelEnvelopes({ channelId, window, limit, payloadKind })` for normal debugging; it returns compact payload summaries, byte counts, and stored-ref digests.
+- `gad.readChannelEnvelopes({ channelId, window, limit, payloadKind })` only when code needs hydrated semantic envelopes. Do not use it for broad exploratory dumps inside an agent turn.
 - `gad.inspectPublicationIntegrity({ channelId, branchId })` to distinguish real missing trajectory publication joins from expected channel-origin envelopes.
 - `gad.inspectTurnState({ branchId, channelId })` to summarize open turns, nonterminal messages, pending invocations, and duplicate turn-open invariant failures. Failed messages are terminal, not streaming.
 - `gad.inspectInvocationState({ branchId, invocationId, transportCallId })` to join projected invocation status with started/terminal trajectory events.
 - `gad.inspectChannelRoster({ channelId })` to read projected presence/roster state without raw SQL.
 - `gad.inspectAgentHealth({ channelId, branchId })` for a one-call bounded channel health report.
-- `gad.getChannelReplayWindow({ channelId, mode, sinceSeq, beforeSeq, limit })`
+- Both channel reads use one paging contract: `window` is `{ kind: "tail" }`,
+  `{ kind: "after", seq }`, or `{ kind: "before", seq }` (tail is the default),
+  and the result is `{ items, pageInfo }`. `pageInfo` contains `totalCount`, the
+  complete matching `firstSeq`/`lastSeq`, the returned range, and truthful
+  `hasMoreBefore`/`hasMoreAfter` flags. `limit` defaults to 50 and is a strict
+  per-page maximum of 500; larger reads must follow the returned cursors rather
+  than asking for an oversized page. `pageInfo.request` echoes the normalized
+  request and `pageInfo.returnedCount` must equal `items.length`. Forward
+  continuation pages must preserve the first page's `snapshotLastSeq` as the
+  `after` window's `throughSeq`, so paging does not chase a moving live tail.
 - `gad.getTrajectoryForEnvelope({ envelopeId })`
 - `gad.listPublishedEnvelopesForTrajectory({ trajectoryId, branchId, eventId, turnId, channelId, limit })`
 - `gad.listGadBranchFiles({ branchId })`
@@ -54,7 +63,18 @@ Branch/state lookups are sentinel-based: an unknown branch returns an empty
 file list, while missing state files/producers return `null`. During the
 inspecting agent's own active turn, `inspectAgentHealth().summary.ok` may be
 false solely because that turn/invocation is still open; zero durable issue
-counters distinguish this expected in-flight state from corruption.
+counters distinguish this expected in-flight state from corruption. The summary
+makes that distinction explicit: `durableIntegrityOk: true` plus
+`inFlightOnly: true` means that the snapshot found activity but no durable
+integrity failure.
+
+When the target is `chat.channelId`, the diagnostic eval is itself the newest
+open invocation. Take one snapshot. If it is `inFlightOnly` and the only open
+row is the diagnostic call/turn, report it as expected current activity and
+stop. Never poll the same channel waiting for that invocation to close: it
+cannot close until the eval that is observing it returns, and every repeated
+probe creates another invocation. Do not fall through to hydrated history or
+raw SQL for this self-observation case.
 
 Current implemented hardening:
 
@@ -86,12 +106,21 @@ For first-pass diagnostics from eval, prefer inspectors and let
 
 ```ts
 const channelId = chat.channelId;
-const health = await gad.inspectAgentHealth({ channelId, limit: 50 });
-const publication = await gad.inspectPublicationIntegrity({ channelId });
-const turn = await gad.inspectTurnState({ channelId });
-const invocation = await gad.inspectInvocationState({ branchId: health.branchId });
-const storage = await gad.inspectStorageDiagnostics({ channelId, limit: 25 });
+const health = await gad.inspectAgentHealth({ channelId });
+console.log({
+  channelId: health.channelId,
+  branchId: health.branchId,
+  summary: health.summary,
+  openTurns: health.turnState.rows,
+  openOrInconsistentInvocations: health.invocationState.rows,
+});
 ```
+
+Most `inspect*` calls return objects with `summary` and/or `rows`. Channel
+inspection and hydrated channel reads deliberately share `{ items, pageInfo }`,
+so paging code does not change when switching projections. Keep parentheses
+around awaited calls before reading a property:
+`(await gad.inspectChannelEnvelopes(input)).items`.
 
 For another visible panel's chat:
 

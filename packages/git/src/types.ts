@@ -25,6 +25,8 @@ export interface CloneOptions {
   singleBranch?: boolean;
   /** Shallow clone depth (default: 1 for faster clones) */
   depth?: number;
+  /** Fetch complete reachable history instead of applying the default shallow depth. */
+  fullHistory?: boolean;
 }
 
 /**

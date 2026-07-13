@@ -22,13 +22,13 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `openExternal` | value |  |  |
-| `workers` | namespace | `listSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery and manifest-declared service resolution. listSources() returns every launchable worker with its source, real manifest entry point, and Durable Object classes; lifecycle uses runtime.createEntity/retireEntity. |
-| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
-| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
+| `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
+| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
+| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `resetExportMarker`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
 | `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
-| `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `putBytes`, `getBase64`, `delete`, `list`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
-| `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections`, `provenanceForFile`, `provenanceForSession`, `provenanceForClaim` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
+| `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
+| `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
 | `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
@@ -59,22 +59,21 @@ includes every regular and Durable Object worker, its workspace `source`, the
 manifest's actual `entry`, and `classes` (empty for a regular worker). Use the
 returned `entry` or read `<source>/package.json`; do not assume `index.ts`.
 
-Launch and retire a regular worker through the runtime entity service:
+Launch and retire a regular worker through the portable typed client (which
+delegates to the canonical runtime entity service):
 
 ```ts
-const handle = await rpc.call("main", "runtime.createEntity", [{
-  kind: "worker",
-  source: "workers/my-worker",
+const handle = await workers.create("workers/my-worker", {
   key: `probe-${crypto.randomUUID()}`,
   contextId: ctx.contextId,
   ref: `ctx:${ctx.contextId}`, // omit only when intentionally using main
   env: { NON_SECRET_PROBE: "configured" },
-}]);
+});
 
 try {
   // Exercise the worker here.
 } finally {
-  await rpc.call("main", "runtime.retireEntity", [{ id: handle.id }]);
+  await workers.destroy(handle);
 }
 ```
 
@@ -337,10 +336,18 @@ Two gates must both admit the caller:
 For sensitive shared resources, add a user decision inside the DO method with
 `approvals.request(...)`; do not use approvals for ordinary private app rows.
 
-Testing: keep storage logic in methods like the above and cover them with
-`createTestDO(...)` unit tests. See `workspace/workers/sample-do/index.ts` and
-`workspace/workers/sample-do/sampleDo.test.ts` for the minimal round trip
-against a real SQLite-backed DO.
+For a running Vibestudio system—including agent eval—exercise the real object
+through `workers.resolveService(...)` / `workers.resolveDurableObject(...)` and
+separate `rpc.call(...)` calls as shown above. This is the integration path: it
+uses workerd, the declared service policy, the method's `@rpc` caller policy,
+and the object's persistent SQLite database.
+
+For fast Vitest-only unit coverage, keep storage logic in methods like the above
+and use `createTestDO(...)`. That helper is intentionally test-only: it creates
+an in-memory sql.js-backed object in the test process and does not exercise
+service resolution, workerd persistence, or the RPC/policy boundary. See
+`workspace/workers/sample-do/sampleDo.test.ts`. Do not import `createTestDO` from
+agent eval or production panel/worker/DO code.
 
 ## Durable Object Schema & Migrations
 

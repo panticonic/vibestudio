@@ -101,7 +101,9 @@ function createMemoryHostStore() {
 
 function createMemoryRefs() {
   const values = new Map<string, string>(); // repoPath → main state
+  const updates: Array<{ repoPath: string; expectedOld: string | null; next: string }> = [];
   return {
+    updates,
     set(repo: string, _ref: string, value: string) {
       values.set(repo, value);
     },
@@ -112,6 +114,19 @@ function createMemoryRefs() {
       },
       async listMains(): Promise<Array<{ repoPath: string; stateHash: string }>> {
         return [...values.entries()].map(([repoPath, stateHash]) => ({ repoPath, stateHash }));
+      },
+      async updateMains(input: {
+        entries: Array<{ repoPath: string; expectedOld: string | null; next: string }>;
+      }) {
+        for (const entry of input.entries) {
+          const current = values.get(entry.repoPath) ?? null;
+          if (current !== entry.expectedOld) throw new Error("compare-and-swap conflict");
+        }
+        for (const entry of input.entries) {
+          values.set(entry.repoPath, entry.next);
+          updates.push(entry);
+        }
+        return { updated: input.entries.length };
       },
     },
   };
@@ -179,6 +194,7 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     }
     // The canonical form is accepted (empty log, but no throw).
     expect(doi.vcsLog(REPO)).toEqual([]);
+    expect(doi.vcsLog({ repoPath: REPO, limit: 5, head: CTX })).toEqual([]);
   });
 
   it("applyEditOps composes the working state internally and mirrors it", async () => {
@@ -408,6 +424,38 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     expect(row["old_content_hash"]).toBe(blob.digest);
   });
 
+  it("publishes host metadata mutations through an intent and keeps recorded main in lockstep", async () => {
+    const original = await mem.store.putBase64(Buffer.from("old\n").toString("base64"));
+    const initial = await doi.ingestWorktreeState({
+      logId: LOG,
+      head: "main",
+      files: [{ path: "config.yml", contentHash: original.digest, mode: 33188 }],
+      actor: ACTOR,
+      summary: "initial",
+    });
+    await mem.store.putTree(
+      [{ name: "config.yml", kind: "file", contentHash: original.digest, mode: 33188 }],
+      { root: true }
+    );
+    refs.set(REPO, "main", initial.stateHash);
+
+    const changed = await mem.store.putBase64(Buffer.from("new\n").toString("base64"));
+    const result = await doi.vcsPublishHostMutation({
+      repoPath: REPO,
+      expectedOld: initial.stateHash,
+      files: [{ path: "config.yml", contentHash: changed.digest, mode: 33188 }],
+      message: "update metadata",
+      operation: "push",
+      actor: ACTOR,
+    });
+
+    expect(refs.updates).toEqual([
+      { repoPath: REPO, expectedOld: initial.stateHash, next: result.stateHash },
+    ]);
+    expect(doi.resolveWorktreeHead({ logId: LOG, head: "main" })?.stateHash).toBe(result.stateHash);
+    await expect(doi.vcsHealPublishDrift()).resolves.toEqual(expect.anything());
+  });
+
   it("compose base uses the context's pinned-base slice from the content store", async () => {
     // A workspace-rooted pinned view: packages/demo/pinned.txt.
     const blob = await mem.store.putBase64(Buffer.from("pinned\n").toString("base64"));
@@ -433,6 +481,24 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     // The working state composes over the SLICE (repo-relative pinned.txt).
     expect(await fileAt(r.stateHash, "pinned.txt")).toBe("pinned\n");
     expect(await fileAt(r.stateHash, "extra.txt")).toBe("e\n");
+  });
+
+  it("adopts a newly imported main repo into one context without moving existing pins", async () => {
+    const emptyView = await mem.store.putTree([], { root: true });
+    doi.setContextBase({ contextId: "importer", stateHash: emptyView.stateHash! });
+    const blob = await mem.store.putBase64(Buffer.from("imported\n").toString("base64"));
+    const imported = await mem.store.putTree(
+      [{ name: "README.md", kind: "file", contentHash: blob.digest, mode: 33188 }],
+      { root: true }
+    );
+    refs.set("projects/imported", "main", imported.stateHash!);
+
+    await expect(
+      doi.vcsAdoptMainRepoIntoContext({ contextId: "importer", repoPath: "projects/imported" })
+    ).resolves.toMatchObject({ repoStateHash: imported.stateHash, adopted: true });
+    await expect(
+      doi.vcsContextRepoStates({ contextId: "importer", repos: ["projects/imported"] })
+    ).resolves.toEqual([{ repoPath: "projects/imported", stateHash: imported.stateHash }]);
   });
 
   it("confines composed context read surfaces to the caller's context lineage", async () => {
@@ -465,6 +531,23 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     );
   });
 
+  it("returns the schema-required pendingMerge field from context status", async () => {
+    const emptyView = await mem.store.putTree([], { root: true });
+    doi.setContextBase({ contextId: "t1", stateHash: emptyView.stateHash! });
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [{ kind: "create", path: "draft.txt", content: { kind: "text", text: "draft\n" } }],
+    });
+    bindRuntimeCaller("panel", "t1");
+
+    await expect(doi.vcsContextStatus({ contextId: "t1" })).resolves.toEqual([
+      expect.objectContaining({ repoPath: REPO, uncommitted: true, pendingMerge: null }),
+    ]);
+  });
+
   it("the userland vcs read surface returns camelCase rows (positional args)", async () => {
     await doi.applyEditOps({
       logId: LOG,
@@ -474,6 +557,18 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
       invocationId: "inv-1",
       edits: [{ kind: "create", path: "a.txt", content: { kind: "text", text: "v1\n" } }],
     });
+    // Trajectory ingestion can land after the edit row. The read projection
+    // must repair invocation -> turn rather than freezing turnId:null forever.
+    gad.sql.exec(
+      `INSERT INTO trajectory_invocations
+        (log_id, head, invocation_id, turn_id, kind, status, updated_at)
+       VALUES (?, ?, ?, ?, 'tool', 'completed', ?)`,
+      "channel:test",
+      "main",
+      "inv-1",
+      "turn-1",
+      new Date().toISOString()
+    );
     const c1 = await doi.commitWorking({ logId: LOG, head: CTX, message: "c1", actor: ACTOR });
 
     const history = doi.vcsFileHistory(REPO, "a.txt", CTX);
@@ -484,10 +579,10 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
       committedEventId: c1.eventId,
       actorId: ACTOR.id,
       invocationId: "inv-1",
+      turnId: "turn-1",
     });
     // Workspace-relative path argument is stripped to repo-relative.
     expect(doi.vcsFileHistory(REPO, `${REPO}/a.txt`, CTX)).toHaveLength(1);
-
     const byActor = doi.vcsEditsByActor(ACTOR.id);
     expect(byActor.some((r) => r.path === "a.txt")).toBe(true);
     const byInvocation = doi.vcsEditsByInvocation("inv-1");

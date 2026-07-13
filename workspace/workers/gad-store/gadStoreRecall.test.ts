@@ -201,6 +201,29 @@ describe("GadWorkspaceDO — recall (T3 commit messages + keyword widening)", ()
     expect(scoped.results.some((r) => r.kind === "commit")).toBe(true);
   });
 
+  it("self-heals a missing disposable commit-memory row from authoritative history", async () => {
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [{ kind: "create", path: "heal.ts", content: { kind: "text", text: "heal();\n" } }],
+    });
+    const commit = await doi.commitWorking({
+      logId: LOG,
+      head: CTX,
+      message: "distinctive self healing recall marker",
+      actor: ACTOR,
+    });
+    gad.sql.exec(`DELETE FROM gad_memory_fts WHERE kind = 'commit' AND event_id = ?`, commit.eventId);
+
+    const recall = doi.recallMemory({ query: "self healing recall", kinds: ["commit"] });
+
+    expect(recall.results).toEqual([
+      expect.objectContaining({ kind: "commit", eventId: commit.eventId }),
+    ]);
+  });
+
   it("recallKeywords OR-widen the match: a keyword surfaces a commit the base query misses", async () => {
     await doi.applyEditOps({
       logId: LOG,

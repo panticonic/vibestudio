@@ -17,6 +17,7 @@
  */
 
 import type {
+  GitCommitMappingOptions,
   GitInteropProvider,
   GitPublishRepoInput,
   GitPullUpstreamOptions,
@@ -96,6 +97,9 @@ function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
         await ensureStateDir();
         await ctx.storage.writeFile(stateFile(key), value);
       },
+      async delete(key) {
+        await ctx.storage.rm(stateFile(key), { force: true }).catch(() => undefined);
+      },
     },
   };
 }
@@ -130,8 +134,20 @@ export async function activate(ctx: ExtensionContextLike) {
     publishRepo(input: GitPublishRepoInput) {
       return upstream.publishRepo(input);
     },
+    resetExportMarker(repoPath: string) {
+      return upstream.resetExportMarker(repoPath);
+    },
+    commitMapping(repoPath: string, options: GitCommitMappingOptions = {}) {
+      return upstream.commitMapping(repoPath, options);
+    },
+    pushDisposableRemote(input: { repoPath: string; url: string; branch: string }) {
+      return upstream.pushDisposableRemote(input);
+    },
     cloneRepo(input: { repoPath: string }) {
       return upstream.cloneRepo(input);
+    },
+    remoteDefaultBranch(input: { url: string; credentialId?: string }) {
+      return upstream.remoteDefaultBranch(input);
     },
     async onMainAdvanced(repoPaths: string[]) {
       upstream.onMainAdvanced(repoPaths);
