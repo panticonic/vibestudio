@@ -25,7 +25,7 @@ here. Create workers and DOs via `runtime.createEntity` (`kind: "worker"` /
 
 Account profiles: live identity projection + personalization
 
-Allowed callers: `server`, `shell`, `app`, `panel`
+Authority principals: `host`, `user`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -39,7 +39,7 @@ Allowed callers: `server`, `shell`, `app`, `panel`
 
 Audit log query access
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -49,18 +49,20 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Gateway authentication bootstrap routes
 
-Allowed callers: `server`, `shell`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
+| `auth.mintAgentCredential` | Mint an entity-scoped agent credential (caller kind `agent`, principal `agent:<entityId>`) bound to a runtime session and channel. The host derives context from the target session. Returns { agentId, agentToken } where agentToken is the full `agent:<agentId>:<token>` string. Callable only by the server or by the extension that owns the target session. |
+| `auth.revokeAgentCredential` | Revoke a single entity-scoped agent credential by agentId. Callable only by the server or by the extension that owns the target session. Returns whether a credential was revoked. |
 
 ## `blobstore`
 
 Per-workspace content-addressable blob storage
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
+Authority principals: `code`, `user`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -86,21 +88,22 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
 Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)
 
-Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `user`, `host`
 
 | Method | Description |
 |--------|-------------|
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. |
+| `build.resolveExecutionAuthority` | Resolve the source and immutable authority requests sealed into an exact retained execution artifact; returns null when the digest is unknown. |
 | `build.validate` | Gad-facing push validation (narrow-host VCS): build + cache + classify a composed candidate workspace view. Keyed by (viewHash, repoPaths, baseViewHash) — repoPaths are the pushed repos (buildable pushed units gate absolutely; content-only skip) and baseViewHash drives the dependent regression gate (a dependent also red on the base is informational; omitted ⇒ failed dependents gate absolutely). IDEMPOTENT: never promotes the EV baseline or records provenance, so it is safe to call on candidates that are never published. |
 | `build.getBuildReport` | Queryable companion to the synchronous push gate: build a unit (runtime, or library targets for packages) at the given workspace state (omitted = main HEAD) and return its agent-actionable RepoBuildReport with structured esbuild + tsc diagnostics. Does NOT advance any head. |
-| `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
+| `build.getSourceDigest` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
 | `build.doctorExtension` | Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status. |
 | `build.recompute` | Rediscover the package graph, recompute every unit's effective version, rebuild any changed buildable units, and return the set of changed/added/removed units. |
-| `build.gc` | Garbage-collect cached build artifacts not referenced by the given active units; returns the number of artifacts freed. |
+| `build.gc` | Garbage-collect cached build artifacts from authoritative incarnation, registry, grant, and bootstrap roots; returns the number of artifacts freed. |
 | `build.getAboutPages` | List available about pages for the launcher UI. |
 | `build.hasUnit` | Whether a build unit with this name exists in the workspace graph. |
 | `build.getPanelMetadata` | Launcher metadata (source path, title, description, launcher visibility) for a panel unit, or null if the name is absent or not a panel. |
@@ -110,7 +113,7 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 
 URL-bound userland credential storage and egress
 
-Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -131,26 +134,42 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 
+## `devHost`
+
+Exact-state Vibestudio host development lifecycle
+
+Authority principals: `user`, `code`, `host`, `entity`
+
+| Method | Description |
+|--------|-------------|
+| `devHost.launch` | Build and supervise an exact projects/vibestudio context state. |
+| `devHost.status` | List only development launches owned by the verified caller. |
+| `devHost.rebuild` | Rebuild the same owned launch from a new exact context snapshot. |
+| `devHost.stop` | Stop an owned development launch and all of its managed processes. |
+| `devHost.eval` | Evaluate code against the verified active generation of an owned launch. |
+| `devHost.logs` | Stream development launch logs after re-authorizing ownership. |
+| `devHost.watch` | Stream lifecycle transitions after re-authorizing ownership. |
+
 ## `docs`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `server`, `shell`, `agent`
+Authority principals: `code`, `host`, `user`, `entity`
 
 | Method | Description |
 |--------|-------------|
-| `docs.search` | Search the capability catalog (services and runtime APIs) by keyword. Results are filtered to what the calling kind may invoke. Use docs.describe(id) for the full typed schema, access rules, and examples. |
+| `docs.search` | Search the capability catalog (services and runtime APIs) by keyword. Results are filtered by available runtime surface and authority principal shape. Use docs.describe(id) for the full typed schema, authority requirements, and examples. |
 | `docs.describe` | Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples). Returns null if unknown or not visible to the caller. |
 | `docs.getSchema` | Return just the args/returns JSON Schema for a catalog id. |
 | `docs.listSurfaces` | List catalog surfaces and the number of entries the caller can see in each. |
-| `docs.listServices` | List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...). |
-| `docs.describeService` | Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service. |
+| `docs.listServices` | List registered RPC services and their methods with JSON-Schema args/returns and compositional authority declarations. |
+| `docs.describeService` | Describe one registered RPC service by name, including each method's compositional authority and JSON-Schema contract. Returns null for an unknown service. |
 
 ## `eval`
 
 Owner-scoped sandbox eval backed by a per-owner internal EvalDO
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`, `agent`
+Authority principals: `code`, `user`, `host`, `entity`
 
 | Method | Description |
 |--------|-------------|
@@ -163,11 +182,23 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`,
 | `eval.cancel` | Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal. |
 | `eval.forceReset` | Forced recovery for a wedged eval DO: cancel every non-terminal run, abort all in-flight runs, and reset the eval context (wipe scope + user db) IMMEDIATELY without waiting on the stuck run chain. Use when `reset` itself would hang behind a wedged run. |
 
+## `events`
+
+Event subscriptions
+
+Authority principals: `user`, `code`, `host`
+
+| Method | Description |
+|--------|-------------|
+| `events.subscribe` | Subscribe this caller's connection to a named event so future emits are delivered over the transport; immediately replays the current snapshot if the server has one. |
+| `events.unsubscribe` | Stop delivering a single named event to this caller's connection; a no-op if it was not subscribed. |
+| `events.unsubscribeAll` | Remove this caller's connection from every event subscription it currently holds. |
+
 ## `externalOpen`
 
 Approval-gated system browser opens
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
+Authority principals: `user`, `host`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -177,7 +208,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Filesystem operations. Context-bound callers are sandboxed to their context folder; supported workspace-repo file mutations route through GAD working edits, while platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
 
-Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`, `agent`
+Authority principals: `code`, `host`, `user`, `entity`
 
 | Method | Description |
 |--------|-------------|
@@ -215,7 +246,7 @@ Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`,
 
 Loopback panel-asset fetch bridge (remote shells)
 
-Allowed callers: `shell`, `app`, `panel`, `worker`, `do`
+Authority principals: `user`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -225,7 +256,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`
 
 External Git interop: declared remotes and remote project imports
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -253,7 +284,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Host governance log — approval provenance + membership events (read-only)
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -263,7 +294,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Host-process graceful shutdown for attached shells
 
-Allowed callers: `shell`, `server`
+Authority principals: `user`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -273,7 +304,7 @@ Allowed callers: `shell`, `server`
 
 Authenticated workspace-child to server-hub control plane
 
-Allowed callers: `shell`, `panel`, `app`, `server`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -298,7 +329,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.
 
-Allowed callers: `shell`, `agent`, `do`, `server`, `panel`
+Authority principals: `user`, `entity`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -309,19 +340,20 @@ Allowed callers: `shell`, `agent`, `do`, `server`, `panel`
 
 Push notifications to the shell chrome area
 
-Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
 | `notification.show` | Show a notification in the shell chrome; returns its id (auto-generated when not supplied). |
 | `notification.dismiss` | Dismiss the notification with the given id, rejecting any pending waitForAction for it. |
 | `notification.reportAction` | Report that the user took an action on a notification, emitting an event and resolving any pending waitForAction. |
+| `notification.signalUserInbox` | Notify every live session for one host-verified account that its durable userland inbox changed. |
 
 ## `panelCdp`
 
 Approval-gated server CDP access for panel targets
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `agent`
+Authority principals: `user`, `host`, `code`, `entity`
 
 | Method | Description |
 |--------|-------------|
@@ -341,7 +373,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `agent`
 
 Forward panel console errors and lifecycle events into unit diagnostics
 
-Allowed callers: `shell`, `server`
+Authority principals: `user`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -351,7 +383,7 @@ Allowed callers: `shell`, `server`
 
 Panel runtime lease coordination
 
-Allowed callers: `shell`, `app`, `server`
+Authority principals: `user`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -366,7 +398,7 @@ Allowed callers: `shell`, `app`, `server`
 
 Server-mediated panel tree handles and control operations
 
-Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
+Authority principals: `code`, `user`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -383,6 +415,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.reload` | Reload a panel's view in place, keeping its current snapshot. |
 | `panelTree.close` | Close a panel, removing it (and its subtree) from the tree. |
 | `panelTree.archive` | Archive a panel, removing it from the active tree while preserving its history. |
+| `panelTree.archiveOwnedRoots` | Internal revocation cleanup: archive every root owned by one account. |
 | `panelTree.unload` | Unload a panel's runtime/view to free resources while keeping the panel in the tree. |
 | `panelTree.movePanel` | Reparent and/or reposition a panel among its siblings (drag-and-drop move). |
 | `panelTree.navigate` | Navigate an existing panel to a new source path (optionally changing ref/context), returning the new panel descriptor or null. |
@@ -394,7 +427,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.updatePanelState` | Update a panel's live navigation state (url, page title, loading/back/forward flags) from the rendering surface. |
 | `panelTree.snapshot` | Return a readable snapshot of one loaded panel, using its agent snapshot when available and accessibility-tree fallback otherwise. |
 | `panelTree.callAgent` | Invoke a panel's in-process agent method (e.g. _agent.snapshot/_agent.tree/_agent.setMode) with optional arguments. |
-| `panelTree.metadata` | Return the full Panel metadata for a panel id, or null if it does not exist. |
+| `panelTree.metadata` | Return compact runtime metadata for a panel id, or null if it does not exist. |
 | `panelTree.getCollapsedIds` | Return the ids of panels that are currently collapsed in the tree UI. |
 | `panelTree.setCollapsed` | Set whether a panel is collapsed in the tree UI. |
 | `panelTree.expandIds` | Expand (un-collapse) a set of panels in the tree UI. |
@@ -403,7 +436,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 
 Trusted review and revocation of durable permission grants
 
-Allowed callers: `shell`, `app`, `panel`, `server`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -414,7 +447,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`
 
 Account-scoped proxy to phone capabilities on connected desktop clients
 
-Allowed callers: `agent`, `panel`, `app`, `shell`
+Authority principals: `entity`, `code`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -427,7 +460,7 @@ Allowed callers: `agent`, `panel`, `app`, `shell`
 
 Active shell/panel ownership
 
-Allowed callers: `server`, `shell`
+Authority principals: `host`, `user`
 
 | Method | Description |
 |--------|-------------|
@@ -439,7 +472,7 @@ Allowed callers: `server`, `shell`
 
 Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
+Authority principals: `code`, `user`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -451,13 +484,13 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
 Runtime entity creation and retirement
 
-Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
+Authority principals: `code`, `user`, `host`
 
 | Method | Description |
 |--------|-------------|
 | `runtime.createEntity` | Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Reuses/reactivates an existing row for the same canonical key. Returns the entity handle (id + runtime targetId). |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
-| `runtime.listEntities` | List live entities (id, kind, source, contextId, title, createdAt). |
+| `runtime.listEntities` | List live entities with their active exact execution identity and sealed authority requests. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.createContext` | Create a full logical workspace context branch. Every context presents the whole workspace tree; per-repo ctx heads are created lazily as edits are made. Use vcs.contextStatus to inspect uncommitted changes, ahead/behind repos, and deleted refs. |
 | `runtime.cloneContext` | Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them. |
@@ -470,7 +503,7 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 
 Server host log inspection and live tailing
 
-Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`, `agent`
+Authority principals: `user`, `code`, `host`, `entity`
 
 | Method | Description |
 |--------|-------------|
@@ -482,7 +515,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`,
 
 Shell-owned consent approval queue
 
-Allowed callers: `shell`, `app`, `server`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -501,7 +534,7 @@ Allowed callers: `shell`, `app`, `server`
 
 Tracks active shell clients for push notification delivery decisions
 
-Allowed callers: `shell`, `app`, `server`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -511,7 +544,7 @@ Allowed callers: `shell`, `app`, `server`
 
 Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibestudio vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`, `agent`
+Authority principals: `user`, `code`, `host`, `entity`
 
 | Method | Description |
 |--------|-------------|
@@ -542,7 +575,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`,
 
 Generic public webhook ingress subscriptions
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
+Authority principals: `user`, `host`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -555,7 +588,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Approval-gated workerd V8 inspector access for profiling workers and DOs
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
+Authority principals: `user`, `host`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -566,7 +599,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
 
 Forward DO console output to the server terminal and the workspace-unit log stream
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -576,7 +609,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Worker discovery and userland service resolution
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
+Authority principals: `user`, `host`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -589,7 +622,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)
 
-Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -616,7 +649,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 | `workspace.units.diagnostics` | Return combined diagnostics for a unit: current status, recent logs, errors, build events, and buffer capacity. |
 | `workspace.units.versions` | List the active build and retained previous versions for an app unit. This is read-only diagnostics and is available to every workspace caller; rollback remains ownership-restricted. |
 | `workspace.units.rollback` | Roll an app unit back to a previous active build (or a specific build key); userland is restricted to managing its own app. |
-| `workspace.units.bakeAppDist` | Bake an app unit's active approved build into a packaging payload directory; trusted-chrome callers only. |
+| `workspace.units.bakeAppDist` | Bake an app unit's active approved build into a packaging payload directory; exact panel-hosting authority required. |
 | `workspace.recurring.list` | List declarative scheduled jobs from meta/vibestudio.yml with their durable run state (next/last run, failures, backoff). |
 | `workspace.heartbeats.list` | List registered heartbeats with their schedule, channel binding, and run state. |
 | `workspace.heartbeats.runNow` | Trigger a heartbeat tick immediately for the selected heartbeat. |
@@ -638,7 +671,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 Workspace slot/entity state (WorkspaceDO).
 
-Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
+Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
@@ -661,12 +694,18 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
 | `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
 | `workspace-state.panel.rebuildIndex` | Rebuild the panel-search index from active panel entities. |
+| `workspace-state.lifecycleLeaseUpsert` | Mark a Durable Object as having active checkpointable work. |
+| `workspace-state.lifecycleLeaseClear` | Clear a Durable Object active-work lease. |
+| `workspace-state.alarmSet` | Register/replace a Durable Object's server-driven wake time. |
+| `workspace-state.alarmClear` | Clear a Durable Object's pending server-driven alarm. |
+| `workspace-state.heartbeatRegister` | Register or update an agent heartbeat registry row. |
+| `workspace-state.heartbeatRemove` | Remove an agent heartbeat registry row. |
 
 ## `workspacePresence`
 
 Who is connected to this workspace (WP8 §4 host presence — session-derived, zero channel coupling)
 
-Allowed callers: `server`, `shell`, `app`, `panel`
+Authority principals: `host`, `user`, `code`
 
 | Method | Description |
 |--------|-------------|
@@ -676,7 +715,7 @@ Allowed callers: `server`, `shell`, `app`, `panel`
 
 Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).
 
-Allowed callers: `do`, `shell`, `server`
+Authority principals: `code`, `user`, `host`
 
 | Method | Description |
 |--------|-------------|

@@ -4,9 +4,11 @@ import * as fs from "fs";
 import * as path from "path";
 import YAML from "yaml";
 import {
+  approvePendingStartupWork,
   clickPanelSelector,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   executePanelScript,
+  getExtensionRegistry,
   getPanelHtml,
   getPanelText,
   getPanelTree,
@@ -14,8 +16,10 @@ import {
   isPanelLoaded,
   launchTestApp,
   removeManagedTestWorkspace,
+  resolvePendingShellApprovals,
   startPanelDiagnostics,
   type TestApp,
+  testRpcCall as rpcCall,
   createManagedTestWorkspace,
   typePanelText,
 } from "../../setup/electronSetup";
@@ -34,16 +38,6 @@ function e2eVaultContextId(vaultWorkspaceRoot: string): string {
   }
   return `vault-${h1.toString(36)}${h2.toString(36)}`;
 }
-
-type PendingApproval = {
-  approvalId: string;
-  kind: string;
-  options?: Array<{
-    value: string;
-    tone?: string;
-    label?: string;
-  }>;
-};
 
 function replaceInitPanels(workspacePath: string, stateArgs: Record<string, unknown>): void {
   const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
@@ -192,102 +186,6 @@ function flattenPanels(nodes: Array<Record<string, any>>): Array<Record<string, 
     out.push(...flattenPanels(children));
   }
   return out;
-}
-
-async function listPendingApprovals(app: ElectronApplication): Promise<PendingApproval[]> {
-  const pending = (await rpcCall(app, "shellApproval", "listPending", [])) as Array<{
-    approvalId: string;
-    kind: string;
-    options?: Array<{
-      value: unknown;
-      tone?: unknown;
-      label?: unknown;
-    }>;
-  }>;
-  return pending.map((approval) => ({
-    approvalId: approval.approvalId,
-    kind: approval.kind,
-    options: Array.isArray(approval.options)
-      ? approval.options.map((option) => ({
-          value: String(option.value),
-          tone: typeof option.tone === "string" ? option.tone : undefined,
-          label: typeof option.label === "string" ? option.label : undefined,
-        }))
-      : undefined,
-  }));
-}
-
-async function rpcCall(
-  app: ElectronApplication,
-  service: string,
-  method: string,
-  args: unknown[] = []
-): Promise<unknown> {
-  return app.evaluate(
-    async (_electron, request) => {
-      const testApi = (
-        globalThis as {
-          __testApi?: {
-            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-          };
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      return testApi.rpcCall(request.service, request.method, request.args);
-    },
-    { service, method, args }
-  );
-}
-
-async function resolveApproval(app: ElectronApplication, approval: PendingApproval): Promise<void> {
-  await app.evaluate(async (_electron, pending) => {
-    const testApi = (
-      globalThis as {
-        __testApi?: {
-          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    if (pending.kind === "userland") {
-      const choice =
-        pending.options?.find((option) => option.tone === "primary")?.value ??
-        pending.options?.find((option) => option.tone !== "danger")?.value ??
-        pending.options?.[0]?.value;
-      if (!choice) throw new Error(`Userland approval ${pending.approvalId} has no options`);
-      await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
-      return;
-    }
-    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, "session"]);
-  }, approval);
-}
-
-async function resolvePendingShellApprovals(app: ElectronApplication): Promise<void> {
-  const pending = await listPendingApprovals(app).catch(() => []);
-  for (const approval of pending) {
-    await resolveApproval(app, approval).catch(() => undefined);
-  }
-}
-
-async function approvePendingStartupWork(app: ElectronApplication): Promise<void> {
-  const launchSession = await rpcCall(app, "workspace", "hostTargets.beginLaunch", [
-    "electron",
-  ]).catch(() => null);
-  if (
-    launchSession &&
-    typeof launchSession === "object" &&
-    "sessionId" in launchSession &&
-    typeof launchSession.sessionId === "string" &&
-    "approvals" in launchSession &&
-    Array.isArray(launchSession.approvals) &&
-    launchSession.approvals.length > 0
-  ) {
-    await rpcCall(app, "workspace", "hostTargets.resolveLaunchSessionApproval", [
-      launchSession.sessionId,
-      "once",
-    ]).catch(() => undefined);
-  }
-  await resolvePendingShellApprovals(app);
 }
 
 async function findLoadedSpectrolitePanelId(
@@ -557,30 +455,68 @@ async function openFilesDrawer(app: TestApp, panelId: string): Promise<void> {
       timeout: 60000,
     })
     .toContain(isMobile ? 'aria-label="Open files"' : 'data-testid="spectrolite-files-trigger"');
-  await expect
-    .poll(
-      async () => {
-        const state = await getSpectroliteViewHookState(app, panelId);
-        if (isMobile ? state?.sidebarOpen === true : state?.filesOpen === true) return true;
-        if (await isPanelElementVisible(app, panelId, drawerSelector)) return true;
+  try {
+    await expect
+      .poll(
+        async () => {
+          const state = await getSpectroliteViewHookState(app, panelId);
+          if (isMobile ? state?.sidebarOpen === true : state?.filesOpen === true) return true;
+          if (await isPanelElementVisible(app, panelId, drawerSelector)) return true;
 
-        // The native bridge can report a dispatched click before React has
-        // accepted it (for example while the previous Radix dialog is still
-        // restoring focus). Keep retrying until the drawer itself is open.
-        const clicked = await clickPanelSelector(app.app, panelId, triggerSelector).catch(
-          () => false
-        );
-        const hooked = await openSpectroliteViewDrawer(app, panelId, "openFiles");
-        if (!clicked && !hooked) {
-          await clickPanelElement(app, panelId, triggerSelector).catch(() => false);
+          // Prefer the panel's controlled-state test seam once it is installed.
+          // Dispatching a synthetic click and a state update in the same turn
+          // can carry the closing Radix dialog's pointer event into the drawer.
+          // Non-instrumented panels retain the native click fallback.
+          const hooked = await openSpectroliteViewDrawer(app, panelId, "openFiles");
+          if (!hooked) {
+            const clicked = await clickPanelSelector(app.app, panelId, triggerSelector).catch(
+              () => false
+            );
+            if (!clicked) {
+              await clickPanelElement(app, panelId, triggerSelector).catch(() => false);
+            }
+          }
+          return false;
+        },
+        {
+          timeout: 30000,
         }
-        return false;
-      },
-      {
-        timeout: 30000,
-      }
-    )
-    .toBe(true);
+      )
+      .toBe(true);
+  } catch (error) {
+    const diagnostics = await executePanelScript<Record<string, unknown>>(
+      app.app,
+      panelId,
+      `
+      (() => {
+        const view = globalThis.__spectroliteE2EView__;
+        const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
+        const drawer = document.querySelector(${JSON.stringify(drawerSelector)});
+        return {
+          href: location.href,
+          visibility: document.visibilityState,
+          hookKeys: view ? Object.keys(view) : [],
+          hookState: view ? {
+            files: typeof view.isFilesOpen === "function" ? view.isFilesOpen() : null,
+            sidebar: typeof view.isSidebarOpen === "function" ? view.isSidebarOpen() : null,
+          } : null,
+          triggerConnected: trigger instanceof HTMLElement ? trigger.isConnected : false,
+          triggerDisabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
+          triggerState: trigger?.getAttribute("data-state") ?? null,
+          drawerConnected: drawer instanceof HTMLElement ? drawer.isConnected : false,
+          drawerState: drawer?.getAttribute("data-state") ?? null,
+          bodyPointerEvents: document.body.style.pointerEvents,
+          activeElement: document.activeElement?.getAttribute("data-testid") ??
+            document.activeElement?.getAttribute("aria-label") ??
+            document.activeElement?.tagName ?? null,
+        };
+      })()
+    `
+    ).catch((diagnosticError) => ({ diagnosticError: String(diagnosticError) }));
+    throw new Error(`Files drawer did not open: ${JSON.stringify(diagnostics)}`, {
+      cause: error,
+    });
+  }
 }
 
 async function openFileFromFilesDrawer(
@@ -702,106 +638,34 @@ async function openBacklinksDrawer(app: TestApp, panelId: string): Promise<void>
     )
     .toBe(true);
   if (isMobile) {
-    const openedMobile = await openFilesDrawer(app, panelId)
-      .then(() => true)
-      .catch(() => false);
-    if (openedMobile) {
-      await expect.poll(() => isOpen(), { timeout: 30000 }).toBe(true);
-      return;
-    }
+    await openFilesDrawer(app, panelId);
+    await expect.poll(() => isOpen(), { timeout: 30000 }).toBe(true);
+    return;
   }
 
-  let opened = false;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    opened = await clickPanelSelector(
-      app.app,
-      panelId,
-      '[data-testid="spectrolite-backlinks-trigger"]'
-    ).catch(() => false);
-    if (!opened) {
-      opened = await clickPanelElement(
-        app,
-        panelId,
-        '[data-testid="spectrolite-backlinks-trigger"]'
-      ).catch(() => false);
-    }
-    if (!opened) {
-      opened = await openSpectroliteViewDrawer(app, panelId, "openBacklinks");
-    }
-    if (!opened) {
-      opened = await clickPanelElement(app, panelId, '[aria-label="Backlinks"]').catch(() => false);
-    }
-    if (!opened) {
-      opened = await clickPanelElement(app, panelId, '[title="Backlinks"]').catch(() => false);
-    }
-
-    if (!opened && isMobile) {
-      opened = await clickPanelElement(app, panelId, '[aria-label="Open files"]').catch(
-        () => false
-      );
-      if (!opened) {
-        await openFilesDrawer(app, panelId)
-          .then(() => {
-            opened = true;
-          })
-          .catch(() => {
-            opened = false;
-          });
-      }
-    }
-
-    if (!opened) {
-      opened = await executePanelScript<boolean>(
-        app.app,
-        panelId,
-        `
-        (() => {
-          const byText = Array.from(document.querySelectorAll("button, [role='button']"))
-            .find((node) => {
-              if (!(node instanceof HTMLElement)) return false;
-              const labels = [
-                node.textContent ?? "",
-                node.getAttribute("aria-label") ?? "",
-                node.getAttribute("title") ?? "",
-              ].join(" ");
-              return /backlinks/i.test(labels);
-            });
-          if (byText instanceof HTMLElement) {
-            byText.click();
-            return true;
-          }
-          const iconButton = document.querySelector('[data-testid="spectrolite-backlinks-trigger"]') ??
-            document.querySelector('[aria-label="Backlinks"]') ??
-            document.querySelector('button[aria-label^="Backlinks" i], button[title^="Backlinks" i]');
-          const button = iconButton;
-          if (!(button instanceof HTMLElement)) return false;
-          button.click();
-          return true;
-        })()
-      `
-      );
-    }
-    if (!opened) {
-      opened =
-        (await clickPanelSelector(app.app, panelId, '[aria-label*="Backlinks"]').catch(
-          () => false
-        )) ||
-        (await clickPanelSelector(app.app, panelId, '[title*="Backlinks"]').catch(() => false)) ||
-        (await clickPanelSelector(
+  // A bridge-level click result only confirms dispatch. Radix can still be
+  // restoring focus from the previous dialog, so retry the user gesture until
+  // controlled state or visible DOM confirms that React accepted it.
+  await expect
+    .poll(
+      async () => {
+        if (await isOpen()) return true;
+        const clicked = await clickPanelSelector(
           app.app,
           panelId,
-          'button[data-testid="spectrolite-backlinks-trigger"]'
-        ).catch(() => false)) ||
-        (await clickPanelElement(app, panelId, '[aria-label*="Backlinks"]').catch(() => false));
-    }
-    if (opened) break;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  expect(opened).toBe(true);
-  await expect
-    .poll(() => isOpen(), {
-      timeout: 30000,
-    })
+          '[data-testid="spectrolite-backlinks-trigger"]'
+        ).catch(() => false);
+        if (!clicked) {
+          await clickPanelElement(
+            app,
+            panelId,
+            '[data-testid="spectrolite-backlinks-trigger"]'
+          ).catch(() => false);
+        }
+        return isOpen();
+      },
+      { timeout: 30000 }
+    )
     .toBe(true);
 }
 
@@ -1186,6 +1050,22 @@ test.describe("Spectrolite", () => {
     if (!removableId) {
       throw new Error("Could not find a removable agent entry");
     }
+    await expect
+      .poll(
+        async () =>
+          executePanelScript<boolean>(
+            testApp!.app,
+            panelId,
+            `
+      (() => {
+        const button = document.querySelector(${JSON.stringify(`[data-testid="${removableId}"]`)});
+        return button instanceof HTMLButtonElement && !button.disabled;
+      })()
+    `
+          ),
+        { timeout: 60000 }
+      )
+      .toBe(true);
     const removedManualAgent = await executePanelScript<boolean>(
       testApp.app,
       panelId,
@@ -1749,6 +1629,18 @@ test.describe("Spectrolite", () => {
         }
       )
       .toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const extensions = await getExtensionRegistry(testApp!.app);
+          const devHost = extensions.find(
+            (entry) => entry.name === "@workspace-extensions/dev-host"
+          );
+          return devHost ? { status: devHost.status, lastError: devHost.lastError } : null;
+        },
+        { timeout: 120_000 }
+      )
+      .toEqual({ status: "running", lastError: null });
     await expect(testApp.window.getByText("Extension stopped", { exact: true })).toHaveCount(0);
   });
 });

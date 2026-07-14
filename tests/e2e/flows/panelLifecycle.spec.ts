@@ -9,6 +9,8 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  approvePendingStartupWork,
+  createPanel,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   getPanelTree,
   hasElectronDisplay,
@@ -20,38 +22,54 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 test.describe("Panel Persistence", () => {
-  // This test launches the app twice, so it needs a longer timeout
   test("panels persist across app restarts", async () => {
-    test.setTimeout(240000); // Double app launch plus slow Electron teardown.
+    test.setTimeout(360000);
     const workspacePath = createManagedTestWorkspace();
     let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
 
     try {
-      // First session: create panels
-      testApp = await launchTestApp({ workspace: workspacePath });
+      testApp = await launchTestApp({
+        workspace: workspacePath,
+        env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
+      });
+      const initialTree = await waitForStartedPanelTree(testApp);
+      const parent = initialTree[0];
+      if (!parent) throw new Error("Workspace started without an initial panel");
+      const created = await createPanel(testApp.app, parent.id, "panels/chat", {
+        name: "Persistence E2E",
+        focus: true,
+      });
+      await expect
+        .poll(async () =>
+          (await getPanelTree(testApp!.app)).some((panel) => panel.id === created.id)
+        )
+        .toBe(true);
 
-      // Wait for initialization
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      // Get initial panel tree
-      await getPanelTree(testApp.app);
-
-      // Save workspace path for restart
-      // Close app using cleanup (which has a timeout to prevent hanging)
       await testApp.cleanup();
       testApp = null;
 
-      // Restart with same workspace
-      testApp = await launchTestApp({ workspace: workspacePath });
-
-      // Wait for initialization
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      // Get panel tree after restart
-      const restoredTree = await getPanelTree(testApp.app);
-
-      // All panels persist across restarts
-      expect(restoredTree.length).toBeGreaterThanOrEqual(0);
+      testApp = await launchTestApp({
+        workspace: workspacePath,
+        env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
+      });
+      await expect
+        .poll(
+          async () => {
+            await approvePendingStartupWork(testApp!.app);
+            try {
+              const restored = (await getPanelTree(testApp!.app)).find(
+                (panel) => panel.id === created.id
+              );
+              return restored
+                ? { id: restored.id, source: restored.snapshot?.source ?? null }
+                : null;
+            } catch {
+              return null;
+            }
+          },
+          { timeout: 180_000 }
+        )
+        .toEqual({ id: created.id, source: "panels/chat" });
     } finally {
       if (testApp) {
         await testApp.cleanup().catch(() => undefined);
@@ -60,3 +78,24 @@ test.describe("Panel Persistence", () => {
     }
   });
 });
+
+async function waitForStartedPanelTree(
+  testApp: Awaited<ReturnType<typeof launchTestApp>>
+): Promise<Awaited<ReturnType<typeof getPanelTree>>> {
+  let tree: Awaited<ReturnType<typeof getPanelTree>> = [];
+  await expect
+    .poll(
+      async () => {
+        await approvePendingStartupWork(testApp.app);
+        try {
+          tree = await getPanelTree(testApp.app);
+          return tree.length;
+        } catch {
+          return 0;
+        }
+      },
+      { timeout: 180_000 }
+    )
+    .toBeGreaterThan(0);
+  return tree;
+}

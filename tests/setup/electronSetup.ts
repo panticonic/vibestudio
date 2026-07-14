@@ -13,8 +13,12 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import {
+  WORKSPACE_SOURCE_DIRS,
+  WORKSPACE_STATE_DIRS,
+} from "@vibestudio/workspace-contracts/sourceDirs";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +33,18 @@ export interface TestApp {
   workspacePath: string;
   /** Clean up the app and test workspace */
   cleanup: () => Promise<void>;
+}
+
+export interface TestExtensionRegistryEntry {
+  name: string;
+  status: "running" | "available" | "stopped" | "error" | "pending-approval" | "building";
+  lastError: string | null;
+}
+
+interface TestPendingApproval {
+  approvalId: string;
+  kind: string;
+  options?: Array<{ value: string; tone?: string; label?: string }>;
 }
 
 export const ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE =
@@ -144,7 +160,10 @@ function initializeUnitGitRepos(sourceRoot: string): void {
       cwd: unitDir,
       stdio: "ignore",
     });
-    execFileSync("git", ["config", "user.name", "Vibestudio E2E"], { cwd: unitDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Vibestudio E2E"], {
+      cwd: unitDir,
+      stdio: "ignore",
+    });
     execFileSync("git", ["add", "-A"], { cwd: unitDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "Initial e2e workspace snapshot"], {
       cwd: unitDir,
@@ -163,30 +182,47 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
   const sourceRoot = path.join(workspaceDir, "source");
   const stateRoot = path.join(workspaceDir, "state");
 
-  for (const dir of Object.values(env)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  fs.mkdirSync(sourceRoot, { recursive: true });
-  fs.mkdirSync(stateRoot, { recursive: true });
-
-  for (const dir of WORKSPACE_SOURCE_DIRS) {
-    const src = path.join(templateDir, dir);
-    const dest = path.join(sourceRoot, dir);
-    if (fs.existsSync(src)) {
-      fs.cpSync(src, dest, { recursive: true });
-    } else {
-      fs.mkdirSync(dest, { recursive: true });
+  try {
+    for (const dir of Object.values(env)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
+
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.mkdirSync(stateRoot, { recursive: true });
+
+    for (const dir of WORKSPACE_SOURCE_DIRS) {
+      const src = path.join(templateDir, dir);
+      const dest = path.join(sourceRoot, dir);
+      if (fs.existsSync(src)) {
+        fs.cpSync(src, dest, { recursive: true });
+      } else {
+        fs.mkdirSync(dest, { recursive: true });
+      }
+    }
+
+    initializeUnitGitRepos(sourceRoot);
+
+    for (const dir of WORKSPACE_STATE_DIRS) {
+      fs.mkdirSync(path.join(stateRoot, dir), { recursive: true });
+    }
+
+    const centralData = new CentralDataManager({
+      databasePath: path.join(getCentralDataDirFromEnv(env), "server-auth", "identity.db"),
+    });
+    try {
+      centralData.addWorkspace(workspaceName);
+      // The harness owns the isolated hub, so exercise deterministic ordered
+      // shutdown instead of opening the interactive desktop quit-policy dialog.
+      centralData.setKeepServerOnQuit(false);
+    } finally {
+      centralData.close();
+    }
+
+    return workspaceDir;
+  } catch (error) {
+    fs.rmSync(testRoot, { recursive: true, force: true });
+    throw error;
   }
-
-  initializeUnitGitRepos(sourceRoot);
-
-  for (const dir of WORKSPACE_STATE_DIRS) {
-    fs.mkdirSync(path.join(stateRoot, dir), { recursive: true });
-  }
-
-  return workspaceDir;
 }
 
 export function removeManagedTestWorkspace(workspaceDir: string): void {
@@ -216,86 +252,28 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   const workspaceInfo = getWorkspaceInfo(workspacePath);
   const ownsWorkspace = workspace === undefined;
 
-  // Determine the main entry point
-  const mainPath = path.resolve(projectRoot, "dist", "main.cjs");
-
-  if (!fs.existsSync(mainPath)) {
-    throw new Error(
-      `Main entry point not found at ${mainPath}. Make sure to run 'pnpm build' before running E2E tests.`
-    );
-  }
-
-  // Get the electron binary path
-  const electronPath = require("electron") as string;
-
-  if (!hasElectronDisplay()) {
-    throw new Error(ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
-  }
-
-  // Build electron args - first arg is the app entry point
-  const electronUserDataDir = path.join(workspaceInfo.testRoot, "electron-user-data");
-  const args = [
-    "--no-sandbox",
-    `--user-data-dir=${electronUserDataDir}`,
-    mainPath,
-    `--workspace=${workspaceInfo.workspaceName}`,
-  ];
-  if (initialPanel) {
-    args.push(`--panel=${initialPanel}`);
-  }
-
-  // Launch the app using the electron binary
-  const app = await electron.launch({
-    executablePath: electronPath,
-    args,
-    env: {
-      ...process.env,
-      NODE_ENV: "development",
-      VIBESTUDIO_TEST_MODE: "1",
-      // Disable GPU acceleration for CI environments
-      ELECTRON_DISABLE_GPU: "1",
-      ELECTRON_DISABLE_SANDBOX: "1",
-      ...workspaceInfo.env,
-      ...env,
-    },
-    timeout: launchTimeout,
-  });
+  let app: ElectronApplication | undefined;
+  let child: ReturnType<ElectronApplication["process"]> | undefined;
+  let cleaned = false;
   const output: string[] = [];
-  const child = app.process();
-  child.stdout?.on("data", (chunk) => output.push(String(chunk)));
-  child.stderr?.on("data", (chunk) => output.push(String(chunk)));
-
-  // Get the first window
-  let window: Page;
-  try {
-    window = await app.firstWindow({ timeout: launchTimeout });
-  } catch (error) {
-    const details = output.join("").trim();
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}${
-        details ? `\n\nElectron output before first window:\n${details}` : ""
-      }`
-    );
-  }
-
-  // Wait for the app to initialize
-  await window.waitForLoadState("domcontentloaded");
-  await waitForTestApiReady(app, launchTimeout, output);
-
-  // Optionally open DevTools
-  if (devTools) {
-    await app.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      win?.webContents.openDevTools();
-    });
-  }
 
   // Cleanup function with timeout to prevent hanging
   const cleanup = async () => {
+    if (cleaned) return;
+    cleaned = true;
     const appProcess = child;
-    const mainPid = appProcess.pid;
-    const readyFile = path.join(workspacePath, "state", "server-ready.json");
+    const mainPid = appProcess?.pid;
+    const readyFile = path.join(
+      getCentralDataDirFromEnv(workspaceInfo.env),
+      "server-auth",
+      "hub-ready.json"
+    );
     const detachedServerPid = readReadyFilePid(readyFile);
+    // Capture dedicated descendant process groups before graceful shutdown can
+    // reparent their members. Workspace servers deliberately own detached
+    // groups so native builds, workerd, model engines, and extension children
+    // can be drained as one lifecycle unit even if the group leader exits first.
+    const ownedProcessGroups = collectOwnedProcessGroups([mainPid, detachedServerPid]);
     // Use a timeout to prevent hanging on app.close()
     const closeWithTimeout = async (timeoutMs: number): Promise<void> => {
       return Promise.race([
@@ -306,28 +284,36 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       ]);
     };
 
-    try {
-      // Try graceful close first with 5 second timeout
-      await closeWithTimeout(5000);
-    } catch (error) {
-      console.warn("[TestSetup] Graceful close failed, force killing:", error);
-      // Force kill the whole process tree if graceful close fails. Killing only the Electron
-      // parent can orphan workerd/extension children under the user session.
+    if (app) {
       try {
-        killProcessTree(mainPid, "SIGKILL");
-        await waitForProcessExit(mainPid, 3000);
-      } catch {
-        // Process may already be dead
+        // Main owns an ordered 15-second shutdown budget. Give that path time
+        // to stop the local hub before falling back to a process-tree kill.
+        await closeWithTimeout(20_000);
+      } catch (error) {
+        console.warn("[TestSetup] Graceful close failed, force killing:", error);
+        // Force kill the whole process tree if graceful close fails. Killing only the Electron
+        // parent can orphan workerd/extension children under the user session.
+        try {
+          killProcessTree(mainPid, "SIGKILL");
+          await waitForProcessExit(mainPid, 3000);
+        } catch {
+          // Process may already be dead
+        }
       }
     }
 
-    cleanupKnownChildProcesses(mainPid);
-    cleanupKnownChildProcesses(detachedServerPid);
+    await stopOwnedProcessGroups(ownedProcessGroups);
+    await cleanupKnownChildProcesses(mainPid);
     killProcessTree(detachedServerPid, "SIGTERM");
     if (!(await waitForProcessExit(detachedServerPid, 3000))) {
       killProcessTree(detachedServerPid, "SIGKILL");
       await waitForProcessExit(detachedServerPid, 3000);
     }
+    // A server forced out during its shutdown budget can leave workerd
+    // reparented before the process-tree walk observes it. The config path is
+    // server-PID-specific, so clean and await those exact children as the final
+    // ownership-safe fallback.
+    await cleanupKnownChildProcesses(detachedServerPid);
 
     if (ownsWorkspace) {
       try {
@@ -338,7 +324,92 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     }
   };
 
-  return { app, window, workspacePath, cleanup };
+  try {
+    // Determine the main entry point
+    const mainPath = path.resolve(projectRoot, "dist", "main.cjs");
+
+    if (!fs.existsSync(mainPath)) {
+      throw new Error(
+        `Main entry point not found at ${mainPath}. Make sure to run 'pnpm build' before running E2E tests.`
+      );
+    }
+
+    if (!hasElectronDisplay()) {
+      throw new Error(ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
+    }
+
+    // Build electron args - first arg is the app entry point
+    const electronPath = require("electron") as string;
+    const electronUserDataDir = path.join(workspaceInfo.testRoot, "electron-user-data");
+    const args = [
+      "--no-sandbox",
+      `--user-data-dir=${electronUserDataDir}`,
+      mainPath,
+      `--workspace=${workspaceInfo.workspaceName}`,
+    ];
+    if (initialPanel) {
+      args.push(`--panel=${initialPanel}`);
+    }
+
+    app = await electron.launch({
+      executablePath: electronPath,
+      args,
+      env: {
+        ...process.env,
+        NODE_ENV: "development",
+        VIBESTUDIO_TEST_MODE: "1",
+        // Disable GPU acceleration for CI environments
+        ELECTRON_DISABLE_GPU: "1",
+        ELECTRON_DISABLE_SANDBOX: "1",
+        ...workspaceInfo.env,
+        ...env,
+      },
+      timeout: launchTimeout,
+    });
+    child = app.process();
+    child.stdout?.on("data", (chunk) => output.push(String(chunk)));
+    child.stderr?.on("data", (chunk) => output.push(String(chunk)));
+
+    const window = await app.firstWindow({ timeout: launchTimeout });
+    await window.waitForLoadState("domcontentloaded");
+    await waitForTestApiReady(app, launchTimeout, output);
+
+    if (devTools) {
+      await app.evaluate(({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        win?.webContents.openDevTools();
+      });
+    }
+
+    return { app, window, workspacePath, cleanup };
+  } catch (error) {
+    const details = tailDiagnosticText(output.join(""));
+    const hubLog = readDiagnosticFileTail(
+      path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log")
+    );
+    await cleanup();
+    const message = error instanceof Error ? error.message : String(error);
+    if ((!details && !hubLog) || message.includes("Electron output before")) throw error;
+    const diagnostics = [
+      hubLog ? `Detached hub log before launch failure:\n${hubLog}` : "",
+      details ? `Electron output before launch failure:\n${details}` : "",
+    ].filter(Boolean);
+    throw new Error(`${message}\n\n${diagnostics.join("\n\n")}`, { cause: error });
+  }
+}
+
+function readDiagnosticFileTail(file: string): string {
+  try {
+    return tailDiagnosticText(fs.readFileSync(file, "utf8"));
+  } catch {
+    return "";
+  }
+}
+
+function tailDiagnosticText(value: string, maxChars = 24_000): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return `[... ${trimmed.length - maxChars} earlier characters omitted ...]\n${trimmed.slice(-maxChars)}`;
 }
 
 function readReadyFilePid(readyFile: string): number | undefined {
@@ -369,6 +440,72 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function collectOwnedProcessGroups(rootPids: Array<number | undefined>): number[] {
+  if (process.platform === "win32") return [];
+  const ownedPids = new Set<number>();
+  for (const rootPid of rootPids) {
+    if (!rootPid || rootPid <= 0) continue;
+    ownedPids.add(rootPid);
+    for (const childPid of collectChildPids(rootPid)) ownedPids.add(childPid);
+  }
+  if (ownedPids.size === 0) return [];
+
+  let stdout = "";
+  try {
+    stdout = execFileSync("ps", ["-o", "pid=,pgid=", "-p", [...ownedPids].join(",")], {
+      encoding: "utf8",
+    });
+  } catch {
+    return [];
+  }
+
+  const groups = new Set<number>();
+  for (const line of stdout.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+    if (!match) continue;
+    const pgid = Number(match[2]);
+    // A dedicated group is owned only when its leader is inside the captured
+    // process tree. This excludes Playwright's/session shell's ambient group.
+    if (pgid > 1 && ownedPids.has(pgid)) groups.add(pgid);
+  }
+  return [...groups];
+}
+
+async function stopOwnedProcessGroups(groups: number[]): Promise<void> {
+  if (process.platform === "win32" || groups.length === 0) return;
+  for (const pgid of groups) signalProcessGroup(pgid, "SIGTERM");
+  await Promise.all(groups.map((pgid) => waitForProcessGroupExit(pgid, 3000)));
+  const survivors = groups.filter(isProcessGroupAlive);
+  for (const pgid of survivors) signalProcessGroup(pgid, "SIGKILL");
+  await Promise.all(survivors.map((pgid) => waitForProcessGroupExit(pgid, 3000)));
+}
+
+function signalProcessGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+function isProcessGroupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitForProcessGroupExit(pgid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessGroupAlive(pgid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessGroupAlive(pgid);
 }
 
 async function removeManagedTestWorkspaceWithRetry(workspaceDir: string): Promise<void> {
@@ -406,7 +543,8 @@ async function waitForTestApiReady(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   const details = output.join("").trim();
-  const reason = lastError instanceof Error ? lastError.message : lastError ? String(lastError) : "";
+  const reason =
+    lastError instanceof Error ? lastError.message : lastError ? String(lastError) : "";
   throw new Error(
     `Timed out waiting for VIBESTUDIO_TEST_MODE test API.${reason ? ` Last error: ${reason}` : ""}${
       details ? `\n\nElectron output before test API timeout:\n${details}` : ""
@@ -414,17 +552,27 @@ async function waitForTestApiReady(
   );
 }
 
-function cleanupKnownChildProcesses(mainPid: number | undefined): void {
-  if (!mainPid) return;
-  if (process.platform === "win32") return;
-  const workerdConfigDir = `/tmp/vibestudio-workerd-${mainPid}/config.capnp`;
-  for (const pid of findPidsByCommand(workerdConfigDir)) {
+async function cleanupKnownChildProcesses(ownerPid: number | undefined): Promise<void> {
+  if (!ownerPid || process.platform === "win32") return;
+  const workerdConfigPath = `/tmp/vibestudio-workerd-${ownerPid}/config.capnp`;
+  const pids = findPidsByCommand(workerdConfigPath);
+  for (const pid of pids) {
     try {
       process.kill(pid, "SIGTERM");
     } catch {
       // already gone
     }
   }
+  await Promise.all(pids.map((pid) => waitForProcessExit(pid, 3000)));
+  const survivors = pids.filter(isProcessAlive);
+  for (const pid of survivors) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+  await Promise.all(survivors.map((pid) => waitForProcessExit(pid, 3000)));
 }
 
 function killProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
@@ -536,6 +684,94 @@ export async function getPanelTree(
   }) as Promise<
     Array<{ id: string; title: string; children: unknown[]; snapshot?: { source?: string } }>
   >;
+}
+
+/** Read extension lifecycle state through the same authenticated RPC path as the shell. */
+export async function getExtensionRegistry(
+  app: ElectronApplication
+): Promise<TestExtensionRegistryEntry[]> {
+  return testRpcCall(app, "extensions", "list", []) as Promise<TestExtensionRegistryEntry[]>;
+}
+
+/** Call server RPC through the main-process test bridge and its authenticated shell path. */
+export async function testRpcCall(
+  app: ElectronApplication,
+  service: string,
+  method: string,
+  args: unknown[] = []
+): Promise<unknown> {
+  return app.evaluate(
+    async (_electron, request) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: {
+            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+          };
+        }
+      ).__testApi;
+      if (!testApi) {
+        throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
+      }
+      return testApi.rpcCall(request.service, request.method, request.args);
+    },
+    { service, method, args }
+  );
+}
+
+/** Resolve every currently presented shell approval using its primary non-dangerous choice. */
+export async function resolvePendingShellApprovals(app: ElectronApplication): Promise<void> {
+  const pending = (await testRpcCall(app, "shellApproval", "listPending", []).catch(
+    () => []
+  )) as Array<{
+    approvalId: string;
+    kind: string;
+    options?: Array<{ value: unknown; tone?: unknown; label?: unknown }>;
+  }>;
+  for (const raw of pending) {
+    const approval: TestPendingApproval = {
+      approvalId: raw.approvalId,
+      kind: raw.kind,
+      options: Array.isArray(raw.options)
+        ? raw.options.map((option) => ({
+            value: String(option.value),
+            tone: typeof option.tone === "string" ? option.tone : undefined,
+            label: typeof option.label === "string" ? option.label : undefined,
+          }))
+        : undefined,
+    };
+    if (approval.kind === "userland") {
+      const choice =
+        approval.options?.find((option) => option.tone === "primary")?.value ??
+        approval.options?.find((option) => option.tone !== "danger")?.value ??
+        approval.options?.[0]?.value;
+      if (!choice) throw new Error(`Userland approval ${approval.approvalId} has no options`);
+      await testRpcCall(app, "shellApproval", "resolveUserland", [approval.approvalId, choice]);
+    } else {
+      await testRpcCall(app, "shellApproval", "resolve", [approval.approvalId, "session"]);
+    }
+  }
+}
+
+/** Cross the native workspace/host-target startup gate, then resolve queued shell approvals. */
+export async function approvePendingStartupWork(app: ElectronApplication): Promise<void> {
+  const launchSession = await testRpcCall(app, "workspace", "hostTargets.beginLaunch", [
+    "electron",
+  ]).catch(() => null);
+  if (
+    launchSession &&
+    typeof launchSession === "object" &&
+    "sessionId" in launchSession &&
+    typeof launchSession.sessionId === "string" &&
+    "approvals" in launchSession &&
+    Array.isArray(launchSession.approvals) &&
+    launchSession.approvals.length > 0
+  ) {
+    await testRpcCall(app, "workspace", "hostTargets.resolveLaunchSessionApproval", [
+      launchSession.sessionId,
+      "once",
+    ]);
+  }
+  await resolvePendingShellApprovals(app);
 }
 
 /**

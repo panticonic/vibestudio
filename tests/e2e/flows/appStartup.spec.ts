@@ -6,7 +6,9 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  approvePendingStartupWork,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
+  getExtensionRegistry,
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
@@ -59,13 +61,41 @@ test.describe("App Startup", () => {
   test("panel tree is accessible via test API", async () => {
     testApp = await launchTestApp();
 
-    // Wait for initialization
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await expect
+      .poll(
+        async () => {
+          try {
+            return Array.isArray(await getPanelTree(testApp.app));
+          } catch {
+            // Startup swaps Electron execution contexts while presenting the
+            // native trust gate. Accessibility is an eventual contract across
+            // that navigation, not a guarantee for one sampled microtask.
+            return false;
+          }
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+  });
 
-    // Should be able to get the panel tree
-    const panelTree = await getPanelTree(testApp.app);
+  test("fresh-workspace extensions complete first activation without crashing", async () => {
+    testApp = await launchTestApp({
+      env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
+    });
+    await expect
+      .poll(
+        async () => {
+          await approvePendingStartupWork(testApp.app);
+          const extensions = await getExtensionRegistry(testApp.app);
+          const devHost = extensions.find(
+            (entry) => entry.name === "@workspace-extensions/dev-host"
+          );
+          return devHost ? { status: devHost.status, lastError: devHost.lastError } : null;
+        },
+        { timeout: 120_000 }
+      )
+      .toEqual({ status: "running", lastError: null });
 
-    // Panel tree should exist (may be empty initially)
-    expect(Array.isArray(panelTree)).toBe(true);
+    await expect(testApp.window.getByText("Extension stopped", { exact: true })).toHaveCount(0);
   });
 });

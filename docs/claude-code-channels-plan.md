@@ -242,7 +242,7 @@ reattach unless the entity is retired).
   adapter registry (one mechanism for "recognize and optionally enrich agent
   launches"), with codex/aider adapters as future sibling extensions.
 
-The snug server stays as-is: it is the PTY/UI affordance surface (badges, notify,
+The terminal control server stays as-is: it is the PTY/UI affordance surface (badges, notify,
 split), orthogonal to agent messaging. Claude Code sessions get both.
 
 ## 5. The linked-agent vessel (userland)

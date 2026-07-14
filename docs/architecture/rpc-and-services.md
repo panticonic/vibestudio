@@ -92,39 +92,24 @@ Are you routing point-to-point with a single caller/target?
    └─ Call the returned worker or Durable Object target
 ```
 
-## Agent callers and the eval escape hatch
+## Identity and authority across relays
 
-The `agent` caller kind (linked external sessions — Claude Code et al.,
-authenticated by an entity-scoped agent credential) is deliberately allowed on
-only a handful of host services. This is NOT a reachability limitation, and
-service authors should not play whack-a-mole adding `agent` to allow lists.
+Transport caller kinds (`panel`, `do`, `agent`, `extension`, and so on) route a
+message; they are not authorization identities. Every ingress produces a
+host-attested authority grant containing the principals that actually apply:
+the exact host, authenticated user/device, exact code artifact, and bound
+entity. Relays preserve that grant and add provenance; they do not convert it
+into a trusted generic `do` or `server` identity.
 
-**The reachability guarantee is eval.** An agent's `vibestudio eval` runs in a
-per-owner EvalDO activated as an ordinary `do` principal scoped to the agent's
-own context (`evalService.ts`). Every service call the eval makes carries that
-`do` identity — so anything `do`-callable is agent-reachable today, including
-capability-gated paths: the EvalDO carries a code identity the grant/approval
-pipeline understands, so consent prompts work through eval where they may be
-deny-only on the direct path.
+Services and `@rpc` methods declare complete principal requirements. Sensitive
+operations additionally use the canonical resource evaluator for capabilities,
+relationships, revocation, and exact execution state. A method's declaration
+therefore answers “which authenticated principal classes can satisfy this
+method?” while its resource check answers “may these exact principals perform
+this operation on this exact object now?”
 
-The only services closed to `do` callers are deliberately user/host surfaces
-(`auth`, `tokens`, `hostLifecycle`, `shellApproval`, `shellPresence`,
-`presence`, `push`, `panelRuntime`, `panelLog`) — none of which an agent
-should reach programmatically.
-
-**Adding `agent` to a service (or method) allow list is purely a UX
-optimization for high-frequency paths** — it lets the CLI hit the service in
-one RPC without composing an eval (e.g. `panelCdp.screenshot` for the
-frontend-dev loop, `workspace.listSkills` for skill discovery). Apply it when:
-
-- the method is read-only or the write is fully permission-gated server-side,
-- the operation is something agents do often enough that eval composition is
-  real friction, and
-- the permission story for a code-identity-less caller is settled (agent
-  callers carry a host-verified `agentBinding` instead of `.code`; gates must
-  treat them as first-class subjects — see `panelAccessPermission.ts` — and
-  cannot rely on the capability grant store, which keys on code identity).
-
-When in doubt, leave the allow list alone and let eval carry it. The policy
-matrix golden (`__servicePolicyMatrix.golden.json`) makes every widening a
-reviewable diff.
+Eval is an ergonomic execution surface, not an authorization escape hatch. An
+agent's EvalDO retains the agent entity, user, context, and evaluated code
+identity, so direct service calls and calls composed through eval reach the same
+decision. Add direct CLI adapters only for ergonomics or streaming—not to
+widen authority—and test both paths against the same resource policy.

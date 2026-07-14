@@ -200,6 +200,17 @@ test.describe("Content overlay", () => {
   test("floats the approval card in a native overlay above a live panel", async () => {
     testApp = await launchTestApp({ launchTimeout: 240_000 });
     await waitHostedShellReady(testApp);
+    await expect
+      .poll(
+        async () =>
+          testApp!.app.evaluate(() => {
+            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
+            const tree = api?.getPanelTree?.() ?? [];
+            return Array.isArray(tree) ? tree.length : 0;
+          }),
+        { timeout: 60_000, intervals: [250, 500, 1000] }
+      )
+      .toBeGreaterThan(0);
 
     // Drive the reusable content overlay directly (the test API authenticates as
     // the shell app, a view host) with a synthetic severe-capability approval.
@@ -209,7 +220,7 @@ test.describe("Content overlay", () => {
       callerId: "panel:e2e",
       callerKind: "panel",
       repoPath: "panels/e2e",
-      effectiveVersion: "ev",
+      executionDigest: "ev",
       requestedAt: 0,
       capability: "panel.automate",
       severity: "severe",
@@ -245,12 +256,13 @@ test.describe("Content overlay", () => {
     expect(probe?.tone).toBe("red");
     expect(probe?.text).toContain("E2E drive panel");
     expect(probe?.card?.height ?? 0).toBeGreaterThan(120);
-    // The full severe-capability action set rendered.
+    // The full exact-version severe-capability action set rendered. Broader
+    // repository trust is intentionally not an approval outcome.
     expect(probe?.text).toContain("Allow once");
     expect(probe?.text).toContain("Allow this session");
-    expect(probe?.text).toContain("Trust repo");
     expect(probe?.text).toContain("Trust version");
     expect(probe?.text).toContain("Deny");
+    expect(probe?.text).toContain("Block");
 
     // Panels were NOT blanked — at least one panel remains in the live tree.
     const panelCount = await testApp.app.evaluate(async () => {

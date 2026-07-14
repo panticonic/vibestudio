@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 
@@ -454,6 +455,7 @@ async function runMultiUserPhase(options, resultsDir) {
           socket.send(
             JSON.stringify({
               type: "ws:auth",
+              contractVersion: RPC_CONTRACT_VERSION,
               token: session.shellToken,
               clientLabel: label,
               clientPlatform: "test",

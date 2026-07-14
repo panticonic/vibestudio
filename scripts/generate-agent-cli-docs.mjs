@@ -80,7 +80,10 @@ async function collectServiceDefinitions() {
 }
 
 function shellCallable(def) {
-  return Array.isArray(def.policy?.allowed) && def.policy.allowed.includes("shell");
+  return (
+    Array.isArray(def.authority?.principals) &&
+    def.authority.principals.some((principal) => principal === "user" || principal === "host")
+  );
 }
 
 function escapeTableCell(value) {
@@ -90,11 +93,18 @@ function escapeTableCell(value) {
 function renderService(def) {
   const lines = [`## \`${def.name}\``, ""];
   if (def.description) lines.push(def.description, "");
-  lines.push(`Allowed callers: ${def.policy.allowed.map((c) => `\`${c}\``).join(", ")}`, "");
+  lines.push(
+    `Authority principals: ${def.authority.principals.map((principal) => `\`${principal}\``).join(", ")}`,
+    ""
+  );
   lines.push("| Method | Description |", "|--------|-------------|");
   for (const [methodName, method] of Object.entries(def.methods)) {
     const shellBlocked =
-      Array.isArray(method.policy?.allowed) && !method.policy.allowed.includes("shell");
+      method.authority &&
+      Array.isArray(method.authority.principals) &&
+      !method.authority.principals.some(
+        (principal) => principal === "user" || principal === "host"
+      );
     if (shellBlocked) continue; // method-level override excludes the CLI
     lines.push(
       `| \`${def.name}.${methodName}\` | ${escapeTableCell(method.description ?? "")} |`

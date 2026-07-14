@@ -167,7 +167,8 @@ is approved once; different code (a spawned deputy) re-prompts.
 ## 10. Implementation status (2026-06-20)
 
 **Layer A — DONE + green.** Findings 1/2/3 closed; the workspace realm migrated
-to declarative `@rpc({ callers })` default-deny (all ~150 DO methods). Docs in
+to declarative `@rpc({ principals | requires })` default-deny. Transport caller
+kinds are no longer authorization identities. Docs in
 `workspace-dev/WORKERS.md`.
 
 **Layer B — DONE + green**, with two refinements the implementation surfaced:

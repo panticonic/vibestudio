@@ -93,8 +93,32 @@ async function getTerminalPanelId(app: ElectronApplication): Promise<string> {
 }
 
 async function clickLaunchApprovalButton(app: ElectronApplication): Promise<boolean> {
+  const labelPatterns = [
+    /^(Allow this session|Allow for session|Use this session|Dev session)$/i,
+    /^(Trust and (start|connect)|Approve and (start|connect)|Approve all|Approve|Allow once|Trust version|Continue|Run)$/i,
+  ];
+  // Shell consent is hosted in a dedicated overlay page. Playwright's page
+  // locator crosses the component's shadow boundary and exercises the same
+  // accessible button a user sees; raw document.querySelectorAll() below is a
+  // fallback for bootstrap views that render directly in a WebContents.
+  const pages = [...new Set([...app.context().pages(), ...app.windows()])];
+  for (const labelPattern of labelPatterns) {
+    for (const page of pages) {
+      for (const frame of page.frames()) {
+        const buttons = frame.getByRole("button", { name: labelPattern });
+        const count = await buttons.count().catch(() => 0);
+        for (let index = 0; index < count; index += 1) {
+          const button = buttons.nth(index);
+          if (!(await button.isVisible().catch(() => false))) continue;
+          if (!(await button.isEnabled().catch(() => false))) continue;
+          await button.click({ timeout: 1_000 });
+          return true;
+        }
+      }
+    }
+  }
   return app.evaluate(
-    async ({ webContents }, source) => {
+    async ({ webContents }, sources) => {
       const candidates = [];
       for (const contents of webContents.getAllWebContents()) {
         if (contents.isDestroyed()) continue;
@@ -121,9 +145,15 @@ async function clickLaunchApprovalButton(app: ElectronApplication): Promise<bool
         try {
           const clicked = await contents.executeJavaScript(
             `(() => {
-              const pattern = new RegExp(${JSON.stringify(source)}, "i");
+              const patterns = ${JSON.stringify(sources)}.map(
+                (source) => new RegExp(source, "i")
+              );
               const buttons = Array.from(document.querySelectorAll("button"));
-              const button = buttons.find((item) => pattern.test((item.textContent ?? "").trim()));
+              const button = patterns
+                .map((pattern) =>
+                  buttons.find((item) => pattern.test((item.textContent ?? "").trim()))
+                )
+                .find(Boolean);
               if (!button) return false;
               button.click();
               return true;
@@ -137,14 +167,12 @@ async function clickLaunchApprovalButton(app: ElectronApplication): Promise<bool
       }
       return false;
     },
-    /^(Trust and (start|connect)|Approve and (start|connect)|Approve all|Approve|Allow|Continue|Run)$/i
-      .source
+    labelPatterns.map((pattern) => pattern.source)
   );
 }
 
 async function resolvePendingTerminalWork(app: ElectronApplication, window?: Page): Promise<void> {
   await approvePendingTerminalWork(app, window);
-  await clickLaunchApprovalButton(app).catch(() => false);
 }
 
 async function waitForTerminalPanel(app: ElectronApplication, window: Page): Promise<string> {
@@ -223,10 +251,15 @@ async function resolveApproval(app: ElectronApplication, approval: PendingApprov
 }
 
 async function approvePendingTerminalWork(app: ElectronApplication, window?: Page): Promise<void> {
+  if (await clickLaunchApprovalButton(app).catch(() => false)) return;
   const pending = await listPendingApprovals(app);
   for (const approval of pending) {
     await resolveApproval(app, approval);
   }
+  // Approval cards are rendered in the shell overlay WebContents, not in the
+  // main Playwright page. Keep scanning every Electron WebContents while a
+  // terminal request is pending: the userland "Open terminal session" prompt
+  // is created after extension activation, well after the bootstrap approvals.
   if (window) {
     await window
       .getByRole("button", {
@@ -235,6 +268,15 @@ async function approvePendingTerminalWork(app: ElectronApplication, window?: Pag
       .click({ timeout: 250 })
       .catch(() => {});
   }
+}
+
+async function approveVisibleTerminalWork(app: ElectronApplication): Promise<void> {
+  // Once the panel is live, exercise consent only through the user-visible
+  // shell overlay. The request that opens a terminal intentionally remains
+  // pending until this UI is answered; issuing a second host test-RPC query
+  // from the same Electron main-process client makes the harness wait behind
+  // the very operation it is supposed to approve.
+  await clickLaunchApprovalButton(app).catch(() => false);
 }
 
 function createTerminalOnlyWorkspace(): string {
@@ -312,14 +354,14 @@ async function requestTerminalSession(
 async function waitForUsableTerminalSession(
   app: ElectronApplication,
   panelId: string,
-  window?: Page
+  _window?: Page
 ): Promise<TerminalSession> {
   const startedAt = Date.now();
   let lastOpenRequestAt = 0;
   await expect
     .poll(
       async () => {
-        await approvePendingTerminalWork(app, window);
+        await approveVisibleTerminalWork(app);
         let sessions = await listTerminalSessions(app, panelId).catch(() => []);
         const alive = sessions.find((session) => session.alive !== false)?.sessionId;
         if (alive) return alive;
@@ -327,9 +369,11 @@ async function waitForUsableTerminalSession(
         const now = Date.now();
         if (now - startedAt > 5_000 && now - lastOpenRequestAt > 5_000) {
           lastOpenRequestAt = now;
-          const opened = await requestTerminalSession(app, panelId).catch(() => undefined);
-          await approvePendingTerminalWork(app, window);
-          if (opened) return opened;
+          // Opening a terminal intentionally stays pending while the userland
+          // consent card is visible. Start the retry without awaiting it so the
+          // next poll can click that card through the independent overlay page.
+          void requestTerminalSession(app, panelId).catch(() => undefined);
+          await approveVisibleTerminalWork(app);
           sessions = await listTerminalSessions(app, panelId).catch(() => []);
         }
         return sessions.find((session) => session.alive !== false)?.sessionId ?? "";
@@ -473,6 +517,27 @@ async function clickTerminalThroughWindow(testApp: TestApp, panelId: string): Pr
       intervals: [100, 250, 500],
     })
     .toBe(panelId);
+}
+
+async function openPaneMenu(
+  app: ElectronApplication,
+  panelId: string,
+  expectedItem: string
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const html = await getPanelHtml(app, panelId);
+        if (html.includes(expectedItem)) return true;
+        const triggerIsOpen = /aria-label="Pane menu"[^>]*aria-expanded="true"/.test(html);
+        if (!triggerIsOpen) {
+          await clickPanelSelector(app, panelId, "[aria-label='Pane menu']");
+        }
+        return false;
+      },
+      { timeout: 10_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
 }
 
 async function nativeWindowInfo(app: ElectronApplication): Promise<{
@@ -685,13 +750,7 @@ test.describe("Terminal Startup", () => {
     }
     await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
 
-    await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
-    await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
-        timeout: 5_000,
-        intervals: [100, 250, 500],
-      })
-      .toContain("Copy all");
+    await openPaneMenu(app, terminalPanelId, "Copy all");
     expect(await clickPanelText(app, terminalPanelId, "[role='menuitem']", "Copy all")).toBe(true);
     await expect
       .poll(async () => getElectronClipboardText(app), {
@@ -700,13 +759,7 @@ test.describe("Terminal Startup", () => {
       })
       .toContain("vibestudio-paste-input");
 
-    await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
-    await expect
-      .poll(async () => getPanelHtml(app, terminalPanelId), {
-        timeout: 5_000,
-        intervals: [100, 250, 500],
-      })
-      .toContain("Find");
+    await openPaneMenu(app, terminalPanelId, "Find");
     expect(await clickPanelText(app, terminalPanelId, "[role='menuitem']", "Find")).toBe(true);
     await expect
       .poll(async () => getPanelHtml(app, terminalPanelId), {

@@ -547,6 +547,12 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   ]).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error),
   }));
+  const shellExtensionDiagnostics = await rpcCall(testApp, "workspace", "units.diagnostics", [
+    "@workspace-extensions/shell",
+    { limit: 200 },
+  ]).catch((error: unknown) => ({
+    error: error instanceof Error ? error.message : String(error),
+  }));
   const diagnostics = {
     pending,
     launchResult,
@@ -557,6 +563,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     channelReplays,
     agentDebugStates,
     workerLogs,
+    shellExtensionDiagnostics,
   };
   await fs.writeFile("/tmp/startup-approvals-diagnostics.json", JSON.stringify(diagnostics, null, 2));
   console.log("STARTUP_APPROVALS_DIAGNOSTICS", JSON.stringify(diagnostics, null, 2).slice(0, 80_000));
@@ -577,6 +584,7 @@ type StartupAgentCompletionState = {
     failures: string[];
   }>;
   errors: string[];
+  terminalErrors: string[];
 };
 
 async function collectStartupAgentCompletion(
@@ -594,11 +602,29 @@ async function collectStartupAgentCompletion(
     if (channelName) channelNames.add(channelName);
   }
   if (!firstPanelId) {
-    return { complete: false, channels: [], errors: ["No panel is available for RPC inspection"] };
+    return {
+      complete: false,
+      channels: [],
+      errors: ["No panel is available for RPC inspection"],
+      terminalErrors: [],
+    };
   }
 
   const channels: StartupAgentCompletionState["channels"] = [];
   const errors: string[] = [];
+  const terminalErrors: string[] = [];
+  for (const panel of panels) {
+    const launchError = await executePanelScript(
+      testApp.app,
+      panel.id,
+      `document.querySelector('[data-testid="agent-launch-error"]')?.textContent?.trim() ?? ""`
+    ).catch(() => "");
+    if (typeof launchError === "string" && launchError.length > 0) {
+      const message = `Panel ${panel.id}: ${launchError}`;
+      errors.push(message);
+      terminalErrors.push(message);
+    }
+  }
   for (const channelName of channelNames) {
     const resolved = await rpcCall(testApp, "workers", "resolveService", [
       "vibestudio.channel.v1",
@@ -778,7 +804,7 @@ async function collectStartupAgentCompletion(
     ) &&
     errors.length === 0;
 
-  return { complete, channels, errors };
+  return { complete, channels, errors, terminalErrors };
 }
 
 function isUnitBatchApproval(approval: PendingApproval): boolean {
@@ -941,12 +967,20 @@ test.describe("Desktop Startup Approvals", () => {
       .toBe(0);
 
     try {
-      await expect
-        .poll(async () => (await collectStartupAgentCompletion(testApp!)).complete, {
-          timeout: 120_000,
-          intervals: [1000, 2000, 5000],
-        })
-        .toBe(true);
+      const deadline = Date.now() + 120_000;
+      let completion = await collectStartupAgentCompletion(testApp);
+      while (
+        !completion.complete &&
+        completion.terminalErrors.length === 0 &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        completion = await collectStartupAgentCompletion(testApp);
+      }
+      if (completion.terminalErrors.length > 0) {
+        throw new Error(completion.terminalErrors.join("\n"));
+      }
+      expect(completion.complete, JSON.stringify(completion, null, 2)).toBe(true);
     } catch (error) {
       console.log(
         "STARTUP_AGENT_COMPLETION_STATE",

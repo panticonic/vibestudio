@@ -121,7 +121,7 @@ function requestCredentialApproval(queue: ApprovalQueueWithListeners) {
     callerId: "worker:approval-e2e",
     callerKind: "worker",
     repoPath: "/repo",
-    effectiveVersion: "hash-approval-e2e",
+    executionDigest: "hash-approval-e2e",
     credentialId: "github-token",
     credentialLabel: "GitHub",
     audience: [{ url: "https://api.github.com/", match: "origin" }],
