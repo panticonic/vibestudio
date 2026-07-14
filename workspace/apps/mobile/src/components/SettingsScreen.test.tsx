@@ -9,6 +9,7 @@ import {
   persistStoredShellCredential,
 } from "@vibestudio/mobile-webrtc";
 import { SettingsScreen } from "./SettingsScreen";
+import { setApprovedAppCapabilities } from "../services/appCapabilities";
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
 import { listMobileWorkspaces, selectMobileWorkspace } from "../services/workspaceSelection";
@@ -86,6 +87,7 @@ function renderSettings() {
 
 describe("SettingsScreen workspace selector", () => {
   beforeEach(() => {
+    setApprovedAppCapabilities(["clipboard"]);
     (Clipboard.getString as jest.Mock).mockReset().mockResolvedValue("");
     (Clipboard.hasImage as jest.Mock).mockReset().mockResolvedValue(false);
     listMock.mockReset().mockResolvedValue(workspaces);

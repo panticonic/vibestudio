@@ -31,6 +31,9 @@ import {
   type SubagentProgressEntry,
   unwrapChatMethodResult,
   type ChatMethodResult,
+  type AgentLaunchRpc,
+  createAgentEntity,
+  subscribeAgentToChannel,
 } from "@workspace/agentic-core";
 import type {
   PubSubClient,
@@ -41,6 +44,7 @@ import type {
   AgentDebugPayload,
   IncomingEvent,
 } from "@workspace/pubsub";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -56,7 +60,6 @@ import {
   destroyHeadlessAgentContext,
   getRecommendedChannelConfig,
   retireHeadlessAgent,
-  subscribeHeadlessAgent,
   unsubscribeHeadlessAgent,
 } from "./channel.js";
 import { HeadlessTurnObserver, type HeadlessTurnSnapshot } from "./turn-observer.js";
@@ -300,30 +303,85 @@ export class HeadlessSession {
       ...getRecommendedChannelConfig(),
       ...config.channelConfig,
     } as ChannelConfig;
-
-    await session.connect(channelId, {
-      channelConfig,
+    const agentConfig: AgentSubscriptionConfig = {
+      ...getRecommendedChannelConfig(),
+      ...config.extraConfig,
+    };
+    const rpc: AgentLaunchRpc = {
+      call: async <T = unknown>(target: string, method: string, args: unknown[]): Promise<T> =>
+        (await config.rpcCall(target, method, args)) as T,
+    };
+    const handle = await createAgentEntity(rpc, {
+      source: config.source,
+      className: config.className,
+      key: objectKey,
       ...(config.contextId ? { contextId: config.contextId } : {}),
-      methods,
+      config: agentConfig,
     });
-
+    const contextId = config.contextId ?? handle.contextId;
+    const ownsContext = !config.contextId;
+    if (config.contextId && handle.contextId && handle.contextId !== config.contextId) {
+      if (handle.id) {
+        await retireHeadlessAgent({ rpcCall: config.rpcCall, entityId: handle.id }).catch(
+          () => undefined
+        );
+      }
+      throw new Error(
+        `runtime.createEntity returned existing agent ${handle.id ?? handle.targetId} in context ` +
+          `${handle.contextId}, but headless channel ${channelId} is in context ${config.contextId}`
+      );
+    }
+    if (!contextId) {
+      if (handle.id) {
+        await retireHeadlessAgent({ rpcCall: config.rpcCall, entityId: handle.id }).catch(
+          () => undefined
+        );
+      }
+      throw new Error(
+        "runtime.createEntity did not return a contextId for headless agent subscription"
+      );
+    }
     try {
-      const subscription = await subscribeHeadlessAgent({
-        rpcCall: config.rpcCall,
-        source: config.source,
-        className: config.className,
-        objectKey,
-        channelId,
-        contextId: config.contextId,
-        extraConfig: config.extraConfig,
+      await session.connect(channelId, {
+        channelConfig,
+        contextId,
+        channelCreation: {
+          governance: "standard",
+          contextBinding: { kind: "context", contextId },
+          origin: { kind: "headless-session" },
+          admission: { kind: "workspace-members" },
+          presentationEditors: { kind: "workspace-members" },
+          presentation: { ...channelConfig },
+        },
+        methods,
       });
-      session._agentEntityId = subscription.entityId;
-      session._agentTargetId = subscription.targetId;
-      session._agentContextId = subscription.contextId;
-      session._ownsAgentContext = !config.contextId;
+      await subscribeAgentToChannel(rpc, handle, {
+        channelId,
+        contextId,
+        config: agentConfig,
+      });
+      session._agentEntityId = handle.id ?? handle.targetId;
+      session._agentTargetId = handle.targetId;
+      session._agentContextId = contextId;
+      session._ownsAgentContext = ownsContext;
       session._agentRpcCall = config.rpcCall;
     } catch (err) {
       session.disconnect();
+      if (ownsContext) {
+        await destroyHeadlessAgentContext({ rpcCall: config.rpcCall, contextId }).catch(
+          async () => {
+            if (handle.id) {
+              await retireHeadlessAgent({ rpcCall: config.rpcCall, entityId: handle.id }).catch(
+                () => undefined
+              );
+            }
+          }
+        );
+      } else if (handle.id) {
+        await retireHeadlessAgent({ rpcCall: config.rpcCall, entityId: handle.id }).catch(
+          () => undefined
+        );
+      }
       throw err;
     }
 
@@ -545,6 +603,7 @@ export class HeadlessSession {
     options?: {
       channelConfig?: ChannelConfig;
       contextId?: string;
+      channelCreation?: ChannelCreation;
       methods?: Record<string, MethodDefinition>;
     }
   ): Promise<void> {
@@ -556,6 +615,7 @@ export class HeadlessSession {
       methods,
       ...(options?.channelConfig ? { channelConfig: options.channelConfig } : {}),
       ...(options?.contextId ? { contextId: options.contextId } : {}),
+      ...(options?.channelCreation ? { channelCreation: options.channelCreation } : {}),
     });
     this._channelId = channelId;
 
@@ -740,11 +800,6 @@ export class HeadlessSession {
   }
 
   async close(opts: HeadlessSessionCloseOptions = {}): Promise<void> {
-    if (this._agentTargetId && this._client && this._modelExecutionEvidence === undefined) {
-      await this.captureModelExecutionEvidence().catch((error) => {
-        console.warn("[HeadlessSession] model execution evidence capture failed:", error);
-      });
-    }
     const entityId = this._agentEntityId;
     const targetId = this._agentTargetId;
     const contextId = this._agentContextId;

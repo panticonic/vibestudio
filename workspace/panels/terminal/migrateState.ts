@@ -117,7 +117,7 @@ function isNotificationSeverity(value: unknown): value is TerminalNotification["
 }
 
 function isNotificationSource(value: unknown): value is NonNullable<TerminalNotification["source"]> {
-  return value === "osc" || value === "snug" || value === "system";
+  return value === "osc" || value === "terminal" || value === "system";
 }
 
 function isPasteMode(value: unknown): value is TerminalState["pasteMode"] {

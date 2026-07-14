@@ -140,8 +140,8 @@ services:
   - source: workers/todo-store
     name: todo-store
     protocols: [example.todos.v1]
-    policy:
-      allowed: [app, panel, do, worker]
+    authority:
+      principals: [user, code]
     durableObject:
       className: TodoStore
 ```
@@ -149,7 +149,7 @@ services:
 The DO methods must also admit app callers:
 
 ```ts
-@rpc({ callers: ["app", "panel", "do", "worker"] })
+@rpc({ principals: ["user", "code"] })
 listTodos() { ... }
 ```
 

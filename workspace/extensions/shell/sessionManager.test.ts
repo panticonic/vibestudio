@@ -5,6 +5,35 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "./sessionManager.js";
 
 describe("SessionManager janitor", () => {
+  it("returns a lossless JSON session shape when no launch adapter matches", async () => {
+    const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
+    const fakePty = new FakePty();
+    (
+      manager as unknown as {
+        pty: { spawn: () => FakePty };
+      }
+    ).pty = { spawn: () => fakePty };
+    const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
+    const opened = manager.open(
+      {
+        command: process.execPath,
+        args: [],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      { callerId: "panel:test", callerKind: "panel" }
+    );
+    const session = manager.requireOwner(opened.sessionId, "panel:test");
+    const info = manager.info(session);
+
+    expect(info).not.toHaveProperty("detectedAgent");
+    expect(JSON.parse(JSON.stringify(info))).toEqual(info);
+
+    manager.dispose(session);
+  });
+
   it("emits watch-all heartbeats only after an idle interval", async () => {
     vi.useFakeTimers();
     const manager = new SessionManager(
@@ -63,11 +92,27 @@ describe("SessionManager janitor", () => {
 
   it("disposes exited, old, listenerless sessions and preserves live sessions", async () => {
     const onDispose = vi.fn();
-    const manager = new SessionManager({ onDispose }, { janitorIntervalMs: 60 * 60_000, exitedSessionTtlMs: 0 });
+    const manager = new SessionManager(
+      { onDispose },
+      { janitorIntervalMs: 60 * 60_000, exitedSessionTtlMs: 0 }
+    );
     const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
     const owner = { callerId: "panel:test", callerKind: "panel" };
-    const live = manager.open({ command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], cwd: root, env: {}, cols: 80, rows: 24 }, owner);
-    const exited = manager.open({ command: process.execPath, args: ["-e", ""], cwd: root, env: {}, cols: 80, rows: 24 }, owner);
+    const live = manager.open(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 5000)"],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      owner
+    );
+    const exited = manager.open(
+      { command: process.execPath, args: ["-e", ""], cwd: root, env: {}, cols: 80, rows: 24 },
+      owner
+    );
 
     await manager.awaitExit(manager.requireOwner(exited.sessionId, owner.callerId));
     manager.sweepExitedSessionsForTest();
@@ -80,10 +125,16 @@ describe("SessionManager janitor", () => {
 
   it("preserves recently exited sessions until the TTL expires", async () => {
     const onDispose = vi.fn();
-    const manager = new SessionManager({ onDispose }, { janitorIntervalMs: 60 * 60_000, exitedSessionTtlMs: 60_000 });
+    const manager = new SessionManager(
+      { onDispose },
+      { janitorIntervalMs: 60 * 60_000, exitedSessionTtlMs: 60_000 }
+    );
     const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
     const owner = { callerId: "panel:test", callerKind: "panel" };
-    const opened = manager.open({ command: process.execPath, args: ["-e", ""], cwd: root, env: {}, cols: 80, rows: 24 }, owner);
+    const opened = manager.open(
+      { command: process.execPath, args: ["-e", ""], cwd: root, env: {}, cols: 80, rows: 24 },
+      owner
+    );
     const session = manager.requireOwner(opened.sessionId, owner.callerId);
 
     await manager.awaitExit(session);
@@ -98,7 +149,17 @@ describe("SessionManager janitor", () => {
     const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
     const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
     const owner = { callerId: "panel:test", callerKind: "panel" };
-    const opened = manager.open({ command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], cwd: root, env: {}, cols: 80, rows: 24 }, owner);
+    const opened = manager.open(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 5000)"],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      owner
+    );
     const session = manager.requireOwner(opened.sessionId, owner.callerId);
     const response = manager.attach(session);
     const reader = response.body!.getReader();
@@ -121,14 +182,17 @@ describe("SessionManager janitor", () => {
     ).pty = { spawn: () => fakePty };
     const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
     const owner = { callerId: "panel:test", callerKind: "panel" };
-    const opened = manager.open({
-      command: process.execPath,
-      args: [],
-      cwd: root,
-      env: {},
-      cols: 80,
-      rows: 24,
-    }, owner);
+    const opened = manager.open(
+      {
+        command: process.execPath,
+        args: [],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      owner
+    );
     const session = manager.requireOwner(opened.sessionId, owner.callerId);
     const response = manager.attach(session);
     const reader = response.body!.getReader();
@@ -149,24 +213,36 @@ describe("SessionManager janitor", () => {
     const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
     const response = manager.watchAllInfo("panel:test");
     const reader = response.body!.getReader();
-    await expect(readEvent(reader)).resolves.toMatchObject({ type: "snapshot-batch", sessions: [] });
+    await expect(readEvent(reader)).resolves.toMatchObject({
+      type: "snapshot-batch",
+      sessions: [],
+    });
 
     const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
     const owner = { callerId: "panel:test", callerKind: "panel" };
-    const opened = manager.open({
-      command: process.execPath,
-      args: ["-e", "process.stdout.write('plain output'); setTimeout(() => {}, 5000)"],
-      cwd: root,
-      env: {},
-      cols: 80,
-      rows: 24,
-    }, owner);
-    await expect(readEvent(reader)).resolves.toMatchObject({ type: "opened", sessionId: opened.sessionId });
+    const opened = manager.open(
+      {
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('plain output'); setTimeout(() => {}, 5000)"],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      owner
+    );
+    await expect(readEvent(reader)).resolves.toMatchObject({
+      type: "opened",
+      sessionId: opened.sessionId,
+    });
 
     await expect(readEvent(reader)).resolves.toMatchObject({
       type: "snapshot",
       sessionId: opened.sessionId,
-      info: expect.objectContaining({ bytesOut: expect.any(Number), lastActivityAt: expect.any(Number) }),
+      info: expect.objectContaining({
+        bytesOut: expect.any(Number),
+        lastActivityAt: expect.any(Number),
+      }),
     });
 
     const session = manager.requireOwner(opened.sessionId, owner.callerId);
@@ -185,14 +261,17 @@ describe("SessionManager janitor", () => {
     const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
     const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
     const owner = { callerId: "panel:test", callerKind: "panel" };
-    const opened = manager.open({
-      command: process.execPath,
-      args: ["-e", "process.stdout.write('a'.repeat(2048) + 'tail')"],
-      cwd: root,
-      env: {},
-      cols: 80,
-      rows: 24,
-    }, owner);
+    const opened = manager.open(
+      {
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('a'.repeat(2048) + 'tail')"],
+        cwd: root,
+        env: {},
+        cols: 80,
+        rows: 24,
+      },
+      owner
+    );
     const session = manager.requireOwner(opened.sessionId, owner.callerId);
 
     await manager.awaitExit(session);
@@ -205,7 +284,10 @@ describe("SessionManager janitor", () => {
   });
 });
 
-async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs = 1000): Promise<unknown> {
+async function readEvent(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs = 1000
+): Promise<unknown> {
   const decoder = new TextDecoder();
   const next = await Promise.race([
     reader.read(),

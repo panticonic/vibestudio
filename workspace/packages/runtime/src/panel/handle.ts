@@ -30,7 +30,7 @@ export function _initPanelHandleBridge(
     selfRpcTargetId?: string | null;
     parentId?: string | null;
     parentRpcTargetId?: string | null;
-    effectiveVersion?: string | null;
+    executionDigest?: string | null;
   } = {}
 ): void {
   _rpc = rpc;
@@ -39,7 +39,7 @@ export function _initPanelHandleBridge(
     selfId: options.selfId ?? null,
     selfRpcTargetId: options.selfRpcTargetId ?? options.selfId ?? null,
     parentId: options.parentId ?? null,
-    effectiveVersion: options.effectiveVersion ?? null,
+    executionDigest: options.executionDigest ?? null,
     defaultOpenParentId: options.selfId ?? null,
     requesterPanelId: options.selfId ?? null,
     initialMetadata: [
@@ -52,7 +52,7 @@ export function _initPanelHandleBridge(
               kind: "workspace" as const,
               parentId: options.parentId ?? null,
               rpcTargetId: options.selfRpcTargetId ?? options.selfId,
-              effectiveVersion: options.effectiveVersion ?? null,
+              executionDigest: options.executionDigest ?? null,
             },
           ]
         : []),

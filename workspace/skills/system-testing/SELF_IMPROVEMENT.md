@@ -414,57 +414,31 @@ If the bug is in the Vibestudio application itself, such as `src/server/`,
 `src/main/`, or root `packages/*`, use a plain project checkout under
 `projects/vibestudio`.
 
-#### Dogfood Server Mode
+#### Exact-state development hosts
 
-When the operator launched Vibestudio with:
+`projects/vibestudio` is an ordinary GAD repository. Its committed base and
+uncommitted edit operations are both first-class build input. It is never
+mirrored into, or replaced by, the checkout that started the current host.
 
-```bash
-pnpm dev:self:server
-```
-
-the active workspace is a managed dogfood workspace. The launcher creates or
-reuses `~/.config/vibestudio/workspaces/dogfood/source/projects/vibestudio` and
-writes `meta/dogfood.json`.
-
-In this mode, `projects/vibestudio` is still a plain project, not a Build V2
-runtime unit, but it is a **self-edit target**:
-
-- Host-checkout mirroring is unavailable under GAD VCS.
-- Changes in `projects/vibestudio` prepare an external Git branch or patch; they
-  do not hot-patch the running Vibestudio server.
-- Verification requires restarting Vibestudio from that checkout, applying the
-  patch in the host checkout, or handing the branch to a developer.
-
-Userland code can detect this mode by reading `meta/dogfood.json`:
+Use the `devHost` service to build and run the exact invoking context state:
 
 ```typescript
-// `fs` is injected in eval (context-scoped) — do not import it.
-async function getDogfoodInfo() {
-  try {
-    return JSON.parse(await fs.readFile("meta/dogfood.json", "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-const dogfood = await getDogfoodInfo();
-if (dogfood?.schemaVersion === 1 && dogfood.project === "projects/vibestudio") {
-  console.log("Dogfood server mode:", dogfood.sourceRoot);
-}
+const launch = await rpc.call("main", "devHost.launch", {
+  target: { kind: "isolated-host", client: "electron", persistence: "ephemeral" },
+  idempotencyKey: `system-test:${crypto.randomUUID()}`,
+});
+console.log(launch.launchId, launch.sourceStateHash, launch.executionInputHash);
 ```
 
-Do not rely on `VIBESTUDIO_DOGFOOD` from userland. That environment variable is a
-server launcher detail; `meta/dogfood.json` is the workspace-visible marker.
-
-#### Normal Project Mode
-
-When the server is not running in dogfood mode, plain projects are editable
-repos, not runtime units. Changing `projects/vibestudio` prepares a branch/patch,
-but it does not hot-patch the running Vibestudio server. Verification may require
-restarting Vibestudio from that checkout or handing the branch to a developer.
+Choose `current-host-client` to test a rebuilt Electron client against the
+existing host, or `isolated-host` to test server and client changes together.
+The service snapshots the exact GAD state, requests state-bound execution
+approval, preserves the last-good generation on build/startup failure, and
+exposes `status`, `logs`, `rebuild`, `eval`, and `stop`. Do not start a second
+CLI process, copy a live projection, or use an ambient Node installation.
 
 Prefer an existing `projects/vibestudio` workspace repo when it exists. If it
-does not exist yet and the workspace is not dogfood-managed, import it with
+does not exist yet, import it with
 `git.importProject()`. That uses one workspace config approval showing the
 destination path, remote URL, and branch; records the shared remote and matching
 upstream with `autoPush: false` in `meta/vibestudio.yml`; clones into canonical
@@ -497,16 +471,9 @@ eval({
 })
 ```
 
-**Important:** Work on a branch before making changes.
-
-```typescript
-const branchName = `fix/system-test-${failedTestName}`;
-import { GitClient } from "@vibestudio/git";
-import { credentials, fs } from "@workspace/runtime";
-const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
-await externalGit.createBranch({ dir: scope.checkoutDir, name: branchName });
-await externalGit.checkout(scope.checkoutDir, branchName);
-```
+Edits remain on the invoking context until explicitly committed and pushed.
+Git Bridge is used only when importing from or exporting to the external Git
+remote; it is not a second workspace VCS.
 
 ## Phase 6: Edit and Fix
 

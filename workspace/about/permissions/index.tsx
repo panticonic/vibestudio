@@ -17,7 +17,7 @@ export interface SavedPermissionGrant {
   capability?: string;
   resource?: string;
   repoPath?: string;
-  effectiveVersion?: string;
+  executionDigest?: string;
   grantedAt?: number;
 }
 
@@ -59,7 +59,7 @@ function GrantCard({
           {grant.repoPath ? (
             <Text size="1" color="gray">
               {grant.repoPath}
-              {grant.effectiveVersion ? ` · version ${grant.effectiveVersion}` : ""}
+              {grant.executionDigest ? ` · version ${grant.executionDigest}` : ""}
             </Text>
           ) : null}
           <Text size="1" color="gray">

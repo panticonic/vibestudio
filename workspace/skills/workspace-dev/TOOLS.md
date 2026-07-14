@@ -267,7 +267,7 @@ Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, re
 
 For app data, prefer a Durable Object service over eval `db` or ad hoc files:
 the DO owns SQLite through `this.sql`, the manifest service declares
-`policy.allowed`, and callers use `workers.resolveService(protocol, objectKey?)`
+`authority.principals`, and callers use `workers.resolveService(protocol, objectKey?)`
 plus `rpc.call(targetId, method, args)`. See
 [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).
 
@@ -632,7 +632,7 @@ import { openPanel } from "@workspace/runtime";
 // otherwise main. It does not infer ctx:<contextId> from the panel context.
 const handle = await openPanel("panels/my-app");
 const lifecycle = await handle.rebuildAndReload();
-console.log(lifecycle.status, lifecycle.effectiveVersion);
+console.log(lifecycle.status, lifecycle.executionDigest);
 ```
 
 When iterating on an already-open panel after code changes, reuse its
@@ -645,7 +645,7 @@ that same target after the command is sent.
 
 Lifecycle calls return a structured result with `panelId`, `operation`,
 `status`, `loaded`, `rebuilt`, `reloaded`, `buildRevision`, and
-`effectiveVersion` when the host can report those values.
+`executionDigest` when the host can report those values.
 
 ---
 

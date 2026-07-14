@@ -748,6 +748,12 @@ class SubagentSpawnProbe extends TestVessel {
         if (target === "main" && method === "runtime.resolveContext") {
           return this.ownerRuntimeContextId;
         }
+        if (
+          target === "main" &&
+          (method === "workspace-state.alarmSet" || method === "workspace-state.alarmClear")
+        ) {
+          return undefined;
+        }
         if (target === "main" && method === "runtime.createSubagentContext") {
           return { contextId: "ctx-child" };
         }

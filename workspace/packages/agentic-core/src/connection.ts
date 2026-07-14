@@ -14,6 +14,7 @@ import type {
   ChannelConfig,
 } from "@workspace/pubsub";
 import type { ChatParticipantMetadata, ConnectionConfig } from "./types.js";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 import {
   DEFAULT_CHANNEL_ENVELOPE_PAGE_LIMIT,
   MAX_CHANNEL_ENVELOPE_PAGE_LIMIT,
@@ -45,6 +46,7 @@ export interface ConnectionConnectOptions {
   methods: Record<string, MethodDefinition>;
   channelConfig?: ChannelConfig;
   contextId?: string;
+  channelCreation?: ChannelCreation;
 }
 
 export class ConnectionManager {
@@ -84,7 +86,7 @@ export class ConnectionManager {
   }
 
   async connect(options: ConnectionConnectOptions): Promise<PubSubClient<ChatParticipantMetadata>> {
-    const { channelId, methods, channelConfig, contextId } = options;
+    const { channelId, methods, channelConfig, contextId, channelCreation } = options;
     const replayMessageLimit = Math.min(
       this.config.replayMessageLimit ?? DEFAULT_CHANNEL_ENVELOPE_PAGE_LIMIT,
       MAX_CHANNEL_ENVELOPE_PAGE_LIMIT
@@ -110,6 +112,7 @@ export class ConnectionManager {
         channel: channelId,
         contextId,
         channelConfig,
+        channelCreation,
         // No asserted HUMAN handle (WP6 §5): the channel stamps human identity
         // from the host-verified subject, ignoring client-supplied handles.
         // Agents/headless workers still pass their own descriptor through.

@@ -12,7 +12,7 @@ function createRpcCall() {
           parentId: null,
           contextId: "ctx-vault",
           runtimeEntityId: "panel:spectrolite-entity",
-          effectiveVersion: "ev-spectrolite",
+          executionDigest: "ev-spectrolite",
         };
       case "panelTree.getStateArgs":
         return {
@@ -41,7 +41,7 @@ function createRpcCall() {
           title: "Agentic Chat",
           kind: "workspace",
           runtimeEntityId: "panel:debug-chat-entity",
-          effectiveVersion: "ev-chat",
+          executionDigest: "ev-chat",
         };
       default:
         return undefined;

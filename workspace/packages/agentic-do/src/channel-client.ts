@@ -5,6 +5,7 @@
  * channel service DO via the server's userland service resolver.
  */
 import type { RpcCaller } from "@vibestudio/rpc";
+import type { ChannelCreation, ChannelRecord } from "@vibestudio/shared/channelStructure";
 import {
   iterateChannelReplayAfterPages,
   type ChannelReplayAfterRequest,
@@ -207,6 +208,9 @@ export class ChannelClient {
       channelConfig?: Record<string, unknown>;
       envelope: ChannelReplayEnvelope;
     }>;
+  }
+  async createChannel(creation: ChannelCreation): Promise<ChannelRecord> {
+    return this.call("createChannel", creation) as Promise<ChannelRecord>;
   }
   async unsubscribe(participantId: string, sessionId: string): Promise<void> {
     await this.call("unsubscribe", participantId, sessionId);

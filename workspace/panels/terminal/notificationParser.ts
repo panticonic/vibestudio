@@ -4,10 +4,10 @@ export interface ParsedNotification {
   severity: NotificationSeverity;
   title?: string;
   message: string;
-  source: "osc" | "snug";
+  source: "osc" | "terminal";
 }
 
-const oscPattern = /\x1b\](9;([^\x07]*)|99;(?:[^;\x07]*;)*([^\x07]*)|777;notify;([^;\x07]*);([^\x07]*)|1337;snug;([^\x07]*))\x07/g;
+const oscPattern = /\x1b\](9;([^\x07]*)|99;(?:[^;\x07]*;)*([^\x07]*)|777;notify;([^;\x07]*);([^\x07]*)|1337;vibestudio-terminal;([^\x07]*))\x07/g;
 
 export class NotificationStreamParser {
   private buffer = "";
@@ -44,17 +44,17 @@ export function parseNotifications(data: string): ParsedNotification[] {
     if (match[2]) out.push(classify({ message: stripMarker(match[2]) }, match[2]));
     else if (match[3]) out.push(classify({ message: stripMarker(match[3]) }, match[3]));
     else if (match[4] || match[5]) out.push(classify({ title: match[4], message: stripMarker(match[5] ?? match[4] ?? "") }, `${match[4] ?? ""} ${match[5] ?? ""}`));
-    else if (match[6]) out.push(parseSnugOsc(match[6]));
+    else if (match[6]) out.push(parseTerminalControlOsc(match[6]));
   }
   return out;
 }
 
-function parseSnugOsc(payload: string): ParsedNotification {
+function parseTerminalControlOsc(payload: string): ParsedNotification {
   const params = new URLSearchParams(payload.replace(/;/g, "&"));
   const severity = parseSeverity(params.get("sev") ?? params.get("severity")) ?? "info";
   const title = params.get("title") ?? undefined;
   const message = params.get("msg") ?? params.get("message") ?? payload;
-  return { severity, title, message, source: "snug" };
+  return { severity, title, message, source: "terminal" };
 }
 
 function classify(notification: Omit<ParsedNotification, "severity" | "source">, raw: string): ParsedNotification {

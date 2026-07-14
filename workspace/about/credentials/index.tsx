@@ -137,7 +137,7 @@ function injectionLabel(credential: ManagedCredentialSummary): string {
 }
 
 function scopeLabel(grant: CredentialAccessGrantSummary): string {
-  return `${grant.repoPath} @ ${grant.effectiveVersion}`;
+  return `${grant.repoPath} @ ${grant.executionDigest}`;
 }
 
 function subjectLabel(subject: CredentialAccessSubjectSummary): string {
@@ -147,7 +147,7 @@ function subjectLabel(subject: CredentialAccessSubjectSummary): string {
 function subjectDetail(subject: CredentialAccessSubjectSummary): string {
   const parts = [
     subject.source?.repoPath,
-    subject.source?.effectiveVersion,
+    subject.source?.executionDigest,
     subject.contextId ? "This workspace context" : undefined,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" / ") : subject.id;
@@ -172,7 +172,7 @@ function matchesQuery(credential: ManagedCredentialSummary, query: string): bool
       grant.resource,
       grant.scope,
       grant.repoPath,
-      grant.effectiveVersion,
+      grant.executionDigest,
       ...grant.subjects.flatMap((subject) => [
         subject.id,
         subject.title,

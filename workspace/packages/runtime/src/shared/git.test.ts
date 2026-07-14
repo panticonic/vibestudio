@@ -51,8 +51,18 @@ describe("runtime Git client", () => {
         headCommit: null,
       },
       importProject: {
+        operationId: "00000000-0000-4000-8000-000000000001",
+        phase: "complete",
         path: "projects/demo",
-        remote: { name: "origin", url: "https://github.com/octo/demo.git" },
+        remote: {
+          name: "origin",
+          urlIdentity: "https://github.com/octo/demo",
+          branch: "main",
+        },
+        stateHash: `state:${"a".repeat(64)}`,
+        gitCommitSha: "b".repeat(40),
+        changed: true,
+        adoptedContextId: "ctx:imported",
       },
       completeWorkspaceDependencies: { imported: [], skipped: [], failed: [] },
     };

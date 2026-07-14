@@ -8,9 +8,9 @@ export interface AppLifecyclePayload {
   source?: string;
   target?: string;
   buildKey?: string | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
   previousBuildKey?: string | null;
-  previousEffectiveVersion?: string | null;
+  previousSourceDigest?: string | null;
   error?: string;
   canRollback?: boolean;
 }
@@ -86,8 +86,8 @@ async function defaultEnsureBundle(
  * report versions.
  */
 function formatUpdateMessage(event: AppLifecyclePayload, appId: string): string {
-  const next = event.effectiveVersion?.trim();
-  const prev = event.previousEffectiveVersion?.trim();
+  const next = event.executionDigest?.trim();
+  const prev = event.previousSourceDigest?.trim();
   if (next && prev && next !== prev) {
     return `${appId} v${prev} → v${next} is ready to install.`;
   }

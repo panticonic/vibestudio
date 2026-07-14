@@ -215,6 +215,8 @@ export interface DeferredAgentState {
   launching: boolean;
   /** The spawn failed (onAddAgent rejected) — drives the queue's error + retry UI. */
   launchFailed: boolean;
+  /** Actionable failure returned by the launch boundary, retained for users and diagnostics. */
+  launchError: string | null;
   /** Retry a failed launch (re-issues the spawn). */
   retryLaunch: () => void;
   /** Inline config draft (model/effort/autonomy/…) applied to the agent spawned

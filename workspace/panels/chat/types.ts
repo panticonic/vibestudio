@@ -12,6 +12,8 @@ export interface PersistedInstalledAgent {
 
 export interface ChatStateArgs {
   channelName: string;
+  /** Durable creation intent, retained so an interrupted first connect resumes safely. */
+  channelCreation?: import("@vibestudio/shared/channelStructure").ChannelCreation;
   channelConfig?: Record<string, unknown>;
   contextId?: string;
   installedAgents?: PersistedInstalledAgent[];

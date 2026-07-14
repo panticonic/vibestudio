@@ -16,7 +16,7 @@ describe("command sources", () => {
   it("loads custom commands and quotes shell-sensitive args", async () => {
     const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
-      if (path.endsWith("/.snug/commands.json")) {
+      if (path.endsWith("/.vibestudio/terminal/commands.json")) {
         return JSON.stringify({
           commands: [{
             id: "say",
@@ -41,7 +41,7 @@ describe("command sources", () => {
   it("preserves custom command split direction as the launcher default target", async () => {
     const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
-      if (path.endsWith("/.snug/commands.json")) {
+      if (path.endsWith("/.vibestudio/terminal/commands.json")) {
         return JSON.stringify({
           commands: [{
             id: "test-down",
@@ -66,7 +66,7 @@ describe("command sources", () => {
   it("honors custom command openInNewPane as a launcher target hint", async () => {
     const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
-      if (path.endsWith("/.snug/commands.json")) {
+      if (path.endsWith("/.vibestudio/terminal/commands.json")) {
         return JSON.stringify({
           commands: [
             { id: "workspace", label: "Workspace shell", command: "zellij", openInNewPane: false },
@@ -109,7 +109,7 @@ describe("command sources", () => {
   it("discovers project commands from parent directories", async () => {
     const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
-      if (path === "/repo/.snug/commands.json") {
+      if (path === "/repo/.vibestudio/terminal/commands.json") {
         return JSON.stringify({ commands: [{ id: "lint", label: "Lint", command: "pnpm", args: ["lint"] }] });
       }
       if (path === "/repo/package.json") return JSON.stringify({ scripts: { dev: "vite" } });

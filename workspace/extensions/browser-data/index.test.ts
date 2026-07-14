@@ -95,7 +95,7 @@ function makeContext(
     unhealthy: vi.fn(),
   };
   const resolveDurableObject = vi.fn(async () => ({
-    targetId: "do:vibestudio/internal:BrowserDataDO:global",
+    targetId: "do:product/browser-data:BrowserDataDO:global",
   }));
   const approvalsRequest = vi.fn(async () => approvalChoice);
   return {
@@ -195,12 +195,12 @@ describe("@workspace-extensions/browser-data", () => {
 
     await expect(api.getBookmarks()).resolves.toEqual([{ id: 1, title: "Example" }]);
     expect(resolveDurableObject).toHaveBeenCalledWith(
-      "vibestudio/internal",
+      "product/browser-data",
       "BrowserDataDO",
       "global"
     );
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:BrowserDataDO:global",
+      "do:product/browser-data:BrowserDataDO:global",
       "getBookmarks",
       "/"
     );
@@ -229,13 +229,13 @@ describe("@workspace-extensions/browser-data", () => {
     ).resolves.toMatchObject([{ dataType: "bookmarks", success: true }]);
 
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:BrowserDataDO:global",
+      "do:product/browser-data:BrowserDataDO:global",
       "addBookmarksBatch",
       [{ title: "Example", url: "https://example.com" }],
       { browser: "chrome", profilePath: "/tmp/profile" }
     );
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:BrowserDataDO:global",
+      "do:product/browser-data:BrowserDataDO:global",
       "recordImportRun",
       expect.objectContaining({
         browser: "chrome",
@@ -262,7 +262,7 @@ describe("@workspace-extensions/browser-data", () => {
     ).resolves.toMatchObject([{ dataType: "history", success: true }]);
 
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:BrowserDataDO:global",
+      "do:product/browser-data:BrowserDataDO:global",
       "addHistoryBatch",
       [{ url: "https://example.com/docs", title: "Docs", visitCount: 1, lastVisitTime: 100 }],
       { browser: "chrome", profilePath: "/tmp/profile" }

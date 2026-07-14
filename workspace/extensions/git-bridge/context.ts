@@ -18,6 +18,7 @@ export interface ExtensionContextLike {
     call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
   };
   storage: {
+    resolvePath(path: string): string;
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
     readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
     writeFile(path: string, data: string | Uint8Array): Promise<void>;

@@ -14,7 +14,7 @@ Spin up headless agentic sessions to systematically test every Vibestudio capabi
 | runner.ts                                  | `HeadlessRunner` — spawn headless sessions from eval with one line |
 | test-runner.ts                             | `TestRunner` — orchestrate test suites, collect full diagnostics   |
 | types.ts                                   | `TestCase`, `TestResult`, `TestSuiteResult`, `TestExecutionResult` |
-| tests/                                     | 148 pre-built test cases across 32 categories                      |
+| tests/                                     | 168 pre-built test cases across 33 categories                      |
 | deterministic.ts                           | Bridge to `@workspace/testkit` deterministic suites (see below)    |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and committing fixes               |
 
@@ -736,7 +736,7 @@ if (fail.execution.snapshot) {
 | `harnessResilienceTests`  | 5     | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups                                                        |
 | `docsProbeTests`          | 10    | Scenario probes that require agents to apply relevant skills, not summarize docs                                                       |
 
-Use `allTests()` to get all 148 tests combined. For full-suite execution, prefer
+Use `allTests()` to get all 168 tests combined. For full-suite execution, prefer
 the staged-progress pattern above: initialize `testStages(allTests())`, build
 feedback choices with `testStageChoices(stages)`, run one selected stage per
 eval with a bounded concurrency cap (`1` for `workers`, at most `2` elsewhere),
@@ -896,14 +896,10 @@ changing shell, mobile, or terminal app source. App bugs often involve approval
 identity, capabilities, native bootstrap, or target-specific build artifacts.
 
 For Vibestudio application source (`src/server/`, `src/main/`, root
-`packages/*`), use a plain checkout under `projects/vibestudio`. In normal mode
-that prepares a branch/patch but does not hot-patch the running server. In
-dogfood server mode (`pnpm dev:self:server`), the workspace contains
-`meta/dogfood.json`, but host-checkout mirroring is unavailable under GAD VCS.
-Treat `projects/vibestudio` as an external Git project used to
-prepare a branch or patch; it does not hot-patch the running server. See
-[SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) for the full workflow and the
-userland detection snippet.
+`packages/*`), edit the ordinary GAD repository at `projects/vibestudio`, then
+launch its exact context state through `devHost`. Use `current-host-client` for
+client-only testing against the current server and `isolated-host` for server
+or protocol changes. See [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md).
 
 ## Environment Compatibility
 

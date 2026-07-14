@@ -86,7 +86,7 @@ Already paired:
 
 - `appId`
 - `buildKey`
-- `effectiveVersion`
+- `executionDigest`
 - `capabilities`
 - `rnHostAbi`
 - app-level `integrity`

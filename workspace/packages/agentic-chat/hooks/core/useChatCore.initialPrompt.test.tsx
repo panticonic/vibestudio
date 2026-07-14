@@ -53,7 +53,10 @@ function InitialPromptProbe({
 
 describe("useChatCore initial prompt", () => {
   it("sends the configured initial prompt through the durable PubSub transcript", async () => {
-    const harness = await createTranscriptHarness("chat-core-initial-prompt");
+    const harness = await createTranscriptHarness(
+      "chat-core-initial-prompt",
+      "ctx-initial-prompt"
+    );
     const prompt = "The user just opened this workspace for the first time";
     const agent = harness.connectParticipant({
       id: "agent:onboarding",

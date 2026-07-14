@@ -1,0 +1,22 @@
+{
+  "name": "@workspace/gad-repository-contract",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable v1 Gad repository schema, manifests, external-reference extraction, and worktree projection",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vibestudio/shared": "workspace:*",
+    "@workspace/vcs-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

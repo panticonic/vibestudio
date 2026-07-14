@@ -117,6 +117,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   // first held message so the inline setup card doesn't flash back in).
   const [armed, setArmed] = useState(false);
   const [launchFailed, setLaunchFailed] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [flushTick, setFlushTick] = useState(0);
 
   const draftTouchedRef = useRef(false);
@@ -223,6 +224,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
 
   const retryLaunch = useCallback(() => {
     issuedRef.current = false;
+    setLaunchError(null);
     setLaunchFailed(false); // re-arms the spawn-driver effect
   }, []);
 
@@ -234,7 +236,15 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       window.clearTimeout(launchWatchdogRef.current);
       return;
     }
-    if (Array.from(pendingAgents.values()).some((agent) => agent.status === "error")) {
+    const failedAgent = Array.from(pendingAgents.values()).find(
+      (agent) => agent.status === "error"
+    );
+    if (failedAgent) {
+      setLaunchError(
+        [failedAgent.error?.message ?? "Agent failed to start", failedAgent.error?.details]
+          .filter(Boolean)
+          .join("\n")
+      );
       setLaunchFailed(true);
       return;
     }
@@ -242,6 +252,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     launchWatchdogRef.current = window.setTimeout(() => {
       issuedRef.current = false;
       spawnInFlightRef.current = false;
+      setLaunchError("Agent launch did not complete within 45 seconds.");
       setLaunchFailed(true);
     }, AGENT_LAUNCH_WATCHDOG_MS);
     return () => window.clearTimeout(launchWatchdogRef.current);
@@ -341,6 +352,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
         console.warn("[useDeferredAgent] Failed to launch agent:", err);
         spawnInFlightRef.current = false;
         issuedRef.current = false;
+        setLaunchError(err instanceof Error ? err.message : String(err));
         setLaunchFailed(true);
       });
   }, [
@@ -376,7 +388,8 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     spawnIntentRef.current = null;
     if (armed) setArmed(false);
     if (launchFailed) setLaunchFailed(false);
-  }, [agentPresent, armed, launchFailed]);
+    if (launchError) setLaunchError(null);
+  }, [agentPresent, armed, launchFailed, launchError]);
 
   // Flush the queue LIVE the moment an agent joins — per item, so a delivered
   // message leaves the queue immediately (no double-display with the transcript/
@@ -470,6 +483,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       setupActive,
       launching,
       launchFailed,
+      launchError,
       retryLaunch,
       draft,
       setDraft: handleSetDraft,
@@ -484,6 +498,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     setupActive,
     launching,
     launchFailed,
+    launchError,
     retryLaunch,
     draft,
     handleSetDraft,

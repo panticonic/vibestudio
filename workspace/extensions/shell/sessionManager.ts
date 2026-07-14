@@ -102,19 +102,27 @@ export class SessionManager {
   private allWatchers = new Set<Watcher>();
   private lastSnapshotAt = new Map<string, number>();
   private pendingSnapshots = new Map<string, PendingSnapshot>();
-  private readonly pty = nodePty as { spawn: (file: string, args: string[], opts: unknown) => PtyProcess };
+  private readonly pty = nodePty as {
+    spawn: (file: string, args: string[], opts: unknown) => PtyProcess;
+  };
   private janitor: NodeJS.Timeout;
   private exitedSessionTtlMs: number;
   private watchAllHeartbeatMs: number;
   private readonly detectAgent?: (argv: string[]) => { kind: string; title?: string } | undefined;
   private readonly resolveContextBranch?: (contextId: string) => Promise<string | undefined>;
 
-  constructor(private readonly hooks: SessionManagerHooks = {}, opts: SessionManagerOptions = {}) {
+  constructor(
+    private readonly hooks: SessionManagerHooks = {},
+    opts: SessionManagerOptions = {}
+  ) {
     this.exitedSessionTtlMs = opts.exitedSessionTtlMs ?? EXITED_SESSION_TTL_MS;
     this.watchAllHeartbeatMs = opts.watchAllHeartbeatMs ?? WATCH_ALL_HEARTBEAT_MS;
     this.detectAgent = opts.detectAgent;
     this.resolveContextBranch = opts.resolveContextBranch;
-    this.janitor = nodeSetInterval(() => this.sweepExitedSessions(), opts.janitorIntervalMs ?? JANITOR_INTERVAL_MS);
+    this.janitor = nodeSetInterval(
+      () => this.sweepExitedSessions(),
+      opts.janitorIntervalMs ?? JANITOR_INTERVAL_MS
+    );
     this.janitor.unref?.();
   }
 
@@ -122,7 +130,14 @@ export class SessionManager {
     return !!this.pty;
   }
 
-  open(req: Omit<OpenRequest, "cwd" | "env"> & { cwd: string; env: NodeJS.ProcessEnv; contextId?: string }, owner: { callerId: string; callerKind: string }): { sessionId: string } {
+  open(
+    req: Omit<OpenRequest, "cwd" | "env"> & {
+      cwd: string;
+      env: NodeJS.ProcessEnv;
+      contextId?: string;
+    },
+    owner: { callerId: string; callerKind: string }
+  ): { sessionId: string } {
     const id = randomUUID();
     const command = req.command ?? process.env["SHELL"] ?? "/bin/bash";
     const args = req.args ?? [];
@@ -162,9 +177,15 @@ export class SessionManager {
     session.pid = pty.pid;
     session.pty = pty;
     pty.onData((data) => this.record(session, Buffer.from(data)));
-    pty.onExit((event) => this.markExit(session, event.exitCode, event.signal ? `SIG${event.signal}` : undefined));
+    pty.onExit((event) =>
+      this.markExit(session, event.exitCode, event.signal ? `SIG${event.signal}` : undefined)
+    );
     this.sessions.set(id, session);
-    this.emitToOwner(session.ownerCallerId, { type: "opened", sessionId: id, info: this.info(session) });
+    this.emitToOwner(session.ownerCallerId, {
+      type: "opened",
+      sessionId: id,
+      info: this.info(session),
+    });
     this.refreshGitBranch(session);
     return { sessionId: id };
   }
@@ -185,6 +206,7 @@ export class SessionManager {
   }
 
   info(session: Session): SessionInfo {
+    const detectedAgent = this.detectAgent?.(session.command.argv);
     return {
       sessionId: session.id,
       ownerCallerId: session.ownerCallerId,
@@ -206,7 +228,7 @@ export class SessionManager {
       detectedUrls: session.detection.detectedUrls,
       bytesOut: session.bytesOut,
       meta: session.meta,
-      detectedAgent: this.detectAgent?.(session.command.argv),
+      ...(detectedAgent ? { detectedAgent } : {}),
     };
   }
 
@@ -246,20 +268,26 @@ export class SessionManager {
     this.emitSnapshot(session);
   }
 
-  restart(session: Session, req: { env: NodeJS.ProcessEnv; cols?: number; rows?: number; command?: string; args?: string[] }): { sessionId: string } {
+  restart(
+    session: Session,
+    req: { env: NodeJS.ProcessEnv; cols?: number; rows?: number; command?: string; args?: string[] }
+  ): { sessionId: string } {
     const [originalCommand, ...originalArgs] = session.command.argv;
     const command = req.command ?? originalCommand;
     const args = req.args ?? originalArgs;
-    return this.open({
-      command,
-      args,
-      cwd: session.command.cwd,
-      env: req.env,
-      cols: req.cols ?? session.cols,
-      rows: req.rows ?? session.rows,
-      label: session.label,
-      ...(session.contextId ? { contextId: session.contextId } : {}),
-    }, { callerId: session.ownerCallerId, callerKind: session.ownerKind });
+    return this.open(
+      {
+        command,
+        args,
+        cwd: session.command.cwd,
+        env: req.env,
+        cols: req.cols ?? session.cols,
+        rows: req.rows ?? session.rows,
+        label: session.label,
+        ...(session.contextId ? { contextId: session.contextId } : {}),
+      },
+      { callerId: session.ownerCallerId, callerKind: session.ownerKind }
+    );
   }
 
   write(session: Session, data: string): void {
@@ -277,12 +305,17 @@ export class SessionManager {
     session.pty?.kill(signal);
   }
 
-  getScrollback(session: Session, maxBytes = session.scrollbackLimit): { text: string; cursor: ScrollCursor } {
+  getScrollback(
+    session: Session,
+    maxBytes = session.scrollbackLimit
+  ): { text: string; cursor: ScrollCursor } {
     const boundedMaxBytes = Math.min(MAX_SCROLLBACK_BYTES, Math.max(1024, maxBytes));
     const start = Math.max(0, session.cursor - boundedMaxBytes);
     const parts = session.chunks
       .filter((chunk) => chunk.end > start)
-      .map((chunk) => chunk.start < start ? chunk.bytes.subarray(start - chunk.start) : chunk.bytes);
+      .map((chunk) =>
+        chunk.start < start ? chunk.bytes.subarray(start - chunk.start) : chunk.bytes
+      );
     return {
       text: Buffer.concat(parts.map((part) => Buffer.from(part))).toString("utf8"),
       cursor: String(session.cursor),
@@ -307,7 +340,9 @@ export class SessionManager {
     const startCursor = after ?? session.cursor;
     const replay = session.chunks
       .filter((chunk) => chunk.end > startCursor)
-      .map((chunk) => chunk.start < startCursor ? chunk.bytes.subarray(startCursor - chunk.start) : chunk.bytes);
+      .map((chunk) =>
+        chunk.start < startCursor ? chunk.bytes.subarray(startCursor - chunk.start) : chunk.bytes
+      );
     let listener: Listener | null = null;
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -347,7 +382,13 @@ export class SessionManager {
   }
 
   awaitExit(session: Session): Promise<{ exitCode: number | null; signal?: string }> {
-    if (!session.alive) return Promise.resolve({ exitCode: session.exit?.code ?? null, signal: session.exit?.signal });
+    if (!session.alive) {
+      const signal = session.exit?.signal;
+      return Promise.resolve({
+        exitCode: session.exit?.code ?? null,
+        ...(signal ? { signal } : {}),
+      });
+    }
     return new Promise((resolve) => session.exitWaiters.push(resolve));
   }
 
@@ -356,7 +397,8 @@ export class SessionManager {
     let timer: NodeJS.Timeout | null = null;
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
-        const send = () => controller.enqueue(encoder.encode(`${JSON.stringify(this.info(session))}\n`));
+        const send = () =>
+          controller.enqueue(encoder.encode(`${JSON.stringify(this.info(session))}\n`));
         send();
         timer = nodeSetInterval(send, 1000);
       },
@@ -444,9 +486,10 @@ export class SessionManager {
     // Context sessions live in a VCS context folder, not a `.git` checkout —
     // their branch display is the context head + dirty indicator resolved over
     // `vcs.contextStatus` (§4.1). Only non-context sessions probe `.git`.
-    const probe = session.contextId && this.resolveContextBranch
-      ? this.resolveContextBranch(session.contextId)
-      : readGitBranch(session.command.cwd);
+    const probe =
+      session.contextId && this.resolveContextBranch
+        ? this.resolveContextBranch(session.contextId)
+        : readGitBranch(session.command.cwd);
     void probe.then((branch) => {
       if (!branch) return;
       const current = this.sessions.get(session.id);
@@ -488,11 +531,17 @@ export class SessionManager {
     this.clearPendingSnapshot(session.id);
     session.alive = false;
     session.exit = { code, ...(signal ? { signal } : {}), at: Date.now() };
-    for (const waiter of session.exitWaiters.splice(0)) waiter({ exitCode: code, signal });
+    for (const waiter of session.exitWaiters.splice(0)) {
+      waiter({ exitCode: code, ...(signal ? { signal } : {}) });
+    }
     for (const listener of session.listeners) listener(null);
     session.listeners.clear();
     this.hooks.onExit?.(session.id);
-    this.emitToOwner(session.ownerCallerId, { type: "exit", sessionId: session.id, exit: session.exit });
+    this.emitToOwner(session.ownerCallerId, {
+      type: "exit",
+      sessionId: session.id,
+      exit: session.exit,
+    });
     this.emitSnapshotNow(session);
   }
 
@@ -527,7 +576,11 @@ export class SessionManager {
 
   private emitSnapshotNow(session: Session): void {
     this.lastSnapshotAt.set(session.id, Date.now());
-    this.emitToOwner(session.ownerCallerId, { type: "snapshot", sessionId: session.id, info: this.info(session) });
+    this.emitToOwner(session.ownerCallerId, {
+      type: "snapshot",
+      sessionId: session.id,
+      info: this.info(session),
+    });
   }
 
   private clearPendingSnapshot(sessionId: string): void {

@@ -41,7 +41,11 @@ import { findDirectionalPane, type PaneFocusDirection } from "./paneFocus.js";
 import { openPort, openUrl } from "./portClick.js";
 import { restoreTerminalState } from "./restore.js";
 import { settingsToastMessage } from "./settingsFeedback.js";
-import { terminalStartupDetail, terminalStartupPendingLabel } from "./startupModel.js";
+import {
+  isRetryableShellStartupError,
+  terminalStartupDetail,
+  terminalStartupPendingLabel,
+} from "./startupModel.js";
 import {
   containsSession,
   splitLeaf,
@@ -339,6 +343,12 @@ export function TerminalApp() {
         setInitialOpenStartedAt(null);
         return sessionId;
       } catch (err) {
+        if (isRetryableShellStartupError(err)) {
+          initialOpenPendingRef.current = true;
+          setInitialOpenError(null);
+          setInitialOpenStatus("opening");
+          return undefined;
+        }
         setInitialOpenError(
           err instanceof Error ? err.message : "Terminal session failed to start"
         );
@@ -472,7 +482,7 @@ export function TerminalApp() {
   useEffect(() => {
     for (const session of Object.values(sessions)) {
       if (containsSession(state.tree, session.sessionId)) continue;
-      const spawn = parseSnugSpawn(session.meta["snugSpawn"]);
+      const spawn = parseTerminalSpawn(session.meta["terminalSpawn"]);
       if (!spawn || !containsSession(state.tree, spawn.parentSessionId)) continue;
       setState((prev) => ({
         ...prev,
@@ -495,11 +505,11 @@ export function TerminalApp() {
 
   useEffect(() => {
     for (const session of Object.values(sessions)) {
-      const approved = parseApprovedOpenUrl(session.meta["snugOpenUrl"]);
+      const approved = parseApprovedOpenUrl(session.meta["terminalOpenUrl"]);
       if (!approved || approvedOpenUrlIdsRef.current.has(approved.id)) continue;
       approvedOpenUrlIdsRef.current.add(approved.id);
       void openUrl(approved.url);
-      void actions.deleteMeta(session.sessionId, "snugOpenUrl").catch(() => {});
+      void actions.deleteMeta(session.sessionId, "terminalOpenUrl").catch(() => {});
       setState((prev) => ({
         ...prev,
         notifications: [
@@ -511,7 +521,7 @@ export function TerminalApp() {
             message: approved.url,
             timestamp: approved.requestedAt,
             read: false,
-            source: "snug",
+            source: "terminal",
           },
           ...prev.notifications,
         ],
@@ -1126,7 +1136,7 @@ function markSessionRead(state: TerminalState, sessionId: string): TerminalState
   };
 }
 
-function parseSnugSpawn(
+function parseTerminalSpawn(
   value: unknown
 ): { parentSessionId: string; direction: "row" | "column" } | undefined {
   if (!value || typeof value !== "object") return undefined;

@@ -15,7 +15,7 @@ function summarize(a: PendingApproval): { title: string; detail: string } {
   const caller = a.callerTitle ?? a.callerId;
   switch (a.kind) {
     case "unit-batch":
-      return { title: `Trust unit change · ${caller}`, detail: `version ${a.effectiveVersion}` };
+      return { title: `Trust unit change · ${caller}`, detail: `version ${a.executionDigest}` };
     case "capability":
       return { title: `${a.title} · ${caller}`, detail: a.capability };
     case "credential":
@@ -23,7 +23,7 @@ function summarize(a: PendingApproval): { title: string; detail: string } {
     case "userland":
       return { title: `${a.title} · ${caller}`, detail: a.summary ?? "" };
     default:
-      return { title: `${a.kind} · ${caller}`, detail: a.effectiveVersion ?? "" };
+      return { title: `${a.kind} · ${caller}`, detail: a.executionDigest ?? "" };
   }
 }
 

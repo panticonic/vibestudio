@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 
@@ -24,8 +24,8 @@ export interface LaunchEnv {
   VIBESTUDIO_VESSEL_REF: string;
   /** Absolute path to this launch profile dir; the bridge listens on its hook.sock. */
   VIBESTUDIO_LAUNCH_PROFILE: string;
-  /** Absolute path to the bundled `vibestudio-agent` skill dir, when resolvable. */
-  VIBESTUDIO_SKILLS_DIR?: string;
+  /** Exact immutable host-owned plugin used for this launch. */
+  VIBESTUDIO_PLUGIN_DIR: string;
   /** Set for subagent launches: the run id of the parent's spawn. Its presence
    *  tells the bridge this session IS a subagent (no hedging in instructions). */
   VIBESTUDIO_SUBAGENT_RUN_ID?: string;
@@ -37,16 +37,6 @@ export interface LaunchEnv {
    *  server instructions. */
   VIBESTUDIO_SUBAGENT_CONTRACT?: string;
 }
-
-/** The Claude Code lifecycle hooks we mirror into the trajectory (§7.4). */
-const HOOK_EVENTS = [
-  "SessionStart",
-  "UserPromptSubmit",
-  "PreToolUse",
-  "PostToolUse",
-  "Stop",
-  "SessionEnd",
-] as const;
 
 function parseSemver(raw: string): [number, number, number] | null {
   const m = raw.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -112,53 +102,42 @@ export interface WrittenProfile {
 export async function writeLaunchProfile(input: {
   statePath: string;
   entityId: string;
+  generationId: string;
+  pluginDir: string;
   env: Omit<LaunchEnv, "VIBESTUDIO_LAUNCH_PROFILE">;
 }): Promise<WrittenProfile> {
-  const profileDir = path.join(input.statePath, "agent-launch", input.entityId);
+  if (!/^[A-Za-z0-9._-]+$/.test(input.generationId)) {
+    throw new Error("Claude launch profile generation id is not path-safe");
+  }
+  const profileDir = path.join(
+    input.statePath,
+    "agent-launch",
+    input.entityId,
+    input.generationId
+  );
   await mkdir(profileDir, { recursive: true });
 
-  const mcpPath = path.join(profileDir, "mcp.json");
-  const settingsPath = path.join(profileDir, "settings.json");
-  const envPath = path.join(profileDir, "env.json");
+  const profilePath = path.join(profileDir, "profile.json");
+  const pluginDir = path.resolve(input.pluginDir);
+  await access(path.join(pluginDir, ".claude-plugin", "plugin.json"));
 
   const env: LaunchEnv = { ...input.env, VIBESTUDIO_LAUNCH_PROFILE: profileDir };
 
-  const mcp = {
-    mcpServers: {
-      vibestudio: { command: "vibestudio", args: ["claude", "channel-host"] },
-    },
-  };
-
-  const hooks: Record<string, unknown> = {};
-  for (const event of HOOK_EVENTS) {
-    hooks[event] = [{ hooks: [{ type: "command", command: `vibestudio claude emit ${event}` }] }];
-  }
-  const settings: Record<string, unknown> = {
-    // Env injected into the Claude Code session: surfaces the bundled skill dir
-    // (env-expanded absolute path) and the launch profile to in-session tools.
-    env: {
-      ...(env.VIBESTUDIO_SKILLS_DIR ? { VIBESTUDIO_SKILLS_DIR: env.VIBESTUDIO_SKILLS_DIR } : {}),
-      VIBESTUDIO_LAUNCH_PROFILE: profileDir,
-    },
-    hooks,
-  };
-
   const argv = [
     "claude",
+    "--plugin-dir",
+    pluginDir,
     "--channels",
     "server:vibestudio",
     "--dangerously-load-development-channels",
-    "--mcp-config",
-    mcpPath,
-    "--settings",
-    settingsPath,
   ];
 
-  await Promise.all([
-    writeFile(mcpPath, `${JSON.stringify(mcp, null, 2)}\n`),
-    writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`),
-    writeFile(envPath, `${JSON.stringify({ ...env, argv }, null, 2)}\n`),
-  ]);
+  const { VIBESTUDIO_AGENT_TOKEN: _credential, ...publicEnvironment } = env;
+  await writeFile(
+    profilePath,
+    `${JSON.stringify({ environment: publicEnvironment, argv }, null, 2)}\n`,
+    { mode: 0o600 }
+  );
 
   return { profileDir, argv, env };
 }

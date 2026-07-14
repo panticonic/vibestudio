@@ -25,6 +25,13 @@
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
       "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["packages/credential-client/src/*"],
+      "@vibestudio/context-workspace": ["packages/context-workspace/src/index.ts"],
+      "@vibestudio/direct-client": ["packages/direct-client/src/index.ts"],
+      "@vibestudio/direct-client/webrtc": ["packages/direct-client/src/webrtcClient.ts"],
+      "@vibestudio/direct-client/node-webrtc": [
+        "packages/direct-client/src/nodeDatachannelPeer.ts"
+      ],
+      "@vibestudio/direct-client/cert": ["packages/direct-client/src/cert.ts"],
       "@vibestudio/dev-log": ["packages/dev-log/src/index.ts"],
       "@vibestudio/durable": ["packages/durable/src/index.ts"],
       "@vibestudio/durable/test-utils": ["packages/durable/src/test-utils.ts"],

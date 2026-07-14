@@ -3,12 +3,21 @@ import { describe, expect, it } from "vitest";
 import { rpc } from "@vibestudio/rpc";
 import initSqlJs from "sql.js";
 import { DurableObjectBase } from "./durable-base.js";
-import { createTestDO } from "./durable-test-utils.js";
+import { createTestDO, createTestDirectAuthority } from "./durable-test-utils.js";
+
+const hostAuthority = (method: string) =>
+  createTestDirectAuthority({
+    callerKind: "server",
+    source: "test",
+    className: "TestDO",
+    objectKey: "test-key",
+    method,
+  });
 
 class EchoDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["server", "panel", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -28,7 +37,7 @@ class LifecycleProbeDO extends DurableObjectBase {
     this.resumed = true;
   }
 
-  @rpc({ callers: ["server", "panel", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   callerKind(): string | null {
     return this.caller?.callerKind ?? null;
   }
@@ -49,7 +58,7 @@ class SchemaProbeDO extends DurableObjectBase {
     if (fromVersion > 0) this.sql.exec(`DROP TABLE IF EXISTS required_table`);
   }
 
-  @rpc({ callers: ["server", "panel", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   hasRequiredTable(): boolean {
     return (
       this.sql
@@ -62,7 +71,7 @@ class SchemaProbeDO extends DurableObjectBase {
 class AlarmProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"] })
   scheduleWake(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
@@ -102,7 +111,11 @@ describe("DurableObjectBase request parsing", () => {
           args: [["op-1"], "shell:owner"],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: {
+            callerId: "main",
+            callerKind: "server",
+            authorization: hostAuthority("echo"),
+          },
         }),
       })
     );
@@ -139,7 +152,11 @@ describe("DurableObjectBase lifecycle routing", () => {
           args: [{ epoch: "e1", reason: "test", deadlineMs: 1 }],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: {
+            callerId: "main",
+            callerKind: "server",
+            authorization: hostAuthority("__lifecycle/prepare"),
+          },
         }),
       })
     );
@@ -160,7 +177,11 @@ describe("DurableObjectBase lifecycle routing", () => {
           ],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
-          __caller: { callerId: "main", callerKind: "server" },
+          __caller: {
+            callerId: "main",
+            callerKind: "server",
+            authorization: hostAuthority("__lifecycle/resume"),
+          },
         }),
       })
     );

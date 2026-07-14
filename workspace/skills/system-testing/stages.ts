@@ -32,6 +32,10 @@ export { webhookTests } from "./tests/webhooks.js";
 export { extensionSurfaceTests } from "./tests/extensions-surface.js";
 export { harnessToolTests } from "./tests/harness-tools.js";
 export { credentialTests } from "./tests/credentials.js";
+export {
+  selfDevelopmentGitTests,
+  selfDevelopmentTests,
+} from "./tests/self-development.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -65,6 +69,10 @@ import { webhookTests as _webhooks } from "./tests/webhooks.js";
 import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-surface.js";
 import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
 import { credentialTests as _credentials } from "./tests/credentials.js";
+import {
+  selfDevelopmentGitTests as _selfDevelopmentGit,
+  selfDevelopmentTests as _selfDevelopment,
+} from "./tests/self-development.js";
 import { deterministicTestCases as _deterministic } from "./deterministic.js";
 
 export type TestStage = {
@@ -98,11 +106,13 @@ export function allTests(): TestCase[] {
     ..._vcs,
     ..._vcsAdvanced,
     ..._gitInterop,
+    ..._selfDevelopmentGit,
     ..._panels,
     ..._workers,
     ..._build,
     ..._oauth,
     ..._credentials,
+    ..._selfDevelopment,
     ..._ws,
     ..._unitDiagnostics,
     ..._multiUser,

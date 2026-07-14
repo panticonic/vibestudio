@@ -337,8 +337,9 @@ await rpc.call(store.targetId, "upsertTodo", [{ title: "Ship the app" }]);
 const rows = await rpc.call(store.targetId, "listTodos", []);
 ```
 
-The worker must also admit the caller in two places: the manifest service
-`policy.allowed` gate and each exposed DO method's `@rpc({ callers })` gate.
+The worker must also admit the host-attested grant in two places: the manifest
+service's `authority.principals` gate and each exposed DO method's
+`@rpc({ principals })` or `@rpc({ requires })` gate.
 See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases)
 for the schema, declaration, partition-key, and testing recipe.
 

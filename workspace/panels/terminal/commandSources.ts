@@ -47,7 +47,7 @@ async function loadProjectCommands(cwd?: string): Promise<CommandSuggestion[]> {
       kind: "project",
       label: custom.label,
       command: [custom.command, ...(custom.args ?? []).map(shellQuote)].join(" "),
-      subtitle: ".snug/commands.json",
+      subtitle: ".vibestudio/terminal/commands.json",
       defaultTarget: customCommandTarget(custom),
     });
   }
@@ -74,7 +74,7 @@ function shellQuote(value: string): string {
 }
 
 async function readCustomCommands(cwd?: string): Promise<CustomCommand[]> {
-  const parsed = await readJsonFile(`${cwd ?? "."}/.snug/commands.json`);
+  const parsed = await readJsonFile(`${cwd ?? "."}/.vibestudio/terminal/commands.json`);
   if (!parsed) return [];
   const result = customCommandsFileSchema.safeParse(parsed);
   return result.success ? result.data.commands : [];

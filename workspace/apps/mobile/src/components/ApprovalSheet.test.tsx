@@ -8,7 +8,7 @@ const base = {
   callerId: "worker-abcdef123456",
   callerKind: "worker",
   repoPath: "/projects/foo",
-  effectiveVersion: "v1",
+  executionDigest: "v1",
   requestedAt: 1,
 } as const;
 
@@ -126,7 +126,7 @@ const unitBatch: PendingApproval = {
       version: "0.1.0",
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "abc123" },
-      ev: "ev-mobile",
+      sourceDigest: "source-mobile",
       capabilities: ["panel-hosting"],
     },
     {
@@ -135,11 +135,11 @@ const unitBatch: PendingApproval = {
       displayName: "Git Tools",
       target: "terminal",
       source: { kind: "workspace-repo", repo: "extensions/git-tools", ref: "def456" },
-      ev: "ev-extension",
+      sourceDigest: "source-extension",
       capabilities: ["filesystem"],
       provider: {
         name: "provider-a",
-        activeEv: "ev-provider",
+        activeSourceDigest: "ev-provider",
         activeBuildKey: "build-provider",
         contractVersion: "1",
       },

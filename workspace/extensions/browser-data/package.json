@@ -4,6 +4,276 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "authority": {
+      "requests": [
+        {
+          "capability": "rpc:addAutofillBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addBookmarksBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addCookiesBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addFaviconsBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addHistoryBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addPasswordsBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addPermissionsBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:addSearchEnginesBatch",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:classifyAgainstStore",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getAllBookmarks",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getAutofillFieldNames",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getAutofillSuggestions",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getBookmarks",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getCookieDomains",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getCookies",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getDomainReadiness",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getHistory",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getHistoryDomains",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getImportHistory",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getNeverSaveOrigins",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getPasswordForSite",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getPasswordOrigins",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getPasswords",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getPermissions",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getProfileImportState",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:getSearchEngines",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:isNeverSave",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:recordImportRun",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:searchBookmarks",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:searchHistory",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "rpc:searchHistoryForAutocomplete",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.emit",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.health",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.log",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.ready",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:panelTree.create",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:userlandApproval.request",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workers.resolveDurableObject",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ]
+    },
     "displayName": "Browser Data",
     "entry": "index.ts",
     "sourcemap": true,

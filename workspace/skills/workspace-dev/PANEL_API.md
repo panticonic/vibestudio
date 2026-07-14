@@ -34,7 +34,7 @@ import { openPanel, listPanels } from "@workspace/runtime";
 
 const handle = await openPanel("panels/my-app", { stateArgs: { mode: "fixture" } });
 const lifecycle = await handle.rebuildAndReload();
-console.log(lifecycle.status, lifecycle.effectiveVersion);
+console.log(lifecycle.status, lifecycle.executionDigest);
 await handle.stateArgs.set({ mode: "live" });
 const snapshot = await handle.snapshot();
 await handle.close(); // close temporary panels opened for diagnostics/tests
@@ -57,7 +57,7 @@ slot from another runtime.
 | Member                                          | Description                                                                                                         |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `id`                                            | Host panel id                                                                                                       |
-| `getInfo()`                                     | Copyable metadata `{ id, title, source, kind, parentId, contextId, runtimeEntityId, effectiveVersion, ref, build }` |
+| `getInfo()`                                     | Copyable metadata `{ id, title, source, kind, parentId, contextId, runtimeEntityId, executionDigest, ref, build }` |
 | `source`                                        | Workspace source or URL                                                                                             |
 | `kind`                                          | `"workspace"` or `"browser"`                                                                                        |
 | `children()`                                    | Fresh direct child handles                                                                                          |
@@ -105,11 +105,11 @@ if (parent) {
   await parent.refresh(); // hydrate exact source/runtime metadata from the host
   const info = await parent.getInfo();
   const args = await parent.stateArgs.get();
-  console.log(info.id, info.source, info.effectiveVersion, args);
+  console.log(info.id, info.source, info.executionDigest, args);
 }
 ```
 
-`effectiveVersion` is the exact immutable source version currently associated
+`executionDigest` is the exact immutable source version currently associated
 with the active panel runtime entity. For git-backed workspace units this is the
 commit/effective-version hash used for approvals and runtime identity. Use
 `refresh()` before comparing metadata around rebuilds, navigation, or reloads.
@@ -125,7 +125,7 @@ type PanelLifecycleResult = {
   rebuilt: boolean;
   reloaded: boolean;
   buildRevision?: number;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
 };
 ```
 

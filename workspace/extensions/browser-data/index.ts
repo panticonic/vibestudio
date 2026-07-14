@@ -87,7 +87,7 @@ interface ExtensionContextLike {
   emit(event: string, payload: unknown): void;
 }
 
-const DO_SOURCE = "vibestudio/internal";
+const DO_SOURCE = "product/browser-data";
 const DO_CLASS = "BrowserDataDO";
 const DO_KEY = "global";
 

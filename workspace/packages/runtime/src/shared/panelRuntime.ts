@@ -1,5 +1,10 @@
 import type { RpcClient } from "@vibestudio/rpc";
-import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import {
+  panelTreeMethods,
+  type PanelTreeListItem,
+  type PanelTreeMetadata,
+} from "@vibestudio/service-schemas/panelTree";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { PanelHandle, PanelNavigateOptions } from "../core/index.js";
 import { createCdpAutomation, type CdpAutomation } from "../panel/cdpAutomation.js";
 import {
@@ -8,31 +13,6 @@ import {
   type PanelHandleHostOps,
   type PanelHandleMetadata,
 } from "./handles.js";
-
-export interface PanelRuntimeListItem {
-  panelId: string;
-  title: string;
-  source: string;
-  kind: "workspace" | "browser";
-  parentId: string | null;
-  contextId: string;
-  runtimeEntityId?: string | null;
-  effectiveVersion?: string | null;
-  ref?: string | null;
-  children?: PanelRuntimeListItem[];
-}
-
-interface PanelRuntimeMetadataResult {
-  id?: string;
-  title?: string;
-  source?: string;
-  kind?: "workspace" | "browser";
-  parentId?: string | null;
-  runtimeEntityId?: string | null;
-  contextId?: string | null;
-  effectiveVersion?: string | null;
-  ref?: string | null;
-}
 
 export interface OpenPanelOptions {
   parentId?: string | null;
@@ -71,7 +51,7 @@ export interface CreatePanelRuntimeOptions {
   selfRpcTargetId?: string | null;
   parentId?: string | null;
   defaultOpenParentId?: string | null | (() => string | null);
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
   requesterPanelId?: string | null | (() => string | null);
   selfHandle?: () => PanelHandle;
   createCdp?: (metadata: PanelHandleMetadata) => CdpAutomation;
@@ -84,8 +64,11 @@ export interface CreatePanelRuntimeOptions {
 
 export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRuntimeApi {
   const metadataCache = new Map<string, PanelHandleMetadata>();
-  const callPanel = <T>(method: string, args: unknown[]): Promise<T> =>
-    options.rpc.call<T>("main", `panelTree.${method}`, args);
+  const panelTreeService = createTypedServiceClient(
+    "panelTree",
+    panelTreeMethods,
+    (_service, method, args) => options.rpc.call("main", `panelTree.${method}`, args)
+  );
 
   const defaultOpenParentId = (): string | null => {
     const value = options.defaultOpenParentId;
@@ -120,7 +103,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     });
   };
 
-  const itemToMetadata = (item: PanelRuntimeListItem): PanelHandleMetadata =>
+  const itemToMetadata = (item: PanelTreeListItem): PanelHandleMetadata =>
     rememberMetadata({
       id: item.panelId,
       title: item.title,
@@ -129,14 +112,10 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       parentId: item.parentId,
       contextId: item.contextId,
       rpcTargetId: item.runtimeEntityId ?? null,
-      effectiveVersion: item.effectiveVersion ?? null,
-      ref: item.ref ?? null,
+      executionDigest: item.executionDigest ?? null,
     });
 
-  const metadataFromResult = (
-    id: string,
-    meta: PanelRuntimeMetadataResult
-  ): PanelHandleMetadata => ({
+  const metadataFromResult = (id: string, meta: PanelTreeMetadata): PanelHandleMetadata => ({
     id,
     title: meta.title,
     source: meta.source,
@@ -144,7 +123,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     parentId: meta.parentId,
     contextId: meta.contextId ?? null,
     rpcTargetId: meta.runtimeEntityId ?? null,
-    effectiveVersion: meta.effectiveVersion ?? null,
+    executionDigest: meta.executionDigest ?? null,
     ref: meta.ref ?? null,
   });
 
@@ -161,7 +140,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
 
   const ops: PanelHandleHostOps = {
     refresh: async (id) => {
-      const meta = await callPanel<PanelRuntimeMetadataResult | null>("metadata", [id]);
+      const meta = await panelTreeService.metadata(id);
       return meta ? rememberMetadata(metadataFromResult(id, meta)) : metadataForId(id);
     },
     children: (id) => panelTree.children(id),
@@ -169,54 +148,62 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       const resolvedParentId = parentId ?? metadataCache.get(id)?.parentId ?? null;
       return resolvedParentId ? panelTree.get(resolvedParentId) : null;
     },
-    ensureLoaded: (id) => callPanel("ensureLoaded", [id]),
+    ensureLoaded: (id) => panelTreeService.ensureLoaded(id),
     isLoaded: async (id) => {
       try {
-        const lease = await callPanel<Record<string, unknown> | null>("getRuntimeLease", [id]);
+        const lease = await panelTreeService.getRuntimeLease(id);
         return lease !== null;
       } catch {
         return false;
       }
     },
     reload: async (id) => {
-      const result = await callPanel<PanelLifecycleResult>("reload", [id]);
+      const result = await panelTreeService.reload(id);
       options.onReload?.(id);
       return result;
     },
     close: async (id) => {
-      const result = await callPanel<PanelLifecycleResult>("close", [id]);
+      const result = await panelTreeService.close(id);
       options.onClose?.(id);
       return result;
     },
     archive: async (id) => {
-      await callPanel("archive", [id]);
+      await panelTreeService.archive(id);
       options.onClose?.(id);
     },
-    unload: (id) => callPanel<PanelLifecycleResult>("unload", [id]),
-    navigate: (id, source, navigateOptions) =>
-      callPanel<{ id: string; title: string }>("navigate", [id, source, navigateOptions]),
+    unload: (id) => panelTreeService.unload(id),
+    navigate: async (id, source, navigateOptions) => {
+      const result = await panelTreeService.navigate(id, source, navigateOptions);
+      if (!result) throw new Error(`Panel not found: ${id}`);
+      return { id: result.id, title: result.title };
+    },
     movePanel: (id, newParentId, targetPosition) =>
-      callPanel("movePanel", [{ panelId: id, newParentId, targetPosition }]),
-    takeOver: (id) => callPanel("takeOver", [id]),
-    openDevTools: (id, mode) => callPanel("openDevTools", [id, mode]),
-    rebuildPanel: (id) => callPanel<PanelLifecycleResult>("rebuildPanel", [id]),
+      panelTreeService.movePanel({ panelId: id, newParentId, targetPosition }),
+    takeOver: async (id) => {
+      await panelTreeService.takeOver(id);
+    },
+    openDevTools: (id, mode) => panelTreeService.openDevTools(id, mode),
+    rebuildPanel: (id) => panelTreeService.rebuildPanel(id),
     rebuildAndReload: async (id) => {
-      const result = await callPanel<PanelLifecycleResult>("rebuildAndReload", [id]);
+      const result = await panelTreeService.rebuildAndReload(id);
       options.onReload?.(id);
       return result;
     },
-    updatePanelState: (id, state) => callPanel("updatePanelState", [id, state]),
-    focus: (id) => callPanel("focus", [id]),
+    updatePanelState: (id, state) => panelTreeService.updatePanelState(id, state),
+    focus: async (id) => {
+      await panelTreeService.focus(id);
+    },
     stateArgs: {
-      get: (id) => callPanel("getStateArgs", [id]),
+      get: async <T = Record<string, unknown>>(id: string): Promise<T> =>
+        (await panelTreeService.getStateArgs(id)) as T,
       set: async (id, updates) => {
-        const next = await callPanel<Record<string, unknown>>("setStateArgs", [id, updates]);
+        const next = await panelTreeService.setStateArgs(id, updates);
         options.onStateArgsSet?.(id);
         return next;
       },
     },
-    snapshot: (id) => callPanel("snapshot", [id]),
-    callAgent: (id, method, args) => callPanel("callAgent", [id, method, args]),
+    snapshot: (id) => panelTreeService.snapshot(id),
+    callAgent: (id, method, args) => panelTreeService.callAgent(id, method, args),
   };
 
   const fromMetadata = (input: PanelHandleMetadata): PanelHandle => {
@@ -229,17 +216,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     });
   };
 
-  const hydrate = (item: PanelRuntimeListItem): PanelHandle => fromMetadata(itemToMetadata(item));
-
-  const flatten = (items: PanelRuntimeListItem[]): PanelRuntimeListItem[] => {
-    const out: PanelRuntimeListItem[] = [];
-    const visit = (item: PanelRuntimeListItem) => {
-      out.push(item);
-      for (const child of item.children ?? []) visit(child);
-    };
-    for (const item of items) visit(item);
-    return out;
-  };
+  const hydrate = (item: PanelTreeListItem): PanelHandle => fromMetadata(itemToMetadata(item));
 
   const panelTree: PanelRuntimeTree = {
     self() {
@@ -256,7 +233,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
           kind: "workspace",
           parentId: options.parentId ?? null,
           rpcTargetId: options.selfRpcTargetId ?? options.selfId,
-          effectiveVersion: options.effectiveVersion ?? null,
+          executionDigest: options.executionDigest ?? null,
         },
         cdp: createCdp({
           id: options.selfId,
@@ -271,13 +248,13 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       return fromMetadata(metadata);
     },
     async list() {
-      return flatten(await callPanel<PanelRuntimeListItem[]>("list", [null])).map(hydrate);
+      return (await panelTreeService.list(null)).map(hydrate);
     },
     async roots() {
-      return (await callPanel<PanelRuntimeListItem[]>("roots", [])).map(hydrate);
+      return (await panelTreeService.roots()).map(hydrate);
     },
     async children(id) {
-      return (await callPanel<PanelRuntimeListItem[]>("list", [id])).map(hydrate);
+      return (await panelTreeService.list(id)).map(hydrate);
     },
     parent(id) {
       const parentId =
@@ -286,23 +263,20 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
           : metadataCache.get(id)?.parentId;
       return parentId ? panelTree.get(parentId) : null;
     },
-    navigate(id, source, navigateOptions) {
-      return callPanel("navigate", [id, source, navigateOptions]);
+    async navigate(id, source, navigateOptions) {
+      const result = await panelTreeService.navigate(id, source, navigateOptions);
+      if (!result) throw new Error(`Panel not found: ${id}`);
+      return { id: result.id, title: result.title };
     },
   };
 
-  const openPanel = async (source: string, openOptions?: OpenPanelOptions): Promise<PanelHandle> => {
+  const openPanel = async (
+    source: string,
+    openOptions?: OpenPanelOptions
+  ): Promise<PanelHandle> => {
     const parentId =
       openOptions?.parentId !== undefined ? openOptions.parentId : defaultOpenParentId();
-    const result = await callPanel<{
-      id: string;
-      title: string;
-      kind: "workspace" | "browser";
-      parentId?: string | null;
-      contextId?: string;
-      runtimeEntityId?: string | null;
-      effectiveVersion?: string | null;
-    }>("create", [source, { ...openOptions, parentId }]);
+    const result = await panelTreeService.create(source, { ...openOptions, parentId });
     const handle = hydrate({
       panelId: result.id,
       title: result.title,
@@ -311,7 +285,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       parentId: result.parentId ?? parentId,
       contextId: result.contextId ?? openOptions?.contextId ?? "",
       runtimeEntityId: result.runtimeEntityId ?? null,
-      effectiveVersion: result.effectiveVersion ?? null,
+      executionDigest: result.executionDigest ?? null,
     });
     options.onOpen?.({ source, id: handle.id, kind: handle.kind });
     return handle;

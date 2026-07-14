@@ -127,6 +127,55 @@ describe("TestRunner", () => {
     });
   });
 
+  it("bounds optional evidence capture before authoritative timeout cleanup", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = {
+      channelId: "chat-timeout",
+      messages: [],
+      sendAndWait: vi.fn(() => new Promise(() => undefined)),
+      captureModelExecutionEvidence: vi.fn(() => new Promise(() => undefined)),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-timeout",
+        agentEntityId: "agent-entity-timeout",
+        agentTargetId: "agent-target-timeout",
+        agentContextId: "ctx-timeout",
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { testTimeoutMs: 5 });
+
+    const { result, execution } = await tester.runOne({
+      name: "bounded-evidence-timeout",
+      category: "test",
+      description: "timeout",
+      prompt: "hang",
+      validate: () => ({ passed: true }),
+    });
+
+    expect(result.passed).toBe(false);
+    expect(execution.modelExecutionEvidence).toBeUndefined();
+    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: true });
+    expect(warn).toHaveBeenCalledWith(
+      "[system-testing] Failed to capture model evidence for failed headless session:",
+      expect.objectContaining({
+        message: 'Timed out capturing model evidence for failed test "bounded-evidence-timeout"',
+      })
+    );
+    warn.mockRestore();
+  });
+
   it("keeps the original test failure when diagnostics collection fails", async () => {
     const session = {
       channelId: "chat-fetch-failed",

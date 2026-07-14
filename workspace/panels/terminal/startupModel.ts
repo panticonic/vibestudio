@@ -74,3 +74,29 @@ export function isUnitApprovalPending(shellUnit: StartupUnitStatus): boolean {
 export function isExtensionPreparing(shellUnit: StartupUnitStatus): boolean {
   return shellUnit?.status === "building" || shellUnit?.status === "available" || shellUnit?.status === "stopped";
 }
+
+const RETRYABLE_SHELL_STARTUP_CODES = new Set([
+  "ENOEXT",
+  "ENOTREADY",
+  "TARGET_NOT_REACHABLE",
+  "RECONNECT_GRACE_EXPIRED",
+  "CONNECTION_LOST",
+]);
+
+/**
+ * A declared native extension has a real activation window after workspace
+ * approval. Calls made during that window are availability misses, not terminal
+ * failures: the panel should remain in its single automatic-open flow and retry
+ * once the extension transport is ready.
+ */
+export function isRetryableShellStartupError(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+  if (RETRYABLE_SHELL_STARTUP_CODES.has(code)) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /extension (?:is )?(?:not installed|not running)|no active approved (?:build|execution artifact)|target (?:bridge )?not reachable|did not reconnect within grace window|connection .* closed before a response/i.test(
+    message
+  );
+}

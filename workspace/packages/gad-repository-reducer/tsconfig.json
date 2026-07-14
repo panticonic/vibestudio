@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": "../../..",
+    "paths": {
+      "@vibestudio/shared/*": ["packages/shared/src/*"],
+      "@workspace/gad-repository-contract": [
+        "workspace/packages/gad-repository-contract/src/index.ts"
+      ],
+      "@workspace/vcs-engine": ["workspace/packages/vcs-engine/src/index.ts"]
+    },
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["vitest/globals"]
+  },
+  "include": ["src/**/*"]
+}

@@ -28,7 +28,7 @@ export interface RuntimeDeps {
   fs: RuntimeFs;
   setupGlobals?: () => void;
   gatewayConfig?: GatewayConfig | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
 }
 
 export function createRuntime(deps: RuntimeDeps) {
@@ -56,7 +56,7 @@ export function createRuntime(deps: RuntimeDeps) {
     parentId: deps.parentId,
     defaultOpenParentId: slotId,
     requesterPanelId: slotId,
-    effectiveVersion: deps.effectiveVersion ?? null,
+    executionDigest: deps.executionDigest ?? null,
     initialMetadata: parentSlotId
       ? [
           {

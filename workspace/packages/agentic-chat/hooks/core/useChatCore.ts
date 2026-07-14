@@ -36,6 +36,7 @@ import {
   type InvocationCardPayload,
 } from "@workspace/agentic-core";
 import type { MessageBlockInput, MessageTier } from "@workspace/agentic-protocol";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 import { cleanupPendingImages, type PendingImage } from "../../utils/imageUtils";
 import type {
   ChatInputContextValue,
@@ -137,6 +138,8 @@ export interface UseChatCoreOptions {
   channelName: string;
   channelConfig?: ChannelConfig;
   contextId?: string;
+  /** Present only at the durable action that creates a new channel. */
+  channelCreation?: ChannelCreation;
   /** Panel LABEL only (WP6 §5) — the channel derives the authoritative human
    *  identity (`user:<userId>` + account handle) from the verified subject. */
   metadata?: ClientParticipantMetadata;
@@ -166,6 +169,7 @@ export interface ChatCoreState {
     methods: Record<string, MethodDefinition>;
     channelConfig?: ChannelConfig;
     contextId?: string;
+    channelCreation?: ChannelCreation;
   }) => Promise<PubSubClient<ChatParticipantMetadata>>;
   hasConnectedRef: React.MutableRefObject<boolean>;
 
@@ -485,6 +489,7 @@ export function useChatCore({
       methods: Record<string, MethodDefinition>;
       channelConfig?: ChannelConfig;
       contextId?: string;
+      channelCreation?: ChannelCreation;
     }): Promise<PubSubClient<ChatParticipantMetadata>> => {
       setStatus("Connecting...");
       const newClient = await connection.connect({
@@ -492,6 +497,7 @@ export function useChatCore({
         methods: options.methods,
         channelConfig: options.channelConfig,
         contextId: options.contextId,
+        channelCreation: options.channelCreation,
       });
       setClient(newClient);
       setConnected(true);

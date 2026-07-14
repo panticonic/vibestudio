@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "authority": {
+      "requests": []
+    },
     "title": "Hello Svelte",
     "entry": "index.ts",
     "template": "svelte"

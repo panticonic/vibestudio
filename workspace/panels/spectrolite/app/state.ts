@@ -96,6 +96,8 @@ export function initialState(args: {
   repoRoot: string | null;
   openPath: string | null;
   installedAgents: InstalledAgentRecord[];
+  /** Set only while an initial mount is moving onto its vault's durable context. */
+  vaultPendingPath?: string | null;
 }): SpectroliteState {
   return {
     contextId: args.contextId,
@@ -113,7 +115,7 @@ export function initialState(args: {
     pathsLoaded: false,
     pathsError: null,
     vaultError: null,
-    vaultPendingPath: null,
+    vaultPendingPath: args.vaultPendingPath ?? null,
     dirtyPaths: [],
 
     activePath: args.openPath,

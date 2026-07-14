@@ -2,15 +2,18 @@ import { stat } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SnugServer } from "./snugServer.js";
+import type { TerminalControlOperation } from "@vibestudio/shared/terminalControlProtocol";
+import { TerminalControlServer } from "./terminalControlServer.js";
 
-describe("SnugServer", () => {
+const TEST_HOST_BUILD_ID = "a".repeat(64);
+
+describe("TerminalControlServer", () => {
   it.skipIf(process.platform === "win32")("creates the socket directory with private permissions", async () => {
-    const server = new SnugServer(makeOps());
+    const server = new TerminalControlServer(makeOps(), { hostBuildId: TEST_HOST_BUILD_ID });
     await server.start();
     const { env, token } = server.envForSession({});
-    const socketPath = env["SNUG_SOCK"];
-    if (!socketPath) throw new Error("missing SNUG_SOCK");
+    const socketPath = env["VIBESTUDIO_TERMINAL_ENDPOINT"];
+    if (!socketPath) throw new Error("missing VIBESTUDIO_TERMINAL_ENDPOINT");
     await waitForStat(socketPath);
 
     expect((await stat(dirname(socketPath))).mode & 0o777).toBe(0o700);
@@ -20,11 +23,11 @@ describe("SnugServer", () => {
   });
 
   it("discards pending session sockets that never register", async () => {
-    const server = new SnugServer(makeOps());
+    const server = new TerminalControlServer(makeOps(), { hostBuildId: TEST_HOST_BUILD_ID });
     await server.start();
     const { env, token } = server.envForSession({});
-    const socketPath = env["SNUG_SOCK"];
-    if (!socketPath) throw new Error("missing SNUG_SOCK");
+    const socketPath = env["VIBESTUDIO_TERMINAL_ENDPOINT"];
+    if (!socketPath) throw new Error("missing VIBESTUDIO_TERMINAL_ENDPOINT");
     await waitForStat(socketPath);
 
     server.discardPending(token);
@@ -33,27 +36,33 @@ describe("SnugServer", () => {
     await server.dispose();
   });
 
-  it("does not inject a broken Unix-socket transport on Windows v1", async () => {
+  it("creates a Windows named-pipe endpoint", async () => {
     const env = { PATH: "existing" };
-    const server = new SnugServer(makeOps(), { platform: "win32" });
+    const server = new TerminalControlServer(makeOps(), {
+      platform: "win32",
+      hostBuildId: TEST_HOST_BUILD_ID,
+    });
 
     await server.start();
     const result = server.envForSession(env);
     server.register(result.token, "session");
     server.discardPending(result.token);
 
-    expect(result).toEqual({ env, token: "" });
+    expect(result.token).not.toBe("");
+    expect(result.env["VIBESTUDIO_TERMINAL_ENDPOINT"]).toMatch(
+      /^\\\\\.\\pipe\\vibestudio-terminal-/
+    );
     await server.dispose();
   });
 
-  it("rejects snug send to sessions owned by another caller", async () => {
+  it("rejects terminal send to sessions owned by another caller", async () => {
     const writes: Array<{ sessionId: string; text: string }> = [];
     const owners = new Map([
       ["source", "panel:a"],
       ["same-owner", "panel:a"],
       ["other-owner", "panel:b"],
     ]);
-    const server = new SnugServer({
+    const server = new TerminalControlServer({
       list: () => [],
       setMeta: () => {},
       getMeta: () => undefined,
@@ -63,16 +72,16 @@ describe("SnugServer", () => {
       ownerOf: (sessionId) => owners.get(sessionId),
       openSplit: async () => "unused",
       openUrl: async () => {},
-    });
+    }, { hostBuildId: TEST_HOST_BUILD_ID });
     await server.start();
     const { env, token } = server.envForSession({});
-    const socketPath = env["SNUG_SOCK"];
-    if (!socketPath) throw new Error("missing SNUG_SOCK");
+    const socketPath = env["VIBESTUDIO_TERMINAL_ENDPOINT"];
+    if (!socketPath) throw new Error("missing VIBESTUDIO_TERMINAL_ENDPOINT");
     await waitForStat(socketPath);
     server.register(token, "source");
 
-    await expect(sendSnug(socketPath, ["send", "--to", "same-owner", "--text", "hello"])).resolves.toEqual({ ok: true });
-    await expect(sendSnug(socketPath, ["send", "--to", "other-owner", "--text", "secret"])).resolves.toMatchObject({
+    await expect(sendTerminal(socketPath, { kind: "send", targetSessionId: "same-owner", text: "hello" })).resolves.toEqual({ ok: true });
+    await expect(sendTerminal(socketPath, { kind: "send", targetSessionId: "other-owner", text: "secret" })).resolves.toMatchObject({
       ok: false,
       error: "EACCES",
     });
@@ -82,31 +91,40 @@ describe("SnugServer", () => {
   });
 
   it("rate-limits notifications per session", async () => {
-    const server = new SnugServer(makeOps({ ownerOf: () => "panel:a" }));
+    const server = new TerminalControlServer(makeOps({ ownerOf: () => "panel:a" }), {
+      hostBuildId: TEST_HOST_BUILD_ID,
+    });
     await server.start();
     const { env, token } = server.envForSession({});
-    const socketPath = env["SNUG_SOCK"];
-    if (!socketPath) throw new Error("missing SNUG_SOCK");
+    const socketPath = env["VIBESTUDIO_TERMINAL_ENDPOINT"];
+    if (!socketPath) throw new Error("missing VIBESTUDIO_TERMINAL_ENDPOINT");
     await waitForStat(socketPath);
     server.register(token, "source");
 
     const responses: unknown[] = [];
     for (let i = 1; i <= 51; i += 1) {
-      responses.push(await sendSnug(socketPath, ["notify", `n${i}`]));
+      responses.push(
+        await sendTerminal(socketPath, {
+          kind: "notify",
+          severity: "info",
+          title: "",
+          message: `n${i}`,
+        })
+      );
     }
 
     const okResponses = responses.filter((item) => (item as { ok?: unknown }).ok === true);
     expect(okResponses).toHaveLength(50);
-    expect(okResponses.every((item) => String((item as { stdout?: unknown }).stdout ?? "").includes("1337;snug"))).toBe(true);
+    expect(okResponses.every((item) => String((item as { stdout?: unknown }).stdout ?? "").includes("1337;vibestudio-terminal"))).toBe(true);
     expect(responses[50]).toMatchObject({
       ok: false,
-      error: "snug notify rate limit exceeded",
+      error: "terminal notification rate limit exceeded",
     });
     await server.dispose();
   });
 });
 
-function makeOps(overrides: Partial<ConstructorParameters<typeof SnugServer>[0]> = {}): ConstructorParameters<typeof SnugServer>[0] {
+function makeOps(overrides: Partial<ConstructorParameters<typeof TerminalControlServer>[0]> = {}): ConstructorParameters<typeof TerminalControlServer>[0] {
   return {
     list: () => [],
     setMeta: () => {},
@@ -149,12 +167,19 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sendSnug(socketPath: string, argv: string[]): Promise<unknown> {
+function sendTerminal(socketPath: string, operation: TerminalControlOperation): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
     let data = "";
     socket.on("connect", () => {
-      socket.write(JSON.stringify({ proto: 1, version: "0.1.0", pid: process.pid, argv }) + "\n");
+      socket.write(
+        JSON.stringify({
+          protocolVersion: 1,
+          hostBuildId: TEST_HOST_BUILD_ID,
+          pid: process.pid,
+          operation,
+        }) + "\n"
+      );
     });
     socket.on("data", (chunk) => {
       data += chunk.toString("utf8");

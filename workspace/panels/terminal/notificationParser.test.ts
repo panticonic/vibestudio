@@ -17,9 +17,9 @@ describe("terminal notification parser", () => {
     ]);
   });
 
-  it("parses vibestudio snug OSC parameters", () => {
-    expect(parseNotifications("\x1b]1337;snug;sev=waiting;title=Agent+blocked;msg=Needs+input\x07")).toEqual([
-      { severity: "waiting", title: "Agent blocked", message: "Needs input", source: "snug" },
+  it("parses vibestudio terminal control OSC parameters", () => {
+    expect(parseNotifications("\x1b]1337;vibestudio-terminal;sev=waiting;title=Agent+blocked;msg=Needs+input\x07")).toEqual([
+      { severity: "waiting", title: "Agent blocked", message: "Needs input", source: "terminal" },
     ]);
   });
 
@@ -32,9 +32,9 @@ describe("terminal notification parser", () => {
   it("buffers OSC notifications split across terminal chunks", () => {
     const parser = new NotificationStreamParser();
 
-    expect(parser.push("before \x1b]1337;snug;sev=approval;title=Need")).toEqual([]);
+    expect(parser.push("before \x1b]1337;vibestudio-terminal;sev=approval;title=Need")).toEqual([]);
     expect(parser.push("+approval;msg=Click+allow\x07 after")).toEqual([
-      { severity: "approval", title: "Need approval", message: "Click allow", source: "snug" },
+      { severity: "approval", title: "Need approval", message: "Click allow", source: "terminal" },
     ]);
   });
 

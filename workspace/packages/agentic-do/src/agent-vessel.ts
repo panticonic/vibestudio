@@ -1583,7 +1583,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel membership ───────────────────────────────────────────────────
 
-  @rpc({ callers: ["panel", "do", "extension"] })
+  @rpc({ principals: ["code"] })
   async subscribeChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1659,7 +1659,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         });
   }
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ principals: ["code"] })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
     try {
       await this.driver.handleIncoming(channelId, {
@@ -1676,7 +1676,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel intake ───────────────────────────────────────────────────────
 
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"] })
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
     this.assertChannelDeliveryCaller("onChannelEnvelope");
     if (envelope.kind === "control") {
@@ -2249,7 +2249,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Method calls (agent as PROVIDER) ─────────────────────────────────────
 
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"] })
   async onMethodCall(
     channelId: string,
     _transportCallId: string,
@@ -2271,7 +2271,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * stale, which is precisely when timeout/cancellation diagnostics need it.
    * The response contains no prompt, tool argument, credential, or secret.
    */
-  @rpc({ callers: ["server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async getModelExecutionEvidence(channelId: string): Promise<unknown> {
     return this.driver.modelExecutionEvidence(channelId);
   }
@@ -2529,7 +2529,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * `do:vibestudio/internal:EvalDO:<key>`. Any other caller is rejected; the
    * generic DO relay is open, so a sensitive receiver gates on receipt.
    */
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"] })
   async chatOp(channelId: string, op: string, args: unknown[]): Promise<unknown> {
     await this.assertOwnEvalCaller(channelId);
     const channel = this.createChannelClient(channelId);
@@ -2927,7 +2927,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /** Channel DO settle path: terminals for our channel_call effects POST back
    *  here. Duplicate delivery is a no-op (deterministic terminal ids). */
-  @rpc({ callers: ["server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async deliverEffectOutcome(
     effectId: string,
     outcome: EffectOutcome,
@@ -2942,7 +2942,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  delivery no-ops once the row is gone. Eviction between defer and delivery
    *  is healed by lease-expiry redrive: the retried call re-attaches via its
    *  idempotencyKey / already-granted capability. */
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"] })
   async onDeferredResult(payload: {
     requestId: string;
     result?: unknown;
@@ -3053,7 +3053,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * before completing, so every output precedes the `invocation.completed` terminal (the reducer drops
    * output after terminal).
    */
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"] })
   async onEvalProgress(payload: {
     runId: string;
     channelId: string;
@@ -3076,7 +3076,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"] })
   async onEvalComplete(payload: {
     runId: string;
     result?: EvalRunResult;
@@ -3306,7 +3306,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Per-channel fork preflight. Vets ONLY the named subscription (it must
    *  exist); a multi-channel agent forks the one channel and drops the rest in
    *  the clone (see {@link postClone}), so the old ≤1-subscription gate is gone. */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async canFork(channelId: string): Promise<{ ok: boolean; reason?: string }> {
     if (!this.subscriptions.getParticipantId(channelId)) {
       return { ok: false, reason: `no subscription for channel ${channelId}` };
@@ -3314,7 +3314,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async postClone(
     _parentObjectKey: string,
     newChannelId: string,
@@ -3411,7 +3411,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * just created), so there is nothing to wipe: outbox/fold caches start empty.
    * The child boots knowing everything the parent knew at the fork point.
    */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async initFromTrajectoryFork(opts: {
     parentLogId: string;
     seq: number;
@@ -4396,7 +4396,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * relay otherwise lets any DO forge a completion and drive the parent loop.
    * Idempotent: a duplicate / post-terminal call no-ops.
    */
-  @rpc({ callers: ["do"] })
+  @rpc({ principals: ["code"] })
   async onSubagentComplete(payload: {
     runId: string;
     channelId?: string;

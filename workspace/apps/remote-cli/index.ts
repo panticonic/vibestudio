@@ -22,7 +22,7 @@ function printBootstrapSummary(): void {
   console.log(`Source: ${process.env["VIBESTUDIO_TERMINAL_APP_SOURCE"] ?? "unknown"}`);
   console.log(`Build: ${process.env["VIBESTUDIO_TERMINAL_APP_BUILD_KEY"] ?? "unknown"}`);
   console.log(
-    `Effective version: ${process.env["VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION"] || "unknown"}`
+    `Effective version: ${process.env["VIBESTUDIO_TERMINAL_APP_EXECUTION_DIGEST"] || "unknown"}`
   );
   console.log(`Gateway: ${requiredEnv("VIBESTUDIO_TERMINAL_APP_GATEWAY_URL")}`);
 }

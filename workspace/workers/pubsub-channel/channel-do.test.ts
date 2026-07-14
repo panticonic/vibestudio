@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import {
+  createTestDO,
+  createTestDirectAuthority,
+} from "@workspace/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -32,19 +35,37 @@ function setRpcCaller(
   callerId: string | null,
   callerKind: string | null,
   callerPanelId?: string | null,
-  userId?: string
+  userId?: string,
+  autoCreate = true
 ): void {
-  if (!sessionWrappedInstances.has(instance)) {
+  if (autoCreate && !sessionWrappedInstances.has(instance)) {
     sessionWrappedInstances.add(instance);
     const original = instance.subscribe.bind(instance);
-    (instance as unknown as { subscribe: PubSubChannel["subscribe"] }).subscribe = (
+    (instance as unknown as { subscribe: PubSubChannel["subscribe"] }).subscribe = async (
       participantId,
       metadata
-    ) =>
-      original(participantId, {
+    ) => {
+      if (!instance.getChannel()) {
+        await instance.createChannel({
+          governance: "standard",
+          contextBinding: {
+            kind: "context",
+            contextId: typeof metadata["contextId"] === "string" ? metadata["contextId"] : "ctx-1",
+          },
+          origin: { kind: "workspace" },
+          admission: { kind: "workspace-members" },
+          presentationEditors: { kind: "workspace-members" },
+          presentation:
+            metadata["channelConfig"] && typeof metadata["channelConfig"] === "object"
+              ? (metadata["channelConfig"] as Record<string, unknown>)
+              : {},
+        });
+      }
+      return original(participantId, {
         __participantSessionId: `${participantId}:test-session`,
         ...metadata,
       });
+    };
   }
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
   (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind =
@@ -52,13 +73,39 @@ function setRpcCaller(
   (instance as unknown as { _currentRpcCallerPanelId: string | null })._currentRpcCallerPanelId =
     callerPanelId ?? null;
   (instance as unknown as { _currentVerifiedCaller: unknown })._currentVerifiedCaller = callerId
-    ? {
+    ? (() => {
+        const authorization = createTestDirectAuthority({
+          callerKind: callerKind ?? "unknown",
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+          method: "test-direct-call",
+        });
+        if (userId) authorization.context.actingUser = `user:${userId}`;
+        authorization.context.entity =
+          callerKind === "server" || callerKind === "shell" ? null : `entity:${callerId}`;
+        return {
         callerId,
         callerKind: callerKind ?? "unknown",
         ...(callerPanelId ? { callerPanelId } : {}),
         ...(userId ? { userId } : {}),
-      }
+          authorization,
+        };
+      })()
     : null;
+}
+
+function patchDirectAuthorization(
+  instance: PubSubChannel,
+  mutate: (authorization: ReturnType<typeof createTestDirectAuthority>) => void
+): void {
+  const verified = (
+    instance as unknown as {
+      _currentVerifiedCaller: { authorization?: ReturnType<typeof createTestDirectAuthority> } | null;
+    }
+  )._currentVerifiedCaller;
+  if (!verified?.authorization) throw new Error("test caller has no direct authority");
+  mutate(verified.authorization);
 }
 
 function agenticEvent(kind = "message.completed") {
@@ -138,6 +185,7 @@ async function createGadBackedChannel(
           targetId: gadTarget,
         };
       }
+      if (target === "main" && method === "workers.resolveDurableObject") return {};
       if (target === "main" && method === "runtime.setTitle") {
         // Title registry isn't relevant in unit tests; treat as a no-op.
         return undefined;
@@ -170,7 +218,15 @@ async function createGadBackedChannel(
         };
         internal._currentRpcCallerId = callerId;
         internal._currentRpcCallerKind = "do";
-        internal._currentVerifiedCaller = { callerId, callerKind: "do" };
+        const authorization = createTestDirectAuthority({
+          callerKind: "do",
+          source: "test",
+          className: "TestDO",
+          objectKey: "workspace-gad",
+          method,
+        });
+        authorization.context.entity = `entity:${callerId}`;
+        internal._currentVerifiedCaller = { callerId, callerKind: "do", authorization };
         const callable = gad.instance as unknown as Record<
           string,
           (...methodArgs: unknown[]) => unknown
@@ -195,7 +251,276 @@ async function createGadBackedChannel(
   return { gad, blobs, ...channel };
 }
 
+/** Simulate runtime.cloneContext's byte-for-byte SQLite clone before invoking
+ * postClone on a child object key. The child deliberately starts with the
+ * parent's structural channel identity; postClone must append the fork root. */
+function seedClonedChannelStructure(
+  child: Awaited<ReturnType<typeof createGadBackedChannel>>,
+  parentChannelId: string,
+  parentContextId: string
+): void {
+  const revisionId = `revision:${parentChannelId}`;
+  const owner = "user:test-user";
+  const structure = {
+    id: revisionId,
+    channelId: parentChannelId,
+    predecessor: null,
+    createdBy: owner,
+    createdAt: 1,
+    reason: "created",
+    owner,
+    governance: "standard",
+    contextBinding: { kind: "context", contextId: parentContextId },
+    origin: { kind: "chat-panel" },
+    admission: { kind: "workspace-members" },
+    presentationEditors: { kind: "workspace-members" },
+  };
+  child.sql.exec(
+    `INSERT INTO channel_structure_revisions
+       (revision_id, predecessor, structure_json, created_at)
+     VALUES (?, NULL, ?, 1)`,
+    revisionId,
+    JSON.stringify(structure)
+  );
+  child.sql.exec(
+    `INSERT INTO channel_root
+       (singleton, current_revision, creation_json, presentation_json,
+        presentation_revision, deleted_at)
+     VALUES (1, ?, ?, '{}', 1, NULL)`,
+    revisionId,
+    JSON.stringify({ owner })
+  );
+  child.sql.exec(`INSERT OR REPLACE INTO state (key, value) VALUES ('contextId', ?)`, parentContextId);
+}
+
 describe("PubSubChannel", () => {
+  it("requires explicit atomic creation before subscribe", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:user", "panel", undefined, undefined, false);
+
+    await expect(
+      instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" })
+    ).rejects.toThrow("has not been created");
+    expect(instance.getChannel()).toBeNull();
+  });
+
+  it("makes creation idempotent only for the full canonical creation record", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice", false);
+    const creation = {
+      governance: "standard" as const,
+      contextBinding: { kind: "context" as const, contextId: "ctx-atomic" },
+      origin: { kind: "chat-panel" },
+      admission: { kind: "workspace-members" as const },
+      presentationEditors: { kind: "workspace-members" as const },
+      presentation: { title: "Atomic channel" },
+    };
+
+    const first = await instance.createChannel(creation);
+    await expect(instance.createChannel(creation)).resolves.toEqual(first);
+    await expect(
+      instance.createChannel({ ...creation, presentation: { title: "Different" } })
+    ).rejects.toThrow("different creation record");
+    expect(instance.getChannel()?.presentation).toEqual({ title: "Atomic channel" });
+  });
+
+  it("transfers ownership with recipient and revision checks and preserves history", async () => {
+    const { instance, sql } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice");
+    await instance.subscribe("user:alice", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "alice-session",
+    });
+    const created = instance.getChannel()!;
+
+    setRpcCaller(instance, "panel:bob", "panel", undefined, "bob");
+    await instance.subscribe("user:bob", {
+      contextId: "ctx-1",
+      name: "Bob",
+      type: "panel",
+      __participantSessionId: "bob-session",
+    });
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice");
+    const transferred = await instance.transferOwner({
+      expectedRevision: created.currentStructureRevision,
+      newOwner: "user:bob",
+    });
+
+    expect(transferred.structure.owner).toBe("user:bob");
+    expect(transferred.structure.predecessor).toBe(created.currentStructureRevision);
+    expect(transferred.structure.reason).toBe("owner-transfer");
+    expect(sql.exec(`SELECT revision_id FROM channel_structure_revisions`).toArray()).toHaveLength(2);
+    await expect(
+      instance.transferOwner({
+        expectedRevision: created.currentStructureRevision,
+        newOwner: "user:alice",
+      })
+    ).rejects.toThrow(/current channel owner|required|conflict/);
+  });
+
+  it("recovers a revoked owner only under live administrator authority", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice");
+    await instance.subscribe("user:alice", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "alice-session",
+    });
+    const created = instance.getChannel()!;
+    setRpcCaller(instance, "panel:bob", "panel", undefined, "bob");
+    await instance.subscribe("user:bob", {
+      contextId: "ctx-1",
+      name: "Bob",
+      type: "panel",
+      __participantSessionId: "bob-session",
+    });
+
+    setRpcCaller(instance, "panel:member", "panel", undefined, "member");
+    await expect(
+      instance.recoverOwner({
+        expectedRevision: created.currentStructureRevision,
+        newOwner: "user:bob",
+      })
+    ).rejects.toThrow("administrator authority");
+
+    setRpcCaller(instance, "panel:admin", "panel", undefined, "admin");
+    patchDirectAuthorization(instance, (authorization) => {
+      authorization.context.workspace = {
+        workspaceId: "test-workspace",
+        member: true,
+        role: "admin",
+        revision: "2",
+      };
+    });
+    const recovered = await instance.recoverOwner({
+      expectedRevision: created.currentStructureRevision,
+      newOwner: "user:bob",
+    });
+    expect(recovered.structure).toMatchObject({ owner: "user:bob", reason: "owner-recovery" });
+  });
+
+  it("enforces a locked entity/code/agent-binding admission chain", async () => {
+    const { instance } = await createGadBackedChannel({ channelKey: "system-agent" });
+    const entity = "entity:do:workers/system-agent:SystemAgent:alice" as const;
+    const code = `code:workers/system-agent@${"a".repeat(64)}` as const;
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice", false);
+    await instance.createChannel({
+      governance: "locked",
+      contextBinding: { kind: "context", contextId: "ctx-system-alice" },
+      origin: { kind: "system-agent", key: "alice" },
+      admission: {
+        kind: "principals",
+        allow: ["user:alice", entity],
+        entityCodeBindings: [{ entity, code }],
+      },
+      presentationEditors: { kind: "principals", allow: ["user:alice", entity] },
+      presentation: { title: "System Agent", titleExplicit: true },
+    });
+
+    const agentId = entity.slice("entity:".length);
+    setRpcCaller(instance, agentId, "do", undefined, "alice", false);
+    patchDirectAuthorization(instance, (authorization) => {
+      authorization.context.entity = entity;
+      authorization.context.code = code;
+      authorization.context.agentBinding = {
+        entity,
+        contextId: "ctx-system-alice",
+        channelId: "system-agent",
+      };
+    });
+    await expect(
+      instance.subscribe(agentId, {
+        contextId: "ctx-system-alice",
+        name: "System Agent",
+        type: "agent",
+        __participantSessionId: "agent-session",
+      })
+    ).resolves.toMatchObject({ ok: true });
+
+    setRpcCaller(instance, agentId, "do", undefined, "alice", false);
+    patchDirectAuthorization(instance, (authorization) => {
+      authorization.context.entity = entity;
+      authorization.context.code = `code:test@${"f".repeat(64)}`;
+      authorization.context.agentBinding = {
+        entity,
+        contextId: "ctx-system-alice",
+        channelId: "system-agent",
+      };
+    });
+    await expect(
+      instance.subscribe(agentId, {
+        contextId: "ctx-system-alice",
+        name: "Drifted agent",
+        type: "agent",
+        __participantSessionId: "drifted-session",
+      })
+    ).rejects.toThrow("exact admitted entity/code chain");
+
+    setRpcCaller(instance, "do:workers/eval:EvalDO:spoof", "do", undefined, "alice", false);
+    await expect(
+      instance.subscribe(agentId, {
+        contextId: "ctx-system-alice",
+        name: "Spoof",
+        type: "agent",
+        __participantSessionId: "spoof-session",
+      })
+    ).rejects.toThrow(/cannot be subscribed by caller/);
+  });
+
+  it("keeps locked structure changes separate from presentation and owner authority", async () => {
+    const { instance } = await createGadBackedChannel({ channelKey: "locked" });
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice", false);
+    const created = await instance.createChannel({
+      governance: "locked",
+      contextBinding: { kind: "context", contextId: "ctx-locked" },
+      origin: { kind: "restricted" },
+      admission: { kind: "principals", allow: ["user:alice"] },
+      presentationEditors: { kind: "owner" },
+      presentation: { title: "Locked" },
+    });
+    await expect(
+      instance.updateStructure({
+        expectedRevision: created.currentStructureRevision,
+        admission: { kind: "workspace-members" },
+        presentationEditors: { kind: "workspace-members" },
+      })
+    ).rejects.toThrow("administrative authority");
+    await expect(
+      instance.transferOwner({
+        expectedRevision: created.currentStructureRevision,
+        newOwner: "user:bob",
+      })
+    ).rejects.toThrow("administrative recovery");
+    await expect(instance.updateConfig({ title: "Renamed" })).resolves.toMatchObject({
+      title: "Renamed",
+    });
+    expect(instance.getChannel()?.currentStructureRevision).toBe(created.currentStructureRevision);
+  });
+
+  it("deletes idempotently and rejects reconnect after deletion", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:alice", "panel", undefined, "alice");
+    await instance.subscribe("user:alice", {
+      contextId: "ctx-1",
+      name: "Alice",
+      type: "panel",
+      __participantSessionId: "alice-session",
+    });
+    expect(instance.deleteChannel()).toEqual({ deleted: true });
+    expect(instance.deleteChannel()).toEqual({ deleted: false });
+    await expect(
+      instance.subscribe("user:alice", {
+        contextId: "ctx-1",
+        name: "Alice",
+        type: "panel",
+        __participantSessionId: "reconnect",
+      })
+    ).rejects.toThrow("is deleted");
+  });
+
   it("stores durable publishes as opaque channel envelopes", async () => {
     const { instance, gad } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:user", "panel");
@@ -1483,6 +1808,7 @@ describe("PubSubChannel", () => {
       channelKey: "channel-fork",
       gad: parent.gad,
     });
+    seedClonedChannelStructure(fork, "channel-parent", "ctx-1");
     await fork.instance.postClone("channel-parent", 3, "ctx-forked");
 
     const replay = await fork.instance.getReplayAfter({ after: 0 });
@@ -1607,6 +1933,7 @@ describe("PubSubChannel", () => {
 
     // A true context fork re-homes the channel into a fresh isolated context.
     const fork = await createGadBackedChannel({ channelKey: "channel-ctx-fork", gad: parent.gad });
+    seedClonedChannelStructure(fork, "channel-ctx-parent", "ctx-src");
     await fork.instance.postClone("channel-ctx-parent", 2, "ctx-forked");
     expect(await fork.instance.getContextId()).toBe("ctx-forked");
 
@@ -3054,6 +3381,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       channelKey: "channel-policy-fork",
       gad: parent.gad,
     });
+    seedClonedChannelStructure(fork, "channel-policy-parent", "ctx-1");
     await fork.instance.postClone("channel-policy-parent", 3, "ctx-policy-fork");
 
     // conversation state SURVIVES the fork — rebuilt by replaying the lineage
@@ -3407,6 +3735,7 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     });
     await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
     const child = await createGadBackedChannel({ channelKey: "channel-child", gad: parent.gad });
+    seedClonedChannelStructure(child, "channel-parent", "ctx-1");
     await child.instance.postClone("channel-parent", 2, "ctx-forked", {
       forkId: "fork-1",
       rootChannelId: "channel-parent",
@@ -3494,12 +3823,27 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     const gate = instance as unknown as {
       inboundCallerDenial(
         method: string,
-        caller: { callerId: string; callerKind: string } | null
+        caller: {
+          callerId: string;
+          callerKind: string;
+          authorization?: ReturnType<typeof createTestDirectAuthority>;
+        } | null
       ): string | null;
     };
     for (const kind of ["panel", "worker", "server", "do", "shell"]) {
+      const authorization = createTestDirectAuthority({
+        callerKind: kind,
+        source: "test",
+        className: "TestDO",
+        objectKey: "channel-1",
+        method: "appendSeed",
+      });
       expect(
-        gate.inboundCallerDenial("appendSeed", { callerId: `${kind}:x`, callerKind: kind })
+        gate.inboundCallerDenial("appendSeed", {
+          callerId: `${kind}:x`,
+          callerKind: kind,
+          authorization,
+        })
       ).toBeNull();
     }
   });

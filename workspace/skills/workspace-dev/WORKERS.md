@@ -208,10 +208,10 @@ Canonical shape:
 
 1. Create `workers/<store>` with a `DurableObjectBase` subclass.
 2. Store durable rows in the DO's SQLite database through `this.sql`.
-3. Expose narrow app methods with `@rpc({ callers: [...] })`; do not expose a
+3. Expose narrow app methods with `@rpc({ principals: [...] })`; do not expose a
    raw SQL console to normal UI callers.
 4. Declare a `services:` entry in `workspace/meta/vibestudio.yml` with
-   `policy.allowed` for the caller kinds that may resolve the service.
+   `authority.principals` for the authenticated principals that may resolve it.
 5. Call it from eval, panels, inline UI, apps, workers, or other DOs with
    `workers.resolveService(protocol, objectKey?)` and `rpc.call(...)`.
 
@@ -245,7 +245,7 @@ export class TodoStore extends DurableObjectBase {
     return ["todos"];
   }
 
-  @rpc({ callers: ["panel", "app", "do", "worker"] })
+  @rpc({ principals: ["user", "code"] })
   upsertTodo(input: { id?: string; title: string; done?: boolean }): { id: string } {
     this.ensureReady();
     const id = input.id ?? crypto.randomUUID();
@@ -264,7 +264,7 @@ export class TodoStore extends DurableObjectBase {
     return { id };
   }
 
-  @rpc({ callers: ["panel", "app", "do", "worker"] })
+  @rpc({ principals: ["user", "code"] })
   listTodos(): Array<{ id: string; title: string; done: boolean; updatedAt: string }> {
     this.ensureReady();
     return (this.sql.exec(`SELECT * FROM todos ORDER BY updated_at DESC`).toArray() as TodoRow[])
@@ -293,8 +293,8 @@ services:
     name: todo-store
     title: Todo Store
     protocols: [example.todos.v1]
-    policy:
-      allowed: [panel, app, do, worker]
+    authority:
+      principals: [user, code]
     durableObject:
       className: TodoStore
 ```
@@ -323,10 +323,13 @@ separate SQLite database for that object key. Use stable, user-meaningful keys
 such as workspace id, project id, document id, or account id. Do not use a
 random key unless the app really wants a new isolated database.
 
-Two gates must both admit the caller:
+Two authority gates must both admit the host-attested grant:
 
-- `services[].policy.allowed` controls who may resolve the service at all.
-- `@rpc({ callers: [...] })` controls who may invoke each exposed DO method.
+- `services[].authority.principals` controls which principal classes may
+  resolve the service.
+- `@rpc({ principals: [...] })` controls which principal classes may invoke
+  each exposed DO method. Use `@rpc({ requires })` when the method needs a
+  compositional capability or relationship instead of a principal-only floor.
 
 For sensitive shared resources, add a user decision inside the DO method with
 `approvals.request(...)`; do not use approvals for ordinary private app rows.
@@ -334,7 +337,7 @@ For sensitive shared resources, add a user decision inside the DO method with
 For a running Vibestudio system—including agent eval—exercise the real object
 through `workers.resolveService(...)` / `workers.resolveDurableObject(...)` and
 separate `rpc.call(...)` calls as shown above. This is the integration path: it
-uses workerd, the declared service policy, the method's `@rpc` caller policy,
+uses workerd, the declared service authority, the method's `@rpc` authority,
 and the object's persistent SQLite database.
 
 For fast Vitest-only unit coverage, keep storage logic in methods like the above
@@ -393,7 +396,7 @@ Rules of thumb:
 ## Durable Object RPC Exposure & Authorization
 
 DO methods are reachable over RPC only when explicitly opted in, and the
-workspace realm enforces a per-method caller policy (default-deny). Two layers,
+workspace realm enforces per-method compositional authority (default-deny). Two layers,
 kept separate — both required. Full design: [`docs/capability-approval-design.md`](../../../docs/capability-approval-design.md).
 
 ### Layer 1 — `@rpc` exposure (which methods are callable)
@@ -402,49 +405,50 @@ A method with no `@rpc` is private to the DO and cannot be invoked over the
 relay; forgetting `@rpc` fails loud ("not exposed"). Mark every method a caller
 should reach.
 
-### Layer 2 — `@rpc({ callers })` caller policy (who may call it)
+### Layer 2 — `@rpc({ principals | requires })` authority (who may call it)
 
 The RPC relay is open between authenticated participants, so the recipient must
-gate. **In the workspace realm, every relay-reachable method MUST declare an
-`@rpc({ callers: [...] })` policy** — a method with no policy, or a call from a
-caller kind not listed, is refused (default-deny). `callers` is a coarse
-caller-KIND floor; values: `"panel" | "do" | "server" | "worker" | "shell" |
-"app" | "extension"`.
+gate. **In the workspace realm, every relay-reachable method MUST declare
+`@rpc({ principals: [...] })` or `@rpc({ requires })`**. A bare `@rpc` exposes
+the method to registration but grants nobody authority to invoke it. Principal
+classes are `"host" | "user" | "device" | "code" | "entity"`; transport roles
+such as panel, DO, app, agent, and extension do not confer authority.
 
 ```ts
 import { rpc } from "@workspace/runtime/worker";
 
 export class MyStoreDO extends DurableObjectBase {
-  @rpc({ callers: ["panel", "do"] })       // a panel or an agent DO may call it
+  @rpc({ principals: ["user", "code"] })  // authenticated user or exact code artifact
   async addItem(label: string): Promise<{ id: string }> { ... }
 
-  @rpc({ callers: ["server"] })            // server-dispatched only (webhook/alarm)
+  @rpc({ principals: ["host"] })           // exact host only (webhook/alarm)
   async onWebhookDelivery(event: WebhookEvent): Promise<void> { ... }
 
   private bumpCounter(): void { ... }       // no @rpc — unreachable over RPC
 }
 ```
 
-Typical floors: panel-driven → `["panel"]`/`["panel","do"]`; channel/agent-internal
-→ `["do"]`; server-dispatched (webhooks/alarms/lifecycle) → `["server"]`;
-broad reads → `["do","panel","server"]`; admin/destructive → `["server","shell"]`.
+Typical floors: user-facing code → `["user", "code"]`; autonomous exact code
+→ `["code"]`; bound external agents → `["entity", "code"]`; host-dispatched
+webhooks/alarms/lifecycle → `["host"]`. Admin/destructive methods should use a
+`requires` expression that combines capability and workspace-role facts.
 
 ### Identity-level tightening (inline)
 
-The kind floor is coarse — *any* DO is `"do"`. When a method must accept only ONE
-specific caller (this agent's own EvalDO, the agent's own PubSubChannel, a known
-class), add an inline check ON TOP of the floor using the server-authenticated
-caller, which cannot be forged:
+Principal classes are deliberately broad. When a method must accept only one
+entity, code artifact, channel, or relationship, declare a `requires`
+expression when possible and validate operation-specific ownership against the
+server-attested caller context:
 
 ```ts
-@rpc({ callers: ["do"] })
+@rpc({ principals: ["code"] })
 async onChannelOp(channelId: string): Promise<void> {
   await this.assertOwnEvalCaller(channelId); // only THIS agent's own EvalDO
   ...
 }
 // this.rpcCallerId / this.rpcCallerKind / this.caller are server-set from the
-// validated token. (Server-realm DOs like EvalDO use a coarser per-DO
-// `assertInboundAllowed` override instead of @rpc policies.)
+// validated invocation grant. Server-realm DOs use the same canonical
+// authority evaluator at their direct-dispatch boundary.
 ```
 
 ### When to add a USER-APPROVAL gate

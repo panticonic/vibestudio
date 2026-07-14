@@ -8,7 +8,14 @@ function parseReq(init?: RequestInit) {
   const envelope = JSON.parse(String(init?.body ?? "{}")) as {
     from?: string;
     target?: string;
-    message?: { type?: string; requestId?: string; method?: string; args?: unknown[]; event?: string; payload?: unknown };
+    message?: {
+      type?: string;
+      requestId?: string;
+      method?: string;
+      args?: unknown[];
+      event?: string;
+      payload?: unknown;
+    };
   };
   const msg = envelope.message ?? {};
   return {
@@ -20,7 +27,9 @@ function parseReq(init?: RequestInit) {
 }
 function respond(init: RequestInit | undefined, result: unknown) {
   const envelope = JSON.parse(String(init?.body ?? "{}")) as {
-    from?: string; target?: string; message?: { requestId?: string };
+    from?: string;
+    target?: string;
+    message?: { requestId?: string };
   };
   return new Response(
     JSON.stringify({
@@ -32,7 +41,6 @@ function respond(init: RequestInit | undefined, result: unknown) {
     })
   );
 }
-
 
 describe("worker panelTree handles", () => {
   const originalFetch = globalThis.fetch;
@@ -73,13 +81,14 @@ describe("worker panelTree handles", () => {
       });
       if (body.method === "panelTree.metadata") {
         return respond(init, {
-              id: "slot-a",
-              title: "Panel A",
-              source: "panels/a",
-              kind: "workspace",
-              parentId: "root",
-              runtimeEntityId: "panel:slot-a-current-entity",
-            });
+          id: "slot-a",
+          title: "Panel A",
+          source: "panels/a",
+          kind: "workspace",
+          parentId: "root",
+          contextId: "ctx-slot-a",
+          runtimeEntityId: "panel:nav-slot-a-current",
+        });
       }
       return respond(init, "ok");
     }) as typeof fetch;
@@ -111,13 +120,13 @@ describe("worker panelTree handles", () => {
       },
       {
         type: "call",
-        targetId: "panel:slot-a-current-entity",
+        targetId: "panel:nav-slot-a-current",
         method: "ping",
         args: [],
       },
       {
         type: "emit",
-        targetId: "panel:slot-a-current-entity",
+        targetId: "panel:nav-slot-a-current",
         method: "ready",
         args: [{ ok: true }],
       },
@@ -133,8 +142,8 @@ describe("worker panelTree handles", () => {
       calls.push(body);
       if (body.method === "panelTree.getRuntimeLease") {
         return respond(init, {
-          slotId: "slot-a",
-          runtimeEntityId: "panel:slot-a-current-entity",
+          slotId: "panel:tree/slot-a",
+          runtimeEntityId: "panel:nav-slot-a-current",
           clientSessionId: "desktop",
           hostConnectionId: "desktop",
           connectionId: "desktop",
@@ -181,15 +190,24 @@ describe("worker panelTree handles", () => {
       });
       if (body.method === "panelTree.metadata") {
         return respond(init, {
-              id: "slot-a",
-              title: "Panel A",
-              source: "panels/a",
-              kind: "workspace",
-              parentId: "root",
-              runtimeEntityId: "panel:slot-a-current-entity",
-            });
+          id: "slot-a",
+          title: "Panel A",
+          source: "panels/a",
+          kind: "workspace",
+          parentId: "root",
+          contextId: "ctx-slot-a",
+          runtimeEntityId: "panel:nav-slot-a-current",
+        });
       }
-      return respond(init, { loaded: true });
+      if (body.method === "panelTree.ensureLoaded") {
+        return respond(init, {
+          panelId: "slot-a",
+          status: "loaded",
+          focused: false,
+          loaded: true,
+        });
+      }
+      return respond(init, "ok");
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -220,7 +238,7 @@ describe("worker panelTree handles", () => {
       },
       {
         type: "call",
-        targetId: "panel:slot-a-current-entity",
+        targetId: "panel:nav-slot-a-current",
         method: "ping",
         args: [],
       },
@@ -236,48 +254,37 @@ describe("worker panelTree handles", () => {
       calls.push(body);
       if (body.method === "panelTree.list" && body.args[0] === null) {
         return respond(init, [
-              {
-                panelId: "root-slot",
-                title: "Root",
-                source: "panels/root",
-                kind: "workspace",
-                parentId: null,
-                contextId: "ctx-root",
-                runtimeEntityId: "panel:root-entity",
-                children: [
-                  {
-                    panelId: "child-slot",
-                    title: "Child",
-                    source: "panels/child",
-                    kind: "workspace",
-                    parentId: "root-slot",
-                    contextId: "ctx-child",
-                    runtimeEntityId: "panel:child-entity",
-                  },
-                ],
-              },
-            ]);
+          {
+            panelId: "root-slot",
+            title: "Root",
+            source: "panels/root",
+            kind: "workspace",
+            parentId: null,
+            contextId: "ctx-root",
+            runtimeEntityId: "panel:nav-root",
+          },
+        ]);
       }
       if (body.method === "panelTree.list" && body.args[0] === "root-slot") {
         return respond(init, [
-              {
-                panelId: "child-slot",
-                title: "Child",
-                source: "panels/child",
-                kind: "workspace",
-                parentId: "root-slot",
-                contextId: "ctx-child",
-                runtimeEntityId: "panel:child-entity",
-              },
-            ]);
+          {
+            panelId: "child-slot",
+            title: "Child",
+            source: "panels/child",
+            kind: "workspace",
+            parentId: "root-slot",
+            contextId: "ctx-child",
+            runtimeEntityId: "panel:nav-child",
+          },
+        ]);
       }
       if (body.method === "panelTree.create") {
         return respond(init, {
-              id: "created-slot",
-              title: "Created",
-              kind: "workspace",
-              runtimeEntityId: "panel:created-entity",
-            });
+          id: "created-slot",
+          title: "Created",
+          kind: "workspace",
+          runtimeEntityId: "panel:nav-created",
+        });
       }
       return respond(init, "ok");
     }) as typeof fetch;
@@ -297,7 +304,7 @@ describe("worker panelTree handles", () => {
     const created = await runtime.openPanel("panels/new");
     runtime.destroy();
 
-    expect(all.map((handle) => handle.id)).toEqual(["root-slot", "child-slot"]);
+    expect(all.map((handle) => handle.id)).toEqual(["root-slot"]);
     expect(children.map((handle) => handle.id)).toEqual(["child-slot"]);
     expect(children[0]?.parent()?.id).toBe("root-slot");
     expect(created.id).toBe("created-slot");
@@ -336,11 +343,11 @@ describe("worker panelTree handles", () => {
       }
       if (body.method === "panelTree.create") {
         return respond(init, {
-              id: "created-slot",
-              title: "Created",
-              kind: "workspace",
-              runtimeEntityId: "panel:created-entity",
-            });
+          id: "created-slot",
+          title: "Created",
+          kind: "workspace",
+          runtimeEntityId: "panel:nav-created",
+        });
       }
       return respond(init, null);
     }) as typeof fetch;
@@ -387,7 +394,30 @@ describe("worker panelTree handles", () => {
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      return respond(init, { wsEndpoint: "ws://cdp.test" });
+      if (body.method === "panelCdp.getCdpEndpoint") {
+        return respond(init, { wsEndpoint: "ws://cdp.test" });
+      }
+      if (body.method === "panelTree.reload") {
+        return respond(init, {
+          panelId: "parent-slot",
+          operation: "reload",
+          status: "reloaded",
+          loaded: true,
+          rebuilt: false,
+          reloaded: true,
+        });
+      }
+      if (body.method === "panelTree.rebuildAndReload") {
+        return respond(init, {
+          panelId: "parent-slot",
+          operation: "rebuildAndReload",
+          status: "reloaded",
+          loaded: true,
+          rebuilt: true,
+          reloaded: true,
+        });
+      }
+      return respond(init, null);
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -397,7 +427,7 @@ describe("worker panelTree handles", () => {
       CONTEXT_ID: "ctx",
       GATEWAY_URL: "http://server.test",
       PARENT_ID: "parent-slot",
-      PARENT_ENTITY_ID: "panel:parent-entity",
+      PARENT_ENTITY_ID: "panel:nav-parent",
       PARENT_KIND: "panel",
     });
 
@@ -420,7 +450,7 @@ describe("worker panelTree handles", () => {
     expect(calls).toEqual([
       {
         type: "call",
-        targetId: "panel:parent-entity",
+        targetId: "panel:nav-parent",
         method: "ping",
         args: [],
       },

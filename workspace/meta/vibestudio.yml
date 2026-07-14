@@ -4,6 +4,7 @@ defaultAgentConfig:
 initPanels:
   - source: panels/chat
     stateArgs:
+      initialPrompt: I just opened this workspace for the first time, help me get onboarded.
       actionBarFile: skills/onboarding/ActionBar.tsx
       systemPrompt: >
         You are the Vibestudio onboarding assistant. Your job is to welcome new
@@ -122,6 +123,17 @@ initPanels:
         - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth
         authorize URLs
 
+  - source: panels/chat
+    stateArgs:
+      agentConfig:
+        model: openai-codex:gpt-5.3-codex-spark
+      initialPrompt: Please run the full system test suite and repair every failure you find.
+      systemPromptMode: append
+      systemPrompt: >
+        You are the Vibestudio system testing agent. Follow the system-testing
+        skill, inspect every failing trajectory, repair root causes, and rerun
+        focused, category, and smoke coverage before reporting completion.
+
 singletonObjects:
   - source: workers/gad-store
     className: GadWorkspaceDO
@@ -138,14 +150,8 @@ services:
     title: gad Workspace Store
     protocols:
       - vibestudio.gad.workspace.v1
-    policy:
-      allowed:
-        - app
-        - panel
-        - shell
-        - server
-        - worker
-        - do
+    authority:
+      principals: [code, user, host]
     durableObject:
       className: GadWorkspaceDO
   # Userland VCS (P5c/P5d): the vcs read/history surface (vcsFileHistory,
@@ -166,17 +172,9 @@ services:
     title: Workspace VCS (userland)
     protocols:
       - vibestudio.vcs.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-        # git-bridge extension: vcsLog / ingestWorktreeState
-        - extension
-        # agent CLI (plan §3.1 grant set): vcsLog, listChannelLogs, mirror reads
-        - agent
+    authority:
+      # Exact unit code, authenticated humans, the exact host, and bound agents.
+      principals: [code, user, host, entity]
     durableObject:
       className: GadWorkspaceDO
   - source: workers/pubsub-channel
@@ -184,15 +182,8 @@ services:
     title: Workspace Channel Service
     protocols:
       - vibestudio.channel.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-        - extension
-        - agent
+    authority:
+      principals: [code, user, host, entity]
     durableObject:
       className: PubSubChannel
   - source: workers/model-settings
@@ -200,14 +191,8 @@ services:
     title: Workspace Model Settings
     protocols:
       - vibestudio.models.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
-        - extension
+    authority:
+      principals: [code, user, host]
     durableObject:
       className: ModelSettingsDO
   - source: workers/testkit-driver
@@ -215,13 +200,8 @@ services:
     title: Testkit Driver
     protocols:
       - vibestudio.testkit-driver.v1
-    policy:
-      allowed:
-        - panel
-        - shell
-        - server
-        - worker
-        - do
+    authority:
+      principals: [code, user, host]
     durableObject:
       className: TestkitDriverDO
 routes: []
@@ -235,6 +215,7 @@ extensions:
   - source: extensions/browser-data
   - source: extensions/shell
   - source: extensions/claude-code
+  - source: extensions/dev-host
   - source: extensions/mobile-debug
   - source: extensions/react-native
   - source: extensions/local-models
@@ -257,12 +238,8 @@ providers:
     extension: extensions/git-bridge
   claudeCode:
     extension: extensions/claude-code
-# App trust grants (approval-gated like every meta edit): which workspace apps
-# may render host chrome.
-trust:
-  chromeApps:
-    - apps/shell
-    - apps/mobile
+  devHost:
+    extension: extensions/dev-host
 # Preferred app per host target, plus startup-ordering constraints
 # (extensions that must run before the app can build).
 hostTargets:

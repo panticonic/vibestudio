@@ -81,7 +81,7 @@ _initPanelHandleBridge(rpc, {
   selfRpcTargetId: _entityId,
   parentId: runtimeParentId,
   parentRpcTargetId: runtimeParentEntityId,
-  effectiveVersion: config.effectiveVersion,
+  executionDigest: config.executionDigest,
 });
 import {
   openExternal as _hostOpenExternal,

@@ -61,6 +61,7 @@ import { customInspectorPayload } from "../components/CustomMessage";
 import { unwrapChatMethodResult } from "@workspace/agentic-core";
 import type { ChatMethodResult, AgentSubscriptionConfig } from "@workspace/agentic-core";
 import type { MessageTier } from "@workspace/agentic-protocol";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 import {
   LocalStorageScopePersistence,
   panelLocalScopeChannelId,
@@ -208,6 +209,8 @@ export interface UseAgenticChatOptions {
   channelName: string;
   channelConfig?: ChannelConfig;
   contextId?: string;
+  /** Exact, persisted creation intent. Omit when joining an existing channel. */
+  channelCreation?: ChannelCreation;
   /** Panel LABEL only (WP6 §5) — never the authoritative human identity; the
    *  channel derives that from the host-verified subject on the connection. */
   metadata?: ClientParticipantMetadata;
@@ -242,6 +245,7 @@ export function useAgenticChat({
   channelName,
   channelConfig,
   contextId,
+  channelCreation,
   // Panel label only — no client-declared human identity: the channel
   // stamps the account-derived identity from the host-verified subject.
   metadata: metadataOption,
@@ -1306,7 +1310,13 @@ Use package imports available to inline_ui plus relative imports for local helpe
             },
           },
         };
-        await core.connectToChannel({ channelId: channelName, methods, channelConfig, contextId });
+        await core.connectToChannel({
+          channelId: channelName,
+          methods,
+          channelConfig,
+          contextId,
+          channelCreation,
+        });
       } catch (err) {
         console.error("[Chat] Connection error:", err);
         core.hasConnectedRef.current = false;
@@ -1317,6 +1327,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     channelName,
     channelConfig,
     contextId,
+    channelCreation,
     core.connectToChannel,
     config.rpc,
     core.hasConnectedRef,

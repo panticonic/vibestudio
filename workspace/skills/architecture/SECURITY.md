@@ -77,24 +77,22 @@ dumb signaling relay — the transport carries the same authenticated RPC and
 the same identity layers as local connections (see the `remote-access` skill
 for operations).
 
-## Caller kinds and the eval reachability model
+## Principal authority and eval reachability
 
-Host services declare per-method caller allow-lists (`panel`, `worker`, `do`,
-`shell`, `server`, `agent`). Two principles keep this manageable:
+Caller kinds route messages; they do not authorize them. Host services and DO
+methods declare complete principal requirements over `host`, `user`, `device`,
+`code`, and `entity`. The host attests those facts at ingress and preserves the
+grant through eval, extensions, workers, DOs, and native process mediation.
 
-- **Eval is the reachability guarantee.** An agent's eval executes in its own
-  `EvalDO` as an ordinary `do` principal with a real code identity, so
-  everything `do`-callable is agent-reachable — *including*
-  capability-gated paths, because the grant/approval pipeline understands
-  the EvalDO's identity and can prompt for consent. Adding `agent` to an
-  allow-list is purely a UX shortcut for high-frequency calls, never a
-  capability expansion.
-- **The only `do`-closed services are deliberate user/host surfaces** (auth,
-  tokens, host lifecycle, shell approval/presence, push, panel runtime) —
-  things no programmatic caller should reach.
+Eval is an ergonomic reachability surface, not an authority conversion. An
+agent's EvalDO keeps the same bound entity/user/context plus the exact evaluated
+code identity. A direct call and the equivalent eval-composed call therefore
+reach the same canonical resource evaluator. Sensitive operations combine
+principal requirements with exact capabilities, live relationships, revocation,
+and state-bound execution identity.
 
-Every widening of a service policy is a reviewable diff against a golden
-policy matrix.
+Every executable unit has a generated exact method/capability manifest, and
+the authority census and runtime-foundation ledgers make widenings reviewable.
 
 ## Why agents are safe by construction
 

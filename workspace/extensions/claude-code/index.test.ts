@@ -26,17 +26,19 @@ vi.mock("./profile.js", () => ({
   MIN_CLAUDE_CODE_VERSION: "2.1.81",
   assertClaudeCodeVersion: vi.fn(async () => "2.1.81"),
   writeLaunchProfile: vi.fn(
-    async (input: { statePath: string; entityId: string; env: Record<string, string> }) => ({
-      profileDir: `${input.statePath}/agent-launch/${input.entityId}`,
+    async (input: { statePath: string; entityId: string; generationId: string; pluginDir: string; env: Record<string, string> }) => ({
+      profileDir: `${input.statePath}/agent-launch/${input.entityId}/${input.generationId}`,
       argv: [
         "claude",
+        "--plugin-dir",
+        input.pluginDir,
         "--channels",
         "server:vibestudio",
         "--dangerously-load-development-channels",
       ],
       env: {
         ...input.env,
-        VIBESTUDIO_LAUNCH_PROFILE: `${input.statePath}/agent-launch/${input.entityId}`,
+        VIBESTUDIO_LAUNCH_PROFILE: `${input.statePath}/agent-launch/${input.entityId}/${input.generationId}`,
       },
     })
   ),
@@ -59,6 +61,19 @@ function makeCtx(tmpRoot: string) {
       contextId: CONTEXT,
       workspaceId: "ws",
       serverUrl: "http://127.0.0.1:5000/rpc",
+    })
+  );
+  const toolchainDir = path.join(tmpRoot, "toolchain");
+  const pluginDir = path.join(toolchainDir, "plugins", "vibestudio");
+  mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true });
+  writeFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), '{"name":"vibestudio"}');
+  process.env["VIBESTUDIO_TOOLCHAIN_DIR"] = toolchainDir;
+  process.env["VIBESTUDIO_HOST_BUILD_ID"] = "a".repeat(64);
+  writeFileSync(
+    path.join(toolchainDir, "manifest.json"),
+    JSON.stringify({
+      hostBuildId: process.env["VIBESTUDIO_HOST_BUILD_ID"],
+      plugin: { relativePath: "plugins/vibestudio" },
     })
   );
 
@@ -89,6 +104,31 @@ function makeCtx(tmpRoot: string) {
       return { revoked: true };
     }
     if (method === "reportExternalExit") return { ok: true, settled: true };
+    if (method === "mirror.targets") {
+      return [{ repoPath: "projects/vibestudio", stateHash: "state-1" }];
+    }
+    if (method === "mirror.objects") {
+      return {
+        files: [
+          {
+            path: "README.md",
+            mode: 33188,
+            content: Buffer.from("workspace\n").toString("base64"),
+            size: 10,
+          },
+        ],
+      };
+    }
+    if (method === "vcs.edit") {
+      return {
+        head: `ctx:${CONTEXT}`,
+        stateHash: "state-2",
+        committed: false,
+        status: "uncommitted",
+        editSeq: 1,
+        changedPaths: [],
+      };
+    }
     throw new Error(`unexpected rpc ${target} ${method}`);
   });
 
@@ -125,7 +165,7 @@ function makeCtx(tmpRoot: string) {
     approvals: { request: approvalsRequest },
     extensions: { invoke: vi.fn(async () => {}) },
     invocation: { current: vi.fn<() => unknown>(() => null) },
-    health: { healthy: vi.fn() },
+    health: { healthy: vi.fn(), degraded: vi.fn() },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   };
 
@@ -142,6 +182,8 @@ afterEach(() => {
   childProcessMock.child.on.mockClear();
   childProcessMock.child.kill.mockClear();
   vi.clearAllMocks();
+  delete process.env["VIBESTUDIO_TOOLCHAIN_DIR"];
+  delete process.env["VIBESTUDIO_HOST_BUILD_ID"];
 });
 
 describe("@workspace-extensions/claude-code prepare", () => {
@@ -170,7 +212,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     expect(result.contextId).toBe(CONTEXT);
     expect(result.channelId).toBe(CHANNEL);
-    expect(result.contextFolder).toContain(CONTEXT);
+    expect(result.contextFolder).toBe(path.join(tmpRoot, "state", "context-workspaces", "ws", CONTEXT));
     expect(result.env.VIBESTUDIO_CHANNEL_ID).toBe(CHANNEL);
     expect(result.env.VIBESTUDIO_AGENT_TOKEN).toBe("agent:agt_1:tok");
     expect(result.env.VIBESTUDIO_SERVER_URL).toBe("http://127.0.0.1:5000");
@@ -203,6 +245,16 @@ describe("@workspace-extensions/claude-code prepare", () => {
     // The prior credential was revoked and a fresh one minted.
     expect(revoked).toEqual(["agt_1"]);
     expect(second.env.VIBESTUDIO_AGENT_TOKEN).toBe("agent:agt_2:tok");
+  });
+
+  it("revokes a candidate credential and publishes no binding when preparation cannot commit", async () => {
+    const { ctx, revoked } = makeCtx(tmpRoot);
+    ctx.storage.writeFile.mockRejectedValueOnce(new Error("storage unavailable"));
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
+
+    await expect(api.prepare({ channelId: CHANNEL })).rejects.toThrow("storage unavailable");
+    expect(revoked).toEqual(["agt_1"]);
+    await expect(api.resolvePrimaryChannel({ contextId: CONTEXT })).resolves.toBeNull();
   });
 
   it("records the context→channel binding for resolvePrimaryChannel", async () => {
@@ -288,6 +340,8 @@ describe("@workspace-extensions/claude-code prepare", () => {
     // Subagents default to autonomous permission handling (`auto`); the task
     // rides as the terminal -p prompt.
     expect(args).toEqual([
+      "--plugin-dir",
+      path.join(tmpRoot, "toolchain", "plugins", "vibestudio"),
       "--channels",
       "server:vibestudio",
       "--dangerously-load-development-channels",
@@ -297,7 +351,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       "audit the repo",
     ]);
     expect(options).toMatchObject({
-      cwd: path.join(tmpRoot, "contexts", CONTEXT),
+      cwd: path.join(tmpRoot, "state", "context-workspaces", "ws", CONTEXT),
       detached: false,
     });
     expect(options.env).toMatchObject({
@@ -352,6 +406,8 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     const [, args] = childProcessMock.spawn.mock.calls[0]! as unknown as [string, string[]];
     expect(args).toEqual([
+      "--plugin-dir",
+      path.join(tmpRoot, "toolchain", "plugins", "vibestudio"),
       "--channels",
       "server:vibestudio",
       "--dangerously-load-development-channels",
@@ -394,6 +450,9 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     // The session died on its own → the vessel is told so the run settles.
     exitHandler(1, null);
+    await vi.waitFor(() => {
+      expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit")).toBeDefined();
+    });
     const report = rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit");
     expect(report).toBeDefined();
     expect(report![0]).toBe(result.vesselRef);

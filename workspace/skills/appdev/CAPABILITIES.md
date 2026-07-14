@@ -76,9 +76,9 @@ what compromised client code can request.
 ## App Databases
 
 There is no app capability that grants a generic workspace SQL database. Use a
-worker Durable Object service for app data: the service's `policy.allowed` must
-include `app`, and each DO method must also include `app` in
-`@rpc({ callers: [...] })` if app callers should invoke it. Keep the DO methods
+worker Durable Object service for app data: its manifest authority and each
+exposed DO method must admit the exact `code` principal carried by app calls.
+Use `@rpc({ principals: [...] })` on every exposed method. Keep the DO methods
 app-shaped (`listItems`, `saveSettings`, `appendEvent`) rather than exposing
 raw SQL to trusted client renderers.
 

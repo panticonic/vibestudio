@@ -249,6 +249,51 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     expect(writeRow?.["hunks_json"]).toBeTruthy();
   });
 
+  it("durably deduplicates client edit IDs and rejects divergent reuse", async () => {
+    const input = {
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      clientEditId: "mirror-batch-1",
+      edits: [
+        { kind: "create" as const, path: "once.txt", content: { kind: "text" as const, text: "once\n" } },
+      ],
+    };
+    const first = await doi.applyEditOps(input);
+    const replay = await doi.applyEditOps(input);
+    expect(replay).toEqual(first);
+    expect(doi.listWorkingEdits({ logId: LOG, head: CTX })).toHaveLength(1);
+
+    await expect(
+      doi.applyEditOps({
+        ...input,
+        edits: [
+          { kind: "write", path: "once.txt", content: { kind: "text", text: "different\n" } },
+        ],
+      })
+    ).rejects.toThrow(/already used for a different edit batch/);
+  });
+
+  it("can update a scratch-looking path already present in canonical state", async () => {
+    const content = await mem.store.putBase64(Buffer.from("TRACKED=1\n").toString("base64"));
+    const root = await mem.store.putTree(
+      [{ name: ".env", kind: "file", contentHash: content.digest, mode: 33188 }],
+      { root: true }
+    );
+    refs.set(REPO, "main", root.stateHash!);
+    const result = await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [
+        { kind: "write", path: ".env", content: { kind: "text", text: "TRACKED=2\n" } },
+      ],
+    });
+    expect(await fileAt(result.stateHash, ".env")).toBe("TRACKED=2\n");
+  });
+
   it("enforces the edit-boundary path policy in the store", async () => {
     const edit = (path: string) =>
       doi.applyEditOps({
@@ -426,13 +471,16 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
 
   it("publishes host metadata mutations through an intent and keeps recorded main in lockstep", async () => {
     const original = await mem.store.putBase64(Buffer.from("old\n").toString("base64"));
-    const initial = await doi.ingestWorktreeState({
+    const initial = await gad.call<Awaited<ReturnType<GadWorkspaceDO["ingestWorktreeState"]>>>(
+      "ingestWorktreeState",
+      {
       logId: LOG,
       head: "main",
       files: [{ path: "config.yml", contentHash: original.digest, mode: 33188 }],
       actor: ACTOR,
       summary: "initial",
-    });
+      }
+    );
     await mem.store.putTree(
       [{ name: "config.yml", kind: "file", contentHash: original.digest, mode: 33188 }],
       { root: true }
@@ -440,14 +488,19 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     refs.set(REPO, "main", initial.stateHash);
 
     const changed = await mem.store.putBase64(Buffer.from("new\n").toString("base64"));
-    const result = await doi.vcsPublishHostMutation({
-      repoPath: REPO,
-      expectedOld: initial.stateHash,
-      files: [{ path: "config.yml", contentHash: changed.digest, mode: 33188 }],
-      message: "update metadata",
-      operation: "push",
-      actor: ACTOR,
-    });
+    const result = await gad.call<
+      Awaited<ReturnType<GadWorkspaceDO["vcsPublishHostMutation"]>>
+    >(
+      "vcsPublishHostMutation",
+      {
+        repoPath: REPO,
+        expectedOld: initial.stateHash,
+        files: [{ path: "config.yml", contentHash: changed.digest, mode: 33188 }],
+        message: "update metadata",
+        operation: "push",
+        actor: ACTOR,
+      }
+    );
 
     expect(refs.updates).toEqual([
       { repoPath: REPO, expectedOld: initial.stateHash, next: result.stateHash },

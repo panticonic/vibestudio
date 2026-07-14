@@ -70,7 +70,7 @@ export class MobileRpcClient implements Pick<
   private readonly reconnectProgressListeners = new Set<(progress: ReconnectProgress) => void>();
   private readonly recoveryListeners = new Map<RecoveryKind, Set<() => void | Promise<void>>>();
   private readonly eventSubscriptions = new Map<string, Set<(event: RpcEventContext) => void>>();
-  private readonly activeEventUnsubs = new Map<string, () => void>();
+  private readonly activeSourceDigestentUnsubs = new Map<string, () => void>();
 
   constructor(config: MobileRpcClientConfig) {
     this.config = config;
@@ -232,8 +232,8 @@ export class MobileRpcClient implements Pick<
       listeners?.delete(listener);
       if (listeners?.size === 0) {
         this.eventSubscriptions.delete(event);
-        this.activeEventUnsubs.get(event)?.();
-        this.activeEventUnsubs.delete(event);
+        this.activeSourceDigestentUnsubs.get(event)?.();
+        this.activeSourceDigestentUnsubs.delete(event);
       }
     };
   }
@@ -390,16 +390,16 @@ export class MobileRpcClient implements Pick<
     this.connection = null;
     this.rpc = null;
     this.currentCallerId = null;
-    this.activeEventUnsubs.clear();
+    this.activeSourceDigestentUnsubs.clear();
     await connection?.close().catch(() => undefined);
   }
 
   private attachEventSubscription(event: string): void {
-    if (!this.rpc || this.activeEventUnsubs.has(event)) return;
+    if (!this.rpc || this.activeSourceDigestentUnsubs.has(event)) return;
     const unsubscribe = this.rpc.on(event, (ev) => {
       for (const listener of this.eventSubscriptions.get(event) ?? []) listener(ev);
     });
-    this.activeEventUnsubs.set(event, unsubscribe);
+    this.activeSourceDigestentUnsubs.set(event, unsubscribe);
   }
 
   private setStatus(status: ConnectionStatus): void {

@@ -4,12 +4,92 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "authority": {
+      "requests": [
+        {
+          "capability": "service:extensions.health",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.invoke",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.log",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.ready",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:runtime.createEntity",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:runtime.resolveContext",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:userlandApproval.request",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.contextStatus",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.ensureContextFolder",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.getInfo",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ]
+    },
     "displayName": "Shell",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
-      "activationEvents": ["*"],
-      "streamingMethods": ["attach", "watchSessionInfo", "watchAllSessionInfo"]
+      "activationEvents": [
+        "*"
+      ],
+      "streamingMethods": [
+        "attach",
+        "watchSessionInfo",
+        "watchAllSessionInfo"
+      ]
     }
   },
   "dependencies": {

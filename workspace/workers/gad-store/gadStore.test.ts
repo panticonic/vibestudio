@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import {
+  createTestDO,
+  createTestDirectAuthority,
+} from "@workspace/runtime/worker/test-utils";
 import { AgentHealthInspectionSchema } from "@workspace/runtime/gad-schema";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -22,7 +25,17 @@ function setVerifiedCaller(instance: GadWorkspaceDO, userId: string | null): voi
   internal._currentRpcCallerId = userId ? "shell" : null;
   internal._currentRpcCallerKind = userId ? "shell" : null;
   internal._currentVerifiedCaller = userId
-    ? { callerId: "shell", callerKind: "shell", userId }
+    ? (() => {
+        const authorization = createTestDirectAuthority({
+          callerKind: "shell",
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+          method: "test-direct-call",
+        });
+        authorization.context.actingUser = `user:${userId}`;
+        return { callerId: "shell", callerKind: "shell", userId, authorization };
+      })()
     : null;
 }
 
@@ -35,7 +48,15 @@ function setDoCaller(instance: GadWorkspaceDO, channelId: string): void {
   };
   internal._currentRpcCallerId = callerId;
   internal._currentRpcCallerKind = "do";
-  internal._currentVerifiedCaller = { callerId, callerKind: "do" };
+  const authorization = createTestDirectAuthority({
+    callerKind: "do",
+    source: "test",
+    className: "TestDO",
+    objectKey: "test-key",
+    method: "test-direct-call",
+  });
+  authorization.context.entity = `entity:${callerId}`;
+  internal._currentVerifiedCaller = { callerId, callerKind: "do", authorization };
 }
 
 function setServerCaller(instance: GadWorkspaceDO): void {
@@ -46,7 +67,17 @@ function setServerCaller(instance: GadWorkspaceDO): void {
   };
   internal._currentRpcCallerId = "server";
   internal._currentRpcCallerKind = "server";
-  internal._currentVerifiedCaller = { callerId: "server", callerKind: "server" };
+  internal._currentVerifiedCaller = {
+    callerId: "server",
+    callerKind: "server",
+    authorization: createTestDirectAuthority({
+      callerKind: "server",
+      source: "test",
+      className: "TestDO",
+      objectKey: "test-key",
+      method: "test-direct-call",
+    }),
+  };
 }
 
 function event<K extends AgenticEvent["kind"]>(

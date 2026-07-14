@@ -52,7 +52,11 @@ const PANEL_METADATA = {
   handle: PANEL_HANDLE,
 };
 
-function buildAgentConfig(opts: { handle: string; repoRoot: string | null; className?: string }): Record<string, unknown> {
+function buildAgentConfig(opts: {
+  handle: string;
+  repoRoot: string | null;
+  className?: string;
+}): Record<string, unknown> {
   const base: Record<string, unknown> = {
     handle: opts.handle,
     systemPrompt: spectroliteAgentSystemPrompt({
@@ -85,10 +89,9 @@ export class SessionController {
   private agentEnsureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private agentEnsureRetryAttempt = 0;
   private unsubscribeRoster: (() => void) | null = null;
+  private removalsInFlight = new Set<string>();
 
-  constructor(
-    private readonly store: Store<SpectroliteState>,
-  ) {}
+  constructor(private readonly store: Store<SpectroliteState>) {}
 
   async start(): Promise<void> {
     if (this.started || this.disposed) return;
@@ -104,7 +107,9 @@ export class SessionController {
     if (!channelName) {
       channelName = newChannelName();
       this.store.setState({ channelName });
-      void panel.stateArgs.set({ channelName, contextId, repoRoot: state.repoRoot ?? undefined });
+      // The entity's runtime context is authoritative. Persisting a second
+      // contextId in stateArgs makes a panel reopen timing-dependent.
+      void panel.stateArgs.set({ channelName, repoRoot: state.repoRoot ?? undefined });
     }
 
     const client = connectViaRpc<ChatParticipantMetadata>({
@@ -113,19 +118,31 @@ export class SessionController {
       contextId,
       clientId: panel.slotId,
       metadata: PANEL_METADATA,
+      channelCreation: {
+        governance: "standard",
+        contextBinding: { kind: "context", contextId },
+        origin: { kind: "spectrolite-panel" },
+        admission: { kind: "workspace-members" },
+        presentationEditors: { kind: "workspace-members" },
+        presentation: { title: "Spectrolite" },
+      },
       recoveryCoordinator,
     });
     this.client = client;
     this.store.setState({ client });
 
-    void client.ready()
-      .then(() => registerSpectroliteMessageTypes(client))
-      .catch((err) => console.warn("[Spectrolite] message type registration failed:", err));
-
     this.unsubscribeRoster = client.onRoster(() => this.handleRosterUpdate());
     void this.consumeEvents(client);
+    // Channel creation is explicit and subscribe never creates one implicitly. Do not launch
+    // resident agents until the panel subscription has acknowledged the durable channel.
+    await client.ready();
+    await registerSpectroliteMessageTypes(client).catch((err) =>
+      console.warn("[Spectrolite] message type registration failed:", err)
+    );
     void listAvailableAgents()
-      .then((agents) => { if (!this.disposed) this.store.setState({ availableAgents: agents }); })
+      .then((agents) => {
+        if (!this.disposed) this.store.setState({ availableAgents: agents });
+      })
       .catch(() => {});
 
     // A vault may already be selected (persisted stateArgs / initPanels).
@@ -176,7 +193,8 @@ export class SessionController {
     const channelName = state.channelName;
     const contextId = state.contextId;
     if (!channelName || !contextId) return;
-    const agents = state.availableAgents.length > 0 ? state.availableAgents : await listAvailableAgents();
+    const agents =
+      state.availableAgents.length > 0 ? state.availableAgents : await listAvailableAgents();
     const agent = agents.find((a) => a.id === agentId || a.className === agentId) ?? agents[0];
     if (!agent) return;
     const handle = `${agent.proposedHandle}-${crypto.randomUUID().slice(0, 4)}`;
@@ -187,7 +205,11 @@ export class SessionController {
       key,
       channelId: channelName,
       channelContextId: contextId,
-      config: buildAgentConfig({ handle, repoRoot: this.store.getState().repoRoot, className: agent.className }),
+      config: buildAgentConfig({
+        handle,
+        repoRoot: this.store.getState().repoRoot,
+        className: agent.className,
+      }),
     });
     this.persistInstalled([
       ...this.store.getState().installedAgents,
@@ -198,9 +220,14 @@ export class SessionController {
   async removeAgent(handle: string): Promise<void> {
     const state = this.store.getState();
     const channelName = state.channelName;
-    if (!channelName) return;
+    if (!channelName || this.removalsInFlight.has(handle)) return;
+    this.removalsInFlight.add(handle);
     // Optimistic hide; rolled back if the unsubscribe fails.
-    this.store.setState((prev) => ({ removedHandles: [...prev.removedHandles, handle] }));
+    this.store.setState((prev) => ({
+      removedHandles: prev.removedHandles.includes(handle)
+        ? prev.removedHandles
+        : [...prev.removedHandles, handle],
+    }));
     try {
       const workers = await getChannelDOParticipants(channelName);
       // Match by the EXACT objectKey we minted on subscribe; prefix-matching
@@ -210,11 +237,22 @@ export class SessionController {
       if (match) {
         await unsubscribeDOFromChannel(match.source, match.className, match.objectKey, channelName);
       } else {
-        console.warn(`[Spectrolite] no DO worker matches handle "${handle}" (key=${record?.key ?? "?"})`);
+        console.warn(
+          `[Spectrolite] no DO worker matches handle "${handle}" (key=${record?.key ?? "?"})`
+        );
       }
-      this.persistInstalled(this.store.getState().installedAgents.filter((a) => a.handle !== handle));
+      this.persistInstalled(
+        this.store.getState().installedAgents.filter((a) => a.handle !== handle)
+      );
+      this.removalsInFlight.delete(handle);
+      // Reconcile immediately in case the definitive absent roster snapshot
+      // arrived while unsubscribe was still awaiting its acknowledgement.
+      this.handleRosterUpdate();
     } catch (err) {
-      this.store.setState((prev) => ({ removedHandles: prev.removedHandles.filter((h) => h !== handle) }));
+      this.removalsInFlight.delete(handle);
+      this.store.setState((prev) => ({
+        removedHandles: prev.removedHandles.filter((h) => h !== handle),
+      }));
       throw err;
     }
   }
@@ -264,7 +302,9 @@ export class SessionController {
             replay: true,
           });
         } catch (err) {
-          this.persistInstalled(this.store.getState().installedAgents.filter((a) => a.key !== agentKey));
+          this.persistInstalled(
+            this.store.getState().installedAgents.filter((a) => a.key !== agentKey)
+          );
           console.warn("[Spectrolite] failed to subscribe default agent:", err);
           this.scheduleEnsureAgentsRetry();
           return;
@@ -293,7 +333,11 @@ export class SessionController {
             key: agent.key,
             channelId: channelName,
             channelContextId: contextId,
-            config: buildAgentConfig({ handle: agent.handle, repoRoot, className: agent.className }),
+            config: buildAgentConfig({
+              handle: agent.handle,
+              repoRoot,
+              className: agent.className,
+            }),
             replay: true,
           });
         } catch (err) {
@@ -323,7 +367,7 @@ export class SessionController {
   private scheduleEnsureAgentsRetry(): void {
     if (this.disposed || this.agentEnsureRetryTimer) return;
     this.agentsEnsured = false;
-    const delayMs = Math.min(30_000, 1_000 * (2 ** this.agentEnsureRetryAttempt));
+    const delayMs = Math.min(30_000, 1_000 * 2 ** this.agentEnsureRetryAttempt);
     this.agentEnsureRetryAttempt += 1;
     this.agentEnsureRetryTimer = setTimeout(() => {
       this.agentEnsureRetryTimer = null;
@@ -342,10 +386,15 @@ export class SessionController {
     }
     this.store.setState((prev) => {
       const liveHandles = new Set(next.map((agent) => agent.handle));
-      const removedHandles = prev.removedHandles.filter((handle) => liveHandles.has(handle));
+      const removedHandles = prev.removedHandles.filter(
+        (handle) => this.removalsInFlight.has(handle) || liveHandles.has(handle)
+      );
       return {
         roster: next,
-        removedHandles: removedHandles.length === prev.removedHandles.length ? prev.removedHandles : removedHandles,
+        removedHandles:
+          removedHandles.length === prev.removedHandles.length
+            ? prev.removedHandles
+            : removedHandles,
       };
     });
   }

@@ -116,7 +116,7 @@ const myApp = await openPanel("panels/my-app");
 | Create project  | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `createProject({ projectType, name, title })`                             |
 | Fork panel      | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
 | Fork worker     | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                              |
-| Build app database | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases). |
+| Build app database | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare `authority.principals` on its manifest service and `@rpc({ principals })` on each method, then call it via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases). |
 | Add repo guidance | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages |
 | Launch panel    | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })` for intentional context-local code. |
 | Launch worker   | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` }])` for newly created or context-edited worker code; omit `ref` only when launching the main build. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id` |
@@ -169,7 +169,7 @@ before changing the fix:
   head.
 - Did the already-open panel run `handle.rebuildAndReload()` after the edit, and
   is that panel already pinned to the intended build ref?
-- In dogfood mode, did the mirror apply or skip because the host checkout was dirty?
+- For `projects/vibestudio`, does `devHost.status` name the expected full source-state and execution-input hashes?
 
 For raw runtime `vcs` calls, `vcs.status(repoPath, head?)` reports a repo head's
 committed unpushed changes vs that repo's own `main` (a GAD state-diff, not

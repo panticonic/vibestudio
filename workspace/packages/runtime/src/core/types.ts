@@ -213,10 +213,10 @@ export interface PanelHandle<
     parentId: string | null;
     contextId: string | null;
     runtimeEntityId: string | null;
-    effectiveVersion: string | null;
+    executionDigest: string | null;
     ref?: string;
     build: {
-      effectiveVersion: string | null;
+      executionDigest: string | null;
       ref?: string;
     };
   }>;

@@ -16,6 +16,7 @@
       "default": "./src/worker/index.ts"
     },
     "./hosted": "./src/shared/hostedRuntime.ts",
+    "./panel-runtime": "./src/shared/panelRuntime.ts",
     "./portable": "./src/shared/portable.ts",
     "./credentials": "./src/shared/credentials.ts",
     "./worker/credentials": "./src/worker/credentials.ts",

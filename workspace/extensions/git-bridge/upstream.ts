@@ -44,6 +44,7 @@ import {
   GitBridge,
   type ExportResult,
   type ImportResult,
+  type PreparedGitImport,
   type UpstreamAuthorship,
 } from "./bridge.js";
 import type { ExtensionContextLike } from "./context.js";
@@ -56,6 +57,27 @@ const TRANSIENT_BACKOFF_MAX_MS = 15 * 60_000;
 /** Upstream-authorship gathering walks at most this many commits per import;
  *  a longer imported range falls back to head-commit-only attribution. */
 const AUTHORSHIP_COMMIT_CAP = 100;
+const IMPORT_OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+type ProviderImportPhase =
+  | "prepared"
+  | "committed"
+  | "complete"
+  | "aborted"
+  | "requires-repair";
+
+interface ProviderImportRecord {
+  version: 1;
+  operationId: string;
+  repoPath: string;
+  remoteName: string;
+  branch: string;
+  scratchRelative: string;
+  prepared: PreparedGitImport;
+  upstreamAuthorship?: UpstreamAuthorship;
+  phase: ProviderImportPhase;
+  error?: string;
+}
 
 interface StoredRepoState {
   configFingerprint: string;
@@ -683,14 +705,34 @@ export class UpstreamEngine {
     });
   }
 
-  async cloneRepo(input: { repoPath: string }): Promise<ImportResult> {
+  async prepareImport(input: {
+    operationId: string;
+    repoPath: string;
+    remote: WorkspaceGitRemoteConfig & { branch: string };
+    credentialId?: string;
+  }): Promise<{
+    operationId: string;
+    repoPath: string;
+    branch: string;
+    gitCommitSha: string;
+    stateHash: string;
+    changed: boolean;
+    phase: "prepared";
+  }> {
+    const operationId = assertImportOperationId(input.operationId);
     const repo = normalizeWorkspaceRepoPath(input.repoPath);
+    const branch = validateWorkspaceGitRemoteBranch(input.remote.branch);
     return withRepoLock(repo, async () => {
-      const config = await this.readConfig();
-      const upstream = getDeclaredUpstreamForRepo(config, repo);
-      if (!upstream) throw new Error(`No approved upstream is declared for ${repo}`);
-      const remote = getDeclaredRemoteForRepo(config, repo, upstream.remote);
-      if (!remote) throw new Error(`No approved remote ${upstream.remote} is declared for ${repo}`);
+      const existing = await this.readImportRecord(operationId);
+      if (existing) {
+        if (existing.repoPath !== repo || existing.branch !== branch) {
+          throw new Error(`Git import operation ${operationId} belongs to a different candidate`);
+        }
+        if (existing.phase === "aborted" || existing.phase === "requires-repair") {
+          throw new Error(`Git import operation ${operationId} is ${existing.phase}`);
+        }
+        return this.preparedStatus(existing);
+      }
       const root = await this.workspaceRoot();
       const { absolutePath } = resolveWorkspaceRepoPath(root, repo);
       if (!isSupportedImportRepoPath(repo)) {
@@ -702,43 +744,223 @@ export class UpstreamEngine {
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
-      assertWorkspaceCreateTargetSafe(root, absolutePath, "cloneRepo");
-      await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
-      const git = this.gitClient(upstream.credentialId);
-      const cloneRef = upstream.branch ?? remote.branch;
+      assertWorkspaceCreateTargetSafe(root, absolutePath, "prepareImport");
+      const scratchRelative = `imports/${operationId}/checkout`;
+      const scratchPath = this.ctx.storage.resolvePath(scratchRelative);
+      await fsp.rm(path.dirname(scratchPath), { recursive: true, force: true });
+      await fsp.mkdir(path.dirname(scratchPath), { recursive: true });
+      const git = this.gitClient(input.credentialId);
       try {
         await git.clone({
-          url: remote.url,
-          dir: absolutePath,
-          ref: cloneRef,
+          url: input.remote.url,
+          dir: scratchPath,
+          ref: branch,
           fullHistory: true,
         });
-        if (remote.name !== "origin") {
-          await git.addRemote(absolutePath, remote.name, remote.url).catch(() => undefined);
+        const checkedOutBranch = await git.getCurrentBranch(scratchPath);
+        if (checkedOutBranch !== branch) {
+          throw new Error(
+            `Prepared clone selected ${checkedOutBranch ?? "detached HEAD"}, expected ${branch}`
+          );
         }
-        const upstreamAuthorship = await this.gatherUpstreamAuthorship(git, absolutePath, null);
-        return await this.bridge.importLockedInner(repo, {
-          summary: `Import ${repo} from ${displayRemote(remote.url)}`,
+        if (input.remote.name !== "origin") {
+          await git.addRemote(scratchPath, input.remote.name, input.remote.url);
+        }
+        const upstreamAuthorship = await this.gatherUpstreamAuthorship(git, scratchPath, null);
+        const prepared = await this.bridge.prepareImportTree(repo, scratchPath, operationId, {
+          summary: `Import ${repo} from ${displayRemote(input.remote.url)}`,
           ...(upstreamAuthorship ? { upstreamAuthorship } : {}),
         });
+        const record: ProviderImportRecord = {
+          version: 1,
+          operationId,
+          repoPath: repo,
+          remoteName: input.remote.name,
+          branch,
+          scratchRelative,
+          prepared,
+          ...(upstreamAuthorship ? { upstreamAuthorship } : {}),
+          phase: "prepared",
+        };
+        await this.writeImportRecord(record);
+        return this.preparedStatus(record);
       } catch (err) {
-        await fsp.rm(absolutePath, { recursive: true, force: true }).catch(() => undefined);
-        // When the requested branch was a default-assumption (not user-declared
-        // config we can trust), name the remote's ACTUAL default branch in the
-        // error instead of leaving a bare git failure.
-        if (cloneRef) {
-          const actualDefault = await git.getRemoteDefaultBranch(remote.url).catch(() => null);
-          if (actualDefault && actualDefault !== cloneRef) {
-            throw new Error(
-              `Clone of ${displayRemote(remote.url)} branch "${cloneRef}" failed ` +
-                `(${errorMessage(err)}). The remote's default branch is "${actualDefault}" — ` +
-                `re-import with --branch ${actualDefault}.`
-            );
-          }
-        }
+        await fsp.rm(path.dirname(scratchPath), { recursive: true, force: true }).catch(() => undefined);
         throw err;
       }
     });
+  }
+
+  async commitImport(input: { operationId: string }): Promise<ReturnType<UpstreamEngine["providerImportStatus"]>> {
+    const operationId = assertImportOperationId(input.operationId);
+    const record = await this.requireImportRecord(operationId);
+    return withRepoLock(record.repoPath, async () => {
+      const current = await this.requireImportRecord(operationId);
+      if (current.phase === "committed" || current.phase === "complete") {
+        return this.providerImportStatus(current);
+      }
+      if (current.phase !== "prepared") {
+        throw new Error(`Git import operation ${operationId} cannot commit from ${current.phase}`);
+      }
+      const published = await this.bridge.publishPreparedImport(current.prepared, {
+        summary: `Import ${current.repoPath} from Git branch ${current.branch}`,
+        ...(current.upstreamAuthorship ? { upstreamAuthorship: current.upstreamAuthorship } : {}),
+      });
+      if (published.stateHash !== current.prepared.stateHash) {
+        throw new Error(
+          `Git import ${operationId} published ${published.stateHash}, expected ${current.prepared.stateHash}`
+        );
+      }
+      const committed: ProviderImportRecord = { ...current, phase: "committed" };
+      await this.writeImportRecord(committed);
+      return this.providerImportStatus(committed);
+    });
+  }
+
+  async finalizeImport(input: { operationId: string }): Promise<ReturnType<UpstreamEngine["providerImportStatus"]>> {
+    const operationId = assertImportOperationId(input.operationId);
+    const record = await this.requireImportRecord(operationId);
+    return withRepoLock(record.repoPath, async () => {
+      let current = await this.requireImportRecord(operationId);
+      if (current.phase === "complete") return this.providerImportStatus(current);
+      if (current.phase === "requires-repair") {
+        const committed = await this.bridge.importOperationStatus(operationId);
+        if (committed?.stateHash === current.prepared.stateHash) {
+          current = { ...current, phase: "committed" };
+          delete current.error;
+          await this.writeImportRecord(current);
+        }
+      }
+      if (current.phase !== "committed") {
+        throw new Error(`Git import operation ${operationId} cannot finalize from ${current.phase}`);
+      }
+      const root = await this.workspaceRoot();
+      const { absolutePath } = resolveWorkspaceRepoPath(root, current.repoPath);
+      const scratchPath = this.ctx.storage.resolvePath(current.scratchRelative);
+      try {
+        await fsp.access(absolutePath);
+        const actualCommit = await this.gitClient().getCurrentCommit(absolutePath);
+        if (actualCommit !== current.prepared.gitCommitSha) {
+          throw new Error(
+            `authoritative checkout exists at a different commit (${actualCommit ?? "none"})`
+          );
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fsp.rename(scratchPath, absolutePath);
+        } else if (error instanceof Error && !error.message.startsWith("authoritative checkout")) {
+          throw error;
+        } else if (error instanceof Error) {
+          current = { ...current, phase: "requires-repair", error: error.message };
+          await this.writeImportRecord(current);
+          return this.providerImportStatus(current);
+        }
+      }
+      try {
+        await this.bridge.finalizePreparedImport(current.prepared, absolutePath);
+        const complete: ProviderImportRecord = { ...current, phase: "complete" };
+        await this.writeImportRecord(complete);
+        return this.providerImportStatus(complete);
+      } catch (error) {
+        const repair: ProviderImportRecord = {
+          ...current,
+          phase: "requires-repair",
+          error: errorMessage(error),
+        };
+        await this.writeImportRecord(repair);
+        return this.providerImportStatus(repair);
+      }
+    });
+  }
+
+  async inspectImport(input: { operationId: string }): Promise<ReturnType<UpstreamEngine["providerImportStatus"]> | null> {
+    const operationId = assertImportOperationId(input.operationId);
+    const record = await this.readImportRecord(operationId);
+    if (!record) return null;
+    if (record.phase === "prepared") {
+      const committed = await this.bridge.importOperationStatus(operationId);
+      if (committed) {
+        if (
+          committed.repoPath !== record.repoPath ||
+          committed.stateHash !== record.prepared.stateHash
+        ) {
+          const repair: ProviderImportRecord = {
+            ...record,
+            phase: "requires-repair",
+            error: "protected-main operation identity disagrees with the prepared candidate",
+          };
+          await this.writeImportRecord(repair);
+          return this.providerImportStatus(repair);
+        }
+        const recovered: ProviderImportRecord = { ...record, phase: "committed" };
+        await this.writeImportRecord(recovered);
+        return this.providerImportStatus(recovered);
+      }
+    }
+    return this.providerImportStatus(record);
+  }
+
+  async abortImport(input: { operationId: string }): Promise<ReturnType<UpstreamEngine["providerImportStatus"]>> {
+    const operationId = assertImportOperationId(input.operationId);
+    const record = await this.requireImportRecord(operationId);
+    return withRepoLock(record.repoPath, async () => {
+      const current = await this.requireImportRecord(operationId);
+      if (current.phase === "committed" || current.phase === "complete") {
+        throw new Error(`Git import operation ${operationId} has crossed its commit point`);
+      }
+      const aborted: ProviderImportRecord = { ...current, phase: "aborted" };
+      await fsp.rm(path.dirname(this.ctx.storage.resolvePath(current.scratchRelative)), {
+        recursive: true,
+        force: true,
+      });
+      await this.writeImportRecord(aborted);
+      return this.providerImportStatus(aborted);
+    });
+  }
+
+  private preparedStatus(record: ProviderImportRecord) {
+    return {
+      operationId: record.operationId,
+      repoPath: record.repoPath,
+      branch: record.branch,
+      gitCommitSha: record.prepared.gitCommitSha,
+      stateHash: record.prepared.stateHash,
+      changed: record.prepared.changed,
+      phase: "prepared" as const,
+    };
+  }
+
+  private providerImportStatus(record: ProviderImportRecord) {
+    return {
+      ...this.preparedStatus(record),
+      phase: record.phase,
+      ...(record.error ? { error: record.error } : {}),
+    };
+  }
+
+  private async requireImportRecord(operationId: string): Promise<ProviderImportRecord> {
+    const record = await this.readImportRecord(operationId);
+    if (!record) throw new Error(`Unknown Git import operation ${operationId}`);
+    return record;
+  }
+
+  private async readImportRecord(operationId: string): Promise<ProviderImportRecord | null> {
+    const file = this.ctx.storage.resolvePath(`imports/${operationId}/operation.json`);
+    try {
+      return parseProviderImportRecord(JSON.parse(await fsp.readFile(file, "utf8")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  private async writeImportRecord(record: ProviderImportRecord): Promise<void> {
+    const file = this.ctx.storage.resolvePath(`imports/${record.operationId}/operation.json`);
+    const temp = `${file}.tmp-${process.pid}`;
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    await fsp.rename(temp, file);
   }
 
   async resetExportMarker(repoPath: string): Promise<GitResetExportMarkerResult> {
@@ -1301,6 +1523,41 @@ export class UpstreamEngine {
       reasons: degraded,
     });
   }
+}
+
+function assertImportOperationId(value: string): string {
+  if (!IMPORT_OPERATION_ID_RE.test(value)) {
+    throw new Error(`Invalid Git import operation id: ${value}`);
+  }
+  return value;
+}
+
+function parseProviderImportRecord(value: unknown): ProviderImportRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Git import operation record");
+  }
+  const record = value as Partial<ProviderImportRecord>;
+  const phase = record.phase;
+  if (
+    record.version !== 1 ||
+    typeof record.operationId !== "string" ||
+    !IMPORT_OPERATION_ID_RE.test(record.operationId) ||
+    typeof record.repoPath !== "string" ||
+    typeof record.remoteName !== "string" ||
+    typeof record.branch !== "string" ||
+    typeof record.scratchRelative !== "string" ||
+    !record.prepared ||
+    typeof record.prepared !== "object" ||
+    record.prepared.operationId !== record.operationId ||
+    record.prepared.repoPath !== record.repoPath ||
+    !["prepared", "committed", "complete", "aborted", "requires-repair"].includes(
+      phase as string
+    ) ||
+    (record.error !== undefined && typeof record.error !== "string")
+  ) {
+    throw new Error(`Invalid Git import operation record ${String(record.operationId ?? "")}`);
+  }
+  return record as ProviderImportRecord;
 }
 
 function statusFromCounts(

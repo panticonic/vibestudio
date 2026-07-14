@@ -29,9 +29,12 @@ vibestudio remote serve --port 3030
 - `vibestudio remote doctor` checks node-datachannel, signaling, and the selected workspace's single identity file.
 - For local development, run signaling on Cloudflare's local runtime (`cd apps/signaling && wrangler dev --local`) — see `docs/webrtc-local-e2e.md`.
 
-### Dogfood mode from a source checkout
+### Developing Vibestudio on the remote host
 
-When the remote server is meant to edit Vibestudio itself, start it with `pnpm dev:self:server`. This layers a source-checkout workflow on top of pairing: a managed workspace with `projects/vibestudio`, userland pushes routed through the Vibestudio Git gateway and mirrored back into the host checkout when clean and fast-forwardable, then rebuild/restart on the same gateway port. Userland detects the mode via `meta/dogfood.json`.
+Import Vibestudio as `projects/vibestudio`, edit it through the normal context
+VCS, and launch the exact context state with the `devHost` service. An isolated
+development host pairs through an ordinary device credential and never receives
+the parent hub's admin token. There is no checkout-mirroring server mode.
 
 ## 2. Pair a client
 

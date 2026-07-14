@@ -140,7 +140,7 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
    * channel so the agent runs its loop without a user message. Wired via the
    * `vibestudio.yml recurring:` registry (server/harness caller only).
    */
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"] })
   async runScheduledJob(_args: unknown): Promise<{ ok: boolean; channels: number }> {
     const channelIds = this.subscriptions.listChannelIds();
     for (const channelId of channelIds) {

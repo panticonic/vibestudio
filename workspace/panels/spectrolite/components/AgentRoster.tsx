@@ -17,7 +17,7 @@ export function useVisibleRoster(): RosterAgent[] {
   const removedHandles = useAppState((s) => s.removedHandles);
   return useMemo(
     () => roster.filter((agent) => !removedHandles.includes(agent.handle)),
-    [roster, removedHandles],
+    [roster, removedHandles]
   );
 }
 
@@ -44,13 +44,16 @@ export function AgentRoster() {
   const agents = useVisibleRoster();
   const availableAgents = useAppState((s) => s.availableAgents);
   const [busy, setBusy] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
 
   const add = async (agentId: string) => {
     setBusy(true);
+    setOperationError(null);
     try {
       await app.session.addAgent(agentId);
     } catch (err) {
       console.warn("[Spectrolite] add agent failed:", err);
+      setOperationError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -58,10 +61,12 @@ export function AgentRoster() {
 
   const remove = async (handle: string) => {
     setBusy(true);
+    setOperationError(null);
     try {
       await app.session.removeAgent(handle);
     } catch (err) {
       console.warn("[Spectrolite] remove agent failed:", err);
+      setOperationError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -70,7 +75,9 @@ export function AgentRoster() {
   return (
     <Flex direction="column" gap="2">
       {agents.length === 0 ? (
-        <Text size="1" color="gray">No agents in the channel yet.</Text>
+        <Text size="1" color="gray">
+          No agents in the channel yet.
+        </Text>
       ) : (
         agents.map((agent) => (
           <Flex
@@ -85,8 +92,12 @@ export function AgentRoster() {
             style={{ minHeight: isMobile ? 48 : 36 }}
           >
             <Flex align="center" gap="2">
-              <span className="spectrolite-agent-avatar"><PersonIcon /></span>
-              <Text size="2" weight="medium">@{agent.handle}</Text>
+              <span className="spectrolite-agent-avatar">
+                <PersonIcon />
+              </span>
+              <Text size="2" weight="medium">
+                @{agent.handle}
+              </Text>
               <Badge size="1" color={agent.status === "live" ? "grass" : "gray"} variant="soft">
                 {agent.status}
               </Badge>
@@ -128,12 +139,20 @@ export function AgentRoster() {
                 data-testid={`spectrolite-agent-option-${a.className}`}
                 onSelect={() => void add(a.id)}
               >
-                {a.name} <Text color="gray" size="1">({a.className})</Text>
+                {a.name}{" "}
+                <Text color="gray" size="1">
+                  ({a.className})
+                </Text>
               </DropdownMenu.Item>
             ))
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Root>
+      {operationError ? (
+        <Text color="red" size="1" role="alert" data-testid="spectrolite-agent-operation-error">
+          {operationError}
+        </Text>
+      ) : null}
     </Flex>
   );
 }

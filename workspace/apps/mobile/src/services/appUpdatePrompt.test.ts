@@ -30,8 +30,8 @@ describe("handleMobileAppLifecycleEvent (update-available)", () => {
         type: "update-available",
         appId: "apps/mobile",
         buildKey: "build-2",
-        effectiveVersion: "1.2.0",
-        previousEffectiveVersion: "1.1.0",
+        executionDigest: "1.2.0",
+        previousSourceDigest: "1.1.0",
         previousBuildKey: "build-1",
       },
       deps
@@ -43,7 +43,7 @@ describe("handleMobileAppLifecycleEvent (update-available)", () => {
   it("surfaces just the target version when no previous version is known", () => {
     const { deps, alert } = makeDeps();
     handleMobileAppLifecycleEvent(
-      { type: "update-available", appId: "apps/mobile", buildKey: "build-2", effectiveVersion: "1.2.0" },
+      { type: "update-available", appId: "apps/mobile", buildKey: "build-2", executionDigest: "1.2.0" },
       deps
     );
     expect(alert.mock.calls[0][1]).toBe("apps/mobile v1.2.0 is ready to install.");
@@ -78,7 +78,7 @@ describe("handleMobileAppLifecycleEvent (update-available)", () => {
       type: "update-available" as const,
       appId: "apps/mobile",
       buildKey: "build-2",
-      effectiveVersion: "1.2.0",
+      executionDigest: "1.2.0",
     };
     handleMobileAppLifecycleEvent(event, deps);
     handleMobileAppLifecycleEvent(event, deps);

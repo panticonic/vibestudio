@@ -404,7 +404,7 @@ describe("pushNotifications", () => {
         callerId: "system",
         callerKind: "system",
         repoPath: "meta",
-        effectiveVersion: "ev-startup",
+        executionDigest: "ev-startup",
         requestedAt: 1,
         trigger: "startup",
         title: "Approve workspace units",

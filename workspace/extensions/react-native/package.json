@@ -4,15 +4,39 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "authority": {
+      "requests": [
+        {
+          "capability": "service:extensions.health",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.ready",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ]
+    },
     "displayName": "React Native Build Provider",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
-      "activationEvents": ["*"],
+      "activationEvents": [
+        "*"
+      ],
       "dependencyMode": "external",
-      "streamingMethods": ["buildArtifact"],
+      "streamingMethods": [
+        "buildArtifact"
+      ],
       "contributes": {
-        "buildTargets": ["react-native"]
+        "buildTargets": [
+          "react-native"
+        ]
       }
     }
   },

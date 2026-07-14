@@ -13,7 +13,7 @@ import { useChatContext } from "../context/ChatContext";
 export function PendingDeliveryQueue() {
   const { deferredAgent } = useChatContext();
   if (!deferredAgent || deferredAgent.queued.length === 0) return null;
-  const { queued, launching, launchFailed, retryLaunch, cancelQueued } = deferredAgent;
+  const { queued, launching, launchFailed, launchError, retryLaunch, cancelQueued } = deferredAgent;
 
   return (
     <Box flexShrink="0" className="pending-delivery-root" data-testid="pending-delivery-queue">
@@ -55,6 +55,18 @@ export function PendingDeliveryQueue() {
             </Button>
           )}
         </Flex>
+        {launchFailed && launchError && (
+          <Text
+            as="p"
+            size="1"
+            color="red"
+            mt="1"
+            className="pending-delivery-error"
+            data-testid="agent-launch-error"
+          >
+            {launchError}
+          </Text>
+        )}
         <Flex
           direction="column"
           gap="1"

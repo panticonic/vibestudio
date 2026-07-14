@@ -107,7 +107,7 @@ async function makeHarness(opts: {
     sql: driverHost.sql as never,
     gad: {
       // The driver runs INSIDE the agent DO, so its gad-store calls are attributed
-      // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ callers: ["do"] })`.
+      // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ principals: ["code"] })`.
       call: <T>(method: string, args: Record<string, unknown>) => {
         const fault = opts.gadFault?.(method);
         if (fault) return Promise.reject(fault);

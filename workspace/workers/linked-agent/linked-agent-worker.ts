@@ -262,7 +262,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return callerId;
   }
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async attach(opts?: { sessionInfo?: Record<string, unknown> }): Promise<{
     ok: boolean;
     cursor: number;
@@ -319,7 +319,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     };
   }
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async heartbeat(): Promise<{ ok: boolean; attached: boolean }> {
     this.requireBridgeCaller("heartbeat");
     const attachment = this.attachment();
@@ -330,14 +330,14 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, attached: true };
   }
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async detachSelf(): Promise<{ ok: boolean }> {
     this.requireBridgeCaller("detachSelf");
     await this.detach("bridge-detached");
     return { ok: true };
   }
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async ackDelivery(opts: { seq: number }): Promise<{ ok: boolean; ackSeq: number }> {
     this.requireBridgeCaller("ackDelivery");
     const seq = Number(opts?.seq);
@@ -522,7 +522,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Outbound: say / complete (plan §7.2) ───────────────────────────────────
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async say(opts: {
     text: string;
     to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
@@ -559,7 +559,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, messageId, channelId };
   }
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async completeFromBridge(opts: {
     report: string;
     outcome?: "success" | "failed";
@@ -585,7 +585,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
    * Caller gating is coarse (any extension may call); the worst a forged report
    * can do is settle-as-failed, which is the cancel path's power.
    */
-  @rpc({ callers: ["extension", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async reportExternalExit(opts: {
     runId?: string;
     code?: number | null;
@@ -612,7 +612,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, settled: true };
   }
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async linkedStatus(): Promise<{
     attached: boolean;
     sessionInfo: Record<string, unknown> | null;
@@ -691,7 +691,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Trajectory authorship from hook events (plan §7.4) ─────────────────────
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async ingestHookEvent(opts: {
     sessionId: string;
     seq: number;
@@ -1085,7 +1085,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Permission relay (plan §7.3) ───────────────────────────────────────────
 
-  @rpc({ callers: ["agent", "server"] })
+  @rpc({ principals: ["host", "entity"] })
   async requestPermission(opts: {
     requestId: string;
     toolName: string;

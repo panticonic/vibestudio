@@ -145,8 +145,8 @@ export { createRuntimeParentHandle } from "./handles.js";
  *     i.e. `rpc.call("main", "<name>.<method>", args)`.
  *
  * SECURITY: the fallback adds NO new access. It routes solely through `callMain`,
- * and the server dispatcher enforces each method's `policy.allowed`
- * (serviceDispatcher.ts `dispatch` → `checkServiceAccess`) at the single choke
+ * and the server dispatcher enforces each method's canonical authority
+ * (serviceDispatcher.ts `dispatch` → compositional authority) at the single choke
  * point — a `do`-denied method still rejects server-side. The proxy is purely
  * ergonomic reach, never an authorization bypass.
  *

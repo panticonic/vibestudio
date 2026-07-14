@@ -11,7 +11,7 @@ import {
 import { runExec } from "./exec.js";
 import { SessionManager } from "./sessionManager.js";
 import { prepareVscodeShellIntegrationLaunch } from "./shellIntegrationEnv.js";
-import { SnugServer } from "./snugServer.js";
+import { TerminalControlServer } from "./terminalControlServer.js";
 import { nodeSetInterval } from "./nodeTimers.js";
 import { LaunchAdapterRegistry } from "./launchAdapters.js";
 import {
@@ -43,7 +43,16 @@ function resolveWithin(root: string, input?: string): string {
 
 function cleanEnv(extra: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const key of ["PATH", "HOME", "LANG", "TERM"]) {
+  for (const key of [
+    "PATH",
+    "HOME",
+    "LANG",
+    "TERM",
+    "VIBESTUDIO_TOOLCHAIN_DIR",
+    "VIBESTUDIO_HOST_BUILD_ID",
+    "VIBESTUDIO_PNPM_PATH",
+    "VIBESTUDIO_TOOLCHAIN_RUNTIME_NODE_MODE",
+  ]) {
     const value = process.env[key];
     if (value) env[key] = value;
   }
@@ -62,7 +71,7 @@ function normalizeScratchExt(ext: string): string {
 }
 
 function isReservedMetaKey(key: string): boolean {
-  return key === "snugOpenUrl" || key === "snugSpawn";
+  return key === "terminalOpenUrl" || key === "terminalSpawn";
 }
 
 function scratchFilename(ext: string): string {
@@ -158,11 +167,11 @@ export async function activate(ctx: ExtensionContext) {
     string,
     { contextId: string; callerId: string; expiresAt: number }
   >();
-  let snug!: SnugServer;
+  let terminalControl!: TerminalControlServer;
   const sessions = new SessionManager(
     {
-      onExit: (sessionId) => snug.unregister(sessionId),
-      onDispose: (sessionId) => snug.unregister(sessionId),
+      onExit: (sessionId) => terminalControl.unregister(sessionId),
+      onDispose: (sessionId) => terminalControl.unregister(sessionId),
     },
     {
       detectAgent: (argv) => launchAdapters.detect(argv),
@@ -220,7 +229,7 @@ export async function activate(ctx: ExtensionContext) {
       buildContextAttachApproval({ contextId, callerId: owner.callerId, operation })
     );
   };
-  snug = new SnugServer({
+  terminalControl = new TerminalControlServer({
     list: (ownerCallerId) => sessions.list(ownerCallerId),
     setMeta: (sessionId, key, value) => sessions.setMetaById(sessionId, key, value),
     getMeta: (sessionId, key) => sessions.getMetaById(sessionId, key),
@@ -235,7 +244,7 @@ export async function activate(ctx: ExtensionContext) {
       const contextId = sessions.contextIdOf(sourceSessionId);
       const command = commandLine ? "/bin/sh" : (process.env["SHELL"] ?? "/bin/bash");
       const args = commandLine ? ["-c", commandLine] : [];
-      ctx.log.info?.("snug category-c request", {
+      ctx.log.info?.("terminal-control category-c request", {
         action: "split",
         sourceSessionId,
         direction,
@@ -251,7 +260,7 @@ export async function activate(ctx: ExtensionContext) {
           buildOpenApproval({ command, args, cwd, label: commandLine })
         );
       } catch (err) {
-        ctx.log.info?.("snug category-c decision", {
+        ctx.log.info?.("terminal-control category-c decision", {
           action: "split",
           sourceSessionId,
           decision: "deny",
@@ -260,18 +269,18 @@ export async function activate(ctx: ExtensionContext) {
         });
         throw err;
       }
-      ctx.log.info?.("snug category-c decision", {
+      ctx.log.info?.("terminal-control category-c decision", {
         action: "split",
         sourceSessionId,
         decision: "allow",
         caller: owner.callerId,
       });
-      const snugEnv = snug.envForSession(cleanEnv({}));
+      const terminalEnv = terminalControl.envForSession(cleanEnv({}));
       try {
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
           args,
-          env: snugEnv.env,
+          env: terminalEnv.env,
         });
         const result = sessions.open(
           {
@@ -286,22 +295,22 @@ export async function activate(ctx: ExtensionContext) {
           },
           owner
         );
-        snug.register(snugEnv.token, result.sessionId);
-        sessions.setMetaById(result.sessionId, "snugSpawn", {
+        terminalControl.register(terminalEnv.token, result.sessionId);
+        sessions.setMetaById(result.sessionId, "terminalSpawn", {
           parentSessionId: sourceSessionId,
           direction,
         });
         return result.sessionId;
       } catch (err) {
-        snug.discardPending(snugEnv.token);
+        terminalControl.discardPending(terminalEnv.token);
         throw err;
       }
     },
     openUrl: async (_sessionId, url) => {
-      if (!/^https?:\/\//.test(url)) throw error("EINVAL", "snug open only supports http(s) URLs");
+      if (!/^https?:\/\//.test(url)) throw error("EINVAL", "terminal open only supports http(s) URLs");
       const owner = sessions.ownerFor(_sessionId);
       if (!owner) throw error("ENOENT", "Unknown source session");
-      ctx.log.info?.("snug category-c request", {
+      ctx.log.info?.("terminal-control category-c request", {
         action: "open-url",
         sourceSessionId: _sessionId,
         url,
@@ -310,7 +319,7 @@ export async function activate(ctx: ExtensionContext) {
       try {
         await requireApproval(ctx, "open", buildUrlOpenApproval({ url }));
       } catch (err) {
-        ctx.log.info?.("snug category-c decision", {
+        ctx.log.info?.("terminal-control category-c decision", {
           action: "open-url",
           sourceSessionId: _sessionId,
           decision: "deny",
@@ -319,21 +328,21 @@ export async function activate(ctx: ExtensionContext) {
         });
         throw err;
       }
-      ctx.log.info?.("snug category-c decision", {
+      ctx.log.info?.("terminal-control category-c decision", {
         action: "open-url",
         sourceSessionId: _sessionId,
         decision: "allow",
         caller: owner.callerId,
       });
-      sessions.setMetaById(_sessionId, "snugOpenUrl", {
+      sessions.setMetaById(_sessionId, "terminalOpenUrl", {
         id: randomUUID(),
         url,
         requestedAt: Date.now(),
       });
     },
   });
-  await snug.start();
-  const scratchDir = path.join(workspace.path, ".snug", "scratch");
+  await terminalControl.start();
+  const scratchDir = path.join(workspace.path, ".vibestudio", "terminal", "scratch");
   void sweepScratch(scratchDir);
   const scratchJanitor = nodeSetInterval(
     () => void sweepScratch(scratchDir),
@@ -385,7 +394,7 @@ export async function activate(ctx: ExtensionContext) {
         owner
       );
       const root = await confinementRoot(parsed.contextId);
-      const cwd = resolveWithin(root, parsed.cwd);
+      let cwd = resolveWithin(root, parsed.cwd);
       const env = cleanEnv(parsed.env);
       const {
         env: _env,
@@ -417,7 +426,7 @@ export async function activate(ctx: ExtensionContext) {
         owner
       );
       const root = await confinementRoot(parsed.contextId);
-      const cwd = resolveWithin(root, parsed.cwd);
+      let cwd = resolveWithin(root, parsed.cwd);
       let command = parsed.command ?? process.env["SHELL"] ?? "/bin/bash";
       let args = parsed.args;
       const {
@@ -441,13 +450,17 @@ export async function activate(ctx: ExtensionContext) {
           try {
             const rewrite = (await ctx.extensions.invoke(handler.extension, handler.method, [
               { contextId: parsed.contextId, argv, cwd, env: parsed.env },
-            ])) as { env?: Record<string, string>; argv?: string[] } | null | undefined;
+            ])) as
+              | { env?: Record<string, string>; argv?: string[]; cwd?: string }
+              | null
+              | undefined;
             if (rewrite?.argv && rewrite.argv.length > 0) {
               const [nextCommand, ...nextArgs] = rewrite.argv;
               command = nextCommand ?? command;
               args = nextArgs;
             }
             if (rewrite?.env) handlerEnv = rewrite.env;
+            if (rewrite?.cwd) cwd = path.resolve(rewrite.cwd);
           } catch (err) {
             ctx.log.debug?.("launch adapter handler failed; launching untouched", {
               extension: handler.extension,
@@ -467,7 +480,7 @@ export async function activate(ctx: ExtensionContext) {
           label: parsed.label,
         })
       );
-      const { env, token } = snug.envForSession(cleanEnv({ ...parsed.env, ...handlerEnv }));
+      const { env, token } = terminalControl.envForSession(cleanEnv({ ...parsed.env, ...handlerEnv }));
       try {
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
@@ -485,10 +498,10 @@ export async function activate(ctx: ExtensionContext) {
           },
           owner
         );
-        snug.register(token, result.sessionId);
+        terminalControl.register(token, result.sessionId);
         return result;
       } catch (err) {
-        snug.discardPending(token);
+        terminalControl.discardPending(token);
         throw err;
       }
     },
@@ -529,7 +542,7 @@ export async function activate(ctx: ExtensionContext) {
     },
 
     async dispose(sessionId: string) {
-      snug.unregister(sessionId);
+      terminalControl.unregister(sessionId);
       let session;
       try {
         session = sessions.requireOwner(sessionId, currentOwner(ctx).callerId);
@@ -542,13 +555,13 @@ export async function activate(ctx: ExtensionContext) {
 
     async restart(sessionId: string, opts?: { cols?: number; rows?: number }) {
       const session = sessions.requireOwner(sessionId, currentOwner(ctx).callerId);
-      const snugEnv = snug.envForSession(cleanEnv({}));
+      const terminalEnv = terminalControl.envForSession(cleanEnv({}));
       try {
         const [command, ...args] = session.command.argv;
         const launch = await prepareVscodeShellIntegrationLaunch({
           command: command ?? process.env["SHELL"] ?? "/bin/bash",
           args,
-          env: snugEnv.env,
+          env: terminalEnv.env,
         });
         const result = sessions.restart(session, {
           ...(opts?.cols ? { cols: opts.cols } : {}),
@@ -557,10 +570,10 @@ export async function activate(ctx: ExtensionContext) {
           args: launch.args,
           env: launch.env,
         });
-        snug.register(snugEnv.token, result.sessionId);
+        terminalControl.register(terminalEnv.token, result.sessionId);
         return result;
       } catch (err) {
-        snug.discardPending(snugEnv.token);
+        terminalControl.discardPending(terminalEnv.token);
         throw err;
       }
     },

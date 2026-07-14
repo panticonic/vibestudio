@@ -120,7 +120,6 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
   let workspaceRoot: string;
   let repoDir: string;
   let gad: TestGad;
-  let doi: GadWorkspaceDO;
   let mem: ReturnType<typeof createMemoryBlobstore>;
   let refs: Map<string, string>;
   let published: string[];
@@ -133,7 +132,6 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     await fsp.mkdir(workspaceRoot);
     repoDir = path.join(workspaceRoot, ...REPO.split("/"));
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "git-bridge" });
-    doi = gad.instance;
     mem = createMemoryBlobstore();
     refs = new Map();
     published = [];
@@ -141,14 +139,22 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     const host: BridgeHost = {
       workspaceRoot: async () => workspaceRoot,
       store: {
-        vcsLog: async (repoPath, limit, head) => doi.vcsLog(repoPath, limit, head),
+        vcsLog: async (repoPath, limit, head) =>
+          gad.callAs("extension", "vcsLog", repoPath, limit, head),
         ingestWorktreeState: (input) =>
-          doi.ingestWorktreeState(input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]),
+          gad.callAs(
+            "extension",
+            "ingestWorktreeState",
+            input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]
+          ),
         // Test double of the DO's `vcsImportPublish`: adopt the ingested
         // staging head into the ref map and mirror the publish on the main log.
         // The gated single-writer publish is exercised in doImport.test.ts.
         importPublish: async ({ repoPath, sourceHead }) => {
-          const head = doi.resolveWorktreeHead({ logId: `vcs:repo:${repoPath}`, head: sourceHead });
+          const head = await gad.call<ReturnType<GadWorkspaceDO["resolveWorktreeHead"]>>(
+            "resolveWorktreeHead",
+            { logId: `vcs:repo:${repoPath}`, head: sourceHead }
+          );
           const stateHash = head?.stateHash ? String(head.stateHash) : "";
           if (stateHash && refs.get(`${repoPath} main`) !== stateHash) {
             const listing = await mem.store.listTree(stateHash);
@@ -170,7 +176,9 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
                 size: mem.blobs.get(entry.contentHash)?.byteLength ?? 0,
                 mode: entry.mode ?? 33188,
               }));
-            const published = await doi.ingestWorktreeState({
+            const mainPublication = await gad.call<
+              Awaited<ReturnType<GadWorkspaceDO["ingestWorktreeState"]>>
+            >("ingestWorktreeState", {
               logId: `vcs:repo:${repoPath}`,
               head: "main",
               logKind: "vcs",
@@ -178,9 +186,9 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
               files,
               summary: "import publish",
             });
-            if (published.stateHash !== stateHash) {
+            if (mainPublication.stateHash !== stateHash) {
               throw new Error(
-                `publish mirror returned ${published.stateHash}, expected ${stateHash}`
+                `publish mirror returned ${mainPublication.stateHash}, expected ${stateHash}`
               );
             }
           }
@@ -188,6 +196,7 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
           published.push(repoPath);
           return { status: "published" as const, repoPath, stateHash };
         },
+        importStatus: async () => null,
       },
       blobstore: mem.store,
       refs: {
@@ -264,14 +273,17 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     }
     files.sort((a, b) => (a.path < b.path ? -1 : 1));
     const stateHash = await mirrorTree(files);
-    const result = await doi.ingestWorktreeState({
+    const result = await gad.call<Awaited<ReturnType<GadWorkspaceDO["ingestWorktreeState"]>>>(
+      "ingestWorktreeState",
+      {
       logId: LOG,
       head: "main",
       logKind: "vcs",
       actor: { id: "user", kind: "user" },
       files,
       summary: "seed",
-    });
+      }
+    );
     expect(result.stateHash).toBe(stateHash);
     refs.set(`${REPO} main`, result.stateHash);
     return result.stateHash;
@@ -304,7 +316,9 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
 
   it("rejects a state without its canonical content-store tree", async () => {
     const content = Buffer.from("unmirrored\n", "utf8");
-    const result = await doi.ingestWorktreeState({
+    const result = await gad.call<Awaited<ReturnType<GadWorkspaceDO["ingestWorktreeState"]>>>(
+      "ingestWorktreeState",
+      {
       logId: LOG,
       head: "main",
       logKind: "vcs",
@@ -318,7 +332,8 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
         },
       ],
       summary: "unmirrored state",
-    });
+      }
+    );
     expect(await mem.store.listTree(result.stateHash)).toBeNull();
 
     await expect(bridge.exportRepoHead(REPO)).rejects.toThrow(
@@ -330,7 +345,12 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     const stateHash = await commitRepo({ "a.txt": "one\n" });
     const result = await bridge.exportRepoHead(REPO);
 
-    const [newest] = (await doi.vcsLog(REPO, 1, "main")) as Array<{ envelopeId: string }>;
+    const [newest] = await gad.call<Array<{ envelopeId: string }>>(
+      "vcsLog",
+      REPO,
+      1,
+      "main"
+    );
     expect(JSON.parse(state.get(`marker:${REPO}`)!)).toEqual({
       version: 1,
       kind: "export-marker",
@@ -575,7 +595,10 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
 
     // The vcs (gad-store DO) sees the imported history on the NON-MAIN staging
     // head — extensions never write the protected main lineage directly…
-    const staging = doi.resolveWorktreeHead({ logId: LOG, head: "import:main" });
+    const staging = await gad.call<ReturnType<GadWorkspaceDO["resolveWorktreeHead"]>>(
+      "resolveWorktreeHead",
+      { logId: LOG, head: imported.sourceHead }
+    );
     expect(staging?.stateHash).toBe(imported.stateHash);
     // …the protected ref was published through the DO's import path (doubled)…
     expect(published).toEqual([REPO]);
@@ -587,7 +610,12 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     const blob = await mem.store.getBase64(external!.contentHash!);
     expect(Buffer.from(blob!, "base64").toString("utf8")).toBe("from github\n");
     // …and the transition is on the staging lineage with the import summary.
-    const log = doi.vcsLog(REPO, 1, "import:main");
+    const log = await gad.call<Awaited<ReturnType<GadWorkspaceDO["vcsLog"]>>>(
+      "vcsLog",
+      REPO,
+      1,
+      imported.sourceHead
+    );
     expect(log[0]).toMatchObject({
       outputStateHash: imported.stateHash,
       summary: expect.stringContaining(`Import ${REPO} from git @ `),
@@ -601,7 +629,7 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
 
     // Unchanged re-import no-ops against the adopted protected ref.
     const again = await bridge.importRepoTree(REPO);
-    expect(again).toEqual({ stateHash: imported.stateHash, changed: false });
+    expect(again).toMatchObject({ stateHash: imported.stateHash, changed: false });
   });
 
   it("round-trips an external git edit through import and a later export", async () => {
@@ -667,21 +695,41 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     expect(ok.stateHash).toBeTruthy();
   });
 
-  it("never ingests platform-ignored paths (.git, .env, node_modules)", async () => {
+  it("imports only the exact commit tree, independent of ignored and untracked files", async () => {
     await commitRepo({ "a.txt": "one\n" });
     await bridge.exportRepoHead(REPO);
 
     await fsp.writeFile(path.join(repoDir, ".env"), "SECRET=1\n");
     await fsp.mkdir(path.join(repoDir, "node_modules", "x"), { recursive: true });
     await fsp.writeFile(path.join(repoDir, "node_modules", "x", "i.js"), "x\n");
-    await fsp.writeFile(path.join(repoDir, "kept.txt"), "kept\n");
+    await fsp.writeFile(path.join(repoDir, "kept.txt"), "untracked too\n");
+
+    const imported = await bridge.importRepoTree(REPO);
+    expect(imported.changed).toBe(false);
+    const paths = (await mem.store.listTree(imported.stateHash))
+      ?.filter((e) => e.kind === "file")
+      .map((e) => e.path);
+    expect(paths).toEqual(["a.txt"]);
+  });
+
+  it("preserves tracked files exactly even when their names are commonly ignored", async () => {
+    await commitRepo({ "a.txt": "one\n" });
+    await bridge.exportRepoHead(REPO);
+    await fsp.writeFile(path.join(repoDir, ".env"), "TRACKED_VALUE=preserve-me\n");
+    await fsp.mkdir(path.join(repoDir, "node_modules/fixture"), { recursive: true });
+    await fsp.writeFile(
+      path.join(repoDir, "node_modules/fixture/index.js"),
+      "export const fixture = true;\n"
+    );
+    git(repoDir, ["add", "-f", ".env", "node_modules/fixture/index.js"]);
+    git(repoDir, ["commit", "-m", "track conventionally ignored source"]);
 
     const imported = await bridge.importRepoTree(REPO);
     expect(imported.changed).toBe(true);
     const paths = (await mem.store.listTree(imported.stateHash))
-      ?.filter((e) => e.kind === "file")
-      .map((e) => e.path);
-    expect(paths).toEqual(["a.txt", "kept.txt"]);
+      ?.filter((entry) => entry.kind === "file")
+      .map((entry) => entry.path);
+    expect(paths?.slice().sort()).toEqual([".env", "a.txt", "node_modules/fixture/index.js"]);
   });
 
   it("keeps per-actor author names when only authorEmail is overridden", async () => {

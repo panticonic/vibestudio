@@ -366,7 +366,6 @@ export function ApprovalCard({
         className="approval-card-footer"
         disabled={actionPending}
         aria-busy={actionPending}
-        style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
       >
         {actions}
         {actionPending ? (
@@ -1163,7 +1162,7 @@ function ApprovalDetails({
         <Detail
           icon={<LockClosedIcon />}
           label="Requester version"
-          value={<IdCode value={approval.effectiveVersion} />}
+          value={<IdCode value={approval.executionDigest} />}
         />
         {approval.kind === "credential" ? (
           <CredentialDetails approval={approval} />
@@ -1592,7 +1591,7 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
         </Text>
       ) : null}
       {approval.units.map((entry) => {
-        const deps = Object.entries(entry.dependencyEvs ?? {});
+        const deps = Object.entries(entry.dependencySourceDigests ?? {});
         const external = Object.entries(entry.externalDeps ?? {});
         return (
           <details key={`${entry.unitKind}:${entry.unitName}`} className="approval-details">
@@ -1619,8 +1618,8 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
                 label="Source"
                 value={<InlineCode>{`${entry.source.repo}@${entry.source.ref}`}</InlineCode>}
               />
-              {entry.ev ? (
-                <Detail icon={<LockClosedIcon />} label="EV" value={<IdCode value={entry.ev} />} />
+              {entry.sourceDigest ? (
+                <Detail icon={<LockClosedIcon />} label="Source digest" value={<IdCode value={entry.sourceDigest} />} />
               ) : null}
               {entry.integrity ? (
                 <Detail
@@ -1634,7 +1633,7 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
                   icon={<GearIcon />}
                   label="Provider"
                   value={
-                    <InlineCode>{`${entry.provider.name}@${entry.provider.activeEv ?? "unknown"}`}</InlineCode>
+                    <InlineCode>{`${entry.provider.name}@${entry.provider.activeSourceDigest ?? "unknown"}`}</InlineCode>
                   }
                 />
               ) : null}

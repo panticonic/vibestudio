@@ -178,8 +178,15 @@ export class EditEngine {
     for (const op of edits) {
       // Store-boundary path guards (any client-side guard is bypassable).
       assertSafeVcsPath(op.path);
-      if (op.kind === "create" || op.kind === "write") assertWritableVcsEditPath(op.path);
       const before = files.get(op.path);
+      // A protected scratch/secret-looking path may legitimately exist in an
+      // imported canonical tree. It remains editable and deletable once it is
+      // authoritative; only introducing a previously-untracked ignored path is
+      // refused. This preserves Git-tree fidelity without letting native
+      // scratch accidentally enter GAD.
+      if (op.kind === "create" || (op.kind === "write" && !before)) {
+        assertWritableVcsEditPath(op.path);
+      }
       const oldHash = before?.contentHash ?? null;
       if (op.kind === "delete") {
         if (!files.delete(op.path)) throw new Error(`delete: no such path ${op.path}`);

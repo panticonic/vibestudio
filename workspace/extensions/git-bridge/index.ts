@@ -72,6 +72,7 @@ function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
       vcsLog: (repoPath, limit, head) => vcsCall("vcsLog", repoPath, limit, head),
       ingestWorktreeState: (input) => vcsCall("ingestWorktreeState", input),
       importPublish: (input) => vcsCall("vcsImportPublish", input),
+      importStatus: (input) => vcsCall("vcsImportOperationStatus", input),
     },
     blobstore: {
       has: (digest) => main("blobstore.has", digest),
@@ -143,8 +144,20 @@ export async function activate(ctx: ExtensionContextLike) {
     pushDisposableRemote(input: { repoPath: string; url: string; branch: string }) {
       return upstream.pushDisposableRemote(input);
     },
-    cloneRepo(input: { repoPath: string }) {
-      return upstream.cloneRepo(input);
+    prepareImport(input: Parameters<UpstreamEngine["prepareImport"]>[0]) {
+      return upstream.prepareImport(input);
+    },
+    commitImport(input: { operationId: string }) {
+      return upstream.commitImport(input);
+    },
+    finalizeImport(input: { operationId: string }) {
+      return upstream.finalizeImport(input);
+    },
+    inspectImport(input: { operationId: string }) {
+      return upstream.inspectImport(input);
+    },
+    abortImport(input: { operationId: string }) {
+      return upstream.abortImport(input);
     },
     remoteDefaultBranch(input: { url: string; credentialId?: string }) {
       return upstream.remoteDefaultBranch(input);

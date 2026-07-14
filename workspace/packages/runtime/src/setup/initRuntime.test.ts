@@ -364,23 +364,54 @@ describe("initRuntime", () => {
             const message = envelope.message;
             if (message.type !== "request") return;
             sends.push({ targetId: envelope.target, method: message.method, args: message.args });
-            deliver(
-              responseFor(
-                envelope,
-                message.method === "panelTree.list"
-                  ? [
-                      {
-                        panelId: "sibling-slot",
-                        title: "Sibling",
-                        source: "panels/sibling",
-                        kind: "workspace",
-                        parentId: "parent-slot",
-                        runtimeEntityId: "panel:sibling-entity",
-                      },
-                    ]
-                  : undefined
-              )
-            );
+            const result = (() => {
+              switch (message.method) {
+                case "panelTree.close":
+                  return {
+                    panelId: "parent-slot",
+                    operation: "close",
+                    status: "closed",
+                    loaded: false,
+                    rebuilt: false,
+                    reloaded: false,
+                  };
+                case "panelTree.navigate":
+                  return {
+                    id: "parent-slot",
+                    title: "Parent",
+                    source: "panels/next",
+                    kind: "workspace",
+                    contextId: "ctx-next",
+                  };
+                case "panelTree.metadata":
+                  return {
+                    id: "parent-slot",
+                    title: "Parent",
+                    source: "panels/next",
+                    kind: "workspace",
+                    parentId: null,
+                    contextId: "ctx-next",
+                    runtimeEntityId: "panel:parent-entity",
+                  };
+                case "panelTree.setStateArgs":
+                  return { mode: "fixture" };
+                case "panelTree.list":
+                  return [
+                    {
+                      panelId: "sibling-slot",
+                      title: "Sibling",
+                      source: "panels/sibling",
+                      kind: "workspace",
+                      parentId: "parent-slot",
+                      contextId: "ctx-1",
+                      runtimeEntityId: "panel:sibling-entity",
+                    },
+                  ];
+                default:
+                  return undefined;
+              }
+            })();
+            deliver(responseFor(envelope, result));
           },
         }),
       fs: {} as never,
@@ -434,7 +465,7 @@ describe("initRuntime", () => {
               responseFor(envelope, {
                 id: "worker:workers/agent:agent",
                 kind: "worker",
-                source: { repoPath: "workers/agent", effectiveVersion: "ev-1" },
+                source: { repoPath: "workers/agent" },
                 contextId: "ctx-1",
                 targetId: "worker:workers/agent:agent",
               })

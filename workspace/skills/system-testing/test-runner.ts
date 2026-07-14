@@ -253,7 +253,12 @@ export class TestRunner {
       let modelExecutionEvidence: unknown;
       if (session) {
         try {
-          modelExecutionEvidence = await session.captureModelExecutionEvidence();
+          const evidenceTimeoutMs = Math.min(testTimeoutMs ?? 5_000, 5_000);
+          modelExecutionEvidence = await this.withTimeout(
+            session.captureModelExecutionEvidence(),
+            evidenceTimeoutMs,
+            `Timed out capturing model evidence for failed test "${test.name}"`
+          );
         } catch (evidenceErr) {
           console.warn(
             "[system-testing] Failed to capture model evidence for failed headless session:",
@@ -498,9 +503,7 @@ export class TestRunner {
         calls
           .slice(0, fallbackIndex)
           .some(
-            (call) =>
-              call?.["ref"] !== policy.primaryModel ||
-              call?.["outcome"] !== "failed"
+            (call) => call?.["ref"] !== policy.primaryModel || call?.["outcome"] !== "failed"
           ) ||
         refs.slice(fallbackIndex).some((ref) => ref !== policy.activeModel);
       if (invalidTransition) {

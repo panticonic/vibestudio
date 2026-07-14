@@ -4,9 +4,206 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "authority": {
+      "requests": [
+        {
+          "capability": "rpc:vcsPush",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:blobstore.getRangeBytes",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:blobstore.putText",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:credentials.resolveCredential",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:docs.describe",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:docs.getSchema",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:docs.search",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:eval.run",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.invoke",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.access",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.grep",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.readFile",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.readdir",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.stat",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.writeFile",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.commit",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.contextDiff",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.discardEdits",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.edit",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.merge",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.pick",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:vcs.readFile",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workers.resolveService",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.getAgentsMd",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.listSkills",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.readSkill",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "userland-service:vcs",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ]
+    },
     "entry": "index.ts",
     "durable": {
-      "classes": [{ "className": "SilentAgentWorker" }]
+      "classes": [
+        {
+          "className": "SilentAgentWorker"
+        }
+      ]
     },
     "exposeModules": [
       "@workspace/runtime",

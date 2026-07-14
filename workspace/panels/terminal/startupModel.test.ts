@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { terminalStartupDetail, terminalStartupPendingLabel } from "./startupModel.js";
+import {
+  isRetryableShellStartupError,
+  terminalStartupDetail,
+  terminalStartupPendingLabel,
+} from "./startupModel.js";
 
 describe("terminal startup model", () => {
   it("does not show a pending label when no session open is pending", () => {
@@ -46,5 +50,21 @@ describe("terminal startup model", () => {
       shellUnit: { status: "running" },
       error: null,
     }).detail).toContain("approval bar");
+  });
+
+  it("retries extension activation-window failures", () => {
+    expect(isRetryableShellStartupError(Object.assign(new Error("not ready"), { code: "ENOTREADY" })))
+      .toBe(true);
+    expect(isRetryableShellStartupError(new Error("Extension is not installed: @workspace-extensions/shell")))
+      .toBe(true);
+    expect(isRetryableShellStartupError(new Error("Target bridge not reachable: shell")))
+      .toBe(true);
+  });
+
+  it("does not retry denials or real shell failures", () => {
+    expect(isRetryableShellStartupError(Object.assign(new Error("Denied"), { code: "EACCES" })))
+      .toBe(false);
+    expect(isRetryableShellStartupError(new Error("node-pty could not spawn /bin/bash")))
+      .toBe(false);
   });
 });

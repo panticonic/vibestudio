@@ -4,12 +4,77 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "authority": {
+      "requests": [
+        {
+          "capability": "service:extensions.emit",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.health",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.log",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:extensions.ready",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.mkdir",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.readFile",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:fs.writeFile",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        },
+        {
+          "capability": "service:workspace.getInfo",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          }
+        }
+      ]
+    },
     "displayName": "Local Models",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
-      "activationEvents": ["*"],
-      "streamingMethods": ["downloadModel", "tailServerLog"]
+      "activationEvents": [
+        "*"
+      ],
+      "streamingMethods": [
+        "downloadModel",
+        "tailServerLog"
+      ]
     }
   }
 }

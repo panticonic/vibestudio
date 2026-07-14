@@ -73,6 +73,18 @@ import { ChannelLog, type ChannelReplayContext, type MessageTypeDefinition } fro
 import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
 import { CallTransport, type PendingCallRow } from "./calls.js";
 import type { PolicyEnvelopeView } from "@workspace/channel-policies";
+import type {
+  ChannelCreation,
+  ChannelRecord,
+  ChannelStructureRevision,
+} from "@vibestudio/shared/channelStructure";
+import {
+  allOf,
+  anyOf,
+  methodCapability,
+  relationship,
+  type Principal,
+} from "@vibestudio/shared/authorization";
 
 /** How long before an RPC participant is considered stale (no heartbeat). */
 const PARTICIPANT_STALE_MS = 5 * 60 * 1000; // 5 minutes
@@ -104,6 +116,17 @@ const INVITE_INDEX_RETRY_MS = 5_000;
 const INVITE_INDEX_REVISION_KEY = "inviteIndexRevision";
 
 const DEFAULT_POLICY_NAME = "agentic.conversation.v1";
+
+const CHANNEL_ADMIN_AUTHORITY = {
+  requires: anyOf(
+    methodCapability("host"),
+    allOf(
+      methodCapability("user"),
+      relationship("workspace-member"),
+      anyOf(relationship("workspace-role", "root"), relationship("workspace-role", "admin"))
+    )
+  ),
+} as const;
 
 /** Service protocol the channel DO resolves for sibling channels (fork parent,
  *  lineage forwarding). */
@@ -239,6 +262,110 @@ function requireBareUserId(value: unknown, method: string): string {
   return value.trim();
 }
 
+function validatePrincipal(value: unknown): Principal {
+  if (
+    typeof value !== "string" ||
+    !(
+      /^(host|user|device|entity):[^\s]+$/u.test(value) ||
+      /^code:[^@\s]+@[0-9a-f]{64}$/u.test(value)
+    )
+  ) {
+    throw new Error(`Invalid channel principal: ${String(value)}`);
+  }
+  return value as Principal;
+}
+
+function validateChannelCreation(value: ChannelCreation): ChannelCreation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("createChannel: creation record is required");
+  }
+  const keys = Object.keys(value).sort();
+  if (
+    JSON.stringify(keys) !==
+    JSON.stringify([
+      "admission",
+      "contextBinding",
+      "governance",
+      "origin",
+      "presentation",
+      "presentationEditors",
+    ])
+  ) {
+    throw new Error("createChannel: creation record has unknown or missing fields");
+  }
+  if (value.governance !== "standard" && value.governance !== "locked") {
+    throw new Error("createChannel: governance must be standard or locked");
+  }
+  if (
+    value.contextBinding?.kind !== "context" ||
+    typeof value.contextBinding.contextId !== "string" ||
+    value.contextBinding.contextId.length === 0
+  ) {
+    throw new Error("createChannel: exact context binding is required");
+  }
+  if (!value.origin || typeof value.origin.kind !== "string" || value.origin.kind.length === 0) {
+    throw new Error("createChannel: origin kind is required");
+  }
+  const validatePolicy = (
+    policy: ChannelCreation["admission"] | ChannelCreation["presentationEditors"],
+    label: string
+  ): void => {
+    if (!policy || typeof policy !== "object") throw new Error(`createChannel: ${label} required`);
+    if (policy.kind === "workspace-members" || policy.kind === "owner") return;
+    if (policy.kind === "channel-members" && label === "admission") return;
+    if (policy.kind === "principals" && Array.isArray(policy.allow)) {
+      for (const principal of policy.allow) validatePrincipal(principal);
+      if (new Set(policy.allow).size !== policy.allow.length) {
+        throw new Error(`createChannel: ${label} principals must be unique`);
+      }
+      if ("entityCodeBindings" in policy) {
+        if (label !== "admission" || !Array.isArray(policy.entityCodeBindings)) {
+          throw new Error("createChannel: entityCodeBindings are valid only for admission");
+        }
+        const entities = new Set<string>();
+        for (const binding of policy.entityCodeBindings) {
+          const entity = validatePrincipal(binding?.entity);
+          const code = validatePrincipal(binding?.code);
+          if (!entity.startsWith("entity:") || !code.startsWith("code:")) {
+            throw new Error("createChannel: admission binding requires entity and code principals");
+          }
+          if (!policy.allow.includes(entity)) {
+            throw new Error("createChannel: bound entity must also appear in admission allow");
+          }
+          if (entities.has(entity)) {
+            throw new Error("createChannel: an admitted entity may have only one code binding");
+          }
+          entities.add(entity);
+        }
+      }
+      return;
+    }
+    throw new Error(`createChannel: invalid ${label} policy`);
+  };
+  validatePolicy(value.admission, "admission");
+  validatePolicy(value.presentationEditors, "presentationEditors");
+  canonicalJson(value.presentation);
+  return JSON.parse(canonicalJson(value)) as ChannelCreation;
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (input: unknown): unknown => {
+    if (input === null || typeof input === "string" || typeof input === "boolean") return input;
+    if (typeof input === "number" && Number.isFinite(input)) return input;
+    if (Array.isArray(input)) return input.map(normalize);
+    if (input && typeof input === "object") {
+      return Object.fromEntries(
+        Object.entries(input as Record<string, unknown>)
+          .filter(([, child]) => child !== undefined)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, child]) => [key, normalize(child)])
+      );
+    }
+    throw new Error(`Channel record is not JSON-compatible (${typeof input})`);
+  };
+  return JSON.stringify(normalize(value));
+}
+
 /**
  * A human roster row stores ONLY the stable identity (`id: user:<userId>`,
  * `kind: "user"`) plus functional transport fields (methods, typing, …).
@@ -317,7 +444,7 @@ interface ChannelPresenceEntry {
 }
 
 export class PubSubChannel extends DurableObjectBase {
-  static override schemaVersion = 112;
+  static override schemaVersion = 113;
   private _channelLog: ChannelLog | null = null;
   private _inviteIndex: DurableObjectServiceClient | null = null;
   private _policyHost: PolicyHost | null = null;
@@ -336,6 +463,24 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   protected createTables(): void {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_root (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        current_revision TEXT NOT NULL,
+        creation_json TEXT NOT NULL,
+        presentation_json TEXT NOT NULL,
+        presentation_revision INTEGER NOT NULL,
+        deleted_at INTEGER
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_structure_revisions (
+        revision_id TEXT PRIMARY KEY,
+        predecessor TEXT,
+        structure_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS participants (
         id TEXT PRIMARY KEY,
@@ -482,6 +627,8 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   protected override migrate(_fromVersion: number, _toVersion: number): void {
+    this.sql.exec(`DROP TABLE IF EXISTS channel_root`);
+    this.sql.exec(`DROP TABLE IF EXISTS channel_structure_revisions`);
     this.sql.exec(`DROP INDEX IF EXISTS idx_channel_envelopes_published_at`);
     this.sql.exec(`DROP INDEX IF EXISTS idx_messages_root`);
     this.sql.exec(`DROP INDEX IF EXISTS idx_messages_root_chat`);
@@ -692,20 +839,361 @@ export class PubSubChannel extends DurableObjectBase {
     return { kind: "roster-snapshot", participants, ts: Date.now() };
   }
 
-  // ── Channel initialization ──────────────────────────────────────────────
+  // ── Explicit channel structure ─────────────────────────────────────────
 
-  private initChannel(contextId: string, channelConfig?: Record<string, unknown>): void {
-    const existing = this.getStateValue("contextId");
+  @rpc({ principals: ["host", "user", "code", "entity"] })
+  async createChannel(creationInput: ChannelCreation): Promise<ChannelRecord> {
+    const creation = validateChannelCreation(creationInput);
+    const creator = this.authenticatedPrincipal("createChannel");
+    const canonicalCreation = canonicalJson({ owner: creator, ...creation });
+    const existing = this.channelRecord();
     if (existing) {
-      if (existing !== contextId) {
-        throw new Error(`Context mismatch: channel bound to ${existing}, got ${contextId}`);
+      const root = this.sql
+        .exec(`SELECT creation_json FROM channel_root WHERE singleton = 1`)
+        .toArray()[0];
+      if (String(root?.["creation_json"] ?? "") !== canonicalCreation) {
+        throw new Error(`Channel ${this.objectKey} already exists with a different creation record`);
       }
+      return existing;
+    }
+
+    const now = Date.now();
+    const revision: ChannelStructureRevision = {
+      id: crypto.randomUUID(),
+      channelId: this.objectKey,
+      predecessor: null,
+      createdBy: creator,
+      createdAt: now,
+      reason: "created",
+      owner: creator,
+      governance: creation.governance,
+      contextBinding: creation.contextBinding,
+      origin: creation.origin,
+      admission: creation.admission,
+      presentationEditors: creation.presentationEditors,
+    };
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO channel_structure_revisions
+           (revision_id, predecessor, structure_json, created_at)
+         VALUES (?, NULL, ?, ?)`,
+        revision.id,
+        JSON.stringify(revision),
+        now
+      );
+      this.sql.exec(
+        `INSERT INTO channel_root
+           (singleton, current_revision, creation_json, presentation_json,
+            presentation_revision, deleted_at)
+         VALUES (1, ?, ?, ?, 1, NULL)`,
+        revision.id,
+        canonicalCreation,
+        JSON.stringify(creation.presentation)
+      );
+      // Existing replay/policy code consumes these derived state values. They
+      // are written in the same storage transaction as the structural root.
+      this.setStateValue("contextId", creation.contextBinding.contextId);
+      this.setStateValue("createdAt", String(now));
+      this.setStateValue("config", JSON.stringify(creation.presentation));
+    });
+    void this.refreshOwnTitle();
+    return this.requireChannelRecord();
+  }
+
+  @rpc({ principals: ["host", "user", "code", "entity"] })
+  getChannel(): ChannelRecord | null {
+    return this.channelRecord();
+  }
+
+  @rpc({ principals: ["host", "user", "code"] })
+  async transferOwner(input: {
+    expectedRevision: string;
+    newOwner: Principal;
+  }): Promise<ChannelRecord> {
+    const current = this.requireChannelRecord();
+    this.assertOwner(current.structure, "transferOwner");
+    if (current.structure.governance === "locked") {
+      throw new Error("transferOwner: locked channel structure requires administrative recovery");
+    }
+    if (current.currentStructureRevision !== input.expectedRevision) {
+      throw new Error(`Channel structure conflict: expected ${input.expectedRevision}`);
+    }
+    const newOwner = validatePrincipal(input.newOwner);
+    this.assertEligibleOwnerRecipient(current, newOwner, "transferOwner");
+    return this.appendStructureRevision(current, {
+      ...current.structure,
+      owner: newOwner,
+      reason: "owner-transfer",
+    });
+  }
+
+  @rpc(CHANNEL_ADMIN_AUTHORITY)
+  async recoverOwner(input: {
+    expectedRevision: string;
+    newOwner: Principal;
+  }): Promise<ChannelRecord> {
+    this.assertWorkspaceAdmin("recoverOwner");
+    const current = this.requireChannelRecord();
+    if (current.currentStructureRevision !== input.expectedRevision) {
+      throw new Error(`Channel structure conflict: expected ${input.expectedRevision}`);
+    }
+    const newOwner = validatePrincipal(input.newOwner);
+    this.assertEligibleOwnerRecipient(current, newOwner, "recoverOwner");
+    return this.appendStructureRevision(current, {
+      ...current.structure,
+      owner: newOwner,
+      reason: "owner-recovery",
+    });
+  }
+
+  @rpc({ principals: ["host", "user", "code"] })
+  async updateStructure(input: {
+    expectedRevision: string;
+    admission: ChannelCreation["admission"];
+    presentationEditors: ChannelCreation["presentationEditors"];
+  }): Promise<ChannelRecord> {
+    const current = this.requireChannelRecord();
+    this.assertOwner(current.structure, "updateStructure");
+    if (current.structure.governance === "locked") {
+      throw new Error("updateStructure: locked channel structure requires administrative authority");
+    }
+    if (current.currentStructureRevision !== input.expectedRevision) {
+      throw new Error(`Channel structure conflict: expected ${input.expectedRevision}`);
+    }
+    const validated = validateChannelCreation({
+      governance: current.structure.governance,
+      contextBinding: current.structure.contextBinding,
+      origin: current.structure.origin,
+      admission: input.admission,
+      presentationEditors: input.presentationEditors,
+      presentation: current.presentation,
+    });
+    return this.appendStructureRevision(current, {
+      ...current.structure,
+      admission: validated.admission,
+      presentationEditors: validated.presentationEditors,
+      reason: "policy-change",
+    });
+  }
+
+  @rpc(CHANNEL_ADMIN_AUTHORITY)
+  async updateLockedStructure(input: {
+    expectedRevision: string;
+    admission: ChannelCreation["admission"];
+    presentationEditors: ChannelCreation["presentationEditors"];
+  }): Promise<ChannelRecord> {
+    this.assertWorkspaceAdmin("updateLockedStructure");
+    const current = this.requireChannelRecord();
+    if (current.structure.governance !== "locked") {
+      throw new Error("updateLockedStructure: channel is not locked");
+    }
+    if (current.currentStructureRevision !== input.expectedRevision) {
+      throw new Error(`Channel structure conflict: expected ${input.expectedRevision}`);
+    }
+    const validated = validateChannelCreation({
+      governance: "locked",
+      contextBinding: current.structure.contextBinding,
+      origin: current.structure.origin,
+      admission: input.admission,
+      presentationEditors: input.presentationEditors,
+      presentation: current.presentation,
+    });
+    return this.appendStructureRevision(current, {
+      ...current.structure,
+      admission: validated.admission,
+      presentationEditors: validated.presentationEditors,
+      reason: "policy-change",
+    });
+  }
+
+  @rpc({ principals: ["host", "user", "code"] })
+  deleteChannel(): { deleted: boolean } {
+    const current = this.requireChannelRecord();
+    this.assertOwner(current.structure, "deleteChannel");
+    if (current.deletedAt !== null) return { deleted: false };
+    this.sql.exec(`UPDATE channel_root SET deleted_at = ? WHERE singleton = 1`, Date.now());
+    return { deleted: true };
+  }
+
+  @rpc(CHANNEL_ADMIN_AUTHORITY)
+  deleteChannelAsAdmin(input: { expectedRevision: string }): { deleted: boolean } {
+    this.assertWorkspaceAdmin("deleteChannelAsAdmin");
+    const current = this.requireChannelRecord();
+    if (current.currentStructureRevision !== input.expectedRevision) {
+      throw new Error(`Channel structure conflict: expected ${input.expectedRevision}`);
+    }
+    if (current.deletedAt !== null) return { deleted: false };
+    this.sql.exec(`UPDATE channel_root SET deleted_at = ? WHERE singleton = 1`, Date.now());
+    return { deleted: true };
+  }
+
+  private appendStructureRevision(
+    current: ChannelRecord,
+    nextInput: ChannelStructureRevision
+  ): ChannelRecord {
+    const now = Date.now();
+    const next: ChannelStructureRevision = {
+      ...nextInput,
+      id: crypto.randomUUID(),
+      predecessor: current.currentStructureRevision,
+      createdBy: this.authenticatedPrincipal("channel structure transition"),
+      createdAt: now,
+    };
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO channel_structure_revisions
+           (revision_id, predecessor, structure_json, created_at) VALUES (?, ?, ?, ?)`,
+        next.id,
+        next.predecessor,
+        JSON.stringify(next),
+        now
+      );
+      this.sql.exec(
+        `UPDATE channel_root SET current_revision = ?
+         WHERE singleton = 1 AND current_revision = ?`,
+        next.id,
+        current.currentStructureRevision
+      );
+      const changed = Number(
+        this.sql.exec(`SELECT changes() AS count`).toArray()[0]?.["count"] ?? 0
+      );
+      if (changed !== 1) {
+        throw new Error("Channel structure changed concurrently");
+      }
+    });
+    return this.requireChannelRecord();
+  }
+
+  private channelRecord(): ChannelRecord | null {
+    const root = this.sql
+      .exec(
+        `SELECT current_revision, presentation_json, presentation_revision, deleted_at
+         FROM channel_root WHERE singleton = 1`
+      )
+      .toArray()[0];
+    if (!root) return null;
+    const revision = this.sql
+      .exec(
+        `SELECT structure_json FROM channel_structure_revisions WHERE revision_id = ?`,
+        String(root["current_revision"])
+      )
+      .toArray()[0];
+    if (!revision) throw new Error(`Channel ${this.objectKey} has a missing structure revision`);
+    return {
+      channelId: this.objectKey,
+      currentStructureRevision: String(root["current_revision"]),
+      structure: JSON.parse(String(revision["structure_json"])) as ChannelStructureRevision,
+      presentation: JSON.parse(String(root["presentation_json"])) as ChannelConfig,
+      presentationRevision: Number(root["presentation_revision"]),
+      deletedAt: root["deleted_at"] === null ? null : Number(root["deleted_at"]),
+    };
+  }
+
+  private requireChannelRecord(): ChannelRecord {
+    const record = this.channelRecord();
+    if (!record) throw new Error(`Channel ${this.objectKey} has not been created`);
+    return record;
+  }
+
+  private authenticatedPrincipal(method: string): Principal {
+    const authority = this.authorization;
+    if (!authority) throw new Error(`${method}: authenticated authority required`);
+    const principal =
+      authority.agentBinding?.entity ??
+      authority.actingUser ??
+      authority.entity ??
+      authority.host ??
+      authority.code ??
+      null;
+    if (!principal) throw new Error(`${method}: authenticated principal required`);
+    return principal;
+  }
+
+  private assertOwner(structure: ChannelStructureRevision, method: string): void {
+    if (this.authenticatedPrincipal(method) !== structure.owner) {
+      throw new Error(`${method}: current channel owner required`);
+    }
+  }
+
+  private assertWorkspaceAdmin(method: string): void {
+    const authority = this.authorization;
+    const role = authority?.workspace?.role;
+    if (authority?.host || (authority?.actingUser && authority.workspace?.member && (role === "root" || role === "admin"))) {
       return;
     }
-    this.setStateValue("contextId", contextId);
-    this.setStateValue("createdAt", String(Date.now()));
-    if (channelConfig) this.setStateValue("config", JSON.stringify(channelConfig));
-    void this.refreshOwnTitle();
+    throw new Error(`${method}: live workspace administrator authority required`);
+  }
+
+  private assertEligibleOwnerRecipient(
+    record: ChannelRecord,
+    principal: Principal,
+    method: string
+  ): void {
+    const admission = record.structure.admission;
+    const userId = principal.startsWith("user:") ? principal.slice("user:".length) : null;
+    const presentId = principal.startsWith("entity:")
+      ? principal.slice("entity:".length)
+      : principal;
+    const present =
+      this.sql.exec(`SELECT 1 FROM participants WHERE id = ?`, presentId).toArray().length > 0;
+    const member =
+      userId !== null &&
+      this.sql.exec(`SELECT 1 FROM channel_members WHERE user_id = ?`, userId).toArray().length > 0;
+    const admitted =
+      admission.kind === "workspace-members"
+        ? userId !== null
+        : admission.kind === "channel-members"
+          ? member
+          : admission.allow.includes(principal);
+    if (!admitted || (!present && !member)) {
+      throw new Error(`${method}: new owner must be an admitted participant or channel member`);
+    }
+  }
+
+  private assertAdmission(): void {
+    const record = this.requireChannelRecord();
+    if (record.deletedAt !== null) throw new Error(`Channel ${this.objectKey} is deleted`);
+    const authority = this.authorization;
+    if (!authority) throw new Error("subscribe: authenticated authority required");
+    const principal = this.authenticatedPrincipal("subscribe");
+    if (principal === record.structure.owner) return;
+    const admission = record.structure.admission;
+    if (admission.kind === "workspace-members") return;
+    if (admission.kind === "principals") {
+      if (authority.agentBinding) {
+        const entity = authority.entity;
+        const binding = admission.entityCodeBindings?.find(
+          (candidate) => candidate.entity === entity
+        );
+        if (
+          entity &&
+          binding &&
+          admission.allow.includes(entity) &&
+          authority.agentBinding.entity === entity &&
+          authority.code === binding.code
+        ) {
+          return;
+        }
+        throw new Error(
+          `subscribe: bound agent does not satisfy an exact admitted entity/code chain`
+        );
+      }
+      const candidates = [
+        authority.actingUser,
+        authority.entity,
+        authority.host,
+        authority.code,
+      ].filter((candidate): candidate is Principal => candidate !== null);
+      if (candidates.some((candidate) => admission.allow.includes(candidate))) return;
+    }
+    if (
+      admission.kind === "channel-members" &&
+      principal.startsWith("user:") &&
+      this.sql.exec(`SELECT 1 FROM channel_members WHERE user_id = ?`, principal).toArray().length > 0
+    ) {
+      return;
+    }
+    throw new Error(`subscribe: ${principal} is not admitted to channel ${this.objectKey}`);
   }
 
   /** Push this channel's display title to the server-side registry. */
@@ -742,14 +1230,15 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   private isAuthorizedParticipantCaller(participantId: string): boolean {
+    const authority = this.authorization;
+    if (!authority) return false;
     const caller = this.caller;
-    if (!caller?.callerId) return false;
-    if (caller.callerId === participantId) return true;
-    if (caller.callerKind === "panel" && caller.callerPanelId === participantId) return true;
-    // Principal-derived human identity (WP6 §3-4): any panel/device owned by
-    // the host-verified user acts as the shared `user:<userId>` participant.
-    if (caller.userId && participantId === `user:${caller.userId}`) return true;
-    return false;
+    if (caller?.callerId === participantId) return true;
+    const callerPanelId = caller?.callerPanelId;
+    if (callerPanelId === participantId) return true;
+    if (authority.actingUser === participantId) return true;
+    if (authority.entity === participantId) return true;
+    return authority.entity === `entity:${participantId}`;
   }
 
   private callerDeliveryId(): string | null {
@@ -828,17 +1317,9 @@ export class PubSubChannel extends DurableObjectBase {
     return staleSessionIds.length;
   }
 
-  private isPrivilegedRpcCaller(): boolean {
-    const caller = this.caller;
-    return (
-      caller?.callerId === "main" ||
-      caller?.callerKind === "server" ||
-      caller?.callerKind === "shell"
-    );
-  }
-
   private assertAdminCaller(method: string): void {
-    if (this.isPrivilegedRpcCaller()) return;
+    const authority = this.authorization;
+    if (authority?.host || authority?.actingUser) return;
     const caller = this.caller;
     throw new Error(
       `${method}: privileged caller required (got ${caller?.callerKind ?? "unknown"} ${caller?.callerId ?? "unknown"})`
@@ -956,7 +1437,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Durable per-channel human presence, including offline members who have no
    * roster row. Status is server-derived from real activity and session count. */
-  @rpc({ callers: ["panel", "do", "worker", "server", "shell", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async getChannelPresence(): Promise<{ entries: ChannelPresenceEntry[]; generatedAt: number }> {
     const generatedAt = Date.now();
     const entries = new Map<string, ChannelPresenceEntry>();
@@ -1018,11 +1499,12 @@ export class PubSubChannel extends DurableObjectBase {
    * Subscribe a participant to this channel. Inserts the participant first,
    * then builds replay, so an initial roster snapshot includes the subscriber.
    */
-  @rpc({ callers: ["panel", "do", "shell", "agent"] })
+  @rpc({ principals: ["user", "code", "entity"] })
   async subscribe(
     participantId: string,
     metadata: Record<string, unknown>
   ): Promise<SubscribeResult> {
+    this.assertAdmission();
     const deliveryId = participantId;
     const doRef = parseDOParticipantId(deliveryId);
     const transport = doRef ? "do" : "rpc";
@@ -1078,12 +1560,6 @@ export class PubSubChannel extends DurableObjectBase {
       throw new Error(
         `subscribe: ${PARTICIPANT_SESSION_METADATA_KEY} is required for session ownership`
       );
-    }
-
-    const contextId = metadata["contextId"] as string | undefined;
-    const channelConfigRaw = metadata["channelConfig"] as Record<string, unknown> | undefined;
-    if (contextId) {
-      this.initChannel(contextId, channelConfigRaw);
     }
 
     // Handle uniqueness: a friendly pre-check complements the partial unique
@@ -1406,7 +1882,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Release exactly one caller-owned session. Public callers can never evict
    * another device or the whole canonical human identity. */
-  @rpc({ callers: ["panel", "do", "shell", "agent"] })
+  @rpc({ principals: ["user", "code", "entity"] })
   async unsubscribe(participantId: string, sessionId: string): Promise<void> {
     // DELETE-like cleanup is idempotent. The stale-session alarm and a
     // graceful client close can race; if the alarm already released this exact
@@ -1419,7 +1895,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.unsubscribeParticipant(participantId, "graceful", sessionId);
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminUnsubscribeParticipant(participantId: string): Promise<void> {
     this.assertAdminCaller("adminUnsubscribeParticipant");
     await this.unsubscribeParticipant(participantId, "graceful");
@@ -1495,7 +1971,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Liveness heartbeat for exactly one caller-owned session. It deliberately
    * does not update last_active_at: an idle open tab is not user activity. */
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async touch(participantId: string, sessionId: string): Promise<void> {
     this.assertParticipantSession(participantId, sessionId, "touch");
     this.sql.exec(
@@ -1513,7 +1989,7 @@ export class PubSubChannel extends DurableObjectBase {
    * GAD validates agentic payloads at append-time inside the txn; policies
    * annotate (never mutate) the envelope.
    */
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async publish(
     participantId: string,
     type: string,
@@ -1577,7 +2053,7 @@ export class PubSubChannel extends DurableObjectBase {
    * role assistant for an agent), carrying the same addressing fields
    * (`to`/`mentions`) a participant's message would.
    */
-  @rpc({ callers: ["panel", "do", "worker", "server", "shell", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async sendAsCaller(
     text: string,
     opts?: {
@@ -1630,7 +2106,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Policy fold state (replaces getConversationState — WS2 §4.4). */
-  @rpc({ callers: ["panel", "do", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async getPolicyState(name?: string): Promise<{
     policy: string;
     version: number;
@@ -1681,7 +2157,7 @@ export class PubSubChannel extends DurableObjectBase {
    * Broadcast envelopes that were durably appended to GAD outside this DO
    * (trajectory publication fan-out). Folds each into the policy caches.
    */
-  @rpc({ callers: ["server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
     let broadcasted = 0;
     for (const envelopeId of envelopeIds) {
@@ -1696,7 +2172,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Mark a message as errored (durable `error` channel event). */
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async error(
     participantId: string,
     messageId: string,
@@ -1717,7 +2193,7 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, participantId);
   }
 
-  @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async getReplayAfter(request: ChannelReplayAfterRequest) {
     return this.channelLog.replayAfter(request, this.currentReplayContext());
   }
@@ -1725,13 +2201,13 @@ export class PubSubChannel extends DurableObjectBase {
   /** Return one durable envelope by its stable envelope id, or null when that
    * id belongs to another log (for example a VCS commit id). This is a pure,
    * lineage-aware lookup used by panels, agents, and diagnostic evals. */
-  @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async getEnvelope(envelopeId: string): Promise<ChannelEvent | null> {
     return this.channelLog.getEventByEnvelopeId(envelopeId);
   }
 
   /** Send a non-durable signal message. */
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
     this.assertParticipantCaller(participantId, "sendSignal");
     this.markParticipantActive(participantId);
@@ -1755,14 +2231,14 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Replace a participant's metadata entirely. */
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
     this.assertParticipantCaller(participantId, "updateMetadata");
     this.markParticipantActive(participantId);
     await this.updateParticipantMetadata(participantId, metadata);
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminUpdateParticipantMetadata(
     participantId: string,
     metadata: Record<string, unknown>
@@ -1788,14 +2264,14 @@ export class PubSubChannel extends DurableObjectBase {
     await this.publishPresenceEvent(participantId, "update", stored);
   }
 
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertParticipantCaller(participantId, "setTypingState");
     if (typing) this.markParticipantActive(participantId);
     this.setParticipantTypingState(participantId, typing);
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminSetParticipantTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertAdminCaller("adminSetParticipantTypingState");
     this.setParticipantTypingState(participantId, typing);
@@ -1816,7 +2292,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Get all participants with DO identity when available. */
-  @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async getParticipants(): Promise<
     Array<{
       participantId: string;
@@ -1871,7 +2347,7 @@ export class PubSubChannel extends DurableObjectBase {
    * host-verified `userId` (WP4). Idempotent: re-adding refreshes the handle
    * snapshot without a second invite.
    */
-  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async addMember(input: { userId: string }): Promise<ChannelMember & { alreadyMember: boolean }> {
     const targetUserId = requireBareUserId(input?.userId, "addMember");
     const memberId = toUserMemberId(targetUserId);
@@ -1980,7 +2456,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Remove a member from this channel (WP7 §3, §10.3 — a user may remove
    *  themselves; mutual trust means anyone may, no ACL). History stays visible. */
-  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async removeMember(input: { userId: string }): Promise<{ removed: boolean }> {
     const userId = requireBareUserId(input?.userId, "removeMember");
     const memberId = toUserMemberId(userId);
@@ -2009,7 +2485,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** List this channel's durable members (WP7 §3). Ordered by add time. */
-  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async listMembers(): Promise<{ members: ChannelMember[] }> {
     const rows = this.sql
       .exec(
@@ -2036,7 +2512,7 @@ export class PubSubChannel extends DurableObjectBase {
    * identity is host-verified and the indexed lookup is exact; no client-supplied
    * user id and no channel enumeration participate in discovery.
    */
-  @rpc({ callers: ["panel", "shell"] })
+  @rpc({ principals: ["user", "code"] })
   async listInvitesForMe(): Promise<{ invites: ChannelInvite[] }> {
     const caller = this.caller;
     if (!caller?.userId) throw new Error("listInvitesForMe requires an authenticated user");
@@ -2048,7 +2524,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Remove the calling user's invite from the canonical workspace inbox. */
-  @rpc({ callers: ["panel", "shell"] })
+  @rpc({ principals: ["user", "code"] })
   async acknowledgeInvite(): Promise<{ acknowledged: boolean }> {
     const caller = this.caller;
     if (!caller?.userId) throw new Error("acknowledgeInvite requires an authenticated user");
@@ -2176,20 +2652,36 @@ export class PubSubChannel extends DurableObjectBase {
     await Promise.all(memberIds.map((memberId) => this.flushInviteIndexOp(memberId)));
   }
 
-  @rpc({ callers: ["panel", "do", "server", "shell", "extension", "agent"] })
+  @rpc({ principals: ["host", "user", "code", "entity"] })
   async getContextId(): Promise<string | null> {
     return this.getStateValue("contextId");
   }
 
-  @rpc({ callers: ["panel", "do", "server", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   async getConfig(): Promise<ChannelConfig | null> {
     return this.getChannelConfig();
   }
 
-  @rpc({ callers: ["panel", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async updateConfig(config: Partial<ChannelConfig>): Promise<ChannelConfig> {
-    const newConfig = { ...this.getChannelConfig(), ...config };
-    this.setStateValue("config", JSON.stringify(newConfig));
+    const channel = this.requireChannelRecord();
+    const principal = this.authenticatedPrincipal("updateConfig");
+    const editors = channel.structure.presentationEditors;
+    const allowed =
+      principal === channel.structure.owner ||
+      editors.kind === "workspace-members" ||
+      (editors.kind === "principals" && editors.allow.includes(principal));
+    if (!allowed) throw new Error(`updateConfig: ${principal} is not a presentation editor`);
+    const newConfig = { ...channel.presentation, ...config };
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE channel_root
+         SET presentation_json = ?, presentation_revision = presentation_revision + 1
+         WHERE singleton = 1`,
+        JSON.stringify(newConfig)
+      );
+      this.setStateValue("config", JSON.stringify(newConfig));
+    });
     this.policyHost.invalidatePolicySelection();
     const event = await this.appendDurable({
       type: "config-update",
@@ -2201,7 +2693,7 @@ export class PubSubChannel extends DurableObjectBase {
     return newConfig;
   }
 
-  @rpc({ callers: ["panel", "do", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async getReplayBefore(beforeSeq: number, limit?: number) {
     return this.channelLog.replayBefore(beforeSeq, limit ?? 100, this.currentReplayContext());
   }
@@ -2209,17 +2701,17 @@ export class PubSubChannel extends DurableObjectBase {
   // Registry reads: direct passthrough to GAD's channel_message_types
   // projection (hydrated — published `source` payloads are blob-spilled).
 
-  @rpc({ callers: ["panel", "do", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async getMessageTypes(): Promise<MessageTypeDefinition[]> {
     return this.channelLog.listMessageTypes();
   }
 
-  @rpc({ callers: ["panel", "do", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
     return this.channelLog.getMessageType(typeId);
   }
 
-  @rpc({ callers: ["panel", "do", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
     this.assertParticipantCaller(participantId, "getMessageSender");
     const replay = await this.channelLog.replayInitial(500, this.currentReplayContext());
@@ -2236,7 +2728,7 @@ export class PubSubChannel extends DurableObjectBase {
     return null;
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
     const tableNames = [
@@ -2277,7 +2769,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminInspectLog(
     opts: {
       afterId?: number;
@@ -2305,13 +2797,13 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminInspectEnvelope(envelopeId: string) {
     this.assertAdminCaller("adminInspectMessageChain");
     return { rows: await this.channelLog.inspectEnvelope(envelopeId) };
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminReconstructTranscript(opts: { rootLimit?: number; beforeSeq?: number } = {}) {
     this.assertAdminCaller("adminReconstructTranscript");
     const envelope =
@@ -2327,7 +2819,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminInspectAgent(
     participantId: string,
     methodName = "getDebugState"
@@ -2336,7 +2828,7 @@ export class PubSubChannel extends DurableObjectBase {
     return this.inspectAgentReadOnly(participantId, methodName);
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "app", "extension", "server", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   async inspectAgent(
     participantId: string,
     methodName = "getDebugState"
@@ -2453,7 +2945,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell"] })
+  @rpc({ principals: ["host", "user"] })
   async adminValidateLog(opts: { rootLimit?: number } = {}) {
     this.assertAdminCaller("adminValidateLog");
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
@@ -2493,7 +2985,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── Method calls (calls.ts — pending_calls is a declared cache) ──────────
 
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async callMethod(
     callerPid: string,
     targetPid: string,
@@ -2507,7 +2999,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.calls.callMethod(callerPid, targetPid, callId, method, args, opts);
   }
 
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async submitMethodResult(
     participantId: string,
     transportCallId: string,
@@ -2570,7 +3062,7 @@ export class PubSubChannel extends DurableObjectBase {
     return { id };
   }
 
-  @rpc({ callers: ["panel", "do", "worker"] })
+  @rpc({ principals: ["code"] })
   async submitMethodProgress(
     participantId: string,
     transportCallId: string,
@@ -2617,12 +3109,12 @@ export class PubSubChannel extends DurableObjectBase {
     );
   }
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"] })
   async cancelMethodCall(callId: string): Promise<void> {
     await this.calls.cancelMethodCall(callId, "cancelled");
   }
 
-  @rpc({ callers: ["server"] })
+  @rpc({ principals: ["host"] })
   async timeoutMethodCall(callId: string, reason?: string): Promise<void> {
     const pending = await this.calls.cancelMethodCall(callId, reason ?? "timed out");
     if (!pending) return;
@@ -2910,7 +3402,7 @@ export class PubSubChannel extends DurableObjectBase {
    * provenance at task-channel creation (B1, WS-5) — until that lands a task
    * channel reads as `root`/`fork`.
    */
-  @rpc({ callers: ["panel", "do", "server", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   async getProvenance(): Promise<ChannelProvenance> {
     return this.computeProvenance();
   }
@@ -2921,7 +3413,7 @@ export class PubSubChannel extends DurableObjectBase {
    * {@link getProvenance} reports `kind:"task"` instead of `root`. Durable state
    * keys, mirroring how fork provenance is stamped at `postClone`.
    */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async recordTaskProvenance(args: {
     parentChannelId: string;
     parentContextId: string;
@@ -2980,7 +3472,7 @@ export class PubSubChannel extends DurableObjectBase {
     return { source: svc.source, className: svc.className, objectKey: svc.objectKey };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async fork(opts: ForkOpts): Promise<ForkResult> {
     const forkId = crypto.randomUUID();
     const now = Date.now();
@@ -3277,7 +3769,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Rename a direct child fork (durable `channel.fork_renamed` on this log). */
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async renameFork(forkId: string, label: string): Promise<void> {
     const event: AgenticEvent<"channel.fork_renamed"> = {
       kind: "channel.fork_renamed",
@@ -3294,7 +3786,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Archive a direct child fork (durable `channel.fork_archived` latch). */
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async archiveFork(forkId: string): Promise<void> {
     const event: AgenticEvent<"channel.fork_archived"> = {
       kind: "channel.fork_archived",
@@ -3319,7 +3811,7 @@ export class PubSubChannel extends DurableObjectBase {
    * shows SIBLING forks by reading the PARENT channel's `listForks` (WS-8
    * deferred this for lack of a cheap getForks RPC).
    */
-  @rpc({ callers: ["panel", "worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async listForks(): Promise<{ forks: ForkProjection[] }> {
     const PAGE = 500;
     let view = createInitialChannelViewState();
@@ -3399,7 +3891,7 @@ export class PubSubChannel extends DurableObjectBase {
    * plumbing: the pending fork marker only makes the operation one-shot and
    * crash-resumable for the matching fork id.
    */
-  @rpc({ callers: ["panel", "worker", "server", "do", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   async appendSeed(
     forkOpRef: { forkId: string },
     envelope: ForkSeed
@@ -3474,7 +3966,7 @@ export class PubSubChannel extends DurableObjectBase {
    * fork (WS2 §4.5). Also lands the clone's fork provenance + pending seed
    * marker from the parent fork op (`forkInit`).
    */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ principals: ["host", "code"] })
   async postClone(
     parentChannelId: string,
     forkPointId: number,
@@ -3494,6 +3986,7 @@ export class PubSubChannel extends DurableObjectBase {
     }
   ): Promise<void> {
     if (!newContextId) throw new Error("postClone requires newContextId");
+    this.rehomeClonedStructure(parentChannelId, forkPointId, newContextId);
     // Fix identity: cloneDO copies parent's __objectKey; overwrite with our actual key
     this.sql.exec(
       `INSERT OR REPLACE INTO state (key, value) VALUES ('__objectKey', ?)`,
@@ -3538,6 +4031,72 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
+  /** A cloned SQLite image is a new channel, not another incarnation of the
+   * parent channel. Re-root the immutable structural lineage before exposing
+   * the child or mutating its derived compatibility projections. */
+  private rehomeClonedStructure(
+    parentChannelId: string,
+    forkPointId: number,
+    newContextId: string
+  ): void {
+    const current = this.requireChannelRecord();
+    const originKey = `${parentChannelId}:${forkPointId}`;
+    if (
+      current.structure.channelId === this.objectKey &&
+      current.structure.contextBinding.contextId === newContextId &&
+      current.structure.origin.kind === "fork" &&
+      current.structure.origin.key === originKey
+    ) {
+      return;
+    }
+    if (current.structure.channelId !== parentChannelId) {
+      throw new Error(
+        `postClone structural source mismatch: expected ${parentChannelId}, found ${current.structure.channelId}`
+      );
+    }
+    const now = Date.now();
+    const next: ChannelStructureRevision = {
+      ...current.structure,
+      id: crypto.randomUUID(),
+      channelId: this.objectKey,
+      predecessor: current.currentStructureRevision,
+      createdBy: current.structure.owner,
+      createdAt: now,
+      reason: "fork",
+      contextBinding: { kind: "context", contextId: newContextId },
+      origin: { kind: "fork", key: originKey },
+    };
+    const childCreation: ChannelCreation = {
+      governance: next.governance,
+      contextBinding: next.contextBinding,
+      origin: next.origin,
+      admission: next.admission,
+      presentationEditors: next.presentationEditors,
+      presentation: current.presentation,
+    };
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO channel_structure_revisions
+           (revision_id, predecessor, structure_json, created_at)
+         VALUES (?, ?, ?, ?)`,
+        next.id,
+        current.currentStructureRevision,
+        JSON.stringify(next),
+        now
+      );
+      this.sql.exec(
+        `UPDATE channel_root
+         SET current_revision = ?, creation_json = ?
+         WHERE singleton = 1 AND current_revision = ?`,
+        next.id,
+        canonicalJson({ owner: next.owner, ...childCreation }),
+        current.currentStructureRevision
+      );
+      const changed = Number(this.sql.exec(`SELECT changes() AS count`).toArray()[0]?.["count"]);
+      if (changed !== 1) throw new Error("postClone structural revision conflict");
+    });
+  }
+
   private async settleUnhomeablePendingCalls(homeable: Set<string>): Promise<void> {
     const targets = new Set<string>();
     for (const row of this.sql.exec(`SELECT DISTINCT target_id FROM pending_calls`).toArray()) {
@@ -3558,7 +4117,7 @@ export class PubSubChannel extends DurableObjectBase {
   // root; the root fans out to its lineage subscribers. Badges reconcile from
   // durable state on open (§H) — a missed signal is not durable.
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ principals: ["code"] })
   async subscribeLineage(
     participantId: string,
     metadata: Record<string, unknown> = {}
@@ -3578,14 +4137,14 @@ export class PubSubChannel extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ principals: ["code"] })
   async unsubscribeLineage(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribeLineage");
     this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, participantId);
   }
 
   /** Relay point for a head advance reported up the chain from a descendant. */
-  @rpc({ callers: ["do", "worker", "server"] })
+  @rpc({ principals: ["host", "code"] })
   async reportLineageHead(report: { channelId: string; headSeq: number }): Promise<void> {
     await this.relayLineageHead(report.channelId, report.headSeq);
   }
@@ -3669,7 +4228,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── State introspection ─────────────────────────────────────────────────
 
-  @rpc({ callers: ["panel", "server", "shell"] })
+  @rpc({ principals: ["host", "user", "code"] })
   override async getState(): Promise<Record<string, unknown>> {
     const replay = await this.channelLog.replayInitial(1, this.currentReplayContext());
     const participants = this.sql.exec(`SELECT * FROM participants`).toArray();

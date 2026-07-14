@@ -49,7 +49,7 @@ The canary migrations all follow the same shape:
 ## What changes for callers
 
 - **API shape** stays the same. The codemod is a search-and-replace of the import + first call segment.
-- **Authorization** moves from `policy.allowed` on the service definition to the extension's own API checks. Use `ctx.approvals.request(...)` only when the extension exposes a custom shared resource whose access should be granted by the user to the original panel/worker. Do not replace ordinary host/runtime permission checks with userland approval prompts.
+- **Authorization** remains host-attested and exact-code-bound. Public extension methods validate operation-specific ownership and inputs; a host-owned provider must sit behind its narrow host service, whose canonical resource evaluator authorizes every method before provider dispatch. Use `ctx.approvals.request(...)` only for a genuinely custom shared resource, never as a replacement for host/runtime authority.
 - **First-call latency** picks up the install/approval round trip. After approval the extension stays running; subsequent calls are RPC-fast.
 - **Failure isolation** improves: if the extension crashes, the host respawns it (1/2/4/8/16s backoff). The old in-host service would have brought down the server.
 
@@ -73,7 +73,7 @@ The canary migrations all follow the same shape:
 - Long-running TypeScript language service per panel. Holds substantial in-memory state across many calls.
 - Migration tested that an extension can be a long-running stateful service, not just stateless compute.
 - The extension owns the TypeScript service helpers directly; only the neutral npm-install helper remains shared.
-- Path validation moved into the extension — the old service-level `policy.allowed` is replaced by per-method input validation.
+- Path validation moved into the extension, while exact extension code admission and caller attribution remain enforced by the host. Per-method validation narrows the operation; it does not invent a second authority system.
 
 ### `browserDataService` → `@workspace-extensions/browser-data`
 

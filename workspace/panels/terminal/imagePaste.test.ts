@@ -9,8 +9,8 @@ describe("imagePaste", () => {
 
   it("fetches and stashes dropped http URLs when CORS permits", async () => {
     const stashScratch = vi.fn(async () => ({
-      absolutePath: "/workspace/.snug/scratch/drop.png",
-      workspaceRelative: ".snug/scratch/drop.png",
+      absolutePath: "/workspace/.vibestudio/terminal/scratch/drop.png",
+      workspaceRelative: ".vibestudio/terminal/scratch/drop.png",
     }));
     vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
@@ -26,7 +26,7 @@ describe("imagePaste", () => {
     });
 
     expect(stashScratch).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]), "png");
-    expect(result?.pasteText).toBe("/workspace/.snug/scratch/drop.png");
+    expect(result?.pasteText).toBe("/workspace/.vibestudio/terminal/scratch/drop.png");
   });
 
   it("skips non-http URLs and non-ok responses", async () => {
@@ -69,8 +69,8 @@ describe("imagePaste", () => {
 
   it("uses relative paths only when the cwd does not require escaping upward", async () => {
     const stashScratch = vi.fn(async () => ({
-      absolutePath: "/workspace/.snug/scratch/drop.png",
-      workspaceRelative: ".snug/scratch/drop.png",
+      absolutePath: "/workspace/.vibestudio/terminal/scratch/drop.png",
+      workspaceRelative: ".vibestudio/terminal/scratch/drop.png",
     }));
 
     await expect(stashForPaste({
@@ -80,7 +80,7 @@ describe("imagePaste", () => {
       cwd: "/workspace",
       pasteMode: "path",
       imagePasteRelative: true,
-    })).resolves.toMatchObject({ pasteText: ".snug/scratch/drop.png" });
+    })).resolves.toMatchObject({ pasteText: ".vibestudio/terminal/scratch/drop.png" });
 
     await expect(stashForPaste({
       shell: { stashScratch } as unknown as ShellApi,
@@ -89,13 +89,13 @@ describe("imagePaste", () => {
       cwd: "/workspace/packages/app",
       pasteMode: "path",
       imagePasteRelative: true,
-    })).resolves.toMatchObject({ pasteText: "/workspace/.snug/scratch/drop.png" });
+    })).resolves.toMatchObject({ pasteText: "/workspace/.vibestudio/terminal/scratch/drop.png" });
   });
 
   it("quotes pasted paths with shell-sensitive characters", async () => {
     const stashScratch = vi.fn(async () => ({
-      absolutePath: "/workspace/.snug/scratch/drop file's.png",
-      workspaceRelative: ".snug/scratch/drop file's.png",
+      absolutePath: "/workspace/.vibestudio/terminal/scratch/drop file's.png",
+      workspaceRelative: ".vibestudio/terminal/scratch/drop file's.png",
     }));
 
     await expect(stashForPaste({
@@ -105,7 +105,7 @@ describe("imagePaste", () => {
       cwd: "/workspace",
       pasteMode: "path",
       imagePasteRelative: false,
-    })).resolves.toMatchObject({ pasteText: "'/workspace/.snug/scratch/drop file'\\''s.png'" });
+    })).resolves.toMatchObject({ pasteText: "'/workspace/.vibestudio/terminal/scratch/drop file'\\''s.png'" });
   });
 
   it("rejects oversized data URIs before writing scratch files", async () => {
@@ -154,12 +154,12 @@ describe("imagePaste", () => {
     const stashScratch = vi
       .fn()
       .mockResolvedValueOnce({
-        absolutePath: "/workspace/.snug/scratch/one.png",
-        workspaceRelative: ".snug/scratch/one.png",
+        absolutePath: "/workspace/.vibestudio/terminal/scratch/one.png",
+        workspaceRelative: ".vibestudio/terminal/scratch/one.png",
       })
       .mockResolvedValueOnce({
-        absolutePath: "/workspace/.snug/scratch/two.pdf",
-        workspaceRelative: ".snug/scratch/two.pdf",
+        absolutePath: "/workspace/.vibestudio/terminal/scratch/two.pdf",
+        workspaceRelative: ".vibestudio/terminal/scratch/two.pdf",
       });
 
     await expect(stashPasteBatch({
@@ -174,11 +174,11 @@ describe("imagePaste", () => {
       imagePasteRelative: false,
     })).resolves.toMatchObject({
       stashed: [
-        { index: 0, paste: { pasteText: "/workspace/.snug/scratch/one.png" } },
-        { index: 2, paste: { pasteText: "/workspace/.snug/scratch/two.pdf" } },
+        { index: 0, paste: { pasteText: "/workspace/.vibestudio/terminal/scratch/one.png" } },
+        { index: 2, paste: { pasteText: "/workspace/.vibestudio/terminal/scratch/two.pdf" } },
       ],
       errors: [{ index: 1, message: "Empty file, nothing pasted" }],
-      pasteText: "/workspace/.snug/scratch/one.png /workspace/.snug/scratch/two.pdf",
+      pasteText: "/workspace/.vibestudio/terminal/scratch/one.png /workspace/.vibestudio/terminal/scratch/two.pdf",
     });
     expect(stashScratch).toHaveBeenCalledTimes(2);
   });

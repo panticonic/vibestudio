@@ -1,11 +1,40 @@
-import { readFile, stat, mkdtemp, mkdir } from "node:fs/promises";
+import { chmod, readFile, stat, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
 import { userlandApprovalRequestSchema } from "@vibestudio/shared/approvals";
 import { activate } from "./index.js";
 import type { SessionInfoEvent } from "./types.js";
+
+const TEST_HOST_BUILD_ID = "a".repeat(64);
+process.env["VIBESTUDIO_HOST_BUILD_ID"] = TEST_HOST_BUILD_ID;
+const originalPath = process.env["PATH"] ?? "";
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+let testToolchainRoot = "";
+
+beforeAll(async () => {
+  testToolchainRoot = await mkdtemp(join(tmpdir(), "vibestudio-test-toolchain-"));
+  const bin = join(testToolchainRoot, "bin");
+  await mkdir(bin, { recursive: true });
+  const launcher = join(bin, "vibestudio");
+  await writeFile(
+    launcher,
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(
+      join(repoRoot, "dist/cli/client.mjs")
+    )} "$@"\n`
+  );
+  await chmod(launcher, 0o755);
+  process.env["VIBESTUDIO_TOOLCHAIN_DIR"] = testToolchainRoot;
+  process.env["PATH"] = `${bin}${delimiter}${originalPath}`;
+});
+
+afterAll(async () => {
+  process.env["PATH"] = originalPath;
+  delete process.env["VIBESTUDIO_TOOLCHAIN_DIR"];
+  await rm(testToolchainRoot, { recursive: true, force: true });
+});
 
 async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "allow") {
   const root = await mkdtemp(join(tmpdir(), "vibestudio-shell-test-"));
@@ -124,8 +153,10 @@ describe("@workspace-extensions/shell", () => {
   it("stashes scratch files inside the workspace with a hard size cap", async () => {
     const { api, root } = await makeApi("allow");
     const result = await api.stashScratch(new Uint8Array([1, 2, 3]), "png");
-    expect(result.absolutePath.startsWith(join(root, ".snug", "scratch"))).toBe(true);
-    expect(result.workspaceRelative.startsWith(".snug/scratch/")).toBe(true);
+    expect(result.absolutePath.startsWith(join(root, ".vibestudio", "terminal", "scratch"))).toBe(
+      true
+    );
+    expect(result.workspaceRelative.startsWith(".vibestudio/terminal/scratch/")).toBe(true);
     await expect(readFile(result.absolutePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     await expect(api.stashScratch(new Uint8Array(), "png")).rejects.toMatchObject({
       code: "EINVAL",
@@ -211,16 +242,16 @@ describe("@workspace-extensions/shell", () => {
     await api.awaitExit(sessionId);
 
     await expect(
-      api.setMeta(sessionId, "snugOpenUrl", {
+      api.setMeta(sessionId, "terminalOpenUrl", {
         id: "spoof",
         url: "https://spoof.test",
         requestedAt: 1,
       })
     ).rejects.toMatchObject({ code: "EACCES" });
-    await expect(api.deleteMeta(sessionId, "snugOpenUrl")).rejects.toMatchObject({
+    await expect(api.deleteMeta(sessionId, "terminalOpenUrl")).rejects.toMatchObject({
       code: "EACCES",
     });
-    await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();
+    await expect(api.getMeta(sessionId, "terminalOpenUrl")).resolves.toBeUndefined();
   });
 
   it("coalesces bulk stream snapshots while keeping lifecycle events immediate", async () => {
@@ -246,35 +277,36 @@ describe("@workspace-extensions/shell", () => {
     await reader.cancel();
   });
 
-  it("injects snug CLI and routes session-scoped metadata commands", async () => {
+  it("injects terminal control CLI and routes session-scoped metadata commands", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
       args: [
         "-lc",
-        "snug version && snug meta set mood '{\"ok\":true}' && snug meta get mood && snug badge 7 --color amber && snug label renamed && snug notify --severity done --title Build finished",
+        "vibestudio --version && vibestudio terminal meta set mood '{\"ok\":true}' && vibestudio terminal meta get mood && vibestudio terminal badge 7 --color amber && vibestudio terminal label renamed && vibestudio terminal notify --severity done --title Build finished",
       ],
     });
     await api.awaitExit(sessionId);
     const info = await api.get(sessionId);
     const scrollback = await api.getScrollback(sessionId);
-    expect(scrollback.text).toContain("snug 0.1.0");
+    expect(scrollback.text).toContain("0.1.1");
+    expect(scrollback.text).toContain(TEST_HOST_BUILD_ID);
     expect(scrollback.text).toContain('{"ok":true}');
-    expect(scrollback.text).toContain("1337;snug");
+    expect(scrollback.text).toContain("1337;vibestudio-terminal");
     expect(info.label).toBe("renamed");
     await expect(api.getMeta(sessionId, "mood")).resolves.toEqual({ ok: true });
     await expect(api.getMeta(sessionId, "badge")).resolves.toEqual({ text: "7", color: "amber" });
   });
 
-  it("allocates isolated snug sockets and unlinks them when sessions exit", async () => {
+  it("allocates isolated terminal control sockets and unlinks them when sessions exit", async () => {
     const { api } = await makeApi("allow");
     const first = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "printf '%s\\n' \"$SNUG_SOCK\""],
+      args: ["-lc", "printf '%s\\n' \"$VIBESTUDIO_TERMINAL_ENDPOINT\""],
     });
     const second = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "printf '%s\\n' \"$SNUG_SOCK\""],
+      args: ["-lc", "printf '%s\\n' \"$VIBESTUDIO_TERMINAL_ENDPOINT\""],
     });
     await api.awaitExit(first.sessionId);
     await api.awaitExit(second.sessionId);
@@ -290,16 +322,20 @@ describe("@workspace-extensions/shell", () => {
     await expect(stat(secondSocket!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not expose snug routing tokens in the session environment", async () => {
+  it("does not expose terminal control routing tokens in the session environment", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", 'test -n "$SNUG_SOCK" && test -z "${SNUG_TOKEN:-}" && snug version'],
+      args: [
+        "-lc",
+        'test -n "$VIBESTUDIO_TERMINAL_ENDPOINT" && test -z "${VIBESTUDIO_TERMINAL_TOKEN:-}" && vibestudio --version',
+      ],
     });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
 
-    expect(scrollback.text).toContain("snug 0.1.0");
+    expect(scrollback.text).toContain("0.1.1");
+    expect(scrollback.text).toContain(TEST_HOST_BUILD_ID);
   });
 
   it("injects VS Code shell integration into interactive bash sessions", async () => {
@@ -318,11 +354,11 @@ describe("@workspace-extensions/shell", () => {
     expect(scrollback.text).toMatch(/\x1b]633;D;0\x07/);
   });
 
-  it("rejects stale snug clients before dispatching commands", async () => {
+  it("rejects stale terminal control clients before dispatching commands", async () => {
     const { api } = await makeApi("allow");
     const staleClient = [
       "const net = require('node:net');",
-      "const c = net.createConnection(process.env.SNUG_SOCK);",
+      "const c = net.createConnection(process.env.VIBESTUDIO_TERMINAL_ENDPOINT);",
       "let data = '';",
       "c.on('connect', () => c.write(JSON.stringify({ proto: 1, version: '0.0.0', pid: process.pid, argv: ['meta', 'set', 'stale', 'true'] }) + '\\n'));",
       "c.on('data', (chunk) => data += chunk);",
@@ -332,93 +368,98 @@ describe("@workspace-extensions/shell", () => {
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
 
-    expect(scrollback.text).toContain("incompatible snug client");
+    expect(scrollback.text).toContain("unsupported terminal-control protocol");
     await expect(api.getMeta(sessionId, "stale")).resolves.toBeUndefined();
   });
 
-  it("prevents snug meta from spoofing host-owned handoff keys", async () => {
+  it("prevents vibestudio terminal meta from spoofing host-owned handoff keys", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
       args: [
         "-lc",
-        'snug meta set snugOpenUrl \'{"id":"spoof","url":"https://spoof.test","requestedAt":1}\' || echo rejected',
+        'vibestudio terminal meta set terminalOpenUrl \'{"id":"spoof","url":"https://spoof.test","requestedAt":1}\' || echo rejected',
       ],
     });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
 
-    expect(scrollback.text).toContain("reserved snug metadata key: snugOpenUrl");
+    expect(scrollback.text).toContain("reserved terminal metadata key: terminalOpenUrl");
     expect(scrollback.text).toContain("rejected");
-    await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();
+    await expect(api.getMeta(sessionId, "terminalOpenUrl")).resolves.toBeUndefined();
   });
 
-  it("lets snug clear a tab badge", async () => {
+  it("lets terminal control clear a tab badge", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug badge busy --color blue && snug badge clear"],
+      args: [
+        "-lc",
+        "vibestudio terminal badge busy --color blue && vibestudio terminal badge clear",
+      ],
     });
     await api.awaitExit(sessionId);
     await expect(api.getMeta(sessionId, "badge")).resolves.toBeUndefined();
   });
 
-  it("rejects invalid snug badge colors without writing badge metadata", async () => {
+  it("rejects invalid vibestudio terminal badge colors without writing badge metadata", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug badge busy --color nope || echo rejected"],
+      args: ["-lc", "vibestudio terminal badge busy --color nope || echo rejected"],
     });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
 
-    expect(scrollback.text).toContain("invalid snug badge color: nope");
+    expect(scrollback.text).toContain("invalid terminal badge color: nope");
     expect(scrollback.text).toContain("rejected");
     await expect(api.getMeta(sessionId, "badge")).resolves.toBeUndefined();
   });
 
-  it("rejects invalid snug notification severities with a clear error", async () => {
+  it("rejects invalid terminal control notification severities with a clear error", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug notify --severity weird hello || echo rejected"],
+      args: ["-lc", "vibestudio terminal notify --severity weird hello || echo rejected"],
     });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
 
-    expect(scrollback.text).toContain("invalid snug notify severity: weird");
+    expect(scrollback.text).toContain("invalid terminal notification severity: weird");
     expect(scrollback.text).toContain("rejected");
-    expect(scrollback.text).not.toContain("1337;snug");
+    expect(scrollback.text).not.toContain("1337;vibestudio-terminal");
   });
 
-  it("routes snug split through approved shell open and tags spawned sessions", async () => {
+  it("routes vibestudio terminal split through approved shell open and tags spawned sessions", async () => {
     const { api, log } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug split right --command 'printf child'"],
+      args: ["-lc", "vibestudio terminal split right --command 'printf child'"],
     });
     await api.awaitExit(sessionId);
     const sessions = await api.list();
-    const child = sessions.find((item) => item.sessionId !== sessionId && item.meta["snugSpawn"]);
-    expect(child?.meta["snugSpawn"]).toMatchObject({
+    const child = sessions.find(
+      (item) => item.sessionId !== sessionId && item.meta["terminalSpawn"]
+    );
+    expect(child?.meta["terminalSpawn"]).toMatchObject({
       parentSessionId: sessionId,
       direction: "row",
     });
     expect(child?.command.argv.join(" ")).toContain("printf child");
     expect(log.info).toHaveBeenCalledWith(
-      "snug category-c decision",
+      "terminal-control category-c decision",
       expect.objectContaining({ action: "split", decision: "allow" })
     );
   });
 
-  it("routes approved snug open into a trusted session metadata handoff", async () => {
+  it("routes approved vibestudio terminal open into a trusted session metadata handoff", async () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug open --url https://example.test"],
+      args: ["-lc", "vibestudio terminal open https://example.test"],
     });
     await api.awaitExit(sessionId);
-    await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toMatchObject({
+    await expect(api.getMeta(sessionId, "terminalOpenUrl")).resolves.toMatchObject({
       id: expect.any(String),
       url: "https://example.test",
       requestedAt: expect.any(Number),
@@ -592,11 +633,11 @@ describe("@workspace-extensions/shell", () => {
     expect(log.debug).toHaveBeenCalled();
   });
 
-  it("approval-gates snug open before creating an open-url handoff", async () => {
+  it("approval-gates vibestudio terminal open before creating an open-url handoff", async () => {
     const { api, request, log } = await makeApi(["allow", "deny"]);
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug open --url https://blocked.example.test || true"],
+      args: ["-lc", "vibestudio terminal open https://blocked.example.test || true"],
     });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
@@ -607,10 +648,10 @@ describe("@workspace-extensions/shell", () => {
       title: "Open URL",
       subject: { label: "https://blocked.example.test" },
     });
-    await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();
+    await expect(api.getMeta(sessionId, "terminalOpenUrl")).resolves.toBeUndefined();
     expect(scrollback.text).toContain("shell.open denied by user");
     expect(log.info).toHaveBeenCalledWith(
-      "snug category-c decision",
+      "terminal-control category-c decision",
       expect.objectContaining({ action: "open-url", decision: "deny" })
     );
   });
@@ -655,5 +696,5 @@ async function readEvent(
 function socketPathFrom(scrollback: string): string | undefined {
   return scrollback
     .split(/\r?\n/)
-    .find((line) => line.includes("/snug-") && line.endsWith(".sock"));
+    .find((line) => line.includes("/vibestudio-terminal-") && line.endsWith(".sock"));
 }

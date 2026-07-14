@@ -12,6 +12,7 @@ import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
 import type { DOIdentity } from "./identity.js";
 import type { ChannelClient } from "./channel-client.js";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 
 export class SubscriptionManager {
   constructor(
@@ -42,6 +43,7 @@ export class SubscriptionManager {
     channelId: string;
     contextId: string;
     config?: unknown;
+    creation?: ChannelCreation;
     descriptor: ParticipantDescriptor;
     /** Request replay of persisted messages sent before this subscriber joined. */
     replay?: boolean;
@@ -56,7 +58,6 @@ export class SubscriptionManager {
       name: opts.descriptor.name,
       type: opts.descriptor.type,
       handle: opts.descriptor.handle,
-      contextId: opts.contextId,
       ...opts.descriptor.metadata,
     };
     // This DO participant (an agent vessel) consumes the channel's STRUCTURED
@@ -67,9 +68,6 @@ export class SubscriptionManager {
     metadata["receivesChannelEnvelopes"] = true;
     if (this.identity.sessionId) {
       metadata[PARTICIPANT_SESSION_METADATA_KEY] = this.identity.sessionId;
-    }
-    if (opts.config && typeof opts.config === "object") {
-      metadata["channelConfig"] = opts.config;
     }
     if (opts.descriptor.methods && opts.descriptor.methods.length > 0) {
       metadata["methods"] = opts.descriptor.methods;
@@ -84,6 +82,7 @@ export class SubscriptionManager {
         "Cannot subscribe before the durable-object session identity is bootstrapped"
       );
     }
+    if (opts.creation) await channel.createChannel(opts.creation);
     const subResult = await channel.subscribe(participantId, metadata);
 
     this.sql.exec(

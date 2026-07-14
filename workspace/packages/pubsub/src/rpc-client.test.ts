@@ -231,18 +231,18 @@ describe("connectViaRpc", () => {
   describe("subscribe + ready flow", () => {
     it("registers event listener and calls subscribe on the channel service", async () => {
       const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.waitFor(() => {
+        expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "subscribe", [
+          SELF_ID,
+          expect.objectContaining({
+            __participantSessionId: expect.any(String),
+            replay: true,
+            replayMessageLimit: 500,
+          }),
+        ]);
+      });
 
       expect(mockRpc.on).toHaveBeenCalledWith("channel:message", expect.any(Function));
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "subscribe", [
-        SELF_ID,
-        expect.objectContaining({
-          __participantSessionId: expect.any(String),
-          replay: true,
-          replayMessageLimit: 500,
-        }),
-      ]);
 
       client.close();
     });

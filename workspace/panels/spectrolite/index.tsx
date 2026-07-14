@@ -13,16 +13,14 @@
  */
 
 import { useEffect, useMemo } from "react";
-import { Flex, Spinner, Text, Theme } from "@radix-ui/themes";
-import { contextId as runtimeContextId, panel } from "@workspace/runtime";
+import { Button, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { usePanelTheme, useAgentState } from "@workspace/react";
 import { ErrorBoundary } from "@workspace/agentic-chat";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
 import { createSpectroliteApp } from "./app/createApp";
-import { AppProvider, useAppState } from "./app/context";
+import { AppProvider, useApp, useAppState } from "./app/context";
 import { Shell } from "./components/Shell";
-import { shouldRebindToVaultContext, vaultContextId } from "./app/vaultContext";
 import "@workspace/agentic-chat/styles.css";
 import "./style.css";
 
@@ -34,23 +32,6 @@ export default function SpectrolitePanel() {
   useEffect(() => {
     app.start();
     return () => app.dispose();
-  }, [app]);
-
-  // Bind to the vault's stable per-vault context head. If the panel mounted
-  // under a different contextId than the selected vault's, reopen so every
-  // `vcs.*` call (and the scribe) resolves to the vault's durable head.
-  useEffect(() => {
-    const repoRoot = app.store.getState().repoRoot;
-    if (repoRoot === null) return;
-    const persisted = panel.stateArgs.get<{ contextId?: string }>();
-    const want = vaultContextId(repoRoot);
-    if (shouldRebindToVaultContext(repoRoot, runtimeContextId, persisted.contextId)) {
-      const activePath = app.store.getState().activePath;
-      void panel.reopen({
-        contextId: want,
-        stateArgs: activePath ? { repoRoot, openPath: activePath } : { repoRoot },
-      }).catch((err) => console.warn("[Spectrolite] reopen to vault context failed:", err));
-    }
   }, [app]);
 
   return (
@@ -65,26 +46,65 @@ export default function SpectrolitePanel() {
 }
 
 function SessionGate({ theme }: { theme: "light" | "dark" }) {
+  const app = useApp();
   const ready = useAppState((s) => Boolean(s.channelName && s.contextId));
+  const vaultPendingPath = useAppState((s) => s.vaultPendingPath);
+  const vaultError = useAppState((s) => s.vaultError);
   // Expose live editor state to debugging agents.
   const activePath = useAppState((s) => s.activePath);
   const dirtyPaths = useAppState((s) => s.dirtyPaths);
   const pendingSuggestions = useAppState((s) => s.pendingSuggestions.length);
   const repoRoot = useAppState((s) => s.repoRoot);
-  const agentState = useMemo(() => ({
-    path: activePath,
-    dirtyPaths,
-    pendingSuggestions,
-    conflicts: pendingSuggestions,
-    repoRoot,
-  }), [activePath, dirtyPaths, pendingSuggestions, repoRoot]);
+  const agentState = useMemo(
+    () => ({
+      path: activePath,
+      dirtyPaths,
+      pendingSuggestions,
+      conflicts: pendingSuggestions,
+      repoRoot,
+    }),
+    [activePath, dirtyPaths, pendingSuggestions, repoRoot]
+  );
   useAgentState("spectrolite", agentState);
+
+  if (vaultPendingPath) {
+    return (
+      <Flex
+        direction="column"
+        align="center"
+        justify="center"
+        gap="3"
+        p="4"
+        style={{ height: "100%" }}
+      >
+        {vaultError ? (
+          <>
+            <Text size="2" color="red" align="center">
+              {vaultError}
+            </Text>
+            <Button type="button" onClick={() => app.retryVaultBinding()}>
+              Retry opening vault
+            </Button>
+          </>
+        ) : (
+          <>
+            <Spinner />
+            <Text size="2" color="gray">
+              Opening {vaultPendingPath}…
+            </Text>
+          </>
+        )}
+      </Flex>
+    );
+  }
 
   if (!ready) {
     return (
       <Flex align="center" justify="center" gap="2" style={{ height: "100%" }}>
         <Spinner />
-        <Text size="2" color="gray">Starting Spectrolite…</Text>
+        <Text size="2" color="gray">
+          Starting Spectrolite…
+        </Text>
       </Flex>
     );
   }

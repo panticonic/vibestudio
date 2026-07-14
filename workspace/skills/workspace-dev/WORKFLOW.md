@@ -151,13 +151,13 @@ Before reloading a parent or ancestor, verify the target:
 
 ```ts
 const info = await handle.refresh().then((h) => h.getInfo());
-console.log(info.id, info.source, info.contextId, info.runtimeEntityId, info.effectiveVersion);
+console.log(info.id, info.source, info.contextId, info.runtimeEntityId, info.executionDigest);
 ```
 
-`effectiveVersion` is the git/effective-version hash for the source currently
+`executionDigest` is the git/effective-version hash for the source currently
 running in that panel's active runtime entity. Lifecycle calls return a
 structured result with `operation`, `status`, `panelId`, `loaded`, `rebuilt`,
-`reloaded`, `buildRevision`, and `effectiveVersion` when the host can report it.
+`reloaded`, `buildRevision`, and `executionDigest` when the host can report it.
 
 7. Tune running state without reopening:
 

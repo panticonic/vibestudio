@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import {
+  createTestDO,
+  createTestDirectAuthority,
+} from "@workspace/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -27,9 +30,25 @@ function setRpcCaller(
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
   (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind =
     callerKind;
+  (instance as unknown as { _currentVerifiedCaller: unknown })._currentVerifiedCaller = callerId
+    ? {
+        callerId,
+        callerKind: callerKind ?? "unknown",
+        authorization: createTestDirectAuthority({
+          callerKind: callerKind ?? "unknown",
+          source: "test",
+          className: "TestDO",
+          objectKey: "transcript-test",
+          method: "test-direct-call",
+        }),
+      }
+    : null;
 }
 
-export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNEL_ID) {
+export async function createTranscriptHarness(
+  channelId = TRANSCRIPT_TEST_CHANNEL_ID,
+  contextId = "ctx-transcript-pipeline"
+) {
   const channelTarget = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
   const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
   const channel = await createTestDO(PubSubChannel, { __objectKey: channelId });
@@ -112,6 +131,15 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
     deliver: () => {},
   };
 
+  await channel.call("createChannel", {
+    governance: "standard",
+    contextBinding: { kind: "context", contextId },
+    origin: { kind: "test", key: "agentic-chat-transcript" },
+    admission: { kind: "workspace-members" },
+    presentationEditors: { kind: "workspace-members" },
+    presentation: {},
+  });
+
   function createParticipantRpc(opts: { id: string; name: string; type: string; handle: string }) {
     return {
       selfId: opts.id,
@@ -157,11 +185,19 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
       name: opts.name,
       type: opts.type,
       handle: opts.handle,
-      contextId: opts.contextId ?? "ctx-transcript-pipeline",
+      contextId: opts.contextId ?? contextId,
     });
   }
 
-  return { gad, channel, channelId, connectParticipant, createParticipantRpc, putTextBlob };
+  return {
+    gad,
+    channel,
+    channelId,
+    contextId,
+    connectParticipant,
+    createParticipantRpc,
+    putTextBlob,
+  };
 }
 
 export async function appendTrajectoryEventsAndBroadcast(

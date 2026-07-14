@@ -159,6 +159,7 @@ interface InstalledAgent {
 /** Type for chat panel state args */
 interface ChatStateArgs {
   channelName?: string;
+  channelCreation?: import("@vibestudio/shared/channelStructure").ChannelCreation;
   channelConfig?: Record<string, unknown>;
   contextId?: string;
   installedAgents?: InstalledAgent[];
@@ -253,7 +254,10 @@ export default function ChatPanel() {
 
   // Auto-bootstrap: when no channelName, mint one (channel only). The agent is
   // created lazily by the chat surface on the first message / initialPrompt.
-  const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
+  const [bootstrap, setBootstrap] = useState<{
+    channelName: string;
+    channelCreation: NonNullable<ChatStateArgs["channelCreation"]>;
+  } | null>(null);
   const bootstrapAttempted = useRef(false);
 
   useEffect(() => {
@@ -269,14 +273,28 @@ export default function ChatPanel() {
       // agent rather than backlog replay. Creating the channel here just lets the
       // composer connect; nothing else is persisted until an agent is added.
       const channelName = `chat-${crypto.randomUUID().slice(0, 8)}`;
-      void panel.stateArgs.set({ channelName, contextId: resolvedContextId });
-      setBootstrapChannel(channelName);
+      const channelCreation: NonNullable<ChatStateArgs["channelCreation"]> = {
+        governance: "standard",
+        contextBinding: { kind: "context", contextId: resolvedContextId },
+        origin: { kind: "chat-panel" },
+        admission: { kind: "workspace-members" },
+        presentationEditors: { kind: "workspace-members" },
+        presentation: stateArgs.channelConfig ?? {},
+      };
+      await panel.stateArgs.set({
+        channelName,
+        contextId: resolvedContextId,
+        channelCreation,
+      });
+      setBootstrap({ channelName, channelCreation });
     })();
   }, [resolvedContextId, stateArgs.channelName]);
 
   // Resolve this before constructing action callbacks that include the
   // channel in durable notification ids.
-  const channelName = stateArgs.channelName ?? bootstrapChannel;
+  const channelName = stateArgs.channelName ?? bootstrap?.channelName;
+  const bootstrapChannel = bootstrap?.channelName;
+  const channelCreation = stateArgs.channelCreation ?? bootstrap?.channelCreation;
 
   // Agent subscription recovery: when a panel has a channel but no DO
   // participants, re-create+subscribe each persisted agent using its stable
@@ -1081,6 +1099,7 @@ export default function ChatPanel() {
         channelName={channelName}
         channelConfig={stateArgs.channelConfig}
         contextId={resolvedContextId}
+        channelCreation={channelCreation}
         metadata={panelMetadata}
         tools={toolProvider}
         actions={chatActions}

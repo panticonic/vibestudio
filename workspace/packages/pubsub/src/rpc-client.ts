@@ -26,6 +26,7 @@ import type {
   ChannelInvite,
   ChannelPresenceEntry,
 } from "./types.js";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 import { DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT } from "./types.js";
 import type { RpcChannelMessage } from "./protocol-wire.js";
 import { PubSubError } from "./types.js";
@@ -95,6 +96,8 @@ interface ClientIngressMessage {
   senderMetadata?: Record<string, unknown>;
   contextId?: string;
   channelConfig?: ChannelConfig;
+  /** Explicit one-time creation record. Subscribe never initializes a channel. */
+  channelCreation?: ChannelCreation;
   totalCount?: number;
   envelopeCount?: number;
   firstEnvelopeSeq?: number;
@@ -162,6 +165,8 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
   channel: string;
   contextId?: string;
   channelConfig?: ChannelConfig;
+  /** Explicit atomic channel structure creation; subscribe never creates structure. */
+  channelCreation?: import("@vibestudio/shared/channelStructure").ChannelCreation;
   sinceId?: number;
   replayMessageLimit?: number;
   reconnect?: boolean;
@@ -1412,8 +1417,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     ...(opts.type !== undefined ? { type: opts.type } : {}),
     ...(opts.handle !== undefined ? { handle: opts.handle } : {}),
     [PARTICIPANT_SESSION_METADATA_KEY]: participantSessionId,
-    contextId: opts.contextId,
-    channelConfig: opts.channelConfig ? opts.channelConfig : undefined,
     replay: replayMode !== "skip",
     replayMessageLimit: opts.replayMessageLimit ?? DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT,
     sinceId: opts.sinceId,
@@ -1503,7 +1506,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // Fire subscribe. Replay normally arrives through ordered channel events; the
   // result also carries the same ordered initial replay as a fallback so losing
   // the ready event does not let ready resolve ahead of replay delivery.
-  callChannel<SubscribeResult | undefined>("subscribe", deliveryId, subscribeMetadata)
+  const creation = opts.channelCreation
+    ? callChannel("createChannel", opts.channelCreation)
+    : Promise.resolve();
+  creation
+    .then(() => callChannel<SubscribeResult | undefined>("subscribe", deliveryId, subscribeMetadata))
     .then(async (result) => {
       await applySubscribeAckFallback(result);
       subscribeAckResolve?.();

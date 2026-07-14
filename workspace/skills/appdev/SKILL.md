@@ -48,8 +48,8 @@ from panels, workers, and extensions:
 8. Apps that need durable shared data should call a manifest-declared worker
    Durable Object service. The app itself does not get a generic workspace SQL
    database; use `workers.resolveService(...)` + `rpc.call(...)` against narrow
-   DO methods, and include `app` in both the service `policy.allowed` and the
-   DO method `@rpc({ callers })` where appropriate.
+   DO methods, and admit the authenticated `code` principal in both the
+   service `authority.principals` and each DO method's `@rpc({ principals })`.
 
 ## Quick Start
 

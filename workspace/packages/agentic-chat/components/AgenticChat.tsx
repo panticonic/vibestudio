@@ -1,4 +1,5 @@
 import type { ChannelConfig } from "@workspace/pubsub";
+import type { ChannelCreation } from "@vibestudio/shared/channelStructure";
 import { Theme } from "@radix-ui/themes";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ChatLayout } from "./ChatLayout";
@@ -16,6 +17,8 @@ export interface AgenticChatProps {
   channelConfig?: ChannelConfig;
   /** Context ID for channel authorization */
   contextId?: string;
+  /** Exact creation intent for a newly minted channel. */
+  channelCreation?: ChannelCreation;
   /** Participant metadata */
   metadata?: ChatParticipantMetadata;
   /** Tool provider factory */
@@ -57,6 +60,7 @@ export function AgenticChat({
   channelName,
   channelConfig,
   contextId,
+  channelCreation,
   metadata,
   tools,
   actions,
@@ -76,6 +80,7 @@ export function AgenticChat({
     channelName,
     channelConfig,
     contextId,
+    channelCreation,
     metadata,
     tools,
     actions,

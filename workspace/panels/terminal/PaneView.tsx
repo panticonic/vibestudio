@@ -509,7 +509,7 @@ export function PaneView(props: {
       type: "success",
       title,
       message: hint
-        ? `${absolutePath}\nImages and files are saved to .snug/scratch/ and cleaned after 24h.`
+        ? `${absolutePath}\nImages and files are saved to .vibestudio/terminal/scratch/ and cleaned after 24h.`
         : absolutePath,
       ttl: hint ? 3500 : 1500,
       actions: [
@@ -644,7 +644,7 @@ export function PaneView(props: {
           position: "relative",
         }}
       >
-        <DropOverlay visible={dragDepth > 0} target=".snug/scratch/..." />
+        <DropOverlay visible={dragDepth > 0} target=".vibestudio/terminal/scratch/..." />
         {showJumpToBottom ? (
           <IconButton
             size="2"

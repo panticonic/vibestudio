@@ -19,18 +19,17 @@ import { createStore, type Store } from "./store";
 import { initialState, type PendingSuggestion, type SpectroliteState } from "./state";
 import { SessionController } from "./sessionController";
 import { VaultController, type VaultStarterDoc } from "./vaultController";
-import { normalizeVaultPath } from "./vaultContext";
+import { normalizeVaultPath, shouldRebindToVaultContext, vaultContextId } from "./vaultContext";
 import { PublishController } from "./publishController";
 import { createViewStateStore, type ViewStateStore } from "../coedit/viewState";
 import { parseFrontmatter, diffDependencies } from "../mdx/frontmatter";
 import { prefetchDependencies } from "../mdx/depPrefetch";
 import type { Collision } from "../coedit/blockReconcile";
-import { resolveContextId, type InstalledAgentRecord } from "../bootstrap";
+import type { InstalledAgentRecord } from "../bootstrap";
 import { spectroliteE2EHooksEnabled } from "./e2eHooks";
 
-interface PersistedStateArgs {
+interface PersistedStateArgs extends Record<string, unknown> {
   channelName?: string;
-  contextId?: string;
   installedAgents?: InstalledAgentRecord[];
   openPath?: string;
   pendingStarterDoc?: unknown;
@@ -83,6 +82,8 @@ export interface SpectroliteApp {
   /** A save 3-way-conflicted (DocController.onConflict): refresh publish state so
    *  the parked pending merge surfaces in the resolution UX. */
   onSaveConflict(vcsPath: string): void;
+  /** Retry an initial move onto the selected vault's durable context. */
+  retryVaultBinding(): void;
   start(): void;
   dispose(): void;
 }
@@ -126,16 +127,26 @@ type SpectroliteE2EGlobal = typeof globalThis & {
 
 export function createSpectroliteApp(): SpectroliteApp {
   const args = panel.stateArgs.get<PersistedStateArgs>();
-  const contextId = resolveContextId(args.contextId, runtimeContextId) ?? null;
+  // A panel entity's runtime context is the only context authority. Keeping a
+  // second copy in stateArgs used to make the initial vault move race channel
+  // bootstrap: whichever effect wrote/read first decided whether to rebind.
+  const contextId = runtimeContextId?.trim() || null;
   const pendingStarterDoc = parsePendingStarterDoc(args.pendingStarterDoc);
   const repoRoot = typeof args.repoRoot === "string" ? normalizeVaultPath(args.repoRoot) : null;
-  const store = createStore(initialState({
-    contextId,
-    channelName: args.channelName ?? null,
-    repoRoot,
-    openPath: args.openPath ?? null,
-    installedAgents: args.installedAgents ?? [],
-  }));
+  const vaultBindingTarget =
+    repoRoot !== null && shouldRebindToVaultContext(repoRoot, runtimeContextId)
+      ? vaultContextId(repoRoot)
+      : null;
+  const store = createStore(
+    initialState({
+      contextId,
+      channelName: args.channelName ?? null,
+      repoRoot,
+      openPath: args.openPath ?? null,
+      installedAgents: args.installedAgents ?? [],
+      vaultPendingPath: vaultBindingTarget ? repoRoot : null,
+    })
+  );
 
   // The panel runs under the vault's contextId, so the vault's durable head IS
   // the caller's own ctx head.
@@ -185,7 +196,12 @@ export function createSpectroliteApp(): SpectroliteApp {
     if (store.getState().activePath !== path) return;
     const next = parseFrontmatter(markdown).dependencies;
     const { added, changed, removed } = diffDependencies(lastDeps, next);
-    if (Object.keys(added).length === 0 && Object.keys(changed).length === 0 && removed.length === 0) return;
+    if (
+      Object.keys(added).length === 0 &&
+      Object.keys(changed).length === 0 &&
+      removed.length === 0
+    )
+      return;
     lastDeps = next;
     store.setState({ activeDeps: next });
     void prefetchDependencies(depSandbox, { ...added, ...changed }, (line) => {
@@ -214,7 +230,7 @@ export function createSpectroliteApp(): SpectroliteApp {
       activeDeps: {},
       // Suggestions are per-doc; drop any not for the new doc on open.
       pendingSuggestions: prev.pendingSuggestions.filter(
-        (s) => s.vcsPath === vault.mapping().toVcsPath(path),
+        (s) => s.vcsPath === vault.mapping().toVcsPath(path)
       ),
     }));
     lastDeps = {};
@@ -232,12 +248,39 @@ export function createSpectroliteApp(): SpectroliteApp {
   };
 
   let started = false;
+  let disposed = false;
+  let vaultBindingInFlight: Promise<void> | null = null;
   let offPublishHead: (() => void) | null = null;
   let offPublishWorking: (() => void) | null = null;
   let startupRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const refreshVaultSidebars = (): void => {
     void vault.refreshPaths();
     void publish.refresh();
+  };
+  const bindToVaultContext = (): void => {
+    if (!vaultBindingTarget || disposed || vaultBindingInFlight) return;
+    store.setState({ vaultError: null, vaultPendingPath: repoRoot });
+    const stateArgs: PersistedStateArgs = {
+      ...(args.channelName ? { channelName: args.channelName } : {}),
+      ...(args.installedAgents ? { installedAgents: args.installedAgents } : {}),
+      ...(args.openPath ? { openPath: args.openPath } : {}),
+      ...(pendingStarterDoc ? { pendingStarterDoc } : {}),
+      ...(repoRoot !== null ? { repoRoot } : {}),
+    };
+    vaultBindingInFlight = panel
+      .reopen({ contextId: vaultBindingTarget, stateArgs })
+      .then(() => undefined)
+      .catch((err) => {
+        if (disposed) return;
+        store.setState({
+          vaultError: `Couldn't open this vault: ${err instanceof Error ? err.message : String(err)}`,
+          // Keep the gate closed: no editor or service may use the transient head.
+          vaultPendingPath: repoRoot,
+        });
+      })
+      .finally(() => {
+        vaultBindingInFlight = null;
+      });
   };
   const spectroliteApp: SpectroliteApp = {
     store,
@@ -268,11 +311,17 @@ export function createSpectroliteApp(): SpectroliteApp {
         vcsPath,
         collision,
       }));
-      store.setState((prev) => ({ pendingSuggestions: [...prev.pendingSuggestions, ...additions] }));
+      store.setState((prev) => ({
+        pendingSuggestions: [...prev.pendingSuggestions, ...additions],
+      }));
     },
     resolveSuggestion(id, resolved) {
       const suggestion = store.getState().pendingSuggestions.find((s) => s.id === id);
-      if (resolved && suggestion && suggestion.vcsPath === vault.mapping().toVcsPath(store.getState().activePath ?? "")) {
+      if (
+        resolved &&
+        suggestion &&
+        suggestion.vcsPath === vault.mapping().toVcsPath(store.getState().activePath ?? "")
+      ) {
         try {
           suggestionApplier?.(resolved);
         } catch (err) {
@@ -300,9 +349,18 @@ export function createSpectroliteApp(): SpectroliteApp {
       // The save parked a pending merge on the vault head; surface it.
       void publish.refresh();
     },
+    retryVaultBinding() {
+      bindToVaultContext();
+    },
     start() {
       if (started) return;
       started = true;
+      if (vaultBindingTarget) {
+        // Rebinding replaces this panel entity. Starting any session, VCS
+        // subscription, or starter write here would bind it to the wrong head.
+        bindToVaultContext();
+        return;
+      }
       void session.start();
       if (store.getState().repoRoot !== null) {
         void createPendingStarterDoc();
@@ -323,6 +381,7 @@ export function createSpectroliteApp(): SpectroliteApp {
       });
     },
     dispose() {
+      disposed = true;
       offPublishHead?.();
       offPublishWorking?.();
       offPublishHead = null;

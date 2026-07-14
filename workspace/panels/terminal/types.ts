@@ -45,7 +45,7 @@ export interface TerminalNotification {
   message: string;
   timestamp: number;
   read: boolean;
-  source?: "osc" | "snug" | "system";
+  source?: "osc" | "terminal" | "system";
 }
 
 export interface PerSessionState {

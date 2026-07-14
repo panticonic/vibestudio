@@ -19,7 +19,7 @@ export interface PanelHandleMetadata {
   parentId?: string | null;
   contextId?: string | null;
   rpcTargetId?: string | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
   ref?: string | null;
 }
 
@@ -132,10 +132,10 @@ export function createPanelHandle<
       parentId: metadata.parentId,
       contextId: metadata.contextId,
       runtimeEntityId: metadata.rpcTargetId,
-      effectiveVersion: metadata.effectiveVersion,
+      executionDigest: metadata.executionDigest,
       ref: metadata.ref ?? undefined,
       build: {
-        effectiveVersion: metadata.effectiveVersion,
+        executionDigest: metadata.executionDigest,
         ref: metadata.ref ?? undefined,
       },
     }),
@@ -285,8 +285,8 @@ export function createNoPanelHandle(): PanelHandle {
         parentId: null,
         contextId: null,
         runtimeEntityId: null,
-        effectiveVersion: null,
-        build: { effectiveVersion: null },
+        executionDigest: null,
+        build: { executionDigest: null },
       }),
     call: new Proxy({} as PanelHandle["call"], {
       get: () => noParent,
@@ -403,8 +403,8 @@ export function createNonPanelRuntimeHandle(options: {
         parentId: options.parentId ?? null,
         contextId: null,
         runtimeEntityId: options.id,
-        effectiveVersion: null,
-        build: { effectiveVersion: null },
+        executionDigest: null,
+        build: { executionDigest: null },
       }),
     call: new Proxy({} as PanelHandle["call"], {
       get: () => unavailable,
@@ -456,7 +456,7 @@ function normalizeMetadata(metadata: PanelHandleMetadata): Required<PanelHandleM
     parentId: metadata.parentId ?? null,
     contextId: metadata.contextId ?? null,
     rpcTargetId: metadata.rpcTargetId ?? null,
-    effectiveVersion: metadata.effectiveVersion ?? null,
+    executionDigest: metadata.executionDigest ?? null,
     ref: metadata.ref ?? null,
   };
 }

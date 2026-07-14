@@ -20,12 +20,18 @@ import {
   createConnectionlessRpcClient,
   envelopeFromMessage,
   rpcExposedMethodNames,
-  rpcMethodPolicy,
+  rpcMethodAuthority,
   type ConnectionlessRpcClient,
   type DeferrableRpcClient,
   type RpcEnvelope,
   type RpcRequest,
 } from "@vibestudio/rpc";
+import type { AuthorizationContext } from "@vibestudio/rpc";
+import {
+  bindMethodCapability,
+  evaluateAuthority,
+  requirementForPrincipals,
+} from "@vibestudio/shared/authorization";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
@@ -344,6 +350,12 @@ export abstract class DurableObjectBase {
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
+              ...(record["authorization"] && typeof record["authorization"] === "object"
+                ? {
+                    authorization:
+                      record["authorization"] as AuthenticatedCaller["authorization"],
+                  }
+                : {}),
             } as AuthenticatedCaller,
             ...(invocationToken ? { invocationToken } : {}),
           };
@@ -451,6 +463,11 @@ export abstract class DurableObjectBase {
       callerKind: (this._currentRpcCallerKind as AuthenticatedCaller["callerKind"]) ?? "unknown",
       ...(this._currentRpcCallerPanelId ? { callerPanelId: this._currentRpcCallerPanelId } : {}),
     };
+  }
+
+  /** Complete host-attested facts for the active direct dispatch. */
+  protected get authorization(): AuthorizationContext | null {
+    return this.caller?.authorization?.context ?? null;
   }
 
   protected get rpcCallerPanelId(): string | null {
@@ -830,7 +847,7 @@ export abstract class DurableObjectBase {
         const previousVerifiedCaller = this._currentVerifiedCaller;
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
-          if (this.caller?.callerKind !== "server") {
+          if (this.inboundHostControlDenial(method)) {
             return new Response(
               JSON.stringify({ error: "Lifecycle calls require server caller" }),
               {
@@ -860,7 +877,7 @@ export abstract class DurableObjectBase {
         const previousVerifiedCaller = this._currentVerifiedCaller;
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
-          if (this.caller?.callerKind !== "server") {
+          if (this.inboundHostControlDenial(method)) {
             return new Response(JSON.stringify({ error: "Alarm calls require server caller" }), {
               status: 403,
               headers: { "Content-Type": "application/json" },
@@ -944,26 +961,70 @@ export abstract class DurableObjectBase {
     });
   }
 
-  /**
-   * Default-deny inbound caller gate (workspace realm, Layer A). Every relay-reachable `@rpc`
-   * method must declare an `@rpc({ callers })` policy admitting the caller's kind; a method with no
-   * policy, or a caller (including an unattributed/null caller) whose kind is not listed, is refused.
-   * Identity-level tightening ("this agent's own EvalDO", a specific PubSubChannel/agent DO) stays as
-   * an inline check inside the method — this is the coarse kind floor beneath it. Returns an error
-   * string to refuse, or null to allow. Events (owner-scoped pushes) are delivered via `deliver`, not
-   * through here, so they are unaffected.
-   */
+  /** Evaluate the method's complete declaration against fresh host mediation. */
   protected inboundCallerDenial(
     method: string | undefined,
     caller: AuthenticatedCaller | null
   ): string | null {
     if (!method) return null;
-    const policy = rpcMethodPolicy(this, method);
-    const kind = caller?.callerKind;
-    if (policy && kind && (policy.callers as readonly string[]).includes(kind)) return null;
-    return policy
-      ? `${method}: caller kind "${kind ?? "unattributed"}" is not permitted (allowed: ${policy.callers.join(", ")})`
-      : `${method}: refused — no @rpc({ callers }) policy declared (workspace DOs are default-deny over the relay)`;
+    const declaration = rpcMethodAuthority(this, method);
+    if (!declaration) {
+      return `${method}: refused — no direct authority declaration (workspace RPC is default-deny)`;
+    }
+    const attestation = caller?.authorization;
+    if (!attestation) return `${method}: fresh host authority attestation is required`;
+    const now = Date.now();
+    const audience = this.directAuthorityAudience();
+    const resourceKey = this.directAuthorityResource();
+    if (
+      attestation.audience !== audience ||
+      attestation.method !== method ||
+      attestation.resourceKey !== resourceKey ||
+      attestation.issuedAt > now ||
+      attestation.expiresAt <= now
+    ) {
+      return `${method}: host authority attestation is stale or bound to another target`;
+    }
+    const decision = evaluateAuthority({
+      context: attestation.context,
+      requirement:
+        declaration.requires !== undefined
+          ? bindMethodCapability(declaration.requires, this.directAuthorityCapability(method))
+          : requirementForPrincipals(
+              declaration.principals,
+              this.directAuthorityCapability(method)
+            ),
+      resourceKey,
+      grants: attestation.grants,
+      now,
+    });
+    return decision.allowed ? null : `${method}: ${decision.reason} (${decision.code})`;
+  }
+
+  private directAuthorityAudience(): string {
+    return `do:${String(this.env["WORKER_SOURCE"])}:${String(this.env["WORKER_CLASS_NAME"])}:${this.objectKey}`;
+  }
+
+  private directAuthorityResource(): string {
+    return this.directAuthorityAudience();
+  }
+
+  private directAuthorityCapability(method: string): string {
+    return `rpc:${method}`;
+  }
+
+  private inboundHostControlDenial(method: string): string | null {
+    const attestation = this.caller?.authorization;
+    const now = Date.now();
+    return attestation &&
+      attestation.audience === this.directAuthorityAudience() &&
+      attestation.method === method &&
+      attestation.resourceKey === this.directAuthorityResource() &&
+      attestation.context.host !== null &&
+      attestation.issuedAt <= now &&
+      attestation.expiresAt > now
+      ? null
+      : `${method}: live host principal is required`;
   }
 
   /**

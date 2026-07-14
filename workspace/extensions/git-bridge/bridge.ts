@@ -38,9 +38,8 @@
 
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { GitClient } from "@vibestudio/git";
-import { VCS_IGNORED_DIRS, VCS_IGNORED_FILES } from "@workspace/vcs-engine";
 import {
   buildWorktreeManifest,
   type ManifestHashEntry,
@@ -53,6 +52,7 @@ import {
 } from "@vibestudio/shared/contentTree/treeObjects";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/workspace/remotes";
 import { withRepoLock } from "./repoLocks.js";
+import { VCS_IGNORED_DIRS } from "@workspace/vcs-engine";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -60,31 +60,21 @@ export const VCS_MAIN_HEAD = "main";
  *  imported snapshot lands here (store-authoritative, never the protected
  *  ref), then the DO publishes it onto `main` through the gated single-writer
  *  `refs.updateMains({ operation: "import" })` path. */
-export const IMPORT_STAGING_HEAD = "import:main";
+const IMPORT_OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function importStagingHead(operationId: string): string {
+  assertImportOperationId(operationId);
+  return `import:${operationId}`;
+}
+
+function assertImportOperationId(operationId: string): void {
+  if (!IMPORT_OPERATION_ID_RE.test(operationId)) {
+    throw new Error(`Invalid Git import operation id: ${operationId}`);
+  }
+}
 
 /** listTree caps results; a truncated listing must fail, never export. */
 const LIST_TREE_LIMIT = 100_000;
-
-/** Root-only worktree merge-conflict summary — never tracked (parity with the
- *  scan-side denylist). */
-const MERGE_CONFLICTS_FILE = "MERGE_CONFLICTS.md";
-
-/** Basename glob patterns never tracked (secret/env/scratch files). Twin of
- *  the host scan's SNAPSHOT_IGNORE_PATTERNS / vcs-engine's segment patterns —
- *  the lists must stay in sync. */
-const SNAPSHOT_IGNORE_PATTERNS = [
-  ".env",
-  ".env.*",
-  "*.log",
-  "*.tmp",
-  "*.swp",
-  "*.swo",
-  "*.sublime-workspace",
-  "*~",
-  "*.tsbuildinfo",
-  "*.tgz",
-  ".npmrc.dist-tag-temp",
-];
 
 /** A raw vcs transition read off a repo's `main` log (newest first). */
 export interface VcsTransition {
@@ -128,11 +118,18 @@ export interface BridgeVcsStore {
    *  through the DO's gated single-writer `refs.updateMains({operation:"import"})`
    *  path (write-ahead intent + provenance). No-ops when main already matches. */
   importPublish(input: {
+    operationId: string;
     repoPath: string;
     sourceHead: string;
     message?: string;
     upstreamAuthorship?: UpstreamAuthorship;
   }): Promise<{ status: "published" | "up-to-date"; repoPath: string; stateHash: string }>;
+  importStatus(input: { operationId: string }): Promise<{
+    operationId: string;
+    repoPath: string;
+    stateHash: string;
+    changed: boolean;
+  } | null>;
 }
 
 export interface BridgeBlobstore {
@@ -178,7 +175,19 @@ export interface ExportResult {
 }
 
 export interface ImportResult {
+  operationId: string;
+  sourceHead: string;
+  gitCommitSha: string;
   stateHash: string;
+  changed: boolean;
+}
+
+export interface PreparedGitImport {
+  operationId: string;
+  repoPath: string;
+  sourceHead: string;
+  stateHash: string;
+  gitCommitSha: string;
   changed: boolean;
 }
 
@@ -220,7 +229,7 @@ interface MaterializeResult {
 
 interface ScannedFile {
   path: string;
-  absPath: string;
+  bytes: Uint8Array;
   contentHash: string;
   size: number;
   mode: number;
@@ -323,26 +332,34 @@ function safeCheckoutJoin(dir: string, relPath: string): string {
   return abs;
 }
 
-async function loadIgnoreMatcher(
-  dir: string
-): Promise<(relPath: string, isDir: boolean) => boolean> {
-  const { default: ignore } = await import("ignore");
-  const platformMatcher = ignore().add(SNAPSHOT_IGNORE_PATTERNS);
-  let userPatterns: string[] = [];
+const WINDOWS_RESERVED_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+const WINDOWS_FORBIDDEN_CHARS = /[<>:"|?*]/;
+
+/** Return a stable, user-facing reason when a Git path is not portable. */
+function portablePathFailure(pathValue: string, seen: Map<string, string>): string | null {
   try {
-    const raw = await fsp.readFile(path.join(dir, ".gadignore"), "utf8");
-    userPatterns = raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#"));
-  } catch {
-    // No repo policy file; platform exclusions still apply.
+    splitTreePath(pathValue);
+  } catch (error) {
+    return error instanceof Error ? error.message : "invalid workspace path";
   }
-  const userMatcher = userPatterns.length > 0 ? ignore().add(userPatterns) : null;
-  return (relPath, isDir) => {
-    const subject = isDir ? `${relPath}/` : relPath;
-    return platformMatcher.ignores(subject) || (userMatcher?.ignores(subject) ?? false);
-  };
+  if (pathValue !== pathValue.normalize("NFC")) return "path is not NFC-normalized";
+  if (pathValue.includes("\\")) return "backslash is not a portable path separator";
+  const folded = pathValue.normalize("NFC").toLocaleLowerCase("en-US");
+  const collision = seen.get(folded);
+  if (collision && collision !== pathValue) return `portable collision with ${collision}`;
+  seen.set(folded, pathValue);
+  for (const segment of pathValue.split("/")) {
+    if (segment.endsWith(".") || segment.endsWith(" ")) {
+      return `segment ${JSON.stringify(segment)} ends with a dot or space`;
+    }
+    if (WINDOWS_RESERVED_BASENAME.test(segment)) {
+      return `segment ${JSON.stringify(segment)} is platform-reserved`;
+    }
+    if (WINDOWS_FORBIDDEN_CHARS.test(segment) || /[\u0000-\u001f]/.test(segment)) {
+      return `segment ${JSON.stringify(segment)} contains platform-reserved characters`;
+    }
+  }
+  return null;
 }
 
 export class GitBridge {
@@ -686,6 +703,17 @@ export class GitBridge {
         );
       }
       await this.clearNonDirAncestors(gitDir, file.path);
+      // A previous projection can have a directory where the new tree has a
+      // file (foo/bar -> foo). Removing only non-directory ancestors is not
+      // enough: the leaf itself must be replaced as one atomic tree shape.
+      try {
+        if ((await fsp.lstat(absPath)).isDirectory()) {
+          await fsp.rm(absPath, { recursive: true, force: true });
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      }
       await fsp.mkdir(path.dirname(absPath), { recursive: true });
       await fsp.writeFile(absPath, Buffer.from(base64, "base64"), {
         mode: file.mode === 33261 ? 0o755 : 0o644,
@@ -735,12 +763,35 @@ export class GitBridge {
   ): Promise<ImportResult> {
     repo = normalizeWorkspaceRepoPath(repo);
     const gitDir = await this.repoGitDir(repo);
+    const operationId = randomUUID();
+    const prepared = await this.prepareImportTree(repo, gitDir, operationId, opts);
+    const published = await this.publishPreparedImport(prepared, opts);
+    await this.finalizePreparedImport(prepared, gitDir);
+    return published;
+  }
+
+  /**
+   * Prepare an import without mutating protected main or bridge checkout
+   * bookkeeping. The selected commit is read entirely from Git objects,
+   * mirrored to CAS, and staged on an operation-addressed non-main lineage.
+   */
+  async prepareImportTree(
+    repo: string,
+    gitDir: string,
+    operationId: string,
+    opts: { summary?: string; upstreamAuthorship?: UpstreamAuthorship } = {}
+  ): Promise<PreparedGitImport> {
+    repo = normalizeWorkspaceRepoPath(repo);
+    assertImportOperationId(operationId);
     const logId = `vcs:repo:${repo}`;
     const commitSha = await this.git.getCurrentCommit(gitDir);
+    if (!commitSha) {
+      throw new Error(`git import: ${repo} has no concrete commit to import`);
+    }
 
-    // Scan + hash the checkout entirely locally (same denylist as the host
-    // scan: platform-ignored dirs/files, `.gadignore`, root conflict summary).
-    const files = await this.scanCheckout(gitDir);
+    // Enumerate the selected commit's tracked Git objects. Worktree drift,
+    // untracked scratch, and ignore files cannot change the imported snapshot.
+    const files = await this.scanCommitTree(gitDir, commitSha);
     const manifest = buildWorktreeManifest(
       files.map((file) => ({ path: file.path, contentHash: file.contentHash, mode: file.mode }))
     );
@@ -749,7 +800,14 @@ export class GitBridge {
     const refValue = (await this.host.refs.readMain(repo))?.stateHash ?? null;
     if (refValue && refValue === manifest.stateHash) {
       this.trace("import no-op", { repo, stateHash: refValue, commitSha });
-      return { stateHash: refValue, changed: false };
+      return {
+        operationId,
+        repoPath: repo,
+        sourceHead: importStagingHead(operationId),
+        stateHash: refValue,
+        gitCommitSha: commitSha,
+        changed: false,
+      };
     }
 
     // Mirror the scanned tree into the content store BEFORE the hash is handed
@@ -766,7 +824,7 @@ export class GitBridge {
     // a `vcs:repo:* main` lineage). The protected ref is untouched here.
     const result = await this.host.store.ingestWorktreeState({
       logId,
-      head: IMPORT_STAGING_HEAD,
+      head: importStagingHead(operationId),
       logKind: "vcs",
       actor: { id: "git-bridge", kind: "system" },
       files: files.map((file) => ({
@@ -784,83 +842,121 @@ export class GitBridge {
       );
     }
 
-    // Publish the staged import onto the protected `main` through the DO's
-    // gated single-writer path (write-ahead intent → refs.updateMains(import)
-    // → provenance). Approval-gated and attributed to this extension via the
-    // host-minted invocation token — never an ungated adoption.
-    const published = await this.host.store.importPublish({
+    return {
+      operationId,
       repoPath: repo,
-      sourceHead: IMPORT_STAGING_HEAD,
+      sourceHead: importStagingHead(operationId),
+      stateHash: result.stateHash,
+      gitCommitSha: commitSha,
+      changed: true,
+    };
+  }
+
+  /** The single authoritative commit point for a prepared import. */
+  async publishPreparedImport(
+    prepared: PreparedGitImport,
+    opts: { summary?: string; upstreamAuthorship?: UpstreamAuthorship } = {}
+  ): Promise<ImportResult> {
+    if (!prepared.changed) {
+      return {
+        operationId: prepared.operationId,
+        sourceHead: prepared.sourceHead,
+        gitCommitSha: prepared.gitCommitSha,
+        stateHash: prepared.stateHash,
+        changed: false,
+      };
+    }
+    assertImportOperationId(prepared.operationId);
+    const summary =
+      opts.summary ??
+      `Import ${prepared.repoPath} from git @ ${prepared.gitCommitSha.slice(0, 7)}`;
+    const published = await this.host.store.importPublish({
+      operationId: prepared.operationId,
+      repoPath: prepared.repoPath,
+      sourceHead: prepared.sourceHead,
       message: summary,
       ...(opts.upstreamAuthorship ? { upstreamAuthorship: opts.upstreamAuthorship } : {}),
     });
-
-    if (commitSha) {
-      // The marker must carry the MAIN-log event id of the published import so
-      // the next export resumes from it; the ingest eventId names the staging
-      // transition, not the main one.
-      const [newest] = await this.host.store.vcsLog(repo, 1, VCS_MAIN_HEAD);
-      if (newest && newest.outputStateHash === published.stateHash) {
-        await this.setMarker(repo, {
-          envelopeId: newest.envelopeId,
-          stateHash: published.stateHash,
-          commitSha,
-        });
-      }
-      // The scanned tree IS what the checkout now holds — sync the tracked map
-      // so the next export's deletion/drift detection starts from reality.
-      await this.setCheckoutMap(
-        repo,
-        Object.fromEntries(
-          files.map((file) => [file.path, { contentHash: file.contentHash, mode: file.mode }])
-        )
-      );
-    }
     this.trace("import published", {
-      repo,
+      repo: prepared.repoPath,
       stateHash: published.stateHash,
-      commitSha,
-      files: files.length,
+      commitSha: prepared.gitCommitSha,
+      operationId: prepared.operationId,
     });
-    return { stateHash: published.stateHash, changed: true };
+    return {
+      operationId: prepared.operationId,
+      sourceHead: prepared.sourceHead,
+      gitCommitSha: prepared.gitCommitSha,
+      stateHash: published.stateHash,
+      changed: true,
+    };
   }
 
-  /** Walk + hash the checkout (platform denylist + `.gadignore`), sorted by path. */
-  private async scanCheckout(dir: string): Promise<ScannedFile[]> {
-    const ignores = await loadIgnoreMatcher(dir);
-    const out: ScannedFile[] = [];
-    const walk = async (abs: string, rel: string): Promise<void> => {
-      const entries = await fsp.readdir(abs, { withFileTypes: true });
-      await Promise.all(
-        entries.map(async (entry) => {
-          const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-          const childAbs = path.join(abs, entry.name);
-          if (entry.isDirectory()) {
-            if (VCS_IGNORED_DIRS.has(entry.name)) return;
-            if (ignores(childRel, true)) return;
-            await walk(childAbs, childRel);
-          } else if (entry.isFile()) {
-            if (VCS_IGNORED_FILES.has(entry.name)) return;
-            // Root-only: the merge-conflict summary is written at the worktree
-            // root; ignore it there without shadowing a nested same-name file.
-            if (childRel === MERGE_CONFLICTS_FILE) return;
-            if (ignores(childRel, false)) return;
-            const bytes = await fsp.readFile(childAbs);
-            const stat = await fsp.stat(childAbs);
-            out.push({
-              path: childRel,
-              absPath: childAbs,
-              contentHash: sha256Hex(bytes),
-              size: bytes.byteLength,
-              mode: stat.mode & 0o111 ? 33261 : 33188,
-            });
-          }
-          // symlinks / sockets / etc. are not part of the vcs file model
-        })
+  importOperationStatus(operationId: string) {
+    assertImportOperationId(operationId);
+    return this.host.store.importStatus({ operationId });
+  }
+
+  /**
+   * Idempotent post-commit bookkeeping. It is deliberately separate from the
+   * protected-main publication so a marker or checkout promotion failure can
+   * be resumed without pretending the import rolled back.
+   */
+  async finalizePreparedImport(prepared: PreparedGitImport, gitDir: string): Promise<void> {
+    const files = await this.scanCommitTree(gitDir, prepared.gitCommitSha);
+    const [newest] = await this.host.store.vcsLog(prepared.repoPath, 1, VCS_MAIN_HEAD);
+    if (!newest || newest.outputStateHash !== prepared.stateHash) {
+      throw new Error(
+        `git import finalization: protected main for ${prepared.repoPath} does not record ${prepared.stateHash}`
       );
-    };
-    await walk(dir, "");
-    return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    }
+    await this.setMarker(prepared.repoPath, {
+      envelopeId: newest.envelopeId,
+      stateHash: prepared.stateHash,
+      commitSha: prepared.gitCommitSha,
+    });
+    await this.setCheckoutMap(
+      prepared.repoPath,
+      Object.fromEntries(
+        files.map((file) => [file.path, { contentHash: file.contentHash, mode: file.mode }])
+      )
+    );
+  }
+
+  /** Read and validate every tracked entry from the exact commit tree. */
+  private async scanCommitTree(dir: string, commitSha: string): Promise<ScannedFile[]> {
+    const entries = await this.git.readCommitTree(dir, commitSha);
+    const failures: string[] = [];
+    const portable = new Map<string, string>();
+    const files: ScannedFile[] = [];
+    for (const entry of entries) {
+      const pathFailure = portablePathFailure(entry.path, portable);
+      if (pathFailure) failures.push(`${entry.path} (${pathFailure})`);
+      if (entry.type === "commit" || entry.mode === 0o160000) {
+        failures.push(`${entry.path} (gitlink/submodule)`);
+        continue;
+      }
+      if (entry.mode === 0o120000) {
+        failures.push(`${entry.path} (symbolic link)`);
+        continue;
+      }
+      if (entry.mode !== 0o100644 && entry.mode !== 0o100755) {
+        failures.push(`${entry.path} (unrepresentable mode ${entry.mode.toString(8)})`);
+        continue;
+      }
+      if (!entry.bytes || pathFailure) continue;
+      files.push({
+        path: entry.path,
+        bytes: entry.bytes,
+        contentHash: sha256Hex(entry.bytes),
+        size: entry.bytes.byteLength,
+        mode: entry.mode === 0o100755 ? TREE_EXEC_MODE : TREE_FILE_MODE,
+      });
+    }
+    if (failures.length > 0) {
+      throw new Error(`git import fidelity preflight rejected:\n- ${failures.join("\n- ")}`);
+    }
+    return files;
   }
 
   /**
@@ -877,14 +973,12 @@ export class GitBridge {
       if (seen.has(file.contentHash)) continue;
       seen.add(file.contentHash);
       if (await this.host.blobstore.has(file.contentHash)) continue;
-      const bytes = await fsp.readFile(file.absPath);
+      const bytes = file.bytes;
       const digest = sha256Hex(bytes);
       if (digest !== file.contentHash) {
-        throw new Error(
-          `git import: ${file.path} changed on disk during the scan (${file.contentHash} → ${digest}); retry`
-        );
+        throw new Error(`git import: retained Git object bytes changed for ${file.path}`);
       }
-      const put = await this.host.blobstore.putBase64(bytes.toString("base64"));
+      const put = await this.host.blobstore.putBase64(Buffer.from(bytes).toString("base64"));
       if (put.digest !== file.contentHash) {
         throw new Error(
           `git import: content store digest ${put.digest} disagrees with local hash ${file.contentHash}`

@@ -507,6 +507,7 @@ describe("useDeferredAgent", () => {
       await result.current.sendMessage();
     });
     await waitFor(() => expect(result.current.deferredAgent?.launchFailed).toBe(true));
+    expect(result.current.deferredAgent?.launchError).toBe("boom");
     expect(m.onAddAgent).toHaveBeenCalledTimes(1);
     // Retry re-issues the spawn (this attempt resolves) and clears the error.
     await act(async () => {
@@ -514,6 +515,7 @@ describe("useDeferredAgent", () => {
     });
     await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(2));
     expect(result.current.deferredAgent?.launchFailed).toBe(false);
+    expect(result.current.deferredAgent?.launchError).toBeNull();
   });
 
   it("spawns once the agent gallery loads, even if the user sent first", async () => {

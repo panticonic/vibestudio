@@ -23,7 +23,7 @@ function createRpcCall() {
                 parentId,
                 contextId: "ctx",
                 runtimeEntityId: "panel:child-entity",
-                effectiveVersion: "ev-child",
+                executionDigest: "ev-child",
               },
             ]
           : [
@@ -35,7 +35,7 @@ function createRpcCall() {
                 parentId: null,
                 contextId: "ctx",
                 runtimeEntityId: "panel:browser-entity",
-                effectiveVersion: "ev-browser",
+                executionDigest: "ev-browser",
               },
             ];
       }
@@ -49,7 +49,7 @@ function createRpcCall() {
             parentId: null,
             contextId: "ctx",
             runtimeEntityId: "panel:root-entity",
-            effectiveVersion: "ev-root",
+            executionDigest: "ev-root",
           },
         ];
       case "panelTree.metadata":
@@ -61,7 +61,7 @@ function createRpcCall() {
           parentId: String(args[0]).includes("parent") ? null : "panel-parent",
           contextId: "ctx-meta",
           runtimeEntityId: `panel:${String(args[0])}-entity`,
-          effectiveVersion: `ev-${String(args[0])}`,
+          executionDigest: `ev-${String(args[0])}`,
         };
       case "panelCdp.getCdpEndpoint":
         return { wsEndpoint: "ws://localhost", token: "t" };
@@ -112,6 +112,7 @@ function createRpcCall() {
         return {
           id: args[0],
           title: "Navigated",
+          kind: "workspace",
         };
       case "panelTree.setStateArgs":
         return { mode: (args[1] as Record<string, unknown>)?.["mode"], preserved: true };
@@ -277,7 +278,7 @@ describe("PanelHandle", () => {
     expect(roots[0]?.id).toBe("root-1");
     await expect(roots[0]?.getInfo()).resolves.toMatchObject({
       runtimeEntityId: "panel:root-entity",
-      effectiveVersion: "ev-root",
+      executionDigest: "ev-root",
     });
     expect(all.map((handle) => handle.id)).toEqual(["browser-1"]);
     expect(panelTree.get("arbitrary").id).toBe("arbitrary");
@@ -356,6 +357,7 @@ describe("PanelHandle", () => {
       source: "panels/events",
       kind: "workspace",
       parentId: null,
+      contextId: "ctx-events",
       runtimeEntityId: "panel:arbitrary-events-entity",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));

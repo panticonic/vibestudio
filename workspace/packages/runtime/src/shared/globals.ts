@@ -37,7 +37,7 @@ declare global {
   /** Source repo path for this endpoint */
   var __vibestudioSourceRepo: string | undefined;
   /** Exact effective version for the source currently running. */
-  var __vibestudioEffectiveVersion: string | null | undefined;
+  var __vibestudioSourceDigest: string | null | undefined;
   /** Environment variables */
   var __vibestudioEnv: Record<string, string> | undefined;
 }
@@ -52,7 +52,7 @@ export interface InjectedConfig {
   initialTheme: "light" | "dark";
   gatewayConfig: GatewayConfig;
   env: Record<string, string>;
-  effectiveVersion: string | null;
+  executionDigest: string | null;
 }
 
 // Access globals via globalThis to support VM sandbox environments
@@ -67,7 +67,7 @@ const g = globalThis as unknown as {
   __vibestudioInitialTheme?: "light" | "dark";
   __vibestudioGatewayConfig?: GatewayConfig;
   __vibestudioSourceRepo?: string;
-  __vibestudioEffectiveVersion?: string | null;
+  __vibestudioSourceDigest?: string | null;
   __vibestudioEnv?: Record<string, string>;
 };
 
@@ -113,8 +113,8 @@ export function getInjectedConfig(): InjectedConfig {
     );
   }
 
-  const effectiveVersion =
-    g.__vibestudioEffectiveVersion ?? g.__vibestudioEnv?.["__VIBESTUDIO_EFFECTIVE_VERSION"] ?? null;
+  const executionDigest =
+    g.__vibestudioSourceDigest ?? g.__vibestudioEnv?.["__VIBESTUDIO_EXECUTION_DIGEST"] ?? null;
   const gatewayConfig = normalizeGatewayConfigForBrowser(g.__vibestudioGatewayConfig);
 
   return {
@@ -133,6 +133,6 @@ export function getInjectedConfig(): InjectedConfig {
     initialTheme: g.__vibestudioInitialTheme === "dark" ? "dark" : "light",
     gatewayConfig,
     env: g.__vibestudioEnv ?? {},
-    effectiveVersion,
+    executionDigest,
   };
 }

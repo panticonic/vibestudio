@@ -1049,7 +1049,7 @@ function ApprovalDetails({
             />
           ) : null}
           <DetailRow icon={Globe} label="Requester repo" value={approval.repoPath} code />
-          <DetailRow icon={Lock} label="Requester version" value={approval.effectiveVersion} code />
+          <DetailRow icon={Lock} label="Requester version" value={approval.executionDigest} code />
           {approval.kind === "credential" ? (
             <CredentialDetails approval={approval} />
           ) : approval.kind === "client-config" ? (
@@ -1300,7 +1300,9 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
           {entry.version ? (
             <DetailRow icon={Lock} label="Version" value={entry.version} code />
           ) : null}
-          {entry.ev ? <DetailRow icon={Lock} label="EV" value={entry.ev} code /> : null}
+          {entry.sourceDigest ? (
+            <DetailRow icon={Lock} label="Source digest" value={entry.sourceDigest} code />
+          ) : null}
           {entry.integrity ? (
             <DetailRow icon={Lock} label="Integrity" value={entry.integrity} code />
           ) : null}
@@ -1308,7 +1310,7 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
             <DetailRow
               icon={Settings2}
               label="Provider"
-              value={`${entry.provider.name}@${entry.provider.activeEv ?? "unknown"}`}
+              value={`${entry.provider.name}@${entry.provider.activeSourceDigest ?? "unknown"}`}
               code
             />
           ) : null}

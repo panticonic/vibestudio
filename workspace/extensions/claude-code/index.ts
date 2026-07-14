@@ -1,8 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { cp, readFile, rm } from "node:fs/promises";
+import { access, readFile, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
+import type { MirrorObjectsResult, MirrorTarget } from "@vibestudio/service-schemas/mirror";
+import type { VcsEditResult } from "@vibestudio/service-schemas/vcs";
+import {
+  ContextWorkspaceSession,
+  type ContextWorkspaceAdapters,
+} from "@vibestudio/context-workspace";
+import { createNativeChildEnvironment } from "@vibestudio/shared/nativeProcessEnvironment";
 import {
   launchAgentIntoChannel,
   subagentRuntimePrompt,
@@ -20,6 +27,20 @@ const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const LINKED_AGENT_SOURCE = "workers/linked-agent";
 const LINKED_AGENT_CLASS = "LinkedAgentWorker";
 const CONTEXT_MARKER = ".vibestudio-context.json";
+const processExitCleanups = new Set<() => void>();
+let processExitHandlerInstalled = false;
+
+function registerProcessExitCleanup(cleanup: () => void): () => void {
+  processExitCleanups.add(cleanup);
+  if (!processExitHandlerInstalled) {
+    processExitHandlerInstalled = true;
+    process.once("exit", () => {
+      for (const current of processExitCleanups) current();
+      processExitCleanups.clear();
+    });
+  }
+  return () => processExitCleanups.delete(cleanup);
+}
 
 function error(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
@@ -34,6 +55,13 @@ interface LaunchRecord {
   agentId: string;
   profileDir: string;
   preparedAt: string;
+}
+
+interface LaunchIndex {
+  version: 1;
+  channels: Record<string, LaunchRecord>;
+  entities: Record<string, string>;
+  contexts: Record<string, string>;
 }
 
 /** Subagent task-duty binding threaded into the linked vessel's state
@@ -198,7 +226,8 @@ export async function activate(ctx: ExtensionContext) {
   }
 
   const headlessLaunches = new Map<string, HeadlessLaunch>();
-  process.once("exit", () => {
+  const workspaceSessions = new Map<string, ContextWorkspaceSession>();
+  const disposeProcessExitCleanup = registerProcessExitCleanup(() => {
     for (const launch of headlessLaunches.values()) {
       try {
         launch.child.kill("SIGTERM");
@@ -207,20 +236,17 @@ export async function activate(ctx: ExtensionContext) {
       }
     }
   });
+  ctx.subscriptions?.push({ dispose: disposeProcessExitCleanup });
 
   const rpc: AgentLaunchRpc = {
     call: <T>(target: string, method: string, args: unknown[]): Promise<T> =>
       ctx.rpc.call<T>(target, method, ...args),
   };
 
-  // ── Storage helpers (bidirectional channel↔context↔entity bookkeeping) ──
-  // Context→channel has no host enumeration surface (there is no channel
-  // registry and entity records carry no channelId), so we record the binding
-  // here at prepare time and serve resolvePrimaryChannel/adaptLaunch from it.
-  const enc = (v: string): string => encodeURIComponent(v);
-  const channelKey = (id: string): string => `channels/${enc(id)}.json`;
-  const entityKey = (id: string): string => `entities/${enc(id)}.json`;
-  const contextKey = (id: string): string => `contexts/${enc(id)}.json`;
+  // One exact registry is the commit point for channel↔context↔entity
+  // bookkeeping. A launch is never partially visible through three separately
+  // written pointer files.
+  const launchIndexKey = "launch-index.json";
 
   async function readJson<T>(key: string): Promise<T | null> {
     try {
@@ -234,6 +260,30 @@ export async function activate(ctx: ExtensionContext) {
     const dir = path.posix.dirname(key);
     await ctx.storage.mkdir(dir, { recursive: true });
     await ctx.storage.writeFile(key, JSON.stringify(value, null, 2));
+  }
+
+  async function readLaunchIndex(): Promise<LaunchIndex> {
+    const current = await readJson<LaunchIndex>(launchIndexKey);
+    if (
+      !current ||
+      current.version !== 1 ||
+      !current.channels ||
+      !current.entities ||
+      !current.contexts
+    ) {
+      return { version: 1, channels: {}, entities: {}, contexts: {} };
+    }
+    return current;
+  }
+
+  async function commitLaunchRecord(record: LaunchRecord): Promise<void> {
+    const current = await readLaunchIndex();
+    await writeJson(launchIndexKey, {
+      version: 1,
+      channels: { ...current.channels, [record.channelId]: record },
+      entities: { ...current.entities, [record.entityId]: record.channelId },
+      contexts: { ...current.contexts, [record.contextId]: record.channelId },
+    } satisfies LaunchIndex);
   }
 
   async function resolveChannelTarget(channelId: string): Promise<string> {
@@ -278,16 +328,72 @@ export async function activate(ctx: ExtensionContext) {
     return parsed.serverUrl;
   }
 
-  function skillsDir(): string | undefined {
-    const fromEnv = process.env["VIBESTUDIO_SKILLS_DIR"];
-    return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
+  async function resolveHostPlugin(): Promise<string> {
+    const toolchainDir = process.env["VIBESTUDIO_TOOLCHAIN_DIR"];
+    const hostBuildId = process.env["VIBESTUDIO_HOST_BUILD_ID"];
+    if (!toolchainDir || !hostBuildId) {
+      throw error("ETOOLCHAIN", "Claude Code requires the active host-owned Vibestudio toolchain");
+    }
+    const manifest = JSON.parse(await readFile(path.join(toolchainDir, "manifest.json"), "utf8")) as {
+      hostBuildId?: unknown;
+      plugin?: { relativePath?: unknown };
+    };
+    if (manifest.hostBuildId !== hostBuildId || typeof manifest.plugin?.relativePath !== "string") {
+      throw error("ETOOLCHAIN", "Active toolchain manifest does not match this host or name its Claude plugin");
+    }
+    const pluginDir = path.resolve(toolchainDir, manifest.plugin.relativePath);
+    if (path.relative(path.resolve(toolchainDir), pluginDir).startsWith("..")) {
+      throw error("ETOOLCHAIN", "Toolchain Claude plugin escapes its immutable host build");
+    }
+    await access(path.join(pluginDir, ".claude-plugin", "plugin.json"));
+    return pluginDir;
   }
 
-  async function installLaunchSkill(contextFolder: string, sourceDir: string): Promise<void> {
-    await readFile(path.join(sourceDir, "SKILL.md"), "utf8");
-    const dest = path.join(contextFolder, ".claude", "skills", "vibestudio-agent");
-    await rm(dest, { recursive: true, force: true });
-    await cp(sourceDir, dest, { recursive: true });
+  function contextWorkspaceAdapters(contextId: string): ContextWorkspaceAdapters {
+    return {
+      readState: async (_repoPath, stateHash) => {
+        const files = [] as Array<{ path: string; bytes: Uint8Array; mode: 0o644 | 0o755 }>;
+        let cursor: string | undefined;
+        do {
+          const page = await ctx.rpc.call<MirrorObjectsResult>("main", "mirror.objects", {
+            stateHash,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const file of page.files) {
+            if (file.mode !== 33188 && file.mode !== 33261) {
+              throw error("EFIDELITY", `Unsupported canonical mode ${file.mode} for ${file.path}`);
+            }
+            files.push({
+              path: file.path,
+              bytes: Buffer.from(file.content, "base64"),
+              mode: file.mode === 33261 ? 0o755 : 0o644,
+            });
+          }
+          cursor = page.next;
+        } while (cursor);
+        return files;
+      },
+      edit: async ({ repoPath, baseStateHash, clientEditId, edits }) => {
+        const result = await ctx.rpc.call<VcsEditResult>("main", "vcs.edit", {
+          head: `ctx:${contextId}`,
+          repoPath,
+          baseStateHash,
+          clientEditId,
+          edits: edits.map((edit) =>
+            edit.kind === "delete"
+              ? edit
+              : {
+                  kind: "write",
+                  path: edit.path,
+                  content: { kind: "bytes", base64: Buffer.from(edit.bytes).toString("base64") },
+                  mode: edit.mode === 0o755 ? 33261 : 33188,
+                }
+          ),
+        });
+        if (!result.stateHash) throw error("ESYNC", "vcs.edit returned no repository state hash");
+        return { stateHash: result.stateHash };
+      },
+    };
   }
 
   function assertHeadlessSubagentCaller(input: LaunchSubagentInput): void {
@@ -334,9 +440,18 @@ export async function activate(ctx: ExtensionContext) {
       const argv = [...prepared.argv, ...subagentCliArgs(input.options), "-p", input.task];
       const command = argv[0] ?? "claude";
       const args = argv.slice(1);
+      const { VIBESTUDIO_AGENT_TOKEN, ...declared } = prepared.env;
+      const childEnvironment = createNativeChildEnvironment({
+        purpose: "claude",
+        declared,
+        purposeCredential: {
+          name: "VIBESTUDIO_AGENT_TOKEN",
+          value: VIBESTUDIO_AGENT_TOKEN,
+        },
+      });
       child = spawn(command, args, {
         cwd: prepared.contextFolder,
-        env: { ...process.env, ...prepared.env },
+        env: childEnvironment.env,
         stdio: ["ignore", logFd, logFd],
         detached: false,
       });
@@ -373,19 +488,33 @@ export async function activate(ctx: ExtensionContext) {
       // `complete`, the parent's run must not dangle as "running" forever —
       // report the exit so the vessel settles it (no-op past a real complete).
       if (tracked) {
-        void ctx.rpc
-          .call(prepared.vesselRef, "reportExternalExit", {
-            runId: input.subagent.runId,
-            code: code ?? null,
-            signal: signal ?? null,
-          })
-          .catch((err: unknown) => {
-            ctx.log.warn?.("Claude Code exit report failed", {
+        void (async () => {
+          let reportedCode = code ?? null;
+          try {
+            const sync = workspaceSessions.get(prepared.entityId);
+            if (sync) {
+              await sync.stop();
+              workspaceSessions.delete(prepared.entityId);
+            }
+          } catch (syncError) {
+            reportedCode = reportedCode ?? 74;
+            ctx.log.warn?.("Claude Code final workspace flush failed", {
               entityId: prepared.entityId,
-              launchId,
-              error: err instanceof Error ? err.message : String(err),
+              error: syncError instanceof Error ? syncError.message : String(syncError),
             });
+          }
+          await ctx.rpc.call(prepared.vesselRef, "reportExternalExit", {
+            runId: input.subagent.runId,
+            code: reportedCode,
+            signal: signal ?? null,
           });
+        })().catch((err: unknown) => {
+          ctx.log.warn?.("Claude Code exit report failed", {
+            entityId: prepared.entityId,
+            launchId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       }
     });
     child.on("error", (err) => {
@@ -423,7 +552,7 @@ export async function activate(ctx: ExtensionContext) {
     // 1. Context is the channel's context — never create a channel.
     const contextId = await resolveContextFromChannel(channelId);
 
-    const priorForChannel = await readJson<LaunchRecord>(channelKey(channelId));
+    const priorForChannel = (await readLaunchIndex()).channels[channelId] ?? null;
     const isFirstPrepare = priorForChannel === null;
 
     // 2. Approval gate on the FIRST prepare for this channel only. A subagent
@@ -464,105 +593,167 @@ export async function activate(ctx: ExtensionContext) {
       }
     );
     const entityId = sessionHandle.id;
-    await ctx.workspace.ensureContextFolder(contextId);
-    const contextFolder = path.join(workspace.contextsPath, contextId);
+    let managedWorkspace: ContextWorkspaceSession | null = null;
+    let mintedCredential: { agentId: string; agentToken: string } | null = null;
+    let writtenProfileDir: string | null = null;
+    try {
+      await ctx.workspace.ensureContextFolder(contextId);
+      const projectionFolder = path.join(workspace.contextsPath, contextId);
 
-    // 4. Ensure the linked-agent vessel and invite it into the channel with the
-    //    standard launch primitives (idempotent: reuses the deterministic key).
-    const launch = await launchAgentIntoChannel(rpc, {
-      channelId,
-      contextId,
-      source: LINKED_AGENT_SOURCE,
-      className: LINKED_AGENT_CLASS,
-      key: `linked:${entityId}`,
-      agentBinding: { entityId, channelId },
-      // `subagent` gives the linked vessel task duty (complete → terminal-settle
-      // to the parent, §8.2); `linkedEntityId` binds the bridge credential.
-      stateArgs: {
-        linkedEntityId: entityId,
-        ...(input.subagent ? { subagent: input.subagent } : {}),
-      },
-    });
-    const vesselRef = launch.handle.targetId;
-    const vesselEntityId = launch.handle.id ?? vesselRef;
-    const vesselParticipantId = launch.subscription.participantId ?? null;
+      // 4. Ensure the linked-agent vessel and invite it into the channel with the
+      //    standard launch primitives (idempotent: reuses the deterministic key).
+      const launch = await launchAgentIntoChannel(rpc, {
+        channelId,
+        contextId,
+        source: LINKED_AGENT_SOURCE,
+        className: LINKED_AGENT_CLASS,
+        key: `linked:${entityId}`,
+        agentBinding: { entityId, channelId },
+        stateArgs: {
+          linkedEntityId: entityId,
+          ...(input.subagent ? { subagent: input.subagent } : {}),
+        },
+      });
+      const vesselRef = launch.handle.targetId;
+      const vesselEntityId = launch.handle.id ?? vesselRef;
+      const vesselParticipantId = launch.subscription.participantId ?? null;
+      const serverUrl = toServerBaseUrl(await readServerUrlFromMarker(projectionFolder));
 
-    const serverUrl = toServerBaseUrl(await readServerUrlFromMarker(contextFolder));
+      // 5. Native tools run only in the managed writable mirror. Its checkpoint
+      // must exactly match the current GAD targets before any credential or
+      // process is created.
+      const targets = await ctx.rpc.call<MirrorTarget[]>("main", "mirror.targets", { contextId });
+      const contextFolder = path.join(
+        workspace.statePath,
+        "context-workspaces",
+        workspace.id,
+        contextId
+      );
+      const priorWorkspace = workspaceSessions.get(entityId);
+      if (priorWorkspace) {
+        await priorWorkspace.stop();
+        workspaceSessions.delete(entityId);
+      }
+      managedWorkspace = await ContextWorkspaceSession.open({
+        root: contextFolder,
+        targets,
+        adapters: contextWorkspaceAdapters(contextId),
+      });
+      await writeFile(
+        path.join(contextFolder, CONTEXT_MARKER),
+        `${JSON.stringify({ contextId, workspaceId: workspace.id, serverUrl }, null, 2)}\n`,
+        { mode: 0o600 }
+      );
+      managedWorkspace.start({
+        readTargets: () => ctx.rpc.call<MirrorTarget[]>("main", "mirror.targets", { contextId }),
+        onError: (message, syncError) =>
+          ctx.log.warn?.(`Claude Code ${message}`, {
+            contextId,
+            error: syncError instanceof Error ? syncError.message : String(syncError),
+          }),
+      });
+      workspaceSessions.set(entityId, managedWorkspace);
 
-    // 5. Mint the agent credential (rotate on re-prepare so a stale token is
-    //    revoked). Bound to entity + host-derived context + channel.
-    if (priorForChannel?.agentId) {
-      await ctx.rpc
-        .call("main", "auth.revokeAgentCredential", priorForChannel.agentId)
-        .catch(() => undefined);
+      // 6. Mint first and revoke the prior credential only after the new profile
+      // and durable pointers commit. A failed rotation leaves the last prepared
+      // generation usable and never leaks the candidate credential.
+      mintedCredential = await ctx.rpc.call<{ agentId: string; agentToken: string }>(
+        "main",
+        "auth.mintAgentCredential",
+        { entityId, channelId }
+      );
+
+      // 7. One canonical plugin owns MCP, hooks, channel support and skill.
+      const pluginDir = await resolveHostPlugin();
+      const written = await writeLaunchProfile({
+        statePath: workspace.statePath,
+        entityId,
+        generationId: mintedCredential.agentId,
+        pluginDir,
+        env: {
+          VIBESTUDIO_SERVER_URL: serverUrl,
+          VIBESTUDIO_AGENT_TOKEN: mintedCredential.agentToken,
+          VIBESTUDIO_ENTITY_ID: entityId,
+          VIBESTUDIO_CONTEXT_ID: contextId,
+          VIBESTUDIO_CHANNEL_ID: channelId,
+          VIBESTUDIO_VESSEL_REF: vesselRef,
+          VIBESTUDIO_PLUGIN_DIR: pluginDir,
+          ...(input.subagent
+            ? {
+                VIBESTUDIO_SUBAGENT_RUN_ID: input.subagent.runId,
+                VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: input.subagent.parentChannelId,
+                VIBESTUDIO_SUBAGENT_CONTRACT: subagentRuntimePrompt(input.subagent),
+              }
+            : {}),
+        },
+      });
+      writtenProfileDir = written.profileDir;
+
+      const record: LaunchRecord = {
+        entityId,
+        contextId,
+        channelId,
+        vesselRef,
+        agentId: mintedCredential.agentId,
+        profileDir: written.profileDir,
+        preparedAt: new Date().toISOString(),
+      };
+      await commitLaunchRecord(record);
+
+      if (priorForChannel?.agentId && priorForChannel.agentId !== mintedCredential.agentId) {
+        await ctx.rpc
+          .call("main", "auth.revokeAgentCredential", priorForChannel.agentId)
+          .catch(() => undefined);
+      }
+      if (priorForChannel?.profileDir && priorForChannel.profileDir !== written.profileDir) {
+        await rm(priorForChannel.profileDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+
+      return {
+        entityId,
+        contextId,
+        channelId,
+        vesselRef,
+        vesselEntityId,
+        vesselParticipantId,
+        contextFolder,
+        env: written.env,
+        argv: written.argv,
+      };
+    } catch (caught) {
+      if (workspaceSessions.get(entityId) === managedWorkspace) workspaceSessions.delete(entityId);
+      if (managedWorkspace) {
+        await managedWorkspace.stop().catch(() => undefined);
+      }
+      if (mintedCredential) {
+        await ctx.rpc
+          .call("main", "auth.revokeAgentCredential", mintedCredential.agentId)
+          .catch(() => undefined);
+      }
+      if (writtenProfileDir) {
+        await rm(writtenProfileDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw caught;
     }
-    const credential = await ctx.rpc.call<{ agentId: string; agentToken: string }>(
-      "main",
-      "auth.mintAgentCredential",
-      { entityId, channelId }
-    );
-
-    // 6. Install the bundled skill into the context tree, then write the launch profile.
-    const bundledSkillsDir = skillsDir();
-    if (bundledSkillsDir) {
-      await installLaunchSkill(contextFolder, bundledSkillsDir);
-    }
-    const written = await writeLaunchProfile({
-      statePath: workspace.statePath,
-      entityId,
-      env: {
-        VIBESTUDIO_SERVER_URL: serverUrl,
-        VIBESTUDIO_AGENT_TOKEN: credential.agentToken,
-        VIBESTUDIO_ENTITY_ID: entityId,
-        VIBESTUDIO_CONTEXT_ID: contextId,
-        VIBESTUDIO_CHANNEL_ID: channelId,
-        VIBESTUDIO_VESSEL_REF: vesselRef,
-        ...(bundledSkillsDir ? { VIBESTUDIO_SKILLS_DIR: bundledSkillsDir } : {}),
-        // Subagent launches carry their duty into the session env so the bridge
-        // states it definitively in the MCP instructions (§8.2): the contract is
-        // the SAME text a Pi child gets as its immediate prompt.
-        ...(input.subagent
-          ? {
-              VIBESTUDIO_SUBAGENT_RUN_ID: input.subagent.runId,
-              VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: input.subagent.parentChannelId,
-              VIBESTUDIO_SUBAGENT_CONTRACT: subagentRuntimePrompt(input.subagent),
-            }
-          : {}),
-      },
-    });
-
-    const record: LaunchRecord = {
-      entityId,
-      contextId,
-      channelId,
-      vesselRef,
-      agentId: credential.agentId,
-      profileDir: written.profileDir,
-      preparedAt: new Date().toISOString(),
-    };
-    await writeJson(channelKey(channelId), record);
-    await writeJson(entityKey(entityId), { channelId });
-    await writeJson(contextKey(contextId), { channelId });
-
-    return {
-      entityId,
-      contextId,
-      channelId,
-      vesselRef,
-      vesselEntityId,
-      vesselParticipantId,
-      contextFolder,
-      env: written.env,
-      argv: written.argv,
-    };
   }
 
   async function release(input: { entityId: string }): Promise<{ released: boolean }> {
     const { entityId } = input;
     if (!entityId) throw error("EINVAL", "release requires an entityId");
     const killed = killHeadlessLaunch(entityId);
-    const pointer = await readJson<{ channelId: string }>(entityKey(entityId));
-    const record = pointer ? await readJson<LaunchRecord>(channelKey(pointer.channelId)) : null;
+    const index = await readLaunchIndex();
+    const channelId = index.entities[entityId];
+    const record = channelId ? index.channels[channelId] ?? null : null;
+    let synchronizationError: unknown = null;
+    const managedWorkspace = workspaceSessions.get(entityId);
+    if (managedWorkspace) {
+      try {
+        await managedWorkspace.stop();
+        workspaceSessions.delete(entityId);
+      } catch (caught) {
+        synchronizationError = caught;
+      }
+    }
     if (record?.agentId) {
       await ctx.rpc
         .call("main", "auth.revokeAgentCredential", record.agentId)
@@ -572,7 +763,8 @@ export async function activate(ctx: ExtensionContext) {
     await removeLaunchProfile(workspace.statePath, entityId).catch(() => undefined);
     // Vessel + channel membership persist for reattach; presence goes offline via
     // the vessel heartbeat. Storage records are left as the reattach anchor.
-    return { released: record !== null || killed };
+    if (synchronizationError) throw synchronizationError;
+    return { released: record !== null || killed || managedWorkspace !== undefined };
   }
 
   async function launchSubagent(input: LaunchSubagentInput): Promise<LaunchSubagentResult> {
@@ -594,8 +786,8 @@ export async function activate(ctx: ExtensionContext) {
     contextId: string;
   }): Promise<{ channelId: string } | null> {
     if (!input.contextId) return null;
-    const rec = await readJson<{ channelId: string }>(contextKey(input.contextId));
-    return rec?.channelId ? { channelId: rec.channelId } : null;
+    const channelId = (await readLaunchIndex()).contexts[input.contextId];
+    return channelId ? { channelId } : null;
   }
 
   async function adaptLaunch(input: {
@@ -603,7 +795,7 @@ export async function activate(ctx: ExtensionContext) {
     argv: string[];
     cwd: string;
     env: Record<string, string>;
-  }): Promise<{ env: Record<string, string>; argv: string[] } | null> {
+  }): Promise<{ env: Record<string, string>; argv: string[]; cwd: string } | null> {
     // Launch-adapter handler (§4.3): a bare `claude` in a context terminal. With
     // no known conversation channel for the context we return null so the shell
     // extension launches the session untouched — channels are never created here.
@@ -613,6 +805,7 @@ export async function activate(ctx: ExtensionContext) {
     return {
       env: { ...input.env, ...prepared.env },
       argv: prepared.argv,
+      cwd: prepared.contextFolder,
     };
   }
 
@@ -635,7 +828,18 @@ export async function activate(ctx: ExtensionContext) {
     });
   }
 
-  ctx.health.healthy({ summary: "Claude Code launch orchestrator activated" });
+  const healthReasons: string[] = [];
+  await assertClaudeCodeVersion().catch((healthError: unknown) => {
+    healthReasons.push(healthError instanceof Error ? healthError.message : String(healthError));
+  });
+  await resolveHostPlugin().catch((healthError: unknown) => {
+    healthReasons.push(healthError instanceof Error ? healthError.message : String(healthError));
+  });
+  if (healthReasons.length > 0) {
+    ctx.health.degraded({ summary: "Claude Code is unavailable", reasons: healthReasons });
+  } else {
+    ctx.health.healthy({ summary: "Claude Code and its host-owned plugin are ready" });
+  }
 
   return {
     providerContracts: {

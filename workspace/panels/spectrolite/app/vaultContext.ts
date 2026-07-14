@@ -9,11 +9,6 @@
  * panel under the new vault's contextId (`reopen({ contextId })`), never a
  * runtime `repoRoot` swap (which can't move the head).
  *
- * An embedding caller may deliberately pin a vault to a shared context by
- * supplying the same explicit `contextId` in panel stateArgs. That is useful
- * for collaborative/testing hosts which already own the context and must not
- * be silently moved to a different head.
- *
  * The vault is a *subdirectory* of the single workspace tree, but `vcs.*` paths
  * are workspace-root-relative. So a note shown as `E2E.mdx` in a vault rooted at
  * `projects/default` is `vcsPath = projects/default/E2E.mdx`. Every boundary
@@ -23,10 +18,7 @@
 
 /** Strip leading/trailing slashes + backslashes; collapse to posix. */
 export function normalizeVaultPath(p: string): string {
-  return p
-    .replace(/\\/g, "/")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
+  return p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
 /**
@@ -53,13 +45,12 @@ export function vaultContextId(vaultWorkspaceRoot: string): string {
   return `vault-${hashVaultPath(normalizeVaultPath(vaultWorkspaceRoot))}`;
 }
 
-/** Whether initial mounting should move an unpinned panel to its stable vault context. */
+/** Whether initial mounting must move the panel to its stable vault context. */
 export function shouldRebindToVaultContext(
   repoRoot: string,
-  runtimeContextId: string | undefined,
-  explicitlyPinnedContextId: string | undefined
+  runtimeContextId: string | undefined
 ): boolean {
-  if (!runtimeContextId || explicitlyPinnedContextId) return false;
+  if (!runtimeContextId) return false;
   return runtimeContextId !== vaultContextId(repoRoot);
 }
 

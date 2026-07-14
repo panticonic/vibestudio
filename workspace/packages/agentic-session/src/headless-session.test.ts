@@ -358,6 +358,31 @@ describe("HeadlessSession", () => {
     expect(session.snapshot().cleanupErrors).toEqual([]);
   });
 
+  it("does not gate authoritative teardown on optional model evidence", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const calls: string[] = [];
+    (session as any)._agentEntityId = "do:workers/agent-worker:AiChatWorker:obj-owned";
+    (session as any)._agentTargetId = "do:workers/agent-worker:AiChatWorker:obj-owned";
+    (session as any)._agentContextId = "ctx-owned";
+    (session as any)._ownsAgentContext = true;
+    (session as any)._channelId = "ch-owned";
+    (session as any)._client = {};
+    (session as any)._agentRpcCall = vi.fn(
+      async (_target: string, method: string, _args: unknown[]) => {
+        calls.push(method);
+        return undefined;
+      }
+    );
+    const capture = vi
+      .spyOn(session, "captureModelExecutionEvidence")
+      .mockImplementation(() => new Promise(() => undefined));
+
+    await expect(session.close({ waitForRemoteCleanup: true })).resolves.toBeUndefined();
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(calls).toEqual(["runtime.destroyContext"]);
+  });
+
   it("records cleanup errors from headless agent teardown", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = HeadlessSession.create({
@@ -389,8 +414,9 @@ describe("HeadlessSession", () => {
     warn.mockRestore();
   });
 
-  it("connects the headless client methods before subscribing the agent", async () => {
+  it("creates the exact context-bound channel before subscribing the agent", async () => {
     const order: string[] = [];
+    let connectOptions: Parameters<HeadlessSession["connect"]>[1];
     const originalConnect = HeadlessSession.prototype.connect;
     const connect = vi
       .spyOn(HeadlessSession.prototype, "connect")
@@ -399,6 +425,7 @@ describe("HeadlessSession", () => {
         channelId: string,
         options?: Parameters<HeadlessSession["connect"]>[1]
       ) {
+        connectOptions = options;
         order.push(
           `connect:${channelId}:${Object.keys(options?.methods ?? {})
             .sort()
@@ -435,10 +462,22 @@ describe("HeadlessSession", () => {
     }
 
     expect(order).toEqual([
-      "connect:headless-1:set_title",
       "rpc:main:runtime.createEntity",
+      "connect:headless-1:set_title",
       "rpc:agent-target:subscribeChannel",
     ]);
+    expect(connectOptions).toMatchObject({
+      contextId: "ctx-1",
+      channelConfig: { approvalLevel: 2 },
+      channelCreation: {
+        governance: "standard",
+        contextBinding: { kind: "context", contextId: "ctx-1" },
+        origin: { kind: "headless-session" },
+        admission: { kind: "workspace-members" },
+        presentationEditors: { kind: "workspace-members" },
+        presentation: { approvalLevel: 2 },
+      },
+    });
     expect(session?.snapshot()).toMatchObject({
       channelId: "headless-1",
       agentEntityId: "entity-1",
@@ -598,14 +637,47 @@ describe("HeadlessSession", () => {
     }
 
     expect(order).toEqual([
-      "connect:headless-1:minted",
       "rpc:main:runtime.createEntity",
+      "connect:headless-1:ctx-minted",
       "rpc:agent-target:subscribeChannel",
     ]);
     expect(session?.snapshot()).toMatchObject({
       agentContextId: "ctx-minted",
       ownsAgentContext: true,
     });
+  });
+
+  it("destroys a minted context when atomic channel creation fails", async () => {
+    const connect = vi
+      .spyOn(HeadlessSession.prototype, "connect")
+      .mockRejectedValue(new Error("channel creation failed"));
+    const rpcCall = vi.fn(async (target: string, method: string) => {
+      if (target === "main" && method === "runtime.createEntity") {
+        return { id: "entity-1", targetId: "agent-target", contextId: "ctx-minted" };
+      }
+      if (target === "main" && method === "runtime.destroyContext") return undefined;
+      throw new Error(`unexpected RPC ${target}.${method}`);
+    });
+
+    try {
+      await expect(
+        HeadlessSession.createWithAgent({
+          config: createConfig(),
+          rpcCall,
+          source: "workers/agent-worker",
+          className: "AiChatWorker",
+          objectKey: "agent-1",
+          channelId: "headless-1",
+        })
+      ).rejects.toThrow("channel creation failed");
+    } finally {
+      connect.mockRestore();
+    }
+
+    expect(rpcCall).toHaveBeenLastCalledWith("main", "runtime.destroyContext", [
+      { contextId: "ctx-minted", recursive: true },
+    ]);
+    expect(rpcCall).not.toHaveBeenCalledWith("agent-target", "subscribeChannel", expect.anything());
   });
 
   it("callMethod returns the provider payload and callMethodResult returns the full envelope", async () => {
