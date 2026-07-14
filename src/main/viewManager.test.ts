@@ -311,7 +311,55 @@ describe("ViewManager", () => {
       expect(overlayView.webContents.focus).toHaveBeenCalledTimes(1);
     });
 
-    it("keeps content overlays top-left anchored while expanding to reported content size", () => {
+    it("re-raises a content overlay when an already-ordered panel is appended above it", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      (hostView.webContents.getURL as Mock).mockReturnValue("file:///shell/index.html");
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      const bounds = { x: 280, y: 70, width: 900, height: 700 };
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds,
+      });
+      vm.showContentOverlay({
+        surface: "approval-card",
+        bounds,
+        props: { approvalId: "approval-1" },
+        theme: { appearance: "light" },
+      });
+
+      const results = (WebContentsView as unknown as Mock).mock.results;
+      const overlayView = results[results.length - 1]?.value;
+      const children = mockWindow.contentView.children as unknown[];
+      expect(children.indexOf(overlayView)).toBeGreaterThan(children.indexOf(panelView));
+
+      // Reproduce a native append outside the managed-order planner. The host
+      // and panel remain correctly ordered relative to each other, which is the
+      // reconciler's fast path.
+      mockWindow.contentView.addChildView(panelView);
+      expect(children.indexOf(overlayView)).toBeLessThan(children.indexOf(panelView));
+
+      vm.updatePanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bounds,
+      });
+
+      expect(children.indexOf(overlayView)).toBeGreaterThan(children.indexOf(panelView));
+    });
+
+    it("keeps content overlays top-right anchored while expanding to reported content size", () => {
       const vm = new ViewManager({
         window: mockWindow,
         shellPreload: "/path/to/preload.js",
@@ -332,7 +380,7 @@ describe("ViewManager", () => {
       const overlayView = results[results.length - 1]?.value;
       expect(overlayView).toBeTruthy();
       expect(overlayView.setBounds).toHaveBeenCalledWith({
-        x: 32,
+        x: 236,
         y: 52,
         width: 472,
         height: 64,
@@ -346,7 +394,7 @@ describe("ViewManager", () => {
       sizeHandler?.({ sender: { id: overlayView.webContents.id } }, { width: 620, height: 240 });
 
       expect(overlayView.setBounds).toHaveBeenCalledWith({
-        x: 32,
+        x: 88,
         y: 52,
         width: 620,
         height: 240,

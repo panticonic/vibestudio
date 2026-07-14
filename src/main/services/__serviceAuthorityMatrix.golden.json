@@ -1,0 +1,561 @@
+{
+  "adblock": {
+    "service": {
+      "principals": ["user"]
+    },
+    "methods": {
+      "addCustomList": {
+        "inherits": true
+      },
+      "addToWhitelist": {
+        "principals": ["user", "code"]
+      },
+      "getConfig": {
+        "inherits": true
+      },
+      "getPanelUrl": {
+        "principals": ["user", "code"]
+      },
+      "getStats": {
+        "principals": ["user", "code"]
+      },
+      "getStatsForPanel": {
+        "principals": ["user", "code"]
+      },
+      "isActive": {
+        "principals": ["user", "code"]
+      },
+      "isEnabledForPanel": {
+        "principals": ["user", "code"]
+      },
+      "rebuildEngine": {
+        "inherits": true
+      },
+      "removeCustomList": {
+        "inherits": true
+      },
+      "removeFromWhitelist": {
+        "principals": ["user", "code"]
+      },
+      "resetStats": {
+        "inherits": true
+      },
+      "resetStatsForPanel": {
+        "principals": ["user", "code"]
+      },
+      "setEnabled": {
+        "inherits": true
+      },
+      "setEnabledForPanel": {
+        "principals": ["user", "code"]
+      },
+      "setListEnabled": {
+        "inherits": true
+      }
+    }
+  },
+  "app": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "applyUpdate": {
+        "inherits": true
+      },
+      "clearBuildCache": {
+        "inherits": true
+      },
+      "getInfo": {
+        "inherits": true
+      },
+      "getShellPages": {
+        "inherits": true
+      },
+      "getSystemTheme": {
+        "inherits": true
+      },
+      "listPendingUpdates": {
+        "inherits": true
+      },
+      "openDevTools": {
+        "inherits": true
+      },
+      "openExternal": {
+        "inherits": true
+      },
+      "openWorkspacePath": {
+        "inherits": true
+      },
+      "setThemeMode": {
+        "inherits": true
+      }
+    }
+  },
+  "events": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "subscribe": {
+        "inherits": true
+      },
+      "unsubscribe": {
+        "inherits": true
+      },
+      "unsubscribeAll": {
+        "inherits": true
+      }
+    }
+  },
+  "menu": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "showContext": {
+        "inherits": true
+      },
+      "showHamburger": {
+        "inherits": true
+      },
+      "showPanelContext": {
+        "inherits": true
+      }
+    }
+  },
+  "notification": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "dismiss": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "service:notification.dismiss"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "service:notification.dismiss"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:notification.dismiss"
+        },
+        "additional": [
+          {
+            "capability": "notifications",
+            "requirement": {
+              "kind": "any",
+              "requirements": [
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "user",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "code",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                }
+              ]
+            },
+            "resource": {
+              "kind": "literal",
+              "key": "platform:notifications"
+            }
+          }
+        ]
+      },
+      "reportAction": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "service:notification.reportAction"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "service:notification.reportAction"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:notification.reportAction"
+        },
+        "additional": [
+          {
+            "capability": "notifications",
+            "requirement": {
+              "kind": "any",
+              "requirements": [
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "user",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "code",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                }
+              ]
+            },
+            "resource": {
+              "kind": "literal",
+              "key": "platform:notifications"
+            }
+          }
+        ]
+      },
+      "show": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "service:notification.show"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "service:notification.show"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:notification.show"
+        },
+        "additional": [
+          {
+            "capability": "notifications",
+            "requirement": {
+              "kind": "any",
+              "requirements": [
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "user",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "code",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                }
+              ]
+            },
+            "resource": {
+              "kind": "literal",
+              "key": "platform:notifications"
+            }
+          }
+        ]
+      },
+      "signalUserInbox": {
+        "principals": ["code", "host"]
+      }
+    }
+  },
+  "palette": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "list": {
+        "inherits": true
+      },
+      "register": {
+        "inherits": true
+      },
+      "run": {
+        "inherits": true
+      },
+      "unregister": {
+        "inherits": true
+      }
+    }
+  },
+  "panel": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "ensureLoaded": {
+        "inherits": true
+      },
+      "forceReloadView": {
+        "inherits": true
+      },
+      "getAddressOptions": {
+        "inherits": true
+      },
+      "getBrowserAddressOptions": {
+        "inherits": true
+      },
+      "getChromeState": {
+        "inherits": true
+      },
+      "getFocusedPanelId": {
+        "inherits": true
+      },
+      "getThemeConfig": {
+        "principals": ["user", "code"]
+      },
+      "getTreeSnapshot": {
+        "inherits": true
+      },
+      "listPinnedPanelIds": {
+        "inherits": true
+      },
+      "markBrowserNavigationIntent": {
+        "inherits": true
+      },
+      "reloadView": {
+        "inherits": true
+      },
+      "takeOver": {
+        "inherits": true
+      },
+      "togglePin": {
+        "inherits": true
+      },
+      "updateTheme": {
+        "inherits": true
+      },
+      "updateThemeConfig": {
+        "inherits": true
+      }
+    }
+  },
+  "remoteCred": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "clear": {
+        "inherits": true
+      },
+      "getCurrent": {
+        "inherits": true
+      },
+      "listDevices": {
+        "inherits": true
+      },
+      "pair": {
+        "inherits": true
+      },
+      "pairDevice": {
+        "inherits": true
+      },
+      "reconnectNow": {
+        "inherits": true
+      },
+      "relaunch": {
+        "inherits": true
+      },
+      "revokeDevice": {
+        "inherits": true
+      }
+    }
+  },
+  "settings": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "getData": {
+        "inherits": true
+      }
+    }
+  },
+  "view": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "bindNativePanelSlot": {
+        "inherits": true
+      },
+      "browserForceReload": {
+        "inherits": true
+      },
+      "browserGoBack": {
+        "inherits": true
+      },
+      "browserGoForward": {
+        "inherits": true
+      },
+      "browserNavigate": {
+        "inherits": true
+      },
+      "browserReload": {
+        "inherits": true
+      },
+      "browserStop": {
+        "inherits": true
+      },
+      "clearNativePanelSlot": {
+        "inherits": true
+      },
+      "forwardMouseClick": {
+        "inherits": true
+      },
+      "hideContentOverlay": {
+        "inherits": true
+      },
+      "hideNativeShellOverlay": {
+        "inherits": true
+      },
+      "setBounds": {
+        "inherits": true
+      },
+      "setHostedShellReady": {
+        "inherits": true
+      },
+      "setShellOverlay": {
+        "inherits": true
+      },
+      "setThemeCss": {
+        "inherits": true
+      },
+      "setVisible": {
+        "inherits": true
+      },
+      "showContentOverlay": {
+        "inherits": true
+      },
+      "showNativeShellOverlay": {
+        "inherits": true
+      },
+      "updateContentOverlay": {
+        "inherits": true
+      },
+      "updateNativePanelSlot": {
+        "inherits": true
+      },
+      "updateNativeShellOverlay": {
+        "inherits": true
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
-import { clearShellTokenCache } from "./rpcClient.js";
+import { clearShellTokenCache } from "@vibestudio/direct-client";
 
 const TEST_SERVER_ID = `srv_${"S".repeat(24)}`;
 const TEST_SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
@@ -59,7 +59,7 @@ vi.mock("../node/panelAssets/panelAssetFacade.js", () => ({
   ),
 }));
 
-vi.mock("./webrtcClient.js", () => ({
+vi.mock("@vibestudio/direct-client/webrtc", () => ({
   WebRtcRpcClient: class {
     closed = false;
 
@@ -378,7 +378,7 @@ describe("vibestudio CLI", () => {
     const expected = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8")).version;
     const { main } = await import("./client.js");
     await expect(main(["--version"])).resolves.toBe(0);
-    expect(console.log).toHaveBeenCalledWith(expected);
+    expect(console.log).toHaveBeenCalledWith(`vibestudio ${expected} (unmanaged source)`);
   });
 
   it("reports rejected or expired WebRTC pairing as an auth error", async () => {

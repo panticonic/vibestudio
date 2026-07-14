@@ -26,6 +26,9 @@ function createPanelView(): PanelViewLike {
 }
 
 describe("AppOrchestrator", () => {
+  const authorityRequests = [
+    { capability: "service:*", resource: { kind: "prefix" as const, prefix: "" } },
+  ];
   it("rejects Electron apps that declare capabilities unsupported by this host", async () => {
     const panelView = createPanelView();
     const orchestrator = new AppOrchestrator({ getPanelView: () => panelView });
@@ -52,7 +55,7 @@ describe("AppOrchestrator", () => {
       target: "electron",
       url: "http://localhost/app",
       capabilities: ELECTRON_APP_HOST_CAPABILITIES,
-      effectiveVersion: "ev-shell",
+      executionDigest: "ev-shell",
     });
 
     expect(panelView.createViewForApp).toHaveBeenCalledWith(
@@ -62,7 +65,7 @@ describe("AppOrchestrator", () => {
       ELECTRON_APP_HOST_CAPABILITIES,
       {
         source: "apps/shell",
-        effectiveVersion: "ev-shell",
+        executionDigest: "ev-shell",
       }
     );
     expect(panelView.setViewVisible).toHaveBeenCalledWith("@workspace-apps/shell", true);
@@ -150,7 +153,7 @@ describe("AppOrchestrator", () => {
       ["panel-hosting"],
       {
         source: "apps/shell",
-        effectiveVersion: undefined,
+        executionDigest: undefined,
       }
     );
     expect(orchestrator.listPendingAppUpdates()).toEqual([]);
@@ -211,14 +214,14 @@ describe("AppOrchestrator", () => {
       fs.writeFileSync(
         path.join(root, "manifest.json"),
         JSON.stringify({
-          version: 1,
+          version: 2,
           app: {
             name: "@workspace-apps/shell",
             source: "apps/shell",
             target: "electron",
             capabilities: ["notifications"],
           },
-          build: { effectiveVersion: "ev-shell" },
+          build: { executionDigest: "ev-shell", authorityRequests },
           artifacts: [{ path: "index.html", role: "html" }],
         })
       );
@@ -230,7 +233,8 @@ describe("AppOrchestrator", () => {
         source: "apps/shell",
         target: "electron",
         capabilities: ["notifications"],
-        effectiveVersion: "ev-shell",
+        executionDigest: "ev-shell",
+        authorityRequests,
       });
       await expect(orchestrator.loadBakedApp(root)).resolves.toBe(true);
 
@@ -241,9 +245,21 @@ describe("AppOrchestrator", () => {
         ["notifications"],
         {
           source: "apps/shell",
-          effectiveVersion: "ev-shell",
+          executionDigest: "ev-shell",
+          requested: authorityRequests,
         }
       );
+
+      fs.writeFileSync(
+        path.join(root, "manifest.json"),
+        JSON.stringify({
+          version: 1,
+          app: { name: "legacy", source: "apps/legacy", target: "electron" },
+          build: { executionDigest: "ev-legacy" },
+          artifacts: [{ path: "index.html", role: "html" }],
+        })
+      );
+      expect(() => readBakedElectronApp(root)).toThrow(/Unsupported baked app manifest version: 1/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -1,3 +1,4 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ServiceDispatcher,
@@ -7,6 +8,8 @@ import {
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
+import { z } from "zod";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
 const ipcInvokeHandlers = new Map<string, (...args: never[]) => unknown>();
@@ -87,7 +90,7 @@ function makeDispatcher(opts: {
 }) {
   ipcHandlers.clear();
   ipcInvokeHandlers.clear();
-  const dispatcher = new ServiceDispatcher();
+  const dispatcher = createTestServiceDispatcher();
   opts.configureDispatcher?.(dispatcher);
   dispatcher.markInitialized();
   const serverClient = {
@@ -187,7 +190,7 @@ describe("IpcDispatcher", () => {
         dispatcher.registerService({
           name: "panel",
           description: "panel",
-          policy: { allowed: ["app"] },
+          authority: { principals: ["code"] },
           methods: panelMethods,
           handler: panelHandler,
         });
@@ -477,7 +480,13 @@ describe("IpcDispatcher", () => {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
         repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
+        executionDigest: "e".repeat(64),
+        requested: [
+          {
+            capability: "service:electron-test.getInfo",
+            resource: { kind: "prefix", prefix: "" },
+          },
+        ],
       }),
       configureDispatcher: (dispatcher) => {
         dispatcher.registerService({
@@ -485,8 +494,14 @@ describe("IpcDispatcher", () => {
           // that the service is Electron-local.
           name: "electron-test",
           description: "test Electron-local service",
-          policy: { allowed: ["app"] },
-          methods: {},
+          authority: { principals: ["code"] },
+          methods: defineServiceMethods({
+            getInfo: {
+              args: z.tuple([]),
+              returns: z.object({ ok: z.boolean() }),
+              access: { sensitivity: "read" },
+            },
+          }),
           handler: async (ctx) => {
             seenContext = ctx;
             return { ok: true };
@@ -507,11 +522,23 @@ describe("IpcDispatcher", () => {
     );
 
     await vi.waitFor(() =>
+      expect(appWc.send).toHaveBeenCalledWith(
+        "vibestudio:rpc:message",
+        expect.objectContaining({
+          message: expect.objectContaining({
+            type: "response",
+            requestId: "req-local",
+            result: { ok: true },
+          }),
+        })
+      )
+    );
+    await vi.waitFor(() =>
       expect(seenContext?.caller.code).toMatchObject({
         callerId: "@workspace-apps/shell",
         callerKind: "app",
         repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
+        executionDigest: "e".repeat(64),
       })
     );
   });

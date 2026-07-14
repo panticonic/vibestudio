@@ -1,21 +1,21 @@
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createVerifiedCaller,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import { describe, expect, it, vi } from "vitest";
 
 import { createViewService } from "./viewService.js";
 
-// App trust is manifest-declared (meta/vibestudio.yml trust.chromeApps) and seeded
-// per process when the workspace manifest loads. Seed the shipped defaults so
-// the unauthorized-source rejection path is exercised as a live host sees it.
-beforeEach(() => {
-  setWorkspaceAppTrust({
-    chromeApps: ["apps/shell", "apps/mobile"],
-  });
-});
-
-afterEach(() => {
-  setWorkspaceAppTrust(null);
-});
+function authorityCtx(caller: VerifiedCaller, panelHosting: boolean): ServiceContext {
+  return {
+    caller,
+    authority: {
+      allows: vi.fn(async ({ capability }) => capability === "panel-hosting" && panelHosting),
+      assert: vi.fn(async () => undefined),
+    },
+  };
+}
 
 function makeViewManager(capabilities: string[] = [], opts: { id?: string; source?: string } = {}) {
   const appId = opts.id ?? "@workspace-apps/shell";
@@ -27,9 +27,7 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
             visible: true,
             bounds: { x: 0, y: 0, width: 800, height: 600 },
             capabilities,
-            appIdentity: opts.source
-              ? { source: opts.source, effectiveVersion: "test" }
-              : undefined,
+            appIdentity: opts.source ? { source: opts.source, executionDigest: "test" } : undefined,
           }
         : null
     ),
@@ -49,7 +47,7 @@ describe("view service", () => {
 
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        authorityCtx(createVerifiedCaller("@workspace-apps/shell", "app"), false),
         "setThemeCss",
         [":root{}"]
       )
@@ -70,7 +68,7 @@ describe("view service", () => {
 
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        authorityCtx(createVerifiedCaller("@workspace-apps/shell", "app"), true),
         "bindNativePanelSlot",
         [request]
       )
@@ -88,13 +86,17 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller(callerId, "app") }, "bindNativePanelSlot", [
-        {
-          nativeSlotId: "panel-stack:primary",
-          panelId: "panel-1",
-          bounds: { x: 10, y: 20, width: 300, height: 200 },
-        },
-      ])
+      service.handler(
+        authorityCtx(createVerifiedCaller(callerId, "app"), false),
+        "bindNativePanelSlot",
+        [
+          {
+            nativeSlotId: "panel-stack:primary",
+            panelId: "panel-1",
+            bounds: { x: 10, y: 20, width: 300, height: 200 },
+          },
+        ]
+      )
     ).rejects.toThrow(/cannot place native panel slots/);
 
     expect(vm.bindPanelSlot).not.toHaveBeenCalled();
@@ -114,7 +116,7 @@ describe("view service", () => {
 
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        authorityCtx(createVerifiedCaller("@workspace-apps/shell", "app"), true),
         "updateNativePanelSlot",
         [request]
       )
@@ -131,9 +133,11 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "setHostedShellReady", [
-        { ready: true },
-      ])
+      service.handler(
+        authorityCtx(createVerifiedCaller("shell", "shell"), false),
+        "setHostedShellReady",
+        [{ ready: true }]
+      )
     ).rejects.toThrow(/cannot place native panel slots/);
 
     expect(vm.setHostedShellReady).not.toHaveBeenCalled();

@@ -35,7 +35,13 @@ vi.mock("./deviceCredentialStore.js", () => ({
   },
 }));
 
-const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
+const shellCtx: ServiceContext = {
+  caller: createVerifiedCaller("shell", "shell"),
+  authority: {
+    allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+    assert: vi.fn(async () => undefined),
+  },
+};
 const SELF_DEVICE_ID = `dev_${"d".repeat(24)}`;
 const NEXT_DEVICE_ID = `dev_${"n".repeat(24)}`;
 const NEXT_REFRESH_TOKEN = "n".repeat(43);

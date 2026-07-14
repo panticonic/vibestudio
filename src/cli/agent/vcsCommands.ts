@@ -19,7 +19,7 @@ import {
 import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
-import type { RpcClient } from "../rpcClient.js";
+import type { RpcClient } from "@vibestudio/direct-client";
 import { normalizeRepoPath, REPO_FLAG, requireRepo } from "./vcsCommandShared.js";
 import { vcsGitCommand } from "./vcsGitCommands.js";
 

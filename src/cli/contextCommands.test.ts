@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeMarker, writeState } from "./contextCommands.js";
-import type { RpcClient } from "./rpcClient.js";
+import type { RpcClient } from "@vibestudio/direct-client";
 
 const tmpDirs: string[] = [];
 function mkTemp(): string {

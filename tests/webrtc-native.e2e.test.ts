@@ -47,8 +47,8 @@ import type {
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { RpcServer } from "../src/server/rpcServer.js";
-import { createNodeDatachannelProvider } from "../src/node/webrtc/nodeDatachannelPeer.js";
-import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
+import { createNodeDatachannelProvider } from "@vibestudio/direct-client/node-webrtc";
+import { ensurePersistentCert } from "@vibestudio/direct-client/cert";
 
 const RUN = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
 const TURN_ICE_SERVERS = turnIceServersFromEnv();

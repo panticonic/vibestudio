@@ -17,7 +17,7 @@
 
 import * as path from "node:path";
 import { loadCliCredentials } from "../credentialStore.js";
-import { RpcClient } from "../rpcClient.js";
+import { RpcClient } from "@vibestudio/direct-client";
 import { AuthError, CliError } from "../output.js";
 import { normalizeServerBaseUrl } from "../serverUrl.js";
 import {

@@ -14,7 +14,6 @@ import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
 import { consumeDesktopAutoApproveOnce, resolveWorkspaceName } from "@vibestudio/workspace/loader";
 import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
-import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
 const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
@@ -128,7 +127,6 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg?.startsWith("--workspace=")) continue;
     if (arg === CHOOSE_CONNECTION_ARG) continue;
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
-    if (arg === DEV_WEBRTC_REMOTE_ARG) continue;
     if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
     if (arg?.startsWith("vibestudio://connect")) continue;
     if (arg?.startsWith("vibestudio://panel")) continue;

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createHostCaller,
+  createVerifiedCaller,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 import { createAppService } from "./appService.js";
 
 vi.mock("electron", () => ({
@@ -45,29 +50,39 @@ function makeService() {
   return { service, viewManager, appOrchestrator };
 }
 
+function authorityCtx(caller: VerifiedCaller, capabilities: readonly string[]): ServiceContext {
+  return {
+    caller,
+    authority: {
+      allows: vi.fn(async ({ capability }) => capabilities.includes(capability)),
+      assert: vi.fn(async () => undefined),
+    },
+  };
+}
+
 describe("createAppService", () => {
   it("does not grant app-host capabilities to the bootstrap shell caller", async () => {
     const { service } = makeService();
-    const shellCtx = { caller: createVerifiedCaller("shell", "shell") };
+    const shellCtx = authorityCtx(createVerifiedCaller("shell", "shell"), []);
 
     await expect(
       service.handler(shellCtx, "openExternal", ["https://example.com"])
-    ).rejects.toThrow(/restricted to app callers/);
-    await expect(service.handler(shellCtx, "clearBuildCache", [])).rejects.toThrow(
-      /restricted to app callers/
-    );
+    ).rejects.toThrow(/requires 'open-external' authority/);
+    await expect(service.handler(shellCtx, "clearBuildCache", [])).rejects.toThrow(/panel-hosting/);
   });
 
   it("allows app callers with declared capabilities to use app-host surfaces", async () => {
     const { service } = makeService();
-    const appCtx = {
-      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
+    const appCtx = authorityCtx(
+      createVerifiedCaller("@workspace-apps/shell", "app", {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
         repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
+        executionDigest: "ev-shell",
+        requested: [{ capability: "open-external", resource: { kind: "prefix", prefix: "" } }],
       }),
-    };
+      ["open-external"]
+    );
 
     await expect(
       service.handler(appCtx, "openExternal", ["https://example.com"])
@@ -76,15 +91,17 @@ describe("createAppService", () => {
 
   it("lets shell and panel-hosting apps apply queued app updates", async () => {
     const { service, appOrchestrator } = makeService();
-    const shellCtx = { caller: createVerifiedCaller("shell", "shell") };
-    const appCtx = {
-      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
+    const shellCtx = authorityCtx(createHostCaller("shell", "shell"), ["panel-hosting"]);
+    const appCtx = authorityCtx(
+      createVerifiedCaller("@workspace-apps/shell", "app", {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
         repoPath: "apps/shell",
-        effectiveVersion: "ev-shell",
+        executionDigest: "ev-shell",
+        requested: [{ capability: "panel-hosting", resource: { kind: "prefix", prefix: "" } }],
       }),
-    };
+      ["panel-hosting"]
+    );
 
     await expect(
       service.handler(shellCtx, "applyUpdate", ["@workspace-apps/shell"])

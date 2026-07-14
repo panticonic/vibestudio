@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { CapabilityScope } from "@vibestudio/rpc";
+import { parseAuthorityRequests } from "@vibestudio/shared/authorityManifest";
 
 const log = createDevLogger("AppOrchestrator");
 
@@ -29,7 +31,8 @@ export interface AppAvailableEvent {
   artifactRoute?: string;
   contextId?: string | null;
   capabilities?: readonly AppCapability[];
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
+  authorityRequests?: readonly CapabilityScope[];
   buildKey?: string | null;
   adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
   selectedForHost?: boolean;
@@ -41,7 +44,7 @@ export interface AppOrchestratorDeps {
 }
 
 interface BakedAppManifest {
-  version: 1;
+  version: 2;
   app: {
     name: string;
     source: string;
@@ -49,7 +52,8 @@ interface BakedAppManifest {
     capabilities?: AppCapability[];
   };
   build: {
-    effectiveVersion: string;
+    executionDigest: string;
+    authorityRequests: readonly CapabilityScope[];
   };
   artifacts: Array<{
     path: string;
@@ -145,7 +149,8 @@ export class AppOrchestrator {
       event.capabilities,
       {
         source: event.source,
-        effectiveVersion: event.effectiveVersion ?? undefined,
+        executionDigest: event.executionDigest ?? undefined,
+        requested: event.authorityRequests,
       }
     );
     panelView.setViewVisible?.(event.appId, true);
@@ -207,14 +212,14 @@ export class AppOrchestrator {
 }
 
 function appAvailableIdentity(event: AppAvailableEvent): string {
-  return event.buildKey ?? event.effectiveVersion ?? event.url;
+  return event.buildKey ?? event.executionDigest ?? event.url;
 }
 
 export function readBakedElectronApp(distDir: string): AppAvailableEvent | null {
   const manifestPath = path.join(distDir, "manifest.json");
   if (!fs.existsSync(manifestPath)) return null;
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as BakedAppManifest;
-  if (manifest.version !== 1) {
+  if (manifest.version !== 2) {
     throw new Error(`Unsupported baked app manifest version: ${String(manifest.version)}`);
   }
   if (manifest.app.target !== "electron") return null;
@@ -230,6 +235,10 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
     target: "electron",
     url: pathToFileURL(htmlPath).href,
     capabilities: manifest.app.capabilities ?? [],
-    effectiveVersion: manifest.build.effectiveVersion,
+    executionDigest: manifest.build.executionDigest,
+    authorityRequests: parseAuthorityRequests(
+      { requests: manifest.build.authorityRequests },
+      `baked app ${manifest.app.name} authorityRequests`
+    ),
   };
 }

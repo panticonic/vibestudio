@@ -265,7 +265,6 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           // `remote serve --dev` promises a disposable copy. pnpm's desktop
           // dev loop intentionally mirrors commits back to the template, but
           // unattended/system-test hosts must never mutate the source checkout.
-          VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR: "1",
         }
       : {}),
     ...(options.autoApprove ? { VIBESTUDIO_AUTO_APPROVE: "1" } : {}),

@@ -105,14 +105,14 @@ describe("PanelView app views", () => {
       "http://127.0.0.1:1234/_a/new/index.html",
       undefined,
       ["notifications"],
-      { source: "apps/shell", effectiveVersion: "ev-new" }
+      { source: "apps/shell", executionDigest: "ev-new" }
     );
 
     expect(viewManager.updateAppView).toHaveBeenCalledWith(
       "@workspace-apps/shell",
       "http://127.0.0.1:1234/_a/new/index.html",
       ["notifications"],
-      { source: "apps/shell", effectiveVersion: "ev-new" }
+      { source: "apps/shell", executionDigest: "ev-new" }
     );
     expect(viewManager.navigateView).not.toHaveBeenCalled();
     expect(viewManager.createView).not.toHaveBeenCalled();

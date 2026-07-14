@@ -7,7 +7,7 @@ import { loadCliCredentials } from "./credentialStore.js";
 import type { ParsedInvocation } from "./commandTable.js";
 import { CliError, UsageError, jsonMode, printError, redactCliSecrets } from "./output.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
-import type { DeviceCredential } from "./rpcClient.js";
+import type { DeviceCredential } from "@vibestudio/direct-client";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -29,7 +29,7 @@ async function createWebRtcHeadlessHostOverrides(
 ): Promise<Record<string, unknown>> {
   const [{ WebRtcRpcClient }, { startPanelAssetFacade }, { RemoteCdpHostBridgeSocket }] =
     await Promise.all([
-      import("./webrtcClient.js"),
+      import("@vibestudio/direct-client/webrtc"),
       import("../node/panelAssets/panelAssetFacade.js"),
       import(pathToFileURL(opts.entryPath).href),
     ]);
@@ -75,7 +75,9 @@ async function createWebRtcHeadlessHostOverrides(
         targetId: string,
         method: string,
         args: unknown[] = [],
-        options?: Parameters<import("./webrtcClient.js").WebRtcRpcClient["stream"]>[3]
+        options?: Parameters<
+          import("@vibestudio/direct-client/webrtc").WebRtcRpcClient["stream"]
+        >[3]
       ): Promise<Response> {
         return client.stream(targetId, method, args, options);
       },

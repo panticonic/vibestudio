@@ -2,8 +2,8 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ViewManager } from "../viewManager.js";
 import { paletteMethods } from "@vibestudio/service-schemas/palette";
-import { requireChromeCaller } from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { requirePanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 
 /**
  * The app-level command-palette bridge. A leaf panel (`panel` caller — or a
@@ -14,7 +14,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
  * register/unregister are inherently scoped by `ctx.caller.runtime.id` — a
  * caller can only ever touch its own command set — so they need NO capability
  * gate and admit any `panel`/`app` caller. (The previous `panel-hosting` gate
- * was wrong: that is a chrome-trust capability leaf panels never hold, so
+ * was wrong: that capability leaf is reserved for panel-hosting code, so
  * panel-contributed commands silently never registered.) list/run are
  * chrome-only (they enumerate / dispatch across panels) — gated via
  * {@link requireChromeCaller}: hosted workspace chrome resolves as
@@ -28,7 +28,7 @@ export function createPaletteService(deps: {
   return {
     name: "palette",
     description: "App-level command palette contributions",
-    policy: { allowed: ["shell", "app", "panel"] },
+    authority: { principals: ["user", "code"] },
     methods: paletteMethods,
     handler: defineServiceHandler("palette", paletteMethods, {
       register: (ctx, [commands]) => {
@@ -39,14 +39,14 @@ export function createPaletteService(deps: {
         deps.panelOrchestrator.unregisterPaletteCommands(ctx.caller.runtime.id);
         return;
       },
-      list: (ctx) => {
+      list: async (ctx) => {
         // Aggregation/dispatch is chrome's job; a panel must not enumerate
         // or dispatch into other panels.
-        requireChromeCaller(ctx, deps.getViewManager(), "palette.list");
+        await requirePanelHostingAuthority(ctx, "palette.list");
         return deps.panelOrchestrator.listPaletteCommands();
       },
-      run: (ctx, [panelId, commandId]) => {
-        requireChromeCaller(ctx, deps.getViewManager(), "palette.run");
+      run: async (ctx, [panelId, commandId]) => {
+        await requirePanelHostingAuthority(ctx, "palette.run");
         deps.panelOrchestrator.runPaletteCommand(panelId, commandId);
         return;
       },

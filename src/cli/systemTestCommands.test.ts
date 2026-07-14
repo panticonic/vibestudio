@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearShellTokenCache } from "./rpcClient.js";
+import { clearShellTokenCache } from "@vibestudio/direct-client";
 
 interface RpcRequest {
   method: string;
@@ -14,7 +14,7 @@ const transportMock = vi.hoisted(() => ({
   rpcBodies: [] as RpcRequest[],
 }));
 
-vi.mock("./webrtcClient.js", () => ({
+vi.mock("@vibestudio/direct-client/webrtc", () => ({
   WebRtcRpcClient: class {
     async ready(): Promise<void> {}
     async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
@@ -128,7 +128,7 @@ describe("vibestudio system-test commands", () => {
         return {
           id: "session:system-tests",
           kind: "session",
-          source: { repoPath: "agent-cli", effectiveVersion: "test-version" },
+          source: { repoPath: "agent-cli" },
           contextId: "ctx_system_tests",
           targetId: "session:system-tests",
         };
@@ -175,7 +175,7 @@ describe("vibestudio system-test commands", () => {
         return {
           id: "session:fresh",
           kind: "session",
-          source: { repoPath: "agent-cli", effectiveVersion: "test-version" },
+          source: { repoPath: "agent-cli" },
           contextId: "ctx_fresh",
           targetId: "session:fresh",
         };

@@ -342,7 +342,7 @@ async function buildNativePipe(): Promise<{
   provider: PeerConnectionProvider;
   webSocketImpl: unknown;
 }> {
-  const { createNodeDatachannelProvider } = await import("../node/webrtc/nodeDatachannelPeer.js");
+  const { createNodeDatachannelProvider } = await import("@vibestudio/direct-client/node-webrtc");
   const { default: WS } = (await import("ws")) as unknown as {
     default: new (url: string) => unknown;
   };

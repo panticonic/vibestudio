@@ -12,8 +12,8 @@ import { buildPanelChromeState } from "@vibestudio/shared/panelChrome";
 import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { buildHamburgerMenuTemplate } from "../menu.js";
-import { requireAppCapability } from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { requireRuntimeCapability } from "@vibestudio/shared/serviceAuthorityChecks";
 
 export function createMenuService(deps: {
   panelOrchestrator: PanelOrchestrator;
@@ -28,12 +28,12 @@ export function createMenuService(deps: {
   return {
     name: "menu",
     description: "Native menus",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: menuMethods,
     handler: defineServiceHandler("menu", menuMethods, {
-      showHamburger: (ctx, [position]) => {
+      showHamburger: async (ctx, [position]) => {
         const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "native-menus", "menu.showHamburger");
+        await requireRuntimeCapability(ctx, "native-menus", "menu.showHamburger");
         const lifecycle = deps.panelOrchestrator;
         const registry = deps.panelRegistry;
         const shellContents = vm.getShellWebContents();
@@ -89,9 +89,9 @@ export function createMenuService(deps: {
         menu.popup({ window: vm.getWindow(), x: position.x, y: position.y });
         return;
       },
-      showContext: (ctx, [items, position]) => {
+      showContext: async (ctx, [items, position]) => {
         const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "native-menus", "menu.showContext");
+        await requireRuntimeCapability(ctx, "native-menus", "menu.showContext");
         return new Promise<string | null>((resolve) => {
           const template: MenuItemConstructorOptions[] = items.map((item) => ({
             label: item.label,
@@ -106,9 +106,9 @@ export function createMenuService(deps: {
           });
         });
       },
-      showPanelContext: (ctx, [panelId, position]) => {
+      showPanelContext: async (ctx, [panelId, position]) => {
         const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "native-menus", "menu.showPanelContext");
+        await requireRuntimeCapability(ctx, "native-menus", "menu.showPanelContext");
         const lifecycle = deps.panelOrchestrator;
         const registry = deps.panelRegistry;
         const panel = registry.getPanel(panelId);

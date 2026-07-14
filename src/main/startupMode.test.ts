@@ -7,7 +7,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
 // Mocks must be set up before the startupMode module is imported, so we
 // resetModules + re-import in each test.
@@ -151,11 +150,10 @@ describe("resolveStartupMode interactive desktop policy", () => {
     ).toEqual(["--foo", mod.CHOOSE_CONNECTION_ARG]);
   });
 
-  it("strips one-shot WebRTC dev pairing args from relaunch selectors", () => {
+  it("strips one-shot pairing links from relaunch selectors", () => {
     expect(
       mod.workspaceRelaunchArgs("default", [
         "--foo",
-        DEV_WEBRTC_REMOTE_ARG,
         "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
         "vibestudio://panel?v=1&source=about%2Fserver-logs",
       ])

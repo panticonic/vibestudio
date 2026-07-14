@@ -12,20 +12,21 @@ import {
 } from "electron";
 import * as path from "path";
 import * as fs from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { EventService } from "@vibestudio/shared/eventsService";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
 import { isDev } from "./utils.js";
 import { SKIP_REMOTE_PAIRING_ARG, parseMainStartupInvocation } from "./startupInvocation.js";
+import { HubPairingInviteSchema } from "@vibestudio/service-schemas/hubControl";
 import {
   createStartupErrorReport,
   formatUnknownError,
   resolveStartupErrorPaths,
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
-import { cleanupNodeDatachannel } from "../node/webrtc/nodeDatachannelPeer.js";
+import { cleanupNodeDatachannel } from "@vibestudio/direct-client/node-webrtc";
 import { maybeNotifyNpmUpdate } from "./updateCheck.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
@@ -57,6 +58,28 @@ const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
 const startupInvocation = parseMainStartupInvocation(process.argv, process.env);
 // Consume one-shot recovery markers so intentional relaunches do not replay them.
 process.argv = startupInvocation.argv;
+const managedDev = startupInvocation.managedDev;
+if (managedDev) {
+  for (const [name, value] of [
+    ["profile", managedDev.profileDir],
+    ["pairing file", managedDev.pairingFile],
+    ["ready file", managedDev.readyFile],
+  ] as const) {
+    if (!path.isAbsolute(value)) throw new Error(`Managed development ${name} must be absolute`);
+  }
+  fs.mkdirSync(managedDev.profileDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(managedDev.profileDir, 0o700);
+  app.setPath("userData", managedDev.profileDir);
+  const pairingStat = fs.statSync(managedDev.pairingFile);
+  if ((pairingStat.mode & 0o077) !== 0) {
+    throw new Error("Managed development pairing file is not private");
+  }
+  const invite = HubPairingInviteSchema.parse(
+    JSON.parse(fs.readFileSync(managedDev.pairingFile, "utf8"))
+  );
+  fs.rmSync(managedDev.pairingFile, { force: true });
+  process.argv.push(invite.deepLink);
+}
 const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost;
 const {
   recoveredExitCode: recoveredLocalServerCrash,
@@ -140,6 +163,8 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { panelLogMethods } from "@vibestudio/service-schemas/panelLog";
 import { corsApprovalMethods } from "@vibestudio/service-schemas/corsApproval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
+import type { RuntimeEntitySummary } from "@vibestudio/shared/runtime/entitySpec";
+import { verifyPanelCodeIdentity } from "./panelCodeIdentity.js";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelPinStore } from "./panelPinStore.js";
 import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
@@ -181,21 +206,28 @@ import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
+import {
+  authorizeVerifiedCaller,
+  verifiedCallerHasAuthority,
+} from "../server/services/authorityRuntime.js";
 
 import {
+  createHostCaller,
   createVerifiedCaller,
   ServiceDispatcher,
   parseServiceMethod,
   type ServiceContext,
+  type VerifiedCodeIdentity,
+  type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
-import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
+import { createEventsServiceDefinition } from "./services/eventsService.js";
 import { eventsMethods } from "@vibestudio/service-schemas/events";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
-import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import { assertPresent } from "../lintHelpers";
 import { ApplicationWindowController } from "./applicationWindowController.js";
 
@@ -269,11 +301,14 @@ if (
   app.exit(0);
   process.exit(0);
 }
-registerProtocol();
+if (!managedDev) registerProtocol();
 installEarlyOpenUrlBuffer();
 enqueueFirstArgvLink(process.argv);
 
-if (startupMode.kind === "local") {
+if (managedDev) {
+  // Selected before the single-instance lock. Never replace it with an
+  // ordinary workspace/bootstrap profile later in startup.
+} else if (startupMode.kind === "local") {
   workspaceId = startupMode.workspaceId;
   app.setPath(
     "userData",
@@ -332,7 +367,7 @@ const chooserChoice = new Promise<ChooserChoice>((resolve) => {
 });
 
 function shouldAutoPairPendingDevWebRtcLink(): boolean {
-  return isDev() && startupInvocation.devWebRtcRemote;
+  return managedDev !== null;
 }
 
 let appliedElectronHostTargetKey: string | null = null;
@@ -431,37 +466,19 @@ function appFsCapabilitiesForMethod(
   throw new Error(`Unsupported app fs method: ${method}`);
 }
 
-function authorizeAppServerCall(
-  callerId: string,
+function appServerCallCapabilities(
   service: string,
   method: string,
   args: readonly unknown[]
-): void {
+): readonly AppCapability[] {
   // The shell consent queue (credential/capability/install/device-code/client-
   // config approvals) must only be reachable from the trusted host-chrome
   // consent surface — NOT from an ordinary adopted app view, which could
   // otherwise enumerate and silently grant/deny another principal's approvals.
   if (service === "shellApproval") {
-    const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
-    if (!(viewInfo?.type === "app" && viewInfo.hostChrome)) {
-      throw new Error(
-        `shellApproval is only available to the host-chrome consent surface, not ${callerId}`
-      );
-    }
-    return;
+    return ["panel-hosting"];
   }
-  if (service !== "fs") return;
-  const required = appFsCapabilitiesForMethod(method, args);
-  if (required.length === 0) return;
-  const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
-  if (viewInfo?.type !== "app") {
-    throw new Error(`fs.${method} requires an active app view for ${callerId}`);
-  }
-  for (const capability of required) {
-    if (!viewInfo.capabilities.includes(capability)) {
-      throw new Error(`fs.${method} requires app capability '${capability}' for ${callerId}`);
-    }
-  }
+  return service === "fs" ? appFsCapabilitiesForMethod(method, args) : [];
 }
 
 const INCOMING_PAIR_LINK_CAPABILITY: AppCapability = "incoming-pair-links";
@@ -1021,7 +1038,8 @@ function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
           artifactRoute?: unknown;
           capabilities?: unknown;
           buildKey?: unknown;
-          effectiveVersion?: unknown;
+          executionDigest?: unknown;
+          authorityRequests?: unknown;
           adoptionPolicy?: unknown;
         })
       : null;
@@ -1052,7 +1070,10 @@ function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
       ? (launch.capabilities as import("@vibestudio/shared/unitManifest").AppCapability[])
       : [],
     buildKey: typeof launch.buildKey === "string" ? launch.buildKey : null,
-    effectiveVersion: typeof launch.effectiveVersion === "string" ? launch.effectiveVersion : null,
+    executionDigest: typeof launch.executionDigest === "string" ? launch.executionDigest : null,
+    authorityRequests: Array.isArray(launch.authorityRequests)
+      ? (launch.authorityRequests as import("@vibestudio/rpc").CapabilityScope[])
+      : [],
     adoptionPolicy:
       launch.adoptionPolicy === "prompt" || launch.adoptionPolicy === "artifact-only"
         ? launch.adoptionPolicy
@@ -1089,7 +1110,7 @@ function electronHostTargetKey(event: AppAvailableEvent): string {
     event.source,
     event.url,
     event.buildKey ?? "",
-    event.effectiveVersion ?? "",
+    event.executionDigest ?? "",
   ].join("\u001f");
 }
 
@@ -1169,7 +1190,7 @@ function electronHostTargetKeyFromPayload(payload: unknown): string | null {
     source,
     url,
     typeof record["buildKey"] === "string" ? record["buildKey"] : "",
-    typeof record["effectiveVersion"] === "string" ? record["effectiveVersion"] : "",
+    typeof record["executionDigest"] === "string" ? record["executionDigest"] : "",
   ].join("\u001f");
 }
 
@@ -1262,7 +1283,7 @@ function rememberElectronHostLaunchStatus(
     details,
     typeof launch?.["appId"] === "string" ? launch["appId"] : "",
     typeof launch?.["buildKey"] === "string" ? launch["buildKey"] : "",
-    typeof launch?.["effectiveVersion"] === "string" ? launch["effectiveVersion"] : "",
+    typeof launch?.["executionDigest"] === "string" ? launch["executionDigest"] : "",
   ].join("\u001f");
   if (electronHostLaunchLastStatusKey === key) return false;
   electronHostLaunchLastStatusKey = key;
@@ -1745,7 +1766,7 @@ app.on("ready", async () => {
   });
 
   // Auto-update check (production only)
-  if (!isDev()) {
+  if (!isDev() && !managedDev) {
     try {
       // Dynamic import to avoid bundling electron-updater in development
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1926,6 +1947,16 @@ app.on("ready", async () => {
   }
 
   const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, service, method, capability, resourceKey }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId,
+      workspaceMember: workspaceId !== "unknown",
+      sessionId: `${caller.runtime.id}:${service}.${method}:${randomUUID()}`,
+      audience: `service:${service}`,
+      capability,
+      resourceKey,
+    })
+  );
 
   performance.mark("startup:services-registered");
 
@@ -2208,6 +2239,92 @@ app.on("ready", async () => {
     // PanelHttpServer is created by serverSession (RPC-backed proxy)
     const conn = assertPresent(serverSession);
 
+    const panelCodeIdentityCache = new Map<string, Promise<VerifiedCodeIdentity | null>>();
+    const resolvePanelCodeIdentity = (
+      callerId: string,
+      panel: NonNullable<ReturnType<PanelRegistry["getPanel"]>>
+    ) => {
+      const executionDigest = panel.executionDigest;
+      const runtimeEntityId = panel.runtimeEntityId;
+      if (!executionDigest || !runtimeEntityId) return Promise.resolve(null);
+      const cacheKey = `${runtimeEntityId}\0${executionDigest}`;
+      let pending = panelCodeIdentityCache.get(cacheKey);
+      if (!pending) {
+        pending = conn.serverClient
+          .call("runtime", "listEntities", [{ kind: "panel" }])
+          .then((value) => {
+            const entities = value as RuntimeEntitySummary[];
+            const source = getPanelSource(panel);
+            return verifyPanelCodeIdentity(
+              {
+                callerId,
+                runtimeEntityId,
+                source,
+                executionDigest,
+              },
+              entities
+            );
+          });
+        panelCodeIdentityCache.set(cacheKey, pending);
+        void pending.catch(() => panelCodeIdentityCache.delete(cacheKey));
+      }
+      return pending;
+    };
+    const codeIdentityForCallerId = async (
+      callerId: string
+    ): Promise<VerifiedCodeIdentity | null> => {
+      const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
+      if (viewInfo?.type === "app") {
+        const identity = viewInfo.appIdentity;
+        if (!identity?.source || !identity.executionDigest || !identity.requested) return null;
+        return {
+          callerId,
+          callerKind: "app",
+          repoPath: identity.source,
+          executionDigest: identity.executionDigest,
+          requested: identity.requested,
+        };
+      }
+      const panel = assertPresent(panelRegistry).getPanel(callerId);
+      return panel ? resolvePanelCodeIdentity(callerId, panel) : null;
+    };
+    const verifiedElectronCaller = async (caller: {
+      callerId: string;
+      callerKind: "shell" | "panel" | "app";
+    }): Promise<VerifiedCaller> =>
+      caller.callerKind === "shell"
+        ? createHostCaller(caller.callerId, "shell")
+        : createVerifiedCaller(
+            caller.callerId,
+            caller.callerKind,
+            await codeIdentityForCallerId(caller.callerId)
+          );
+    const requireElectronRuntimeCapability = async (
+      caller: { callerId: string; callerKind: "shell" | "panel" | "app" },
+      capability: string,
+      surface: string
+    ): Promise<void> => {
+      const verified = await verifiedElectronCaller(caller);
+      const resourceKey = `platform:${capability}`;
+      const allowed = verifiedCallerHasAuthority(
+        verified,
+        {
+          workspaceId,
+          workspaceMember: workspaceId !== "unknown",
+          sessionId: `${caller.callerId}:${surface}:${randomUUID()}`,
+          audience: surface,
+          capability,
+          resourceKey,
+        },
+        ["host", "user", "code"]
+      );
+      if (!allowed) {
+        throw Object.assign(new Error(`${surface} requires '${capability}' authority`), {
+          code: "EACCES",
+        });
+      }
+    };
+
     // Create IpcDispatcher (replaces Electron-side RpcServer for shell)
     // Forwards server-service calls to the server, dispatches Electron-local
     // services to the local dispatcher.
@@ -2228,22 +2345,19 @@ app.on("ready", async () => {
         const viewInfo = viewManager.getViewInfo(callerId);
         return resolveElectronViewCaller(callerId, viewInfo);
       },
-      getCodeIdentityForCaller: (callerId) => {
-        const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
-        if (viewInfo?.type !== "app") return null;
-        const identity = viewInfo.appIdentity;
-        if (!identity?.source || !identity.effectiveVersion) return null;
-        return {
-          callerId,
-          callerKind: "app",
-          repoPath: identity.source,
-          effectiveVersion: identity.effectiveVersion,
-        };
-      },
+      getCodeIdentityForCaller: codeIdentityForCallerId,
       getWebContentsForCaller: (callerId) =>
         applicationWindow.viewManager?.getWebContents(callerId) ?? null,
       getPanelRuntimeConnection: (panelId) => panelOrchestrator?.getPanelRuntimeConnection(panelId),
-      authorizeAppServerCall,
+      authorizeAppServerCall: async (callerId, service, method, args) => {
+        for (const capability of appServerCallCapabilities(service, method, args)) {
+          await requireElectronRuntimeCapability(
+            { callerId, callerKind: "app" },
+            capability,
+            `${service}.${method}`
+          );
+        }
+      },
       onServerRpcResult: async ({ service, method, args, result }) => {
         if (service === "workspace" && method === "hostTargets.launch" && args[0] === "electron") {
           await applyReadyElectronLaunchResult(result);
@@ -2504,7 +2618,6 @@ app.on("ready", async () => {
     electronContainer.registerRpc(
       createNotificationService({
         eventService,
-        getViewManager,
         onAction: async (_id, actionId) => {
           if (actionId === "desktop-update-download") {
             if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
@@ -2527,13 +2640,12 @@ app.on("ready", async () => {
     // Electron-local services are routed here. Workspace.select (relaunch) is
     // signalled from the server via the workspace:relaunch-requested event
     // (handled by the server event bridge).
-    electronContainer.registerRpc(createSettingsService({ serverClient: sc, getViewManager }));
+    electronContainer.registerRpc(createSettingsService({ serverClient: sc }));
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.registerRpc(
       createRemoteCredService({
         getServerClient: () => serverClientRef,
         getConnectionMode: () => conn.connectionMode,
-        getViewManager,
       })
     );
     const { createPhoneProvisioningService } =
@@ -2599,7 +2711,7 @@ app.on("ready", async () => {
     electronContainer.registerRpc({
       name: "autofill",
       description: "Password autofill management",
-      policy: { allowed: ["shell", "panel"] },
+      authority: { principals: ["user", "code"] },
       methods: autofillMethods,
       handler: defineServiceHandler("autofill", autofillMethods, {
         confirmSave: (ctx, args) => invokeAutofill(ctx, "confirmSave", args),
@@ -2623,21 +2735,13 @@ app.on("ready", async () => {
           "panel-tree-updated": () => panelRegistry?.getPanelTreeSnapshot(),
         },
       });
-      const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
-        if (callerHasPlatformCapability(caller.runtime.id, caller.runtime.kind, "panel-hosting")) {
-          return true;
-        }
-        if (caller.runtime.kind !== "app") return false;
-        const viewInfo = applicationWindow.viewManager?.getViewInfo(caller.runtime.id) ?? null;
-        return viewHasAppCapability(caller.runtime.id, viewInfo, "panel-hosting");
-      };
       electronContainer.registerRpc({
         ...baseEventsService,
         handler: defineServiceHandler("events", eventsMethods, {
           subscribe: async (ctx, args) => {
             const result = await baseEventsService.handler(ctx, "subscribe", args);
             const eventName = args[0];
-            if (shouldForwardServerEvents(ctx.caller) && isValidEventName(eventName)) {
+            if ((await hasPanelHostingAuthority(ctx)) && isValidEventName(eventName)) {
               serverEventSubscriptions.add(eventName);
             }
             return result;
@@ -2645,14 +2749,14 @@ app.on("ready", async () => {
           unsubscribe: async (ctx, args) => {
             const result = await baseEventsService.handler(ctx, "unsubscribe", args);
             const eventName = args[0];
-            if (shouldForwardServerEvents(ctx.caller) && isValidEventName(eventName)) {
+            if ((await hasPanelHostingAuthority(ctx)) && isValidEventName(eventName)) {
               serverEventSubscriptions.delete(eventName);
             }
             return result;
           },
           unsubscribeAll: async (ctx, args) => {
             const result = await baseEventsService.handler(ctx, "unsubscribeAll", args);
-            if (shouldForwardServerEvents(ctx.caller)) {
+            if (await hasPanelHostingAuthority(ctx)) {
               serverEventSubscriptions.clear();
             }
             return result;
@@ -2706,19 +2810,6 @@ app.on("ready", async () => {
       return resolveElectronViewCaller(callerId, getViewManager().getViewInfo(callerId));
     };
 
-    const codeIdentityForCallerId = (callerId: string) => {
-      const viewInfo = applicationWindow.viewManager?.getViewInfo(callerId);
-      if (viewInfo?.type !== "app") return null;
-      const identity = viewInfo.appIdentity;
-      if (!identity?.source || !identity.effectiveVersion) return null;
-      return {
-        callerId,
-        callerKind: "app" as const,
-        repoPath: identity.source,
-        effectiveVersion: identity.effectiveVersion,
-      };
-    };
-
     /**
      * Reject if the sender is not the shell webContents. Used for IPC
      * channels that should only be reachable from the trusted shell UI
@@ -2732,21 +2823,14 @@ app.on("ready", async () => {
       }
     };
 
-    const requireAppCapabilityForIpc = (
+    const requireRuntimeCapabilityForIpc = async (
       event: Electron.IpcMainInvokeEvent,
       capability: AppCapability,
       channel: string
-    ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
+    ): Promise<{ callerId: string; callerKind: "shell" | "panel" | "app" }> => {
       const caller = resolveCaller(event);
-      if (caller.callerKind !== "app") return caller;
-      const viewInfo = applicationWindow.viewManager?.getViewInfo(caller.callerId) ?? null;
-      if (viewHasAppCapability(caller.callerId, viewInfo, capability)) {
-        return caller;
-      }
-      console.warn(
-        `[ipc] Rejecting ${channel} from app ${caller.callerId} without capability '${capability}'`
-      );
-      throw new Error(`Channel '${channel}' requires app capability '${capability}'`);
+      await requireElectronRuntimeCapability(caller, capability, channel);
+      return caller;
     };
 
     ipcMain.handle("vibestudio:getPanelInit", async (event) => {
@@ -2756,7 +2840,7 @@ app.on("ready", async () => {
     });
 
     ipcMain.handle("vibestudio:focusPanel", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
+      await requireRuntimeCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
       assertPresent(panelOrchestrator).focusPanel(panelId);
     });
     ipcMain.handle("vibestudio:bridge.getInfo", async (event) => {
@@ -2825,11 +2909,17 @@ app.on("ready", async () => {
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}". Expected "service.method"`);
       if (callerKind === "app" && parsed.service === "fs") {
-        authorizeAppServerCall(callerId, parsed.service, parsed.method, args);
+        for (const capability of appServerCallCapabilities(parsed.service, parsed.method, args)) {
+          await requireElectronRuntimeCapability(
+            { callerId, callerKind },
+            capability,
+            `${parsed.service}.${parsed.method}`
+          );
+        }
         return sc.callAs({ callerId, callerKind }, parsed.service, parsed.method, args);
       }
       return dispatcher.dispatch(
-        { caller: createVerifiedCaller(callerId, callerKind, codeIdentityForCallerId(callerId)) },
+        { caller: await verifiedElectronCaller({ callerId, callerKind }) },
         parsed.service,
         parsed.method,
         args
@@ -2857,6 +2947,31 @@ app.on("ready", async () => {
     applicationWindow.create();
 
     performance.mark("startup:workspace-window-attached");
+    if (managedDev) {
+      if (
+        serverSession.serverId !== managedDev.expectedServerId ||
+        serverSession.workspaceId !== managedDev.expectedWorkspaceId
+      ) {
+        throw new Error(
+          `Managed client connected to ${serverSession.serverId}/${serverSession.workspaceId}; ` +
+            `expected ${managedDev.expectedServerId}/${managedDev.expectedWorkspaceId}`
+        );
+      }
+      const ready = {
+        version: 1,
+        launchId: managedDev.launchId,
+        clientBuildId: managedDev.clientBuildId,
+        profileId: path.basename(managedDev.profileDir),
+        pid: process.pid,
+        serverId: serverSession.serverId,
+        workspaceId: serverSession.workspaceId,
+        readyAt: Date.now(),
+      };
+      fs.mkdirSync(path.dirname(managedDev.readyFile), { recursive: true, mode: 0o700 });
+      const temp = `${managedDev.readyFile}.tmp.${process.pid}`;
+      fs.writeFileSync(temp, JSON.stringify(ready, null, 2), { mode: 0o600 });
+      fs.renameSync(temp, managedDev.readyFile);
+    }
 
     // Log startup timing in dev mode
     if (isDev()) {

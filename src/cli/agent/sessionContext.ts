@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadCliCredentials } from "../credentialStore.js";
-import { RpcClient, shellCallerId } from "../rpcClient.js";
+import { RpcClient, shellCallerId } from "@vibestudio/direct-client";
 import { isValidSessionName, loadAgentSession } from "../sessionStore.js";
 import { AuthError, CliError, StaleSessionError, UsageError } from "../output.js";
 import type { FlagSpec, ParsedInvocation } from "../commandTable.js";

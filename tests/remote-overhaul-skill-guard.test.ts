@@ -11,6 +11,16 @@ const REQUIRED_SKILLS = [
   "workspace/extensions/git-bridge/SKILL.md",
 ] as const;
 
+const NON_SOURCE_DIRECTORIES = new Set([
+  ".git",
+  ".turbo",
+  ".vite",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+]);
+
 function read(file: string): string {
   return fs.readFileSync(path.join(process.cwd(), file), "utf8");
 }
@@ -19,8 +29,9 @@ function skillFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...skillFiles(full));
-    else if (entry.name === "SKILL.md") out.push(full);
+    if (entry.isDirectory() && !NON_SOURCE_DIRECTORIES.has(entry.name)) {
+      out.push(...skillFiles(full));
+    } else if (entry.name === "SKILL.md") out.push(full);
   }
   return out;
 }

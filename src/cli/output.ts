@@ -1,4 +1,5 @@
 import { redactToken } from "@vibestudio/shared/redact";
+import { DirectClientAuthError } from "@vibestudio/direct-client";
 
 /**
  * CLI output + exit-code conventions.
@@ -117,7 +118,12 @@ export function redactCliSecrets(message: string): string {
 /** Print an error and return the exit code it maps to. */
 export function printError(error: unknown, options: { json: boolean }): number {
   const message = redactCliSecrets(error instanceof Error ? error.message : String(error));
-  const exitCode = error instanceof CliError ? error.exitCode : EXIT_ERROR;
+  const exitCode =
+    error instanceof CliError
+      ? error.exitCode
+      : error instanceof DirectClientAuthError
+        ? EXIT_AUTH
+        : EXIT_ERROR;
   if (options.json) {
     console.error(JSON.stringify({ error: message, exitCode }));
   } else {

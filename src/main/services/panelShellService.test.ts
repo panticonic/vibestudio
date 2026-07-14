@@ -1,10 +1,40 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createPanelShellService } from "./panelShellService.js";
 
-const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
-const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel:chat", "panel") };
+function authorityCtx(
+  callerId: string,
+  kind: "app" | "panel" | "shell",
+  allowed: boolean
+): ServiceContext {
+  return {
+    caller: createVerifiedCaller(
+      callerId,
+      kind,
+      kind === "app"
+        ? {
+            callerId,
+            callerKind: "app",
+            repoPath: "apps/shell",
+            executionDigest: "a".repeat(64),
+            requested: allowed
+              ? [{ capability: "panel-hosting", resource: { kind: "prefix", prefix: "" } }]
+              : [],
+          }
+        : null
+    ),
+    authority: {
+      allows: vi.fn(async ({ capability }) => capability === "panel-hosting" && allowed),
+      assert: vi.fn(async () => undefined),
+    },
+  };
+}
+
+const appCtx = authorityCtx("@workspace-apps/shell", "app", true);
+const unprivilegedAppCtx = authorityCtx("@workspace-apps/other", "app", false);
+const panelCtx = authorityCtx("panel:chat", "panel", false);
 
 function createServiceHarness(appCapabilities: string[] = []) {
   const setCurrentTheme = vi.fn();
@@ -156,15 +186,15 @@ describe("PanelShellService", () => {
   it("denies apps without panel-hosting capability", async () => {
     const harness = createServiceHarness();
 
-    await expect(harness.service.handler(appCtx, "ensureLoaded", ["panel-1"])).rejects.toThrow(
-      /panel-hosting/
-    );
-    await expect(harness.service.handler(appCtx, "takeOver", ["panel-1"])).rejects.toThrow(
-      /panel-hosting/
-    );
-    await expect(harness.service.handler(appCtx, "reloadView", ["panel-1"])).rejects.toThrow(
-      /panel-hosting/
-    );
+    await expect(
+      harness.service.handler(unprivilegedAppCtx, "ensureLoaded", ["panel-1"])
+    ).rejects.toThrow(/panel-hosting/);
+    await expect(
+      harness.service.handler(unprivilegedAppCtx, "takeOver", ["panel-1"])
+    ).rejects.toThrow(/panel-hosting/);
+    await expect(
+      harness.service.handler(unprivilegedAppCtx, "reloadView", ["panel-1"])
+    ).rejects.toThrow(/panel-hosting/);
     expect(harness.ensureLoaded).not.toHaveBeenCalled();
     expect(harness.takeOverPanel).not.toHaveBeenCalled();
     expect(harness.reload).not.toHaveBeenCalled();
@@ -180,7 +210,7 @@ describe("PanelShellService", () => {
 
   it("exposes only the theme config getter to panel callers through dispatch policy", async () => {
     const harness = createServiceHarness();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(harness.service);
     dispatcher.markInitialized();
 
@@ -200,10 +230,8 @@ describe("PanelShellService", () => {
     const harness = createServiceHarness(["panel-hosting"]);
 
     await expect(
-      harness.service.handler({ caller: createVerifiedCaller("shell", "shell") }, "reloadView", [
-        "panel-1",
-      ])
-    ).rejects.toThrow(/restricted to app callers/);
+      harness.service.handler(authorityCtx("shell", "shell", false), "reloadView", ["panel-1"])
+    ).rejects.toThrow(/panel-hosting/);
     expect(harness.reload).not.toHaveBeenCalled();
   });
 

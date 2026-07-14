@@ -1,43 +1,56 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createNotificationService } from "./notificationService.js";
 
-function createHarness(capabilities: string[] = []) {
+function createHarness() {
   const eventService = { emit: vi.fn(), emitToUser: vi.fn(() => true) };
-  const viewManager = {
-    getViewInfo: vi.fn(() => ({
-      type: "app",
-      visible: true,
-      bounds: { x: 0, y: 0, width: 100, height: 100 },
-      capabilities,
-    })),
-  };
   const service = createNotificationService({
     eventService: eventService as never,
-    getViewManager: () => viewManager as never,
   });
   return { service, eventService };
 }
 
-describe("createNotificationService", () => {
-  it("gates app notification calls on the notifications capability", async () => {
-    const { service } = createHarness([]);
-
-    await expect(
-      service.handler({ caller: createVerifiedCaller("@workspace-apps/shell", "app") }, "show", [
-        { type: "info", title: "Denied" },
-      ])
-    ).rejects.toThrow(/requires app capability 'notifications'/);
+const panelCaller = (notifications: boolean) =>
+  createVerifiedCaller("panel:test", "panel", {
+    callerId: "panel:test",
+    callerKind: "panel",
+    repoPath: "panels/test",
+    executionDigest: "a".repeat(64),
+    requested: [
+      {
+        capability: "service:notification.show",
+        resource: { kind: "prefix", prefix: "" },
+      },
+      ...(notifications
+        ? [{ capability: "notifications", resource: { kind: "prefix" as const, prefix: "" } }]
+        : []),
+    ],
   });
 
-  it("emits notification events for apps with the notifications capability", async () => {
-    const { service, eventService } = createHarness(["notifications"]);
+async function dispatchShow(
+  service: ReturnType<typeof createNotificationService>,
+  notifications: boolean
+) {
+  const dispatcher = createTestServiceDispatcher();
+  dispatcher.registerService(service);
+  dispatcher.markInitialized();
+  return dispatcher.dispatch({ caller: panelCaller(notifications) }, "notification", "show", [
+    { type: "info", title: notifications ? "Allowed" : "Denied" },
+  ]);
+}
 
-    const id = await service.handler(
-      { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-      "show",
-      [{ type: "info", title: "Allowed" }]
-    );
+describe("createNotificationService", () => {
+  it("gates notification calls on the declared notifications prerequisite", async () => {
+    const { service } = createHarness();
+
+    await expect(dispatchShow(service, false)).rejects.toMatchObject({ code: "EACCES" });
+  });
+
+  it("emits notification events when the exact code requests both capabilities", async () => {
+    const { service, eventService } = createHarness();
+
+    const id = await dispatchShow(service, true);
 
     expect(id).toMatch(/^notif-/);
     expect(eventService.emit).toHaveBeenCalledWith("notification:show", {
@@ -48,13 +61,27 @@ describe("createNotificationService", () => {
   });
 
   it("allows panel callers through the dispatcher policy", async () => {
-    const { service, eventService } = createHarness([]);
-    const dispatcher = new ServiceDispatcher();
+    const { service, eventService } = createHarness();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
     const id = await dispatcher.dispatch(
-      { caller: createVerifiedCaller("panel:test", "panel") },
+      {
+        caller: createVerifiedCaller("panel:test", "panel", {
+          callerId: "panel:test",
+          callerKind: "panel",
+          repoPath: "panels/test",
+          executionDigest: "a".repeat(64),
+          requested: [
+            {
+              capability: "service:notification.show",
+              resource: { kind: "prefix", prefix: "" },
+            },
+            { capability: "notifications", resource: { kind: "prefix", prefix: "" } },
+          ],
+        }),
+      },
       "notification",
       "show",
       [{ type: "info", title: "Panel notice" }]
@@ -69,25 +96,21 @@ describe("createNotificationService", () => {
   });
 
   it("preserves typed notification action commands", async () => {
-    const { service, eventService } = createHarness(["notifications"]);
+    const { service, eventService } = createHarness();
 
-    await service.handler(
-      { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-      "show",
-      [
-        {
-          type: "info",
-          title: "Update",
-          actions: [
-            {
-              id: "app.applyUpdate",
-              label: "Load update",
-              command: { type: "app.applyUpdate", appId: "@workspace-apps/shell" },
-            },
-          ],
-        },
-      ]
-    );
+    await service.handler({ caller: panelCaller(true) }, "show", [
+      {
+        type: "info",
+        title: "Update",
+        actions: [
+          {
+            id: "app.applyUpdate",
+            label: "Load update",
+            command: { type: "app.applyUpdate", appId: "@workspace-apps/shell" },
+          },
+        ],
+      },
+    ]);
 
     expect(eventService.emit).toHaveBeenCalledWith(
       "notification:show",
@@ -102,7 +125,7 @@ describe("createNotificationService", () => {
   });
 
   it("implements the server-only user inbox signal declared by the schema", async () => {
-    const { service, eventService } = createHarness([]);
+    const { service, eventService } = createHarness();
 
     await expect(
       service.handler({ caller: createVerifiedCaller("server", "server") }, "signalUserInbox", [

@@ -28,7 +28,7 @@ import {
 } from "./commandTable.js";
 import { CliError, jsonMode, printError, printResult, UsageError } from "./output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./agent/sessionContext.js";
-import type { RpcClient } from "./rpcClient.js";
+import type { RpcClient } from "@vibestudio/direct-client";
 
 const CHANNEL_PROTOCOL = "vibestudio.channel.v1";
 const VCS_PROTOCOL = "vibestudio.vcs.v1";

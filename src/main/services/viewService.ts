@@ -2,8 +2,9 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import type { ViewManager } from "../viewManager.js";
 import { assertHttpUrl } from "../utils.js";
-import { callerHasPlatformCapability, viewHasAppCapability } from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 
 export function createViewService(deps: { getViewManager: () => ViewManager }): ServiceDefinition {
   /**
@@ -13,66 +14,43 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
    * authority by declaring `panel-hosting`; ordinary app callers can only
    * reach self-targeted methods if this policy is expanded later.
    */
-  const hasViewHostAuthority = (vm: ViewManager, callerId: string, callerKind: string): boolean => {
-    if (callerHasPlatformCapability(callerId, callerKind, "panel-hosting")) return true;
-    const viewInfo = vm.getViewInfo(callerId);
-    return viewHasAppCapability(callerId, viewInfo, "panel-hosting");
+  const assertViewHost = async (ctx: ServiceContext, method: string): Promise<void> => {
+    if (await hasPanelHostingAuthority(ctx)) return;
+    throw new Error(
+      `view.${method}: caller '${ctx.caller.runtime.id}' cannot host workspace views`
+    );
   };
 
-  const assertViewHost = (
-    vm: ViewManager,
-    callerId: string,
-    callerKind: string,
-    method: string
-  ): void => {
-    if (hasViewHostAuthority(vm, callerId, callerKind)) return;
-    throw new Error(`view.${method}: caller '${callerId}' cannot host workspace views`);
+  const assertNativePanelSlotHost = async (ctx: ServiceContext, method: string): Promise<void> => {
+    if (await hasPanelHostingAuthority(ctx)) return;
+    throw new Error(
+      `view.${method}: caller '${ctx.caller.runtime.id}' cannot place native panel slots`
+    );
   };
 
-  const assertNativePanelSlotHost = (
-    vm: ViewManager,
-    callerId: string,
-    callerKind: string,
-    method: string
-  ): void => {
-    const viewInfo = vm.getViewInfo(callerId);
-    if (callerKind === "app" && viewHasAppCapability(callerId, viewInfo, "panel-hosting")) {
-      return;
-    }
-    throw new Error(`view.${method}: caller '${callerId}' cannot place native panel slots`);
-  };
-
-  const assertOwnsOrViewHost = (
-    vm: ViewManager,
-    callerId: string,
-    callerKind: string,
+  const assertOwnsOrViewHost = async (
+    ctx: ServiceContext,
     targetId: string,
     method: string
-  ): void => {
-    if (hasViewHostAuthority(vm, callerId, callerKind)) return;
-    if (callerId === targetId) return;
+  ): Promise<void> => {
+    const callerId = ctx.caller.runtime.id;
+    if (callerId === targetId || (await hasPanelHostingAuthority(ctx))) return;
     throw new Error(`view.${method}: caller '${callerId}' does not own target view '${targetId}'`);
   };
 
   return {
     name: "view",
     description: "View bounds, visibility, theme CSS",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: viewMethods,
     handler: defineServiceHandler("view", viewMethods, {
-      setBounds: (ctx, [viewId, bounds]) => {
+      setBounds: async (ctx, [viewId, bounds]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          viewId,
-          "setBounds"
-        );
+        await assertOwnsOrViewHost(ctx, viewId, "setBounds");
         vm.setViewBounds(viewId, bounds);
         return;
       },
-      setVisible: (ctx, [viewId, visible]) => {
+      setVisible: async (ctx, [viewId, visible]) => {
         const vm = deps.getViewManager();
         const targetInfo = vm.getViewInfo(viewId);
         if (
@@ -84,197 +62,120 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
             `view.setVisible: hosted apps must place panel views with native panel slots`
           );
         }
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          viewId,
-          "setVisible"
-        );
+        await assertOwnsOrViewHost(ctx, viewId, "setVisible");
         vm.setViewVisible(viewId, visible);
         return;
       },
-      forwardMouseClick: (ctx, [viewId, point]) => {
+      forwardMouseClick: async (ctx, [viewId, point]) => {
         const vm = deps.getViewManager();
-        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "forwardMouseClick");
+        await assertViewHost(ctx, "forwardMouseClick");
         return vm.forwardMouseClick(viewId, point);
       },
-      setThemeCss: (ctx, [css]) => {
+      setThemeCss: async (ctx, [css]) => {
         const vm = deps.getViewManager();
-        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setThemeCss");
+        await assertViewHost(ctx, "setThemeCss");
         vm.setThemeCss(css);
         return;
       },
-      bindNativePanelSlot: (ctx, [request]) => {
+      bindNativePanelSlot: async (ctx, [request]) => {
         const vm = deps.getViewManager();
-        assertNativePanelSlotHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "bindNativePanelSlot"
-        );
+        await assertNativePanelSlotHost(ctx, "bindNativePanelSlot");
         vm.bindPanelSlot(ctx.caller.runtime.id, request);
         return { status: "bound" };
       },
-      updateNativePanelSlot: (ctx, [request]) => {
+      updateNativePanelSlot: async (ctx, [request]) => {
         const vm = deps.getViewManager();
-        assertNativePanelSlotHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "updateNativePanelSlot"
-        );
+        await assertNativePanelSlotHost(ctx, "updateNativePanelSlot");
         return vm.updatePanelSlot(ctx.caller.runtime.id, request);
       },
-      clearNativePanelSlot: (ctx, [request]) => {
+      clearNativePanelSlot: async (ctx, [request]) => {
         const vm = deps.getViewManager();
-        assertNativePanelSlotHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "clearNativePanelSlot"
-        );
+        await assertNativePanelSlotHost(ctx, "clearNativePanelSlot");
         vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId);
         return;
       },
-      setHostedShellReady: (ctx, [request]) => {
+      setHostedShellReady: async (ctx, [request]) => {
         const vm = deps.getViewManager();
-        assertNativePanelSlotHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "setHostedShellReady"
-        );
+        await assertNativePanelSlotHost(ctx, "setHostedShellReady");
         vm.setHostedShellReady(ctx.caller.runtime.id, request.ready);
         return;
       },
-      setShellOverlay: (ctx, [active]) => {
+      setShellOverlay: async (ctx, [active]) => {
         const vm = deps.getViewManager();
-        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setShellOverlay");
+        await assertViewHost(ctx, "setShellOverlay");
         vm.setShellOverlayActive(active);
         return;
       },
-      showNativeShellOverlay: (ctx, [options]) => {
+      showNativeShellOverlay: async (ctx, [options]) => {
         const vm = deps.getViewManager();
-        assertViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "showNativeShellOverlay"
-        );
+        await assertViewHost(ctx, "showNativeShellOverlay");
         vm.showNativeShellOverlay(options);
         return;
       },
-      updateNativeShellOverlay: (ctx, [options]) => {
+      updateNativeShellOverlay: async (ctx, [options]) => {
         const vm = deps.getViewManager();
-        assertViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "updateNativeShellOverlay"
-        );
+        await assertViewHost(ctx, "updateNativeShellOverlay");
         vm.updateNativeShellOverlay(options);
         return;
       },
-      hideNativeShellOverlay: (ctx, [id]) => {
+      hideNativeShellOverlay: async (ctx, [id]) => {
         const vm = deps.getViewManager();
-        assertViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          "hideNativeShellOverlay"
-        );
+        await assertViewHost(ctx, "hideNativeShellOverlay");
         vm.hideNativeShellOverlay(id);
         return;
       },
-      showContentOverlay: (ctx, [options]) => {
+      showContentOverlay: async (ctx, [options]) => {
         const vm = deps.getViewManager();
-        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "showContentOverlay");
+        await assertViewHost(ctx, "showContentOverlay");
         vm.showContentOverlay(options);
         return;
       },
-      updateContentOverlay: (ctx, [options]) => {
+      updateContentOverlay: async (ctx, [options]) => {
         const vm = deps.getViewManager();
-        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "updateContentOverlay");
+        await assertViewHost(ctx, "updateContentOverlay");
         vm.updateContentOverlay(options);
         return;
       },
-      hideContentOverlay: (ctx) => {
+      hideContentOverlay: async (ctx) => {
         const vm = deps.getViewManager();
-        assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "hideContentOverlay");
+        await assertViewHost(ctx, "hideContentOverlay");
         vm.hideContentOverlay();
         return;
       },
       browserNavigate: async (ctx, [browserId, url]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          browserId,
-          "browserNavigate"
-        );
+        await assertOwnsOrViewHost(ctx, browserId, "browserNavigate");
         assertHttpUrl(url);
         await vm.navigateView(browserId, url);
         return;
       },
-      browserGoBack: (ctx, [browserId]) => {
+      browserGoBack: async (ctx, [browserId]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          browserId,
-          "browserGoBack"
-        );
+        await assertOwnsOrViewHost(ctx, browserId, "browserGoBack");
         vm.getWebContents(browserId)?.navigationHistory.goBack();
         return;
       },
-      browserGoForward: (ctx, [browserId]) => {
+      browserGoForward: async (ctx, [browserId]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          browserId,
-          "browserGoForward"
-        );
+        await assertOwnsOrViewHost(ctx, browserId, "browserGoForward");
         vm.getWebContents(browserId)?.navigationHistory.goForward();
         return;
       },
-      browserReload: (ctx, [browserId]) => {
+      browserReload: async (ctx, [browserId]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          browserId,
-          "browserReload"
-        );
+        await assertOwnsOrViewHost(ctx, browserId, "browserReload");
         vm.reload(browserId);
         return;
       },
-      browserForceReload: (ctx, [browserId]) => {
+      browserForceReload: async (ctx, [browserId]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          browserId,
-          "browserForceReload"
-        );
+        await assertOwnsOrViewHost(ctx, browserId, "browserForceReload");
         vm.forceReload(browserId);
         return;
       },
-      browserStop: (ctx, [browserId]) => {
+      browserStop: async (ctx, [browserId]) => {
         const vm = deps.getViewManager();
-        assertOwnsOrViewHost(
-          vm,
-          ctx.caller.runtime.id,
-          ctx.caller.runtime.kind,
-          browserId,
-          "browserStop"
-        );
+        await assertOwnsOrViewHost(ctx, browserId, "browserStop");
         vm.stop(browserId);
         return;
       },

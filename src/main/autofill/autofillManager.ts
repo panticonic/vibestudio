@@ -344,7 +344,7 @@ export class AutofillManager {
     return {
       name: "autofill",
       description: "Password autofill management",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: autofillMethods,
       handler: defineServiceHandler("autofill", autofillMethods, {
         confirmSave: async (_ctx, [panelId, action]) => {

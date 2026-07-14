@@ -17,7 +17,7 @@ import {
 } from "../commandTable.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { AuthError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
-import { RpcClient as CliRpcClient } from "../rpcClient.js";
+import { RpcClient as CliRpcClient } from "@vibestudio/direct-client";
 import { normalizeServerBaseUrl } from "../serverUrl.js";
 import { normalizeRepoPath, REPO_FLAG, requireRepo } from "./vcsCommandShared.js";
 

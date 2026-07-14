@@ -27,8 +27,9 @@ import {
   type PairOptions,
   type RemoteWorkspaceEntry,
 } from "./remoteClient.js";
-import { RpcClient, type DeviceCredential } from "./rpcClient.js";
+import { RpcClient, type DeviceCredential } from "@vibestudio/direct-client";
 import { runTerminalLaunchGate } from "./terminalLaunchGate.js";
+import { terminalControlCommands } from "./terminalControlCommands.js";
 import { agentCommands } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
@@ -37,6 +38,7 @@ import { channelCommands } from "./channelCommands.js";
 import { contextCommands } from "./contextCommands.js";
 import { panelCommands } from "./panelCommands.js";
 import { systemTestCommands } from "./systemTestCommands.js";
+import { runtimeFoundationCommands } from "./runtimeFoundationCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
 import { runClaudeGroup } from "./claude/index.js";
@@ -874,6 +876,7 @@ const mobileCommands: CliCommand[] = [
 const commandRegistry: CliCommand[] = [
   ...remoteCommands,
   ...terminalCommands,
+  ...terminalControlCommands,
   ...mobileCommands,
   ...agentCommands,
   ...fsCommands,
@@ -883,6 +886,7 @@ const commandRegistry: CliCommand[] = [
   ...contextCommands,
   ...panelCommands,
   ...systemTestCommands,
+  ...runtimeFoundationCommands,
 ];
 
 const GROUP_ORDER = [
@@ -897,6 +901,7 @@ const GROUP_ORDER = [
   "context",
   "panel",
   "system-test",
+  "runtime-foundations",
 ];
 
 export async function main(argv: string[]): Promise<number> {
@@ -923,7 +928,12 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (group === "--version" || group === "-v" || group === "version") {
-    console.log(packageVersion());
+    const hostBuildId = process.env["VIBESTUDIO_HOST_BUILD_ID"];
+    console.log(
+      hostBuildId
+        ? `vibestudio ${packageVersion()} (host ${hostBuildId})`
+        : `vibestudio ${packageVersion()} (unmanaged source)`
+    );
     return 0;
   }
   // The `claude` group self-parses (it supports a bare launcher invocation plus
@@ -1069,6 +1079,7 @@ const GROUP_DESCRIPTIONS: Record<string, string> = {
   channel: "list, read, send, and follow conversation channels",
   context: "materialize and watch remote context folders",
   panel: "inspect and capture workspace panels",
+  "runtime-foundations": "inspect and reset versioned local runtime foundations",
 };
 
 function printGroupHelp(group: string): void {

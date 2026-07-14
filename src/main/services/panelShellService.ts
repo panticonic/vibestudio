@@ -1,5 +1,4 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "../panelView.js";
@@ -20,8 +19,8 @@ import {
 import { createBrowserDataClient } from "@vibestudio/browser-data";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
-import { requireAppCapability, requireChromeCaller } from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { requirePanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 
 async function getPanelAddressOptions(
   source: string,
@@ -111,14 +110,6 @@ async function getRepoState(
   }
 }
 
-function requirePanelHostingAppCapability(
-  ctx: ServiceContext,
-  viewManager: ViewManager,
-  method: string
-): void {
-  requireAppCapability(ctx, viewManager, "panel-hosting", `panel.${method}`);
-}
-
 export function createPanelShellService(deps: {
   panelOrchestrator: PanelOrchestrator;
   panelRegistry: PanelRegistry;
@@ -129,79 +120,78 @@ export function createPanelShellService(deps: {
   return {
     name: "panel",
     description: "Electron-local panel view helpers",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: panelMethods,
     handler: defineServiceHandler("panel", panelMethods, {
-      updateTheme: (ctx, [theme]) => {
+      updateTheme: async (ctx, [theme]) => {
         const lifecycle = deps.panelOrchestrator;
-        const vm = deps.getViewManager();
-        requirePanelHostingAppCapability(ctx, vm, "updateTheme");
+        await requirePanelHostingAuthority(ctx, "panel.updateTheme");
         lifecycle.setCurrentTheme(theme);
         lifecycle.broadcastTheme(theme);
         return;
       },
-      updateThemeConfig: (ctx, [config]) => {
+      updateThemeConfig: async (ctx, [config]) => {
         const lifecycle = deps.panelOrchestrator;
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "updateThemeConfig");
+        await requirePanelHostingAuthority(ctx, "panel.updateThemeConfig");
         lifecycle.setCurrentThemeConfig(config);
         lifecycle.broadcastThemeConfig();
         return;
       },
       getThemeConfig: () => deps.panelOrchestrator.getThemeConfig(),
-      getTreeSnapshot: (ctx) => {
-        requireChromeCaller(ctx, deps.getViewManager(), "panel.getTreeSnapshot");
+      getTreeSnapshot: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "panel.getTreeSnapshot");
         return deps.panelRegistry.getPanelTreeSnapshot();
       },
-      getFocusedPanelId: (ctx) => {
-        requireChromeCaller(ctx, deps.getViewManager(), "panel.getFocusedPanelId");
+      getFocusedPanelId: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "panel.getFocusedPanelId");
         return deps.panelRegistry.getFocusedPanelId();
       },
       getChromeState: async (ctx, [panelId]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getChromeState");
+        await requirePanelHostingAuthority(ctx, "panel.getChromeState");
         const panel = deps.panelRegistry.getPanel(panelId);
         if (!panel) throw new Error(`Panel not found: ${panelId}`);
         const repo = await getRepoState(getPanelSource(panel), deps.serverClient);
         return buildPanelChromeState({ panel, repo }) satisfies PanelChromeState;
       },
-      getAddressOptions: (ctx, [source, ref]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getAddressOptions");
+      getAddressOptions: async (ctx, [source, ref]) => {
+        await requirePanelHostingAuthority(ctx, "panel.getAddressOptions");
         return getPanelAddressOptions(source, ref, deps.serverClient);
       },
-      getBrowserAddressOptions: (ctx, [query]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getBrowserAddressOptions");
+      getBrowserAddressOptions: async (ctx, [query]) => {
+        await requirePanelHostingAuthority(ctx, "panel.getBrowserAddressOptions");
         return getBrowserAddressOptions(query, deps.panelRegistry, deps.serverClient);
       },
-      ensureLoaded: (ctx, [panelId]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "ensureLoaded");
+      ensureLoaded: async (ctx, [panelId]) => {
+        await requirePanelHostingAuthority(ctx, "panel.ensureLoaded");
         return deps.panelOrchestrator.ensureLoaded(panelId);
       },
-      takeOver: (ctx, [panelId]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "takeOver");
+      takeOver: async (ctx, [panelId]) => {
+        await requirePanelHostingAuthority(ctx, "panel.takeOver");
         return deps.panelOrchestrator.takeOverPanel(panelId);
       },
-      markBrowserNavigationIntent: (ctx, [panelId, intent]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "markBrowserNavigationIntent");
+      markBrowserNavigationIntent: async (ctx, [panelId, intent]) => {
+        await requirePanelHostingAuthority(ctx, "panel.markBrowserNavigationIntent");
         deps.panelView.markBrowserNavigationIntent?.(panelId, intent);
         return;
       },
-      reloadView: (ctx, [panelId]) => {
+      reloadView: async (ctx, [panelId]) => {
         const vm = deps.getViewManager();
-        requirePanelHostingAppCapability(ctx, vm, "reloadView");
+        await requirePanelHostingAuthority(ctx, "panel.reloadView");
         vm.reload(panelId);
         return;
       },
-      forceReloadView: (ctx, [panelId]) => {
+      forceReloadView: async (ctx, [panelId]) => {
         const vm = deps.getViewManager();
-        requirePanelHostingAppCapability(ctx, vm, "forceReloadView");
+        await requirePanelHostingAuthority(ctx, "panel.forceReloadView");
         vm.forceReload(panelId);
         return;
       },
-      togglePin: (ctx, [panelId]) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "togglePin");
+      togglePin: async (ctx, [panelId]) => {
+        await requirePanelHostingAuthority(ctx, "panel.togglePin");
         return deps.panelOrchestrator.togglePanelPin(panelId);
       },
-      listPinnedPanelIds: (ctx) => {
-        requirePanelHostingAppCapability(ctx, deps.getViewManager(), "listPinnedPanelIds");
+      listPinnedPanelIds: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "panel.listPinnedPanelIds");
         return deps.panelOrchestrator.listPinnedPanelIds();
       },
     }),

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearShellTokenCache } from "../rpcClient.js";
+import { clearShellTokenCache } from "@vibestudio/direct-client";
 
 interface RpcRequest {
   method: string;
@@ -16,7 +16,7 @@ const transportMock = vi.hoisted(() => ({
   rpcBodies: [] as RpcRequest[],
 }));
 
-vi.mock("../webrtcClient.js", () => ({
+vi.mock("@vibestudio/direct-client/webrtc", () => ({
   WebRtcRpcClient: class {
     async ready(): Promise<void> {}
     async call(method: string, args: unknown[] = []): Promise<unknown> {
@@ -86,7 +86,7 @@ function jsonOutput(): unknown {
 const SESSION_HANDLE = {
   id: "session:work",
   kind: "session",
-  source: { repoPath: "agent-cli", effectiveVersion: "" },
+  source: { repoPath: "agent-cli" },
   contextId: "ctx_1",
   targetId: "session:work",
 };
@@ -409,13 +409,13 @@ describe("vibestudio agent commands", () => {
           {
             name: "runtime",
             description: "Runtime entity creation",
-            policy: { allowed: ["shell"] },
+            authority: { principals: ["user"] },
             methods: {},
           },
         ];
       }
       if (body.method === "docs.describeService") {
-        return { name: "runtime", policy: { allowed: ["shell"] }, methods: {} };
+        return { name: "runtime", authority: { principals: ["user"] }, methods: {} };
       }
       throw new Error(`unexpected method ${body.method}`);
     });
@@ -425,7 +425,7 @@ describe("vibestudio agent commands", () => {
       {
         name: "runtime",
         description: "Runtime entity creation",
-        policy: { allowed: ["shell"] },
+        authority: { principals: ["user"] },
         methods: {},
       },
     ]);

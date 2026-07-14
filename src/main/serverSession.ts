@@ -47,6 +47,7 @@ import {
 const log = createDevLogger("ServerSession");
 
 export interface SessionConnection {
+  serverId: string;
   connectionMode: "local" | "remote";
   /**
    * Who controls the server process: "desktop-local" means this app manages a
@@ -253,6 +254,7 @@ export async function establishServerSession(args: {
     };
 
     return {
+      serverId: target.serverId,
       connectionMode: "local",
       serverOwnership: "desktop-local",
       protocol,
@@ -471,6 +473,10 @@ async function buildRemoteSessionConnection(
       serverClient.call(svc, m, a)
     );
     const wsInfo = await workspaceClient.getInfo();
+    const authClient = createTypedServiceClient("auth", authMethods, (svc, method, args) =>
+      serverClient.call(svc, method, args)
+    );
+    const connectionInfo = await authClient.getConnectionInfo();
     log.info(`[Workspace] Remote workspace: ${wsInfo.config.id}`);
 
     const panelHttpServer: PanelHttpServerLike = {
@@ -486,6 +492,7 @@ async function buildRemoteSessionConnection(
     const statePath = path.join(app.getPath("userData"), "remote-state");
 
     return {
+      serverId: connectionInfo.serverId,
       connectionMode: "remote",
       serverOwnership: "external",
       protocol,

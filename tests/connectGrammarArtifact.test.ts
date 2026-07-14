@@ -22,7 +22,6 @@ describe("raw-node pairing grammar artifact", () => {
     await expect(
       esbuild.build({
         entryPoints: [
-          path.resolve("scripts/dev-webrtc-remote.mjs"),
           path.resolve("scripts/desktop-pairing-smoke.mjs"),
           path.resolve("scripts/cli-remote-smoke.mjs"),
         ],

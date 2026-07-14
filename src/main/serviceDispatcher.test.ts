@@ -1,3 +1,4 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 /**
  * Tests for ServiceDispatcher and parseServiceMethod.
  */
@@ -5,7 +6,6 @@
 import { z } from "zod";
 import {
   createVerifiedCaller,
-  ServiceDispatcher,
   ServiceError,
   parseServiceMethod,
 } from "@vibestudio/shared/serviceDispatcher";
@@ -19,15 +19,18 @@ const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
   return {
     name,
-    policy: { allowed: ["shell", "panel", "server"] },
-    methods: {},
+    authority: { principals: ["user", "code", "host"] },
+    methods: {
+      hello: { args: z.tuple([]).rest(z.unknown()) },
+      run: { args: z.tuple([]).rest(z.unknown()) },
+    },
     handler,
   };
 }
 
 describe("ServiceDispatcher", () => {
   it("dispatch before markInitialized: registered services work, unknown services get the retryable not-initialized error", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService(makeService("echo", async (_ctx, method, args) => ({ method, args })));
 
     // A registered service is fully wired and may be called during boot
@@ -43,14 +46,14 @@ describe("ServiceDispatcher", () => {
   });
 
   it("dispatch throws ServiceError for unknown service", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.markInitialized();
 
     await expect(sd.dispatch(ctx, "nope", "foo", [])).rejects.toThrow("Unknown service");
   });
 
   it("dispatch calls registered handler and returns result", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService(makeService("echo", async (_ctx, method, args) => ({ method, args })));
     sd.markInitialized();
 
@@ -59,7 +62,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("dispatch wraps non-ServiceError exceptions in ServiceError", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService(
       makeService("fail", async () => {
         throw new Error("boom");
@@ -99,7 +102,7 @@ describe("ServiceDispatcher", () => {
   ])(
     "preserves $label provenance when wrapping it",
     async ({ error, errorKind, code, sourceCause }) => {
-      const sd = new ServiceDispatcher();
+      const sd = createTestServiceDispatcher();
       sd.registerService(
         makeService("fail", async () => {
           throw error;
@@ -124,7 +127,7 @@ describe("ServiceDispatcher", () => {
   );
 
   it("registerService warns on overwrite", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     sd.registerService(makeService("svc", async () => {}));
@@ -137,7 +140,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("hasService and getServices reflect registrations", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService(makeService("alpha", async () => {}));
     sd.registerService(makeService("beta", async () => {}));
 
@@ -147,7 +150,7 @@ describe("ServiceDispatcher", () => {
   });
 
   it("getServiceDefinitions returns all definitions", () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService(makeService("a", async () => {}));
     sd.registerService(makeService("b", async () => {}));
 
@@ -156,24 +159,25 @@ describe("ServiceDispatcher", () => {
     expect(defs.map((d) => d.name).sort()).toEqual(["a", "b"]);
   });
 
-  it("getPolicy returns policy from definition", () => {
-    const sd = new ServiceDispatcher();
+  it("keeps authority declarations on the registered definition", () => {
+    const sd = createTestServiceDispatcher();
     sd.registerService({
       name: "restricted",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {},
       handler: async () => {},
     });
 
-    expect(sd.getPolicy("restricted")).toEqual({ allowed: ["shell"] });
-    expect(sd.getPolicy("nonexistent")).toBeUndefined();
+    expect(
+      sd.getServiceDefinitions().find((service) => service.name === "restricted")?.authority
+    ).toEqual({ principals: ["user"] });
   });
 
   it("validates args against Zod schema when method is defined", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService({
       name: "typed",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         greet: { args: z.tuple([z.string()]) },
       },
@@ -190,10 +194,10 @@ describe("ServiceDispatcher", () => {
   });
 
   it("validates declared return schemas in dev/test", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService({
       name: "typedReturn",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         ok: { args: z.tuple([]), returns: z.object({ count: z.number() }) },
         bad: { args: z.tuple([]), returns: z.object({ count: z.number() }) },
@@ -209,10 +213,10 @@ describe("ServiceDispatcher", () => {
   });
 
   it("accepts null as the wire representation of declared void returns", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService({
       name: "voidReturn",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         okNull: { args: z.tuple([]), returns: z.void() },
         okUndefined: { args: z.tuple([]), returns: z.void() },
@@ -233,10 +237,10 @@ describe("ServiceDispatcher", () => {
   });
 
   it("reports service, method, argument path, and a readable summary on validation failure", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService({
       name: "workspace",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         logs: { args: z.tuple([z.string(), z.object({ limit: z.number() })]) },
       },
@@ -260,11 +264,11 @@ describe("ServiceDispatcher", () => {
   });
 
   it("normalizes wire args: pads omitted trailing optionals and maps null→undefined", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     let seen: unknown[] = [];
     sd.registerService({
       name: "norm",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         m: { args: z.tuple([z.string(), z.number().optional(), z.boolean().optional()]) },
       },
@@ -287,11 +291,11 @@ describe("ServiceDispatcher", () => {
   });
 
   it("normalizes wire args for tuple overload unions", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     let seen: unknown[] = [];
     sd.registerService({
       name: "overloaded",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         readFile: {
           args: z.union([
@@ -330,11 +334,11 @@ describe("ServiceDispatcher", () => {
   });
 
   it("normalizes the real fs overloaded schemas", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     const seen = new Map<string, unknown[]>();
     sd.registerService({
       name: "realFs",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         readFile: fsMethods.readFile,
         glob: fsMethods.glob,
@@ -355,10 +359,10 @@ describe("ServiceDispatcher", () => {
   });
 
   it("getMethodSchema returns method definition", () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     sd.registerService({
       name: "svc",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         doStuff: { args: z.tuple([z.string()]), description: "does stuff" },
       },

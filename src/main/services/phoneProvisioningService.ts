@@ -124,7 +124,7 @@ export function createPhoneProvisioningService(
   return {
     name: "phoneProvisioning",
     description: "Desktop-bound phone discovery, installation, and pairing launch",
-    policy: { allowed: ["server"] },
+    authority: { principals: ["host"] },
     methods: phoneProvisioningMethods,
     handler: async (_ctx, method, args) => {
       switch (method) {

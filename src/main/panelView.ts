@@ -9,7 +9,11 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { ViewManager } from "./viewManager.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import type { PanelViewLike, ServerInfoLike } from "@vibestudio/shared/panelInterfaces";
+import type {
+  HostedAppIdentity,
+  PanelViewLike,
+  ServerInfoLike,
+} from "@vibestudio/shared/panelInterfaces";
 import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import {
@@ -290,7 +294,7 @@ export class PanelView implements PanelViewLike {
     url: string,
     contextId?: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedAppIdentity
   ): Promise<void> {
     if (this.viewManager.hasView(appId)) {
       const currentUrl = this.viewManager.getViewUrl(appId);

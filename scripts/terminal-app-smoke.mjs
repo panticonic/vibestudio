@@ -7,6 +7,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
@@ -168,6 +169,7 @@ async function createShellEventClient(url, shellToken) {
       ws.send(
         JSON.stringify({
           type: "ws:auth",
+          contractVersion: RPC_CONTRACT_VERSION,
           token: shellToken,
           clientLabel: "Terminal app smoke",
           clientPlatform: "headless",

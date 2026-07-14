@@ -61,7 +61,7 @@ export class ShellContentOverlayView {
   private pendingFocus = false;
   /** Corner the overlay snaps to; persists across re-shows so the card reappears
    *  where the user last placed it. */
-  private corner: OverlayCorner = "top-left";
+  private corner: OverlayCorner = "top-right";
   private dragging = false;
   private dragStartScreen: { x: number; y: number } | null = null;
   private dragStartPos: { x: number; y: number } | null = null;

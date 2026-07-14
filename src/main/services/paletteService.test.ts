@@ -10,18 +10,36 @@ import type { ViewManager } from "../viewManager.js";
 // hid the bug that real panels (no panel-hosting, kind "panel") were rejected.
 const panelCtx: ServiceContext = {
   caller: createVerifiedCaller("@workspace-panels/chat", "panel"),
+  authority: {
+    allows: vi.fn(async () => false),
+    assert: vi.fn(async () => undefined),
+  },
 };
 // Native-host shell (bootstrap launch gate / electron-main) — chrome.
-const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
+const shellCtx: ServiceContext = {
+  caller: createVerifiedCaller("shell", "shell"),
+  authority: {
+    allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+    assert: vi.fn(async () => undefined),
+  },
+};
 // The hosted workspace shell — resolves as kind:"app" (apps/shell), authorized
 // chrome. The old `kind === "shell"` gate silently rejected this, dropping every
 // panel-contributed command (the bug that motivated this whole change).
 const hostedShellCtx: ServiceContext = {
   caller: createVerifiedCaller("@workspace-apps/shell", "app"),
+  authority: {
+    allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+    assert: vi.fn(async () => undefined),
+  },
 };
 // An arbitrary workspace app must NOT enumerate/dispatch across panels.
 const otherAppCtx: ServiceContext = {
   caller: createVerifiedCaller("@workspace-apps/news", "app"),
+  authority: {
+    allows: vi.fn(async () => false),
+    assert: vi.fn(async () => undefined),
+  },
 };
 
 function harness() {
@@ -74,8 +92,8 @@ describe("paletteService", () => {
 
   it("restricts list/run to chrome — panels and arbitrary apps are rejected", async () => {
     const { service } = harness();
-    await expect(service.handler(panelCtx, "list", [])).rejects.toThrow(/chrome|shell/);
-    await expect(service.handler(panelCtx, "run", ["p", "c"])).rejects.toThrow(/chrome|shell/);
+    await expect(service.handler(panelCtx, "list", [])).rejects.toThrow(/panel-hosting/);
+    await expect(service.handler(panelCtx, "run", ["p", "c"])).rejects.toThrow(/panel-hosting/);
     // An arbitrary app lacking panel-hosting/apps/shell cannot either.
     await expect(service.handler(otherAppCtx, "list", [])).rejects.toThrow();
     await expect(service.handler(otherAppCtx, "run", ["p", "c"])).rejects.toThrow();

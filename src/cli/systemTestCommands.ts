@@ -11,7 +11,7 @@ import {
 } from "./agent/sessionContext.js";
 import { ensureNamedAgentSession } from "./agent/index.js";
 import { loadCliCredentials } from "./credentialStore.js";
-import { RpcClient } from "./rpcClient.js";
+import { RpcClient } from "@vibestudio/direct-client";
 import { loadAgentSession } from "./sessionStore.js";
 import { typedClient } from "./typedClients.js";
 import {

@@ -1,7 +1,16 @@
-export const DEV_WEBRTC_REMOTE_ARG = "--dev-webrtc-remote";
 export const PAIR_CONFIRMED_ARG = "--pair-confirmed";
 export const SKIP_REMOTE_PAIRING_ARG = "--skip-remote-pairing";
 export const HEADLESS_HOST_ARG = "--headless-host";
+
+export interface ManagedDevInvocation {
+  launchId: string;
+  clientBuildId: string;
+  profileDir: string;
+  pairingFile: string;
+  readyFile: string;
+  expectedServerId: string;
+  expectedWorkspaceId: string;
+}
 
 const RECOVERED_LOCAL_SERVER_CRASH_PREFIX = "--recovered-local-server-crash=";
 const LOCAL_SERVER_CRASH_LOOP_PREFIX = "--local-server-crash-loop=";
@@ -21,7 +30,7 @@ export interface MainStartupInvocation {
   isHeadlessHost: boolean;
   pendingPairConfirmed: boolean;
   skipRemotePairing: boolean;
-  devWebRtcRemote: boolean;
+  managedDev: ManagedDevInvocation | null;
   crashRecovery: LocalServerCrashRecoveryInvocation;
 }
 
@@ -73,7 +82,7 @@ export function parseMainStartupInvocation(
     isHeadlessHost: env["VIBESTUDIO_HEADLESS_HOST"] === "1" || argv.includes(HEADLESS_HOST_ARG),
     pendingPairConfirmed: argv.includes(PAIR_CONFIRMED_ARG),
     skipRemotePairing: argv.includes(SKIP_REMOTE_PAIRING_ARG),
-    devWebRtcRemote: argv.includes(DEV_WEBRTC_REMOTE_ARG),
+    managedDev: parseManagedDevInvocation(env),
     crashRecovery: {
       recoveredExitCode: recovered.value,
       crashLoopExitCode: crashLoop.value,
@@ -81,4 +90,23 @@ export function parseMainStartupInvocation(
       shouldClearRelaunchState: recovered.value === null && crashLoop.value === null,
     },
   };
+}
+
+function parseManagedDevInvocation(
+  env: Readonly<Record<string, string | undefined>>
+): ManagedDevInvocation | null {
+  if (env["VIBESTUDIO_MANAGED_DEV"] !== "1") return null;
+  const required = {
+    launchId: env["VIBESTUDIO_MANAGED_DEV_LAUNCH_ID"],
+    clientBuildId: env["VIBESTUDIO_MANAGED_DEV_CLIENT_BUILD_ID"],
+    profileDir: env["VIBESTUDIO_MANAGED_DEV_PROFILE_DIR"],
+    pairingFile: env["VIBESTUDIO_MANAGED_DEV_PAIRING_FILE"],
+    readyFile: env["VIBESTUDIO_MANAGED_DEV_READY_FILE"],
+    expectedServerId: env["VIBESTUDIO_MANAGED_DEV_EXPECTED_SERVER_ID"],
+    expectedWorkspaceId: env["VIBESTUDIO_MANAGED_DEV_EXPECTED_WORKSPACE_ID"],
+  };
+  for (const [name, value] of Object.entries(required)) {
+    if (!value?.trim()) throw new Error(`Managed development client is missing ${name}`);
+  }
+  return required as ManagedDevInvocation;
 }

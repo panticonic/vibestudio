@@ -505,7 +505,11 @@ export function setupTestApi(
       if (!panelView) throw new Error("PanelView not available");
       const wc = panelView.getWebContents(panelId);
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
-      wc.focus();
+      // Preserve the control selected by clickPanelSelector. Calling focus() on
+      // an already-focused WebContents emits another page-focus transition;
+      // focus-managing widgets such as xterm can then reclaim focus from a
+      // text field immediately before these input events are delivered.
+      if (!wc.isFocused()) wc.focus();
       for (const char of text) {
         if (char === "\r" || char === "\n") {
           wc.sendInputEvent({ type: "keyDown", keyCode: "Enter" });

@@ -22,6 +22,7 @@ import {
   type RpcResponse,
 } from "@vibestudio/rpc";
 import {
+  createHostCaller,
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
@@ -100,7 +101,9 @@ export interface IpcDispatcherDeps {
   resolveCallerForWebContents: (
     webContentsId: number
   ) => { callerId: string; callerKind: "shell" | "panel" | "app" } | null;
-  getCodeIdentityForCaller?: (callerId: string) => VerifiedCodeIdentity | null;
+  getCodeIdentityForCaller?: (
+    callerId: string
+  ) => VerifiedCodeIdentity | null | Promise<VerifiedCodeIdentity | null>;
   getWebContentsForCaller: (callerId: string) => WebContents | null;
   /**
    * Runtime entity id + lease connectionId for a panel, used to open its
@@ -112,7 +115,7 @@ export interface IpcDispatcherDeps {
     service: string,
     method: string,
     args: readonly unknown[]
-  ) => void;
+  ) => void | Promise<void>;
   onServerRpcResult?: (event: {
     callerId: string;
     callerKind: CallerKind;
@@ -369,14 +372,14 @@ export class IpcDispatcher {
       try {
         let result: unknown;
         if (this.deps.dispatcher.routesToHost(service, callerKind)) {
-          // Dispatch locally to Electron services. The dispatcher itself
-          // enforces policy via checkServiceAccess (single choke-point).
+          // Dispatch locally to Electron services. The dispatcher is the
+          // single compositional-authority choke point.
+          const codeIdentity = await this.deps.getCodeIdentityForCaller?.(callerId);
           const ctx = {
-            caller: createVerifiedCaller(
-              callerId,
-              callerKind,
-              this.deps.getCodeIdentityForCaller?.(callerId) ?? null
-            ),
+            caller:
+              callerKind === "shell"
+                ? createHostCaller(callerId, "shell")
+                : createVerifiedCaller(callerId, callerKind, codeIdentity ?? null),
             requestId: req.requestId,
             ...(callOptions?.idempotencyKey ? { idempotencyKey: callOptions.idempotencyKey } : {}),
             ...(callOptions?.readOnly ? { readOnly: true } : {}),
@@ -399,7 +402,7 @@ export class IpcDispatcher {
             );
           } else if (callerKind === "app") {
             try {
-              this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
+              await this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
             } catch (cause) {
               const message = cause instanceof Error ? cause.message : String(cause);
               const code = (cause as { code?: unknown } | null)?.code;

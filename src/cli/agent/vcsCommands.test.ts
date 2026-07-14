@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearShellTokenCache } from "../rpcClient.js";
+import { clearShellTokenCache } from "@vibestudio/direct-client";
 
 interface RpcRequest {
   method: string;
@@ -29,7 +29,7 @@ const transportMock = vi.hoisted(() => ({
   rpcBodies: [] as RpcRequest[],
 }));
 
-vi.mock("../webrtcClient.js", () => ({
+vi.mock("@vibestudio/direct-client/webrtc", () => ({
   WebRtcRpcClient: class {
     async ready(): Promise<void> {}
 

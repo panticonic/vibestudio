@@ -1,14 +1,12 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { requirePanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   HubWorkspaceRouteSchema,
   hubControlMethods,
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
-import type { ViewManager } from "../viewManager.js";
-import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
@@ -129,29 +127,20 @@ export function createRemoteCredService(deps: {
    * would show a green "connected to remote" while actually on local).
    */
   getConnectionMode?: () => "local" | "remote";
-  getViewManager?: () => ViewManager;
 }): ServiceDefinition {
   const requireLiveClient = (): ServerClient => {
     const client = deps.getServerClient?.() ?? null;
     if (!client?.isConnected()) throw new Error("Not connected to a Vibestudio server");
     return client;
   };
-  const requireRemoteCredCaller = (ctx: ServiceContext, method: string): void => {
-    if (ctx.caller.runtime.kind !== "app") return;
-    if (!deps.getViewManager) {
-      throw new Error(`remoteCred.${method} app capability unavailable`);
-    }
-    requireChromeAppCallerOrHost(ctx, deps.getViewManager(), `remoteCred.${method}`);
-  };
-
   return {
     name: "remoteCred",
     description: "Manage this desktop's encrypted WebRTC device pairing",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: remoteCredMethods,
     handler: defineServiceHandler("remoteCred", remoteCredMethods, {
-      getCurrent: (ctx) => {
-        requireRemoteCredCaller(ctx, "getCurrent");
+      getCurrent: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "remoteCred.getCurrent");
         const stored = loadStoredRemotePairingFromStore();
         const client = deps.getServerClient?.() ?? null;
         return {
@@ -166,8 +155,8 @@ export function createRemoteCredService(deps: {
           workspaceName: stored?.workspaceName,
         };
       },
-      pair: (ctx, [{ link, label }]) => {
-        requireRemoteCredCaller(ctx, "pair");
+      pair: async (ctx, [{ link, label }]) => {
+        await requirePanelHostingAuthority(ctx, "remoteCred.pair");
         const parsed = parseConnectLink(link);
         if (parsed.kind === "error") {
           return { ok: false, error: "invalid-link", message: parsed.reason };
@@ -193,25 +182,25 @@ export function createRemoteCredService(deps: {
         return { ok: true };
       },
       pairDevice: async (ctx, [options]) => {
-        requireRemoteCredCaller(ctx, "pairDevice");
+        await requirePanelHostingAuthority(ctx, "remoteCred.pairDevice");
         const client = hubControlClientFor(requireLiveClient());
         return await client.pairDevice(options);
       },
       listDevices: async (ctx) => {
-        requireRemoteCredCaller(ctx, "listDevices");
+        await requirePanelHostingAuthority(ctx, "remoteCred.listDevices");
         const response = await hubControlClientFor(requireLiveClient()).listDevices();
         return response.devices;
       },
       revokeDevice: async (ctx, [deviceId]) => {
-        requireRemoteCredCaller(ctx, "revokeDevice");
+        await requirePanelHostingAuthority(ctx, "remoteCred.revokeDevice");
         const stored = loadStoredRemotePairingFromStore();
         const result = await hubControlClientFor(requireLiveClient()).revokeDevice(deviceId);
         const currentDevice = result.revoked && stored?.deviceId === deviceId;
         if (currentDevice) clearStoredRemotePairingInStore();
         return { ...result, currentDevice };
       },
-      reconnectNow: (ctx) => {
-        requireRemoteCredCaller(ctx, "reconnectNow");
+      reconnectNow: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "remoteCred.reconnectNow");
         const client = deps.getServerClient?.() ?? null;
         if (!client?.nudge) {
           throw new Error(
@@ -221,13 +210,13 @@ export function createRemoteCredService(deps: {
         client.nudge();
         return;
       },
-      clear: (ctx) => {
-        requireRemoteCredCaller(ctx, "clear");
+      clear: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "remoteCred.clear");
         clearStoredRemotePairingInStore();
         return { ok: true };
       },
-      relaunch: (ctx) => {
-        requireRemoteCredCaller(ctx, "relaunch");
+      relaunch: async (ctx) => {
+        await requirePanelHostingAuthority(ctx, "remoteCred.relaunch");
         relaunchApp();
         return { ok: true };
       },

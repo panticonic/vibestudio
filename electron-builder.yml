@@ -8,6 +8,7 @@ directories:
 files:
   - "dist/**/*"
   - "scripts/cli/**/*"
+  - "plugin/vibestudio/**/*"
   - "packages/**/*"
   - "node_modules/**/*"
   - "package.json"

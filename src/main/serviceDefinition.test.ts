@@ -1,24 +1,21 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 /**
  * Tests for ServiceDefinition integration with ServiceDispatcher.
  */
 
 import { z } from "zod";
-import {
-  createVerifiedCaller,
-  ServiceDispatcher,
-  type ServiceContext,
-} from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 
 describe("ServiceDispatcher.registerService", () => {
   it("registers and dispatches a service definition", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
 
     const def: ServiceDefinition = {
       name: "echo",
-      policy: { allowed: ["shell", "panel"] },
+      authority: { principals: ["user", "code"] },
       methods: {
         greet: { args: z.tuple([z.string()]) },
       },
@@ -36,11 +33,11 @@ describe("ServiceDispatcher.registerService", () => {
   });
 
   it("validates args against Zod schema and rejects invalid args", async () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
 
     const def: ServiceDefinition = {
       name: "math",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         add: { args: z.tuple([z.number(), z.number()]) },
       },
@@ -58,12 +55,12 @@ describe("ServiceDispatcher.registerService", () => {
     await expect(sd.dispatch(ctx, "math", "add", ["a", "b"])).rejects.toThrow("Invalid args");
   });
 
-  it("allows unknown methods (no schema validation)", async () => {
-    const sd = new ServiceDispatcher();
+  it("rejects undeclared methods instead of granting ambient handler access", async () => {
+    const sd = createTestServiceDispatcher();
 
     const def: ServiceDefinition = {
       name: "flex",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         known: { args: z.tuple([z.string()]) },
       },
@@ -73,40 +70,41 @@ describe("ServiceDispatcher.registerService", () => {
     sd.registerService(def);
     sd.markInitialized();
 
-    // Unknown method — no schema to validate against, passes through
-    const result = await sd.dispatch(ctx, "flex", "unknown", [42]);
-    expect(result).toEqual({ method: "unknown", args: [42] });
+    await expect(sd.dispatch(ctx, "flex", "unknown", [42])).rejects.toThrow("Unknown method");
   });
 
-  it("getPolicy returns policy for registered services", () => {
-    const sd = new ServiceDispatcher();
+  it("keeps the registered authority declaration introspectable", () => {
+    const sd = createTestServiceDispatcher();
 
     const def: ServiceDefinition = {
       name: "secret",
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
       methods: {},
       handler: async () => {},
     };
 
     sd.registerService(def);
 
-    expect(sd.getPolicy("secret")).toEqual({ allowed: ["server"] });
-    expect(sd.getPolicy("nonexistent")).toBeUndefined();
+    expect(
+      sd.getServiceDefinitions().find((service) => service.name === "secret")?.authority
+    ).toEqual({
+      principals: ["host"],
+    });
   });
 
   it("getServiceDefinitions returns all registered definitions", () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
 
     sd.registerService({
       name: "a",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {},
       handler: async () => {},
     });
 
     sd.registerService({
       name: "b",
-      policy: { allowed: ["panel"] },
+      authority: { principals: ["code"] },
       methods: {},
       handler: async () => {},
     });
@@ -117,12 +115,12 @@ describe("ServiceDispatcher.registerService", () => {
   });
 
   it("getMethodSchema returns schema for known methods", () => {
-    const sd = new ServiceDispatcher();
+    const sd = createTestServiceDispatcher();
     const argsSchema = z.tuple([z.string()]);
 
     sd.registerService({
       name: "svc",
-      policy: { allowed: ["shell"] },
+      authority: { principals: ["user"] },
       methods: {
         foo: { args: argsSchema, description: "test method" },
       },

@@ -25,7 +25,7 @@ import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
-import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
+import { ensurePersistentCert } from "@vibestudio/direct-client/cert";
 
 const execFileAsync = promisify(execFile);
 const RUN_WEBRTC_E2E = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";

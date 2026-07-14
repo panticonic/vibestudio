@@ -13,11 +13,11 @@ import {
 } from "@vibestudio/service-schemas/hubControl";
 import type { CliStoredPairing } from "./credentialStore.js";
 import { AuthError, UsageError } from "./output.js";
-import { RpcClient, type DeviceCredential } from "./rpcClient.js";
+import { RpcClient, type DeviceCredential } from "@vibestudio/direct-client";
 import { typedClient } from "./typedClients.js";
 
-export type { DeviceCredential } from "./rpcClient.js";
-export { refreshShell, type RefreshShellResponse } from "./rpcClient.js";
+export type { DeviceCredential } from "@vibestudio/direct-client";
+export { refreshShell, type RefreshShellResponse } from "@vibestudio/direct-client";
 
 export interface PairOptions {
   link: string;
@@ -63,7 +63,7 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
   const issuedRef: { current: { deviceId: string; refreshToken: string } | null } = {
     current: null,
   };
-  const { WebRtcRpcClient } = await import("./webrtcClient.js");
+  const { WebRtcRpcClient } = await import("@vibestudio/direct-client/webrtc");
   const client = new WebRtcRpcClient({
     pairing,
     callerId: "shell:pairing",

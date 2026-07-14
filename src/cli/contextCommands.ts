@@ -8,10 +8,15 @@
  * ops (`vcs.edit`) and polls for inbound state-hash changes to re-materialize.
  */
 
-import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { MirrorObjectsResult, MirrorTarget } from "@vibestudio/service-schemas/mirror";
+import type { VcsEditResult } from "@vibestudio/service-schemas/vcs";
+import {
+  ContextWorkspaceSession,
+  type CanonicalWorkspaceFile,
+  type ContextWorkspaceAdapters,
+} from "@vibestudio/context-workspace";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -20,9 +25,64 @@ import {
 } from "./commandTable.js";
 import { jsonMode, printError, printResult } from "./output.js";
 import { resolveSessionScope, SCOPE_FLAGS, CONTEXT_MARKER_FILE } from "./agent/sessionContext.js";
-import type { RpcClient } from "./rpcClient.js";
+import type { RpcClient } from "@vibestudio/direct-client";
 
-const WATCH_POLL_MS = 4000;
+/** Read one exact repository state into the shared synchronizer's binary-safe model. */
+export async function readCanonicalState(
+  client: RpcClient,
+  stateHash: string
+): Promise<CanonicalWorkspaceFile[]> {
+  let cursor: string | undefined;
+  const files: CanonicalWorkspaceFile[] = [];
+  do {
+    const page = await client.call<MirrorObjectsResult>("mirror.objects", [
+      { stateHash, ...(cursor ? { cursor } : {}) },
+    ]);
+    for (const file of page.files) {
+      if (file.mode !== 33188 && file.mode !== 33261) {
+        throw new Error(`mirror returned unsupported file mode ${file.mode} for ${file.path}`);
+      }
+      files.push({
+        path: file.path,
+        bytes: Buffer.from(file.content, "base64"),
+        mode: file.mode === 33261 ? 0o755 : 0o644,
+      });
+    }
+    cursor = page.next;
+  } while (cursor);
+  return files;
+}
+
+export function createContextWorkspaceAdapters(
+  client: RpcClient,
+  contextId: string
+): ContextWorkspaceAdapters {
+  return {
+    readState: async (_repoPath, stateHash) => readCanonicalState(client, stateHash),
+    edit: async ({ repoPath, baseStateHash, clientEditId, edits }) => {
+      const result = await client.call<VcsEditResult>("vcs.edit", [
+        {
+          head: `ctx:${contextId}`,
+          repoPath,
+          baseStateHash,
+          clientEditId,
+          edits: edits.map((edit) =>
+            edit.kind === "delete"
+              ? edit
+              : {
+                  kind: "write",
+                  path: edit.path,
+                  content: { kind: "bytes", base64: Buffer.from(edit.bytes).toString("base64") },
+                  mode: edit.mode === 0o755 ? 33261 : 33188,
+                }
+          ),
+        },
+      ]);
+      if (!result.stateHash) throw new Error("vcs.edit did not return a repository state hash");
+      return { stateHash: result.stateHash };
+    },
+  };
+}
 
 /** Fetch every page of a state's tree and write each file under `destRepoDir`.
  *  Exported for unit testing the mirror write path against a mock client. */
@@ -32,23 +92,15 @@ export async function writeState(
   destRepoDir: string,
   onWrite?: (absPath: string) => void
 ): Promise<number> {
-  let cursor: string | undefined;
-  let written = 0;
-  do {
-    const page = await client.call<MirrorObjectsResult>("mirror.objects", [
-      { stateHash, ...(cursor ? { cursor } : {}) },
-    ]);
-    for (const file of page.files) {
-      const abs = path.join(destRepoDir, file.path);
-      await fsp.mkdir(path.dirname(abs), { recursive: true });
-      const mode = file.mode === 33261 ? 0o755 : 0o644;
-      await fsp.writeFile(abs, Buffer.from(file.content, "base64"), { mode });
-      onWrite?.(abs);
-      written += 1;
-    }
-    cursor = page.next;
-  } while (cursor);
-  return written;
+  const files = await readCanonicalState(client, stateHash);
+  for (const file of files) {
+    const abs = path.join(destRepoDir, file.path);
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await fsp.writeFile(abs, file.bytes, { mode: file.mode });
+    await fsp.chmod(abs, file.mode);
+    onWrite?.(abs);
+  }
+  return files.length;
 }
 
 /** Exported for unit testing the marker write. */
@@ -78,10 +130,12 @@ async function mirror(inv: ParsedInvocation): Promise<number> {
     await fsp.mkdir(dir, { recursive: true });
 
     const targets = await client.call<MirrorTarget[]>("mirror.targets", [{ contextId }]);
-    let total = 0;
-    for (const target of targets) {
-      total += await writeState(client, target.stateHash, path.join(dir, target.repoPath));
-    }
+    const adapters = createContextWorkspaceAdapters(client, contextId);
+    const workspace = await ContextWorkspaceSession.open({ root: dir, targets, adapters });
+    const total = Object.values(workspace.statuses()).reduce(
+      (sum, status) => sum + status.fileCount,
+      0
+    );
     await writeMarker(client, dir, contextId, session.serverUrl);
 
     const result = { contextId, dir, repos: targets.length, files: total };
@@ -90,7 +144,7 @@ async function mirror(inv: ParsedInvocation): Promise<number> {
         console.log(`mirrored ${total} file(s) across ${targets.length} repo(s) into ${dir}`);
         console.log("watching for local edits and inbound changes (Ctrl-C to stop)…");
       }
-      await watch(client, contextId, dir, targets);
+      await watch(client, contextId, workspace);
       return 0;
     }
     printResult(result, {
@@ -108,104 +162,28 @@ async function mirror(inv: ParsedInvocation): Promise<number> {
 }
 
 /**
- * v1 watch: local edits → `vcs.edit` ops; inbound state-hash changes → re-write.
- * Conflicts surface via the context's normal edit/commit semantics (the mirror
- * adds no merge model). Inbound polling is a simple interval over `mirror.targets`.
+ * Poll the shared durable synchronizers. Local batches are journaled before
+ * RPC, while inbound states use their attached-safe per-file generation path.
  */
 async function watch(
   client: RpcClient,
   contextId: string,
-  dir: string,
-  initialTargets: MirrorTarget[]
+  workspace: ContextWorkspaceSession
 ): Promise<void> {
-  const head = `ctx:${contextId}`;
-  const repoPaths = initialTargets.map((t) => t.repoPath).sort((a, b) => b.length - a.length);
-  const lastState = new Map(initialTargets.map((t) => [t.repoPath, t.stateHash]));
-  // Paths we just wrote from inbound updates — skip the echo edit they trigger.
-  const suppress = new Set<string>();
-
-  /** Map an absolute local path to its (repoPath, inner path), or null. */
-  const locate = (abs: string): { repoPath: string; inner: string } | null => {
-    const rel = path.relative(dir, abs).split(path.sep).join("/");
-    if (!rel || rel.startsWith("..") || rel === CONTEXT_MARKER_FILE) return null;
-    for (const repoPath of repoPaths) {
-      if (rel === repoPath) continue;
-      if (rel.startsWith(`${repoPath}/`)) {
-        return { repoPath, inner: rel.slice(repoPath.length + 1) };
-      }
-    }
-    return null;
-  };
-
-  const pending = new Map<string, NodeJS.Timeout>();
-  const recordEdit = (abs: string): void => {
-    const located = locate(abs);
-    if (!located) return;
-    if (suppress.delete(abs)) return; // inbound write — don't echo it back
-    const existing = pending.get(abs);
-    if (existing) clearTimeout(existing);
-    pending.set(
-      abs,
-      setTimeout(() => {
-        pending.delete(abs);
-        void applyEdit(abs, located).catch((error) => {
-          console.error(`watch: edit of ${located.inner} failed: ${String(error)}`);
-        });
-      }, 200)
-    );
-  };
-
-  const applyEdit = async (abs: string, located: { repoPath: string; inner: string }) => {
-    let edit: { kind: string; path: string; content?: string };
-    if (fs.existsSync(abs)) {
-      const content = await fsp.readFile(abs, "utf8");
-      edit = { kind: "write", path: located.inner, content };
-    } else {
-      edit = { kind: "delete", path: located.inner };
-    }
-    await client.call("vcs.edit", [{ edits: [edit], head, repoPath: located.repoPath }]);
-  };
-
-  const watcher = fs.watch(dir, { recursive: true }, (_event, filename) => {
-    if (!filename) return;
-    recordEdit(path.join(dir, filename.toString()));
+  workspace.start({
+    readTargets: () => client.call<MirrorTarget[]>("mirror.targets", [{ contextId }]),
+    onError: (message, error) =>
+      console.error(
+        `watch: ${message}; will retry: ${error instanceof Error ? error.message : String(error)}`
+      ),
   });
-
-  // Inbound poll: re-materialize any repo whose state hash advanced upstream.
-  const poll = setInterval(() => {
-    void (async () => {
-      const targets = await client
-        .call<MirrorTarget[]>("mirror.targets", [{ contextId }])
-        .catch((error: unknown) => {
-          console.error(
-            `watch: failed to check inbound updates; will retry: ${error instanceof Error ? error.message : String(error)}`
-          );
-          return null;
-        });
-      if (!targets) return;
-      for (const target of targets) {
-        if (lastState.get(target.repoPath) === target.stateHash) continue;
-        try {
-          await writeState(client, target.stateHash, path.join(dir, target.repoPath), (abs) =>
-            suppress.add(abs)
-          );
-          lastState.set(target.repoPath, target.stateHash);
-        } catch (error) {
-          console.error(
-            `watch: failed to apply inbound update for ${target.repoPath}; will retry: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
-    })();
-  }, WATCH_POLL_MS);
 
   await new Promise<void>((resolve) => {
     const stop = () => resolve();
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
   });
-  watcher.close();
-  clearInterval(poll);
+  await workspace.stop();
   await client.close();
 }
 

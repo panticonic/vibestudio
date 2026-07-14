@@ -12,36 +12,36 @@ const adblockMethods = defineServiceMethods({
   },
   addCustomList: { args: z.tuple([z.string()]) },
   removeCustomList: { args: z.tuple([z.string()]) },
-  addToWhitelist: { args: z.tuple([z.string()]), policy: { allowed: ["shell", "panel"] } },
+  addToWhitelist: { args: z.tuple([z.string()]), authority: { principals: ["user", "code"] } },
   removeFromWhitelist: {
     args: z.tuple([z.string()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
   },
-  getStats: { args: z.tuple([]), policy: { allowed: ["shell", "panel"] } },
+  getStats: { args: z.tuple([]), authority: { principals: ["user", "code"] } },
   resetStats: { args: z.tuple([]) },
   rebuildEngine: { args: z.tuple([]) },
-  isActive: { args: z.tuple([]), policy: { allowed: ["shell", "panel"] } },
-  getStatsForPanel: { args: z.tuple([z.number()]), policy: { allowed: ["shell", "panel"] } },
+  isActive: { args: z.tuple([]), authority: { principals: ["user", "code"] } },
+  getStatsForPanel: { args: z.tuple([z.number()]), authority: { principals: ["user", "code"] } },
   isEnabledForPanel: {
     args: z.tuple([z.number()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
   },
   setEnabledForPanel: {
     args: z.tuple([z.number(), z.boolean()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
   },
   resetStatsForPanel: {
     args: z.tuple([z.number()]),
-    policy: { allowed: ["shell", "panel"] },
+    authority: { principals: ["user", "code"] },
   },
-  getPanelUrl: { args: z.tuple([z.number()]), policy: { allowed: ["shell", "panel"] } },
+  getPanelUrl: { args: z.tuple([z.number()]), authority: { principals: ["user", "code"] } },
 });
 
 export function createAdblockService(deps: { adBlockManager: AdBlockManager }): ServiceDefinition {
   return {
     name: "adblock",
     description: "Ad blocking configuration and stats",
-    policy: { allowed: ["shell"] },
+    authority: { principals: ["user"] },
     methods: adblockMethods,
     handler: defineServiceHandler("adblock", adblockMethods, {
       getConfig: () => deps.adBlockManager.getConfig(),

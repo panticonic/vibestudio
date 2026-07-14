@@ -21,7 +21,7 @@ import type {
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { isWebRtcCredential } from "./credentialStore.js";
 import { typedClient } from "./typedClients.js";
-import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
+import { refreshShell, RpcClient, type DeviceCredential } from "@vibestudio/direct-client";
 import { TimeoutError } from "./output.js";
 
 export interface TerminalLaunchGateOptions {

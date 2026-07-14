@@ -1,5 +1,6 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createAdblockService } from "./adblockService.js";
 
 function createManager() {
@@ -26,7 +27,7 @@ function createManager() {
 describe("createAdblockService", () => {
   it("allows panel callers to use panel adblock methods", async () => {
     const manager = createManager();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createAdblockService({ adBlockManager: manager as never }));
     dispatcher.markInitialized();
 
@@ -43,7 +44,7 @@ describe("createAdblockService", () => {
 
   it("keeps global adblock configuration methods shell-only", async () => {
     const manager = createManager();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createAdblockService({ adBlockManager: manager as never }));
     dispatcher.markInitialized();
 
@@ -54,7 +55,7 @@ describe("createAdblockService", () => {
         "setEnabled",
         [false]
       )
-    ).rejects.toThrow("not accessible to panel callers");
+    ).rejects.toMatchObject({ code: "EACCES" });
     expect(manager.setEnabled).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,7 @@ import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { loadCliCredentials, saveCliCredentials, type CliCredentials } from "../credentialStore.js";
 import { pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
-import { RpcClient, RpcError } from "../rpcClient.js";
+import { RpcClient, RpcError } from "@vibestudio/direct-client";
 import {
   deleteAgentSession,
   isValidSessionName,

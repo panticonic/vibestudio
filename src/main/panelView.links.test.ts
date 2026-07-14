@@ -288,7 +288,7 @@ describe("PanelView plain panel links", () => {
       "http://127.0.0.1:1234/_a/shell/index.html",
       undefined,
       ["panel-hosting"],
-      { source: "apps/shell", effectiveVersion: "ev" }
+      { source: "apps/shell", executionDigest: "ev" }
     );
 
     const event = { preventDefault: vi.fn() };

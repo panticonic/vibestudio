@@ -37,8 +37,8 @@ import {
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
+import type { HostedAppIdentity } from "@vibestudio/shared/panelInterfaces";
 
 const log = createDevLogger("ViewManager");
 
@@ -69,7 +69,7 @@ export interface ViewConfig {
   /** Full-window host chrome app. These views are not panel content. */
   hostChrome?: boolean;
   /** Workspace source path and effective version for app principals. */
-  appIdentity?: { source?: string; effectiveVersion?: string | null };
+  appIdentity?: HostedAppIdentity;
 }
 
 interface PanelDisplayDiagnostics {
@@ -141,7 +141,7 @@ interface ManagedView {
   injectHostThemeVariables: boolean;
   appCapabilities: readonly AppCapability[];
   hostChrome: boolean;
-  appIdentity?: { source?: string; effectiveVersion?: string | null };
+  appIdentity?: HostedAppIdentity;
   themeCssKey?: string;
   /** Stored event handlers for proper cleanup */
   handlers?: {
@@ -550,7 +550,7 @@ export class ViewManager {
     const hostChrome =
       config.type === "app" &&
       (config.hostChrome ?? false) &&
-      isAuthorizedChromeAppCaller(config.id, config.appIdentity?.source);
+      config.appCapabilities?.includes("panel-hosting") === true;
 
     // Track the managed view
     const managed: ManagedView = {
@@ -1516,7 +1516,15 @@ export class ViewManager {
           }
         }
       }
-      if (alreadyOrdered) return;
+      if (alreadyOrdered) {
+        // Managed views can be appended above an already-correct managed
+        // sequence (for example, the first panel created while an approval is
+        // open). The transient overlays are intentionally absent from
+        // `desired`, so reassert their independent top-of-stack invariant even
+        // when no managed reordering is needed.
+        this.raiseTransientOverlays();
+        return;
+      }
     }
 
     for (const view of desired) {
@@ -1524,9 +1532,11 @@ export class ViewManager {
       this.window.contentView.addChildView(view);
     }
 
-    for (const cb of this.viewOrderChangedCallbacks) {
-      cb();
-    }
+    this.raiseTransientOverlays();
+  }
+
+  private raiseTransientOverlays(): void {
+    for (const cb of this.viewOrderChangedCallbacks) cb();
     this.nativeShellOverlay.bringToFront();
     this.shellContentOverlay.bringToFront();
   }
@@ -1986,7 +1996,7 @@ export class ViewManager {
     hostChrome: boolean;
     bounds: ViewBounds;
     capabilities: readonly AppCapability[];
-    appIdentity?: { source?: string; effectiveVersion?: string | null };
+    appIdentity?: HostedAppIdentity;
   } | null {
     const managed = this.views.get(id);
     if (!managed) {
@@ -2101,16 +2111,14 @@ export class ViewManager {
     id: string,
     url: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedAppIdentity
   ): Promise<void> {
     const managed = this.views.get(id);
     if (!managed) throw new Error(`View not found: ${id}`);
     if (managed.type !== "app") throw new Error(`View is not an app view: ${id}`);
     managed.appCapabilities = [...(capabilities ?? [])];
     const nextIdentity = identity;
-    managed.hostChrome =
-      capabilities?.includes("panel-hosting") === true &&
-      isAuthorizedChromeAppCaller(id, nextIdentity?.source);
+    managed.hostChrome = capabilities?.includes("panel-hosting") === true;
     if (!managed.hostChrome && this.nativePanelSlots.activeHostedShellViewId === id) {
       this.nativePanelSlots.hostedShellReady = false;
       this.clearAllPanelSlots();

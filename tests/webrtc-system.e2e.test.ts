@@ -57,8 +57,8 @@ import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
-import { createNodeDatachannelProvider } from "../src/node/webrtc/nodeDatachannelPeer.js";
-import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
+import { createNodeDatachannelProvider } from "@vibestudio/direct-client/node-webrtc";
+import { ensurePersistentCert } from "@vibestudio/direct-client/cert";
 
 const RUN = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

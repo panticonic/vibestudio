@@ -1237,7 +1237,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       rebuilt: flags.rebuilt ?? false,
       reloaded: flags.reloaded ?? false,
       buildRevision: source ? this.runtime.getBuildRevision(source, ref) : undefined,
-      effectiveVersion: panel?.effectiveVersion ?? null,
+      executionDigest: panel?.executionDigest ?? null,
     };
   }
 

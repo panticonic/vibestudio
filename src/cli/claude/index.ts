@@ -4,7 +4,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadCliCredentials } from "../credentialStore.js";
-import { RpcClient } from "../rpcClient.js";
+import { RpcClient } from "@vibestudio/direct-client";
 import { AuthError, CliError } from "../output.js";
 import { printResult } from "../output.js";
 import { CONTEXT_MARKER, findContextMarker } from "./context.js";
