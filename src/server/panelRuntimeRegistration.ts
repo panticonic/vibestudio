@@ -14,6 +14,7 @@ import {
 } from "./ownerPanelTreeBridge.js";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
+  createHostCaller,
   createVerifiedCaller,
   type CallerKind,
   type ServiceContext,
@@ -36,7 +37,6 @@ import { assertPresent } from "../lintHelpers";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -95,12 +95,11 @@ export interface CommonDeps {
   tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
   eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
-  /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  /** CURRENT role lookup; workspace administration fails closed without one. */
-  roleOf: (userId: string) => import("@vibestudio/identity/types").UserRole | null | undefined;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
   entityCache?: import("@vibestudio/shared/runtime/entityCache").EntityCache;
+  resolveExecutionRequests: (
+    executionDigest: string
+  ) => readonly import("@vibestudio/rpc").CapabilityScope[] | null;
   /** True when the target context already holds state (active entity or materialized folder). */
   contextExists: (contextId: string) => boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
@@ -192,7 +191,7 @@ export interface CommonDeps {
   ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
   cancelHostTargetLaunchSession?: (sessionId: string) => Promise<void> | void;
   approvalQueue?: ApprovalQueue;
-  getEffectiveVersion?: (source: string) => Promise<string | undefined>;
+  getSourceDigest?: (source: string) => Promise<string | undefined>;
   registerEntityTitleListener?: (
     listener: (
       entityId: string,
@@ -228,7 +227,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     });
     return serverPanelTreeBridgePromise;
   };
-  const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+  const serverCtx: ServiceContext = { caller: createHostCaller("server") };
   const isKnownPanelSlot = async (targetId: string): Promise<boolean> => {
     try {
       const slot = (await deps.dispatcher.dispatch(serverCtx, "workspace-state", "slot.get", [
@@ -284,7 +283,11 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         callerId: rec.id,
         callerKind: k,
         repoPath: rec.source.repoPath,
-        effectiveVersion: rec.source.effectiveVersion,
+        executionDigest: rec.activeExecutionDigest ?? "unknown",
+        requested:
+          (rec.activeExecutionDigest
+            ? deps.resolveExecutionRequests(rec.activeExecutionDigest)
+            : null) ?? [],
       });
     },
   };
@@ -325,8 +328,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         getHostTargetLaunchSession: deps.getHostTargetLaunchSession,
         resolveHostTargetLaunchSessionApproval: deps.resolveHostTargetLaunchSessionApproval,
         cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
-        hasAppCapability: deps.hasAppCapability,
-        roleOf: deps.roleOf,
         approvalQueue: deps.approvalQueue,
         ensureContextFolder: deps.ensureContextFolder,
       })
@@ -442,7 +443,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-          hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
@@ -599,7 +599,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-          hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           validateOpenPanelSource: async ({ source, options }) => {
             if (!shouldValidateOpenPanelWorkspaceUnit(source)) return;

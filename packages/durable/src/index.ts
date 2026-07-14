@@ -3,12 +3,19 @@ import {
   createConnectionlessRpcClient,
   envelopeFromMessage,
   rpcExposedMethodNames,
+  rpcMethodAuthority,
   type AuthenticatedCaller,
+  type AuthorizationContext,
   type ConnectionlessRpcClient,
   type DeferrableRpcClient,
   type RpcEnvelope,
   type RpcRequest,
 } from "@vibestudio/rpc";
+import {
+  bindMethodCapability,
+  evaluateAuthority,
+  requirementForPrincipals,
+} from "@vibestudio/shared/authorization";
 
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
 export { rpc } from "@vibestudio/rpc";
@@ -195,6 +202,12 @@ export abstract class DurableObjectBase {
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
+              ...(record["authorization"] && typeof record["authorization"] === "object"
+                ? {
+                    authorization:
+                      record["authorization"] as AuthenticatedCaller["authorization"],
+                  }
+                : {}),
             },
           };
         }
@@ -281,6 +294,11 @@ export abstract class DurableObjectBase {
 
   protected get caller(): AuthenticatedCaller | null {
     return this.currentVerifiedCaller;
+  }
+
+  /** Complete host-attested facts for the active direct dispatch. */
+  protected get authorization(): AuthorizationContext | null {
+    return this.caller?.authorization?.context ?? null;
   }
 
   protected get rpcCallerId(): string | null {
@@ -468,8 +486,9 @@ export abstract class DurableObjectBase {
 
       if (method === "__lifecycle/prepare" || method === "__lifecycle/resume") {
         return this.withCaller(verifiedCallerFromBody, async () => {
-          if (this.caller?.callerKind !== "server") {
-            return jsonResponse({ error: "Lifecycle calls require server caller" }, 403);
+          const denial = this.inboundHostControlDenial(method);
+          if (denial) {
+            return jsonResponse({ error: denial }, 403);
           }
           const result =
             method === "__lifecycle/prepare"
@@ -484,8 +503,9 @@ export abstract class DurableObjectBase {
 
       if (method === "__alarm") {
         return this.withCaller(verifiedCallerFromBody, async () => {
-          if (this.caller?.callerKind !== "server") {
-            return jsonResponse({ error: "Alarm calls require server caller" }, 403);
+          const denial = this.inboundHostControlDenial(method);
+          if (denial) {
+            return jsonResponse({ error: denial }, 403);
           }
           await this.alarm();
           return jsonResponse({ result: "ok" });
@@ -542,31 +562,12 @@ export abstract class DurableObjectBase {
     }
   }
 
-  /**
-   * Gate inbound RPC by caller. Default: allow all (the generic relay is open,
-   * `rpcServer.checkRelayAuth`). Sensitive recipients that run privileged code
-   * (e.g. a server-only internal DO) OVERRIDE this to reject non-trusted callers
-   * — a blanket guard, since `exposeAll` reflects every public method (including
-   * TS-private helpers, which are runtime-public). Throwing here surfaces a 500
-   * error response and the method never runs.
-   *
-   * `kind` distinguishes a privileged inbound METHOD CALL ("call") from an event
-   * DELIVERY ("event"). Event deliveries are opt-in — the DO subscribed to a
-   * topic/channel and the publisher (server event-push, a channel DO, …) pushes
-   * to it — so a server-only DO should still ACCEPT them while refusing "call".
-   */
-  protected assertInboundAllowed(
-    _caller: AuthenticatedCaller | null,
-    _kind: "call" | "event"
-  ): void {}
-
   /** Handle an `RpcEnvelope` POSTed to `__rpc`; returns a response envelope (or `{}` for events). */
   private async handleInboundEnvelope(request: Request): Promise<Response> {
     const envelope = (await request.json()) as RpcEnvelope;
     const message = envelope.message;
     if (message?.type !== "request" && message?.type !== "stream-request") {
       // Event push / frames: deliver with no response (opt-in subscription).
-      this.assertInboundAllowed(envelope.delivery.caller ?? null, "event");
       this.connectionlessClient().deliver(envelope);
       return jsonResponse({});
     }
@@ -587,7 +588,6 @@ export abstract class DurableObjectBase {
     const rawCaller = envelope.delivery.caller;
     const caller = rawCaller && rawCaller.callerId !== "" ? rawCaller : null;
     const message = envelope.message as RpcRequest;
-    this.assertInboundAllowed(caller, "call");
     const prev = {
       verifiedCaller: this.currentVerifiedCaller,
       callerId: this.currentRpcCallerId,
@@ -611,6 +611,20 @@ export abstract class DurableObjectBase {
     // only on relayed userland `vcs` dispatches. Bound per-dispatch.
     this.currentCallerContextId = message?.callerContextId ?? undefined;
     try {
+      const denial = this.inboundCallerDenial(message?.method, caller);
+      if (denial) {
+        return {
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
+          provenance: envelope.provenance ?? [],
+          message: {
+            type: "response",
+            requestId: message?.requestId ?? "",
+            error: denial,
+          },
+        } as RpcEnvelope;
+      }
       return await connectionless.respond(envelope);
     } finally {
       this.currentVerifiedCaller = prev.verifiedCaller;
@@ -622,6 +636,72 @@ export abstract class DurableObjectBase {
       this.currentInvocationToken = prev.invocationToken;
       this.currentCallerContextId = prev.callerContextId;
     }
+  }
+
+  /** Evaluate the method's complete declaration against fresh host mediation. */
+  protected inboundCallerDenial(
+    method: string | undefined,
+    caller: AuthenticatedCaller | null
+  ): string | null {
+    if (!method) return null;
+    const declaration = rpcMethodAuthority(this, method);
+    if (!declaration) {
+      return `${method}: refused — no direct authority declaration (workspace RPC is default-deny)`;
+    }
+    const attestation = caller?.authorization;
+    if (!attestation) return `${method}: fresh host authority attestation is required`;
+    const now = Date.now();
+    const audience = this.directAuthorityAudience();
+    const resourceKey = this.directAuthorityResource();
+    if (
+      attestation.audience !== audience ||
+      attestation.method !== method ||
+      attestation.resourceKey !== resourceKey ||
+      attestation.issuedAt > now ||
+      attestation.expiresAt <= now
+    ) {
+      return `${method}: host authority attestation is stale or bound to another target`;
+    }
+    const decision = evaluateAuthority({
+      context: attestation.context,
+      requirement:
+        declaration.requires !== undefined
+          ? bindMethodCapability(declaration.requires, this.directAuthorityCapability(method))
+          : requirementForPrincipals(
+              declaration.principals,
+              this.directAuthorityCapability(method)
+            ),
+      resourceKey,
+      grants: attestation.grants,
+      now,
+    });
+    return decision.allowed ? null : `${method}: ${decision.reason} (${decision.code})`;
+  }
+
+  private directAuthorityAudience(): string {
+    return `do:${String(this.env["WORKER_SOURCE"])}:${String(this.env["WORKER_CLASS_NAME"])}:${this.objectKey}`;
+  }
+
+  private directAuthorityResource(): string {
+    return this.directAuthorityAudience();
+  }
+
+  private directAuthorityCapability(method: string): string {
+    return `rpc:${method}`;
+  }
+
+  private inboundHostControlDenial(method: string): string | null {
+    const attestation = this.caller?.authorization;
+    const now = Date.now();
+    return attestation &&
+      attestation.audience === this.directAuthorityAudience() &&
+      attestation.method === method &&
+      attestation.resourceKey === this.directAuthorityResource() &&
+      attestation.context.host !== null &&
+      attestation.issuedAt <= now &&
+      attestation.expiresAt > now
+      ? null
+      : `${method}: live host principal is required`;
   }
 
   protected handleWebSocketUpgrade(_request: Request): Response {

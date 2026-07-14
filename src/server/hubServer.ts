@@ -95,6 +95,21 @@ export interface WorkspaceRuntime {
   controlToken: string;
 }
 
+/**
+ * Decide which workspace children a hub must revive before it becomes ready.
+ * A disposable development hub owns exactly one fresh `dev` child; persisted
+ * room routes from the operator's normal hub are foreign state and must never
+ * make an ephemeral run start old workspace checkouts.
+ */
+export function shouldRestartWorkspaceAtHubStart(input: {
+  ephemeral: boolean;
+  bootstrapWorkspace: string;
+  workspaceName: string;
+  hasRoutedRooms: boolean;
+}): boolean {
+  return input.ephemeral ? input.workspaceName === input.bootstrapWorkspace : input.hasRoutedRooms;
+}
+
 interface HubWorkspacePresenceSnapshot {
   serverBootId: string;
   revision: number;
@@ -2429,10 +2444,12 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   // without first reaching an in-memory hub session to re-route themselves.
   const restartableWorkspaces = centralData.listWorkspaces().filter((entry) => {
     const routeFile = routedRoomStatePath(entry.name);
-    return (
-      (args.ephemeral && entry.name === bootstrapWorkspace) ||
-      (fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0)
-    );
+    return shouldRestartWorkspaceAtHubStart({
+      ephemeral: args.ephemeral === true,
+      bootstrapWorkspace,
+      workspaceName: entry.name,
+      hasRoutedRooms: fs.existsSync(routeFile) && new RoutedRoomStore(routeFile).list().length > 0,
+    });
   });
   await Promise.all(
     restartableWorkspaces.map((entry) => ensureWorkspaceRuntime(activeState, entry.name))

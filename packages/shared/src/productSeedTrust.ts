@@ -19,7 +19,7 @@ export interface ProductSeedIdentity {
   unitKind: ProductSeedUnitKind;
   name: string;
   source: { kind: "workspace-repo"; repo: string; ref: string };
-  effectiveVersion: string | null;
+  executionDigest: string | null;
 }
 
 export interface ProductSeedVerification {
@@ -80,7 +80,7 @@ export function verifyProductSeedSource(opts: {
   unitDir: string;
   identity: ProductSeedIdentity;
 }): ProductSeedVerification | null {
-  if (opts.identity.effectiveVersion === null) return null;
+  if (opts.identity.executionDigest === null) return null;
   const record = readProductSeedSourceRecord(path.join(opts.unitDir, SEED_RECORD_FILE));
   if (!record) return null;
   if (record.unitKind !== opts.identity.unitKind || record.name !== opts.identity.name) return null;

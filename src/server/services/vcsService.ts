@@ -11,7 +11,7 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   canonicalizeWorkspaceFilePath,
@@ -23,7 +23,6 @@ import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../vcsHost/paths.js";
 import type { MainAdvanceApprovalGate } from "./mainAdvanceApproval.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export interface VcsServiceDeps {
   workspaceVcs: WorkspaceVcs;
@@ -32,7 +31,6 @@ export interface VcsServiceDeps {
   getDefaultRepo?: () => string | undefined;
   getBuildSystem?: () => BuildSystemV2 | null;
   mainAdvanceGate?: MainAdvanceApprovalGate;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
    * Cross-context READ authorization — the DENY-not-prompt dual of the
    * `context.boundary` gate. Returns the contexts a caller may inspect: the
@@ -75,10 +73,6 @@ function headForCaller(ctx: ServiceContext, deps: VcsServiceDeps): string {
 /** Shell/server are user-level surfaces; everything else (panel,
  *  app, worker, do, extension) is sandboxed code whose writes are confined
  *  to its own context head. */
-function isPrivilegedCaller(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
-  return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
-}
-
 /**
  * Authorization gate for HEAD WRITES (commit, merge target, abortMerge).
  * Policy:
@@ -89,13 +83,13 @@ function isPrivilegedCaller(ctx: ServiceContext, deps: VcsServiceDeps): boolean 
  *   ERROR, never a silent fallthrough to main — main is user-owned; the
  *   publish path for sandboxed code is a privileged merge of its ctx head.
  */
-function resolveWriteHead(
+async function resolveWriteHead(
   ctx: ServiceContext,
   deps: VcsServiceDeps,
   requestedHead: string | undefined
-): string {
+): Promise<string> {
   const callerKind = ctx.caller.runtime.kind;
-  if (isPrivilegedCaller(ctx, deps)) return requestedHead ?? headForCaller(ctx, deps);
+  if (await hasPanelHostingAuthority(ctx)) return requestedHead ?? headForCaller(ctx, deps);
   // Via callerContextId so agent callers (credential-bound context) can write
   // their own ctx head like any other sandboxed caller.
   const contextId = callerContextId(ctx, deps);
@@ -134,7 +128,7 @@ async function authorizeContextRead(
 ): Promise<void> {
   if (callerContextId(ctx, deps) === targetContextId) return;
   // Shell/server are user-level surfaces — the user owns every context.
-  if (isPrivilegedCaller(ctx, deps)) return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   if (ownerContextId) {
     const ownedByHint = await deps.listOwnedContexts?.({ contextId: ownerContextId });
     const edge = ownedByHint?.contexts.find((c) => c.contextId === targetContextId);
@@ -370,8 +364,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     name: "vcs",
     description:
       "Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibestudio vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.",
-    policy: {
-      allowed: ["shell", "panel", "app", "server", "worker", "do", "extension", "agent"],
+    authority: {
+      principals: ["user", "code", "host", "entity"],
     },
     methods: vcsMethods,
     handler: defineServiceHandler("vcs", vcsMethods, {
@@ -388,7 +382,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               "check the path or replacement text before calling vcs.edit."
           );
         }
-        const head = resolveWriteHead(ctx, deps, input.head);
+        const head = await resolveWriteHead(ctx, deps, input.head);
         const repoPath = input.repoPath ? normalizeWorkspaceRepoPath(input.repoPath) : undefined;
         const groups = new Map<string, typeof input.edits>();
         if (repoPath) {
@@ -502,6 +496,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               // Provenance edge into the agentic trajectory (self-asserted by
               // the calling agent runtime; the edit tool passes its toolCallId).
               ...(input.invocationId ? { invocationId: input.invocationId } : {}),
+              ...(input.clientEditId ? { clientEditId: input.clientEditId } : {}),
             })
           );
         }
@@ -538,7 +533,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         if (!input.message || !input.message.trim()) {
           throw new Error("vcs.commit requires a message");
         }
-        const head = resolveWriteHead(ctx, deps, input.head);
+        const head = await resolveWriteHead(ctx, deps, input.head);
         if (head === VCS_MAIN_HEAD) {
           throw new Error("vcs.commit: main advances only via push; commit a ctx:* head");
         }
@@ -653,8 +648,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         }
         return out;
       },
-      discardEdits: (ctx, [repoArg, headArg]) => {
-        const head = resolveWriteHead(ctx, deps, headArg);
+      discardEdits: async (ctx, [repoArg, headArg]) => {
+        const head = await resolveWriteHead(ctx, deps, headArg);
         if (head === VCS_MAIN_HEAD) {
           throw new Error(
             "vcs.discardEdits: main is a pure ref with no working edits to discard — " +
@@ -668,9 +663,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       // editsByActor/Turn/Invocation, log) are USERLAND-dispatched since
       // P5c: consumers resolve the `vcs` manifest service (workers.
       // resolveService → gad-store DO) and call its `vcs*` read methods.
-      previewBuild: (ctx, [input]) => {
+      previewBuild: async (ctx, [input]) => {
         const head = input.head
-          ? resolveWriteHead(ctx, deps, input.head)
+          ? await resolveWriteHead(ctx, deps, input.head)
           : headForCaller(ctx, deps);
         return vcs.previewBuild({
           head,
@@ -741,7 +736,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         const actor = actorFor(ctx);
         // A revert lands as a WORKING edit (inverse patch) — no commit, no
         // build; the caller commits it later. Rejects a `main` head.
-        const head = resolveWriteHead(ctx, deps, target.head);
+        const head = await resolveWriteHead(ctx, deps, target.head);
         const repoPath = normalizeWorkspaceRepoPath(target.repoPath);
         const stateHash = target.stateHash;
         let eventId = target.eventId;
@@ -828,7 +823,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         // (`vcsMerge`), which owns the commit-gate on BOTH sides; this host
         // side resolves the source head, loops repos, and surfaces the DO's
         // source-side dirty-gate error verbatim.
-        const targetHead = resolveWriteHead(ctx, deps, input.head);
+        const targetHead = await resolveWriteHead(ctx, deps, input.head);
         if (targetHead === VCS_MAIN_HEAD) {
           throw new Error(
             "vcs.merge targets a ctx:* head (pulls a source into it); main advances via push"
@@ -895,7 +890,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         // picks 3-way-apply a commit's patch (routed per pick's repoPath);
         // path picks inject the source context's working content (routed to
         // the paths' owning repos). Each lands via the DO `vcsPick`.
-        const targetHead = resolveWriteHead(ctx, deps, input.head);
+        const targetHead = await resolveWriteHead(ctx, deps, input.head);
         if (targetHead === VCS_MAIN_HEAD) {
           throw new Error("vcs.pick targets a ctx:* head; main advances via push");
         }
@@ -968,7 +963,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       },
       abortMerge: async (ctx, [repoArg, headArg]) => {
         const actor = actorFor(ctx);
-        const targetHead = resolveWriteHead(ctx, deps, headArg);
+        const targetHead = await resolveWriteHead(ctx, deps, headArg);
         if (targetHead === VCS_MAIN_HEAD) {
           throw new Error(
             "vcs.abortMerge: main is a pure ref and never carries a pending merge — " +

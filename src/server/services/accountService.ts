@@ -70,7 +70,7 @@ export function createAccountService(deps: {
     name: "account",
     description: "Account profiles: live identity projection + personalization",
     // Human-driven surfaces only for the write default; reads widen per-method.
-    policy: { allowed: ["server", "shell", "app", "panel"] },
+    authority: { principals: ["host", "user", "code"] },
     methods: accountMethods,
     handler: defineServiceHandler("account", accountMethods, {
       getProfile: (ctx, [requested]) => {

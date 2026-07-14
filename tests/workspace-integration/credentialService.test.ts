@@ -28,12 +28,17 @@ import type {
   StoredCredentialSummary,
 } from "@vibestudio/credential-client/types";
 import type { ClientConfigRecord } from "@vibestudio/credential-client/clientConfigStore";
-import { createCredentialService } from "../../src/server/services/credentialService.js";
+import { createCredentialService as createCredentialServiceDefinition } from "../../src/server/services/credentialService.js";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { DEFERRED_RESULT, isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
+import { withTestServiceAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { CredentialSessionGrantStore } from "../../src/server/services/credentialSessionGrants.js";
 import { createApprovalQueue } from "../../src/server/services/approvalQueue.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
+
+const createCredentialService = (
+  ...args: Parameters<typeof createCredentialServiceDefinition>
+) => withTestServiceAuthority(createCredentialServiceDefinition(...args));
 
 function verifiedTestCaller(
   callerId: string,
@@ -61,12 +66,13 @@ function verifiedTestCaller(
               : callerId.startsWith("do:")
                 ? "/owner"
                 : `/${suffix}`;
-  const effectiveVersion = suffix === "other" || suffix === "new-version" ? "hash-2" : "hash-1";
+  const executionDigest = suffix === "other" || suffix === "new-version" ? "hash-2" : "hash-1";
   return createVerifiedCaller(callerId, callerKind, {
     callerId,
     callerKind: callerKind === "do" ? "do" : callerKind,
     repoPath,
-    effectiveVersion,
+    executionDigest,
+    requested: [],
   });
 }
 
@@ -149,7 +155,7 @@ class MemoryCredentialUseGrantStore {
       grant.action,
       grant.scope,
       grant.repoPath,
-      grant.effectiveVersion,
+      grant.executionDigest,
     ].join("\x00");
     const index = this.grants.findIndex(
       (entry) =>
@@ -161,7 +167,7 @@ class MemoryCredentialUseGrantStore {
           entry.action,
           entry.scope,
           entry.repoPath,
-          entry.effectiveVersion,
+          entry.executionDigest,
         ].join("\x00") === key
     );
     if (index >= 0) this.grants.splice(index, 1);
@@ -432,7 +438,7 @@ describe("credentialService", () => {
           action: "use",
           scope: "version",
           repoPath: "/owner",
-          effectiveVersion: "hash-1",
+          executionDigest: "hash-1",
           grantedAt,
           grantedBy: "version",
         },
@@ -448,7 +454,8 @@ describe("credentialService", () => {
           {
             id: "panel:owner",
             kind: "panel",
-            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-1",
             contextId: "ctx-owner",
             key: "owner",
             createdAt: grantedAt,
@@ -458,7 +465,8 @@ describe("credentialService", () => {
           {
             id: "worker:/owner:jobs",
             kind: "worker",
-            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-1",
             contextId: "ctx-owner",
             key: "jobs",
             parentId: "panel:owner",
@@ -469,7 +477,8 @@ describe("credentialService", () => {
           {
             id: "do:/owner:Agent:main",
             kind: "do",
-            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-1",
             contextId: "ctx-owner",
             className: "Agent",
             key: "main",
@@ -481,7 +490,8 @@ describe("credentialService", () => {
           {
             id: "worker:/owner:other-version",
             kind: "worker",
-            source: { repoPath: "/owner", effectiveVersion: "hash-2" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-2",
             contextId: "ctx-owner",
             key: "other-version",
             parentId: "panel:owner",
@@ -500,7 +510,7 @@ describe("credentialService", () => {
             parentId: null,
             contextId: "ctx-owner",
             runtimeEntityId: "panel:owner",
-            effectiveVersion: "hash-1",
+            executionDigest: "hash-1",
           },
         ],
       },
@@ -520,7 +530,7 @@ describe("credentialService", () => {
       bindingLabel: "REST API",
       scope: "version",
       repoPath: "/owner",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       grantedAt,
     });
     expect(inspected[0]!.grants[0]!.subjects.map((subject) => subject.id)).toEqual([
@@ -598,7 +608,7 @@ describe("credentialService", () => {
         kind: "credential-input",
         credentialLabel: "GitHub",
         repoPath: "/repo",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
       })
     );
     expect(approvalQueue.request).not.toHaveBeenCalled();
@@ -749,7 +759,7 @@ describe("credentialService", () => {
         callerId: "worker:other",
         callerKind: "worker",
         repoPath: "/other",
-        effectiveVersion: "hash-2",
+        executionDigest: "hash-2",
         title: "Revoke Example API",
         resource: { type: "credential", label: "Credential", value: "Example API" },
       })
@@ -1151,7 +1161,7 @@ describe("credentialService", () => {
           action: "use",
           scope: "version",
           repoPath: "/consumer",
-          effectiveVersion: "hash-1",
+          executionDigest: "hash-1",
           grantedAt: 1,
           grantedBy: "version",
         },
@@ -1200,12 +1210,13 @@ describe("credentialService", () => {
 
     const grantStore = new MemoryCredentialUseGrantStore();
     const approvalQueue = approvingQueue("version");
-    const source = { repoPath: "workers/agent-worker", effectiveVersion: "hash-agent" };
+    const source = { repoPath: "workers/agent-worker" };
     const activeEntities: EntityRecord[] = [
       {
         id: "do:workers/agent-worker:AiChatWorker:subagent-one",
         kind: "do",
         source,
+        activeExecutionDigest: "hash-agent",
         contextId: "ctx-one",
         className: "AiChatWorker",
         key: "subagent-one",
@@ -1217,6 +1228,7 @@ describe("credentialService", () => {
         id: "do:workers/agent-worker:AiChatWorker:subagent-two",
         kind: "do",
         source,
+        activeExecutionDigest: "hash-agent",
         contextId: "ctx-two",
         className: "AiChatWorker",
         key: "subagent-two",
@@ -1260,7 +1272,7 @@ describe("credentialService", () => {
       expect.objectContaining({
         callerId: "do:workers/agent-worker:AiChatWorker:subagent-one",
         repoPath: source.repoPath,
-        effectiveVersion: source.effectiveVersion,
+        executionDigest: "hash-agent",
       })
     );
     expect(grantStore.list(stored.id)).toContainEqual(
@@ -1271,7 +1283,7 @@ describe("credentialService", () => {
         action: "use",
         scope: "version",
         repoPath: source.repoPath,
-        effectiveVersion: source.effectiveVersion,
+        executionDigest: "hash-agent",
       })
     );
   });
@@ -1304,13 +1316,15 @@ describe("credentialService", () => {
       callerId: "worker:consumer-a",
       callerKind: "worker",
       repoPath: "/consumer",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
+      requested: [],
     });
     const callerB = createVerifiedCaller("worker:consumer-b", "worker", {
       callerId: "worker:consumer-b",
       callerKind: "worker",
       repoPath: "/consumer",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
+      requested: [],
     });
 
     const first = service.handler({ caller: callerA }, "resolveCredential", [
@@ -1335,7 +1349,7 @@ describe("credentialService", () => {
         action: "use",
         scope: "version",
         repoPath: "/consumer",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
       })
     );
   });
@@ -1465,7 +1479,7 @@ describe("credentialService", () => {
         action: "use",
         scope: "version",
         repoPath: "/repo",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
         grantedBy: "version",
       }),
     ]);
@@ -1848,7 +1862,8 @@ describe("credentialService", () => {
           {
             id: "panel:owner",
             kind: "panel",
-            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-1",
             contextId: "ctx-owner",
             key: "owner",
             createdAt: Date.now(),
@@ -1858,7 +1873,8 @@ describe("credentialService", () => {
           {
             id: "worker:/owner:jobs",
             kind: "worker",
-            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-1",
             contextId: "ctx-owner",
             key: "jobs",
             parentId: "panel:owner",
@@ -1869,7 +1885,8 @@ describe("credentialService", () => {
           {
             id: "do:/owner:Agent:main",
             kind: "do",
-            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            source: { repoPath: "/owner" },
+            activeExecutionDigest: "hash-1",
             contextId: "ctx-owner",
             className: "Agent",
             key: "main",
@@ -2881,7 +2898,7 @@ describe("credentialService", () => {
         callerId: "panel-owner",
         callerKind: "panel",
         repoPath: "/repo",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
       },
       authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
       tokenUrl: "https://oauth2.googleapis.com/token",
@@ -3606,7 +3623,7 @@ describe("credentialService", () => {
         callerId: "worker:test",
         callerKind: "worker",
         repoPath: "worker:test",
-        effectiveVersion: "unknown",
+        executionDigest: "unknown",
       },
       authorizeUrl: "https://auth.example.test/oauth/authorize",
       tokenUrl: "https://auth.example.test/oauth/token",
@@ -3678,7 +3695,7 @@ describe("credentialService", () => {
         callerId: "worker:test",
         callerKind: "worker",
         repoPath: "worker:test",
-        effectiveVersion: "unknown",
+        executionDigest: "unknown",
       },
       authorizeUrl: "https://auth.example.test/oauth/authorize",
       tokenUrl: "https://auth.example.test/oauth/token",
@@ -3758,7 +3775,7 @@ describe("credentialService", () => {
         callerId: "panel-test",
         callerKind: "panel",
         repoPath: "panel-test",
-        effectiveVersion: "unknown",
+        executionDigest: "unknown",
       },
       authorizeUrl: "https://auth.example.test/device",
       tokenUrl: "https://auth.example.test/token",
@@ -3848,7 +3865,7 @@ describe("credentialService", () => {
         callerId: "panel-test",
         callerKind: "panel",
         repoPath: "panel-test",
-        effectiveVersion: "unknown",
+        executionDigest: "unknown",
       },
       authorizeUrl: "https://auth.example.test/device",
       tokenUrl: "https://auth.example.test/token",

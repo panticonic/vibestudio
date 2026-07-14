@@ -4,7 +4,7 @@ import {
   createConnectionlessRpcClient,
   rpc,
   rpcExposedMethodNames,
-  rpcMethodPolicy,
+  rpcMethodAuthority,
 } from "./connectionless.js";
 import type { RpcEnvelope } from "./types.js";
 
@@ -186,14 +186,14 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
   });
 });
 
-// Declarative caller policy: `@rpc({ callers })` registers BOTH exposure and a caller-kind floor.
+// Declarative authority registers both exposure and complete admitted principal classes.
 class PolicyBase {
-  @rpc({ callers: ["server"] }) async serverOnly() {
+  @rpc({ principals: ["host"] }) async serverOnly() {
     return "s"; // decorated on a base → policy lands on the concrete class too
   }
 }
 class PolicyDO extends PolicyBase {
-  @rpc({ callers: ["panel", "do"] }) async broad() {
+  @rpc({ principals: ["code"] }) async broad() {
     return "b";
   }
   @rpc async noPolicy() {
@@ -201,15 +201,15 @@ class PolicyDO extends PolicyBase {
   }
 }
 
-describe("@rpc({ callers }) declarative policy", () => {
-  it("rpcMethodPolicy returns the policy for `@rpc({callers})` (own + inherited), undefined for bare `@rpc`", () => {
+describe("@rpc({ principals }) declarative authority", () => {
+  it("returns direct authority for own and inherited methods, and undefined for bare @rpc", () => {
     const inst = new PolicyDO();
-    expect(rpcMethodPolicy(inst, "broad")).toEqual({ callers: ["panel", "do"] });
-    expect(rpcMethodPolicy(inst, "serverOnly")).toEqual({ callers: ["server"] }); // inherited
-    expect(rpcMethodPolicy(inst, "noPolicy")).toBeUndefined(); // bare @rpc
+    expect(rpcMethodAuthority(inst, "broad")).toEqual({ principals: ["code"] });
+    expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({ principals: ["host"] });
+    expect(rpcMethodAuthority(inst, "noPolicy")).toBeUndefined();
   });
 
-  it("the factory form `@rpc({callers})` still registers exposure", () => {
+  it("the factory form still registers exposure", () => {
     expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual([
       "broad",
       "noPolicy",

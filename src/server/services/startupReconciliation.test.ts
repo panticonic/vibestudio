@@ -26,7 +26,8 @@ describe("runStartupReconciliation", () => {
     // Seed: one active panel entity.
     workspaceDO.entityActivate({
       kind: "panel",
-      source: { repoPath: "panels/chat", effectiveVersion: "v1" },
+      source: { repoPath: "panels/chat" },
+      activeExecutionDigest: "v1",
       contextId: "ctx-active",
       key: "nav-active",
     });
@@ -34,7 +35,8 @@ describe("runStartupReconciliation", () => {
     // Seed: a retired entity from BEFORE the grace window (will be GC'd).
     const expiredRetired = workspaceDO.entityActivate({
       kind: "panel",
-      source: { repoPath: "panels/old", effectiveVersion: "v1" },
+      source: { repoPath: "panels/old" },
+      activeExecutionDigest: "v1",
       contextId: "ctx-expired",
       key: "nav-expired",
     });
@@ -50,7 +52,8 @@ describe("runStartupReconciliation", () => {
     // Seed: a recently-retired entity (still within grace; survives).
     const recentRetired = workspaceDO.entityActivate({
       kind: "panel",
-      source: { repoPath: "panels/recent", effectiveVersion: "v1" },
+      source: { repoPath: "panels/recent" },
+      activeExecutionDigest: "v1",
       contextId: "ctx-recent",
       key: "nav-recent",
     });
@@ -61,7 +64,8 @@ describe("runStartupReconciliation", () => {
     // Seed: a retired entity with cleanup_complete=0 (simulates crash mid-cleanup).
     const incompleteCleanup = workspaceDO.entityActivate({
       kind: "panel",
-      source: { repoPath: "panels/crash", effectiveVersion: "v1" },
+      source: { repoPath: "panels/crash" },
+      activeExecutionDigest: "v1",
       contextId: "ctx-crash",
       key: "nav-crash",
     });

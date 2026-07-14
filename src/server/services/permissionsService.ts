@@ -1,12 +1,17 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   permissionsMethods,
   type SavedPermissionGrant,
 } from "@vibestudio/service-schemas/permissions";
-import { capabilityGrantId, type CapabilityGrantStore } from "./capabilityGrantStore.js";
+import {
+  capabilityGrantExecutionDigest,
+  capabilityGrantId,
+  capabilityGrantRepoPath,
+  capabilityGrantResourceLabel,
+  type CapabilityGrantStore,
+} from "./capabilityGrantStore.js";
 import {
   userlandApprovalGrantId,
   type UserlandApprovalGrantStore,
@@ -17,70 +22,56 @@ import {
 } from "./credentialUseGrantStore.js";
 
 const SERVICE = "permissions";
-const TRUSTED_PAGE = "about/permissions";
-
 export function createPermissionsService(deps: {
   capabilityGrants: CapabilityGrantStore;
   userlandGrants: UserlandApprovalGrantStore;
   credentialUseGrants: CredentialUseGrantStoreLike;
 }): ServiceDefinition {
-  const assertCanManagePermissions = (ctx: ServiceContext, method: string): void => {
-    const privileged = ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
-    if (!privileged && ctx.caller.code?.repoPath !== TRUSTED_PAGE) {
-      throw new ServiceError(
-        SERVICE,
-        method,
-        "Only the trusted Permissions page may inspect grants",
-        "EACCES"
-      );
-    }
-  };
-
   return {
     name: SERVICE,
     description: "Trusted review and revocation of durable permission grants",
-    policy: { allowed: ["shell", "app", "panel", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: permissionsMethods,
     handler: defineServiceHandler(SERVICE, permissionsMethods, {
-      list: (ctx) => {
-        assertCanManagePermissions(ctx, "list");
+      list: () => {
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listPersistent()
-          .map((grant) => ({
-            id: capabilityGrantId(grant),
-            kind: "capability",
-            callerLabel: grant.repoPath || grant.callerId || "App",
-            scopeLabel:
-              grant.effect === "deny"
-                ? "Blocked for this code version"
-                : "Trusted for this code version",
-            capability: grant.capability,
-            resource:
-              grant.capability === "network" && grant.resourceKey === "network:*"
-                ? "All network destinations"
-                : grant.resourceKey,
-            repoPath: grant.repoPath,
-            ...(grant.effectiveVersion ? { effectiveVersion: grant.effectiveVersion } : {}),
-            grantedAt: grant.grantedAt,
-          }));
+          .map((grant) => {
+            const repoPath = capabilityGrantRepoPath(grant);
+            const executionDigest = capabilityGrantExecutionDigest(grant);
+            return {
+              id: capabilityGrantId(grant),
+              kind: "capability",
+              callerLabel: repoPath ?? grant.subject,
+              scopeLabel:
+                grant.effect === "deny"
+                  ? "Blocked for this code version"
+                  : "Trusted for this code version",
+              capability: grant.capability,
+              resource: capabilityGrantResourceLabel(grant.resource),
+              ...(repoPath ? { repoPath } : {}),
+              ...(executionDigest ? { executionDigest } : {}),
+              grantedAt: grant.createdAt,
+            };
+          });
         const sessionCapability: SavedPermissionGrant[] = deps.capabilityGrants
           .listSession()
-          .map((grant) => ({
-            id: capabilityGrantId(grant),
-            kind: "capability",
-            callerLabel: grant.repoPath || grant.callerId || "App",
-            scopeLabel:
-              grant.effect === "deny"
-                ? "Blocked for this session"
-                : "Allowed until Vibestudio restarts",
-            capability: grant.capability,
-            resource:
-              grant.capability === "network" && grant.resourceKey === "network:*"
-                ? "All network destinations"
-                : grant.resourceKey,
-            repoPath: grant.repoPath,
-            grantedAt: grant.grantedAt,
-          }));
+          .map((grant) => {
+            const repoPath = capabilityGrantRepoPath(grant);
+            return {
+              id: capabilityGrantId(grant),
+              kind: "capability",
+              callerLabel: repoPath ?? grant.subject,
+              scopeLabel:
+                grant.effect === "deny"
+                  ? "Blocked for this session"
+                  : "Allowed until Vibestudio restarts",
+              capability: grant.capability,
+              resource: capabilityGrantResourceLabel(grant.resource),
+              ...(repoPath ? { repoPath } : {}),
+              grantedAt: grant.createdAt,
+            };
+          });
         const userland: SavedPermissionGrant[] = deps.userlandGrants
           .listPersistent()
           .map((grant) => ({
@@ -94,8 +85,8 @@ export function createPermissionsService(deps: {
             capability: grant.subject.label ?? "Agent choice",
             resource: grant.subject.id,
             ...(grant.principal.repoPath ? { repoPath: grant.principal.repoPath } : {}),
-            ...(grant.principal.effectiveVersion
-              ? { effectiveVersion: grant.principal.effectiveVersion }
+            ...(grant.principal.executionDigest
+              ? { executionDigest: grant.principal.executionDigest }
               : {}),
             grantedAt: grant.grantedAt,
           }));
@@ -109,15 +100,14 @@ export function createPermissionsService(deps: {
             capability: `Credential ${grant.use}: ${grant.action}`,
             resource: grant.resource,
             ...(grant.repoPath ? { repoPath: grant.repoPath } : {}),
-            ...(grant.effectiveVersion ? { effectiveVersion: grant.effectiveVersion } : {}),
+            ...(grant.executionDigest ? { executionDigest: grant.executionDigest } : {}),
             grantedAt: grant.grantedAt,
           }));
         return [...sessionCapability, ...capability, ...userland, ...credentialUse].sort(
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
         );
       },
-      revoke: async (ctx, [{ kind, id }]) => {
-        assertCanManagePermissions(ctx, "revoke");
+      revoke: async (_ctx, [{ kind, id }]) => {
         const removed =
           kind === "capability"
             ? deps.capabilityGrants.revokePersistent(id) || deps.capabilityGrants.revokeSession(id)

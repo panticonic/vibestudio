@@ -15,7 +15,7 @@ function unitBatchRequest(
     callerId: "panel-1",
     callerKind: "panel" as const,
     repoPath: "panels/example",
-    effectiveVersion: "hash-1",
+    executionDigest: "hash-1",
     trigger: "source-change" as const,
     title: "Update trusted unit source",
     description: "Accepting this push updates trusted native extension code.",
@@ -31,7 +31,7 @@ function unitBatchRequest(
           repo: "extensions/typecheck-service",
           ref: "main",
         },
-        ev: "ev-typecheck",
+        sourceDigest: "sourceDigest-typecheck",
         capabilities: ["node:fs"],
       },
     ],
@@ -48,7 +48,7 @@ describe("approvalQueue", () => {
       callerId: "worker:1",
       callerKind: "worker",
       repoPath: "/repo",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" }],
@@ -74,7 +74,7 @@ describe("approvalQueue", () => {
       callerId: "worker:1",
       callerKind: "worker",
       repoPath: "/repo",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" }],
@@ -105,7 +105,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "external-browser-open",
       title: "Open external browser",
       resource: {
@@ -134,7 +134,7 @@ describe("approvalQueue", () => {
         panel: { id: "panel:chat", title: "Agentic Chat" },
         sourcePath: input.repoPath,
         repoPath: input.repoPath,
-        effectiveVersion: input.effectiveVersion,
+        executionDigest: input.executionDigest,
         stableIdentityKey: input.callerId,
         ephemeralInstanceKey: input.callerId,
         eval: { ownerId: "do:workers/agent:AgentDO:session", subKey: "turn-1" },
@@ -154,7 +154,7 @@ describe("approvalQueue", () => {
       callerId: "do:vibestudio/internal:EvalDO:one",
       callerKind: "do",
       repoPath: "vibestudio/internal",
-      effectiveVersion: "internal",
+      executionDigest: "internal",
       capability: "external-browser-open",
       title: "Open external browser",
     });
@@ -177,7 +177,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "context.boundary",
       title: "Open panel",
       operation: {
@@ -192,7 +192,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "context.boundary",
       title: "Spawn worker",
       operation: {
@@ -222,7 +222,7 @@ describe("approvalQueue", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/example",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
         capability: "external-browser-open",
         title: "Open external browser",
       })
@@ -242,7 +242,7 @@ describe("approvalQueue", () => {
       callerId: "worker:alpha",
       callerKind: "worker" as const,
       repoPath: "workers/alpha",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
     };
 
     await expect(
@@ -293,7 +293,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "context.boundary",
       severity: "severe",
       title: "Act on Shell's context",
@@ -323,7 +323,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "external-browser-open",
       title: "Open external browser",
     });
@@ -345,7 +345,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "external-browser-open",
       title: "Open external browser",
     });
@@ -367,7 +367,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "workspace-repo-write",
       title: "Write project files",
       resource: {
@@ -382,7 +382,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "workspace-repo-write",
       title: "Write project files",
       resource: {
@@ -410,7 +410,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "external-browser-open",
       title: "Open external browser",
       resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
@@ -420,7 +420,7 @@ describe("approvalQueue", () => {
       callerId: "panel-2",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       capability: "external-browser-open",
       title: "Open external browser",
       resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
@@ -443,7 +443,7 @@ describe("approvalQueue", () => {
     const second = queue.request(
       unitBatchRequest({
         dedupKey: "unit-source-change:extension:typecheck:main",
-        effectiveVersion: "newer-commit",
+        executionDigest: "newer-commit",
       })
     );
 
@@ -484,7 +484,7 @@ describe("approvalQueue", () => {
     const request = {
       callerKind: "worker" as const,
       repoPath: "/repo",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" as const }],
@@ -513,7 +513,7 @@ describe("approvalQueue", () => {
     const request = {
       callerKind: "worker" as const,
       repoPath: "/repo",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" as const }],
@@ -542,7 +542,7 @@ describe("approvalQueue", () => {
         approval.kind === "credential" &&
         approval.credentialId === "cred-1" &&
         approval.repoPath === "/repo" &&
-        approval.effectiveVersion === "hash-1" &&
+        approval.executionDigest === "hash-1" &&
         approval.grantResource?.bindingId === "binding-1" &&
         approval.grantResource.resource === "https://api.github.com/" &&
         approval.grantResource.action === "use",
@@ -561,7 +561,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       configId: "google-workspace",
       authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
       tokenUrl: "https://oauth2.googleapis.com/token",
@@ -606,7 +606,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       title: "Add GitHub",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" }],
@@ -647,7 +647,7 @@ describe("approvalQueue", () => {
       callerId: "panel-1",
       callerKind: "panel" as const,
       repoPath: "panels/example",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
       title: "Add GitHub",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" as const }],
@@ -685,7 +685,7 @@ describe("approvalQueue", () => {
       callerId: "system:extensions",
       callerKind: "system" as const,
       repoPath: "meta",
-      effectiveVersion: "",
+      executionDigest: "",
       trigger: "startup" as const,
       title: "Approve workspace extensions",
       description: "2 extensions need approval.",
@@ -758,7 +758,7 @@ describe("approvalQueue", () => {
         callerId: "worker:alpha",
         callerKind: "worker" as const,
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
       },
       subject: { id: "team-x:foo", label: "Team X foo" },
       title: "Allow foo?",
@@ -912,7 +912,7 @@ describe("approvalQueue", () => {
         callerId: "panel-test",
         callerKind: "panel" as const,
         repoPath: "panel-test",
-        effectiveVersion: "v1",
+        executionDigest: "v1",
         credentialLabel: "GitHub CLI",
         userCode: "ABCD-EFGH",
         verificationUri: "https://github.com/login/device",
@@ -985,7 +985,7 @@ describe("approvalQueue", () => {
         callerId: "do:workers/agent:AgentWorker:entity-1",
         callerKind: "do" as const,
         repoPath: "workers/linked",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
         entityId: "entity-1",
         channelId: "channel-1",
         capability: "external-agent.tool",
@@ -1118,7 +1118,7 @@ describe("approvalQueue", () => {
         callerId: "panel-1",
         callerKind: "panel" as const,
         repoPath: "panels/example",
-        effectiveVersion: "hash-1",
+        executionDigest: "hash-1",
         capability: "external-browser-open",
         title: "Open external browser",
         resource: { type: "url" as const, label: "URL", value: "https://example.com" },

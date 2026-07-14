@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit } from "./builder.js";
+import { sealBuildEnvironment } from "./sourceClosure.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
@@ -28,11 +29,13 @@ describe("buildUnit app builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    sealBuildEnvironment({ appRoot: root, workspaceRoot });
     clearBuildProvidersForTests();
   });
 
   afterEach(() => {
     clearBuildProvidersForTests();
+    sealBuildEnvironment(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -46,6 +49,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
+          authority: { requests: [] },
           app: {
             target: "electron",
             renderer: "index.ts",
@@ -78,7 +82,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-apps/shell"),
-      "ev-shell",
+      "sourceDigest-shell",
       graph,
       workspaceRoot,
       "state:test"
@@ -139,6 +143,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
+          authority: { requests: [] },
           app: {
             target: "terminal",
             entry: "index.ts",
@@ -178,7 +183,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-apps/remote-cli"),
-      "ev-cli",
+      "sourceDigest-cli",
       graph,
       workspaceRoot,
       "state:test"
@@ -204,6 +209,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
+          authority: { requests: [] },
           app: {
             target: "react-native",
             renderer: "index.tsx",
@@ -233,7 +239,7 @@ describe("buildUnit app builds", () => {
       name: "@workspace-extensions/react-native-provider",
       target: "react-native",
       contractVersion: "1",
-      activeEv: "ev-provider",
+      activeSourceDigest: "sourceDigest-provider",
       activeBuildKey: "provider-build",
       build: async (_input) => ({
         artifacts: [
@@ -252,13 +258,13 @@ describe("buildUnit app builds", () => {
         },
       }),
       streamArtifact: async (_artifact, input) =>
-        new Response(`bundle:${input.unitName}:${input.effectiveVersion}`),
+        new Response(`bundle:${input.unitName}:${input.sourceDigest}`),
     });
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-apps/mobile"),
-      "ev-mobile",
+      "sourceDigest-mobile",
       graph,
       workspaceRoot,
       "state:test"
@@ -276,7 +282,7 @@ describe("buildUnit app builds", () => {
         rnHostAbi: "rn-host-2",
         provider: {
           name: "@workspace-extensions/react-native-provider",
-          activeEv: "ev-provider",
+          activeSourceDigest: "sourceDigest-provider",
           activeBuildKey: "provider-build",
           contractVersion: "1",
         },
@@ -290,7 +296,9 @@ describe("buildUnit app builds", () => {
         encoding: "base64",
         platform: "ios",
         integrity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/),
-        content: Buffer.from("bundle:@workspace-apps/mobile:ev-mobile").toString("base64"),
+        content: Buffer.from("bundle:@workspace-apps/mobile:sourceDigest-mobile").toString(
+          "base64"
+        ),
       }),
     ]);
   });
@@ -331,6 +339,7 @@ describe("buildUnit app builds", () => {
         private: true,
         type: "module",
         vibestudio: {
+          authority: { requests: [] },
           title: "FS Panel",
           entry: "index.ts",
         },
@@ -363,7 +372,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-panels/fs-panel"),
-      "ev-panel",
+      "sourceDigest-panel",
       graph,
       workspaceRoot,
       "state:test"
@@ -389,6 +398,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         vibestudio: {
+          authority: { requests: [] },
           app: {
             target: "dist",
             distDir: "dist",
@@ -412,7 +422,7 @@ describe("buildUnit app builds", () => {
     await expect(
       buildUnit(
         graph.get("@workspace-apps/prebuilt"),
-        "ev-dist",
+        "sourceDigest-dist",
         graph,
         workspaceRoot,
         "state:test"

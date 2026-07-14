@@ -78,7 +78,7 @@ export interface CredentialUseGrant {
   action: CredentialGrantAction;
   scope: CredentialGrantScope;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   grantedAt: number;
   grantedBy: string;
 }
@@ -101,7 +101,7 @@ export interface CredentialAccessSubjectSummary {
 
 export interface CredentialAccessEntitySource {
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
 }
 
 export interface CredentialAccessGrantSummary {
@@ -113,7 +113,7 @@ export interface CredentialAccessGrantSummary {
   action: CredentialGrantAction;
   scope: CredentialGrantScope;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   grantedAt: number;
   grantedBy: string;
   subjects: CredentialAccessSubjectSummary[];

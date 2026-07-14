@@ -3,7 +3,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { buildMethods } from "@vibestudio/service-schemas/build";
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { BuildSystemV2 } from "../buildV2/index.js";
-import { computeBuildKey } from "../buildV2/effectiveVersion.js";
+import { computeCompilationCacheKey } from "../buildV2/sourceClosure.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
 
 const SKILLS_PACKAGE_SCOPE = (() => {
@@ -16,7 +16,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
   return {
     name: "build",
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
-    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
       getBuild: (_ctx, [unit, ref, options]) => {
@@ -43,9 +43,18 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
           ? { ...build.metadata, diagnostics }
           : build.metadata;
       },
+      resolveExecutionAuthority: (_ctx, [executionDigest]) => {
+        const execution = deps.buildSystem.getExecutionArtifact(executionDigest);
+        if (!execution) return null;
+        return {
+          source: execution.ref.source.repoPath,
+          executionDigest: execution.ref.executionDigest,
+          requested: [...execution.requested],
+        };
+      },
       validate: (_ctx, [input]) => deps.buildSystem.validate(input),
       getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
-      getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
+      getSourceDigest: (_ctx, [unit]) => deps.buildSystem.getSourceDigest(unit),
       inspectBuildProvenance: (_ctx, [source]) => {
         const bs = deps.buildSystem;
         const graph = bs.getGraph();
@@ -80,11 +89,11 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
             workspaceRoot: bs.getWorkspaceRoot(),
           };
         }
-        const effectiveVersion = bs.getEffectiveVersion(node.name);
-        const buildKeys = effectiveVersion
+        const sourceDigest = bs.getSourceDigest(node.name);
+        const buildKeys = sourceDigest
           ? {
-              sourcemap: computeBuildKey(node.name, effectiveVersion, true),
-              production: computeBuildKey(node.name, effectiveVersion, false),
+              sourcemap: computeCompilationCacheKey(node.name, sourceDigest, true),
+              production: computeCompilationCacheKey(node.name, sourceDigest, false),
             }
           : { sourcemap: null, production: null };
         const cachedBuilds = Object.fromEntries(
@@ -111,7 +120,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
             relativePath: node.relativePath,
             path: node.path,
           },
-          effectiveVersion,
+          sourceDigest,
           buildKeys,
           cachedBuilds,
           recentBuildEvents: bs.listRecentBuildEvents(node.name),
@@ -121,7 +130,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
       listRecentBuildEvents: (_ctx, [unit]) => deps.buildSystem.listRecentBuildEvents(unit),
       doctorExtension: (_ctx, [source]) => deps.buildSystem.doctorExtension(source),
       recompute: () => deps.buildSystem.recompute(),
-      gc: (_ctx, [activeUnits]) => deps.buildSystem.gc(activeUnits),
+      gc: () => deps.buildSystem.gc(),
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
       getPanelMetadata: (_ctx, [unit]) => {

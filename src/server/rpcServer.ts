@@ -45,6 +45,7 @@ import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   authenticatedCallerOf,
+  createHostCaller,
   parseServiceMethod,
   createVerifiedCaller,
   ServiceDispatcher,
@@ -56,13 +57,13 @@ import {
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import { DeferralRegistry } from "./services/deferralRegistry.js";
-import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { WsEventSession, type EventService } from "@vibestudio/shared/eventsService";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
+import { attestDirectRpc } from "./services/authorityRuntime.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
 import { ConnectionRegistry, type WsClientState } from "./rpcServer/connectionRegistry.js";
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
@@ -374,6 +375,15 @@ export class RpcServer {
     private deps: {
       tokenManager: TokenManager;
       dispatcher: ServiceDispatcher;
+      workspaceId: string;
+      /** Resolves live provider/manifest admission for an exact code principal. */
+      directCodeGrant?: (input: {
+        caller: VerifiedCaller;
+        source: string;
+        className: string;
+        objectKey: string;
+        method: string;
+      }) => boolean;
       /** Called when an authenticated client disconnects (e.g., for fs handle cleanup) */
       onClientDisconnect?: (callerId: string, callerKind: CallerKind) => void;
       /** Called when a client successfully authenticates */
@@ -436,6 +446,10 @@ export class RpcServer {
         invocationToken: string
       ) => Pick<ExtensionInvocation, "caller" | "chainCaller"> | null;
       resolveExtensionCodeIdentity?: (extensionName: string) => VerifiedCodeIdentity | null;
+      resolveExecutionRequests?: (
+        executionDigest: string
+      ) => readonly import("@vibestudio/rpc").CapabilityScope[] | null;
+      capabilityGrantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
       /**
        * On-behalf-of invocation table for userland vcs-DO dispatches
        * (narrow-host-vcs §4): when a sandboxed caller's relay targets the DO
@@ -493,11 +507,23 @@ export class RpcServer {
       egressProxy: deps.egressProxy,
       authenticateHttp: (req) => this.authenticateHttpRequest(req),
       verifiedCaller: (caller) =>
-        this.verifiedCallerFor(caller.callerId, caller.callerKind, caller.agentBinding),
+        this.verifiedCallerFor(
+          caller.callerId,
+          caller.callerKind,
+          caller.agentBinding,
+          undefined,
+          caller.hostOriginated
+        ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
       createHttpContext: (caller, extras) =>
-        this.serviceContextFor(caller.callerId, caller.callerKind, extras, caller.agentBinding),
+        this.serviceContextFor(
+          caller.callerId,
+          caller.callerKind,
+          extras,
+          caller.agentBinding,
+          caller.hostOriginated
+        ),
       createWsContext: (client, request, extras) =>
         this.serviceContextForRpcMessage(client, request, extras),
       sendWs: (client, message) => this.sendToWs(client.ws, message),
@@ -511,6 +537,7 @@ export class RpcServer {
           caller.callerId,
           caller.callerKind,
           caller.agentBinding,
+          caller.hostOriginated,
           envelope,
           message
         ),
@@ -550,18 +577,24 @@ export class RpcServer {
     callerId: string,
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/identity/types").AgentBinding,
-    subject?: UserSubject
+    subject?: UserSubject,
+    hostOriginated?: true
   ): VerifiedCaller {
     const code =
       callerKind === "extension"
         ? (this.deps.resolveExtensionCodeIdentity?.(callerId) ?? null)
         : this.deps.entityCache
-          ? resolveCodeIdentity(this.deps.entityCache, callerId)
+          ? resolveCodeIdentity(
+              this.deps.entityCache,
+              callerId,
+              this.deps.resolveExecutionRequests ?? (() => null)
+            )
           : null;
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
     // otherwise resolve it from the caller id (§5.2/§5.4).
     const resolvedSubject = subject ?? this.resolveSubject(callerId, callerKind, agentBinding);
-    return createVerifiedCaller(callerId, callerKind, code, agentBinding, resolvedSubject);
+    const caller = createVerifiedCaller(callerId, callerKind, code, agentBinding, resolvedSubject);
+    return hostOriginated ? { ...caller, hostOriginated: true } : caller;
   }
 
   /**
@@ -602,10 +635,11 @@ export class RpcServer {
     callerId: string,
     callerKind: CallerKind,
     extras: Omit<ServiceContext, "caller"> = {},
-    agentBinding?: import("@vibestudio/identity/types").AgentBinding
+    agentBinding?: import("@vibestudio/identity/types").AgentBinding,
+    hostOriginated?: true
   ): ServiceContext {
     return {
-      caller: this.verifiedCallerFor(callerId, callerKind, agentBinding),
+      caller: this.verifiedCallerFor(callerId, callerKind, agentBinding, undefined, hostOriginated),
       ...extras,
     };
   }
@@ -642,7 +676,8 @@ export class RpcServer {
         callerId: invocation.chainCaller.callerId,
         callerKind: invocation.chainCaller.callerKind,
         repoPath: invocation.chainCaller.repoPath,
-        effectiveVersion: invocation.chainCaller.effectiveVersion,
+        executionDigest: invocation.chainCaller.executionDigest,
+        requested: invocation.chainCaller.requested,
       };
       return {
         caller: createVerifiedCaller(code.callerId, code.callerKind, code),
@@ -652,26 +687,9 @@ export class RpcServer {
           : {}),
       };
     }
-    const caller = invocation?.caller;
-    if (
-      caller?.callerKind !== "panel" &&
-      caller?.callerKind !== "app" &&
-      caller?.callerKind !== "worker" &&
-      caller?.callerKind !== "do"
-    ) {
-      return null;
-    }
-    const code: VerifiedCodeIdentity = {
-      callerId: caller.callerId,
-      callerKind: caller.callerKind,
-      repoPath: "",
-      effectiveVersion: "",
-    };
-    return {
-      caller: createVerifiedCaller(code.callerId, code.callerKind, code),
-      code,
-      ...(caller.contextId ? { contextId: caller.contextId } : {}),
-    };
+    // Invocation metadata without a preserved exact chain identity is
+    // attribution-only. It cannot be promoted into a code principal.
+    return null;
   }
 
   private relayCallerScopeForRpcMessage(
@@ -1059,7 +1077,13 @@ export class RpcServer {
       this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
       existing.ws.close(4002, "Replaced by new connection");
     }
-    const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding, subject);
+    const caller = this.verifiedCallerFor(
+      callerId,
+      callerKind,
+      agentBinding,
+      subject,
+      entry.hostOriginated
+    );
     // Denormalize the host-verified owning user once, at admission (WP4 §2.1).
     // Defensive invariant: only the in-process server can synthesize a subject;
     // every external unattributed caller fails here.
@@ -1398,21 +1422,6 @@ export class RpcServer {
     }
 
     const { service, method } = parsed;
-
-    try {
-      checkServiceAccess(service, client.caller.runtime.kind, this.dispatcher, method);
-    } catch (error) {
-      this.sendToWs(client.ws, {
-        type: "ws:rpc",
-        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
-          type: "response",
-          requestId: request.requestId,
-          error: error instanceof Error ? error.message : String(error),
-          errorKind: rpcErrorKindOf(error, "access"),
-        }),
-      });
-      return;
-    }
 
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
@@ -2056,6 +2065,9 @@ export class RpcServer {
         callerId,
         callerKind,
         ...(httpAgentBinding ? { agentBinding: httpAgentBinding } : {}),
+        ...(callerId === entry.callerId && entry.hostOriginated
+          ? { hostOriginated: true as const }
+          : {}),
       },
     };
   }
@@ -2069,6 +2081,7 @@ export class RpcServer {
     callerId: string,
     callerKind: CallerKind,
     agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined,
+    hostOriginated: true | undefined,
     envelope: RpcEnvelope,
     message: RpcRequest
   ): Promise<unknown> {
@@ -2083,8 +2096,6 @@ export class RpcServer {
     if (targetId === "main") {
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}"`);
-
-      checkServiceAccess(parsed.service, callerKind, this.dispatcher, parsed.method);
 
       // A handler may complete out-of-band only when the caller explicitly opted
       // in (via callDeferred → `deferrable`), stamped a requestId, and can receive
@@ -2112,7 +2123,8 @@ export class RpcServer {
           ...(deferral ? { deferral } : {}),
           ...(readOnly ? { readOnly: true } : {}),
         },
-        agentBinding
+        agentBinding,
+        hostOriginated
       );
       return await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
     }
@@ -2120,7 +2132,13 @@ export class RpcServer {
     // Relay to another target
     const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
     if (!auth.ok) throw createRelayError(auth.reason, "EACCES");
-    const authenticatedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
+    const authenticatedCaller = this.verifiedCallerFor(
+      callerId,
+      callerKind,
+      agentBinding,
+      undefined,
+      hostOriginated
+    );
     return await this.relayCall(
       callerId,
       callerKind,
@@ -2208,7 +2226,17 @@ export class RpcServer {
   }
 
   async callTarget<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T> {
-    return this.relayCall("main", "server", targetId, method, args) as Promise<T>;
+    return this.relayCall(
+      "main",
+      "server",
+      targetId,
+      method,
+      args,
+      undefined,
+      undefined,
+      undefined,
+      true
+    ) as Promise<T>;
   }
 
   /**
@@ -2243,7 +2271,8 @@ export class RpcServer {
     args: unknown[],
     targetConnectionId?: string,
     meta?: RelayCallMeta,
-    relayCallerScope?: RelayCallerScope
+    relayCallerScope?: RelayCallerScope,
+    hostOriginated = false
   ): Promise<unknown> {
     const isPanelOrShellTarget = !targetId.startsWith("do:") && !targetId.startsWith("worker:");
     if (isPanelOrShellTarget) {
@@ -2300,7 +2329,8 @@ export class RpcServer {
         method,
         args,
         meta,
-        relayCallerScope
+        relayCallerScope,
+        hostOriginated
       );
     }
 
@@ -2335,7 +2365,8 @@ export class RpcServer {
     method: string,
     args: unknown[],
     meta?: RelayCallMeta,
-    relayCallerScope?: RelayCallerScope
+    relayCallerScope?: RelayCallerScope,
+    hostOriginated = false
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
     // Assertion-only: the concrete DO entity must exist before dispatch.
@@ -2399,10 +2430,36 @@ export class RpcServer {
         callerKind === "panel"
           ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
           : undefined;
-      const attributedCaller = relayCallerScope?.invocationCaller.subject
-        ? relayCallerScope.invocationCaller
-        : (relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind));
+      const attributedCaller = hostOriginated
+        ? createHostCaller(callerId, "server", { userId: "system", handle: "system" })
+        : relayCallerScope?.invocationCaller.subject
+          ? relayCallerScope.invocationCaller
+          : (relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind));
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
+      const authorization = attestDirectRpc({
+        caller: attributedCaller,
+        source: ref.source,
+        className: ref.className,
+        objectKey: ref.objectKey,
+        method,
+        workspaceId: this.deps.workspaceId,
+        workspaceMember:
+          hostOriginated ||
+          !this.deps.membershipGate ||
+          this.deps.membershipGate(attributedCaller.subject),
+        sessionId: meta?.requestId ?? `${callerId}:${method}`,
+        grantCode:
+          !attributedCaller.code ||
+          (this.deps.directCodeGrant?.({
+            caller: attributedCaller,
+            source: ref.source,
+            className: ref.className,
+            objectKey: ref.objectKey,
+            method,
+          }) ??
+            true),
+        grantStore: this.deps.capabilityGrantStore,
+      });
       const result = await postToDurableObject(ref, method, args, {
         workerdUrl,
         workerdGatewayToken,
@@ -2411,6 +2468,7 @@ export class RpcServer {
         callerKind,
         ...(callerPanelId ? { callerPanelId } : {}),
         ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+        authorization,
         ...(meta?.requestId ? { requestId: meta.requestId } : {}),
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
         ...(meta?.readOnly ? { readOnly: true } : {}),

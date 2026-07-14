@@ -4,11 +4,12 @@ import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 import { resolveCodeIdentity } from "./principalIdentity.js";
 
-function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
+function makeDoRecord(id: string, repoPath: string, executionDigest: string): EntityRecord {
   return {
     id,
     kind: "do",
-    source: { repoPath, effectiveVersion },
+    source: { repoPath },
+    activeExecutionDigest: executionDigest,
     contextId: "ctx-chat",
     key: id,
     createdAt: Date.now(),
@@ -29,12 +30,15 @@ describe("resolveCodeIdentity", () => {
     );
 
     expect(
-      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794")
+      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794", () => [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      ])
     ).toEqual({
       callerId: "do:workers/agent-worker:AiChatWorker:ai-chat-96322794",
       callerKind: "do",
       repoPath: "workers/agent-worker",
-      effectiveVersion: "hash-1",
+      executionDigest: "hash-1",
+      requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
     });
   });
 
@@ -42,7 +46,7 @@ describe("resolveCodeIdentity", () => {
     const cache = new EntityCache();
 
     expect(
-      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794")
+      resolveCodeIdentity(cache, "do:workers/agent-worker:AiChatWorker:ai-chat-96322794", () => [])
     ).toBeNull();
   });
 });

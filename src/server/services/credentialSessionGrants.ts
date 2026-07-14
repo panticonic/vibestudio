@@ -3,7 +3,7 @@ import type { CredentialGrantAction } from "@vibestudio/credential-client/types"
 export interface CredentialSessionGrantScope {
   callerId: string;
   repoPath?: string;
-  effectiveVersion?: string;
+  executionDigest?: string;
 }
 
 export interface CredentialSessionGrantResource {

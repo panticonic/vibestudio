@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseCanonicalKey } from "@vibestudio/shared/canonicalKey";
-import { CapabilityGrantStore, capabilityGrantKey } from "./capabilityGrantStore.js";
+import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   normalizeCallerKind,
   panelCapabilityResourceKey,
@@ -11,6 +10,9 @@ import {
 } from "./capabilityPermission.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+
+const DIGEST_A = "1".repeat(64);
+const DIGEST_B = "2".repeat(64);
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-capability-"));
@@ -45,23 +47,35 @@ function createApprovalQueueMock(
 }
 
 describe("capabilityPermission", () => {
-  it("uses the shared canonical key shape for session grants", () => {
-    expect(
-      parseCanonicalKey(
-        capabilityGrantKey("session", "native.notifications", "desktop", {
-          callerId: "app:apps/shell:window-1",
-          repoPath: "apps/shell",
-          effectiveVersion: "ev-shell",
-        })
-      )
-    ).toEqual([
-      "capability-grant",
-      "session",
+  it("stores session approvals as canonical authority grants", () => {
+    const store = new CapabilityGrantStore({ statePath: tempStatePath() });
+    store.grant(
       "native.notifications",
       "desktop",
-      "app:apps/shell:window-1",
-      "apps/shell",
-      "",
+      {
+        callerId: "app:apps/shell:window-1",
+        repoPath: "apps/shell",
+        executionDigest: DIGEST_A,
+      },
+      "session",
+      undefined,
+      10
+    );
+    expect(store.listSession()).toEqual([
+      expect.objectContaining({
+        subject: `code:apps/shell@${DIGEST_A}`,
+        capability: "native.notifications",
+        resource: { kind: "exact", key: "desktop" },
+        effect: "allow",
+        createdAt: 10,
+        constraints: { sessionId: "app:apps/shell:window-1" },
+        binding: {
+          kind: "session",
+          sessionId: "app:apps/shell:window-1",
+          repoPath: "apps/shell",
+          executionDigest: DIGEST_A,
+        },
+      }),
     ]);
   });
 
@@ -79,7 +93,11 @@ describe("capabilityPermission", () => {
           callerId: "panel-source",
           callerKind: "panel",
           repoPath: "panels/source",
-          effectiveVersion: "version-1",
+          executionDigest: DIGEST_A,
+          requested: [
+            { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+            { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+          ],
         },
         null,
         { userId: "usr_requester", handle: "requester" }
@@ -126,7 +144,11 @@ describe("capabilityPermission", () => {
         callerId: "worker:source",
         callerKind: "worker",
         repoPath: "workers/source",
-        effectiveVersion: "version-1",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
       capability: "example-capability",
       resource: { type: "example", label: "Example", value: "stable-key" },
@@ -140,7 +162,64 @@ describe("capabilityPermission", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps internal version grants scoped to the concrete caller identity", async () => {
+  it("does not reuse a version grant for a different artifact digest", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const request = (executionDigest: string) => ({
+      caller: createVerifiedCaller("worker:source", "worker", {
+        callerId: "worker:source",
+        callerKind: "worker" as const,
+        repoPath: "workers/source",
+        executionDigest,
+        requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
+      }),
+      capability: "example-capability",
+      resource: { type: "example", label: "Example", value: "stable-key" },
+      title: "Example action",
+      deniedReason: "Denied",
+    });
+
+    await requestCapabilityPermission(deps, request(DIGEST_A));
+    await requestCapabilityPermission(deps, request(DIGEST_B));
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed before prompting when code has no exact artifact digest", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+
+    await expect(
+      requestCapabilityPermission(deps, {
+        caller: createVerifiedCaller("worker:source", "worker", {
+          callerId: "worker:source",
+          callerKind: "worker",
+          repoPath: "workers/source",
+          executionDigest: "unknown",
+          requested: [
+            { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+            { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+          ],
+        }),
+        capability: "example-capability",
+        resource: { type: "example", label: "Example", value: "stable-key" },
+        title: "Example action",
+        deniedReason: "Denied",
+      })
+    ).resolves.toEqual({
+      allowed: false,
+      reason: "capability caller execution digest must be a full lowercase SHA-256 digest",
+    });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("shares version grants across incarnations of the same exact code artifact", async () => {
     const approvalQueue = createApprovalQueueMock("version");
     const deps = {
       approvalQueue,
@@ -155,36 +234,48 @@ describe("capabilityPermission", () => {
 
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do", {
-        callerId: "do:vibestudio/internal:EvalDO:one",
+      caller: createVerifiedCaller("do:workers/eval:EvalDO:one", "do", {
+        callerId: "do:workers/eval:EvalDO:one",
         callerKind: "do",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
+        repoPath: "workers/eval",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do", {
-        callerId: "do:vibestudio/internal:EvalDO:one",
+      caller: createVerifiedCaller("do:workers/eval:EvalDO:one", "do", {
+        callerId: "do:workers/eval:EvalDO:one",
         callerKind: "do",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
+        repoPath: "workers/eval",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:vibestudio/internal:EvalDO:two", "do", {
-        callerId: "do:vibestudio/internal:EvalDO:two",
+      caller: createVerifiedCaller("do:workers/eval:EvalDO:two", "do", {
+        callerId: "do:workers/eval:EvalDO:two",
         callerKind: "do",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
+        repoPath: "workers/eval",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
 
-  it("destructively resets legacy internal version grants without a caller identity", () => {
+  it("refuses the retired caller-bound grant format without rewriting it", () => {
     const statePath = tempStatePath();
     fs.writeFileSync(
       path.join(statePath, "capability-grants.json"),
@@ -193,32 +284,25 @@ describe("capabilityPermission", () => {
           {
             capability: "external-browser-open",
             resourceKey: "https://example.com",
+            resourceScope: { kind: "exact", key: "https://example.com" },
             scope: "version",
-            repoPath: "vibestudio/internal",
-            effectiveVersion: "internal",
+            callerId: "do:workers/eval:EvalDO:one",
+            repoPath: "workers/eval",
+            executionDigest: DIGEST_A,
             grantedAt: 1,
           },
         ],
       })
     );
 
-    const grantStore = new CapabilityGrantStore({ statePath });
-
-    expect(
-      grantStore.hasGrant("external-browser-open", "https://example.com", {
-        callerId: "do:vibestudio/internal:EvalDO:one",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
-      })
-    ).toBe(false);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(statePath, "capability-grants.json"), "utf8"))
-    ).toEqual({
-      grants: [],
-    });
+    const before = fs.readFileSync(path.join(statePath, "capability-grants.json"), "utf8");
+    expect(() => new CapabilityGrantStore({ statePath })).toThrow(
+      "scoped runtime-foundations reset"
+    );
+    expect(fs.readFileSync(path.join(statePath, "capability-grants.json"), "utf8")).toBe(before);
   });
 
-  it("destructively resets retired repository-scoped grants", () => {
+  it("refuses retired repository-scoped grants without a compatibility reader", () => {
     const statePath = tempStatePath();
     const filePath = path.join(statePath, "capability-grants.json");
     fs.writeFileSync(
@@ -237,19 +321,11 @@ describe("capabilityPermission", () => {
       })
     );
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const grantStore = new CapabilityGrantStore({ statePath });
-
-    expect(
-      grantStore.hasGrant("external-browser-open", "https://example.com", {
-        callerId: "worker:source",
-        repoPath: "workers/source",
-        effectiveVersion: "version-1",
-      })
-    ).toBe(false);
-    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({ grants: [] });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Resetting invalid grant store"));
-    warn.mockRestore();
+    const before = fs.readFileSync(filePath, "utf8");
+    expect(() => new CapabilityGrantStore({ statePath })).toThrow(
+      "scoped runtime-foundations reset"
+    );
+    expect(fs.readFileSync(filePath, "utf8")).toBe(before);
   });
 
   it("keys session-scoped capability grants to the concrete caller identity", async () => {
@@ -271,7 +347,11 @@ describe("capabilityPermission", () => {
         callerId: "panel:first",
         callerKind: "panel",
         repoPath: "panels/source",
-        effectiveVersion: "version-1",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     });
     await requestCapabilityPermission(deps, {
@@ -280,7 +360,11 @@ describe("capabilityPermission", () => {
         callerId: "panel:second",
         callerKind: "panel",
         repoPath: "panels/source",
-        effectiveVersion: "version-1",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     });
 
@@ -297,7 +381,11 @@ describe("capabilityPermission", () => {
       callerId: "worker:network",
       callerKind: "worker",
       repoPath: "workers/network",
-      effectiveVersion: "version-1",
+      executionDigest: DIGEST_A,
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
     const requestForOrigin = (origin: string) => ({
       caller,
@@ -344,7 +432,11 @@ describe("capabilityPermission", () => {
       callerId: "worker:network",
       callerKind: "worker",
       repoPath: "workers/network",
-      effectiveVersion: "version-1",
+      executionDigest: DIGEST_A,
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
     const requestFor = (capability: string, origin: string) => ({
       caller,
@@ -376,7 +468,7 @@ describe("capabilityPermission", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps internal network trust scoped to the concrete caller identity", async () => {
+  it("shares broad network trust across incarnations of one exact artifact", async () => {
     const approvalQueue = createApprovalQueueMock("version");
     const deps = {
       approvalQueue,
@@ -386,8 +478,12 @@ describe("capabilityPermission", () => {
       createVerifiedCaller(id, "do", {
         callerId: id,
         callerKind: "do",
-        repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
+        repoPath: "workers/eval",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       });
     const requestFor = (id: string, origin: string) => ({
       caller: caller(id),
@@ -405,18 +501,18 @@ describe("capabilityPermission", () => {
 
     await requestCapabilityPermission(
       deps,
-      requestFor("do:vibestudio/internal:EvalDO:one", "https://one.example")
+      requestFor("do:workers/eval:EvalDO:one", "https://one.example")
     );
     await requestCapabilityPermission(
       deps,
-      requestFor("do:vibestudio/internal:EvalDO:one", "https://two.example")
+      requestFor("do:workers/eval:EvalDO:one", "https://two.example")
     );
     await requestCapabilityPermission(
       deps,
-      requestFor("do:vibestudio/internal:EvalDO:two", "https://two.example")
+      requestFor("do:workers/eval:EvalDO:two", "https://two.example")
     );
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
 
   it("supports requester-entity scoped panel grants even for repo/version approvals", async () => {
@@ -441,7 +537,11 @@ describe("capabilityPermission", () => {
       callerId: "panel:first-entity",
       callerKind: "panel",
       repoPath: "panels/source",
-      effectiveVersion: "version-1",
+      executionDigest: DIGEST_A,
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
@@ -463,7 +563,11 @@ describe("capabilityPermission", () => {
       callerId: "panel:second-entity",
       callerKind: "panel",
       repoPath: "panels/source",
-      effectiveVersion: "version-1",
+      executionDigest: DIGEST_A,
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
@@ -503,7 +607,11 @@ describe("capabilityPermission", () => {
         callerId: "panel:source",
         callerKind: "panel",
         repoPath: "panels/source",
-        effectiveVersion: "version-1",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
       capability: "context.boundary",
       severity: "severe",
@@ -552,7 +660,11 @@ describe("capabilityPermission", () => {
         callerId: "worker:source",
         callerKind: "worker",
         repoPath: "workers/source",
-        effectiveVersion: "version-1",
+        executionDigest: DIGEST_A,
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
       capability: "example-capability",
       resource: { type: "example", label: "Example", value: "stable-key" },

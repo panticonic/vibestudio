@@ -31,15 +31,15 @@ import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js"
 function makeRecord(
   id: string,
   kind: EntityKind,
-  opts?: { contextId?: string; repoPath?: string; effectiveVersion?: string }
+  opts?: { contextId?: string; repoPath?: string; executionDigest?: string }
 ): EntityRecord {
   return {
     id,
     kind,
     source: {
       repoPath: opts?.repoPath ?? "",
-      effectiveVersion: opts?.effectiveVersion ?? "",
     },
+    activeExecutionDigest: opts?.executionDigest ?? "",
     contextId: opts?.contextId ?? "",
     key: id,
     createdAt: Date.now(),
@@ -50,8 +50,6 @@ function makeRecord(
 
 type MockDispatcher = ServiceDispatcher & {
   dispatch: ReturnType<typeof vi.fn>;
-  getPolicy: ReturnType<typeof vi.fn>;
-  getMethodPolicy: ReturnType<typeof vi.fn>;
 };
 
 type TestRpcServer = {
@@ -118,8 +116,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
 
   const dispatcher = {
     dispatch: vi.fn(),
-    getPolicy: vi.fn(),
-    getMethodPolicy: vi.fn(),
+    assertAuthority: vi.fn(),
   } as unknown as MockDispatcher;
   const runtimeCoordinator = new PanelRuntimeCoordinator();
   runtimeCoordinator.registerClient({
@@ -140,6 +137,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
     runtimeCoordinator,
     grantPanel: (panelId: string) => connectionGrants.grant(panelId, "shell:test").token,
     server: new RpcServer({
+      workspaceId: "test-workspace",
       tokenManager,
       dispatcher,
       entityCache,
@@ -162,7 +160,14 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
               callerId,
               callerKind: "extension" as const,
               repoPath: callerId.slice("@workspace-extensions/".length),
-              effectiveVersion: "ev-test",
+              executionDigest: "ev-test",
+              requested: [
+                {
+                  capability: "service:*",
+                  resource: { kind: "prefix" as const, prefix: "" },
+                },
+                { capability: "rpc:*", resource: { kind: "prefix" as const, prefix: "" } },
+              ],
             }
           : null,
       ...opts,
@@ -592,8 +597,6 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
   function setupStreamingServer() {
     const created = createServer();
     const dispatcher = testServer(created.server).dispatcher;
-    dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
-    dispatcher.getMethodPolicy.mockReturnValue(undefined);
     return { ...created, dispatcher };
   }
 
@@ -869,8 +872,6 @@ describe("RpcServer relay behavior", () => {
   it("replaces forged WS RPC identity before service dispatch and response attribution", async () => {
     const { server, grantPanel } = createServer();
     const sourceWs = createTestWs();
-    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
-    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
     testServer(server).dispatcher.dispatch.mockResolvedValue({ ok: true });
     testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
 
@@ -1013,12 +1014,15 @@ describe("RpcServer relay behavior", () => {
     const tokenManager = new TokenManager();
     const dispatcher = {
       dispatch: vi.fn(),
-      getPolicy: vi.fn(),
-      getMethodPolicy: vi.fn(),
     } as unknown as MockDispatcher;
     const entityCache = new EntityCache();
     entityCache._onActivate(makeRecord("panel:nav-a", "panel", { contextId: "ctx-1" }));
-    const server = new RpcServer({ tokenManager, dispatcher, entityCache });
+    const server = new RpcServer({
+      workspaceId: "test-workspace",
+      tokenManager,
+      dispatcher,
+      entityCache,
+    });
 
     await expect(
       testServer(server).relayToDO(
@@ -1166,7 +1170,14 @@ describe("RpcServer relay behavior", () => {
       callerId: "@workspace-apps/shell",
       callerKind: "app" as const,
       repoPath: "apps/shell",
-      effectiveVersion: "ev-parent",
+      executionDigest: "ev-parent",
+      requested: [
+        {
+          capability: "service:*",
+          resource: { kind: "prefix" as const, prefix: "" },
+        },
+        { capability: "rpc:*", resource: { kind: "prefix" as const, prefix: "" } },
+      ],
       contextId: "ctx-parent",
     };
     const resolveExtensionInvocation = vi.fn(() => ({
@@ -1186,7 +1197,7 @@ describe("RpcServer relay behavior", () => {
       makeRecord(parentCaller.callerId, "app", {
         contextId: parentCaller.contextId,
         repoPath: parentCaller.repoPath,
-        effectiveVersion: parentCaller.effectiveVersion,
+        executionDigest: parentCaller.executionDigest,
       })
     );
     server.setWorkerdUrl("http://127.0.0.1:1111");
@@ -1425,7 +1436,6 @@ describe("RpcServer relay behavior", () => {
     const ws1 = createTestWs();
     const ws2 = createTestWs();
 
-    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
     testServer(server).dispatcher.dispatch.mockResolvedValue("ok");
 
     testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
@@ -2277,6 +2287,29 @@ describe("RpcServer caller identity", () => {
     const callers = testServer(server).connections.getCallerConnections("electron-main");
     expect(callers).toHaveLength(1);
     expect(callers[0]!.caller.runtime.kind).toBe("shell");
+    expect(callers[0]!.caller.hostOriginated).toBeUndefined();
+  });
+
+  it("stamps host authority only from host-attested token metadata", () => {
+    const { server, tokenManager } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "usr_root", handle: "root" }),
+      },
+    });
+    const token = tokenManager.createToken("headless-host", "shell", {
+      hostOriginated: true,
+    });
+    const ws = createTestWs();
+
+    testServer(server).handleAuth(ws, token, "conn-headless-host");
+
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(
+      testServer(server).connections.getCallerConnections("headless-host")[0]?.caller
+    ).toMatchObject({
+      runtime: { id: "headless-host", kind: "shell" },
+      hostOriginated: true,
+    });
   });
 
   it("accepts WS authentication when a connection grant resolves to a shell host principal", () => {
@@ -2348,18 +2381,22 @@ describe("RpcServer caller identity", () => {
     );
   });
 
-  it("denies worker callers for shell-only methods", async () => {
+  it("preserves a compositional dispatcher denial on the wire", async () => {
     const { server } = createServer();
     const client = createClient("worker-1");
     client.caller = createVerifiedCaller("worker-1", "worker");
-    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
-    testServer(server).dispatcher.getMethodPolicy.mockReturnValue({ allowed: ["shell"] });
+    testServer(server).dispatcher.dispatch.mockRejectedValue(
+      Object.assign(new Error("authenticated user principal is required"), {
+        code: "EACCES",
+        errorKind: "access",
+      })
+    );
 
     await handleRpc(server, client, rpcRequest("req-3", "internal.shellOnly"));
 
-    expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(testServer(server).dispatcher.dispatch).toHaveBeenCalledOnce();
     expect(sentResponse(client).envelope.message.error).toContain(
-      "not accessible to worker callers"
+      "authenticated user principal is required"
     );
   });
 
@@ -2368,8 +2405,6 @@ describe("RpcServer caller identity", () => {
     const client = createClient("server");
     client.caller = createVerifiedCaller("server", "server");
     const dispatched: unknown[] = [];
-    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
-    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
     testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: unknown) => {
       dispatched.push(ctx);
       return { ok: true };
@@ -2391,13 +2426,21 @@ describe("RpcServer caller identity", () => {
           callerId: "@workspace-apps/shell",
           callerKind: "app" as const,
         },
+        chainCaller: {
+          callerId: "@workspace-apps/shell",
+          callerKind: "app" as const,
+          repoPath: "apps/shell",
+          executionDigest: "a".repeat(64),
+          requested: [
+            { capability: "service:*", resource: { kind: "prefix" as const, prefix: "" } },
+            { capability: "rpc:*", resource: { kind: "prefix" as const, prefix: "" } },
+          ],
+        },
       })),
     });
     const client = createClient("@workspace-extensions/tools");
     client.caller = createVerifiedCaller("@workspace-extensions/tools", "extension");
     const dispatched: unknown[] = [];
-    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["extension"] });
-    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
     testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: unknown) => {
       dispatched.push(ctx);
       return { ok: true };
@@ -2414,8 +2457,12 @@ describe("RpcServer caller identity", () => {
       chainCaller: {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
-        repoPath: "",
-        effectiveVersion: "",
+        repoPath: "apps/shell",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       },
     });
   });
@@ -2921,8 +2968,6 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
   function setupStreamingServer(opts: Parameters<typeof createServer>[0] = {}) {
     const created = createServer(opts);
     const dispatcher = testServer(created.server).dispatcher;
-    dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
-    dispatcher.getMethodPolicy.mockReturnValue(undefined);
     return { ...created, dispatcher };
   }
 

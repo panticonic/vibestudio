@@ -19,7 +19,8 @@
  *            (policy + token resolution + gateContext construction), ProtectedRefStore
  *            (CAS + gate), GadWorkspaceDO push/merge orchestration, the DO base's
  *            read-at-entry invocationToken/callerContextId binding (driven via a
- *            real `__rpc` envelope), the content store, the chrome-trust bypass.
+ *            real `__rpc` envelope), the content store, and exact originating
+ *            principal attribution at the approval boundary.
  *   STUBBED — (a) the HTTP/workerd transport between host relay and DO is replaced
  *            by in-process `fetch` into the DO (the full electron gateway /
  *            workerd is unreachable in a vitest process); (b) the host-side token
@@ -32,7 +33,10 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import {
+  createTestDO,
+  createTestDirectAuthority,
+} from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
@@ -41,8 +45,13 @@ import type { GadCaller } from "../../src/server/vcsHost/testSupport.js";
 import { createProtectedRefStore, type RefGateBatch } from "../../src/server/services/protectedRefStore.js";
 import { createRefsRpcService } from "../../src/server/services/refsRpcService.js";
 import { VcsInvocationTable } from "../../src/server/services/vcsInvocationTable.js";
-import { isAuthorizedChrome } from "../../src/server/services/chromeTrust.js";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createHostCaller,
+  createVerifiedCaller,
+  type ServiceDispatcher,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { RefAdvanceGateContext } from "../../src/server/services/mainAdvanceApproval.js";
 
 const USER = { id: "user", kind: "user" };
@@ -52,10 +61,10 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 function inProcessGadCaller(gad: TestGad): GadCaller {
   return {
     async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
+      // WorkspaceVcs is a host-owned bridge. Exercise the normal DO dispatch
+      // path so the call carries the product host principal; direct method
+      // calls would be deliberately unattributed and must fail closed.
+      return await gad.call<T>(method, input);
     },
   };
 }
@@ -67,6 +76,7 @@ describe("full-gateway attribution (row 11)", () => {
   let refs: ReturnType<typeof createProtectedRefStore>;
   let invocations: VcsInvocationTable;
   let refsService: ReturnType<typeof createRefsRpcService>;
+  let refsDispatcher: ServiceDispatcher;
   let gateBatches: RefGateBatch[];
 
   /** The REAL refs bridge: the DO's `refsStore().updateMains` routes through the
@@ -74,7 +84,18 @@ describe("full-gateway attribution (row 11)", () => {
    *  single-writer policy + on-behalf-of token resolution are genuinely
    *  exercised (not the doVcsPush stub, which bypasses that layer). */
   function installRealRefsBridge(): void {
-    const writerCtx = { caller: createVerifiedCaller(WRITER_ID, "do") };
+    const writer = createVerifiedCaller(WRITER_ID, "do", {
+      callerId: WRITER_ID,
+      callerKind: "do",
+      repoPath: "workers/gad-store",
+      executionDigest: "d".repeat(64),
+      requested: [
+        {
+          capability: "service:refs.updateMains",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
     const bridge = {
       async readMain(repoPath: string) {
         const r = refs.readMain(repoPath);
@@ -95,7 +116,12 @@ describe("full-gateway attribution (row 11)", () => {
       }) {
         // The production RPC hop: the DO calls refs.updateMains; the host
         // resolves attribution from the token in the refsService handler.
-        return (await refsService.handler(writerCtx as never, "updateMains", [input])) as {
+        return (await refsDispatcher.dispatch(
+          { caller: writer },
+          "refs",
+          "updateMains",
+          [input]
+        )) as {
           updated: Array<{ repoPath: string; stateHash: string | null }>;
         };
       },
@@ -120,6 +146,9 @@ describe("full-gateway attribution (row 11)", () => {
       invocations,
       getVcsWriterIdentity: () => WRITER_ID,
     });
+    refsDispatcher = createTestServiceDispatcher();
+    refsDispatcher.registerService(refsService);
+    refsDispatcher.markInitialized();
     // contentStore + buildStore from the shared bridge; refsStore overridden below.
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     installRealRefsBridge();
@@ -177,7 +206,18 @@ describe("full-gateway attribution (row 11)", () => {
         from: opts.caller.runtime.id,
         target: `do:test:${objectKey}`,
         delivery: {
-          caller: { callerId: opts.caller.runtime.id, callerKind: opts.caller.runtime.kind },
+          caller: {
+            callerId: opts.caller.runtime.id,
+            callerKind: opts.caller.runtime.kind,
+            authorization: createTestDirectAuthority({
+              callerKind:
+                opts.caller.hostOriginated || opts.noToken ? "server" : opts.caller.runtime.kind,
+              source: "test",
+              className: "TestDO",
+              objectKey,
+              method: "vcsPush",
+            }),
+          },
         },
         provenance: [],
         message: {
@@ -219,7 +259,7 @@ describe("full-gateway attribution (row 11)", () => {
     return ctx.caller;
   }
 
-  it("attributes a panel-originated push to the PANEL principal (no chrome bypass)", async () => {
+  it("attributes a panel-originated push to the exact panel principal", async () => {
     const panel = createVerifiedCaller("chat-1", "panel");
     const stateHash = await seedCommit("chat-1", "packages/a", "a.txt", "A\n");
 
@@ -232,10 +272,10 @@ describe("full-gateway attribution (row 11)", () => {
     expect(refs.readMain("packages/a")?.stateHash).toBe(stateHash);
 
     // The approval gate saw the ORIGINATING panel principal, resolved by the
-    // host from the token — and the chrome bypass does NOT fire for it.
+    // host from the token. A runtime label alone carries no host authority.
     const gateCaller = lastGateCaller();
     expect(gateCaller.runtime).toEqual({ id: "chat-1", kind: "panel" });
-    expect(isAuthorizedChrome(gateCaller)).toBe(false);
+    expect(gateCaller.hostOriginated).toBeUndefined();
     // Phase 5: the host ref movement LOG is gone; on-behalf-of attribution now
     // rides the invocation token, resolved at the gate (asserted above) and
     // recorded DO-side. The token window closed after the dispatch (replay
@@ -243,24 +283,22 @@ describe("full-gateway attribution (row 11)", () => {
     expect(invocations.size()).toBe(0);
   });
 
-  it("attributes a chrome-originated push to chrome — bypass FIRES on the resolved caller", async () => {
-    const shell = createVerifiedCaller("shell", "shell");
-    // Sanity: chrome trust is keyed on the resolved principal.
-    expect(isAuthorizedChrome(shell)).toBe(true);
+  it("preserves a genuine host origin through the invocation token", async () => {
+    const shell = createHostCaller("shell", "shell");
     await seedCommit("chat-1", "packages/a", "a.txt", "A\n");
 
     const result = await relayPush({
       caller: shell,
-      // chrome has no ctx registration; it pushes another head unrestricted.
+      // A host operation has no context registration; it pushes another head.
       input: { repoPaths: ["packages/a"], sourceHead: vcsContextHead("chat-1") },
     });
     expect(result.status).toBe("pushed");
     const gateCaller = lastGateCaller();
     expect(gateCaller.runtime).toEqual({ id: "shell", kind: "shell" });
-    expect(isAuthorizedChrome(gateCaller)).toBe(true);
+    expect(gateCaller.hostOriginated).toBe(true);
   });
 
-  it("a DO-self push (no token) attributes to the DO itself — full prompt, no bypass", async () => {
+  it("a DO-self push without a token attributes to the DO itself", async () => {
     await seedCommit("chat-1", "packages/a", "a.txt", "A\n");
     const result = await relayPush({
       caller: createVerifiedCaller(WRITER_ID, "do"),
@@ -268,10 +306,10 @@ describe("full-gateway attribution (row 11)", () => {
       input: { repoPaths: ["packages/a"], sourceHead: vcsContextHead("chat-1") },
     });
     expect(result.status).toBe("pushed");
-    // No token → attributed to the writer DO (kind "do"), chrome bypass off.
+    // No token means the writer DO is the sole originating principal.
     const gateCaller = lastGateCaller();
     expect(gateCaller.runtime.kind).toBe("do");
-    expect(isAuthorizedChrome(gateCaller)).toBe(false);
+    expect(gateCaller.hostOriginated).toBeUndefined();
   });
 
   it("rejects a forged token at the host (never silently attributes to the DO)", async () => {
@@ -282,7 +320,19 @@ describe("full-gateway attribution (row 11)", () => {
     const envelope = {
       from: "panel:chat-1",
       target: `do:test:${objectKey}`,
-      delivery: { caller: { callerId: "panel:chat-1", callerKind: "panel" } },
+      delivery: {
+        caller: {
+          callerId: "panel:chat-1",
+          callerKind: "panel",
+          authorization: createTestDirectAuthority({
+            callerKind: "panel",
+            source: "test",
+            className: "TestDO",
+            objectKey,
+            method: "vcsPush",
+          }),
+        },
+      },
       provenance: [],
       message: {
         type: "request",

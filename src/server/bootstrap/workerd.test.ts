@@ -61,7 +61,7 @@ describe("workerd bootstrap policy", () => {
         externalHost: "127.0.0.1",
         configuredAliases: undefined,
       },
-      getInternalDoEnv: () => ({}),
+      getProductDoEnv: () => ({}),
       runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
       eventService: inert as WorkerdBootstrapDeps["eventService"],
       onManagerStarted: vi.fn(),

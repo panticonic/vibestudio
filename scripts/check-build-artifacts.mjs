@@ -38,7 +38,7 @@ const contracts = [
     mustContain: [SERVER_ESM_BANNER],
   },
   {
-    path: "dist/internal-do.bundle.mjs",
+    path: "dist/product-do.bundle.mjs",
     runtime: "workerd/browser Durable Object bundle",
     format: "esm",
     forbidden: [

@@ -154,7 +154,7 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
   const getProvider = () =>
     (providerPromise ??= (async () => {
       const { createNodeDatachannelProvider } =
-        await import("../node/webrtc/nodeDatachannelPeer.js");
+        await import("@vibestudio/direct-client/node-webrtc");
       return createNodeDatachannelProvider({ peerName: "vibestudio-server" });
     })());
 

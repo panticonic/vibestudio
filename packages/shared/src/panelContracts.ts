@@ -40,6 +40,8 @@ export const PanelFocusResultSchema: z.ZodType<PanelFocusResult> = z.object({
     "focused",
     "loaded",
     "leased_elsewhere",
+    "mobile_held",
+    "no_default_cdp_host",
     "build_failed",
     "view_creation_failed",
   ]),
@@ -57,7 +59,7 @@ export const PanelLifecycleResultSchema: z.ZodType<PanelLifecycleResult> = z.obj
   rebuilt: z.boolean(),
   reloaded: z.boolean(),
   buildRevision: z.number().optional(),
-  effectiveVersion: z.string().nullable().optional(),
+  executionDigest: z.string().nullable().optional(),
 });
 
 export const PanelNavigationStateSchema: z.ZodType<PanelNavigationState> = z.object({
@@ -159,7 +161,7 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
     id: z.string(),
     title: z.string(),
     runtimeEntityId: z.string().nullable().optional(),
-    effectiveVersion: z.string().nullable().optional(),
+    executionDigest: z.string().nullable().optional(),
     owner: z.string().optional(),
     children: z.array(PanelSchema),
     positionId: z.string().optional(),

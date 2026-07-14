@@ -1,9 +1,10 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { Gateway } from "../gateway.js";
 import { RouteRegistry } from "../routeRegistry.js";
 import {
@@ -27,7 +28,7 @@ function makePanelRecord(id: string): EntityRecord {
   return {
     id,
     kind: "panel",
-    source: { repoPath: "", effectiveVersion: "" },
+    source: { repoPath: "" },
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -44,7 +45,7 @@ function makeSessionRecord(
   return {
     id,
     kind: "session",
-    source: { repoPath: "agent-cli", effectiveVersion: "" },
+    source: { repoPath: "agent-cli" },
     contextId: opts.contextId ?? "ctx-abc",
     key,
     parentId: opts.parentId,
@@ -222,7 +223,13 @@ describe("auth service connection grants", () => {
 
     await expect(
       service.definition.handler(
-        { caller: createVerifiedCaller("shell:test", "shell") },
+        {
+          caller: createVerifiedCaller("shell:test", "shell"),
+          authority: {
+            allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+            assert: vi.fn(async () => undefined),
+          },
+        },
         "grantConnection",
         ["panel:missing"]
       )
@@ -244,7 +251,13 @@ describe("auth service connection grants", () => {
     });
 
     const granted = (await service.definition.handler(
-      { caller: createVerifiedCaller("shell:test", "shell") },
+      {
+        caller: createVerifiedCaller("shell:test", "shell"),
+        authority: {
+          allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+          assert: vi.fn(async () => undefined),
+        },
+      },
       "grantConnection",
       ["panel:one"]
     )) as { token: string; expiresAt: number };
@@ -268,16 +281,20 @@ describe("auth service connection grants", () => {
       getWorkspaceId: () => "workspace_test",
       getConnectionInfo,
       connectionGrants,
-      hasAppCapability: (callerId, capability) =>
-        callerId === "app:apps/mobile:device-1" && capability === "panel-hosting",
     });
 
-    expect(service.definition.methods?.["grantConnection"]?.policy).toEqual({
-      allowed: ["server", "shell", "app"],
+    expect(service.definition.methods?.["grantConnection"]?.authority).toEqual({
+      principals: ["host", "user", "code"],
     });
 
     const granted = (await service.definition.handler(
-      { caller: createVerifiedCaller("app:apps/mobile:device-1", "app") },
+      {
+        caller: createVerifiedCaller("app:apps/mobile:device-1", "app"),
+        authority: {
+          allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+          assert: vi.fn(async () => undefined),
+        },
+      },
       "grantConnection",
       ["panel:mobile"]
     )) as { token: string; expiresAt: number };
@@ -301,12 +318,17 @@ describe("auth service connection grants", () => {
       getWorkspaceId: () => "workspace_test",
       getConnectionInfo,
       connectionGrants,
-      hasAppCapability: () => false,
     });
 
     await expect(
       service.definition.handler(
-        { caller: createVerifiedCaller("app:apps/other:device-1", "app") },
+        {
+          caller: createVerifiedCaller("app:apps/other:device-1", "app"),
+          authority: {
+            allows: vi.fn(async () => false),
+            assert: vi.fn(async () => undefined),
+          },
+        },
         "grantConnection",
         ["panel:mobile"]
       )
@@ -326,7 +348,7 @@ describe("auth service connection grants", () => {
         callerId: "system:apps",
         callerKind: "system",
         repoPath: "apps/mobile",
-        effectiveVersion: "ev-mobile",
+        executionDigest: "sourceDigest-mobile",
         trigger: "startup",
         title: "Approve workspace apps",
         description: "Approve the mobile app",
@@ -337,9 +359,9 @@ describe("auth service connection grants", () => {
             displayName: "Mobile",
             target: "react-native",
             source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-            ev: "ev-mobile",
+            sourceDigest: "sourceDigest-mobile",
             capabilities: ["notifications"],
-            dependencyEvs: {},
+            dependencySourceDigests: {},
             externalDeps: {},
           },
         ],
@@ -421,8 +443,25 @@ async function postLocal<T>(
 }
 
 describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () => {
+  const extensionCaller = (callerId: string) =>
+    createVerifiedCaller(callerId, "extension", {
+      callerId,
+      callerKind: "extension",
+      repoPath: "extensions/agent-launcher",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "service:auth.mintAgentCredential",
+          resource: { kind: "prefix", prefix: "" },
+        },
+        {
+          capability: "service:auth.revokeAgentCredential",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
   const makeDispatcher = () => {
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     const tokenManager = new TokenManager();
     const authStore = makeAuthStore();
     const records = new Map<string, EntityRecord>();
@@ -450,7 +489,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
       "session:s1",
       makeSessionRecord("session:s1", { contextId: "ctx-derived", parentId: extensionId })
     );
-    const ext = { caller: createVerifiedCaller(extensionId, "extension") };
+    const ext = { caller: extensionCaller(extensionId) };
 
     const minted = (await dispatcher.dispatch(ext, "auth", "mintAgentCredential", [
       { entityId: "session:s1", channelId: "chan-1" },
@@ -482,7 +521,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
     );
 
     const serverMinted = (await dispatcher.dispatch(
-      { caller: createVerifiedCaller("server", "server") },
+      { caller: createHostCaller("server") },
       "auth",
       "mintAgentCredential",
       [{ entityId: "session:s2", channelId: "chan-2" }]
@@ -493,7 +532,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
 
     await expect(
       dispatcher.dispatch(
-        { caller: createVerifiedCaller("extension:other", "extension") },
+        { caller: extensionCaller("extension:other") },
         "auth",
         "mintAgentCredential",
         [{ entityId: "session:s2", channelId: "chan-2" }]
@@ -511,7 +550,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
           "mintAgentCredential",
           [{ entityId: "e", channelId: "ch" }]
         )
-      ).rejects.toThrow(/not accessible/i);
+      ).rejects.toThrow(/authenticated code principal|exact code or host principal/i);
     }
   });
 });

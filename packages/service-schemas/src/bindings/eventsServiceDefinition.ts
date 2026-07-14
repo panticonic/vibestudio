@@ -18,7 +18,7 @@ export function createEventsServiceDefinition(
     name: "events",
     hostRouting: { panel: "session" },
     description: "Event subscriptions",
-    policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: eventsMethods,
     handler: defineServiceHandler("events", eventsMethods, {
       subscribe: async (ctx, [eventName]) => {

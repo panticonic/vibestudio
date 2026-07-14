@@ -1,29 +1,29 @@
 /**
  * State Transition Trigger — subscribes to workspace state advances on the
- * GAD vcs log (`vcs:workspace` @ main), recomputes effective versions for
+ * GAD vcs log (`vcs:workspace` @ main), recomputes source digests for
  * the touched units, and rebuilds them.
  *
  * Replaces the git PushTrigger: change detection is `diffGadStates` paths
  * (precise per-file), content hashes are manifest subtree hashes, and the
- * build's sources come from the same immutable state the EVs were computed
+ * build's sources come from the same immutable state the source digests were computed
  * at — there is no commit/push race to patch around.
  *
- * Immutability: never mutates the PackageGraph; EV maps and content-hash
+ * Immutability: never mutates the PackageGraph; source digest maps and content-hash
  * maps are value types replaced wholesale.
  */
 
 import { EventEmitter } from "events";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import {
-  computeEffectiveVersions,
+  computeSourceClosures,
   recomputeFromNodes,
-  diffEvMaps,
-  persistEvState,
+  diffSourceMaps,
+  persistSourceState,
   type ContentHashMap,
-  type EffectiveVersionMap,
-} from "./effectiveVersion.js";
+  type SourceClosureMap,
+} from "./sourceClosure.js";
 import * as buildStore from "./buildStore.js";
-import { buildUnit, computeBuildUnitKey } from "./builder.js";
+import { buildUnit, computeUnitCompilationCacheKey } from "./builder.js";
 import { diagnosticsFromError, type BuildDiagnostic } from "./diagnostics.js";
 import { recordDiagnostics } from "./diagnosticsStore.js";
 import { assertPresent } from "../../lintHelpers";
@@ -110,7 +110,7 @@ export interface BuildRecord {
   inputStateHash: string;
   unitName: string;
   subtree: string;
-  ev: string;
+  sourceDigest: string;
   buildKey: string;
   status: "ok" | "error";
   error?: string;
@@ -144,7 +144,7 @@ export interface WorkspaceStateSource {
    * Discover package manifests from a workspace-rooted state. Per the per-repo
    * VCS reshape this is the composed live workspace view (`workspaceView()` =
    * `composeRepoStatesLocal` over each repo's `main`). Discovery stays
-   * workspace-rooted so unit `relativePath`s, EVs, and the build graph remain
+   * workspace-rooted so unit `relativePath`s, source digests, and the build graph remain
    * in workspace coordinates regardless of which repo advanced.
    */
   discoverGraph(stateHash: string): Promise<PackageGraph>;
@@ -174,7 +174,7 @@ export interface StateTriggerEvents {
   };
   "graph-updated": {
     graph: PackageGraph;
-    evMap: EffectiveVersionMap;
+    sourceMap: SourceClosureMap;
     contentHashes: ContentHashMap;
     stateHash: string;
   };
@@ -184,7 +184,7 @@ export const MAIN_HEAD = "main";
 
 export interface BuildStateSnapshot {
   graph: PackageGraph;
-  evMap: EffectiveVersionMap;
+  sourceMap: SourceClosureMap;
   contentHashes: ContentHashMap;
   stateHash: string;
 }
@@ -224,7 +224,7 @@ export function unitsForChangedPaths(
 export class StateTransitionTrigger extends EventEmitter {
   private queue: Promise<void> = Promise.resolve();
   private graph: PackageGraph;
-  private evMap: EffectiveVersionMap;
+  private sourceMap: SourceClosureMap;
   private contentHashes: ContentHashMap;
   private stateHash: string;
   private readonly workspaceRoot: string;
@@ -233,7 +233,7 @@ export class StateTransitionTrigger extends EventEmitter {
 
   constructor(opts: {
     graph: PackageGraph;
-    evMap: EffectiveVersionMap;
+    sourceMap: SourceClosureMap;
     contentHashes: ContentHashMap;
     stateHash: string;
     workspaceRoot: string;
@@ -241,7 +241,7 @@ export class StateTransitionTrigger extends EventEmitter {
   }) {
     super();
     this.graph = opts.graph;
-    this.evMap = opts.evMap;
+    this.sourceMap = opts.sourceMap;
     this.contentHashes = opts.contentHashes;
     this.stateHash = opts.stateHash;
     this.workspaceRoot = opts.workspaceRoot;
@@ -260,13 +260,13 @@ export class StateTransitionTrigger extends EventEmitter {
   getState(): BuildStateSnapshot {
     return {
       graph: this.graph,
-      evMap: this.evMap,
+      sourceMap: this.sourceMap,
       contentHashes: this.contentHashes,
       stateHash: this.stateHash,
     };
   }
 
-  /** Rediscover graph/EV state without triggering eager builds. */
+  /** Rediscover graph/source digest state without triggering eager builds. */
   async rediscoverAt(stateHash: string): Promise<void> {
     const newGraph = await this.source.discoverGraph(stateHash);
     const relPaths = newGraph.allNodes().map((node) => node.relativePath);
@@ -277,19 +277,19 @@ export class StateTransitionTrigger extends EventEmitter {
       if (hash) contentHashes[node.name] = hash;
     }
 
-    const result = computeEffectiveVersions(newGraph, contentHashes);
+    const result = computeSourceClosures(newGraph, contentHashes);
     this.graph = newGraph;
-    this.evMap = result.evMap;
+    this.sourceMap = result.sourceMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = stateHash;
-    persistEvState({
+    persistSourceState({
       stateHash,
-      evMap: result.evMap,
+      sourceMap: result.sourceMap,
       contentHashes: result.contentHashes,
     });
     this.emit("graph-updated", {
       graph: newGraph,
-      evMap: result.evMap,
+      sourceMap: result.sourceMap,
       contentHashes: result.contentHashes,
       stateHash,
     });
@@ -312,12 +312,12 @@ export class StateTransitionTrigger extends EventEmitter {
    * bookkeeping (consumed directly off `workspaceVcs.onStateAdvanced`) — it is
    * NOT a publication and MUST NOT build: builds are validated at the push gate
    * (`validate`/`validateRepoPush` build + cache the candidate, idempotently —
-   * they do NOT record the baseline), and the recorded baseline (`persistEvState`
+   * they do NOT record the baseline), and the recorded baseline (`persistSourceState`
    * + `recordBuild`) is promoted ONLY here, reactively, when `main` advances.
    * On-demand previews of working content go through `previewBuild` (which
-   * never touches the EV baseline). So the build trigger deliberately does
+   * never touches the source digest baseline). So the build trigger deliberately does
    * nothing here: no `buildChanged`, no `change-detected`/unit-reconcile, and —
-   * critically — no `persistEvState` (the EV baseline tracks ONLY pushed main
+   * critically — no `persistSourceState` (the source digest baseline tracks ONLY pushed main
    * states; a pinned/working state must never poison it).
    */
   private async processPinnedHead(_event: StateAdvancedEvent): Promise<void> {
@@ -329,7 +329,7 @@ export class StateTransitionTrigger extends EventEmitter {
     // same composed workspace `stateHash` but DISTINCT per-repo `changedPaths`.
     // Deduping on `stateHash` alone would drop every repo after the first (the
     // first advances `this.stateHash` to the composed view), leaving the later
-    // repos' units' content hashes / EV / build notifications stale. Every
+    // repos' units' content hashes / source digest / build notifications stale. Every
     // per-repo event is therefore processed for its own `changedPaths`; an
     // empty delta is cheaply handled by the `units.size === 0` branch below.
 
@@ -362,23 +362,23 @@ export class StateTransitionTrigger extends EventEmitter {
     const result = recomputeFromNodes(
       this.graph,
       changedNames,
-      this.evMap,
+      this.sourceMap,
       this.contentHashes,
       updated
     );
-    const changeset = diffEvMaps(this.evMap, result.evMap);
+    const changeset = diffSourceMaps(this.sourceMap, result.sourceMap);
 
-    this.evMap = result.evMap;
+    this.sourceMap = result.sourceMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = event.stateHash;
-    persistEvState({
+    persistSourceState({
       stateHash: event.stateHash,
-      evMap: result.evMap,
+      sourceMap: result.sourceMap,
       contentHashes: result.contentHashes,
     });
     this.emit("graph-updated", {
       graph: this.graph,
-      evMap: result.evMap,
+      sourceMap: result.sourceMap,
       contentHashes: result.contentHashes,
       stateHash: event.stateHash,
     });
@@ -386,7 +386,7 @@ export class StateTransitionTrigger extends EventEmitter {
     await this.buildChanged(
       [...changeset.changed, ...changeset.added],
       this.graph,
-      result.evMap,
+      result.sourceMap,
       event,
       null
     );
@@ -394,7 +394,7 @@ export class StateTransitionTrigger extends EventEmitter {
 
   /**
    * Full graph rediscovery: re-scan workspace manifests from the immutable
-   * state, hash every unit at that state, recompute all EVs, build what changed.
+   * state, hash every unit at that state, recompute all source digests, build what changed.
    */
   async fullRediscovery(event: StateAdvancedEvent, sourceUnitName?: string): Promise<void> {
     const newGraph = await this.source.discoverGraph(event.stateHash);
@@ -406,21 +406,21 @@ export class StateTransitionTrigger extends EventEmitter {
       if (hash) contentHashes[node.name] = hash;
     }
 
-    const result = computeEffectiveVersions(newGraph, contentHashes);
-    const changeset = diffEvMaps(this.evMap, result.evMap);
+    const result = computeSourceClosures(newGraph, contentHashes);
+    const changeset = diffSourceMaps(this.sourceMap, result.sourceMap);
 
     this.graph = newGraph;
-    this.evMap = result.evMap;
+    this.sourceMap = result.sourceMap;
     this.contentHashes = result.contentHashes;
     this.stateHash = event.stateHash;
-    persistEvState({
+    persistSourceState({
       stateHash: event.stateHash,
-      evMap: result.evMap,
+      sourceMap: result.sourceMap,
       contentHashes: result.contentHashes,
     });
     this.emit("graph-updated", {
       graph: newGraph,
-      evMap: result.evMap,
+      sourceMap: result.sourceMap,
       contentHashes: result.contentHashes,
       stateHash: event.stateHash,
     });
@@ -428,7 +428,7 @@ export class StateTransitionTrigger extends EventEmitter {
     await this.buildChanged(
       [...changeset.changed, ...changeset.added],
       newGraph,
-      result.evMap,
+      result.sourceMap,
       event,
       sourceUnitName ?? null
     );
@@ -437,7 +437,7 @@ export class StateTransitionTrigger extends EventEmitter {
   private async buildChanged(
     names: string[],
     graph: PackageGraph,
-    evMap: EffectiveVersionMap,
+    sourceMap: SourceClosureMap,
     trigger: StateAdvancedEvent,
     sourceUnitName: string | null
   ): Promise<void> {
@@ -462,8 +462,8 @@ export class StateTransitionTrigger extends EventEmitter {
       // Trusted units (extensions/apps) rebuild only when directly targeted.
       if ((node.kind === "extension" || node.kind === "app") && name !== sourceUnitName) continue;
 
-      const ev = assertPresent(evMap[name]);
-      const buildKey = computeBuildUnitKey(node, ev);
+      const sourceDigest = assertPresent(sourceMap[name]);
+      const buildKey = computeUnitCompilationCacheKey(node, sourceDigest);
       if (buildStore.has(buildKey)) {
         this.emit("build-complete", { name, buildKey, trigger });
         continue;
@@ -471,14 +471,14 @@ export class StateTransitionTrigger extends EventEmitter {
 
       this.emit("build-started", { name, trigger });
       try {
-        await buildUnit(node, ev, graph, this.workspaceRoot, trigger.stateHash);
+        await buildUnit(node, sourceDigest, graph, this.workspaceRoot, trigger.stateHash);
         this.emit("build-complete", { name, buildKey, trigger });
         void this.source
           .recordBuild({
             inputStateHash: trigger.stateHash,
             unitName: name,
             subtree: node.relativePath,
-            ev,
+            sourceDigest,
             buildKey,
             status: "ok",
           })
@@ -493,7 +493,7 @@ export class StateTransitionTrigger extends EventEmitter {
             inputStateHash: trigger.stateHash,
             unitName: name,
             subtree: node.relativePath,
-            ev,
+            sourceDigest,
             buildKey,
             status: "error",
             error: message,

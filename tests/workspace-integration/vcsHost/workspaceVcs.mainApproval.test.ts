@@ -44,12 +44,7 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -71,7 +66,8 @@ function panelCaller() {
     callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/test",
-    effectiveVersion: "ev-panel",
+    executionDigest: "ev-panel",
+    requested: [],
   });
 }
 

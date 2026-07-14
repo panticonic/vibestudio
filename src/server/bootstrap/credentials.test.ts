@@ -1,14 +1,14 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
-import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { describe, expect, it } from "vitest";
 import { RouteRegistry } from "../routeRegistry.js";
 import { wireCredentialService, type CredentialBootstrapDeps } from "./credentials.js";
 
 describe("wireCredentialService", () => {
   it("constructs and registers the credential service through the host container", async () => {
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     const container = new ServiceContainer(dispatcher);
     const inert = {};
 
@@ -29,7 +29,6 @@ describe("wireCredentialService", () => {
       credentialLifecycle: inert as CredentialBootstrapDeps["credentialLifecycle"],
       hasConnectedShell: () => false,
       getAuthorizingShell: () => null,
-      hasAppCapability: () => false,
     });
 
     expect(service.name).toBe("credentials");

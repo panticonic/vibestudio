@@ -23,7 +23,7 @@ export type GadCaller = VcsGadCaller;
  * / `getBuildSystem` no longer exist. Result is the canonical `vcsPushResult`.
  */
 export function pushToMain(
-  gad: { instance: unknown },
+  gad: { call<T>(method: string, input: unknown): Promise<T> },
   input: {
     repoPaths: string[];
     sourceHead: string;
@@ -31,10 +31,7 @@ export function pushToMain(
     actor?: { id: string; kind: string };
   }
 ): Promise<import("@vibestudio/service-schemas/vcs").VcsPushResult> {
-  const instance = gad.instance as {
-    vcsPush: (i: unknown) => Promise<import("@vibestudio/service-schemas/vcs").VcsPushResult>;
-  };
-  return instance.vcsPush(input);
+  return gad.call("vcsPush", input);
 }
 
 type RefsLike = Pick<

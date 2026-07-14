@@ -3,17 +3,17 @@
  * entry point: caller-aware search/describe/getSchema/listSurfaces over the
  * unified catalog (services + runtime surface).
  *
- * Per-result filtering (not a service-level gate) keeps the policy permissive
- * while never advertising a method the caller cannot invoke — `index` applies
- * `isCatalogEntryVisible`, which mirrors the dispatcher's static gate.
+ * Per-result filtering is discovery ergonomics only. Enforcement remains in the
+ * compositional dispatcher; this surface uses declared principals and runtime
+ * availability without recreating an authorization gate.
  */
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDispatcher, CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
-import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import { docsMethods, type SerializedServiceDefinition } from "@vibestudio/service-schemas/docs";
 import { createCatalogIndex } from "./catalog/catalogIndex.js";
+import { isServiceMethodVisible } from "./catalog/buildCatalog.js";
 import { serializeDef } from "./catalog/serialize.js";
 
 export function createDocsService(deps: {
@@ -25,8 +25,8 @@ export function createDocsService(deps: {
     runtimeSurfaces: deps.runtimeSurfaces,
   }));
 
-  // Per-service view (absorbs meta.listServices/describeService), caller-filtered:
-  // serialize the def, then keep only the methods this caller kind may invoke.
+  // Per-service discovery view: keep methods whose declared authority mentions
+  // a principal shape this runtime can carry. This is not an access decision.
   const serializeForCaller = (
     def: ServiceDefinition,
     kind: CallerKind
@@ -34,13 +34,9 @@ export function createDocsService(deps: {
     const full = serializeDef(def) as SerializedServiceDefinition;
     const methods: SerializedServiceDefinition["methods"] = {};
     for (const name of Object.keys(full.methods)) {
-      try {
-        checkServiceAccess(def.name, kind, deps.dispatcher, name);
-        const method = full.methods[name];
-        if (method) methods[name] = method;
-      } catch {
-        // not callable by this caller kind — omit from the per-service view
-      }
+      const schema = def.methods[name];
+      const method = full.methods[name];
+      if (schema && method && isServiceMethodVisible(schema, def, kind)) methods[name] = method;
     }
     return { ...full, methods };
   };
@@ -49,7 +45,7 @@ export function createDocsService(deps: {
     name: "docs",
     description:
       "Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension", "server", "shell", "agent"] },
+    authority: { principals: ["code", "host", "user", "entity"] },
     methods: docsMethods,
     handler: defineServiceHandler("docs", docsMethods, {
       search: (ctx, [query, opts]) => {

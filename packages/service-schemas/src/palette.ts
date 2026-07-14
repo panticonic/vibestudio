@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",

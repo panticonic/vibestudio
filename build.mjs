@@ -11,6 +11,7 @@ import {
   computeHostBuildFingerprint,
   writeHostBuildFingerprint,
 } from "./scripts/host-build-fingerprint.mjs";
+import { computeBuilderImplementationDigest } from "./scripts/builder-implementation-digest.mjs";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -216,13 +217,13 @@ const browserTransportConfig = {
   logOverride,
 };
 
-const internalDoBundleConfig = {
+const productDoBundleConfig = {
   entryPoints: ["src/server/internalDOs/index.ts"],
   bundle: true,
   platform: "browser",
   target: "es2022",
   format: "esm",
-  outfile: "dist/internal-do.bundle.mjs",
+  outfile: "dist/product-do.bundle.mjs",
   conditions: ["worker", "browser"],
   external: ["node:*", "electron"],
   sourcemap: isDev,
@@ -474,31 +475,40 @@ async function build() {
     fs.rmSync("dist/bootstrap", { recursive: true, force: true });
 
     const workerdProgramsPromise = buildWorkerdPrograms({ minify: !isDev, logOverride });
+    const builderImplementationDefine = {
+      "globalThis.__VIBESTUDIO_BUILDER_IMPLEMENTATION_DIGEST__": JSON.stringify(
+        computeBuilderImplementationDigest(process.cwd())
+      ),
+    };
     await Promise.all([
-      esbuild.build(mainConfig),
+      esbuild.build({
+        ...mainConfig,
+        define: { ...(mainConfig.define ?? {}), ...builderImplementationDefine },
+      }),
       ...preloadConfigs.map((config) => esbuild.build(config)),
       esbuild.build(browserTransportConfig),
-      esbuild.build(internalDoBundleConfig),
+      esbuild.build(productDoBundleConfig),
       esbuild.build(bootstrapConfig),
       esbuild.build(clientConfig),
       buildDependencyWorkers(),
       workerdProgramsPromise,
     ]);
     const workerdPrograms = await workerdProgramsPromise;
-    // Inline the build-compiled internal DO and workerd host programs into both
+    // Inline the sealed product DO artifact and workerd host programs into both
     // server artifacts. Source-mode execution reads the same emitted files.
-    const internalDoBundleContent = fs.readFileSync("dist/internal-do.bundle.mjs", "utf8");
-    const internalDoBundleDefine = {
-      "globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
+    const productDoBundleContent = fs.readFileSync("dist/product-do.bundle.mjs", "utf8");
+    const productDoBundleDefine = {
+      "globalThis.__VIBESTUDIO_PRODUCT_DO_BUNDLE__": JSON.stringify(productDoBundleContent),
       "globalThis.__VIBESTUDIO_WORKERD_PROGRAMS__": JSON.stringify(workerdPrograms),
+      ...builderImplementationDefine,
     };
     const serverElectronWithBundle = {
       ...serverElectronConfig,
-      define: { ...(serverElectronConfig.define ?? {}), ...internalDoBundleDefine },
+      define: { ...(serverElectronConfig.define ?? {}), ...productDoBundleDefine },
     };
     const serverWithBundle = {
       ...serverConfig,
-      define: { ...(serverConfig.define ?? {}), ...internalDoBundleDefine },
+      define: { ...(serverConfig.define ?? {}), ...productDoBundleDefine },
     };
     // Both server bundles consume the internal-DO output captured above.
     await Promise.all([esbuild.build(serverElectronWithBundle), esbuild.build(serverWithBundle)]);
@@ -523,13 +533,13 @@ async function build() {
   }
 }
 
-async function buildInternalDoOnly() {
+async function buildProductDoOnly() {
   try {
     fs.mkdirSync("dist", { recursive: true });
-    await esbuild.build(internalDoBundleConfig);
-    console.log("Internal Durable Object bundle built successfully!");
+    await esbuild.build(productDoBundleConfig);
+    console.log("Product Durable Object bundle built successfully!");
   } catch (error) {
-    console.error("Internal Durable Object bundle build failed:", error);
+    console.error("Product Durable Object bundle build failed:", error);
     process.exitCode = 1;
   }
 }
@@ -538,7 +548,7 @@ async function buildSourceServerPrerequisites() {
   try {
     // Source-mode servers import infrastructure packages through their public
     // dist exports, and auto-spawn the compiled headless host. Rebuilding only
-    // the internal DO bundle can therefore combine live server source with
+    // the product DO bundle can therefore combine live server source with
     // stale RPC/runtime binaries. Keep this boundary equivalent to the
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
@@ -548,7 +558,7 @@ async function buildSourceServerPrerequisites() {
     // embeds the RPC WebSocket client, so leaving it stale can make panels use
     // an older wire protocol even when packages/rpc/dist is current.
     await esbuild.build(browserTransportConfig);
-    await esbuild.build(internalDoBundleConfig);
+    await esbuild.build(productDoBundleConfig);
     await buildWorkerdPrograms({ minify: !isDev, logOverride });
     console.log("Source server prerequisites built successfully!");
   } catch (error) {
@@ -557,8 +567,8 @@ async function buildSourceServerPrerequisites() {
   }
 }
 
-if (process.argv.includes("--internal-do-only")) {
-  await buildInternalDoOnly();
+if (process.argv.includes("--product-do-only")) {
+  await buildProductDoOnly();
 } else if (process.argv.includes("--source-server-prereqs")) {
   await buildSourceServerPrerequisites();
 } else {

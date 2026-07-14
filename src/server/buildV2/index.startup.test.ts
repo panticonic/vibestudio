@@ -85,7 +85,7 @@ describe("BuildSystemV2 startup", () => {
     expect(vi.mocked(buildUnit)).not.toHaveBeenCalled();
   });
 
-  it("uses the explicit dependency workspace root for root-dependency fingerprints", async () => {
+  it("seals the explicit dependency workspace root at startup", async () => {
     const appRoot = path.join(root, "app");
     const dependencyWorkspaceRoot = path.join(appRoot, "workspace");
     fs.mkdirSync(dependencyWorkspaceRoot, { recursive: true });
@@ -99,16 +99,16 @@ describe("BuildSystemV2 startup", () => {
     fs.writeFileSync(path.join(dependencyWorkspaceRoot, "tsconfig.integration.json"), "{}\n");
 
     const { initBuildSystemV2 } = await import("./index.js");
-    const { getRootDependencyFingerprintInfo } = await import("./effectiveVersion.js");
+    const { getSealedBuildEnvironment } = await import("./sourceClosure.js");
     buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
       appRoot,
       dependencyWorkspaceRoot,
     });
 
-    const info = getRootDependencyFingerprintInfo();
-    const workspacePackage = info.files.find((file) => file.file === "workspace/package.json");
+    const info = getSealedBuildEnvironment();
+    const workspacePackage = info.inputs.find((file) => file.file === "workspace/package.json");
     expect(info.root).toBe(appRoot);
-    expect(info.rootSource).toBe("injected");
+    expect(info.workspaceRoot).toBe(dependencyWorkspaceRoot);
     expect(workspacePackage?.present).toBe(true);
     expect(workspacePackage?.path).toBe(path.join(dependencyWorkspaceRoot, "package.json"));
   });

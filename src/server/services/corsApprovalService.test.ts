@@ -52,7 +52,11 @@ describe("corsApprovalService", () => {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
         callerKind: "do",
         repoPath: "workers/agent-worker",
-        effectiveVersion: "version-1",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     };
 
@@ -84,7 +88,11 @@ describe("corsApprovalService", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "workspace/panels/chat",
-        effectiveVersion: "version-1",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     };
 
@@ -129,7 +137,11 @@ describe("corsApprovalService", () => {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
         repoPath: "apps/shell",
-        effectiveVersion: "version-1",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     };
 

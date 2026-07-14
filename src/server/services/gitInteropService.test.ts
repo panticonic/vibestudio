@@ -4,11 +4,32 @@ import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createTestServiceContext,
+  withTestServiceAuthority,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
-import { createGitInteropService } from "./gitInteropService.js";
+import { createGitInteropService as createGitInteropServiceDefinition } from "./gitInteropService.js";
+import { GitImportJournal } from "./gitImportJournal.js";
+
+function createGitInteropService(
+  deps: Omit<Parameters<typeof createGitInteropServiceDefinition>[0], "importJournal"> & {
+    importJournal?: GitImportJournal;
+  }
+) {
+  const journalRoot = deps.workspacePath ?? tempWorkspace();
+  return withTestServiceAuthority(
+    createGitInteropServiceDefinition({
+      ...deps,
+      importJournal:
+        deps.importJournal ??
+        new GitImportJournal(path.join(journalRoot, ".git-import-journal.json")),
+    })
+  );
+}
 
 type GitProviderInvoker = NonNullable<
   Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
@@ -17,11 +38,87 @@ type GitProviderInvoker = NonNullable<
 function cloneProvider(
   cloneRepo: (ctx: ServiceContext, repoPath: string) => Promise<unknown>
 ): GitProviderInvoker {
+  const phases = new Map<string, "prepared" | "committed" | "complete" | "aborted">();
   return (async (ctx: ServiceContext, method: string, args: unknown[]) => {
-    if (method !== "cloneRepo") throw new Error(`Unexpected provider method: ${method}`);
-    const input = args[0] as { repoPath: string };
-    await cloneRepo(ctx, input.repoPath);
-    return { stateHash: `state:${input.repoPath}`, changed: true };
+    const input = args[0] as { operationId: string; repoPath?: string };
+    const status = (phase: "prepared" | "committed" | "complete" | "aborted") => ({
+      operationId: input.operationId,
+      repoPath: input.repoPath ?? "projects/bgkit",
+      branch: "vibestudio-bridge",
+      gitCommitSha: "a".repeat(40),
+      stateHash: `state:${"b".repeat(64)}`,
+      changed: true,
+      phase,
+    });
+    if (method === "prepareImport") {
+      await cloneRepo(ctx, input.repoPath!);
+      phases.set(input.operationId, "prepared");
+      return status("prepared");
+    }
+    if (method === "commitImport") {
+      phases.set(input.operationId, "committed");
+      return status("committed");
+    }
+    if (method === "finalizeImport") {
+      phases.set(input.operationId, "complete");
+      return status("complete");
+    }
+    if (method === "inspectImport") {
+      const phase = phases.get(input.operationId);
+      return phase ? status(phase) : null;
+    }
+    if (method === "abortImport") {
+      phases.set(input.operationId, "aborted");
+      return status("aborted");
+    }
+    throw new Error(`Unexpected provider method: ${method}`);
+  }) as GitProviderInvoker;
+}
+
+function importProvider(input: {
+  branch?: string | null;
+  discoverError?: Error;
+  clone?: (ctx: ServiceContext, repoPath: string) => Promise<unknown>;
+}): GitProviderInvoker {
+  const phases = new Map<string, "prepared" | "committed" | "complete" | "aborted">();
+  return (async (ctx: ServiceContext, method: string, args: unknown[]) => {
+    if (method === "remoteDefaultBranch") {
+      if (input.discoverError) throw input.discoverError;
+      return { branch: input.branch ?? null };
+    }
+    const operation = args[0] as { operationId: string; repoPath?: string };
+    const repoPath = operation.repoPath ?? "projects/bgkit";
+    const status = (phase: "prepared" | "committed" | "complete" | "aborted") => ({
+      operationId: operation.operationId,
+      repoPath,
+      branch: input.branch ?? "main",
+      gitCommitSha: "a".repeat(40),
+      stateHash: `state:${"b".repeat(64)}`,
+      changed: true,
+      phase,
+    });
+    if (method === "prepareImport") {
+      await input.clone?.(ctx, repoPath);
+      phases.set(operation.operationId, "prepared");
+      return status("prepared");
+    }
+    if (method === "commitImport") {
+      phases.set(operation.operationId, "committed");
+      return status("committed");
+    }
+    if (method === "finalizeImport") {
+      phases.set(operation.operationId, "complete");
+      return status("complete");
+    }
+    if (method === "inspectImport") {
+      const phase = phases.get(operation.operationId);
+      return phase ? status(phase) : null;
+    }
+    if (method === "abortImport") {
+      phases.set(operation.operationId, "aborted");
+      return status("aborted");
+    }
+    throw new Error(`Unexpected provider method: ${method}`);
   }) as GitProviderInvoker;
 }
 
@@ -32,20 +129,22 @@ function tempWorkspace(): string {
 }
 
 function serviceContext(): ServiceContext {
-  return {
-    caller: createVerifiedCaller("server", "server"),
-  } as ServiceContext;
+  return createTestServiceContext(createVerifiedCaller("server", "server"));
 }
 
 function panelServiceContext(): ServiceContext {
-  return {
-    caller: createVerifiedCaller("panel-1", "panel", {
+  return createTestServiceContext(
+    createVerifiedCaller("panel-1", "panel", {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/test",
-      effectiveVersion: "ev-panel",
-    }),
-  } as ServiceContext;
+      executionDigest: "ev-panel",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    })
+  );
 }
 
 function grantStore(): CapabilityGrantStore {
@@ -95,6 +194,110 @@ function diskConfigPersistence(workspacePath: string) {
 }
 
 describe("gitInteropService", () => {
+  it("resolves and persists a non-main remote default before any workspace mutation", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(workspaceConfig),
+      "utf8"
+    );
+    const clone = vi.fn(async () => undefined);
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider: importProvider({ branch: "trunk", clone }),
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    const result = (await service.handler(serviceContext(), "importProject", [
+      {
+        path: "projects/bgkit",
+        remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
+      },
+    ])) as { remote: { branch: string } };
+
+    expect(result.remote.branch).toBe("trunk");
+    expect(clone).toHaveBeenCalledOnce();
+    const config = YAML.parse(
+      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf8")
+    ) as WorkspaceConfig;
+    expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]?.branch).toBe("trunk");
+    expect(config.git?.upstreams?.["projects"]?.["bgkit"]?.branch).toBe("trunk");
+  });
+
+  it("fails branch discovery and empty remotes before config, clone, or source adoption", async () => {
+    for (const provider of [
+      importProvider({ discoverError: new Error("remote unavailable") }),
+      importProvider({ branch: null }),
+    ]) {
+      const workspacePath = tempWorkspace();
+      const workspaceConfig: WorkspaceConfig = { id: "test" };
+      fs.writeFileSync(
+        path.join(workspacePath, "meta", "vibestudio.yml"),
+        YAML.stringify(workspaceConfig),
+        "utf8"
+      );
+      const persistence = diskConfigPersistence(workspacePath);
+      const sourceChanged = vi.fn(async () => undefined);
+      const service = createGitInteropService({
+        workspacePath,
+        workspaceConfig,
+        treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+        invokeGitProvider: provider,
+        onWorkspaceSourceChanged: sourceChanged,
+        ...persistence,
+      });
+
+      await expect(
+        service.handler(serviceContext(), "importProject", [
+          {
+            path: "projects/bgkit",
+            remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
+          },
+        ])
+      ).rejects.toThrow();
+      expect(persistence.persistWorkspaceConfigMutation).not.toHaveBeenCalled();
+      expect(sourceChanged).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not discover a default when the caller names a branch", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(workspaceConfig),
+      "utf8"
+    );
+    const providerSpy = vi.fn(importProvider({ branch: "release" }));
+    const provider = providerSpy as unknown as GitProviderInvoker;
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider: provider,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await service.handler(serviceContext(), "importProject", [
+      {
+        path: "projects/bgkit",
+        remote: {
+          name: "origin",
+          url: "https://github.com/werg/bgkit.git",
+          branch: "release",
+        },
+      },
+    ]);
+    expect(providerSpy.mock.calls.map((call: unknown[]) => call[1])).toEqual([
+      "prepareImport",
+      "commitImport",
+      "finalizeImport",
+    ]);
+  });
+
   it("imports a requested branch and persists it as a shared remote", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
@@ -233,7 +436,7 @@ describe("gitInteropService", () => {
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
   });
 
-  it("rolls the approved config declaration back when extension clone fails", async () => {
+  it("leaves configuration untouched when operation-owned preparation fails", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     const cloneRepo = vi.fn().mockRejectedValueOnce(new Error("network unavailable"));
@@ -267,7 +470,7 @@ describe("gitInteropService", () => {
           },
         },
       ])
-    ).rejects.toThrow(/failed during clone: network unavailable.*re-run the same import command/s);
+    ).rejects.toThrow(/failed during preparation: network unavailable/s);
 
     // No phantom declaration survives a failed clone: the remote/upstream
     // config is rolled back and the retry path is a clean re-import.
@@ -277,11 +480,99 @@ describe("gitInteropService", () => {
     expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toBeUndefined();
     expect(config.git?.upstreams?.["projects"]?.["bgkit"]).toBeUndefined();
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
-    expect(sourceChanged).toHaveBeenCalledWith(
-      panelServiceContext(),
-      "Roll back failed Git import of projects/bgkit",
-      undefined
+    expect(sourceChanged).not.toHaveBeenCalled();
+  });
+
+  it("resumes post-commit finalization from the durable journal without rediscovering the branch", async () => {
+    const workspacePath = tempWorkspace();
+    const configPath = path.join(workspacePath, "meta", "vibestudio.yml");
+    fs.writeFileSync(configPath, YAML.stringify({ id: "test" }), "utf8");
+    const journalPath = path.join(workspacePath, ".state", "git-imports.json");
+    const phases = new Map<string, "prepared" | "committed" | "complete" | "aborted">();
+    let branchLookups = 0;
+    let finalizeAttempts = 0;
+    const providerSpy = vi.fn(async (_ctx: ServiceContext, method: string, args: unknown[]) => {
+      if (method === "remoteDefaultBranch") {
+        branchLookups += 1;
+        if (branchLookups > 1) throw new Error("remote is offline during recovery");
+        return { branch: "trunk" };
+      }
+      const input = args[0] as { operationId: string; repoPath?: string };
+      const result = (phase: "prepared" | "committed" | "complete" | "aborted") => ({
+        operationId: input.operationId,
+        repoPath: input.repoPath ?? "projects/bgkit",
+        branch: "trunk",
+        gitCommitSha: "a".repeat(40),
+        stateHash: `state:${"b".repeat(64)}`,
+        changed: true,
+        phase,
+      });
+      if (method === "prepareImport") {
+        phases.set(input.operationId, "prepared");
+        return result("prepared");
+      }
+      if (method === "commitImport") {
+        phases.set(input.operationId, "committed");
+        return result("committed");
+      }
+      if (method === "finalizeImport") {
+        finalizeAttempts += 1;
+        if (finalizeAttempts === 1) throw new Error("marker fsync failed");
+        phases.set(input.operationId, "complete");
+        return result("complete");
+      }
+      if (method === "inspectImport") {
+        const phase = phases.get(input.operationId);
+        return phase ? result(phase) : null;
+      }
+      if (method === "abortImport") {
+        phases.set(input.operationId, "aborted");
+        return result("aborted");
+      }
+      throw new Error(`Unexpected provider method: ${method}`);
+    });
+    const provider = providerSpy as unknown as GitProviderInvoker;
+    const sourceChanged = vi.fn(async () => "ctx-imported");
+    const request = {
+      path: "projects/bgkit",
+      remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
+    };
+
+    const first = createGitInteropService({
+      workspacePath,
+      workspaceConfig: { id: "test" },
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider: provider,
+      importJournal: new GitImportJournal(journalPath),
+      onWorkspaceSourceChanged: sourceChanged,
+      ...diskConfigPersistence(workspacePath),
+    });
+    await expect(first.handler(serviceContext(), "importProject", [request])).rejects.toThrow(
+      /committed protected main but finalization is incomplete/
     );
+
+    const resumed = createGitInteropService({
+      workspacePath,
+      workspaceConfig: YAML.parse(fs.readFileSync(configPath, "utf8")) as WorkspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider: provider,
+      importJournal: new GitImportJournal(journalPath),
+      onWorkspaceSourceChanged: sourceChanged,
+      ...diskConfigPersistence(workspacePath),
+    });
+    await expect(
+      resumed.handler(serviceContext(), "importProject", [request])
+    ).resolves.toMatchObject({
+      phase: "complete",
+      remote: { branch: "trunk" },
+      adoptedContextId: "ctx-imported",
+    });
+
+    expect(branchLookups).toBe(1);
+    expect(providerSpy.mock.calls.filter((call) => call[1] === "prepareImport")).toHaveLength(1);
+    expect(providerSpy.mock.calls.filter((call) => call[1] === "commitImport")).toHaveLength(1);
+    expect(providerSpy.mock.calls.filter((call) => call[1] === "finalizeImport")).toHaveLength(2);
+    expect(sourceChanged).toHaveBeenCalledTimes(1);
   });
 
   it("imports configured workspace dependencies without prompting for another approval", async () => {
@@ -346,7 +637,7 @@ describe("gitInteropService", () => {
           path: "projects/bgkit",
           remote: {
             name: "origin",
-            url: "https://github.com/werg/bgkit.git",
+            urlIdentity: "https://github.com/werg/bgkit.git",
             branch: "vibestudio-bridge",
           },
         },
@@ -357,7 +648,7 @@ describe("gitInteropService", () => {
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
     expect(sourceChanged).toHaveBeenCalledWith(
-      panelServiceContext(),
+      expect.objectContaining({ caller: panelServiceContext().caller }),
       "Import workspace project projects/bgkit",
       "projects/bgkit"
     );
@@ -680,7 +971,7 @@ describe("gitInteropService", () => {
     ).rejects.toThrow("Invalid gitInterop.publishRepo provider result");
   });
 
-  it("rejects malformed clone results before completing an import", async () => {
+  it("rejects malformed preparation results before completing an import", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     const service = createGitInteropService({
@@ -695,10 +986,14 @@ describe("gitInteropService", () => {
       service.handler(serviceContext(), "importProject", [
         {
           path: "projects/bgkit",
-          remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
+          remote: {
+            name: "origin",
+            url: "https://github.com/werg/bgkit.git",
+            branch: "main",
+          },
         },
       ])
-    ).rejects.toThrow("Invalid gitInterop.cloneRepo provider result");
+    ).rejects.toThrow("Invalid gitInterop.prepareImport provider result");
   });
 
   it("removing a declared remote also removes upstream tracking that points at it", async () => {

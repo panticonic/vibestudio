@@ -46,7 +46,7 @@ export interface PanelListItem {
   parentId: string | null;
   contextId: string;
   runtimeEntityId?: string | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
 }
 
 export interface PanelRegistryOptions {
@@ -176,10 +176,10 @@ export class PanelRegistry implements PanelRelationshipProvider {
       partition: contextIdToPartition(contextId),
       contextId,
       runtimeEntityId: panel.runtimeEntityId ?? null,
-      effectiveVersion: panel.effectiveVersion ?? null,
+      executionDigest: panel.executionDigest ?? null,
       ref: getPanelRef(panel),
       build: {
-        effectiveVersion: panel.effectiveVersion ?? null,
+        executionDigest: panel.executionDigest ?? null,
         ref: getPanelRef(panel),
       },
     };
@@ -197,7 +197,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       parentId: this.findParentId(panel.id),
       contextId: getPanelContextId(panel),
       runtimeEntityId: panel.runtimeEntityId ?? null,
-      effectiveVersion: panel.effectiveVersion ?? null,
+      executionDigest: panel.executionDigest ?? null,
     }));
   }
 
@@ -215,7 +215,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       parentId,
       contextId: getPanelContextId(panel),
       runtimeEntityId: panel.runtimeEntityId ?? null,
-      effectiveVersion: panel.effectiveVersion ?? null,
+      executionDigest: panel.executionDigest ?? null,
     }));
   }
 

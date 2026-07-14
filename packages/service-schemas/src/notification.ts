@@ -4,8 +4,9 @@
 
 import { z } from "zod";
 import type { NotificationPayload } from "@vibestudio/shared/events";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 export type NotificationShowRequest = Omit<NotificationPayload, "id"> & { id?: string };
 
@@ -19,6 +20,18 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
 const USER_INBOX_SIGNAL_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
+
+const notificationAuthority = (method: "show" | "dismiss" | "reportAction") => ({
+  requirement: requirementForPrincipals(["user", "code"], `service:notification.${method}`),
+  resource: { kind: "literal" as const, key: `service:notification.${method}` },
+  additional: [
+    {
+      capability: "notifications",
+      requirement: requirementForPrincipals(["user", "code"], "notifications"),
+      resource: { kind: "literal" as const, key: "platform:notifications" },
+    },
+  ],
+});
 
 export const NotificationActionSchema = z.object({
   id: z.string().describe("Stable action identifier reported back via reportAction."),
@@ -107,6 +120,7 @@ export const notificationMethods = defineServiceMethods({
       "Show a notification in the shell chrome; returns its id (auto-generated when not supplied).",
     args: z.tuple([NotificationShowRequestSchema]),
     returns: z.string(),
+    authority: notificationAuthority("show"),
     access: WRITE_ACCESS,
     examples: [{ args: [{ type: "info", title: "Hello", message: "World" }] }],
   },
@@ -115,6 +129,7 @@ export const notificationMethods = defineServiceMethods({
       "Dismiss the notification with the given id, rejecting any pending waitForAction for it.",
     args: z.tuple([z.string()]),
     returns: z.void(),
+    authority: notificationAuthority("dismiss"),
     access: WRITE_ACCESS,
     examples: [{ args: ["notif-123"] }],
   },
@@ -123,6 +138,7 @@ export const notificationMethods = defineServiceMethods({
       "Report that the user took an action on a notification, emitting an event and resolving any pending waitForAction.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.void(),
+    authority: notificationAuthority("reportAction"),
     access: WRITE_ACCESS,
     examples: [{ args: ["notif-123", "approve"] }],
   },
@@ -131,7 +147,7 @@ export const notificationMethods = defineServiceMethods({
       "Notify every live session for one host-verified account that its durable userland inbox changed.",
     args: z.tuple([z.string().min(1)]),
     returns: z.boolean(),
-    policy: { allowed: ["do", "server"] },
+    authority: { principals: ["code", "host"] },
     access: USER_INBOX_SIGNAL_ACCESS,
     examples: [{ args: ["usr_alice"] }],
   },

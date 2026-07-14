@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
-import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { EVAL_DO_SOURCE, WORKSPACE_DO_SOURCE } from "./internalDOs/productBootManifest.js";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
+import { attestDirectRpc } from "./services/authorityRuntime.js";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */
 function userlandUrl(ref: DORef, methodPath: string): string {
@@ -44,13 +46,18 @@ describe("doRefUrl", () => {
 
   it("routes an internal DO through its static namespace (/_w/)", () => {
     const ref = makeRef({
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: "ws-1",
     });
     expect(doRefUrl(ref, "lifecycleListLeases")).toBe(
-      `/_w/${INTERNAL_DO_SOURCE.split("/").map(encodeURIComponent).join("/")}/WorkspaceDO/ws-1/lifecycleListLeases`
+      `/_w/${WORKSPACE_DO_SOURCE.split("/").map(encodeURIComponent).join("/")}/WorkspaceDO/ws-1/lifecycleListLeases`
     );
+  });
+
+  it("routes a capability-bearing product seed through its exact static namespace", () => {
+    const ref = makeRef({ source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: "eval-1" });
+    expect(doRefUrl(ref, "run")).toBe(`/_w/product/eval/EvalDO/eval-1/run`);
   });
 
   it("escapes special characters in the packed userland key", () => {
@@ -74,6 +81,21 @@ describe("DODispatch", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     dispatch = new DODispatch();
+    dispatch.setAuthorityAttester((ref, method) =>
+      attestDirectRpc({
+        caller: createHostCaller("main", "server", {
+          userId: "system",
+          handle: "system",
+        }),
+        source: ref.source,
+        className: ref.className,
+        objectKey: ref.objectKey,
+        method,
+        workspaceId: "test-workspace",
+        workspaceMember: true,
+        sessionId: "test-session",
+      })
+    );
   });
 
   describe("dispatch without token-backed configuration", () => {
@@ -167,7 +189,14 @@ describe("DODispatch", () => {
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
         `http://127.0.0.1:10001${userlandUrl(ref, "__lifecycle/resume")}`
       );
-      expect(body["__caller"]).toEqual({ callerId: "main", callerKind: "server" });
+      expect(body["__caller"]).toMatchObject({
+        callerId: "main",
+        callerKind: "server",
+        authorization: {
+          method: "__lifecycle/resume",
+          context: { host: expect.stringMatching(/^host:/) },
+        },
+      });
       expect(body["__parentId"]).toBe("main");
     });
   });

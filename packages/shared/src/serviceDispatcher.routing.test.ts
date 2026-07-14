@@ -1,19 +1,20 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
 import { ServiceDispatcher } from "./serviceDispatcher.js";
 
 describe("ServiceDispatcher host routing metadata", () => {
   it("routes registered services to the host unless their definition keeps the caller on-session", () => {
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService({
       name: "local",
-      policy: { allowed: ["shell", "app", "panel"] },
+      authority: { principals: ["user", "code"] },
       methods: {},
       handler: vi.fn(),
     });
     dispatcher.registerService({
       name: "session-owned",
       hostRouting: { panel: "session" },
-      policy: { allowed: ["shell", "app", "panel"] },
+      authority: { principals: ["user", "code"] },
       methods: {},
       handler: vi.fn(),
     });

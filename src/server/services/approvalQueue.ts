@@ -70,7 +70,7 @@ interface ApprovalQueueRequestBase {
   callerId: string;
   callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   /**
    * The REQUESTING user's `subject.userId` (WP5 §5.1), stamped by the enqueuing
    * service so a resolution record can name both parties. Attribution only.
@@ -385,7 +385,7 @@ export function createApprovalQueue(deps: {
     callerId: string;
     callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
     requesterCategory?: ApprovalRequesterCategory;
   }) => ApprovalRequesterIdentity;
   autoApprove?: ApprovalQueueAutoApproveOptions | boolean;
@@ -445,7 +445,7 @@ export function createApprovalQueue(deps: {
       callerId: approval.callerId,
       callerKind: approval.callerKind,
       ...(approval.repoPath ? { repoPath: approval.repoPath } : {}),
-      ...(approval.effectiveVersion ? { effectiveVersion: approval.effectiveVersion } : {}),
+      ...(approval.executionDigest ? { executionDigest: approval.executionDigest } : {}),
       ...(entry.requestedByUserId ? { userId: entry.requestedByUserId } : {}),
     };
   }
@@ -589,7 +589,7 @@ export function createApprovalQueue(deps: {
         "capability",
         req.callerId,
         req.repoPath,
-        req.effectiveVersion,
+        req.executionDigest,
         req.capability,
         req.resource?.value ?? "",
       ]);
@@ -602,7 +602,7 @@ export function createApprovalQueue(deps: {
         return canonicalKey(["unit-batch-custom", req.callerId, req.dedupKey]);
       }
       // Coalesce duplicate reconciles for the same trigger + set onto one
-      // prompt. Include each unit's source repo/ref/ev and the config
+      // prompt. Include each unit's source repo/ref/sourceDigest and the config
       // write, so batches that differ only in those (same names) don't collapse
       // and surface stale consent details.
       return canonicalKey([
@@ -619,10 +619,10 @@ export function createApprovalQueue(deps: {
             unit.target ?? null,
             unit.source.repo,
             unit.source.ref,
-            unit.ev ?? null,
+            unit.sourceDigest ?? null,
             unit.integrity ?? null,
             unit.provider?.name ?? null,
-            unit.provider?.activeEv ?? null,
+            unit.provider?.activeSourceDigest ?? null,
             unit.provider?.activeBuildKey ?? null,
             unit.provider?.contractVersion ?? null,
           ]),
@@ -634,7 +634,7 @@ export function createApprovalQueue(deps: {
       return canonicalKey([
         "client-config",
         req.repoPath,
-        req.effectiveVersion,
+        req.executionDigest,
         req.configId,
         req.authorizeUrl,
         req.tokenUrl,
@@ -662,7 +662,7 @@ export function createApprovalQueue(deps: {
       "credential",
       req.callerId,
       req.repoPath,
-      req.effectiveVersion,
+      req.executionDigest,
       req.credentialId,
     ]);
   }
@@ -684,14 +684,14 @@ export function createApprovalQueue(deps: {
   function resolveRequesterFor(
     req: Pick<
       ApprovalQueueRequestBase,
-      "callerId" | "callerKind" | "repoPath" | "effectiveVersion" | "requesterCategory"
+      "callerId" | "callerKind" | "repoPath" | "executionDigest" | "requesterCategory"
     >
   ): ApprovalRequesterIdentity | undefined {
     return deps.resolveRequester?.({
       callerId: req.callerId,
       callerKind: req.callerKind,
       repoPath: req.repoPath,
-      effectiveVersion: req.effectiveVersion,
+      executionDigest: req.executionDigest,
       ...(req.requesterCategory ? { requesterCategory: req.requesterCategory } : {}),
     });
   }
@@ -776,7 +776,7 @@ export function createApprovalQueue(deps: {
       callerId: req.callerId,
       callerKind: req.callerKind,
       repoPath: req.repoPath,
-      effectiveVersion: req.effectiveVersion,
+      executionDigest: req.executionDigest,
       requestedAt: Date.now(),
       ...(callerTitle !== undefined ? { callerTitle } : {}),
       ...(requester ? { requester } : {}),
@@ -1254,7 +1254,7 @@ export function createApprovalQueue(deps: {
           callerId: req.principal.callerId,
           callerKind: req.principal.callerKind,
           repoPath: req.principal.repoPath,
-          effectiveVersion: req.principal.effectiveVersion,
+          executionDigest: req.principal.executionDigest,
           ...(req.principal.requesterCategory
             ? { requesterCategory: req.principal.requesterCategory }
             : {}),
@@ -1278,7 +1278,7 @@ export function createApprovalQueue(deps: {
           callerId: req.principal.callerId,
           callerKind: req.principal.callerKind,
           repoPath: req.principal.repoPath,
-          effectiveVersion: req.principal.effectiveVersion,
+          executionDigest: req.principal.executionDigest,
           requestedAt: Date.now(),
           ...(callerTitle !== undefined ? { callerTitle } : {}),
           ...(requester ? { requester } : {}),
@@ -1391,7 +1391,7 @@ export function createApprovalQueue(deps: {
         callerId: req.callerId,
         callerKind: req.callerKind,
         repoPath: req.repoPath,
-        effectiveVersion: req.effectiveVersion,
+        executionDigest: req.executionDigest,
         requestedAt: Date.now(),
         ...(callerTitle !== undefined ? { callerTitle } : {}),
         ...(requester ? { requester } : {}),

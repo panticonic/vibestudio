@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AppInfoSchema } from "@vibestudio/shared/panelContracts";
 
@@ -109,7 +109,7 @@ export const appMethods = defineServiceMethods({
           .nullable()
           .optional()
           .describe("Build key the update would install, if known."),
-        effectiveVersion: z
+        executionDigest: z
           .string()
           .nullable()
           .optional()
@@ -119,7 +119,7 @@ export const appMethods = defineServiceMethods({
           .nullable()
           .optional()
           .describe("Build key currently installed, if known."),
-        previousEffectiveVersion: z
+        previousSourceDigest: z
           .string()
           .nullable()
           .optional()

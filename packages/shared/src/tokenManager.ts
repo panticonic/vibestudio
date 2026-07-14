@@ -6,10 +6,14 @@ export interface TokenEntry {
   callerId: string;
   callerKind: CallerKind;
   agentBinding?: AgentBinding;
+  /** Host-issued attestation for a server-managed transport principal. */
+  hostOriginated?: true;
 }
 
 export interface TokenMetadata {
   agentBinding?: AgentBinding;
+  /** Mint only at a host-owned bootstrap site; never accept from a client. */
+  hostOriginated?: true;
 }
 
 /**

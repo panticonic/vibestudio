@@ -18,7 +18,7 @@ export function createSettingsServiceStandalone(_deps: {
   return {
     name: "settings",
     description: "Settings, model roles (standalone mode)",
-    policy: { allowed: ["shell", "app"] },
+    authority: { principals: ["user", "code"] },
     methods: settingsMethods,
     handler: defineServiceHandler("settings", settingsMethods, {
       getData: () => {

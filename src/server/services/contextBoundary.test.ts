@@ -20,7 +20,11 @@ function subjectCaller(id = "panel:p1") {
     callerId: id,
     callerKind: "panel",
     repoPath: "panels/p",
-    effectiveVersion: "v1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 }
 

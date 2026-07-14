@@ -36,7 +36,8 @@ async function createDbAtSchemaVersion(schemaVersion: number) {
 function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
   return {
     kind: "panel" as const,
-    source: { repoPath: SOURCE, effectiveVersion: VERSION },
+    source: { repoPath: SOURCE },
+    activeExecutionDigest: VERSION,
     contextId: "ctx-1",
     key: "entry-1",
     ...overrides,
@@ -46,7 +47,8 @@ function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>
 function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
   return {
     kind: "do" as const,
-    source: { repoPath: SOURCE, effectiveVersion: VERSION },
+    source: { repoPath: SOURCE },
+    activeExecutionDigest: VERSION,
     contextId: "ctx-1",
     className: "MyDO",
     key: "k1",
@@ -144,18 +146,19 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(() =>
       instance.entityActivate({
         kind: "panel",
-        source: { repoPath: "panels/other", effectiveVersion: VERSION },
+        source: { repoPath: "panels/other" },
+        activeExecutionDigest: VERSION,
         contextId: "ctx-1",
         key: "p1",
       })
     ).toThrow(/Identity collision/);
   });
 
-  it("throws IDENTITY_COLLISION when effectiveVersion differs for a do (canonical id matches)", () => {
-    instance.entityActivate(doInput());
-    expect(() =>
-      instance.entityActivate(doInput({ source: { repoPath: SOURCE, effectiveVersion: "v2" } }))
-    ).toThrow(/Identity collision/);
+  it("updates the active execution projection without changing logical identity", () => {
+    const first = instance.entityActivate(doInput());
+    const updated = instance.entityActivate(doInput({ activeExecutionDigest: "v2" }));
+    expect(updated.id).toBe(first.id);
+    expect(updated.activeExecutionDigest).toBe("v2");
   });
 
   it("throws IDENTITY_COLLISION when contextId differs", () => {
@@ -638,10 +641,12 @@ describe("WorkspaceDO lifecycle registry", () => {
     const rec = instance.entityActivate(doInput());
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     instance.lifecycleLeaseUpsert(key);
+    instance.alarmSet({ ...key, wakeAt: Date.now() + 5_000 });
 
     instance.entityRetire(rec.id);
 
     expect(instance.lifecycleListLeases()).toEqual([]);
+    expect(instance.alarmNextWakeAt()).toBeNull();
   });
 });
 
@@ -673,7 +678,8 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
   function bindSlotToEntity(slotId: string, entityKey: string): string {
     const entity = instance.entityActivate({
       kind: "panel",
-      source: { repoPath: "panels/test", effectiveVersion: "ev-1" },
+      source: { repoPath: "panels/test" },
+      activeExecutionDigest: "ev-1",
       contextId: "ctx",
       key: entityKey,
     });
@@ -745,7 +751,8 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
   it("entitySetDisplayTitle works for non-panel entities and clears with null/empty", () => {
     const worker = instance.entityActivate({
       kind: "worker",
-      source: { repoPath: "workers/agent", effectiveVersion: "ev-1" },
+      source: { repoPath: "workers/agent" },
+      activeExecutionDigest: "ev-1",
       contextId: "ctx",
       key: "agent-key",
     });
@@ -763,13 +770,15 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
   it("entityListDisplayTitles returns only active entities with titles", () => {
     const a = instance.entityActivate({
       kind: "worker",
-      source: { repoPath: "workers/a", effectiveVersion: "ev" },
+      source: { repoPath: "workers/a" },
+      activeExecutionDigest: "ev",
       contextId: "ctx",
       key: "a",
     });
     const b = instance.entityActivate({
       kind: "worker",
-      source: { repoPath: "workers/b", effectiveVersion: "ev" },
+      source: { repoPath: "workers/b" },
+      activeExecutionDigest: "ev",
       contextId: "ctx",
       key: "b",
     });

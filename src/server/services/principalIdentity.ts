@@ -5,12 +5,14 @@ import {
   type CodeIdentityCallerKind,
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
+import type { CapabilityScope } from "@vibestudio/rpc";
 
 export interface ResolvedCodeIdentity {
   callerId: string;
   callerKind: CodeIdentityCallerKind;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
+  requested: readonly CapabilityScope[];
 }
 
 /**
@@ -22,18 +24,23 @@ export interface ResolvedCodeIdentity {
  */
 export function resolveCodeIdentity(
   entityCache: Pick<EntityCache, "resolveActive">,
-  callerId: string
+  callerId: string,
+  resolveRequests: (executionDigest: string) => readonly CapabilityScope[] | null
 ): ResolvedCodeIdentity | null {
   const record = entityCache.resolveActive(callerId);
   if (!record) return null;
   if (!isCodeIdentityCallerKind(record.kind)) return null;
   const callerKind = callerKindForPrincipalKind(record.kind);
   if (!isCodeIdentityCallerKind(callerKind)) return null;
+  if (!record.activeExecutionDigest) return null;
+  const requested = resolveRequests(record.activeExecutionDigest);
+  if (!requested) return null;
   return {
     callerId,
     callerKind,
     repoPath: record.source.repoPath,
-    effectiveVersion: record.source.effectiveVersion,
+    executionDigest: record.activeExecutionDigest,
+    requested,
   };
 }
 

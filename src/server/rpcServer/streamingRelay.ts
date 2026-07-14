@@ -18,7 +18,6 @@ import {
   type ServiceDispatcher,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import type { StreamFrame } from "../services/egressProxy.js";
@@ -172,7 +171,12 @@ export class StreamingRelay {
       return;
     }
 
-    const validation = this.validateProxyFetch({ method, callerKind, args, readOnly });
+    const proxyContext = this.deps.createHttpContext(admission.caller, {
+      ...(request.requestId ? { requestId: request.requestId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(readOnly ? { readOnly: true } : {}),
+    });
+    const validation = await this.validateProxyFetch({ method, args, context: proxyContext });
     if (!validation.ok) {
       writeJson(res, validation.status, { error: validation.error });
       return;
@@ -224,12 +228,6 @@ export class StreamingRelay {
     if (parsed && request.method !== "credentials.proxyFetch") {
       const abortController = this.register(client, request.requestId);
       try {
-        checkServiceAccess(
-          parsed.service,
-          client.caller.runtime.kind,
-          this.deps.dispatcher,
-          parsed.method
-        );
         const context = this.deps.createWsContext(client, request, {
           ...(request.requestId ? { requestId: request.requestId } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -270,11 +268,15 @@ export class StreamingRelay {
       return;
     }
 
-    const validation = this.validateProxyFetch({
+    const proxyContext = this.deps.createWsContext(client, request, {
+      ...(request.requestId ? { requestId: request.requestId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(readOnly ? { readOnly: true } : {}),
+    });
+    const validation = await this.validateProxyFetch({
       method: request.method,
-      callerKind: client.caller.runtime.kind,
       args: request.args,
-      readOnly,
+      context: proxyContext,
     });
     if (!validation.ok) {
       await emitFrame({
@@ -324,12 +326,11 @@ export class StreamingRelay {
     }
   }
 
-  private validateProxyFetch(request: {
+  private async validateProxyFetch(request: {
     method: string;
-    callerKind: CallerKind;
     args: unknown[];
-    readOnly?: boolean;
-  }): ProxyFetchValidation {
+    context: ServiceContext;
+  }): Promise<ProxyFetchValidation> {
     if (request.method !== "credentials.proxyFetch") {
       return {
         ok: false,
@@ -341,27 +342,18 @@ export class StreamingRelay {
       return { ok: false, status: 503, error: "Streaming proxy fetch is unavailable" };
     }
     try {
-      checkServiceAccess("credentials", request.callerKind, this.deps.dispatcher, "proxyFetch");
+      await this.deps.dispatcher.assertAuthority(
+        request.context,
+        "credentials",
+        "proxyFetch",
+        request.args
+      );
     } catch (error) {
       return {
         ok: false,
         status: 403,
         error: error instanceof Error ? error.message : String(error),
       };
-    }
-    if (request.readOnly) {
-      const method = this.deps.dispatcher.getMethodSchema?.("credentials", "proxyFetch");
-      const sensitivity = method?.access?.sensitivity;
-      if (sensitivity !== "read") {
-        return {
-          ok: false,
-          status: 403,
-          error:
-            `Blocked in read-only mode: 'credentials.proxyFetch' is not declared read-only ` +
-            `(sensitivity ${sensitivity ?? "unknown"}). A read-only caller may only invoke ` +
-            `methods declaring access.sensitivity === "read".`,
-        };
-      }
     }
     const params = (request.args[0] ?? {}) as {
       url?: string;
@@ -403,13 +395,6 @@ export class StreamingRelay {
       writeJson(res, 400, { error: `Invalid method format: "${request.method}"` });
       return;
     }
-    try {
-      checkServiceAccess(parsed.service, caller.callerKind, this.deps.dispatcher, parsed.method);
-    } catch (error) {
-      writeJson(res, 403, { error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-
     let response: Response;
     try {
       const context = this.deps.createHttpContext(caller, {

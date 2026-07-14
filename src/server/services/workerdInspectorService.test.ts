@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceContext } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -43,14 +44,18 @@ function createApprovalQueueMock(
 }
 
 function panelCtx(): ServiceContext {
-  return {
-    caller: createVerifiedCaller("panel:panels/chat:1", "panel", {
+  return createTestServiceContext(
+    createVerifiedCaller("panel:panels/chat:1", "panel", {
       callerId: "panel:panels/chat:1",
       callerKind: "panel",
       repoPath: "panels/chat",
-      effectiveVersion: "ev-test",
-    }),
-  };
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    })
+  );
 }
 
 function makeDeps(overrides?: Partial<WorkerdInspectorServiceDeps>): WorkerdInspectorServiceDeps {
@@ -116,7 +121,7 @@ describe("workerdInspectorService", () => {
   it("skips approval for shell callers", async () => {
     const deps = makeDeps();
     const service = createWorkerdInspectorService(deps);
-    const ctx: ServiceContext = { caller: createVerifiedCaller("shell:main", "shell") };
+    const ctx = createTestServiceContext(createVerifiedCaller("shell:main", "shell"));
     await service.handler(ctx, "getEndpoint", ["core:user:worker-host"]);
     expect(deps.approvalQueue.request).not.toHaveBeenCalled();
   });

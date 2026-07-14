@@ -43,14 +43,7 @@ const BINARY_OPTIONS: UserlandApprovalOption[] = [
   { value: "deny", label: "Deny", tone: "danger" },
 ];
 
-function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOption[] {
-  const identityScoped =
-    principal.effectiveVersion === "internal" ||
-    principal.repoPath === "vibestudio/internal" ||
-    principal.requesterCategory === "eval" ||
-    principal.requesterCategory === "internal-service" ||
-    principal.requester?.category === "eval" ||
-    principal.requester?.category === "internal-service";
+function scopedAllowOptions(_principal: ApprovalPrincipal): UserlandApprovalOption[] {
   return [
     {
       value: "once",
@@ -66,10 +59,8 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
     },
     {
       value: "version",
-      label: identityScoped ? "Trust identity" : "Trust version",
-      description: identityScoped
-        ? "Remember for this exact runtime identity."
-        : "Remember for this exact code version.",
+      label: "Trust version",
+      description: "Remember for this exact code version.",
       tone: "primary",
     },
     { value: "deny", label: "Deny", description: "Do not allow this request.", tone: "danger" },
@@ -170,7 +161,7 @@ export function createUserlandApprovalService(deps: {
       callerId: identity.callerId,
       callerKind: identity.callerKind,
       repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
     };
   }
 
@@ -307,7 +298,7 @@ export function createUserlandApprovalService(deps: {
       callerKind: principal.callerKind,
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: principal.repoPath,
-      effectiveVersion: principal.effectiveVersion,
+      executionDigest: principal.executionDigest,
       title: decoratedReq.title,
       description: decoratedReq.description,
       warning: decoratedReq.warning,
@@ -377,7 +368,7 @@ export function createUserlandApprovalService(deps: {
                 callerId: approval.callerId,
                 callerKind: approval.callerKind,
                 repoPath: approval.repoPath,
-                effectiveVersion: approval.effectiveVersion,
+                executionDigest: approval.executionDigest,
               },
               approval.subject.id,
               approval.issuer
@@ -424,7 +415,7 @@ export function createUserlandApprovalService(deps: {
         callerKind: principal.callerKind,
         ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
         repoPath: principal.repoPath,
-        effectiveVersion: principal.effectiveVersion,
+        executionDigest: principal.executionDigest,
         ...(principal.requesterCategory ? { requesterCategory: principal.requesterCategory } : {}),
         entityId: binding.entityId,
         channelId: binding.channelId,
@@ -477,20 +468,20 @@ export function createUserlandApprovalService(deps: {
     requestSecretInput: { args: z.tuple([secretInputRequestSchema]) },
     requestAs: {
       args: z.tuple([approvalPrincipalSchema, userlandApprovalRequestSchema]),
-      policy: { allowed: ["extension"] },
+      authority: { principals: ["code"] },
     },
     requestSecretInputAs: {
       args: z.tuple([approvalPrincipalSchema, secretInputRequestSchema]),
-      policy: { allowed: ["extension"] },
+      authority: { principals: ["code"] },
     },
     // External-agent relay: bound agent runtimes may be either DOs or workers.
     requestExternal: {
       args: z.tuple([externalAgentApprovalRequestSchema]),
-      policy: { allowed: ["do", "worker"] },
+      authority: { principals: ["code"] },
     },
     settleExternal: {
       args: z.tuple([externalAgentSettleSchema]),
-      policy: { allowed: ["do", "worker"] },
+      authority: { principals: ["code"] },
     },
     revoke: { args: z.tuple([userlandApprovalSubjectIdSchema]) },
     list: { args: z.tuple([]) },
@@ -499,7 +490,7 @@ export function createUserlandApprovalService(deps: {
   return {
     name: SERVICE_NAME,
     description: "Userland-managed consent approvals",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["code"] },
     methods,
     handler: defineServiceHandler(SERVICE_NAME, methods, {
       request: (ctx, [requestArg]) => request(ctx, requestArg),

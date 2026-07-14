@@ -14,6 +14,7 @@ import { channelMethods } from "./channel.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
+import { devHostMethods } from "./devHost.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
@@ -30,6 +31,7 @@ import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
 import { panelTreeMethods } from "./panelTree.js";
+import { phoneProvisioningMethods } from "./phoneProvisioning.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
 import { permissionsMethods } from "./permissions.js";
 import { refsMethods } from "./refs.js";
@@ -42,9 +44,9 @@ import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { webhookIngressMethods } from "./webhookIngress.js";
 import { workerLogMethods } from "./workerLog.js";
-import { workspaceMethods } from "./workspace.js";
+import { HostTargetLaunchResultSchema, workspaceMethods } from "./workspace.js";
 import { workspacePresenceMethods } from "./workspacePresence.js";
-import { workspaceStateMethods } from "./workspaceState.js";
+import { EntityRecordSchema, workspaceStateMethods } from "./workspaceState.js";
 import { worktreeMethods } from "./worktree.js";
 
 type ServiceTable = {
@@ -63,6 +65,7 @@ const serviceTables: ServiceTable[] = [
   { service: "channel", file: "channel.ts", methods: channelMethods },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
+  { service: "devHost", file: "devHost.ts", methods: devHostMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },
   { service: "events", file: "events.ts", methods: eventsMethods },
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
@@ -80,6 +83,11 @@ const serviceTables: ServiceTable[] = [
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
   { service: "panelTree", file: "panelTree.ts", methods: panelTreeMethods },
+  {
+    service: "phoneProvisioning",
+    file: "phoneProvisioning.ts",
+    methods: phoneProvisioningMethods,
+  },
   { service: "permissions", file: "permissions.ts", methods: permissionsMethods },
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "refs", file: "refs.ts", methods: refsMethods },
@@ -102,6 +110,54 @@ const serviceTables: ServiceTable[] = [
   { service: "worktree", file: "worktree.ts", methods: worktreeMethods },
 ];
 
+describe("runtime identity wire contracts", () => {
+  it("keeps immutable source identity separate from the active execution digest", () => {
+    expect(
+      EntityRecordSchema.parse({
+        id: "worker:workers/example:key",
+        kind: "worker",
+        source: { repoPath: "workers/example" },
+        activeExecutionDigest: "a".repeat(64),
+        contextId: "ctx-1",
+        key: "key",
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      })
+    ).toMatchObject({
+      source: { repoPath: "workers/example" },
+      activeExecutionDigest: "a".repeat(64),
+    });
+  });
+
+  it("preserves exact authority requests on ready host-target launches", () => {
+    const parsed = HostTargetLaunchResultSchema.parse({
+      status: "ready",
+      launched: true,
+      target: "electron",
+      source: "apps/shell",
+      appId: "@workspace-apps/shell",
+      buildKey: "build-1",
+      executionDigest: "a".repeat(64),
+      authorityRequests: [
+        {
+          capability: "service:events.subscribe",
+          resource: { kind: "exact", key: "service:events.subscribe" },
+        },
+      ],
+    });
+
+    expect(parsed.status).toBe("ready");
+    if (parsed.status !== "ready") throw new Error("Expected a ready launch result");
+    expect(parsed.authorityRequests).toEqual([
+      {
+        capability: "service:events.subscribe",
+        resource: { kind: "exact", key: "service:events.subscribe" },
+      },
+    ]);
+  });
+});
+
 const approvedReturnlessMethods = new Set([
   // `invokeStream` returns a live Response object from the extension streaming
   // bridge. That transport is validated by stream-level tests rather than a
@@ -115,6 +171,10 @@ const approvedWeakReturnRoots = new Set([
   // remain fully structural.
   "credentials.connect",
   "credentials.resolveCredential",
+  // Live NDJSON streams cross the same Response-aware RPC relay as other
+  // streamed services; individual entries are validated by devHost schemas.
+  "devHost.logs",
+  "devHost.watch",
 ]);
 
 type TraversableZodDef = z.ZodTypeDef & {

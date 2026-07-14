@@ -1,6 +1,7 @@
 // Shared types used across main, renderer, server, and preload
 
 import type { CreateChildOptions } from "@vibestudio/types";
+import type { UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
@@ -22,6 +23,8 @@ export type { StateArgsSchema, StateArgsValue };
  * optional in the type.
  */
 export interface PackageManifest {
+  /** Exact authority envelopes requested by each build of this executable unit. */
+  authority?: UnitAuthorityManifest;
   /** Human-readable display name shared by all workspace unit kinds. */
   displayName?: string;
   /** Display title (required at runtime for panels; workers don't need it). */
@@ -154,10 +157,10 @@ export interface PanelInfo {
   partition: string;
   contextId: string;
   runtimeEntityId?: string | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
   ref?: string;
   build?: {
-    effectiveVersion?: string | null;
+    executionDigest?: string | null;
     ref?: string;
   };
 }
@@ -224,7 +227,7 @@ export interface PanelLifecycleResult {
   rebuilt: boolean;
   reloaded: boolean;
   buildRevision?: number;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
 }
 
 export interface PanelExplicitState {
@@ -238,6 +241,8 @@ export type PanelFocusStatus =
   | "focused"
   | "loaded"
   | "leased_elsewhere"
+  | "mobile_held"
+  | "no_default_cdp_host"
   | "build_failed"
   | "view_creation_failed";
 
@@ -338,7 +343,7 @@ export interface Panel {
   id: string;
   title: string;
   runtimeEntityId?: string | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
   /**
    * Owning-user id (WP3): the user whose tree this panel's root belongs to.
    * Attribution/provenance only — NOT an inter-user security token (plan §0.0).

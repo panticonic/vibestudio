@@ -86,7 +86,7 @@ export class EntityCache {
     const entry: EntityRecord = {
       id: record.id,
       kind: record.kind,
-      source: record.source ?? { repoPath: "", effectiveVersion: "" },
+      source: record.source ?? { repoPath: "" },
       contextId: record.contextId ?? "",
       key: record.id,
       createdAt: Date.now(),

@@ -1,40 +1,44 @@
 import * as fs from "node:fs";
-import { stateLayout } from "../stateLayout.js";
+import type { AuthorityGrant, Principal, ResourceScope } from "@vibestudio/rpc";
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
+import { stateLayout } from "../stateLayout.js";
 import { writeJsonFileAtomic } from "../hostCore/atomicFile.js";
+import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 
 export type CapabilityGrantDecision = "session" | "version";
 
 export interface CapabilityGrantIdentity {
   callerId: string;
   repoPath: string;
-  effectiveVersion: string;
-}
-
-export interface CapabilityGrant {
-  effect?: "allow" | "deny";
-  capability: string;
-  resourceKey: string;
-  resourceScope?: ApprovalResourceScope;
-  scope: CapabilityGrantDecision;
-  callerId?: string;
-  repoPath: string;
-  effectiveVersion?: string;
-  grantedAt: number;
+  executionDigest: string;
 }
 
 interface CapabilityGrantFile {
-  grants: CapabilityGrant[];
+  version: 2;
+  grants: AuthorityGrant[];
 }
 
-export class CapabilityGrantStore {
-  private readonly sessionGrants = new Map<string, CapabilityGrant>();
-  private readonly filePath: string;
-  private persistent: CapabilityGrantFile = { grants: [] };
+type PersistentGrantBinding = Extract<
+  AuthorityGrant["binding"],
+  { kind: "exact-execution" | "selector" }
+>;
 
-  constructor(opts: { statePath: string }) {
+/**
+ * The approval system persists the same AuthorityGrant records consumed by the
+ * dispatcher. Session records use the identical vocabulary but remain in
+ * memory; there is no approval-specific shadow grant representation.
+ */
+export class CapabilityGrantStore {
+  private readonly sessionGrants = new Map<string, AuthorityGrant>();
+  private readonly filePath: string;
+  private readonly issuer: Principal;
+  private persistent: CapabilityGrantFile = { version: 2, grants: [] };
+
+  constructor(opts: { statePath: string; issuer?: Principal }) {
     this.filePath = stateLayout(opts.statePath).capabilityGrantsFile;
+    this.issuer = opts.issuer ?? getProductBootManifest().hostPrincipal;
     this.load();
   }
 
@@ -44,72 +48,7 @@ export class CapabilityGrantStore {
     identity: CapabilityGrantIdentity,
     resourceScope?: ApprovalResourceScope
   ): boolean {
-    const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
-    return (
-      Array.from(this.sessionGrants.values()).some(
-        (grant) =>
-          grant.effect !== "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      ) ||
-      this.persistent.grants.some(
-        (grant) =>
-          grant.effect !== "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      )
-    );
-  }
-
-  grant(
-    capability: string,
-    resourceKey: string,
-    identity: CapabilityGrantIdentity,
-    scope: CapabilityGrantDecision,
-    resourceScope?: ApprovalResourceScope,
-    now = Date.now(),
-    effect: "allow" | "deny" = "allow"
-  ): void {
-    const normalizedScope = resourceScope ?? exactResourceScope(resourceKey);
-    if (scope === "session") {
-      const next: CapabilityGrant = {
-        capability,
-        resourceKey,
-        resourceScope: normalizedScope,
-        scope,
-        callerId: identity.callerId,
-        repoPath: identity.repoPath,
-        grantedAt: now,
-        effect,
-      };
-      this.sessionGrants.set(capabilityGrantKey(scope, capability, resourceKey, identity), next);
-      return;
-    }
-    const next: CapabilityGrant = {
-      capability,
-      resourceKey,
-      resourceScope: normalizedScope,
-      scope,
-      callerId:
-        scope === "version" && versionGrantRequiresCaller(identity) ? identity.callerId : undefined,
-      repoPath: identity.repoPath,
-      effectiveVersion: scope === "version" ? identity.effectiveVersion : undefined,
-      grantedAt: now,
-      effect,
-    };
-    this.persistent.grants = [
-      ...this.persistent.grants.filter(
-        (grant) =>
-          !(
-            grant.capability === next.capability &&
-            grant.resourceKey === next.resourceKey &&
-            grant.scope === next.scope &&
-            grant.callerId === next.callerId &&
-            grant.repoPath === next.repoPath &&
-            grant.effectiveVersion === next.effectiveVersion
-          )
-      ),
-      next,
-    ];
-    this.save();
+    return this.hasEffect("allow", capability, resourceKey, identity, resourceScope);
   }
 
   hasDenial(
@@ -118,29 +57,75 @@ export class CapabilityGrantStore {
     identity: CapabilityGrantIdentity,
     resourceScope?: ApprovalResourceScope
   ): boolean {
-    const requestedScope = resourceScope ?? exactResourceScope(resourceKey);
-    return (
-      Array.from(this.sessionGrants.values()).some(
-        (grant) =>
-          grant.effect === "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      ) ||
-      this.persistent.grants.some(
-        (grant) =>
-          grant.effect === "deny" &&
-          grantMatches(grant, capability, resourceKey, requestedScope, identity)
-      )
+    return this.hasEffect("deny", capability, resourceKey, identity, resourceScope);
+  }
+
+  grant(
+    capability: string,
+    resourceKey: string,
+    identity: CapabilityGrantIdentity,
+    lifetime: CapabilityGrantDecision,
+    resourceScope?: ApprovalResourceScope,
+    now = Date.now(),
+    effect: "allow" | "deny" = "allow",
+    issuedBy: Principal = this.issuer,
+    provenance = "user-capability-approval"
+  ): AuthorityGrant {
+    assertExactCodeIdentity(identity);
+    const resource = resourceScope ?? exactResourceScope(resourceKey);
+    const subject = codePrincipal(identity);
+    const next: AuthorityGrant = {
+      subject,
+      capability,
+      resource,
+      effect,
+      issuedBy,
+      createdAt: now,
+      constraints: lifetime === "session" ? { sessionId: identity.callerId } : undefined,
+      binding:
+        lifetime === "session"
+          ? {
+              kind: "session",
+              sessionId: identity.callerId,
+              repoPath: identity.repoPath,
+              executionDigest: identity.executionDigest,
+            }
+          : {
+              kind: "exact-execution",
+              repoPath: identity.repoPath,
+              executionDigest: identity.executionDigest,
+            },
+      provenance: `${provenance}:${lifetime}`,
+    };
+
+    const key = capabilityGrantSlot(next);
+    if (lifetime === "session") {
+      this.sessionGrants.set(key, next);
+      return structuredClone(next);
+    }
+
+    this.persistent.grants = this.persistent.grants.map((grant) =>
+      grant.revokedAt === undefined && capabilityGrantSlot(grant) === key
+        ? { ...grant, revokedAt: now }
+        : grant
     );
+    this.persistent.grants.push(next);
+    this.save();
+    return structuredClone(next);
   }
 
-  /** Durable grants only; session decisions intentionally disappear at restart. */
-  listPersistent(): CapabilityGrant[] {
-    return this.persistent.grants.map((grant) => ({ ...grant }));
+  /** Active durable decisions; revoked records remain in the audit file. */
+  listPersistent(now = Date.now()): AuthorityGrant[] {
+    return this.persistent.grants
+      .filter((grant) => isActive(grant, now))
+      .map((grant) => structuredClone(grant));
   }
 
-  /** Active in-memory decisions, exposed so the trusted Permissions page can revoke them. */
-  listSession(): CapabilityGrant[] {
-    return Array.from(this.sessionGrants.values(), (grant) => ({ ...grant }));
+  /** Active in-memory decisions, exposed so the Permissions page can revoke them. */
+  listSession(now = Date.now()): AuthorityGrant[] {
+    return Array.from(this.sessionGrants.values())
+      .filter((grant) => isActive(grant, now))
+      .map((grant) => structuredClone(grant));
   }
 
   revokeSession(id: string): boolean {
@@ -152,32 +137,48 @@ export class CapabilityGrantStore {
     return false;
   }
 
-  revokePersistent(id: string): boolean {
-    const before = this.persistent.grants.length;
-    this.persistent.grants = this.persistent.grants.filter(
-      (grant) => capabilityGrantId(grant) !== id
-    );
-    if (this.persistent.grants.length === before) return false;
+  revokePersistent(id: string, now = Date.now()): boolean {
+    let found = false;
+    this.persistent.grants = this.persistent.grants.map((grant) => {
+      if (grant.revokedAt !== undefined || capabilityGrantId(grant) !== id) return grant;
+      found = true;
+      return { ...grant, revokedAt: now };
+    });
+    if (!found) return false;
     this.save();
     return true;
+  }
+
+  private hasEffect(
+    effect: AuthorityGrant["effect"],
+    capability: string,
+    resourceKey: string,
+    identity: CapabilityGrantIdentity,
+    resourceScope?: ApprovalResourceScope
+  ): boolean {
+    if (!hasExactCodeIdentity(identity)) return false;
+    const requested = resourceScope ?? exactResourceScope(resourceKey);
+    const now = Date.now();
+    return [...this.sessionGrants.values(), ...this.persistent.grants].some(
+      (grant) =>
+        grant.effect === effect &&
+        isActive(grant, now) &&
+        grantMatches(grant, capability, resourceKey, requested, identity)
+    );
   }
 
   private load(): void {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as unknown;
       if (!isCapabilityGrantFile(parsed)) {
-        throw new Error("expected the current exact { grants } schema");
+        throw new Error(
+          `Unsupported capability grant state: ${this.filePath}. Run the scoped runtime-foundations reset before starting the host.`
+        );
       }
       this.persistent = parsed;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-      console.warn(
-        `[CapabilityGrantStore] Resetting invalid grant store ${this.filePath}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-      this.persistent = { grants: [] };
-      this.save();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
   }
 
@@ -186,169 +187,283 @@ export class CapabilityGrantStore {
   }
 }
 
-function isCapabilityGrantFile(value: unknown): value is CapabilityGrantFile {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    Array.isArray((value as { grants?: unknown }).grants) &&
-    (value as { grants: unknown[] }).grants.every(isPersistentCapabilityGrant)
-  );
-}
-
-function isPersistentCapabilityGrant(value: unknown): value is CapabilityGrant {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const grant = value as Partial<CapabilityGrant>;
-  const allowedKeys = new Set([
-    "capability",
-    "resourceKey",
-    "resourceScope",
-    "scope",
-    "callerId",
-    "repoPath",
-    "effectiveVersion",
-    "grantedAt",
-    "effect",
-  ]);
-  return (
-    Object.keys(grant).every((key) => allowedKeys.has(key)) &&
-    typeof grant.capability === "string" &&
-    typeof grant.resourceKey === "string" &&
-    isApprovalResourceScope(grant.resourceScope) &&
-    grant.scope === "version" &&
-    (grant.callerId === undefined || typeof grant.callerId === "string") &&
-    typeof grant.repoPath === "string" &&
-    typeof grant.effectiveVersion === "string" &&
-    (grant.effect === undefined || grant.effect === "allow" || grant.effect === "deny") &&
-    Number.isFinite(grant.grantedAt) &&
-    (!versionGrantRequiresCaller({
-      callerId: grant.callerId ?? "",
-      repoPath: grant.repoPath,
-      effectiveVersion: grant.effectiveVersion,
-    }) ||
-      typeof grant.callerId === "string")
-  );
-}
-
-function isApprovalResourceScope(value: unknown): value is ApprovalResourceScope {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const scope = value as Record<string, unknown>;
-  if (scope["kind"] === "exact") {
-    return (
-      Object.keys(scope).every((key) => key === "kind" || key === "key" || key === "label") &&
-      typeof scope["key"] === "string" &&
-      (scope["label"] === undefined || typeof scope["label"] === "string")
-    );
-  }
-  if (scope["kind"] === "origin") {
-    return Object.keys(scope).length === 2 && typeof scope["origin"] === "string";
-  }
-  if (scope["kind"] === "domain") {
-    return Object.keys(scope).length === 2 && typeof scope["domain"] === "string";
-  }
-  return scope["kind"] === "network" && Object.keys(scope).length === 2 && scope["value"] === "*";
-}
-
-export function capabilityGrantId(grant: CapabilityGrant): string {
+export function capabilityGrantId(grant: AuthorityGrant): string {
   return canonicalKey([
-    "capability-grant-record",
-    grant.scope,
+    "authority-grant",
+    grant.subject,
     grant.capability,
-    grant.resourceKey,
-    grant.callerId ?? "",
-    grant.repoPath,
-    grant.effectiveVersion ?? "",
-    JSON.stringify(grant.resourceScope ?? null),
-    grant.effect ?? "allow",
+    JSON.stringify(grant.resource),
+    grant.effect,
+    grant.issuedBy,
+    String(grant.createdAt),
+    JSON.stringify(grant.binding),
+    grant.provenance,
   ]);
 }
 
-export function capabilityGrantKey(
-  scope: CapabilityGrantDecision,
-  capability: string,
-  resourceKey: string,
-  identity: CapabilityGrantIdentity
-): string {
+export function capabilityGrantRepoPath(grant: AuthorityGrant): string | undefined {
+  return grant.binding.kind === "principal" ? undefined : grant.binding.repoPath;
+}
+
+export function capabilityGrantExecutionDigest(grant: AuthorityGrant): string | undefined {
+  switch (grant.binding.kind) {
+    case "exact-execution":
+    case "session":
+      return grant.binding.executionDigest;
+    case "selector":
+      return grant.binding.resolvedExecutionDigest;
+    case "principal":
+      return undefined;
+  }
+}
+
+export function capabilityGrantResourceLabel(resource: ResourceScope): string {
+  switch (resource.kind) {
+    case "exact":
+      return resource.key;
+    case "prefix":
+      return resource.prefix ? `${resource.prefix}/…` : "All resources";
+    case "origin":
+      return resource.origin;
+    case "domain":
+      return `*.${resource.domain}`;
+    case "network":
+      return "All network destinations";
+  }
+}
+
+function capabilityGrantSlot(grant: AuthorityGrant): string {
   return canonicalKey([
-    "capability-grant",
-    scope,
-    capability,
-    resourceKey,
-    scope === "session" || (scope === "version" && versionGrantRequiresCaller(identity))
-      ? identity.callerId
-      : "",
-    identity.repoPath,
-    scope === "version" ? identity.effectiveVersion : "",
+    "authority-grant-slot",
+    grant.subject,
+    grant.capability,
+    JSON.stringify(grant.resource),
+    JSON.stringify(grant.binding),
   ]);
-}
-
-export function versionGrantRequiresCaller(identity: CapabilityGrantIdentity): boolean {
-  return identity.effectiveVersion === "internal" || identity.repoPath === "vibestudio/internal";
 }
 
 function grantMatches(
-  grant: CapabilityGrant,
+  grant: AuthorityGrant,
   capability: string,
   resourceKey: string,
   requestedScope: ApprovalResourceScope,
   identity: CapabilityGrantIdentity
 ): boolean {
   return (
+    grant.subject === codePrincipal(identity) &&
     grant.capability === capability &&
-    resourceScopeCovers(
-      grant.resourceScope ?? exactResourceScope(grant.resourceKey),
-      requestedScope,
-      resourceKey
-    ) &&
-    principalScopeMatches(grant, identity)
+    resourceScopeCovers(grant.resource, requestedScope, resourceKey) &&
+    bindingMatches(grant, identity)
   );
 }
 
-function principalScopeMatches(grant: CapabilityGrant, identity: CapabilityGrantIdentity): boolean {
-  if (grant.scope === "session") {
-    return grant.callerId === identity.callerId;
+function bindingMatches(grant: AuthorityGrant, identity: CapabilityGrantIdentity): boolean {
+  switch (grant.binding.kind) {
+    case "session":
+      return (
+        grant.binding.sessionId === identity.callerId &&
+        grant.binding.repoPath === identity.repoPath &&
+        grant.binding.executionDigest === identity.executionDigest
+      );
+    case "exact-execution":
+      return (
+        grant.binding.repoPath === identity.repoPath &&
+        grant.binding.executionDigest === identity.executionDigest
+      );
+    case "selector":
+      // Selector inheritance requires a live resolver proof. This store does not
+      // guess from a digest and therefore cannot satisfy one by itself.
+      return false;
+    case "principal":
+      return false;
   }
-  if (
-    grant.repoPath !== identity.repoPath ||
-    grant.effectiveVersion !== identity.effectiveVersion
-  ) {
+}
+
+function resourceScopeCovers(
+  granted: ResourceScope,
+  requested: ApprovalResourceScope,
+  requestedKey: string
+): boolean {
+  switch (granted.kind) {
+    case "network":
+      return true;
+    case "domain": {
+      const hostname =
+        requested.kind === "domain"
+          ? requested.domain
+          : requested.kind === "origin"
+            ? originHostname(requested.origin)
+            : requested.kind === "exact"
+              ? originHostname(requested.key)
+              : null;
+      return hostname ? domainCovers(granted.domain, hostname) : false;
+    }
+    case "origin":
+      return requested.kind === "origin"
+        ? requested.origin === granted.origin
+        : requested.kind === "exact" && requested.key === granted.origin;
+    case "prefix":
+      return requestedKey === granted.prefix || requestedKey.startsWith(`${granted.prefix}/`);
+    case "exact":
+      return requested.kind === "exact"
+        ? granted.key === requested.key
+        : granted.key === requestedKey;
+  }
+}
+
+function isCapabilityGrantFile(value: unknown): value is CapabilityGrantFile {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const file = value as Record<string, unknown>;
+  return (
+    Object.keys(file).length === 2 &&
+    file["version"] === 2 &&
+    Array.isArray(file["grants"]) &&
+    file["grants"].every(isAuthorityGrant)
+  );
+}
+
+function isAuthorityGrant(value: unknown): value is AuthorityGrant {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const grant = value as Record<string, unknown>;
+  const allowed = new Set([
+    "subject",
+    "capability",
+    "resource",
+    "effect",
+    "issuedBy",
+    "createdAt",
+    "expiresAt",
+    "revokedAt",
+    "constraints",
+    "binding",
+    "provenance",
+  ]);
+  return (
+    Object.keys(grant).every((key) => allowed.has(key)) &&
+    isPrincipal(grant["subject"]) &&
+    typeof grant["capability"] === "string" &&
+    isResourceScope(grant["resource"]) &&
+    (grant["effect"] === "allow" || grant["effect"] === "deny") &&
+    isPrincipal(grant["issuedBy"]) &&
+    isFiniteNumber(grant["createdAt"]) &&
+    (grant["expiresAt"] === undefined || isFiniteNumber(grant["expiresAt"])) &&
+    (grant["revokedAt"] === undefined || isFiniteNumber(grant["revokedAt"])) &&
+    isConstraints(grant["constraints"]) &&
+    isPersistentBinding(grant["binding"]) &&
+    bindingAgreesWithSubject(grant["binding"], grant["subject"]) &&
+    typeof grant["provenance"] === "string"
+  );
+}
+
+function isResourceScope(value: unknown): value is ResourceScope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const scope = value as Record<string, unknown>;
+  if (Object.keys(scope).length !== 2) return false;
+  switch (scope["kind"]) {
+    case "exact":
+      return typeof scope["key"] === "string";
+    case "prefix":
+      return typeof scope["prefix"] === "string";
+    case "origin":
+      return typeof scope["origin"] === "string";
+    case "domain":
+      return typeof scope["domain"] === "string";
+    case "network":
+      return scope["value"] === "*";
+    default:
+      return false;
+  }
+}
+
+function isPersistentBinding(value: unknown): value is PersistentGrantBinding {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const binding = value as Record<string, unknown>;
+  if (binding["kind"] === "exact-execution") {
+    return (
+      Object.keys(binding).length === 3 &&
+      typeof binding["repoPath"] === "string" &&
+      hasExactDigest(binding["executionDigest"])
+    );
+  }
+  if (binding["kind"] === "selector") {
+    return (
+      Object.keys(binding).length === 4 &&
+      typeof binding["repoPath"] === "string" &&
+      typeof binding["selector"] === "string" &&
+      hasExactDigest(binding["resolvedExecutionDigest"])
+    );
+  }
+  return false;
+}
+
+function bindingAgreesWithSubject(binding: unknown, subject: unknown): boolean {
+  if (!isPersistentBinding(binding) || typeof subject !== "string") return false;
+  const digest =
+    binding.kind === "exact-execution" ? binding.executionDigest : binding.resolvedExecutionDigest;
+  return subject === `code:${binding.repoPath}@${digest}`;
+}
+
+function isConstraints(value: unknown): value is AuthorityGrant["constraints"] {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const constraints = value as Record<string, unknown>;
+  return (
+    Object.keys(constraints).every(
+      (key) => key === "sessionId" || key === "minVersion" || key === "maxVersion"
+    ) &&
+    (constraints["sessionId"] === undefined || typeof constraints["sessionId"] === "string") &&
+    (constraints["minVersion"] === undefined || typeof constraints["minVersion"] === "string") &&
+    (constraints["maxVersion"] === undefined || typeof constraints["maxVersion"] === "string")
+  );
+}
+
+function codePrincipal(identity: CapabilityGrantIdentity): Principal {
+  return `code:${identity.repoPath}@${identity.executionDigest}`;
+}
+
+function isPrincipal(value: unknown): value is Principal {
+  return (
+    typeof value === "string" &&
+    (/^(host|user|device|entity):.+$/.test(value) || /^code:[^@]+@[0-9a-f]{64}$/.test(value))
+  );
+}
+
+function isActive(grant: AuthorityGrant, now: number): boolean {
+  return (
+    (grant.revokedAt === undefined || grant.revokedAt > now) &&
+    (grant.expiresAt === undefined || grant.expiresAt > now)
+  );
+}
+
+function hasExactDigest(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    parseSha256(value, "capability grant execution digest");
+    return true;
+  } catch {
     return false;
   }
-  if (versionGrantRequiresCaller(identity)) {
-    return grant.callerId === identity.callerId;
+}
+
+function hasExactCodeIdentity(identity: CapabilityGrantIdentity): boolean {
+  return Boolean(
+    identity.callerId && identity.repoPath && hasExactDigest(identity.executionDigest)
+  );
+}
+
+function assertExactCodeIdentity(identity: CapabilityGrantIdentity): void {
+  if (!identity.callerId || !identity.repoPath) {
+    throw new Error("Capability grant identity requires callerId and repoPath");
   }
-  return grant.callerId === undefined || grant.callerId === identity.callerId;
+  parseSha256(identity.executionDigest, "capability grant execution digest");
 }
 
 function exactResourceScope(key: string): ApprovalResourceScope {
   return { kind: "exact", key };
 }
 
-function resourceScopeCovers(
-  granted: ApprovalResourceScope,
-  requested: ApprovalResourceScope,
-  requestedKey: string
-): boolean {
-  if (granted.kind === "network") {
-    return (
-      requested.kind === "network" || requested.kind === "origin" || requested.kind === "domain"
-    );
-  }
-  if (granted.kind === "domain") {
-    if (requested.kind === "domain") {
-      return domainCovers(granted.domain, requested.domain);
-    }
-    if (requested.kind === "origin") {
-      const hostname = originHostname(requested.origin);
-      return hostname ? domainCovers(granted.domain, hostname) : false;
-    }
-    return false;
-  }
-  if (granted.kind === "origin") {
-    return requested.kind === "origin" && requested.origin === granted.origin;
-  }
-  return requested.kind === "exact" ? granted.key === requested.key : granted.key === requestedKey;
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function originHostname(origin: string): string | null {

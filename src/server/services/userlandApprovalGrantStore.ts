@@ -10,20 +10,10 @@ import type {
   UserlandApprovalIssuer,
   UserlandApprovalSubject,
 } from "@vibestudio/shared/approvals";
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
 
 interface UserlandApprovalGrantFile {
   grants: UserlandApprovalGrant[];
-}
-
-function defaultIssuer(principal: UserlandApprovalGrant["principal"]): UserlandApprovalIssuer {
-  return { kind: principal.callerKind, id: principal.callerId };
-}
-
-function effectiveIssuer(grant: UserlandApprovalGrant): UserlandApprovalIssuer {
-  if (!grant.issuer && grant.scope === "version" && grant.principal.repoPath) {
-    return { kind: grant.principal.callerKind, id: grant.principal.repoPath };
-  }
-  return grant.issuer ?? defaultIssuer(grant.principal);
 }
 
 export class UserlandApprovalGrantStore {
@@ -64,12 +54,16 @@ export class UserlandApprovalGrantStore {
     issuer?: UserlandApprovalIssuer,
     scope: UserlandApprovalGrantScope = "caller"
   ): Promise<void> {
+    if (scope === "version") {
+      if (!principal.repoPath) throw new Error("Version approval requires a source repository");
+      parseSha256(principal.executionDigest ?? "", "userland approval execution digest");
+    }
     const next: UserlandApprovalGrant = {
       principal: {
         callerId: principal.callerId,
         callerKind: principal.callerKind,
         repoPath: principal.repoPath,
-        effectiveVersion: principal.effectiveVersion,
+        executionDigest: principal.executionDigest,
       },
       ...(issuer ? { issuer } : {}),
       subject,
@@ -77,17 +71,11 @@ export class UserlandApprovalGrantStore {
       grantedAt: now,
       scope,
     };
-    const nextIssuer = effectiveIssuer(next);
-    const key = keyFor(next.principal, nextIssuer, next.subject.id, scope);
+    const key = keyFor(next.principal, next.issuer, next.subject.id, scope);
     const current = scope === "session" ? this.sessionGrants : this.persistent.grants;
     const filtered = current.filter(
       (grant) =>
-        keyFor(
-          grant.principal,
-          effectiveIssuer(grant),
-          grant.subject.id,
-          grant.scope ?? "caller"
-        ) !== key
+        keyFor(grant.principal, grant.issuer, grant.subject.id, grant.scope ?? "caller") !== key
     );
     if (scope === "session") {
       this.sessionGrants.splice(0, this.sessionGrants.length, ...filtered, next);
@@ -170,26 +158,22 @@ export class UserlandApprovalGrantStore {
 }
 
 export function userlandApprovalGrantId(grant: UserlandApprovalGrant): string {
-  return keyFor(grant.principal, effectiveIssuer(grant), grant.subject.id, grant.scope ?? "caller");
+  return keyFor(grant.principal, grant.issuer, grant.subject.id, grant.scope ?? "caller");
 }
 
 export function keyFor(
   principal: UserlandApprovalGrant["principal"],
-  issuer: UserlandApprovalIssuer,
+  issuer: UserlandApprovalIssuer | undefined,
   subjectId: string,
   scope: UserlandApprovalGrantScope = "caller"
 ): string {
   return canonicalKey([
     "userland-grant",
     scope,
-    scope === "version"
-      ? userlandVersionGrantRequiresCaller(principal)
-        ? principal.callerId
-        : (principal.repoPath ?? "")
-      : principal.callerId,
-    scope === "version" ? (principal.effectiveVersion ?? "") : "",
-    issuer.kind,
-    issuer.id,
+    scope === "version" ? (principal.repoPath ?? "") : principal.callerId,
+    scope === "version" ? (principal.executionDigest ?? "") : "",
+    issuer?.kind ?? "code",
+    issuer?.id ?? (scope === "version" ? (principal.repoPath ?? "") : principal.callerId),
     subjectId,
   ]);
 }
@@ -201,20 +185,11 @@ function grantAppliesToPrincipal(
   const scope = grant.scope ?? "caller";
   if (scope === "version") {
     return (
-      grant.principal.callerKind === principal.callerKind &&
-      (!userlandVersionGrantRequiresCaller(grant.principal) ||
-        grant.principal.callerId === principal.callerId) &&
       grant.principal.repoPath === principal.repoPath &&
-      grant.principal.effectiveVersion === principal.effectiveVersion
+      grant.principal.executionDigest === principal.executionDigest
     );
   }
   return grant.principal.callerId === principal.callerId;
-}
-
-function userlandVersionGrantRequiresCaller(
-  principal: Pick<UserlandApprovalGrant["principal"], "repoPath" | "effectiveVersion">
-): boolean {
-  return principal.effectiveVersion === "internal" || principal.repoPath === "vibestudio/internal";
 }
 
 function issuerMatches(
@@ -222,14 +197,8 @@ function issuerMatches(
   principal: ApprovalPrincipal,
   issuer?: UserlandApprovalIssuer
 ): boolean {
-  const grantIssuer = effectiveIssuer(grant);
-  if (issuer) return grantIssuer.kind === issuer.kind && grantIssuer.id === issuer.id;
-  if ((grant.scope ?? "caller") === "version") {
-    return grantIssuer.kind === principal.callerKind && grantIssuer.id === principal.repoPath;
-  }
-  return (
-    grantIssuer.kind === grant.principal.callerKind && grantIssuer.id === grant.principal.callerId
-  );
+  if (!issuer) return grant.issuer === undefined;
+  return grant.issuer?.kind === issuer.kind && grant.issuer.id === issuer.id;
 }
 
 function isGrant(value: unknown): value is UserlandApprovalGrant {
@@ -259,8 +228,21 @@ function isGrant(value: unknown): value is UserlandApprovalGrant {
       grant.scope === "caller" ||
       grant.scope === "session" ||
       grant.scope === "version") &&
+    (grant.scope !== "version" ||
+      (typeof grant.principal.repoPath === "string" &&
+        typeof grant.principal.executionDigest === "string" &&
+        isExactDigest(grant.principal.executionDigest))) &&
     !!grant.subject &&
     typeof grant.subject.id === "string" &&
     (grant.subject.label === undefined || typeof grant.subject.label === "string")
   );
+}
+
+function isExactDigest(value: string): boolean {
+  try {
+    parseSha256(value, "userland approval execution digest");
+    return true;
+  } catch {
+    return false;
+  }
 }

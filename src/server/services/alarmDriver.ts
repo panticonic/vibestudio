@@ -1,6 +1,6 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { AlarmDoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { WORKSPACE_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 import type { LifecycleKey } from "../internalDOs/workspaceDO.js";
 
 const log = createDevLogger("AlarmDriver");
@@ -35,7 +35,7 @@ export class AlarmDriver {
   constructor(deps: AlarmDriverDeps) {
     this.deps = deps;
     this.workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };

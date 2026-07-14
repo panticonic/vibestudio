@@ -78,7 +78,7 @@ class MemoryCredentialUseGrantStore {
       grant.action,
       grant.scope,
       grant.repoPath,
-      grant.effectiveVersion,
+      grant.executionDigest,
     ].join("\x00");
     const index = this.grants.findIndex(
       (entry) =>
@@ -90,7 +90,7 @@ class MemoryCredentialUseGrantStore {
           entry.action,
           entry.scope,
           entry.repoPath,
-          entry.effectiveVersion,
+          entry.executionDigest,
         ].join("\x00") === key
     );
     if (index >= 0) this.grants.splice(index, 1);
@@ -104,13 +104,17 @@ function tempStatePath(): string {
 
 function workerCaller(
   callerId: string,
-  source: { repoPath?: string; effectiveVersion?: string } = {}
+  source: { repoPath?: string; executionDigest?: string } = {}
 ) {
   return createVerifiedCaller(callerId, "worker", {
     callerId,
     callerKind: "worker",
     repoPath: source.repoPath ?? "/repo",
-    effectiveVersion: source.effectiveVersion ?? "hash-1",
+    executionDigest: source.executionDigest ?? "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 }
 
@@ -135,7 +139,7 @@ function createCredential(overrides: Partial<Credential> = {}): Credential {
         action: "use",
         scope: "version",
         repoPath: "/repo",
-        effectiveVersion: "hash-1",
+        executionDigest: "a".repeat(64),
         grantedAt: 1,
         grantedBy: "self",
       },
@@ -456,7 +460,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -543,7 +547,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -615,7 +619,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -709,7 +713,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -790,7 +794,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -942,7 +946,7 @@ describe("EgressProxy", () => {
           action: "read",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -979,7 +983,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1038,7 +1042,7 @@ describe("EgressProxy", () => {
           action: "read",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1551,7 +1555,7 @@ describe("EgressProxy", () => {
           action: "read",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1681,7 +1685,7 @@ describe("EgressProxy", () => {
 
     await expect(
       proxy.forwardProxyFetch({
-        caller: workerCaller("worker:other", { effectiveVersion: "hash-2" }),
+        caller: workerCaller("worker:other", { executionDigest: "b".repeat(64) }),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",
@@ -1701,7 +1705,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "self",
         },
@@ -1740,7 +1744,7 @@ describe("EgressProxy", () => {
           action: "use",
           scope: "version",
           repoPath: "/repo",
-          effectiveVersion: "hash-1",
+          executionDigest: "a".repeat(64),
           grantedAt: 1,
           grantedBy: "version",
         },
@@ -1892,7 +1896,7 @@ describe("EgressProxy", () => {
         action: "use",
         scope: "version",
         repoPath: "/repo",
-        effectiveVersion: "hash-1",
+        executionDigest: "a".repeat(64),
       })
     );
   });

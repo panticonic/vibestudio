@@ -108,9 +108,9 @@ function stageServer() {
   console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
 
-  // Server runtime files (see paths.ts / internalDoLoader.ts / headlessHostManager.ts).
+  // Server runtime files (see paths.ts / productBootManifest.ts / headlessHostManager.ts).
   copyFile("dist/server.mjs", path.join(root, "dist/server.mjs"));
-  copyFile("dist/internal-do.bundle.mjs", path.join(root, "dist/internal-do.bundle.mjs"));
+  copyFile("dist/product-do.bundle.mjs", path.join(root, "dist/product-do.bundle.mjs"));
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),

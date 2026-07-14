@@ -10,13 +10,13 @@
  */
 
 import { z } from "zod";
-import type { ServicePolicy, MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy, MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { DigestSchema, StateHashSchema } from "./blobstore.js";
 
 /** Only the workspace VCS store DO drives the scan primitive (plus server/shell
  *  for host-side tests). Not a broadly readable surface. */
-export const WORKTREE_POLICY: ServicePolicy = { allowed: ["do", "shell", "server"] };
+export const WORKTREE_POLICY: ServiceAuthorityPolicy = { principals: ["code", "host"] };
 
 const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
 
@@ -60,7 +60,7 @@ export const worktreeMethods = defineServiceMethods({
       "Scan a working tree into the content store and return its content-addressed state. Resolves the (repoPath, head) directory, hashes+mirrors every file into the CAS (refreshing the .gad sidecar), and returns { stateHash, files }. A pure disk→CAS primitive: no commit, no ref advance, no history — the caller (the gad-store DO) owns all VCS semantics.",
     args: z.tuple([z.string(), z.string()]),
     returns: ScanResultSchema,
-    policy: WORKTREE_POLICY,
+    authority: WORKTREE_POLICY,
     access: WRITE_ACCESS,
   },
   project: {
@@ -68,7 +68,7 @@ export const worktreeMethods = defineServiceMethods({
       "Materialize a content-addressed `stateHash` onto the (repoPath, head) working tree (the disk-projection primitive, sibling of `scan`). Semantics-free: hardlinks the CAS tree onto disk and refreshes the sidecar — no commit, no ref advance, no history. The gad-store DO drives it to re-materialize a restored/forked repo into the ACTIVE context checkout (`ctx:workspace`); `main` is never projected (D1).",
     args: z.tuple([z.string(), z.string(), StateHashSchema]),
     returns: ProjectResultSchema,
-    policy: WORKTREE_POLICY,
+    authority: WORKTREE_POLICY,
     access: WRITE_ACCESS,
   },
   dependentRepos: {
@@ -76,7 +76,7 @@ export const worktreeMethods = defineServiceMethods({
       "Workspace-relative paths of repos whose build unit directly imports `repoPath`'s unit, at the live workspace view. A content-derived build-graph read (dumb primitive, same class as `scan`): it holds no delete semantics — the gad-store DO consumes it to decide whether a deletion is refused without `force`. Empty when `repoPath` is content-only or has no dependents.",
     args: z.tuple([z.string()]),
     returns: z.array(z.string()),
-    policy: WORKTREE_POLICY,
+    authority: WORKTREE_POLICY,
     access: { sensitivity: "read" },
   },
 });

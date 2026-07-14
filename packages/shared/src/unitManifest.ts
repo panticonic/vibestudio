@@ -6,6 +6,8 @@
  * build, reconcile/install, and boot checks cannot drift by unit kind.
  */
 
+import { authorityRequestsFromManifest } from "./authorityManifest.js";
+
 export type UnitKind = "extension" | "app";
 export type WorkspaceAppTarget = "electron" | "react-native" | "terminal";
 
@@ -407,6 +409,7 @@ export function validateUnitManifest(
   options: UnitManifestValidationOptions
 ): void {
   const record = assertRecord(manifest, descriptor.label, options);
+  authorityRequestsFromManifest(record, `${descriptor.label} ${options.unitName}`);
   assertNoForeignKindBlocks(record, descriptor, options);
   validateInlineSourcemap(record, descriptor, options);
 

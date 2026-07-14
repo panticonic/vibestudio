@@ -8,6 +8,10 @@ import {
   type ApprovedAppDistEntry,
 } from "./distBake.js";
 import type { BuildResult } from "./buildStore.js";
+import { sha256 } from "@vibestudio/shared/execution/identity";
+import { executionArtifactFixture } from "../testing/executionArtifactFixture.js";
+
+const APP_SOURCE = sha256("dist-app-source");
 
 function appEntry(overrides: Partial<ApprovedAppDistEntry> = {}): ApprovedAppDistEntry {
   return {
@@ -15,7 +19,8 @@ function appEntry(overrides: Partial<ApprovedAppDistEntry> = {}): ApprovedAppDis
     target: "electron",
     capabilities: ["notifications"],
     source: { repo: "workspace/apps/shell", ref: "main" },
-    activeEv: "ev-shell",
+    activeSourceDigest: APP_SOURCE,
+    activeExecutionDigest: DIST_EXECUTION.binding.artifact.executionDigest,
     activeSourceHash: "state:shell",
     activeBundleKey: "build-shell",
     status: "running",
@@ -30,7 +35,7 @@ function appBuild(overrides: Partial<BuildResult> = {}): BuildResult {
     metadata: {
       kind: "app",
       name: "@workspace-apps/shell",
-      ev: "ev-shell",
+      sourceDigest: APP_SOURCE,
       sourceStateHash: "state:shell",
       sourcemap: true,
       details: {
@@ -64,16 +69,19 @@ function appBuild(overrides: Partial<BuildResult> = {}): BuildResult {
   };
 }
 
+const DIST_EXECUTION = executionArtifactFixture("apps/shell", appBuild(), "main", "build-shell");
+
 describe("app dist bake", () => {
   it("creates a target-checked manifest for an active approved Electron app build", () => {
     const manifest = createAppDistBakeManifest({
       entry: appEntry(),
       build: appBuild(),
+      execution: DIST_EXECUTION.bundle,
       generatedAt: "2026-05-26T12:00:00.000Z",
     });
 
     expect(manifest).toMatchObject({
-      version: 1,
+      version: 2,
       generatedAt: "2026-05-26T12:00:00.000Z",
       app: {
         name: "@workspace-apps/shell",
@@ -82,8 +90,10 @@ describe("app dist bake", () => {
         capabilities: ["notifications"],
       },
       build: {
-        key: "build-shell",
-        effectiveVersion: "ev-shell",
+        key: DIST_EXECUTION.binding.artifact.buildKey,
+        compilationCacheKey: "build-shell",
+        executionDigest: DIST_EXECUTION.binding.artifact.executionDigest,
+        authorityRequests: DIST_EXECUTION.bundle.requested,
         sourceStateHash: "state:shell",
         target: "electron",
         integrity: "sha256-shell",
@@ -100,6 +110,7 @@ describe("app dist bake", () => {
       createAppDistBakeManifest({
         entry: appEntry({ status: "pending-approval" }),
         build: appBuild(),
+        execution: DIST_EXECUTION.bundle,
       })
     ).toThrow(/not running/);
 
@@ -107,6 +118,7 @@ describe("app dist bake", () => {
       createAppDistBakeManifest({
         entry: appEntry({ activeBundleKey: "other-build" }),
         build: appBuild(),
+        execution: DIST_EXECUTION.bundle,
         buildKey: "build-shell",
       })
     ).toThrow(/no matching active app build/);
@@ -117,11 +129,12 @@ describe("app dist bake", () => {
         build: appBuild({
           metadata: {
             ...appBuild().metadata,
-            ev: "other-ev",
+            sourceDigest: "other-sourceDigest",
           },
         }),
+        execution: DIST_EXECUTION.bundle,
       })
-    ).toThrow(/EV does not match/);
+    ).toThrow(/source digest does not match/);
   });
 
   it("requires signed platform-keyed primary artifacts for React Native bakes", () => {
@@ -143,7 +156,7 @@ describe("app dist bake", () => {
           rnHostAbi: "rn-0.79-vibestudio-1",
           provider: {
             name: "@workspace-extensions/react-native",
-            activeEv: "ev-provider",
+            activeSourceDigest: "sourceDigest-provider",
             activeBuildKey: "provider-build",
             contractVersion: "vibestudio-build-provider-v1",
           },
@@ -161,10 +174,13 @@ describe("app dist bake", () => {
         },
       ],
     });
+    const rnExecution = executionArtifactFixture("apps/mobile", rnBuild, "main", "build-mobile");
+    rnEntry.activeExecutionDigest = rnExecution.binding.artifact.executionDigest;
 
-    expect(createAppDistBakeManifest({ entry: rnEntry, build: rnBuild }).build.rnHostAbi).toBe(
-      "rn-0.79-vibestudio-1"
-    );
+    expect(
+      createAppDistBakeManifest({ entry: rnEntry, build: rnBuild, execution: rnExecution.bundle })
+        .build.rnHostAbi
+    ).toBe("rn-0.79-vibestudio-1");
 
     expect(() =>
       createAppDistBakeManifest({
@@ -173,6 +189,7 @@ describe("app dist bake", () => {
           metadata: rnBuild.metadata,
           artifacts: [{ ...rnBuild.artifacts[0]!, platform: undefined }],
         }),
+        execution: rnExecution.bundle,
       })
     ).toThrow(/missing a mobile platform/);
   });
@@ -184,6 +201,7 @@ describe("app dist bake", () => {
       writeAppDistBake({
         entry: appEntry(),
         build: appBuild(),
+        execution: DIST_EXECUTION.bundle,
         outDir,
         generatedAt: "2026-05-26T12:00:00.000Z",
       });
@@ -191,7 +209,7 @@ describe("app dist bake", () => {
       expect(JSON.parse(fs.readFileSync(path.join(outDir, "manifest.json"), "utf8"))).toMatchObject(
         {
           app: { source: "apps/shell" },
-          build: { key: "build-shell" },
+          build: { compilationCacheKey: "build-shell" },
         }
       );
       expect(fs.readFileSync(path.join(outDir, "artifacts", "index.html"), "utf8")).toBe(

@@ -1,0 +1,25 @@
+{
+  "name": "@vibestudio/direct-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./webrtc": "./src/webrtcClient.ts",
+    "./node-webrtc": "./src/nodeDatachannelPeer.ts",
+    "./cert": "./src/cert.ts"
+  },
+  "dependencies": {
+    "@vibestudio/env-paths": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
+    "node-datachannel": "^0.32.0",
+    "ws": "^8.18.3",
+    "zod": "^3.24.1"
+  }
+}

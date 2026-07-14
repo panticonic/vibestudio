@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import {
   createWebhookIngressSubscriptionSchema as createSubscriptionSchema,
   rotateWebhookIngressSecretSchema as rotateSecretSchema,
@@ -11,7 +11,7 @@ import {
 } from "@vibestudio/service-schemas/webhookIngress";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { WEBHOOK_STORE_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 import {
   getHeader,
   summarizeWebhookIngressSubscription,
@@ -27,7 +27,6 @@ import {
   type WebhookReplayKey,
   type WebhookTarget,
 } from "../../../packages/shared/src/webhooks/ingress.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 
@@ -89,7 +88,7 @@ export class InMemoryWebhookIngressStore implements WebhookIngressStore {
 
 export class DOWebhookIngressStore implements WebhookIngressStore {
   private readonly ref = {
-    source: INTERNAL_DO_SOURCE,
+    source: WEBHOOK_STORE_DO_SOURCE,
     className: "WebhookStoreDO",
     objectKey: "global",
   };
@@ -163,7 +162,6 @@ export interface WebhookIngressServiceDeps {
     callerKind: CallerKind;
     repoPath: string;
   } | null>;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
   /** Backhaul registrar; relay-mode subscriptions register through it. */
   relayRegistrar?: WebhookRelayRegistrar;
@@ -224,7 +222,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ctx: ServiceContext,
     subscription: WebhookIngressSubscription
   ): Promise<void> {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+    if (await hasPanelHostingAuthority(ctx)) return;
     const scope = await callerScope(ctx);
     if (subscription.ownerCallerId !== scope.ownerCallerId) {
       throw new Error("webhook subscription is not owned by caller");
@@ -236,7 +234,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     target: WebhookTarget,
     resolvedScope?: ResolvedCallerScope
   ): Promise<void> {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+    if (await hasPanelHostingAuthority(ctx)) return;
     const scope = resolvedScope ?? (await callerScope(ctx));
     if (!scope.targetSource) {
       throw new Error("webhook target source cannot be verified for caller");
@@ -297,7 +295,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ctx: ServiceContext,
     options: { includeRevoked?: boolean } = {}
   ): Promise<WebhookIngressSubscriptionSummary[]> {
-    const owner = isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })
+    const owner = (await hasPanelHostingAuthority(ctx))
       ? undefined
       : (await callerScope(ctx)).ownerCallerId;
     const rows = await store.list(owner);
@@ -587,7 +585,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   const definition: ServiceDefinition = {
     name: "webhookIngress",
     description: "Generic public webhook ingress subscriptions",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: webhookIngressMethods,
     handler: defineServiceHandler("webhookIngress", webhookIngressMethods, {
       createSubscription: (ctx, [input]) => createSubscription(ctx, input),

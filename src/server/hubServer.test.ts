@@ -26,11 +26,52 @@ import {
   HubRootCompletePairingBodySchema,
   openHubDataStores,
   prepareEphemeralWorkspaceDisk,
+  shouldRestartWorkspaceAtHubStart,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
+
+describe("hub startup workspace selection", () => {
+  it("starts only the fresh bootstrap workspace for an ephemeral hub", () => {
+    expect(
+      shouldRestartWorkspaceAtHubStart({
+        ephemeral: true,
+        bootstrapWorkspace: "dev",
+        workspaceName: "dev",
+        hasRoutedRooms: false,
+      })
+    ).toBe(true);
+    expect(
+      shouldRestartWorkspaceAtHubStart({
+        ephemeral: true,
+        bootstrapWorkspace: "dev",
+        workspaceName: "old-workspace",
+        hasRoutedRooms: true,
+      })
+    ).toBe(false);
+  });
+
+  it("revives routed workspaces for a persistent hub", () => {
+    expect(
+      shouldRestartWorkspaceAtHubStart({
+        ephemeral: false,
+        bootstrapWorkspace: "default",
+        workspaceName: "team",
+        hasRoutedRooms: true,
+      })
+    ).toBe(true);
+    expect(
+      shouldRestartWorkspaceAtHubStart({
+        ephemeral: false,
+        bootstrapWorkspace: "default",
+        workspaceName: "idle",
+        hasRoutedRooms: false,
+      })
+    ).toBe(false);
+  });
+});
 
 describe("workspace child process-tree ownership", () => {
   function fakeChild(overrides: Partial<ChildProcess> = {}): ChildProcess {

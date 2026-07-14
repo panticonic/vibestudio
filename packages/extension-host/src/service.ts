@@ -22,6 +22,11 @@ import type {
   BuildProviderTarget,
 } from "@vibestudio/shared/buildProvider";
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type {
+  ArtifactBundleEntry,
+  ExecutionArtifactRef,
+} from "@vibestudio/shared/execution/identity";
+import type { CapabilityScope } from "@vibestudio/rpc";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredExtensions,
@@ -37,7 +42,7 @@ import {
   UnitSourceChangeGrantStore,
   UnitTrustResolver,
   authorizeUnitSourceChange,
-  collectTransitiveUnitDependencyEvs,
+  collectTransitiveUnitDependencySourceDigests,
   createPendingUnitRegistryEntry,
   createUnitBuildIdentity,
   createUnitBatchEntryBase,
@@ -101,7 +106,20 @@ interface BuildSystemLike {
     metadata: ExtensionBuildMetadataLike;
     artifacts: ExtensionBuildArtifactLike[];
   } | null;
-  getEffectiveVersion(unitName: string): string | null;
+  resolveExecutionArtifact(
+    unitPath: string,
+    ref?: string
+  ): Promise<{
+    artifact: ExecutionArtifactRef;
+    compilationCacheKey: string;
+  }>;
+  getExecutionArtifact(executionDigest: string): {
+    ref: ExecutionArtifactRef;
+    requested: readonly CapabilityScope[];
+    entries: ArtifactBundleEntry[];
+    entryPath(artifactPath: string): string;
+  } | null;
+  getSourceDigest(unitName: string): string | null;
   getExternalDeps(unitName: string): Record<string, string>;
   getGraph(): {
     allNodes(): Array<{
@@ -134,7 +152,7 @@ interface BuildSystemLike {
 }
 
 interface ExtensionBuildMetadataLike {
-  ev: string;
+  sourceDigest: string;
   sourceStateHash?: string | null;
   details?:
     | {
@@ -175,7 +193,7 @@ interface ApprovalQueueLike {
           callerKind: "panel" | "app" | "worker" | "do" | "extension";
           requestedByUserId?: string;
           repoPath: string;
-          effectiveVersion: string;
+          executionDigest: string;
           capability: string;
           dedupKey?: string | null;
           title: string;
@@ -189,7 +207,7 @@ interface ApprovalQueueLike {
           callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
           requestedByUserId?: string;
           repoPath: string;
-          effectiveVersion: string;
+          executionDigest: string;
           dedupKey?: string | null;
           trigger: PendingUnitBatchApproval["trigger"];
           title: string;
@@ -558,7 +576,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     return {
       name: "extensions",
       description: "Installed extension management and invocation",
-      policy: { allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"] },
+      authority: { principals: ["code", "user", "host"] },
       methods: extensionsMethods,
       handler: defineServiceHandler("extensions", extensionsMethods, {
         invoke: (ctx, [name, method, args]) => this.invoke(ctx, name, method, args),
@@ -638,7 +656,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       );
     }
     try {
-      return await call(entry, invocation);
+      const result = await call(entry, invocation);
+      // Extension invocation is a JSON-valued RPC boundary. JavaScript methods with no
+      // explicit return value are successful void calls, represented canonically as null
+      // on the wire. All other values still flow through the service schema unchanged.
+      return result === undefined ? null : result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const wrapped = new Error(
@@ -708,6 +730,61 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     );
   }
 
+  async invokeProviderStream(
+    ctx: ServiceContext,
+    provider: string,
+    method: string,
+    args: unknown[]
+  ): Promise<Response> {
+    await this.whenReconciled();
+    const name = this.deps.resolveProviderExtensionName(provider);
+    if (!name) {
+      throw new ServiceError(
+        "extensions",
+        "invokeProviderStream",
+        `No extension provider declared for providers.${provider}`,
+        "ENOENT"
+      );
+    }
+    if (!this.deps.extensionTransport.streamCallTarget) {
+      throw new ServiceError(
+        "extensions",
+        "invokeProviderStream",
+        "Extension streaming transport is unavailable",
+        "ENOTIMPL"
+      );
+    }
+    const entry = this.lookupForInvoke(name);
+    if (!entry || !this.processes.isRunning(entry.name)) {
+      throw new ServiceError(
+        "extensions",
+        "invokeProviderStream",
+        `Extension is not running: ${name}`,
+        "ENOTREADY"
+      );
+    }
+    this.assertActiveProviderImplementation(entry, provider, method, "invokeProviderStream");
+    const invocation = this.createTrackedInvocation(
+      ctx,
+      entry.name,
+      `providers.${provider}.${method}`
+    );
+    try {
+      const response = await this.deps.extensionTransport.streamCallTarget(
+        entry.name,
+        "extension.invokeProviderStream",
+        provider,
+        method,
+        args,
+        invocation
+      );
+      return this.responseWithInvocationCleanup(response, invocation);
+    } catch (error) {
+      this.clearTrackedInvocation(invocation);
+      throw error;
+    }
+  }
+
   private assertPublicProviderInvocationAllowed(provider: string, method: string): void {
     if (!this.isHostProviderMethod(provider, method)) return;
     throw new ServiceError(
@@ -753,7 +830,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     entry: RegistryEntry,
     provider: string,
     method: string,
-    operation: "invokeProvider"
+    operation: "invokeProvider" | "invokeProviderStream"
   ): void {
     const declarations = this.activeProviderContracts(entry, operation);
     if (declarations[provider]?.methods.includes(method)) return;
@@ -767,7 +844,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private activeProviderContracts(
     entry: RegistryEntry,
-    operation: "invoke" | "invokeProvider" | "invokeStream" | "ready"
+    operation: "invoke" | "invokeProvider" | "invokeProviderStream" | "invokeStream" | "ready"
   ): ExtensionProviderContracts {
     const build = entry.activeBundleKey
       ? this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)
@@ -907,12 +984,15 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   resolveCodeIdentity(extensionName: string): VerifiedCodeIdentity | null {
     const entry = this.registry.get(extensionName);
-    if (!entry?.activeBundleKey || !entry.activeEv) return null;
+    if (!entry?.activeBundleKey || !entry.activeExecutionDigest) return null;
+    const execution = this.deps.buildSystem.getExecutionArtifact(entry.activeExecutionDigest);
+    if (!execution || execution.ref.executionDigest !== entry.activeExecutionDigest) return null;
     return {
       callerId: entry.name,
       callerKind: "extension",
       repoPath: entry.source.repo,
-      effectiveVersion: entry.activeEv,
+      executionDigest: entry.activeExecutionDigest,
+      requested: execution.requested,
     };
   }
 
@@ -1313,8 +1393,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     displayName: string;
     status: RegistryEntry["status"];
     version: string;
-    ev: string | null;
-    activeEv: string | null;
+    sourceDigest: string | null;
+    executionDigest: string | null;
     activeBundleKey: string | null;
     activeRuntimeDepsKey: string | null;
     lastBuiltAt: number | null;
@@ -1397,7 +1477,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     if (repoPath === "meta") {
       return { allowed: true };
     }
-    return authorizeUnitSourceChange(
+    return authorizeUnitSourceChange<RegistryEntry, ReturnType<ExtensionHost["findExtensionNode"]>>(
       {
         descriptor: EXTENSION_UNIT_DESCRIPTOR,
         grantStore: this.sourceChangeGrants,
@@ -1412,7 +1492,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
               ? { requestedByUserId: sourceChange.caller.subject.userId }
               : {}),
             repoPath: identity.repoPath,
-            effectiveVersion: identity.effectiveVersion,
+            executionDigest: identity.executionDigest,
             dedupKey: `unit-source-change:extension:${installed.entry.name}:${sourceChange.branch}`,
             trigger: "source-change",
             title: `${installed.entry.name} source change`,
@@ -1420,7 +1500,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
             units: [
               {
                 ...this.buildBatchEntry(installed.node, installed.entry.source.ref),
-                ev: installed.entry.activeEv,
+                sourceDigest: installed.entry.activeSourceDigest,
               },
             ],
             configWrite: null,
@@ -1454,8 +1534,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         version: this.readNodeVersion(node.path),
         sourceRepo: node.relativePath,
         ref,
-        effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-        dependencyEvs: this.currentDependencyEvs(node),
+        sourceDigest: this.deps.buildSystem.getSourceDigest(node.name),
+        dependencySourceDigests: this.currentDependencyEvs(node),
         externalDeps: this.currentExternalDeps(node),
       }),
       target: null,
@@ -1472,8 +1552,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       name: node.name,
       sourceRepo: node.relativePath,
       ref,
-      effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-      dependencyEvs: this.currentDependencyEvs(node),
+      sourceDigest: this.deps.buildSystem.getSourceDigest(node.name),
+      dependencySourceDigests: this.currentDependencyEvs(node),
       externalDeps: this.currentExternalDeps(node),
       capabilities: extensionRuntimeCapabilities(),
     });
@@ -1495,7 +1575,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         name: entry.name,
         target,
         contractVersion: "vibestudio-build-provider-v1",
-        activeEv: entry.activeEv,
+        activeSourceDigest: entry.activeSourceDigest,
         activeBuildKey: entry.activeBundleKey,
         build: async (input) => {
           const invocation: ExtensionInvocation = {
@@ -1588,19 +1668,25 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private async activateOnce(name: string): Promise<void> {
     const entry = this.registry.get(name);
-    if (!entry?.activeBundleKey) throw new Error(`Extension has no active approved build: ${name}`);
-    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
-    if (!build) {
+    if (!entry?.activeExecutionDigest) {
+      throw new Error(`Extension has no active approved execution artifact: ${name}`);
+    }
+    const execution = this.deps.buildSystem.getExecutionArtifact(entry.activeExecutionDigest);
+    if (!execution || execution.ref.executionDigest !== entry.activeExecutionDigest) {
       throw new Error(
-        `Approved extension build is missing from build store: ${entry.activeBundleKey}`
+        `Approved extension execution artifact is unavailable: ${entry.activeExecutionDigest}`
       );
     }
+    const primary = execution.entries.find((artifact) => artifact.role === "primary");
+    if (!primary) throw new Error(`Extension execution artifact has no primary entry: ${name}`);
+    const runtimeNodeModulesDir = this.activeRuntimeNodeModulesDir(entry);
     const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });
     await this.processes.start({
       name,
       version: entry.version,
-      bundlePath: extensionPrimaryArtifactPath(build),
+      bundlePath: execution.entryPath(primary.path),
+      ...(runtimeNodeModulesDir ? { runtimeNodeModulesDir } : {}),
       storageDir: this.storageDirFor(name),
       gatewayUrl: this.deps.getGatewayUrl(),
       rpcToken: token,
@@ -1616,19 +1702,24 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     const node = this.findExtensionNode(name);
     const previous = this.registry.get(node.name);
     this.unitHost.markBuilding(node.name);
-    const build = await this.deps.buildSystem.getBuild(node.name, ref);
+    const binding = await this.deps.buildSystem.resolveExecutionArtifact(node.name, ref);
+    const build = this.deps.buildSystem.getBuildByKey?.(binding.compilationCacheKey);
+    if (!build) {
+      throw new Error(`Compilation record missing for resolved extension artifact: ${node.name}`);
+    }
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
-    const activeDependencyEvs = this.currentDependencyEvs(node);
+    const activeDependencySourceDigests = this.currentDependencyEvs(node);
     const activeExternalDeps = this.currentExternalDeps(node);
     this.unitHost.activateBuild({
       name: node.name,
       version: this.readNodeVersion(node.path),
       sourceRepo: node.relativePath,
       ref: ref ?? "main",
-      buildDir: build.dir,
-      effectiveVersion: build.metadata.ev,
+      buildKey: binding.compilationCacheKey,
+      sourceDigest: binding.artifact.source.sourceEv,
+      executionDigest: binding.artifact.executionDigest,
       activeSourceHash,
-      dependencyEvs: activeDependencyEvs,
+      dependencySourceDigests: activeDependencySourceDigests,
       externalDeps: activeExternalDeps,
       runtimeDepsKey: extensionMetadataDetails(build.metadata)?.runtimeDepsKey ?? null,
       status: "building",
@@ -1639,10 +1730,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       const message = err instanceof Error ? err.message : String(err);
       if (previous?.activeBundleKey) {
         this.registry.patch(node.name, {
-          activeEv: previous.activeEv,
+          activeSourceDigest: previous.activeSourceDigest,
+          activeExecutionDigest: previous.activeExecutionDigest,
           activeSourceHash: previous.activeSourceHash,
           activeBundleKey: previous.activeBundleKey,
-          activeDependencyEvs: previous.activeDependencyEvs,
+          activeDependencySourceDigests: previous.activeDependencySourceDigests,
           activeExternalDeps: previous.activeExternalDeps ?? {},
           activeRuntimeDepsKey: previous.activeRuntimeDepsKey,
           status: "error",
@@ -1732,10 +1824,10 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   private currentDependencyEvs(
     node: ReturnType<ExtensionHost["findExtensionNode"]>
   ): Record<string, string> {
-    return collectTransitiveUnitDependencyEvs(
+    return collectTransitiveUnitDependencySourceDigests(
       this.deps.buildSystem.getGraph().allNodes(),
       node,
-      (name) => this.deps.buildSystem.getEffectiveVersion(name)
+      (name) => this.deps.buildSystem.getSourceDigest(name)
     );
   }
 
@@ -1754,8 +1846,8 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       this.unitHost.needsBuildRefresh(entry, {
         sourceRepo: node.relativePath,
         ref: entry.source.ref,
-        effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-        dependencyEvs: this.currentDependencyEvs(node),
+        sourceDigest: this.deps.buildSystem.getSourceDigest(node.name),
+        dependencySourceDigests: this.currentDependencyEvs(node),
         externalDeps: currentExternalDeps,
       })
     ) {
@@ -1776,12 +1868,41 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
   }
 
   private hasUsableActiveRuntimeDeps(entry: RegistryEntry): boolean {
-    if (!entry.activeBundleKey || !entry.activeRuntimeDepsKey) return false;
+    try {
+      this.activeRuntimeNodeModulesDir(entry);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private activeRuntimeNodeModulesDir(entry: RegistryEntry): string | undefined {
+    if (!entry.activeBundleKey) {
+      throw new Error(`Extension has no active compilation record: ${entry.name}`);
+    }
     const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
-    if (!build) return false;
-    const externalDeps = extensionMetadataDetails(build.metadata)?.externalDeps ?? {};
-    if (Object.keys(externalDeps).length === 0) return true;
-    return fs.existsSync(path.join(build.dir, "node_modules"));
+    if (!build) {
+      throw new Error(`Extension compilation record is unavailable: ${entry.activeBundleKey}`);
+    }
+    const details = extensionMetadataDetails(build.metadata);
+    const externalDeps = details?.externalDeps ?? {};
+    if (Object.keys(externalDeps).length === 0) return undefined;
+    if (
+      !entry.activeRuntimeDepsKey ||
+      !details?.runtimeDepsKey ||
+      entry.activeRuntimeDepsKey !== details.runtimeDepsKey
+    ) {
+      throw new Error(
+        `Extension runtime dependency identity does not match its active build: ${entry.name}`
+      );
+    }
+    const nodeModulesDir = path.join(build.dir, "node_modules");
+    if (!fs.existsSync(nodeModulesDir)) {
+      throw new Error(
+        `Extension runtime dependency layer is unavailable for ${entry.name}: ${nodeModulesDir}`
+      );
+    }
+    return fs.realpathSync(nodeModulesDir);
   }
 
   private findExtensionNode(nameOrRepo: string) {
@@ -1854,7 +1975,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       callerKind: ctx.caller.runtime.kind,
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
       dedupKey: `unit-management:extension:reload:${node.name}`,
       trigger: "management",
       title: "Reload extension",
@@ -1867,9 +1988,10 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           version: entry?.version ?? this.readNodeVersion(node.path),
           target: null,
           source,
-          ev: entry?.activeEv ?? null,
+          sourceDigest: entry?.activeSourceDigest ?? null,
           capabilities: extensionRuntimeCapabilities(),
-          dependencyEvs: entry?.activeDependencyEvs ?? this.currentDependencyEvs(node),
+          dependencySourceDigests:
+            entry?.activeDependencySourceDigests ?? this.currentDependencyEvs(node),
           externalDeps: entry?.activeExternalDeps ?? this.currentExternalDeps(node),
         },
       ],
@@ -2150,8 +2272,8 @@ function extensionWorkspaceStatusFallback(
     displayName: node.manifest.displayName ?? entry.name,
     status: entry.status,
     version: entry.version,
-    ev: entry.activeEv,
-    activeEv: entry.activeEv,
+    sourceDigest: entry.activeSourceDigest,
+    executionDigest: entry.activeExecutionDigest,
     activeBundleKey: entry.activeBundleKey,
     activeRuntimeDepsKey: entry.activeRuntimeDepsKey,
     lastError: entry.lastError,

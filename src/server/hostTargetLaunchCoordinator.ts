@@ -65,6 +65,10 @@ export interface HostTargetLaunchCoordinatorDeps {
 export class HostTargetLaunchCoordinator {
   private revision = 0;
   private sessions = new Map<string, HostTargetLaunchSessionSnapshot>();
+  private sessionRefreshes = new Map<
+    string,
+    { emit: boolean; promise: Promise<HostTargetLaunchSessionSnapshot> }
+  >();
 
   constructor(private readonly deps: HostTargetLaunchCoordinatorDeps) {}
 
@@ -352,12 +356,36 @@ export class HostTargetLaunchCoordinator {
     sessionId: string,
     opts: { emit?: boolean } = {}
   ): Promise<HostTargetLaunchSessionSnapshot> {
-    const previous = this.requireSession(sessionId);
-    const launch = await this.resolveLaunch(previous.target);
-    const next = this.snapshotFromLaunch(previous, launch);
-    this.sessions.set(sessionId, next);
-    if (opts.emit && sessionChanged(previous, next)) this.emitSession(next);
-    return next;
+    const active = this.sessionRefreshes.get(sessionId);
+    if (active) {
+      active.emit ||= opts.emit === true;
+      return await active.promise;
+    }
+
+    const flight: {
+      emit: boolean;
+      promise: Promise<HostTargetLaunchSessionSnapshot>;
+    } = {
+      emit: opts.emit === true,
+      promise: Promise.resolve(this.requireSession(sessionId)),
+    };
+    flight.promise = (async () => {
+      const previous = this.requireSession(sessionId);
+      const launch = await this.resolveLaunch(previous.target);
+      const next = this.snapshotFromLaunch(previous, launch);
+      // A cancelled session remains cancelled even if its in-flight launch probe settles later.
+      if (this.sessions.has(sessionId)) {
+        this.sessions.set(sessionId, next);
+        if (flight.emit && sessionChanged(previous, next)) this.emitSession(next);
+      }
+      return next;
+    })().finally(() => {
+      if (this.sessionRefreshes.get(sessionId) === flight) {
+        this.sessionRefreshes.delete(sessionId);
+      }
+    });
+    this.sessionRefreshes.set(sessionId, flight);
+    return await flight.promise;
   }
 
   private snapshotFromLaunch(

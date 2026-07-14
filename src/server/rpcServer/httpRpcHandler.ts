@@ -18,6 +18,7 @@ export interface AuthenticatedHttpRpcCaller {
   callerId: string;
   callerKind: CallerKind;
   agentBinding?: AgentBinding;
+  hostOriginated?: true;
 }
 
 export type HttpRpcAdmission =

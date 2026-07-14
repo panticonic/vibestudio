@@ -11,7 +11,6 @@
  */
 
 import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   IdentityCollisionError,
   canonicalEntityId,
@@ -28,7 +27,7 @@ interface DbEntityRow {
   id: string;
   kind: EntityKind;
   source_repo_path: string;
-  source_effective_version: string;
+  active_execution_digest: string | null;
   context_id: string;
   class_name: string | null;
   key: string;
@@ -121,7 +120,8 @@ export interface LifecycleOp extends LifecycleKey {
 
 export interface EntityActivateInput {
   kind: EntityKind;
-  source: { repoPath: string; effectiveVersion: string };
+  source: { repoPath: string };
+  activeExecutionDigest?: string;
   contextId: string;
   className?: string;
   key: string;
@@ -291,32 +291,11 @@ function rowToHeartbeatRegistry(row: Record<string, unknown>): HeartbeatRegistry
 }
 
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 20;
+  static override schemaVersion = 21;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
-  }
-
-  /**
-   * Receiver-side authorization (Layer A). WorkspaceDO is server-internal: it is
-   * reached ONLY through the `workspace-state` service, which dispatches as
-   * callerKind "server" (doDispatch stamps `{ callerId: "main", callerKind:
-   * "server" }`) and enforces its own read/write policy. Refuse any direct relay
-   * caller (panel/worker/do/…) so the open relay cannot bypass that policy by
-   * addressing the DO by objectKey. Events are owner-scoped push notifications —
-   * accept them.
-   */
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return;
-    if (caller?.callerKind !== "server") {
-      throw new Error(
-        `workspace-state: WorkspaceDO is server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`
-      );
-    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -329,7 +308,7 @@ export class WorkspaceDO extends DurableObjectBase {
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
         source_repo_path TEXT NOT NULL,
-        source_effective_version TEXT NOT NULL,
+        active_execution_digest TEXT,
         context_id TEXT NOT NULL,
         class_name TEXT,
         key TEXT NOT NULL,
@@ -527,7 +506,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * - Prior 'retired' row with identical identity → reactivate (flip status).
    * - Prior row with mismatched identity → throw IDENTITY_COLLISION.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityActivate(input: EntityActivateInput): EntityRecord {
     return this.ctx.storage.transactionSync(() => {
       const id = canonicalEntityId({
@@ -540,6 +519,15 @@ export class WorkspaceDO extends DurableObjectBase {
       const existing = this.readEntityRow(id);
       if (existing) {
         this.assertIdentityMatches(id, existing, input);
+        const nextExecutionDigest = input.activeExecutionDigest ?? null;
+        if (existing.active_execution_digest !== nextExecutionDigest) {
+          this.sql.exec(
+            `UPDATE entities SET active_execution_digest = ? WHERE id = ?`,
+            nextExecutionDigest,
+            id
+          );
+          existing.active_execution_digest = nextExecutionDigest;
+        }
         const nextAgentBinding =
           input.agentBinding === undefined ? null : JSON.stringify(input.agentBinding);
         if (existing.agent_binding !== null && existing.agent_binding !== nextAgentBinding) {
@@ -593,14 +581,14 @@ export class WorkspaceDO extends DurableObjectBase {
       const now = Date.now();
       this.sql.exec(
         `INSERT INTO entities (
-          id, kind, source_repo_path, source_effective_version,
+          id, kind, source_repo_path, active_execution_digest,
           context_id, class_name, key, state_args, agent_binding, parent_id, owner_user_id, created_at,
           status, retired_at, cleanup_complete, error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
-        input.source.effectiveVersion,
+        input.activeExecutionDigest ?? null,
         input.contextId,
         input.className ?? null,
         input.key,
@@ -617,7 +605,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityRetire(id: string): EntityRecord | null {
     return this.ctx.storage.transactionSync(() => {
       const row = this.readEntityRow(id);
@@ -632,11 +620,13 @@ export class WorkspaceDO extends DurableObjectBase {
         id
       );
       if (row.kind === "do" && row.class_name) {
-        this.lifecycleLeaseClear({
+        const lifecycleKey = {
           source: row.source_repo_path,
           className: row.class_name,
           objectKey: row.key,
-        });
+        };
+        this.lifecycleLeaseClear(lifecycleKey);
+        this.alarmClear(lifecycleKey);
       }
       const updated = this.readEntityRow(id);
       return updated ? this.rowToEntity(updated) : null;
@@ -644,13 +634,13 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Mark cleanup_complete=1 after server-side hooks succeed. */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityCleanupComplete(id: string): void {
     this.sql.exec(`UPDATE entities SET cleanup_complete = 1 WHERE id = ?`, id);
   }
 
   /** Find rows whose cleanup hooks need retrying. */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityFindIncompleteCleanups(): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE retired_at IS NOT NULL AND cleanup_complete = 0`)
@@ -662,7 +652,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * Hard-delete retired rows older than the grace window and unreferenced by slot_history.
    * Never deletes active rows; never deletes history-referenced rows. Fires no hooks.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityGc(opts: GcOptions = {}): string[] {
     const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
     const cutoff = Date.now() - graceMs;
@@ -703,20 +693,20 @@ export class WorkspaceDO extends DurableObjectBase {
 
   // ── Entity reads ──
 
-  @rpc
+  @rpc({ principals: ["host"] })
   entityResolve(id: string): EntityRecord | null {
     const row = this.readEntityRow(id);
     return row ? this.rowToEntity(row) : null;
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   entityResolveActive(id: string): EntityRecord | null {
     const row = this.readEntityRow(id);
     if (!row || row.status !== "active") return null;
     return this.rowToEntity(row);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   entityResolveContext(id: string): string | null {
     const row = this.readEntityRow(id);
     return row ? row.context_id : null;
@@ -727,7 +717,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * `entityId`, or null. Backed by `idx_slots_current`. This is the authoritative,
    * lease-independent way to find the tree slot a panel's runtime entity belongs to.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   slotResolveByEntity(entityId: string): string | null {
     const row = this.sql
       .exec(`SELECT slot_id FROM slots WHERE current_entity_id = ? AND closed_at IS NULL`, entityId)
@@ -735,17 +725,17 @@ export class WorkspaceDO extends DurableObjectBase {
     return row && typeof row["slot_id"] === "string" ? row["slot_id"] : null;
   }
 
-  entityResolveSource(id: string): { repoPath: string; effectiveVersion: string } | null {
+  entityResolveSource(id: string): { repoPath: string } | null {
     const row = this.readEntityRow(id);
     if (!row) return null;
-    return { repoPath: row.source_repo_path, effectiveVersion: row.source_effective_version };
+    return { repoPath: row.source_repo_path };
   }
 
   // ─────────────────────────────────────────────────────────────
   // lifecycle.* operations
   // ─────────────────────────────────────────────────────────────
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleLeaseUpsert(input: LifecycleLeaseInput): void {
     this.assertLifecycleKey(input);
     const now = Date.now();
@@ -765,7 +755,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleLeaseClear(input: LifecycleKey): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -781,7 +771,7 @@ export class WorkspaceDO extends DurableObjectBase {
   // ─────────────────────────────────────────────────────────────
 
   /** Register/replace a DO's wake time (absolute epoch ms). */
-  @rpc
+  @rpc({ principals: ["host"] })
   alarmSet(input: LifecycleKey & { wakeAt: number; bestEffort?: boolean }): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -798,7 +788,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Clear a DO's pending alarm (no-op if none). */
-  @rpc
+  @rpc({ principals: ["host"] })
   alarmClear(input: LifecycleKey): void {
     this.assertLifecycleKey(input);
     this.sql.exec(
@@ -810,7 +800,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Soonest pending wake time, or null when no alarms are scheduled. */
-  @rpc
+  @rpc({ principals: ["host"] })
   alarmNextWakeAt(): number | null {
     const row = this.sql.exec(`SELECT MIN(wake_at) AS next FROM do_alarms`).toArray()[0] as
       | { next: number | null }
@@ -820,7 +810,7 @@ export class WorkspaceDO extends DurableObjectBase {
 
   /** Atomically return and delete all alarms due at/before `now`. Each fires once;
    *  recurring DOs re-arm from inside their own `alarm()` handler. */
-  @rpc
+  @rpc({ principals: ["host"] })
   alarmTakeDue(now: number): Array<LifecycleKey & { wakeAt: number; bestEffort: boolean }> {
     return this.ctx.storage.transactionSync(() => {
       const rows = this.sql
@@ -858,7 +848,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * deleted; jobs whose `specHash` is unchanged keep their durable
    * `next_run_at`; new or respecified jobs adopt `initialNextRunAt`.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringSync(input: { jobs: RecurringJobRow[] }): void {
     this.ctx.storage.transactionSync(() => {
       const names = input.jobs.map((j) => j.name);
@@ -922,7 +912,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Jobs due at/before `now`. Rows stay put; the registry marks each run. */
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringDue(now: number): RecurringJobRow[] {
     return (
       this.sql
@@ -937,7 +927,7 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToRecurringJob);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringMarkRun(input: { name: string; lastRunAt: number; nextRunAt: number }): void {
     this.sql.exec(
       `UPDATE recurring_jobs
@@ -950,7 +940,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringMarkSucceeded(input: { name: string; finishedAt: number; durationMs: number }): void {
     this.sql.exec(
       `UPDATE recurring_jobs
@@ -966,7 +956,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringMarkFailed(input: {
     name: string;
     failedAt: number;
@@ -994,7 +984,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringNextWakeAt(): number | null {
     const row = this.sql
       .exec(`SELECT MIN(next_run_at) AS next FROM recurring_jobs`)
@@ -1002,7 +992,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return row && row.next !== null ? row.next : null;
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   recurringList(): RecurringJobRow[] {
     return (
       this.sql.exec(`SELECT * FROM recurring_jobs ORDER BY name`).toArray() as Array<
@@ -1011,7 +1001,7 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToRecurringJob);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   heartbeatRegister(input: HeartbeatRegistryRow): void {
     const now = Date.now();
     this.sql.exec(
@@ -1047,7 +1037,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   heartbeatRemove(input: {
     name: string;
     source?: string;
@@ -1068,7 +1058,7 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM heartbeat_registry WHERE name = ?`, input.name);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   heartbeatList(): HeartbeatRegistryRow[] {
     return (
       this.sql.exec(`SELECT * FROM heartbeat_registry ORDER BY name`).toArray() as Array<
@@ -1077,7 +1067,7 @@ export class WorkspaceDO extends DurableObjectBase {
     ).map(rowToHeartbeatRegistry);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleListLeases(): LifecycleLease[] {
     const rows = this.sql
       .exec(
@@ -1103,7 +1093,7 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleOpenEpoch(input: LifecycleEpochInput): string {
     return this.ctx.storage.transactionSync(() => {
       const seqRow = this.sql
@@ -1133,7 +1123,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleRecordOp(input: LifecycleOpInput): void {
     this.assertLifecycleKey(input.key);
     this.insertLifecycleOp(
@@ -1146,7 +1136,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleListOps(epochId: string): LifecycleOp[] {
     const rows = this.sql
       .exec(
@@ -1178,12 +1168,12 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleCompleteEpoch(epochId: string): void {
     this.sql.exec(`UPDATE lifecycle_epochs SET status = 'completed' WHERE epoch_id = ?`, epochId);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   lifecycleListResumeTargets(): LifecycleKey[] {
     const rows = this.sql
       .exec(
@@ -1202,7 +1192,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Return all active entities (used by restart revival to re-attach runtime). */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityListActive(): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE status = 'active' ORDER BY created_at`)
@@ -1211,7 +1201,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Return active entities of a given kind (used by singleton reconciliation). */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityListActiveByKind(kind: EntityKind): EntityRecord[] {
     const rows = this.sql
       .exec(`SELECT * FROM entities WHERE status = 'active' AND kind = ? ORDER BY created_at`, kind)
@@ -1228,7 +1218,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * (context_id, owner_context_id, kind); `created_at` is preserved on conflict,
    * `owner_entity_id` refreshed.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   contextEdgeUpsert(input: {
     contextId: string;
     ownerContextId: string;
@@ -1249,7 +1239,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** List edges owned BY a context (the owner side), optionally scoped to one kind. */
-  @rpc
+  @rpc({ principals: ["host"] })
   contextEdgeListByOwner(input: {
     ownerContextId: string;
     kind?: "lifecycle" | "lineage";
@@ -1275,7 +1265,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** List edges INTO a context (the child side) — walk up for authz/teardown. */
-  @rpc
+  @rpc({ principals: ["host"] })
   contextEdgeListByChild(contextId: string): Array<{
     ownerContextId: string;
     kind: "lifecycle" | "lineage";
@@ -1296,7 +1286,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Delete every inbound edge of a context (called on teardown). */
-  @rpc
+  @rpc({ principals: ["host"] })
   contextEdgeDeleteByChild(contextId: string): void {
     this.sql.exec(`DELETE FROM context_edges WHERE context_id = ?`, contextId);
   }
@@ -1305,7 +1295,7 @@ export class WorkspaceDO extends DurableObjectBase {
   // slot.* operations
   // ─────────────────────────────────────────────────────────────
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotCreate(input: SlotCreateInput): void {
     this.ctx.storage.transactionSync(() => {
       const existing = this.sql
@@ -1332,7 +1322,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotAppendHistory(slotId: string, entry: SlotHistoryEntryInput): number {
     return this.ctx.storage.transactionSync(() => {
       this.requireSlot(slotId);
@@ -1348,7 +1338,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotSetCurrent(slotId: string, entryKey: string): void {
     this.ctx.storage.transactionSync(() => {
       this.requireSlot(slotId);
@@ -1374,7 +1364,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotUpdateCurrentStateArgs(slotId: string, stateArgs: unknown): void {
     this.ctx.storage.transactionSync(() => {
       const slot = this.requireSlot(slotId);
@@ -1398,7 +1388,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotReplaceHistory(slotId: string, entries: SlotHistoryEntryInput[], cursor: number): void {
     this.ctx.storage.transactionSync(() => {
       this.requireSlot(slotId);
@@ -1428,13 +1418,13 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotSetParent(slotId: string, parentSlotId: string | null): void {
     this.requireSlot(slotId);
     this.sql.exec(`UPDATE slots SET parent_slot_id = ? WHERE slot_id = ?`, parentSlotId, slotId);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotSetPosition(slotId: string, positionId: string): void {
     this.requireSlot(slotId);
     this.sql.exec(`UPDATE slots SET position_id = ? WHERE slot_id = ?`, positionId, slotId);
@@ -1449,7 +1439,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * or keeps its current owner when no mover subject is supplied. Authorization
    * is permissive (any member may restructure any tree); only attribution moves.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   slotMove(
     slotId: string,
     parentSlotId: string | null,
@@ -1535,7 +1525,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return ids;
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotClose(slotId: string): void {
     this.ctx.storage.transactionSync(() => {
       this.requireSlot(slotId);
@@ -1548,7 +1538,7 @@ export class WorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotGet(slotId: string): DbSlotRow | null {
     const row = this.sql
       .exec(
@@ -1569,7 +1559,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * tree for a "just my tree" view (backed by idx_slots_owner) but is NOT the
    * default.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   slotListOpen(filter?: { owner?: string }): DbSlotRow[] {
     if (filter?.owner !== undefined) {
       return this.sql
@@ -1594,7 +1584,7 @@ export class WorkspaceDO extends DurableObjectBase {
       .toArray() as unknown as DbSlotRow[];
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   slotHistory(slotId: string): DbSlotHistoryRow[] {
     return this.sql
       .exec(`SELECT * FROM slot_history WHERE slot_id = ? ORDER BY cursor`, slotId)
@@ -1611,7 +1601,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * Returns the slot's current entity id when one is bound, so callers (the
    * workspace-state RPC handler) can refresh their entity-keyed caches.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   panelIndex(input: IndexablePanel): string | null {
     const now = Date.now();
     let resolvedEntityId: string | null = null;
@@ -1692,7 +1682,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * the slot is empty / closed) so callers can mirror the change into their
    * entity-keyed caches without a second round-trip.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   panelUpdateTitle(slotId: string, title: string): string | null {
     const row = this.sql
       .exec(`SELECT current_entity_id FROM slots WHERE slot_id = ?`, slotId)
@@ -1703,7 +1693,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return entityId;
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   panelIncrementAccess(entityId: string): void {
     this.sql.exec(
       `UPDATE panel_search_metadata SET access_count = access_count + 1 WHERE slot_id = ?`,
@@ -1722,7 +1712,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * FTS staging row's title alone in that case (rather than blanking it) so
    * the panel stays findable in search.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   entitySetDisplayTitle(entityId: string, title: string | null): void {
     const normalized = typeof title === "string" ? title.trim() : "";
     const stored = normalized.length > 0 ? normalized : null;
@@ -1752,7 +1742,7 @@ export class WorkspaceDO extends DurableObjectBase {
    * lookups (e.g. when building a pending approval) don't have to round-trip
    * to the DO on the hot path.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   entityListDisplayTitles(): Array<{ id: string; title: string }> {
     return this.sql
       .exec(
@@ -1789,7 +1779,7 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   panelSearch(query: string, limit = 50): PanelSearchResult[] {
     const safeQuery = this.sanitizeSearchQuery(query);
     if (!safeQuery) return [];
@@ -1827,7 +1817,7 @@ export class WorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   panelRebuildIndex(): void {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM panel_search_metadata`);
@@ -2110,8 +2100,10 @@ export class WorkspaceDO extends DurableObjectBase {
       kind: row.kind,
       source: {
         repoPath: row.source_repo_path,
-        effectiveVersion: row.source_effective_version,
       },
+      ...(row.active_execution_digest
+        ? { activeExecutionDigest: row.active_execution_digest }
+        : {}),
       contextId: row.context_id,
       key: row.key,
       createdAt: row.created_at,
@@ -2141,11 +2133,6 @@ export class WorkspaceDO extends DurableObjectBase {
         field: "source.repoPath",
         existing: existing.source_repo_path,
         attempted: input.source.repoPath,
-      },
-      {
-        field: "source.effectiveVersion",
-        existing: existing.source_effective_version,
-        attempted: input.source.effectiveVersion,
       },
       { field: "contextId", existing: existing.context_id, attempted: input.contextId },
       { field: "className", existing: existing.class_name, attempted: input.className ?? null },

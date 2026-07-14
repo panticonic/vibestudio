@@ -8,7 +8,7 @@ export interface CredentialRuntimePanelInfo {
   parentId?: string | null;
   contextId?: string;
   runtimeEntityId?: string | null;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
 }
 
 export interface CredentialRuntimeInspector {

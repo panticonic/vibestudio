@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { BROWSER_NAVIGATION_TRANSITIONS } from "@vibestudio/shared/panelCommands";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   PanelFocusResultSchema,
   PanelTreeSnapshotSchema,
@@ -101,7 +101,7 @@ export const panelMethods = defineServiceMethods({
     description: "Return the current server-controlled theme identity tokens for hosted panels.",
     args: z.tuple([]),
     returns: ThemeConfigSchema,
-    policy: { allowed: ["shell", "app", "panel"] },
+    authority: { principals: ["user", "code"] },
     access: READ_ACCESS,
   },
   getTreeSnapshot: {

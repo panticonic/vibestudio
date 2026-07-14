@@ -9,7 +9,7 @@
  *   - distinct object keys get isolated facet storage.
  */
 import { createServer, type Server } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import { executionArtifactFixture } from "./testing/executionArtifactFixture.js";
 import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
@@ -69,7 +70,7 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
     metadata: {
       kind: "worker",
       name: source,
-      ev,
+      sourceDigest: ev,
       sourceStateHash: "state:test",
       sourcemap: false,
       details: { kind: "generic" },
@@ -90,6 +91,7 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
 interface Harness {
   manager: WorkerdManager;
   gateway: Server;
+  statePath: string;
   dispatch: (
     ref: { source: string; className: string; objectKey: string },
     method: string
@@ -110,31 +112,25 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
   // Construct the manager first (its getServerUrl reads the port lazily via the
   // holder) so the gateway closure below can reference a `const` manager.
   const portHolder = { value: 0 };
+  const executionBundles = new Map<string, ReturnType<typeof executionArtifactFixture>["bundle"]>();
 
+  const statePath = mkdtempSync(join(tmpdir(), "vibestudio-udo-state-"));
   const deps: WorkerdManagerDeps = {
+    hostPrincipal: "host:test-product-build",
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
-    bindRuntimeImage: async (source: string, ref?: string) => {
+    resolveExecutionArtifact: async (source: string, ref?: string) => {
       const b = builds[source];
       if (!b) throw new Error(`no build for ${source}`);
-      return {
-        source,
-        unitName: source,
-        stateHash: ref?.startsWith("state:") ? ref : "state:test",
-        effectiveVersion: b.metadata.ev,
-        buildKey: `build:${source}:${b.metadata.ev}`,
-      };
+      const fixture = executionArtifactFixture(source, b, ref);
+      executionBundles.set(fixture.binding.artifact.executionDigest, fixture.bundle);
+      return fixture.binding;
     },
-    getBuildByKey: (key: string) => {
-      const entry = Object.entries(builds).find(
-        ([source, build]) => key === `build:${source}:${build.metadata.ev}`
-      );
-      return entry?.[1] ?? null;
-    },
+    getExecutionArtifact: (executionDigest) => executionBundles.get(executionDigest) ?? null,
     workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
+    statePath,
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(59999),
     registerEgressCaller: () => {},
@@ -207,7 +203,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     return ((await res.json()) as { result: unknown }).result;
   };
 
-  return { manager, gateway, dispatch };
+  return { manager, gateway, statePath, dispatch };
 }
 
 let active: Harness | null = null;
@@ -248,7 +244,7 @@ describe("UniversalDO facet host (real workerd)", () => {
 
   it("clones facet storage to a new key (channel fork), independent, no restart", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
-    const { manager, dispatch } = active;
+    const { manager, statePath, dispatch } = active;
 
     await manager.ensureDOClass("workers/counter", "CounterDO");
     const src = { source: "workers/counter", className: "CounterDO", objectKey: "orig" };
@@ -268,8 +264,14 @@ describe("UniversalDO facet host (real workerd)", () => {
     expect(await dispatch(cloned, "get")).toMatchObject({ count: 3 });
     expect(await dispatch(src, "get")).toMatchObject({ count: 2 });
 
-    // destroyDO removes the fork's facet storage.
+    // Destruction is logical immediately, but physical storage stays intact
+    // until workerd releases its SQLite handles at a process boundary.
     await manager.destroyDO(cloned);
+    expect(await dispatch(cloned, "get")).toMatchObject({ count: 3 });
+    const pendingDeletes = join(statePath, "pending-do-storage-deletes.json");
+    expect(existsSync(pendingDeletes)).toBe(true);
+    await manager.shutdown();
+    expect(existsSync(pendingDeletes)).toBe(false);
   }, 30_000);
 
   it("forwards a WebSocket upgrade through the facet host (hibernation)", async () => {

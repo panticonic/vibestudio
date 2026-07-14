@@ -53,12 +53,23 @@ function panelCaller(entityId: string, repoPath = "panels/requester"): VerifiedC
     callerId: entityId,
     callerKind: "panel",
     repoPath,
-    effectiveVersion: "version-1",
+    executionDigest: "a".repeat(64),
+    requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   });
 }
 
 function panelCtx(entityId = "panel:requester"): ServiceContext {
-  return { caller: panelCaller(entityId) };
+  return authorityCtx(panelCaller(entityId), false);
+}
+
+function authorityCtx(caller: VerifiedCaller, panelHosting: boolean): ServiceContext {
+  return {
+    caller,
+    authority: {
+      allows: vi.fn(async ({ capability }) => capability === "panel-hosting" && panelHosting),
+      assert: vi.fn(async () => undefined),
+    },
+  };
 }
 
 /**
@@ -80,7 +91,11 @@ function accessDeps(overrides: Partial<PanelAccessPermissionDeps> = {}): PanelAc
         callerId: id,
         callerKind: "panel",
         repoPath: "panels/anchor",
-        effectiveVersion: "version-1",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       })
     ),
     ...overrides,
@@ -242,7 +257,7 @@ describe("panelAccessPermission", () => {
       resolveCallerContext,
       contextExists: vi.fn(() => true),
     });
-    const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+    const serverCtx = authorityCtx(createVerifiedCaller("server", "server"), false);
 
     const result = await requirePanelAccessPermission(deps, serverCtx, "cdp", {
       id: "target",
@@ -271,7 +286,7 @@ describe("panelAccessPermission", () => {
     const approvalQueue = approvalQueueMock("session");
     const resolveSubjectCaller = vi.fn(() => null);
     const deps = accessDeps({ approvalQueue, resolveSubjectCaller });
-    const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+    const serverCtx = authorityCtx(createVerifiedCaller("server", "server"), false);
 
     const result = await requirePanelAccessPermission(deps, serverCtx, "cdp", {
       id: "target",
@@ -292,9 +307,14 @@ describe("panelAccessPermission", () => {
 
     for (const kind of ["shell", "server"] as const) {
       await expect(
-        requirePanelAccessPermission(deps, { caller: createVerifiedCaller(kind, kind) }, "close", {
-          id: "target",
-        })
+        requirePanelAccessPermission(
+          deps,
+          authorityCtx(createVerifiedCaller(kind, kind), false),
+          "close",
+          {
+            id: "target",
+          }
+        )
       ).resolves.toEqual({ allowed: true });
     }
 
@@ -337,13 +357,22 @@ describe("panelAccessPermission", () => {
       callerId: "app:apps/field-mobile:device-1",
       callerKind: "app",
       repoPath: "apps/field-mobile",
-      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
 
-    const result = await requirePanelAccessPermission(deps, { caller: appCaller }, "close", {
-      id: "target",
-      contextId: "ctx-target",
-    });
+    const result = await requirePanelAccessPermission(
+      deps,
+      authorityCtx(appCaller, false),
+      "close",
+      {
+        id: "target",
+        contextId: "ctx-target",
+      }
+    );
 
     expect(result).toMatchObject({ allowed: true, prompted: true });
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
@@ -358,23 +387,28 @@ describe("panelAccessPermission", () => {
     const deps = accessDeps({
       approvalQueue,
       resolveSubjectCaller,
-      hasAppCapability: vi.fn(
-        (callerId, capability) =>
-          callerId === "@workspace-apps/shell" && capability === "panel-hosting"
-      ),
     });
     const appCaller = createVerifiedCaller("@workspace-apps/shell", "app", {
       callerId: "@workspace-apps/shell",
       callerKind: "app",
       repoPath: "apps/shell",
-      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
 
-    const result = await requirePanelAccessPermission(deps, { caller: appCaller }, "close", {
-      id: "target",
-      runtimeEntityId: "panel:target",
-      contextId: "ctx-target",
-    });
+    const result = await requirePanelAccessPermission(
+      deps,
+      authorityCtx(appCaller, true),
+      "close",
+      {
+        id: "target",
+        runtimeEntityId: "panel:target",
+        contextId: "ctx-target",
+      }
+    );
 
     expect(result).toEqual({ allowed: true });
     expect(approvalQueue.request).not.toHaveBeenCalled();

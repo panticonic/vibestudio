@@ -11,7 +11,7 @@
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
+import { allOf, anyOf, capability, relationship } from "@vibestudio/shared/authorization";
 import { worktreeMethods } from "@vibestudio/service-schemas/worktree";
 
 export interface WorktreeServiceDeps {
@@ -35,44 +35,46 @@ export interface WorktreeServiceDeps {
 }
 
 export function createWorktreeService(deps: WorktreeServiceDeps): ServiceDefinition {
-  const assertAuthorized = (
+  const assertAuthorized = async (
     ctx: Parameters<NonNullable<ServiceDefinition["handler"]>>[0],
     method: string
-  ): void => {
-    const caller = ctx.caller;
-    if (caller.runtime.kind === "shell" || caller.runtime.kind === "server") return;
+  ): Promise<void> => {
     const writerIdentity = deps.getVcsWriterIdentity();
-    if (
-      caller.runtime.kind !== "do" ||
-      writerIdentity === null ||
-      caller.runtime.id !== writerIdentity
-    ) {
-      throw new ServiceAccessError(
-        "worktree",
-        method,
-        caller.runtime.kind,
-        `worktree.${method} is restricted to the workspace VCS store DO`
-      );
-    }
+    const serviceCapability = `service:worktree.${method}`;
+    if (!ctx.authority) throw new Error(`worktree.${method} authority evaluator is unavailable`);
+    await ctx.authority.assert({
+      capability: serviceCapability,
+      resourceKey: serviceCapability,
+      requirement: writerIdentity
+        ? anyOf(
+            capability("host", serviceCapability),
+            allOf(
+              capability("code", serviceCapability),
+              relationship("entity-self", `entity:${writerIdentity}`),
+              relationship("workspace-member")
+            )
+          )
+        : capability("host", serviceCapability),
+    });
   };
 
   return {
     name: "worktree",
     description:
       "Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).",
-    policy: { allowed: ["do", "shell", "server"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: worktreeMethods,
     handler: defineServiceHandler("worktree", worktreeMethods, {
-      scan: (ctx, [repoPath, head]) => {
-        assertAuthorized(ctx, "scan");
+      scan: async (ctx, [repoPath, head]) => {
+        await assertAuthorized(ctx, "scan");
         return deps.scan(repoPath, head);
       },
-      project: (ctx, [repoPath, head, stateHash]) => {
-        assertAuthorized(ctx, "project");
+      project: async (ctx, [repoPath, head, stateHash]) => {
+        await assertAuthorized(ctx, "project");
         return deps.project(repoPath, head, stateHash);
       },
-      dependentRepos: (ctx, [repoPath]) => {
-        assertAuthorized(ctx, "dependentRepos");
+      dependentRepos: async (ctx, [repoPath]) => {
+        await assertAuthorized(ctx, "dependentRepos");
         return deps.dependentRepos(repoPath);
       },
     }),

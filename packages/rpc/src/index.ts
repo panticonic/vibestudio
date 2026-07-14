@@ -43,6 +43,19 @@ export type {
   RpcErrorKind,
 } from "./types.js";
 export { RemoteRpcError, RpcBoundaryError, rpcErrorKindOf } from "./errors.js";
+export type {
+  AuthorizationContext,
+  AuthorizationDecision,
+  AuthorityGrant,
+  AuthorityRequirement,
+  CapabilityScope,
+  DirectAuthorityAttestation,
+  LiveWorkspaceRelationship,
+  Principal,
+  PrincipalKind,
+  ResourceScope,
+  VerifiedDelegation,
+} from "./authority.js";
 
 export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract } from "./client.js";
@@ -62,8 +75,8 @@ export {
   collectExposableMethods,
   rpc,
   rpcExposedMethodNames,
-  rpcMethodPolicy,
-  type RpcCallerPolicy,
+  rpcMethodAuthority,
+  type RpcAuthorityPolicy,
   type ConnectionlessRpcClient,
   type ConnectionlessRpcConfig,
 } from "./connectionless.js";

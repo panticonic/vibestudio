@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { doRefUrl, encodeUniversalKey, postToDurableObject } from "./workerdRpcRelay.js";
-import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { EVAL_DO_SOURCE, WORKSPACE_DO_SOURCE } from "./internalDOs/productBootManifest.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -21,12 +21,21 @@ describe("workerdRpcRelay", () => {
   it("routes internal DOs through their static namespace (/_w/), encoding source segments", () => {
     expect(
       doRefUrl(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: "ctx/tree:chat" },
+        { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO", objectKey: "ctx/tree:chat" },
         "__lifecycle/prepare now"
       )
     ).toBe(
-      `/_w/${INTERNAL_DO_SOURCE.split("/").map(encodeURIComponent).join("/")}/WorkspaceDO/ctx%2Ftree%3Achat/__lifecycle/prepare%20now`
+      `/_w/${WORKSPACE_DO_SOURCE.split("/").map(encodeURIComponent).join("/")}/WorkspaceDO/ctx%2Ftree%3Achat/__lifecycle/prepare%20now`
     );
+  });
+
+  it("routes non-serializable product capabilities without crossing UniversalDO", () => {
+    expect(
+      doRefUrl(
+        { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: "agent/eval" },
+        "executeRun"
+      )
+    ).toBe(`/_w/product/eval/EvalDO/agent%2Feval/executeRun`);
   });
 
   // Inbound dispatch converged on envelope-via-__rpc: the relay POSTs an

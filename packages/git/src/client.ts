@@ -1443,6 +1443,71 @@ export class GitClient {
   }
 
   /**
+   * Read the exact tracked tree of a commit from Git objects. Working-tree and
+   * index state are deliberately excluded so importers can preflight fidelity
+   * without races or accidental inclusion/omission of local scratch files.
+   */
+  async readCommitTree(
+    dir: string,
+    ref: string = "HEAD"
+  ): Promise<
+    Array<{
+      path: string;
+      type: "blob" | "commit";
+      mode: number;
+      oid: string;
+      bytes: Uint8Array | null;
+    }>
+  > {
+    type CommitTreeEntry = {
+      path: string;
+      type: "blob" | "commit";
+      mode: number;
+      oid: string;
+      bytes: Uint8Array | null;
+    };
+    const oid = isFullOid(ref)
+      ? ref
+      : await git.resolveRef({ fs: this.fs, dir, ref });
+    const rows = (await git.walk({
+      fs: this.fs,
+      dir,
+      trees: [git.TREE({ ref: oid })],
+      map: async (filepath, [entry]) => {
+        if (filepath === "." || !entry) return undefined;
+        const type = await entry.type();
+        if (type === "tree") return undefined;
+        const entryOid = await entry.oid();
+        const mode = await entry.mode();
+        if (!entryOid || mode === null || mode === undefined) {
+          throw new Error(`Git tree entry has no object identity: ${filepath}`);
+        }
+        if (type === "commit") {
+          return { path: filepath, type, mode, oid: entryOid, bytes: null } as const;
+        }
+        if (type !== "blob") {
+          throw new Error(`Unsupported Git tree entry type ${String(type)} at ${filepath}`);
+        }
+        const { blob } = await git.readBlob({ fs: this.fs, dir, oid: entryOid });
+        // Own the bytes. Some filesystem adapters reuse backing buffers, and
+        // callers retain this snapshot across asynchronous preflight/mirror
+        // work. A Git-object read is useful as an immutable boundary only when
+        // its returned bytes cannot subsequently change underneath it.
+        return {
+          path: filepath,
+          type,
+          mode,
+          oid: entryOid,
+          bytes: new Uint8Array(blob),
+        } as const;
+      },
+    })) as Array<CommitTreeEntry | undefined>;
+    return rows
+      .filter((row): row is CommitTreeEntry => row !== undefined)
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
    * Get the current branch name
    */
   async getCurrentBranch(dir: string): Promise<string | null> {

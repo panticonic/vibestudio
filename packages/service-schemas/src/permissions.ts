@@ -1,5 +1,24 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  allOf,
+  anyOf,
+  methodCapability,
+  relationship,
+} from "@vibestudio/shared/authorization";
+
+const permissionsAuthority = (method: "list" | "revoke") => ({
+  requirement: anyOf(
+    methodCapability("host"),
+    allOf(methodCapability("user"), relationship("workspace-member")),
+    allOf(
+      methodCapability("code"),
+      relationship("workspace-member"),
+      relationship("code-source", "about/permissions")
+    )
+  ),
+  resource: { kind: "literal" as const, key: `service:permissions.${method}` },
+});
 
 export const savedPermissionGrantSchema = z
   .object({
@@ -10,7 +29,7 @@ export const savedPermissionGrantSchema = z
     capability: z.string().optional(),
     resource: z.string().optional(),
     repoPath: z.string().optional(),
-    effectiveVersion: z.string().optional(),
+    executionDigest: z.string().optional(),
     grantedAt: z.number().optional(),
   })
   .strict();
@@ -22,6 +41,7 @@ export const permissionsMethods = defineServiceMethods({
     description: "List active session and durable capability, userland, and credential-use grants.",
     args: z.tuple([]),
     returns: z.array(savedPermissionGrantSchema),
+    authority: permissionsAuthority("list"),
     access: { sensitivity: "read" },
   },
   revoke: {
@@ -35,6 +55,7 @@ export const permissionsMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: z.void(),
+    authority: permissionsAuthority("revoke"),
     access: { sensitivity: "write" },
   },
 });

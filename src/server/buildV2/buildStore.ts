@@ -86,7 +86,7 @@ export type BuildMetadataDetails =
       rnHostAbi?: string | null;
       provider?: {
         name: string;
-        activeEv: string | null;
+        activeSourceDigest: string | null;
         activeBuildKey: string | null;
         contractVersion: string;
       } | null;
@@ -96,7 +96,7 @@ export type BuildMetadataDetails =
 export interface BuildMetadata {
   kind: "panel" | "package" | "worker" | "extension" | "app" | "template";
   name: string;
-  ev: string;
+  sourceDigest: string;
   /** Workspace state this artifact was materialized from; null for non-workspace builds. */
   sourceStateHash: string | null;
   sourcemap: boolean;

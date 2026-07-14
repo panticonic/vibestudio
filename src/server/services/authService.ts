@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "http";
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { requirePanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import {
   authMethods,
   RefreshAgentResponseSchema,
@@ -26,7 +27,6 @@ import type { User } from "@vibestudio/identity/types";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
   agentCallerId,
@@ -37,7 +37,6 @@ import {
 import { refreshPrincipalGrantResponse } from "../hostCore/auth/principalGrants.js";
 import { sendAuthError } from "../hostCore/auth/httpErrors.js";
 import { authError, authErrorCode } from "../hostCore/auth/errors.js";
-import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
 
 export const RefreshShellBodySchema = z
   .object({
@@ -313,8 +312,6 @@ export function createAuthService(deps: {
   getConnectionInfo: () => AuthConnectionInfo;
   connectionGrants?: ConnectionGrantService;
   auditLog?: Pick<AuditLog, "append">;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  capabilityAuthorizer?: CapabilityAuthorizer;
   ensureMobileAppReady?: (source?: string | null) => Promise<{
     ready: boolean;
     reason?: string;
@@ -330,18 +327,6 @@ export function createAuthService(deps: {
   retireMobileAppPrincipal?: (deviceId: string) => void;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
 }): ServiceWithRoutes {
-  const capabilityAuthorizer =
-    deps.capabilityAuthorizer ??
-    createCapabilityAuthorizer({
-      hasAppCapability: deps.hasAppCapability,
-      // WP9 §3: resolve the caller's LIVE role from the hub-owned identity DB so
-      // `isRootOrAdmin` reflects promotions/demotions immediately (never a value
-      // frozen onto the connection). Both hub and child hold a read handle;
-      // undefined where no identity store is wired, in which case role gates
-      // deny (no role can be affirmed).
-      roleOf: deps.roleOf,
-    });
-
   async function resolveAgentCredentialTarget(
     methodName: string,
     entityId: string
@@ -372,11 +357,11 @@ export function createAuthService(deps: {
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
-    policy: { allowed: ["server", "shell"] },
+    authority: { principals: ["host", "user"] },
     methods: authMethods,
     handler: defineServiceHandler("auth", authMethods, {
-      grantConnection: (ctx, [principalId]) => {
-        capabilityAuthorizer.require(ctx.caller, "panel-hosting");
+      grantConnection: async (ctx, [principalId]) => {
+        await requirePanelHostingAuthority(ctx, "auth.grantConnection");
         if (!deps.connectionGrants) throw new Error("Connection grants are not configured");
         // Boundary defense at the RPC ingress: a slot id ("panel:tree/…") names a
         // tree position, not a connectable principal. Reject it loudly here so a
@@ -398,8 +383,11 @@ export function createAuthService(deps: {
       }),
       mintAgentCredential: async (ctx, [input]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
+        if (ctx.caller.hostOriginated !== true && !ctx.caller.code) {
+          throw new Error("auth.mintAgentCredential requires an exact code or host principal");
+        }
         const record = await resolveAgentCredentialTarget("mintAgentCredential", input.entityId);
-        if (ctx.caller.runtime.kind !== "server") {
+        if (ctx.caller.hostOriginated !== true) {
           assertAgentCredentialOwner("mintAgentCredential", ctx.caller.runtime.id, record);
         }
         return await deps.agentCredentialWriter.mint({
@@ -412,6 +400,9 @@ export function createAuthService(deps: {
       },
       revokeAgentCredential: async (ctx, [agentId]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
+        if (ctx.caller.hostOriginated !== true && !ctx.caller.code) {
+          throw new Error("auth.revokeAgentCredential requires an exact code or host principal");
+        }
         const existing = deps.deviceAuthStore.getAgentCredential(agentId);
         if (!existing) return { revoked: false };
         if (existing.revokedAt) return { revoked: false };
@@ -419,7 +410,7 @@ export function createAuthService(deps: {
           "revokeAgentCredential",
           existing.entityId
         );
-        if (ctx.caller.runtime.kind !== "server") {
+        if (ctx.caller.hostOriginated !== true) {
           assertAgentCredentialOwner("revokeAgentCredential", ctx.caller.runtime.id, record);
         }
         const revoked = await deps.agentCredentialWriter.revoke(agentId);

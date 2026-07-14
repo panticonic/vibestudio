@@ -92,7 +92,7 @@ export function shortVersion(value?: string | null, length = 12): string {
 }
 
 export function unitSourceLabel(unit: UnitBatchEntry): string {
-  return `${unit.source.repo}@${unit.source.ref}${unit.ev ? ` - ${shortVersion(unit.ev)}` : ""}`;
+  return `${unit.source.repo}@${unit.source.ref}${unit.sourceDigest ? ` - ${shortVersion(unit.sourceDigest)}` : ""}`;
 }
 
 export function unitReviewRows(approval: PendingUnitBatchApproval): UnitReviewRow[] {
@@ -134,7 +134,7 @@ export function approvalSignature(approval: PendingUnitBatchApproval): string {
         unit.target ?? "",
         unit.source.repo,
         unit.source.ref,
-        unit.ev ?? "",
+        unit.sourceDigest ?? "",
       ].join(":")
     ),
   ].join("|");

@@ -14,14 +14,14 @@ const workerAlpha = {
   callerId: "worker:alpha",
   callerKind: "worker" as const,
   repoPath: "workers/alpha",
-  effectiveVersion: "hash-1",
+  executionDigest: "a".repeat(64),
 };
 
 const appShell = {
   callerId: "app:apps/shell:device-1",
   callerKind: "app" as const,
   repoPath: "apps/shell",
-  effectiveVersion: "app-hash-1",
+  executionDigest: "b".repeat(64),
 };
 
 describe("UserlandApprovalGrantStore", () => {
@@ -43,7 +43,7 @@ describe("UserlandApprovalGrantStore", () => {
       callerId: "panel-one",
       callerKind: "panel" as const,
       repoPath: "panels/one",
-      effectiveVersion: "hash-1",
+      executionDigest: "c".repeat(64),
     };
     await store.record(panelOne, { id: "subject-1" }, "yes", 20);
 
@@ -56,7 +56,7 @@ describe("UserlandApprovalGrantStore", () => {
     expect(raw.grants[0].principal).toMatchObject({
       callerId: "panel-one",
       repoPath: "panels/one",
-      effectiveVersion: "hash-1",
+      executionDigest: "c".repeat(64),
     });
   });
 
@@ -83,7 +83,7 @@ describe("UserlandApprovalGrantStore", () => {
       principal: {
         callerKind: "app",
         repoPath: appShell.repoPath,
-        effectiveVersion: appShell.effectiveVersion,
+        executionDigest: appShell.executionDigest,
       },
       issuer: {
         kind: "app",
@@ -107,13 +107,13 @@ describe("UserlandApprovalGrantStore", () => {
     ).toMatchObject({ choice: "allow", scope: "version" });
   });
 
-  it("matches internal version-scoped grants by concrete caller id", async () => {
+  it("matches version-scoped grants across runtime kinds by exact code principal", async () => {
     const store = new UserlandApprovalGrantStore({ statePath: tempDir() });
     const evalOne = {
       callerId: "do:vibestudio/internal:EvalDO:one",
       callerKind: "do" as const,
       repoPath: "vibestudio/internal",
-      effectiveVersion: "internal",
+      executionDigest: "d".repeat(64),
     };
     await store.record(evalOne, { id: "team-x:foo" }, "allow", 10, undefined, "version");
 
@@ -125,11 +125,13 @@ describe("UserlandApprovalGrantStore", () => {
       store.lookup(
         {
           ...evalOne,
-          callerId: "do:vibestudio/internal:EvalDO:two",
+          callerId: "worker:vibestudio/internal:two",
+          callerKind: "worker",
         },
         "team-x:foo"
       )
-    ).toBeNull();
+    ).toMatchObject({ choice: "allow", scope: "version" });
+    expect(store.lookup({ ...evalOne, executionDigest: "e".repeat(64) }, "team-x:foo")).toBeNull();
   });
 
   it("keeps session-scoped grants in memory", async () => {

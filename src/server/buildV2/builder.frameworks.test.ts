@@ -37,6 +37,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { sealBuildEnvironment } from "./sourceClosure.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
@@ -74,12 +75,14 @@ describe("buildUnit framework-agnostic panel builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-frameworks-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    sealBuildEnvironment({ appRoot: root, workspaceRoot });
     // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
     // real node_modules instead of a fresh install.
     initBuilder([path.join(REPO_ROOT, "node_modules")]);
   });
 
   afterEach(() => {
+    sealBuildEnvironment(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -175,7 +178,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-panels/hello-vanilla"),
-      "ev-hello-vanilla",
+      "sourceDigest-hello-vanilla",
       graph,
       workspaceRoot,
       "state:test"
@@ -224,7 +227,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-panels/hello-svelte"),
-      "ev-hello-svelte",
+      "sourceDigest-hello-svelte",
       graph,
       workspaceRoot,
       "state:test"

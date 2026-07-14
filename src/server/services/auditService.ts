@@ -76,7 +76,7 @@ export function createAuditService(auditLog: AuditLog): ServiceDefinition {
   return {
     name: "audit",
     description: "Audit log query access",
-    policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods,
     handler: defineServiceHandler("audit", methods, {
       query: async (_ctx, [query]) => {

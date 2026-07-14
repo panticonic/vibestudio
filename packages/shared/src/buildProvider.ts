@@ -21,7 +21,7 @@ export interface BuildProviderInput {
   sourcePath: string;
   sourceRoot: string;
   workspaceRoot: string;
-  effectiveVersion: string;
+  sourceDigest: string;
   manifest: Record<string, unknown>;
 }
 
@@ -37,11 +37,8 @@ export interface BuildProvider {
   name: string;
   target: BuildProviderTarget;
   contractVersion: string;
-  activeEv: string | null;
+  activeSourceDigest: string | null;
   activeBuildKey: string | null;
   build(input: BuildProviderInput): Promise<BuildProviderOutput>;
-  streamArtifact?(
-    artifact: BuildProviderArtifact,
-    input: BuildProviderInput,
-  ): Promise<Response>;
+  streamArtifact?(artifact: BuildProviderArtifact, input: BuildProviderInput): Promise<Response>;
 }

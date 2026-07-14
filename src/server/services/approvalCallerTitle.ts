@@ -16,7 +16,7 @@ export interface ApprovalRequesterInput {
   callerId: string;
   callerKind: ApprovalRequesterKind;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   requesterCategory?: ApprovalRequesterCategory;
   eval?: ApprovalRequesterIdentity["eval"];
 }
@@ -186,13 +186,11 @@ export function resolveApprovalRequester(
   const directTitle = cleanTitle(deps.getTitle(input.callerId));
   const category = categoryForRecord(callerRecord, input.callerKind, input.requesterCategory);
   const sourcePath = callerRecord?.source.repoPath ?? input.repoPath;
-  const effectiveVersion = callerRecord?.source.effectiveVersion ?? input.effectiveVersion;
+  const executionDigest = callerRecord?.activeExecutionDigest ?? input.executionDigest;
   const title =
     (input.callerKind === "worker" || input.callerKind === "do"
       ? (panelTitle ?? directTitle)
       : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, input.callerId);
-  const internalIdentity =
-    effectiveVersion === "internal" || sourcePath === "vibestudio/internal" || category === "eval";
   const breadcrumbs =
     lineage.length > 0
       ? lineage
@@ -227,11 +225,9 @@ export function resolveApprovalRequester(
       : {}),
     sourcePath,
     repoPath: input.repoPath,
-    effectiveVersion,
+    executionDigest,
     ...(callerRecord?.contextId ? { contextId: callerRecord.contextId } : {}),
-    stableIdentityKey: internalIdentity
-      ? input.callerId
-      : `${input.repoPath}@${input.effectiveVersion}`,
+    stableIdentityKey: `${input.repoPath}@${input.executionDigest}`,
     ephemeralInstanceKey: input.callerId,
     ...(evalIdentity ? { eval: evalIdentity } : {}),
     breadcrumbs,
@@ -258,6 +254,6 @@ export function resolveApprovalCallerTitle(
         ? record.kind
         : "system",
     repoPath: record?.source.repoPath ?? "",
-    effectiveVersion: record?.source.effectiveVersion ?? "",
+    executionDigest: record?.activeExecutionDigest ?? "",
   }).title;
 }

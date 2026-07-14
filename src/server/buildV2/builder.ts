@@ -11,7 +11,7 @@
  * Coalescing: dedup concurrent builds of the same build key.
  *
  * Source files are materialized from the requested GAD state, so builds always
- * match what the EV describes regardless of working tree state.
+ * match what the source digest describes regardless of working tree state.
  */
 
 import * as esbuild from "esbuild";
@@ -41,7 +41,7 @@ import {
   type BuildMetadata,
   type BuildResult,
 } from "./buildStore.js";
-import { computeBuildKey } from "./effectiveVersion.js";
+import { computeCompilationCacheKey } from "./sourceClosure.js";
 import {
   collectTransitiveDependencyOverrides,
   collectTransitiveExternalDeps,
@@ -227,7 +227,7 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
  * Create an esbuild plugin that resolves @workspace/* imports from
  * the materialized source tree. All packages are read from the same immutable
  * GAD state to preserve content-addressable semantics: the build always
- * matches the EV regardless of filesystem state.
+ * matches the source digest regardless of filesystem state.
  *
  * Since materialized source states do not include generated dist/, the plugin maps
  * exports-based dist/ paths to their TypeScript source equivalents.
@@ -1352,11 +1352,11 @@ export interface BuildUnitOptions {
 
 export function effectiveBuildVersion(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   options?: BuildUnitOptions
 ): string {
   if (options?.library) {
-    return `${ev}:lib:${createHash("sha256")
+    return `${sourceDigest}:lib:${createHash("sha256")
       .update(
         JSON.stringify({
           externals: options.externals ?? [],
@@ -1370,9 +1370,9 @@ export function effectiveBuildVersion(
       .slice(0, 12)}`;
   }
   if (node.kind === "extension") {
-    return `${ev}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`;
+    return `${sourceDigest}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`;
   }
-  return ev;
+  return sourceDigest;
 }
 
 export function buildSourcemapForNode(node: GraphNode, options?: BuildUnitOptions): boolean {
@@ -1383,14 +1383,14 @@ export function buildSourcemapForNode(node: GraphNode, options?: BuildUnitOption
       : node.manifest.sourcemap !== false;
 }
 
-export function computeBuildUnitKey(
+export function computeUnitCompilationCacheKey(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   options?: BuildUnitOptions
 ): string {
-  return computeBuildKey(
+  return computeCompilationCacheKey(
     node.name,
-    effectiveBuildVersion(node, ev, options),
+    effectiveBuildVersion(node, sourceDigest, options),
     buildSourcemapForNode(node, options)
   );
 }
@@ -1400,19 +1400,19 @@ export function computeBuildUnitKey(
  * Returns a BuildResult from the content-addressed store.
  *
  * @param stateRef - Immutable workspace state (`state:…` hash) the build's
- *   sources are materialized from — the same state EVs were derived from.
+ *   sources are materialized from — the same state source digests were derived from.
  * @param options - Optional build options (library mode, externals).
  */
 export async function buildUnit(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   graph: PackageGraph,
   workspaceRoot: string,
   stateRef: string,
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
   const sourcemap = buildSourcemapForNode(node, options);
-  const buildKey = computeBuildUnitKey(node, ev, options);
+  const buildKey = computeUnitCompilationCacheKey(node, sourceDigest, options);
 
   // Check store first
   const cached = buildStore.get(buildKey);
@@ -1429,7 +1429,7 @@ export async function buildUnit(
 
   const buildPromise = doBuild(
     node,
-    ev,
+    sourceDigest,
     buildKey,
     graph,
     workspaceRoot,
@@ -1452,7 +1452,7 @@ function withRequestedSourceState(build: BuildResult, sourceStateHash: string): 
 
 async function doBuild(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -1480,7 +1480,7 @@ async function doBuild(
       }
       return await buildLibraryBundle(
         node,
-        ev,
+        sourceDigest,
         buildKey,
         graph,
         workspaceRoot,
@@ -1493,7 +1493,7 @@ async function doBuild(
     } else if (node.kind === "worker") {
       return await buildWorker(
         node,
-        ev,
+        sourceDigest,
         buildKey,
         graph,
         workspaceRoot,
@@ -1504,7 +1504,7 @@ async function doBuild(
     } else if (node.kind === "extension") {
       return await buildExtension(
         node,
-        ev,
+        sourceDigest,
         buildKey,
         graph,
         workspaceRoot,
@@ -1514,7 +1514,7 @@ async function doBuild(
     } else if (node.kind === "app") {
       return await buildApp(
         node,
-        ev,
+        sourceDigest,
         buildKey,
         graph,
         workspaceRoot,
@@ -1535,7 +1535,7 @@ async function doBuild(
     } else {
       return await buildPanel(
         node,
-        ev,
+        sourceDigest,
         buildKey,
         graph,
         workspaceRoot,
@@ -1631,7 +1631,7 @@ function storeSimpleBuild(
   buildKey: string,
   bundle: string,
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   sourcemap: boolean,
   sourceStateHash: string | null,
   extraMetadata: Partial<BuildMetadata> = {}
@@ -1640,7 +1640,7 @@ function storeSimpleBuild(
   const metadata: BuildMetadata = {
     kind: node.kind as BuildMetadata["kind"],
     name: node.name,
-    ev,
+    sourceDigest,
     sourceStateHash,
     sourcemap,
     details: { kind: "generic" },
@@ -1670,7 +1670,7 @@ function bundleArtifacts(bundle: string): BuildArtifacts {
 
 async function buildPanel(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -1870,7 +1870,7 @@ async function buildPanel(
     const metadata: BuildMetadata = {
       kind: node.kind,
       name: node.name,
-      ev,
+      sourceDigest,
       sourceStateHash,
       sourcemap,
       framework: resolved.framework,
@@ -2266,7 +2266,7 @@ const WORKER_NODE_BUILTIN_EXTERNALS: readonly string[] = [
 
 async function buildWorker(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -2394,7 +2394,7 @@ async function buildWorker(
       const metadata: BuildMetadata = {
         kind: node.kind as BuildMetadata["kind"],
         name: node.name,
-        ev,
+        sourceDigest,
         sourceStateHash,
         sourcemap,
         details: { kind: "generic" },
@@ -2403,7 +2403,7 @@ async function buildWorker(
       return buildStore.put(buildKey, artifacts, metadata);
     }
 
-    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash);
+    return storeSimpleBuild(buildKey, bundle, node, sourceDigest, sourcemap, sourceStateHash);
   } finally {
     env.cleanup();
   }
@@ -2415,7 +2415,7 @@ async function buildWorker(
 
 async function buildApp(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -2435,7 +2435,7 @@ async function buildApp(
   if (appManifest["target"] === "terminal") {
     return buildTerminalApp(
       node,
-      ev,
+      sourceDigest,
       buildKey,
       graph,
       workspaceRoot,
@@ -2447,12 +2447,12 @@ async function buildApp(
   }
   if (appManifest["target"] === "react-native") {
     const provider = resolveBuildProvider("react-native");
-    const providerBuildKey = computeBuildKey(
+    const providerBuildKey = computeCompilationCacheKey(
       node.name,
       [
-        ev,
+        sourceDigest,
         `provider:${provider.name}`,
-        `provider-ev:${provider.activeEv ?? ""}`,
+        `provider-sourceDigest:${provider.activeSourceDigest ?? ""}`,
         `provider-build:${provider.activeBuildKey ?? ""}`,
         `provider-contract:${provider.contractVersion}`,
       ].join(":"),
@@ -2464,7 +2464,7 @@ async function buildApp(
       sourcePath: appSourcePath,
       sourceRoot,
       workspaceRoot,
-      effectiveVersion: ev,
+      sourceDigest,
       manifest: extractedManifest,
     };
     const output = await provider.build(providerInput);
@@ -2476,7 +2476,7 @@ async function buildApp(
     const metadata: BuildMetadata = {
       kind: "app",
       name: node.name,
-      ev,
+      sourceDigest,
       sourceStateHash,
       sourcemap,
       details: {
@@ -2487,7 +2487,7 @@ async function buildApp(
         rnHostAbi: output.metadata?.rnHostAbi ?? null,
         provider: {
           name: provider.name,
-          activeEv: provider.activeEv,
+          activeSourceDigest: provider.activeSourceDigest,
           activeBuildKey: provider.activeBuildKey,
           contractVersion: provider.contractVersion,
         },
@@ -2499,7 +2499,7 @@ async function buildApp(
 
   return buildPanel(
     node,
-    ev,
+    sourceDigest,
     buildKey,
     graph,
     workspaceRoot,
@@ -2511,7 +2511,7 @@ async function buildApp(
 
 async function buildTerminalApp(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -2573,7 +2573,7 @@ async function buildTerminalApp(
       {
         kind: "app",
         name: node.name,
-        ev,
+        sourceDigest,
         sourceStateHash,
         sourcemap,
         details: {
@@ -2662,7 +2662,7 @@ function extensionProviderContracts(
 
 async function buildExtension(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -2759,7 +2759,7 @@ async function buildExtension(
       metadata: {
         kind: "extension",
         name: node.name,
-        ev,
+        sourceDigest,
         sourceStateHash,
         sourcemap: true,
         details: {
@@ -2788,7 +2788,7 @@ async function buildExtension(
       dependencyDiagnostics,
     });
 
-    const result = storeSimpleBuild(buildKey, bundle, node, ev, true, sourceStateHash, {
+    const result = storeSimpleBuild(buildKey, bundle, node, sourceDigest, true, sourceStateHash, {
       details: {
         kind: "extension",
         runtimeDepsKey: runtimeDeps.key,
@@ -2873,13 +2873,39 @@ async function smokeTestExtensionBuild(
 
 function generateExtensionSmokeScript(bundlePath: string, runtimeExternalDeps: string[]): string {
   return `
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 const bundlePath = ${JSON.stringify(bundlePath)};
 const runtimeExternalDeps = ${JSON.stringify(runtimeExternalDeps)};
 const require = createRequire(pathToFileURL(bundlePath).href);
+const smokeStorageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "storage");
+const smokeStorageRootWithSeparator = smokeStorageRoot + path.sep;
+await fs.mkdir(smokeStorageRoot, { recursive: true });
 for (const dep of runtimeExternalDeps) {
   require.resolve(dep);
+}
+function smokeStoragePath(relativePath) {
+  const resolved = path.resolve(smokeStorageRoot, relativePath);
+  if (resolved !== smokeStorageRoot && !resolved.startsWith(smokeStorageRootWithSeparator)) {
+    const error = new Error(\`Storage path escapes extension storage: \${relativePath}\`);
+    error.code = "EACCES";
+    throw error;
+  }
+  return resolved;
+}
+function createSmokeStorage() {
+  return {
+    resolvePath: smokeStoragePath,
+    mkdir: (relativePath, options) =>
+      fs.mkdir(smokeStoragePath(relativePath), { recursive: options?.recursive ?? true }),
+    readFile: (relativePath, encoding) =>
+      fs.readFile(smokeStoragePath(relativePath), encoding),
+    writeFile: (relativePath, data) => fs.writeFile(smokeStoragePath(relativePath), data),
+    rm: (relativePath, options) => fs.rm(smokeStoragePath(relativePath), options),
+    readdir: (relativePath = ".") => fs.readdir(smokeStoragePath(relativePath)),
+  };
 }
 function createAsyncNullProxy() {
   return new Proxy(Object.create(null), {
@@ -2894,7 +2920,7 @@ function createExtensionSmokeContext() {
   return {
     name: "smoke-test",
     version: "0.0.0",
-    storage: asyncNull,
+    storage: createSmokeStorage(),
     fs: asyncNull,
     git: asyncNull,
     panel: asyncNull,
@@ -3046,7 +3072,7 @@ function linkExtensionRuntimeDeps(
 
 async function buildLibraryBundle(
   node: GraphNode,
-  ev: string,
+  sourceDigest: string,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
@@ -3093,7 +3119,7 @@ async function buildLibraryBundle(
     });
 
     const bundleContent = fs.readFileSync(outfile, "utf-8");
-    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash);
+    return storeSimpleBuild(buildKey, bundleContent, node, sourceDigest, false, sourceStateHash);
   } finally {
     env.cleanup();
   }
@@ -3280,7 +3306,7 @@ async function doNpmBuild(
       const metadata: BuildMetadata = {
         kind: "panel",
         name: specifier,
-        ev: `npm:${version}`,
+        sourceDigest: `npm:${version}`,
         sourceStateHash: null,
         sourcemap: false,
         details: { kind: "generic" },
@@ -3386,7 +3412,7 @@ async function doPlatformBuild(
       const metadata: BuildMetadata = {
         kind: "package",
         name: specifier,
-        ev: buildKey,
+        sourceDigest: buildKey,
         sourceStateHash: null,
         sourcemap: false,
         details: { kind: "generic" },

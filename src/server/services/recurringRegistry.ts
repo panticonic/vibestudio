@@ -8,7 +8,7 @@ import type {
 import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { UnitMetaChangeApprovalProvider } from "@vibestudio/unit-host";
 import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { WORKSPACE_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 import type { RecurringJobRow } from "../internalDOs/workspaceDO.js";
 
 const log = createDevLogger("RecurringRegistry");
@@ -191,7 +191,7 @@ export class RecurringRegistry {
   constructor(deps: RecurringRegistryDeps) {
     this.deps = deps;
     this.workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };
@@ -360,7 +360,7 @@ export class HeartbeatDeclarationRegistry {
 
   constructor(private readonly deps: HeartbeatDeclarationRegistryDeps) {
     this.workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };

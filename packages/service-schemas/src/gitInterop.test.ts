@@ -226,25 +226,38 @@ describe("gitInterop canonical contract", () => {
       "resetExportMarker",
       "commitMapping",
       "pushDisposableRemote",
-      "cloneRepo",
+      "prepareImport",
+      "commitImport",
+      "finalizeImport",
+      "inspectImport",
+      "abortImport",
       "remoteDefaultBranch",
       "onMainAdvanced",
     ]);
     expect(GIT_INTEROP_PROVIDER_METHOD_NAMES).toEqual(Object.keys(gitInteropProviderMethods));
 
     expect(
-      gitInteropProviderMethods.cloneRepo.args.safeParse([
-        { repoPath: "projects/demo", remoteUrl: "https://example.test/demo.git" },
+      gitInteropProviderMethods.prepareImport.args.safeParse([
+        {
+          operationId: "3e903582-72fb-4ca6-9238-809f74193d2a",
+          repoPath: "projects/demo",
+          remote: { name: "origin", url: "https://example.test/demo.git", branch: "main" },
+        },
       ]).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
-      gitInteropProviderMethods.cloneRepo.returns.safeParse({
-        stateHash: "state:123",
+      gitInteropProviderMethods.prepareImport.returns.safeParse({
+        operationId: "3e903582-72fb-4ca6-9238-809f74193d2a",
+        repoPath: "projects/demo",
+        branch: "main",
+        gitCommitSha: "a".repeat(40),
+        stateHash: `state:${"b".repeat(64)}`,
         changed: true,
+        phase: "prepared",
       }).success
     ).toBe(true);
     expect(
-      gitInteropProviderMethods.cloneRepo.returns.safeParse({ stateHash: "state:123" }).success
+      gitInteropProviderMethods.prepareImport.returns.safeParse({ stateHash: "state:123" }).success
     ).toBe(false);
     expect(
       gitInteropProviderMethods.onMainAdvanced.args.safeParse([["projects/demo"]]).success

@@ -3,15 +3,15 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor, ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor, ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 // Access descriptors for gateway connection and entity-scoped agent auth.
 const AUTH_READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
-const AUTH_CONNECTION_INFO_POLICY: ServicePolicy = {
-  allowed: ["server", "shell", "app", "panel", "worker", "do", "extension", "agent"],
+const AUTH_CONNECTION_INFO_POLICY: ServiceAuthorityPolicy = {
+  principals: ["host", "user", "code", "entity"],
 };
 const AUTH_PAIRING_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",
@@ -82,7 +82,7 @@ export const authMethods = defineServiceMethods({
       "Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway.",
     args: z.tuple([z.string()]),
     returns: z.object({ token: z.string() }),
-    policy: { allowed: ["server", "shell", "app"] },
+    authority: { principals: ["host", "user", "code"] },
     access: AUTH_GRANT_ACCESS,
   },
   getConnectionInfo: {
@@ -90,7 +90,7 @@ export const authMethods = defineServiceMethods({
       "Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace.",
     args: z.tuple([]),
     returns: ConnectionInfoResponseSchema,
-    policy: AUTH_CONNECTION_INFO_POLICY,
+    authority: AUTH_CONNECTION_INFO_POLICY,
     access: AUTH_READ_ACCESS,
   },
   mintAgentCredential: {
@@ -113,7 +113,7 @@ export const authMethods = defineServiceMethods({
       }),
     ]),
     returns: z.object({ agentId: z.string(), agentToken: z.string() }),
-    policy: { allowed: ["extension", "server"] },
+    authority: { principals: ["code", "host"] },
     access: AUTH_PAIRING_ACCESS,
     examples: [{ args: [{ entityId: "session:s1", channelId: "chan-1" }] }],
   },
@@ -122,7 +122,7 @@ export const authMethods = defineServiceMethods({
       "Revoke a single entity-scoped agent credential by agentId. Callable only by the server or by the extension that owns the target session. Returns whether a credential was revoked.",
     args: z.tuple([z.string().describe("Agent credential id (agt_…).")]),
     returns: z.object({ revoked: z.boolean() }),
-    policy: { allowed: ["extension", "server"] },
+    authority: { principals: ["code", "host"] },
     access: AUTH_REVOKE_ACCESS,
   },
 });

@@ -524,7 +524,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
   const definition: ServiceDefinition = {
     name: "push",
     description: "Push notification device registration and delivery",
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: pushMethods,
     handler: defineServiceHandler("push", pushMethods, {
       register: (ctx, [opts]) => {

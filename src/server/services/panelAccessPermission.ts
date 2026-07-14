@@ -4,8 +4,7 @@ import {
   panelAccessSeverityForTarget,
 } from "@vibestudio/shared/panelAccessPolicy";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { callerHasAppCapability } from "./chromeTrust.js";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import { requireContextBoundaryPermission, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
@@ -32,7 +31,6 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
    * Returns null when the anchor has no resolvable code identity.
    */
   resolveSubjectCaller(entityId: string): VerifiedCaller | null;
-  hasAppCapability?(callerId: string, capability: AppCapability): boolean;
   /** Used by panelTreeService.targetForCreate to resolve a panel caller's own slot. */
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
   /** Retained for wiring compatibility; the context-boundary gate no longer reads it. */
@@ -124,7 +122,7 @@ export async function requirePanelAccessPermission(
   target: PanelAccessPermissionTarget
 ): Promise<PanelAccessPermissionResult> {
   if (isOpenPanelOperation(op)) return { allowed: true };
-  if (callerHasAppCapability(ctx.caller, "panel-hosting", deps)) {
+  if (await hasPanelHostingAuthority(ctx)) {
     return { allowed: true };
   }
 

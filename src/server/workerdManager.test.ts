@@ -20,6 +20,7 @@ import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
+import { executionArtifactFixture } from "./testing/executionArtifactFixture.js";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -73,7 +74,7 @@ function mockWorkerBuild(
     metadata: {
       kind: "worker",
       name: "workers/runtime-fixture",
-      ev: "abc123",
+      sourceDigest: "abc123",
       sourceStateHash: "state:test",
       sourcemap: false,
       details: { kind: "generic" },
@@ -93,7 +94,9 @@ function mockWorkerBuild(
 
 function createMockDeps(overrides: Partial<WorkerdManagerDeps> = {}): WorkerdManagerDeps {
   const build = mockWorkerBuild();
+  const bundles = new Map<string, ReturnType<typeof executionArtifactFixture>["bundle"]>();
   return {
+    hostPrincipal: "host:test-product-build",
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
       revokeToken: vi.fn(),
@@ -102,14 +105,12 @@ function createMockDeps(overrides: Partial<WorkerdManagerDeps> = {}): WorkerdMan
       closeHandlesForCaller: vi.fn(),
     } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => "http://127.0.0.1:9999",
-    bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => ({
-      source: unitPath,
-      unitName: unitPath,
-      stateHash: ref?.startsWith("state:") ? ref : "state:test",
-      effectiveVersion: build.metadata.ev,
-      buildKey: `build:${unitPath}:${ref ?? "main"}`,
-    })),
-    getBuildByKey: vi.fn(() => build),
+    resolveExecutionArtifact: vi.fn(async (unitPath: string, ref?: string) => {
+      const fixture = executionArtifactFixture(unitPath, build, ref);
+      bundles.set(fixture.binding.artifact.executionDigest, fixture.bundle);
+      return fixture.binding;
+    }),
+    getExecutionArtifact: vi.fn((executionDigest: string) => bundles.get(executionDigest) ?? null),
     workerdPrograms: {
       router: "export default { fetch() { return new Response(null, { status: 204 }); } };",
       workerHost: "export default { fetch() { return new Response(null, { status: 204 }); } };",
@@ -117,7 +118,7 @@ function createMockDeps(overrides: Partial<WorkerdManagerDeps> = {}): WorkerdMan
         "export class UniversalDO {}; export default { fetch() { return new Response(); } };",
     },
     workspacePath: "/tmp/test-workspace",
-    statePath: "/tmp/test-workspace-state",
+    statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-state-")),
     getProxyPort: () => 49444,
     getSharedEgressPort: () => Promise.resolve(49555),
     registerEgressCaller: () => {},
@@ -145,7 +146,9 @@ async function loadCompiledRouter(): Promise<{
   return module.default;
 }
 
-type StartWorkerArgs = Parameters<WorkerdManager["startWorker"]>[0];
+type StartWorkerArgs = Omit<Parameters<WorkerdManager["startWorker"]>[0], "execution"> & {
+  ref?: string;
+};
 
 /** Default args for the runtime-managed worker-launch path (startWorker). */
 function startArgs(overrides: Partial<StartWorkerArgs> = {}): StartWorkerArgs {
@@ -155,6 +158,23 @@ function startArgs(overrides: Partial<StartWorkerArgs> = {}): StartWorkerArgs {
     contextId: "ctx-1",
     ...overrides,
   };
+}
+
+async function launchWorker(mgr: WorkerdManager, intent: StartWorkerArgs) {
+  const { ref, ...args } = intent;
+  const execution = await mgr.resolveExecution(args.source, ref);
+  return mgr.startWorker({ ...args, execution });
+}
+
+type DurableObjectIntent = Omit<
+  Parameters<WorkerdManager["ensureDurableObjectEntity"]>[0],
+  "execution"
+> & { ref?: string };
+
+async function launchDurableObject(mgr: WorkerdManager, intent: DurableObjectIntent) {
+  const { ref, ...args } = intent;
+  const execution = await mgr.resolveExecution(args.source, ref);
+  return mgr.ensureDurableObjectEntity({ ...args, execution });
 }
 
 /** Status of a live worker instance by sanitized name (replaces getInstanceStatus). */
@@ -207,7 +227,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
 
       expect(deps.tokenManager.ensureToken).toHaveBeenCalledWith(
         "worker:workers/runtime-fixture:hello",
@@ -217,7 +237,8 @@ describe("WorkerdManager", () => {
 
     it("resolves canonical worker target ids to loader instance names", async () => {
       const mgr = new WorkerdManager(createMockDeps());
-      const handle = await mgr.startWorker(
+      const handle = await launchWorker(
+        mgr,
         startArgs({ source: "workers/runtime-fixture", key: "instance:with spaces" })
       );
 
@@ -229,7 +250,8 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(
+      await launchWorker(
+        mgr,
         startArgs({
           parent: {
             parentId: "panel-parent",
@@ -251,7 +273,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
+      await launchWorker(mgr, startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
 
       const code = await mgr.getWorkerCode("hello");
       expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
@@ -261,9 +283,9 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      const first = await mgr.startWorker(startArgs());
+      const first = await launchWorker(mgr, startArgs());
       // Same (source, key, contextId) → returns the existing instance as a no-op.
-      const again = await mgr.startWorker(startArgs());
+      const again = await launchWorker(mgr, startArgs());
 
       expect(again).toEqual(first);
       expect(mgr.listInstances()).toHaveLength(1);
@@ -273,30 +295,30 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       // Same key (→ same sanitized name) but a different source ⇒ different
       // targetId ⇒ genuine collision, not a re-attach.
-      await expect(mgr.startWorker(startArgs({ source: "workers/other" }))).rejects.toThrow(
+      await expect(launchWorker(mgr, startArgs({ source: "workers/other" }))).rejects.toThrow(
         /different identity/
       );
       // Distinct raw keys that sanitize to the SAME name (`a:b` and `a_b`) ⇒
       // different targetId ⇒ must throw, not silently reuse the first worker.
-      await mgr.startWorker(startArgs({ source: "workers/x", key: "a:b" }));
-      await expect(mgr.startWorker(startArgs({ source: "workers/x", key: "a_b" }))).rejects.toThrow(
-        /different identity/
-      );
+      await launchWorker(mgr, startArgs({ source: "workers/x", key: "a:b" }));
+      await expect(
+        launchWorker(mgr, startArgs({ source: "workers/x", key: "a_b" }))
+      ).rejects.toThrow(/different identity/);
     });
 
     it("rejects the same (source, key) in another context (no silent cross-context reuse)", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       // Same source+key maps to the same (context-free) targetId, but a launch in
       // a DIFFERENT context must NOT silently reuse the ctx-1 worker — reattach
       // requires a contextId match too. Callers must use context-unique keys
       // until worker canonical ids include contextId (tracked follow-up).
-      await expect(mgr.startWorker(startArgs({ contextId: "ctx-2" }))).rejects.toThrow(
+      await expect(launchWorker(mgr, startArgs({ contextId: "ctx-2" }))).rejects.toThrow(
         /different identity/
       );
       expect(mgr.listInstances()).toHaveLength(1);
@@ -304,34 +326,35 @@ describe("WorkerdManager", () => {
 
     it("records a lifecycle event and lastError on failed start, cleared by a later success", async () => {
       const recordLifecycleEvent = vi.fn();
-      const bindRuntimeImage = vi.fn().mockRejectedValueOnce(new Error("boom"));
-      const deps = createMockDeps({ bindRuntimeImage, recordLifecycleEvent });
+      const deps = createMockDeps({ recordLifecycleEvent });
+      const getExecutionArtifact = deps.getExecutionArtifact;
+      let artifactAvailable = false;
+      deps.getExecutionArtifact = vi.fn((digest) =>
+        artifactAvailable ? getExecutionArtifact(digest) : null
+      );
       const mgr = new WorkerdManager(deps);
 
-      await expect(mgr.startWorker(startArgs())).rejects.toThrow("boom");
+      await expect(launchWorker(mgr, startArgs())).rejects.toThrow("Missing execution authority");
 
       expect(recordLifecycleEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "workers/runtime-fixture",
           callerId: "worker:workers/runtime-fixture:hello",
           level: "error",
-          message: "Worker failed to start: boom",
+          message: expect.stringContaining("Missing execution authority"),
           fields: expect.objectContaining({ event: "worker-start-failed" }),
         })
       );
       expect(mgr.getLastWorkerError("workers/runtime-fixture")).toEqual(
-        expect.objectContaining({ message: "boom", timestamp: expect.any(Number) })
+        expect.objectContaining({
+          message: expect.stringContaining("Missing execution authority"),
+          timestamp: expect.any(Number),
+        })
       );
 
       // Subsequent successful start clears the recorded failure.
-      bindRuntimeImage.mockResolvedValue({
-        source: "workers/runtime-fixture",
-        unitName: "workers/runtime-fixture",
-        stateHash: "main",
-        effectiveVersion: "workers/runtime-fixture@main",
-        buildKey: "build:workers/runtime-fixture:main",
-      });
-      await mgr.startWorker(startArgs());
+      artifactAvailable = true;
+      await launchWorker(mgr, startArgs());
 
       expect(mgr.getLastWorkerError("workers/runtime-fixture")).toBeNull();
       expect(recordLifecycleEvent).toHaveBeenLastCalledWith(
@@ -343,17 +366,15 @@ describe("WorkerdManager", () => {
       );
     });
 
-    it("rolls back on build failure", async () => {
+    it("does not begin a launch when selector resolution fails", async () => {
       const deps = createMockDeps({
-        bindRuntimeImage: vi.fn().mockRejectedValue(new Error("build failed")),
+        resolveExecutionArtifact: vi.fn().mockRejectedValue(new Error("build failed")),
       });
       const mgr = new WorkerdManager(deps);
 
-      await expect(mgr.startWorker(startArgs())).rejects.toThrow("build failed");
+      await expect(launchWorker(mgr, startArgs())).rejects.toThrow("build failed");
 
-      expect(deps.tokenManager.revokeToken).toHaveBeenCalledWith(
-        "worker:workers/runtime-fixture:hello"
-      );
+      expect(deps.tokenManager.revokeToken).not.toHaveBeenCalled();
       expect(mgr.listInstances()).toHaveLength(0);
     });
 
@@ -361,7 +382,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs({ key: 'hello"; process.exit();//' }));
+      await launchWorker(mgr, startArgs({ key: 'hello"; process.exit();//' }));
       const [instance] = mgr.listInstances();
       // All non-alphanumeric/dash/underscore chars replaced
       expect(instance?.name).not.toContain('"');
@@ -377,49 +398,56 @@ describe("WorkerdManager", () => {
     it("stores explicit state ref when provided", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
+      const stateRef = `state:${"a".repeat(64)}`;
 
-      await mgr.startWorker(startArgs({ ref: "state:abc123" }));
+      await launchWorker(mgr, startArgs({ ref: stateRef }));
 
-      expect(statusOf(mgr, "hello")?.scopeRef).toBe("state:abc123");
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/runtime-fixture", "state:abc123");
+      expect(statusOf(mgr, "hello")?.scopeRef).toBe(stateRef);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith(
+        "workers/runtime-fixture",
+        stateRef
+      );
     });
 
     it("binds main when no ref is provided", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
 
       expect(statusOf(mgr, "hello")?.scopeRef).toBeUndefined();
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/runtime-fixture", undefined);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith(
+        "workers/runtime-fixture",
+        undefined
+      );
     });
 
     it("binds runtime-managed workers to main by default", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      const prepared = await mgr.startWorker({
+      const prepared = await launchWorker(mgr, {
         source: "workers/new",
         key: "new-worker",
         contextId: "ctx-agent",
       });
 
-      expect(prepared.effectiveVersion).toBe("abc123");
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", undefined);
+      expect(prepared.executionDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/new", undefined);
     });
 
     it("honors explicit context refs for runtime-managed workers", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker({
+      await launchWorker(mgr, {
         source: "workers/new",
         key: "new-worker",
         contextId: "ctx-agent",
         ref: "ctx:ctx-agent",
       });
 
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
       expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("ctx:ctx-agent");
     });
 
@@ -427,21 +455,21 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/new-do",
         className: "NewDO",
         key: "k1",
         contextId: "ctx-agent",
       });
 
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", undefined);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/new-do", undefined);
     });
 
     it("serves object-specific stateArgs in userland DO env", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/new-do",
         className: "NewDO",
         key: "subagent-object",
@@ -470,15 +498,15 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/new-do",
         className: "NewDO",
         key: "main-object",
         contextId: "ctx-agent",
       });
-      vi.mocked(deps.bindRuntimeImage).mockClear();
+      vi.mocked(deps.resolveExecutionArtifact).mockClear();
 
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/new-do",
         className: "NewDO",
         key: "branch-object",
@@ -486,8 +514,8 @@ describe("WorkerdManager", () => {
         ref: "ctx:ctx-agent",
       });
 
-      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledTimes(1);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
       expect(mgr.getDoVersion("workers/new-do", "NewDO", "branch-object")).not.toBeNull();
     });
 
@@ -496,7 +524,7 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(deps);
       const syntheticContextId = "5b0784b0a6d5b81c3ba856394cb1eb6e456e4716ab43030e62d2e8de77a6d2de";
 
-      const prepared = await mgr.ensureDurableObjectEntity({
+      const prepared = await launchDurableObject(mgr, {
         source: "workers/model-settings",
         className: "ModelSettingsDO",
         key: "workspace-model-settings",
@@ -507,25 +535,20 @@ describe("WorkerdManager", () => {
       expect(prepared.targetId).toBe(
         "do:workers/model-settings:ModelSettingsDO:workspace-model-settings"
       );
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/model-settings", "main");
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/model-settings", "main");
     });
   });
 
   // -------------------------------------------------------------------------
-  // Manifest-declared bootstrap main-bound DOs (the `vcs` service's DO →
-  // deps.getBootstrapMainBoundDos). The manager itself carries NO hardcoded
-  // workspace unit name: only a declared (source, className) pair gets the
-  // raw-ref bootstrap passthrough (observable as "" passed through instead of
-  // being normalized to undefined).
+  // Selector resolution is uniform for every ordinary DO; product bootstrap
+  // artifacts use the sealed manifest path instead of a class-name exception.
   // -------------------------------------------------------------------------
-  describe("bootstrap main-bound DOs (manifest-declared)", () => {
-    it("binds a declared main-bound DO to explicit main", async () => {
-      const deps = createMockDeps({
-        getBootstrapMainBoundDos: () => [{ source: "workers/vcs-store", className: "VcsDO" }],
-      });
+  describe("ordinary DO selector resolution", () => {
+    it("binds an ordinary DO to explicit main", async () => {
+      const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/vcs-store",
         className: "VcsDO",
         key: "workspace-vcs",
@@ -533,45 +556,38 @@ describe("WorkerdManager", () => {
         ref: "main",
       });
 
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/vcs-store", "main");
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/vcs-store", "main");
     });
 
-    it("passes the bootstrap ref through raw ONLY for the declared pair", async () => {
-      const deps = createMockDeps({
-        getBootstrapMainBoundDos: () => [{ source: "workers/vcs-store", className: "VcsDO" }],
-      });
+    it("normalizes an empty selector uniformly", async () => {
+      const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      // Declared pair: the raw ref ("") is used as-is.
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/vcs-store",
         className: "VcsDO",
         key: "workspace-vcs",
         contextId: "ctx-boot",
         ref: "",
       });
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/vcs-store", "");
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/vcs-store", undefined);
 
-      // A non-declared pair (including the historically hardcoded gad-store)
-      // takes the regular normalization path ("" → undefined).
-      await mgr.ensureDurableObjectEntity({
+      await launchDurableObject(mgr, {
         source: "workers/gad-store",
         className: "GadWorkspaceDO",
         key: "workspace-gad",
         contextId: "ctx-boot",
         ref: "",
       });
-      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/gad-store", undefined);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledWith("workers/gad-store", undefined);
     });
 
-    it("keeps regular build-ref validation for every DO (declared or not)", async () => {
-      const deps = createMockDeps({
-        getBootstrapMainBoundDos: () => [{ source: "workers/vcs-store", className: "VcsDO" }],
-      });
+    it("keeps build-ref validation for every ordinary DO", async () => {
+      const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
       await expect(
-        mgr.ensureDurableObjectEntity({
+        launchDurableObject(mgr, {
           source: "workers/vcs-store",
           className: "VcsDO",
           key: "workspace-vcs",
@@ -590,7 +606,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       const updated = await mgr.updateInstance("hello", {
         env: { FOO: "bar" },
       });
@@ -602,17 +618,18 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
-      const updated = await mgr.updateInstance("hello", { ref: "state:feature-x" });
+      await launchWorker(mgr, startArgs());
+      const stateRef = `state:${"b".repeat(64)}`;
+      const updated = await mgr.updateInstance("hello", { ref: stateRef });
 
-      expect(updated.scopeRef).toBe("state:feature-x");
+      expect(updated.scopeRef).toBe(stateRef);
     });
 
     it("restores main tracking on update with empty string", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs({ ref: "state:abc123" }));
+      await launchWorker(mgr, startArgs({ ref: `state:${"a".repeat(64)}` }));
       const updated = await mgr.updateInstance("hello", { ref: "" });
 
       expect(updated.scopeRef).toBeUndefined();
@@ -625,7 +642,7 @@ describe("WorkerdManager", () => {
   describe("listing", () => {
     it("listInstances strips tokens", async () => {
       const mgr = new WorkerdManager(createMockDeps());
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
 
       const list = mgr.listInstances();
       expect(list).toHaveLength(1);
@@ -641,7 +658,7 @@ describe("WorkerdManager", () => {
     it("starts workerd with a dev inspector and exposes it for running workers", async () => {
       const mgr = new WorkerdManager(createMockDeps());
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
 
       expect(spawn).toHaveBeenLastCalledWith(
         expect.any(String),
@@ -668,7 +685,7 @@ describe("WorkerdManager", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const mgr = new WorkerdManager(createMockDeps());
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
 
       expect(mgr.getPort()).toBe(49553);
       expect(fetchMock).toHaveBeenCalledWith(
@@ -690,27 +707,22 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       const before = mgr.getWorkerVersion("hello");
-      await mgr.onSourceRebuilt(
-        "workers/runtime-fixture",
-        null,
-        {
-          head: "main",
-          stateHash: "state:next",
-          repoStateHash: "state:next",
-          sinceStateHash: "state:prev",
-          eventId: "event:next",
-          headHash: "head:next",
-          actor: { id: "user", kind: "user" },
-          transitionKind: "snapshot",
-          changedPaths: ["workers/runtime-fixture/index.ts"],
-          repoPath: "workers/runtime-fixture",
-          fileChanges: [],
-          editOps: [],
-        },
-        "build:workers/runtime-fixture:main"
-      );
+      await mgr.onSourceRebuilt("workers/runtime-fixture", null, {
+        head: "main",
+        stateHash: "state:next",
+        repoStateHash: "state:next",
+        sinceStateHash: "state:prev",
+        eventId: "event:next",
+        headHash: "head:next",
+        actor: { id: "user", kind: "user" },
+        transitionKind: "snapshot",
+        changedPaths: ["workers/runtime-fixture/index.ts"],
+        repoPath: "workers/runtime-fixture",
+        fileChanges: [],
+        editOps: [],
+      });
 
       // No restart — the worker host reloads on its next request because the
       // loader-cache version bumped. The instance stays "running" throughout.
@@ -722,103 +734,74 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       await mgr.updateInstance("hello", { env: { FEATURE: "enabled" } });
       const beforeRebuild = mgr.getWorkerVersion("hello");
 
-      await mgr.onSourceRebuilt(
-        "workers/runtime-fixture",
-        null,
-        {
-          head: "main",
-          stateHash: "state:next",
-          repoStateHash: "state:next",
-          sinceStateHash: "state:prev",
-          eventId: "event:next",
-          headHash: "head:next",
-          actor: { id: "user", kind: "user" },
-          transitionKind: "snapshot",
-          changedPaths: ["workers/runtime-fixture/index.ts"],
-          repoPath: "workers/runtime-fixture",
-          fileChanges: [],
-          editOps: [],
-        },
-        "build:workers/runtime-fixture:main"
-      );
+      await mgr.onSourceRebuilt("workers/runtime-fixture", null, {
+        head: "main",
+        stateHash: "state:next",
+        repoStateHash: "state:next",
+        sinceStateHash: "state:prev",
+        eventId: "event:next",
+        headHash: "head:next",
+        actor: { id: "user", kind: "user" },
+        transitionKind: "snapshot",
+        changedPaths: ["workers/runtime-fixture/index.ts"],
+        repoPath: "workers/runtime-fixture",
+        fileChanges: [],
+        editOps: [],
+      });
 
       expect(mgr.getWorkerVersion("hello")).toBe((beforeRebuild ?? 0) + 1);
     });
 
-    it("marks failed runtime image rebinds terminal after the warm attempt fails", async () => {
-      const buildKey = "build:workers/runtime-fixture:main";
-      const bindRuntimeImage = vi
-        .fn()
-        .mockResolvedValueOnce({
-          source: "workers/runtime-fixture",
-          unitName: "workers/runtime-fixture",
-          stateHash: "state:test",
-          effectiveVersion: "workers/runtime-fixture@main",
-          buildKey,
-        })
-        .mockRejectedValueOnce(new Error("Unknown vcs ref: ctx:deleted"));
+    it("fails closed when immutable execution bytes are unavailable", async () => {
       const deps = createMockDeps({
-        bindRuntimeImage,
-        getBuildByKey: vi.fn(() => null),
-        statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-image-error-")),
+        getExecutionArtifact: vi.fn(() => null),
+        statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-artifact-error-")),
       });
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
-
-      await expect(mgr.getWorkerCode("hello")).rejects.toMatchObject({
-        code: "RUNTIME_IMAGE_WARMING",
-      });
-      await vi.waitFor(() => expect(bindRuntimeImage).toHaveBeenCalledTimes(2));
-      await expect(mgr.getWorkerCode("hello")).rejects.toMatchObject({
-        code: "RUNTIME_IMAGE_UNAVAILABLE",
-        message: expect.stringContaining("Unknown vcs ref: ctx:deleted"),
-      });
+      await expect(launchWorker(mgr, startArgs())).rejects.toThrow("Missing execution authority");
+      expect(mgr.listInstances()).toEqual([]);
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledTimes(1);
     });
 
     it("skips ref-targeted instances", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs({ ref: "state:abc123" }));
-      const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
+      await launchWorker(mgr, startArgs({ ref: `state:${"a".repeat(64)}` }));
+      const callsBefore = vi.mocked(deps.resolveExecutionArtifact).mock.calls.length;
 
       // Ref-targeted instance should not restart on HEAD push
-      await mgr.onSourceRebuilt(
-        "workers/runtime-fixture",
-        null,
-        {
-          head: "main",
-          stateHash: "state:next",
-          repoStateHash: "state:next",
-          sinceStateHash: "state:prev",
-          eventId: "event:next",
-          headHash: "head:next",
-          actor: { id: "user", kind: "user" },
-          transitionKind: "snapshot",
-          changedPaths: ["workers/runtime-fixture/index.ts"],
-          repoPath: "workers/runtime-fixture",
-          fileChanges: [],
-          editOps: [],
-        },
-        "build:workers/runtime-fixture:main"
-      );
+      await mgr.onSourceRebuilt("workers/runtime-fixture", null, {
+        head: "main",
+        stateHash: "state:next",
+        repoStateHash: "state:next",
+        sinceStateHash: "state:prev",
+        eventId: "event:next",
+        headHash: "head:next",
+        actor: { id: "user", kind: "user" },
+        transitionKind: "snapshot",
+        changedPaths: ["workers/runtime-fixture/index.ts"],
+        repoPath: "workers/runtime-fixture",
+        fileChanges: [],
+        editOps: [],
+      });
 
       const status = statusOf(mgr, "hello");
       expect(status?.status).toBe("running");
-      // No additional bind calls — rebuild was skipped
-      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(callsBefore);
+      // No additional selector resolution — pinned execution was skipped.
+      expect(deps.resolveExecutionArtifact).toHaveBeenCalledTimes(callsBefore);
     });
 
     it("does not restart workerd on a source rebuild", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       const spawnsBefore = vi.mocked(spawn).mock.calls.length;
 
       await mgr.onSourceRebuilt("workers/runtime-fixture", null);
@@ -832,13 +815,13 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(startArgs());
-      const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
+      await launchWorker(mgr, startArgs());
+      const callsBefore = vi.mocked(deps.resolveExecutionArtifact).mock.calls.length;
 
       await mgr.onSourceRebuilt("workers/other", null);
 
       // No additional bind calls (no restart triggered)
-      expect(vi.mocked(deps.bindRuntimeImage).mock.calls.length).toBe(callsBefore);
+      expect(vi.mocked(deps.resolveExecutionArtifact).mock.calls.length).toBe(callsBefore);
     });
 
     it("tears down stale DO services when a class is removed from the manifest", async () => {
@@ -918,7 +901,10 @@ describe("WorkerdManager", () => {
 
       await mgr.onSourceRebuilt("workers/agent", [{ className: "AgentDO" }]);
 
-      expect(vi.mocked(deps.bindRuntimeImage)).not.toHaveBeenCalled();
+      expect(vi.mocked(deps.resolveExecutionArtifact)).toHaveBeenCalledWith(
+        "workers/agent",
+        undefined
+      );
       expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toMatchObject({
         kind: "worker-do",
         source: "workers/agent",
@@ -951,7 +937,7 @@ describe("WorkerdManager", () => {
 
       mgr.reconcileManifestRoutes(["workers/agent"]);
 
-      expect(vi.mocked(deps.bindRuntimeImage)).not.toHaveBeenCalled();
+      expect(vi.mocked(deps.resolveExecutionArtifact)).not.toHaveBeenCalled();
       expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toMatchObject({
         kind: "worker-do",
         source: "workers/agent",
@@ -987,7 +973,7 @@ describe("WorkerdManager", () => {
 
       // Bring workerd up first (a worker create starts the static host); then
       // register a userland DO class — which by itself never restarts.
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
       const restartBegin = vi.fn();
@@ -1029,7 +1015,7 @@ describe("WorkerdManager", () => {
       mgr.onRestartBegin(begin);
       mgr.onRestartReady(ready);
 
-      await mgr.startWorker(startArgs());
+      await launchWorker(mgr, startArgs());
       expect(begin).not.toHaveBeenCalled();
       expect(ready).not.toHaveBeenCalled();
       expect(mgr.getBootGeneration()).toBe(1);

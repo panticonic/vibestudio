@@ -87,7 +87,7 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
   return {
     name: "externalOpen",
     description: "Approval-gated system browser opens",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["user", "host", "code"] },
     methods: externalOpenMethods,
     handler: defineServiceHandler("externalOpen", externalOpenMethods, {
       openExternal: (ctx, [url, options]) => requestOpen(ctx, url, options),

@@ -28,7 +28,7 @@ export function createPanelLogService(deps: PanelLogServiceDeps): ServiceDefinit
   return {
     name: "panelLog",
     description: "Forward panel console errors and lifecycle events into unit diagnostics",
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     methods: panelLogMethods,
     handler: defineServiceHandler("panelLog", panelLogMethods, {
       append: (_ctx, [records]) => {

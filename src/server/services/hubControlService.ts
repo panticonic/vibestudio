@@ -73,7 +73,7 @@ export function createHubControlService(client: HubControlClient): ServiceDefini
   return {
     name: "hubControl",
     description: "Authenticated workspace-child to server-hub control plane",
-    policy: { allowed: ["shell", "panel", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: hubControlMethods,
     handler: defineServiceHandler("hubControl", hubControlMethods, {
       listWorkspaces: (ctx, args) => forward(ctx, "listWorkspaces", args),

@@ -7,7 +7,6 @@ import type {
   WorkspaceHeartbeatDecl,
   WorkspaceHostTargetDecl,
   WorkspaceHostTargetName,
-  WorkspaceTrustDecl,
 } from "@vibestudio/workspace-contracts/types";
 import {
   WORKSPACE_APP_PACKAGE_SCOPE,
@@ -184,7 +183,6 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
     values: config.apps,
   });
   validateHeartbeats(config.heartbeats);
-  validateTrust(config.trust);
   validateHostTargets(config.hostTargets);
   validateProviders(config);
   try {
@@ -408,6 +406,7 @@ export const WORKSPACE_EXTENSION_PROVIDER_NAMES = [
   "browserData",
   "gitInterop",
   "claudeCode",
+  "devHost",
 ] as const;
 export type WorkspaceExtensionProviderName = (typeof WORKSPACE_EXTENSION_PROVIDER_NAMES)[number];
 
@@ -429,24 +428,6 @@ function validateUnitSourceList(values: unknown, kind: CanonicalUnitKind, field:
     canonical.push(repoPath);
   }
   return canonical;
-}
-
-function validateTrust(trust: WorkspaceTrustDecl | undefined): void {
-  if (trust === undefined) return;
-  if (trust === null || typeof trust !== "object" || Array.isArray(trust)) {
-    throw new Error("meta/vibestudio.yml: `trust` must be a mapping");
-  }
-  for (const key of Object.keys(trust)) {
-    if (key !== "chromeApps") {
-      throw new Error(`meta/vibestudio.yml: unknown \`trust\` key "${key}"`);
-    }
-  }
-  validateUnitSourceList(trust.chromeApps, APP_UNIT, "trust.chromeApps");
-  validateUnitSourceList(
-    trust.connectionManagementApps,
-    APP_UNIT,
-    "trust.connectionManagementApps"
-  );
 }
 
 function validateHostTargets(hostTargets: WorkspaceConfig["hostTargets"] | undefined): void {
@@ -544,20 +525,6 @@ function validateProviders(config: WorkspaceConfig): void {
  * (`apps/name`). Missing `trust` (or a missing list) resolves to an empty
  * grant list — trust is never assumed.
  */
-export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): {
-  chromeApps: string[];
-  connectionManagementApps: string[];
-} {
-  return {
-    chromeApps: validateUnitSourceList(config.trust?.chromeApps, APP_UNIT, "trust.chromeApps"),
-    connectionManagementApps: validateUnitSourceList(
-      config.trust?.connectionManagementApps,
-      APP_UNIT,
-      "trust.connectionManagementApps"
-    ),
-  };
-}
-
 /**
  * Resolve one host target's declared app (canonical `apps/name` repo path)
  * and its required extensions (canonical `extensions/name`). Returns null

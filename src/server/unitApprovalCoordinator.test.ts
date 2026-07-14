@@ -14,7 +14,7 @@ function unit(kind: "extension" | "app", name: string): UnitBatchEntry {
       repo: `${kind === "app" ? "apps" : "extensions"}/${name}`,
       ref: "main",
     },
-    ev: `${name}-ev`,
+    sourceDigest: `${name}-sourceDigest`,
     capabilities: [],
   };
 }

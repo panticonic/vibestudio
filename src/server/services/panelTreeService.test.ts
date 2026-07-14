@@ -46,19 +46,35 @@ function ctx() {
       callerId: "panel:requester",
       callerKind: "panel",
       repoPath: "panels/requester",
-      effectiveVersion: "v1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     }),
+    authority: {
+      allows: vi.fn(async () => false),
+      assert: vi.fn(async () => undefined),
+    },
   };
 }
 
-function chromeAppCtx() {
+function panelHostCtx() {
   return {
     caller: createVerifiedCaller("@workspace-apps/shell", "app", {
       callerId: "@workspace-apps/shell",
       callerKind: "app",
       repoPath: "apps/shell",
-      effectiveVersion: "v1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     }),
+    authority: {
+      allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+      assert: vi.fn(async () => undefined),
+    },
   };
 }
 
@@ -81,7 +97,11 @@ function treeDeps(overrides: Partial<PanelTreeServiceDeps> = {}): PanelTreeServi
           callerId: id,
           callerKind: "panel",
           repoPath: "panels/anchor",
-          effectiveVersion: "v1",
+          executionDigest: "a".repeat(64),
+          requested: [
+            { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+            { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+          ],
         })
     ),
     bridge: vi.fn(),
@@ -93,10 +113,10 @@ describe("panelTreeService", () => {
   it("is exposed to userland runtimes and trusted shell/server hosts", () => {
     const service = createPanelTreeService(treeDeps({ approvalQueue: approvalQueueMock("deny") }));
 
-    // Authorized chrome is trusted by capability. Runtime callers are admitted
-    // but scoped by the context-boundary gate unless they hold chrome trust.
-    expect(service.policy).toEqual({
-      allowed: ["panel", "worker", "do", "shell", "server", "app"],
+    // Runtime callers are admitted but remain context-boundary scoped unless
+    // the canonical evaluator grants their exact code panel-hosting authority.
+    expect(service.authority).toEqual({
+      principals: ["code", "user", "host"],
     });
   });
 
@@ -199,7 +219,7 @@ describe("panelTreeService", () => {
     });
   });
 
-  it("does not prompt when authorized chrome closes a panel in another context", async () => {
+  it("does not prompt when exact code authority permits cross-context panel hosting", async () => {
     const approvalQueue = approvalQueueMock("once");
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
@@ -212,14 +232,10 @@ describe("panelTreeService", () => {
           }
         : undefined
     );
-    const hasAppCapability = vi.fn(
-      (_callerId: string, capability: string) => capability === "panel-hosting"
-    );
-    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge, hasAppCapability }));
+    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge }));
 
-    await expect(service.handler(chromeAppCtx(), "archive", ["target"])).resolves.toBeUndefined();
+    await expect(service.handler(panelHostCtx(), "archive", ["target"])).resolves.toBeUndefined();
 
-    expect(hasAppCapability).toHaveBeenCalledWith("@workspace-apps/shell", "panel-hosting");
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
       callerId: "@workspace-apps/shell",

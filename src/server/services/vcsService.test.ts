@@ -1,15 +1,23 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { withTestServiceAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind } from "@vibestudio/shared/runtime/entitySpec";
-import { createVcsService } from "./vcsService.js";
+import { createVcsService as createVcsServiceDefinition } from "./vcsService.js";
+
+const createVcsService = (...args: Parameters<typeof createVcsServiceDefinition>) =>
+  withTestServiceAuthority(createVcsServiceDefinition(...args));
 
 function panelCaller(id = "panel-source") {
   return createVerifiedCaller(id, "panel", {
     callerId: id,
     callerKind: "panel",
     repoPath: "panels/source",
-    effectiveVersion: "version-1",
+    executionDigest: "version-1",
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 }
 
@@ -32,7 +40,7 @@ function entityCacheWithContext(
   entityCache._onActivate({
     id: callerId,
     kind,
-    source: { repoPath: "panels/source", effectiveVersion: "version-1" },
+    source: { repoPath: "panels/source" },
     contextId,
     key: callerId,
     createdAt: Date.now(),

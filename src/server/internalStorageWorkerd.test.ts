@@ -6,17 +6,28 @@ import * as esbuild from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
+import { createHostCaller } from "../../packages/shared/src/serviceDispatcher.js";
 import { DODispatch } from "./doDispatch.js";
-import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import {
+  BROWSER_DATA_DO_SOURCE,
+  EVAL_DO_SOURCE,
+  WORKSPACE_DO_SOURCE,
+  getProductExecutionArtifact,
+  productSeedHostCapabilities,
+  resolveProductSeedArtifact,
+} from "./internalDOs/productBootManifest.js";
 import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
+import { attestDirectRpc } from "./services/authorityRuntime.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import { executionArtifactFixture } from "./testing/executionArtifactFixture.js";
 import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
+import { createTestDirectAuthority } from "@vibestudio/durable/test-utils";
 
 // Resolve @workspace/* and @vibestudio/* imports to source via the
 // workspace/tsconfig.json path map (same source of truth vitest.config.ts
@@ -71,7 +82,7 @@ beforeAll(async () => {
       platform: "browser",
       target: "es2022",
       format: "esm",
-      outfile: "dist/internal-do.bundle.mjs",
+      outfile: "dist/product-do.bundle.mjs",
       conditions: ["worker", "browser"],
       external: ["node:*", "electron"],
       logLevel: "silent",
@@ -93,30 +104,29 @@ async function createWorkerdHarness(
 ) {
   const tokenManager = new TokenManager();
   const { getBuild, ...managerOverrides } = overrides;
-  const builds = new Map<string, BuildResult>();
+  const executionBundles = new Map<string, ReturnType<typeof executionArtifactFixture>["bundle"]>();
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the loader-server closure can reference a `const` manager.
   const portHolder = { value: 0 };
   const manager = new WorkerdManager({
+    hostPrincipal: "host:test-product-build",
     tokenManager,
     fsService: {
       closeHandlesForCaller: () => {},
     } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
-    bindRuntimeImage: async (source: string, ref?: string) => {
+    resolveExecutionArtifact: async (source: string, ref?: string) => {
+      const productSeed = resolveProductSeedArtifact(source);
+      if (productSeed) return productSeed;
       if (!getBuild) throw new Error("workspace builds are not used by internal DO tests");
       const build = await getBuild(source, ref);
-      const buildKey = `build:${source}:${build.metadata.ev}`;
-      builds.set(buildKey, build);
-      return {
-        source,
-        unitName: source,
-        stateHash: ref?.startsWith("state:") ? ref : "state:test",
-        effectiveVersion: build.metadata.ev,
-        buildKey,
-      };
+      const fixture = executionArtifactFixture(source, build, ref);
+      executionBundles.set(fixture.binding.artifact.executionDigest, fixture.bundle);
+      return fixture.binding;
     },
-    getBuildByKey: (key: string) => builds.get(key) ?? null,
+    getExecutionArtifact: (executionDigest) =>
+      getProductExecutionArtifact(executionDigest) ?? executionBundles.get(executionDigest) ?? null,
+    getProductDoCapabilities: (source, className) => productSeedHostCapabilities(source, className),
     workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
@@ -188,6 +198,7 @@ async function createWorkerdHarness(
       workerdUrl: `http://127.0.0.1:${port}`,
       workerdGatewayToken: manager.getWorkerdGatewayToken(),
       workerdDispatchSecret: manager.getDispatchSecret(),
+      authorization: hostAttestation(ref, method),
     });
   };
 
@@ -207,7 +218,34 @@ function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): 
   dispatch.setEnsureDO((source, className, objectKey) =>
     manager.ensureDO(source, className, objectKey)
   );
+  dispatch.setAuthorityAttester(testHostAttestation);
   return dispatch;
+}
+
+function testHostAttestation(ref: DORef, method: string) {
+  if (ref.source !== "workers/lifecycle-probe") return hostAttestation(ref, method);
+  return createTestDirectAuthority({
+    source: ref.source,
+    className: ref.className,
+    objectKey: ref.objectKey,
+    method,
+  });
+}
+
+function hostAttestation(ref: DORef, method: string) {
+  return attestDirectRpc({
+    caller: createHostCaller("main", "server", {
+      userId: "system",
+      handle: "system",
+    }),
+    source: ref.source,
+    className: ref.className,
+    objectKey: ref.objectKey,
+    method,
+    workspaceId: "test-workspace",
+    workspaceMember: true,
+    sessionId: `test:${method}`,
+  });
 }
 
 async function bundleWorker(source: string, entryPoint: string, ev: string): Promise<BuildResult> {
@@ -232,7 +270,7 @@ function buildResult(source: string, ev: string, bundle: string): BuildResult {
     metadata: {
       kind: "worker",
       name: source,
-      ev,
+      sourceDigest: ev,
       sourceStateHash: "state:test",
       sourcemap: false,
       details: { kind: "generic" },
@@ -378,18 +416,21 @@ describe("internal storage DOs under workerd", () => {
     expect(result["started_at"]).toBeDefined();
   }, 240_000);
 
-  it("starts workerd with EvalDO registered (UNSAFE_EVAL binding renders as `unsafeEval = void`)", async () => {
-    // Regression: the EvalDO binding was emitted as `unsafeEval = ()` (empty
-    // struct), which workerd rejects with "Type mismatch; expected Void", so the
-    // whole runtime failed to boot once EvalDO was registered. Other workerd tests
-    // register only WorkspaceDO/BrowserDataDO, so they never exercised this binding.
+  it("launches the exact EvalDO product seed with its declared unsafe-eval capability", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    // registerAllDOClasses writes the capnp config and (re)starts workerd; a
-    // malformed config makes workerd exit before accepting HTTP and this rejects.
-    await expect(
-      manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }])
-    ).resolves.not.toThrow();
+    await manager.registerAllDOClasses([{ source: EVAL_DO_SOURCE, className: "EvalDO" }]);
+    const ref = { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: "capability-probe" };
+    // Product-seed registration is metadata-only. Running a concrete object
+    // crosses UniversalDO's loader boundary and makes EvalDO read the binding
+    // before it asks the deliberately minimal harness for its engine bundle.
+    const result = (await harness.callDurableObject(ref, "run", {
+      code: "1 + 1",
+      runId: "unsafe-eval-probe",
+    })) as { success: boolean; error?: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+    expect(result.error).not.toContain("UNSAFE_EVAL binding not configured");
     expect(manager.getBootGeneration()).toBeGreaterThanOrEqual(1);
   });
 
@@ -399,8 +440,8 @@ describe("internal storage DOs under workerd", () => {
     // the server-only EvalDO requires.
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }]);
-    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
+    await manager.registerAllDOClasses([{ source: EVAL_DO_SOURCE, className: "EvalDO" }]);
+    const ref = { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
 
     // startRun inserts a pending row and returns it.
     expect(
@@ -440,16 +481,16 @@ describe("internal storage DOs under workerd", () => {
   it("round-trips entity activate / resolve / retire / gc through WorkspaceDO under workerd", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" }]);
+    await manager.registerAllDOClasses([{ source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO" }]);
     const ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: "workspace-test",
     };
 
     const activateInput = {
       kind: "panel",
-      source: { repoPath: "panels/example", effectiveVersion: "v1" },
+      source: { repoPath: "panels/example" },
       contextId: "ctx-1",
       key: "entry-1",
     };
@@ -512,7 +553,7 @@ describe("internal storage DOs under workerd", () => {
       concurrency: 2,
     });
     const workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: "workspace-lifecycle",
     };
@@ -523,7 +564,7 @@ describe("internal storage DOs under workerd", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO" },
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
     lifecycleDriver.start();
@@ -539,7 +580,7 @@ describe("internal storage DOs under workerd", () => {
           reason: "raw",
           deadlineMs: 1_000,
         })
-      ).rejects.toThrow(/not exposed|403/);
+      ).rejects.toThrow(/not exposed|no direct authority declaration|403/);
 
       await doDispatch.dispatch(workspaceRef, "lifecycleLeaseUpsert", {
         source: probeRef.source,
@@ -601,7 +642,7 @@ describe("internal storage DOs under workerd", () => {
     const doDispatch = createDODispatch(manager, harness.tokenManager);
     const alarmDriver = new AlarmDriver({ doDispatch, workspaceId: "workspace-alarm" });
     const workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: "workspace-alarm",
     };
@@ -612,7 +653,7 @@ describe("internal storage DOs under workerd", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO" },
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
 
@@ -648,9 +689,9 @@ describe("internal storage DOs under workerd", () => {
   it("indexes panels into FTS5 and returns matches via WorkspaceDO.panelSearch under real workerd storage", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" }]);
+    await manager.registerAllDOClasses([{ source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO" }]);
     const ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: "workspace-fts5",
     };
@@ -661,7 +702,7 @@ describe("internal storage DOs under workerd", () => {
     for (const key of ["entry-a", "entry-b"]) {
       await harness.callDurableObject(ref, "entityActivate", {
         kind: "panel",
-        source: { repoPath: "panels/example", effectiveVersion: "v1" },
+        source: { repoPath: "panels/example" },
         contextId: "ctx-1",
         key,
       });
@@ -714,10 +755,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
     const historyBatch = [
       {
         url: "https://example.com/docs/storage",
@@ -802,7 +843,7 @@ describe("internal storage DOs under workerd", () => {
           metadata: {
             kind: "worker",
             name: "workers/gad-store",
-            ev: "gad-store-test",
+            sourceDigest: "gad-store-test",
             sourceStateHash: "state:test",
             sourcemap: false,
             details: { kind: "generic" },
@@ -877,11 +918,11 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
     const ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: BROWSER_DATA_DO_SOURCE,
       className: "BrowserDataDO",
       objectKey: "global-record",
     };
@@ -942,11 +983,11 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
     const ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: BROWSER_DATA_DO_SOURCE,
       className: "BrowserDataDO",
       objectKey: "global-history-range",
     };
@@ -1006,11 +1047,11 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
     const ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: BROWSER_DATA_DO_SOURCE,
       className: "BrowserDataDO",
       objectKey: "global-import-idempotency",
     };
@@ -1143,10 +1184,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
     await harness.callDurableObject(ref, "addCookiesBatch", [
       {
         name: "sid",
@@ -1182,10 +1223,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
 
     await harness.callDurableObject(
       ref,
@@ -1234,10 +1275,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
     const baseCookie = {
       name: "sid",
       domain: ".example.com",
@@ -1274,11 +1315,11 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
     const ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: BROWSER_DATA_DO_SOURCE,
       className: "BrowserDataDO",
       objectKey: "global-domain-readiness",
     };
@@ -1344,10 +1385,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
     const id = await harness.callDurableObject(ref, "addPassword", {
       url: "https://example.com/login",
       username: "ada",
@@ -1378,10 +1419,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
     const id = (await harness.callDurableObject(ref, "addPassword", {
       url: "https://example.com/login",
       username: "ada",
@@ -1420,10 +1461,10 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: BROWSER_DATA_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
     const password = {
       url: "https://example.com/login",
       username: "ada",

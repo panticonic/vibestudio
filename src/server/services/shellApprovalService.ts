@@ -72,7 +72,7 @@ export function createShellApprovalService(deps: {
   return {
     name: "shellApproval",
     description: "Shell-owned consent approval queue",
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: shellApprovalMethods,
     handler: defineServiceHandler(serviceName, shellApprovalMethods, {
       resolve: async (ctx, [approvalId, decision]) => {
@@ -122,12 +122,14 @@ export function createShellApprovalService(deps: {
           {
             callerId: pending.callerId,
             repoPath: pending.repoPath,
-            effectiveVersion: pending.effectiveVersion,
+            executionDigest: pending.executionDigest,
           },
           "version",
           pending.resourceScope,
           Date.now(),
-          "deny"
+          "deny",
+          ctx.caller.subject ? (`user:${ctx.caller.subject.userId}` as const) : undefined,
+          "interactive-capability-block"
         );
         await approvalQueue.resolve(approvalId, "deny", resolverFrom(ctx, deviceLabelFor));
         metrics.recordApprovalResolved({ decision: "deny", source: ctx.caller.runtime.kind });

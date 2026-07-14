@@ -6,7 +6,7 @@ function makeRecord(overrides: Partial<EntityRecord> = {}): EntityRecord {
   return {
     id: overrides.id ?? "panel:test",
     kind: overrides.kind ?? "panel",
-    source: overrides.source ?? { repoPath: "panels/test", effectiveVersion: "v1" },
+    source: overrides.source ?? { repoPath: "panels/test" },
     contextId: overrides.contextId ?? "ctx-1",
     key: overrides.key ?? "test",
     createdAt: overrides.createdAt ?? Date.now(),

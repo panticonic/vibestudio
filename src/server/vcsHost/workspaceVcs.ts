@@ -974,7 +974,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             inputStateHash: record.inputStateHash,
             unitName: record.unitName,
             subtree: record.subtree,
-            ev: record.ev,
+            sourceDigest: record.sourceDigest,
             buildKey: record.buildKey,
             status: record.status,
             ...(record.error ? { error: record.error } : {}),
@@ -1627,6 +1627,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     repoPath: string;
     invocationId?: string;
     turnId?: string;
+    /** Durable at-least-once identity, scoped by actor + repo log + head. */
+    clientEditId?: string;
   }): Promise<RecordEditResult> {
     if (input.head === VCS_MAIN_HEAD || !input.head.startsWith("ctx:")) {
       throw new Error(
@@ -1645,6 +1647,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         actorJson: JSON.stringify(vcsLogActor(input.actor)),
         invocationId: input.invocationId ?? null,
         turnId: input.turnId ?? null,
+        clientEditId: input.clientEditId ?? null,
         edits: input.edits,
         ...(input.baseStateHash !== undefined ? { baseStateHash: input.baseStateHash } : {}),
       });

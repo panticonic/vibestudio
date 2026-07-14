@@ -73,7 +73,7 @@ export const approvalPrincipalSchema = z
     callerId: approvalCleanString("caller id", { min: 1, max: 200 }),
     callerKind: z.enum(["panel", "app", "worker", "do", "extension"]),
     repoPath: approvalCleanString("repo path", { min: 1, max: 300 }),
-    effectiveVersion: approvalCleanString("effective version", { min: 1, max: 200 }),
+    executionDigest: approvalCleanString("effective version", { min: 1, max: 200 }),
     callerTitle: approvalCleanString("caller title", { max: 120 }).optional(),
   })
   .strict();
@@ -160,7 +160,7 @@ export interface ApprovalRequesterIdentity {
   /** Code/source that created this runtime, when known. */
   sourcePath?: string;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   contextId?: string;
   /** Stable trust/audit key: code version for normal builds, runtime id for internal/eval. */
   stableIdentityKey: string;
@@ -203,24 +203,11 @@ export interface ApprovalOperationDescriptor {
   groupKey?: string;
 }
 
-export type ApprovalResourceScope =
-  | {
-      kind: "exact";
-      key: string;
-      label?: string;
-    }
-  | {
-      kind: "origin";
-      origin: string;
-    }
-  | {
-      kind: "domain";
-      domain: string;
-    }
-  | {
-      kind: "network";
-      value: "*";
-    };
+/** Approval presentation uses the same canonical resource vocabulary as grants. */
+export type ApprovalResourceScope = Exclude<
+  import("@vibestudio/rpc").ResourceScope,
+  { kind: "prefix" }
+>;
 
 const approvalInputFieldSchema = z
   .object({
@@ -320,7 +307,7 @@ export interface ApprovalPrincipal {
   callerId: string;
   callerKind: "panel" | "app" | "worker" | "do" | "extension";
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   /**
    * Server-controlled human-readable name for this caller — e.g. a panel's
    * current title or a worker's `runtime.setTitle()` value. Approval UIs
@@ -359,7 +346,7 @@ export interface UserlandApprovalGrant {
     callerId: string;
     callerKind: "panel" | "app" | "worker" | "do" | "extension";
     repoPath?: string;
-    effectiveVersion?: string;
+    executionDigest?: string;
   };
   issuer?: UserlandApprovalIssuer;
   subject: UserlandApprovalSubject;
@@ -404,14 +391,14 @@ export interface DiffReviewEntry {
 }
 
 export interface PendingApprovalBase {
-  // principal == { callerId, callerKind, repoPath, effectiveVersion }
+  // principal == { callerId, callerKind, repoPath, executionDigest }
   approvalId: string;
   callerId: string;
   // "system" is a host-initiated principal (e.g. workspace-startup extension
   // reconciliation), not a userland caller pretending to be one.
   callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   requestedAt: number;
   /**
    * Server-resolved display title for the caller, if known. Surfaced by the
@@ -519,15 +506,15 @@ export interface UnitBatchEntry {
   version?: string | null;
   target?: "electron" | "react-native" | "terminal" | null;
   source: { kind: "workspace-repo"; repo: string; ref: string };
-  ev?: string | null;
+  sourceDigest?: string | null;
   /** Native or host capabilities granted by running this unit. */
   capabilities: string[];
-  dependencyEvs?: Record<string, string>;
+  dependencySourceDigests?: Record<string, string>;
   externalDeps?: Record<string, string>;
   integrity?: string | null;
   provider?: {
     name: string;
-    activeEv: string | null;
+    activeSourceDigest: string | null;
     activeBuildKey: string | null;
     contractVersion: string;
   } | null;

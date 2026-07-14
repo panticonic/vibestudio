@@ -1,9 +1,6 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createVerifiedCaller,
-  ServiceDispatcher,
-  type ServiceContext,
-} from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
@@ -28,21 +25,21 @@ function createDeps() {
         source: "workers/example-store",
         name: "channel",
         protocols: ["example.store.v1"],
-        policy: { allowed: ["panel", "worker", "shell"] },
+        authority: { principals: ["code", "user"] },
         durableObject: { className: "ExampleStoreDO" },
       },
       {
         source: "workers/example-store",
         name: "panel-channel",
         protocols: ["example.panel-store.v1"],
-        policy: { allowed: ["panel"] },
+        authority: { principals: ["code"] },
         durableObject: { className: "ExampleStoreDO" },
       },
       {
         source: "workers/stateless-api",
         name: "stateless-api",
         protocols: ["example.stateless.v1"],
-        policy: { allowed: ["shell"] },
+        authority: { principals: ["user"] },
         worker: { routePath: "/api" },
       },
     ],
@@ -83,7 +80,7 @@ function createDeps() {
 describe("workerService userland service resolution", () => {
   it("lists every launchable worker with its real manifest entry point", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -104,7 +101,7 @@ describe("workerService userland service resolution", () => {
 
   it("lists and resolves manifest-declared services", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -165,7 +162,7 @@ describe("workerService userland service resolution", () => {
 
   it("uses workspace declarations added after the service is constructed", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -183,7 +180,7 @@ describe("workerService userland service resolution", () => {
         source: "workers/poem-store",
         name: "poem-store",
         protocols: ["poem.store.v1"],
-        policy: { allowed: ["panel", "worker", "shell"] },
+        authority: { principals: ["code", "user"] },
         durableObject: { className: "PoemStoreDO" },
       },
     ];
@@ -211,14 +208,14 @@ describe("workerService userland service resolution", () => {
           source: "workers/poem-collection-store",
           name: "poem-collection",
           protocols: ["poems.collection.v1"],
-          policy: { allowed: ["panel", "worker"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "PoemStore" },
         },
       ],
       routes: [],
     };
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -251,6 +248,9 @@ describe("workerService userland service resolution", () => {
 
   it("does not use a context duplicate to bypass a main service policy", async () => {
     const deps = createDeps();
+    deps.workspaceDecls.services.find((service) => service.name === "panel-channel")!.authority = {
+      principals: ["host"],
+    };
     const contextDecls: WorkspaceDeclarations = {
       singletons: new SingletonRegistry([
         { source: "workers/example-store", className: "ExampleStoreDO", key: "channel" },
@@ -260,13 +260,13 @@ describe("workerService userland service resolution", () => {
           source: "workers/example-store",
           name: "panel-channel",
           protocols: ["example.panel-store.v1"],
-          policy: { allowed: ["extension"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "ExampleStoreDO" },
         },
       ],
       routes: [],
     };
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -288,7 +288,7 @@ describe("workerService userland service resolution", () => {
 
   it("resolves concrete durable object targets", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
@@ -326,14 +326,14 @@ describe("workerService userland service resolution", () => {
           source: "workers/poem-collection-store",
           name: "poem-collection",
           protocols: ["poems.collection.v1"],
-          policy: { allowed: ["panel", "worker"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "PoemStore" },
         },
       ],
       routes: [],
     };
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -369,6 +369,9 @@ describe("workerService userland service resolution", () => {
 
   it("does not use a context duplicate to bypass a main direct DO policy", async () => {
     const deps = createDeps();
+    deps.workspaceDecls.services.find((service) => service.name === "panel-channel")!.authority = {
+      principals: ["host"],
+    };
     const contextDecls: WorkspaceDeclarations = {
       singletons: new SingletonRegistry([
         { source: "workers/example-store", className: "ExampleStoreDO", key: "channel" },
@@ -378,13 +381,13 @@ describe("workerService userland service resolution", () => {
           source: "workers/example-store",
           name: "panel-channel",
           protocols: ["example.panel-store.v1"],
-          policy: { allowed: ["extension"] },
+          authority: { principals: ["code"] },
           durableObject: { className: "ExampleStoreDO" },
         },
       ],
       routes: [],
     };
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({
         ...(deps as object),
@@ -407,7 +410,7 @@ describe("workerService userland service resolution", () => {
   it("activates resolved durable object services and lets DO callers use worker-allowed services", async () => {
     const deps = createDeps();
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({ ...(deps as object), activateDurableObject } as never)
     );
@@ -436,7 +439,7 @@ describe("workerService userland service resolution", () => {
   it("stamps an on-demand durable object with the resolving caller's owner", async () => {
     const deps = createDeps();
     const activateDurableObject = vi.fn(async () => {});
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(
       createWorkerService({ ...(deps as object), activateDurableObject } as never)
     );
@@ -458,7 +461,7 @@ describe("workerService userland service resolution", () => {
 
   it("lets DO callers use panel-allowed durable services", async () => {
     const deps = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 

@@ -59,7 +59,7 @@ export function createServerLogService(deps: {
     description: "Server host log inspection and live tailing",
     // serverLog exposes only read methods (query/tail/stats), so the service-level
     // `agent` grant is read-only in practice.
-    policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension", "agent"] },
+    authority: { principals: ["user", "code", "host", "entity"] },
     methods: serverLogMethods,
     handler: defineServiceHandler("serverLog", serverLogMethods, {
       query: (_ctx, [query]) => envelope(deps.store.query(query ?? {})),

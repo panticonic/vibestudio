@@ -2,10 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit } from "./builder.js";
+import { sealBuildEnvironment } from "./sourceClosure.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
@@ -27,9 +28,11 @@ describe("buildUnit extension builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    sealBuildEnvironment({ appRoot: root, workspaceRoot });
   });
 
   afterEach(() => {
+    sealBuildEnvironment(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -44,6 +47,7 @@ describe("buildUnit extension builds", () => {
         type: "module",
         private: true,
         vibestudio: {
+          authority: { requests: [] },
           displayName: "Hello Extension",
           entry: "index.ts",
           sourcemap: true,
@@ -59,7 +63,28 @@ describe("buildUnit extension builds", () => {
     fs.writeFileSync(
       path.join(extensionDir, "index.ts"),
       [
-        "export async function activate() {",
+        "export async function activate(ctx: any) {",
+        "  try {",
+        "    await ctx.storage.readFile('missing.json', 'utf8');",
+        "    throw new Error('missing storage file unexpectedly existed');",
+        "  } catch (error: any) {",
+        "    if (error.code !== 'ENOENT') throw error;",
+        "  }",
+        "  await ctx.storage.writeFile('root-value.txt', 'root');",
+        "  if (await ctx.storage.readFile('root-value.txt', 'utf8') !== 'root') {",
+        "    throw new Error('smoke storage root did not round-trip');",
+        "  }",
+        "  await ctx.storage.mkdir('state', { recursive: true });",
+        "  await ctx.storage.writeFile('state/value.txt', 'isolated');",
+        "  if (await ctx.storage.readFile('state/value.txt', 'utf8') !== 'isolated') {",
+        "    throw new Error('smoke storage did not round-trip');",
+        "  }",
+        "  try {",
+        "    ctx.storage.resolvePath('../escape');",
+        "    throw new Error('smoke storage accepted an escaping path');",
+        "  } catch (error: any) {",
+        "    if (error.code !== 'EACCES') throw error;",
+        "  }",
         "  return {",
         "    ping() { return 'pong'; },",
         "  };",
@@ -81,7 +106,13 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/hello");
-    const result = await buildUnit(node, "ev-extension-test", graph, workspaceRoot, "state:test");
+    const result = await buildUnit(
+      node,
+      "sourceDigest-extension-test",
+      graph,
+      workspaceRoot,
+      "state:test"
+    );
 
     expect(result.metadata).toMatchObject({
       kind: "extension",
@@ -115,6 +146,7 @@ describe("buildUnit extension builds", () => {
         type: "module",
         private: true,
         vibestudio: {
+          authority: { requests: [] },
           displayName: "CJS Extension",
           entry: "index.ts",
           sourcemap: true,
@@ -158,7 +190,7 @@ describe("buildUnit extension builds", () => {
     const node = graph.get("@workspace-extensions/cjs-extension");
     const result = await buildUnit(
       node,
-      "ev-extension-cjs-test",
+      "sourceDigest-extension-cjs-test",
       graph,
       workspaceRoot,
       "state:test"

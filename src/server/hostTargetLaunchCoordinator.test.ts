@@ -10,7 +10,7 @@ const mobileApproval: PendingUnitBatchApproval = {
   callerId: "system:units",
   callerKind: "system",
   repoPath: "meta",
-  effectiveVersion: "",
+  executionDigest: "",
   trigger: "startup",
   title: "Approve workspace units",
   description: "Approve before launch",
@@ -21,9 +21,9 @@ const mobileApproval: PendingUnitBatchApproval = {
       displayName: "Mobile",
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-      ev: "ev-mobile",
+      sourceDigest: "sourceDigest-mobile",
       capabilities: [],
-      dependencyEvs: {},
+      dependencySourceDigests: {},
       externalDeps: {},
     },
   ],
@@ -324,6 +324,48 @@ describe("HostTargetLaunchCoordinator", () => {
           status: "ready",
         })
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("single-flights repeated refreshes of an unresolved launch session", async () => {
+    const { coordinator, launchHostTarget } = makeCoordinator({});
+    let resolveLaunch!: (value: HostTargetLaunchResult) => void;
+    const launch = new Promise<HostTargetLaunchResult>((resolve) => {
+      resolveLaunch = resolve;
+    });
+    launchHostTarget.mockImplementation(async () => await launch);
+    vi.useFakeTimers();
+    try {
+      const firstPending = coordinator.beginLaunch("electron");
+      await vi.advanceTimersByTimeAsync(300);
+      const first = await firstPending;
+
+      const secondPending = coordinator.beginLaunch("electron");
+      const thirdPending = coordinator.beginLaunch("electron");
+      await vi.advanceTimersByTimeAsync(300);
+      const [second, third] = await Promise.all([secondPending, thirdPending]);
+
+      expect(second.sessionId).toBe(first.sessionId);
+      expect(third.sessionId).toBe(first.sessionId);
+      expect(launchHostTarget).toHaveBeenCalledTimes(1);
+
+      resolveLaunch({
+        status: "ready",
+        launched: true,
+        target: "electron",
+        source: "apps/shell",
+        appId: "@workspace-apps/shell",
+        buildKey: "build-shell",
+      });
+      await vi.runAllTimersAsync();
+
+      expect(await coordinator.getLaunchSession(first.sessionId)).toMatchObject({
+        status: "ready",
+        settled: true,
+      });
+      expect(launchHostTarget).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

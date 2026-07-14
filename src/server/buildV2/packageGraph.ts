@@ -331,7 +331,7 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
   // The template workspace may contain packages whose real package name is not
   // under an @workspace/* scope, e.g. @vendor/shared-utils. Treat any dependency
   // whose package name is present in the graph as internal so source
-  // materialization, EV computation, and esbuild resolution all see the same
+  // materialization, source digest computation, and esbuild resolution all see the same
   // workspace graph.
   for (const node of graph.allNodes()) {
     for (const [depName, depSpec] of Object.entries(node.dependencies)) {
@@ -341,7 +341,7 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
     }
   }
 
-  // Inject template dependencies into panels so template content flows into EVs
+  // Inject template dependencies into panels so template content flows into source digests
   const hasDefaultTemplate = graph.has("template:default");
   for (const node of graph.allNodes()) {
     if (node.kind !== "panel") continue;
@@ -358,7 +358,7 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
       }
     } else if (hasDefaultTemplate) {
       // Always inject default template as a dep so its content flows into the
-      // panel's EV. Even panels with their own index.html get this dep — the
+      // panel's source digest. Even panels with their own index.html get this dep — the
       // cost is trivial (template files materialized alongside panel source)
       // and it avoids a state-correctness issue: the live filesystem check for
       // index.html could disagree with the requested build state.

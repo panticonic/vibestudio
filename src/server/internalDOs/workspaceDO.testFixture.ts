@@ -20,7 +20,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
         source_repo_path TEXT NOT NULL,
-        source_effective_version TEXT NOT NULL,
+        active_execution_digest TEXT,
         context_id TEXT NOT NULL,
         class_name TEXT,
         key TEXT NOT NULL,

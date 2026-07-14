@@ -14,7 +14,10 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import {
+  createTestDO,
+  createTestDirectAuthority,
+} from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
@@ -35,12 +38,7 @@ function report(
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -72,14 +70,8 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
   // parked intent (plan §11).
   let gateOverride: (() => Promise<void>) | null = null;
 
-  const doInstance = () =>
-    gad.instance as unknown as {
-      vcsPush: (a: unknown) => Promise<unknown>;
-      vcsMerge: (a: unknown) => Promise<unknown>;
-      vcsHealPublishDrift: (a: unknown) => Promise<unknown>;
-    };
   const push = (input: PushInput) =>
-    doInstance().vcsPush(input) as Promise<
+    gad.call("vcsPush", input) as Promise<
       | { status: "pushed" | "up-to-date"; repoPaths: string[] }
       | {
           status: "diverged";
@@ -299,7 +291,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     expect(pendingBefore).toHaveLength(1);
     // Restart: restore provenance recording and heal.
     inst.completePublishIntent = original;
-    const healed = await doInstance().vcsHealPublishDrift({});
+    const healed = await gad.call("vcsHealPublishDrift", {});
     expect(healed).toMatchObject({ pendingIntents: 0 });
     // Provenance recorded: DO main head now matches the ref.
     const head = (
@@ -349,7 +341,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     // A concurrent heal (host-driven attach heal, or another op's on-demand
     // reconcile) runs while the intent is parked in-flight: it must NOT reap it,
     // even though the intent LOOKS stale (CAS not landed).
-    const healedDuring = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
+    const healedDuring = (await gad.call("vcsHealPublishDrift", {})) as { pendingIntents: number };
     expect(healedDuring.pendingIntents).toBe(1);
     expect(pendingIntents().map((r) => r.intent_id)).toContain(parkedId);
 
@@ -393,7 +385,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     );
     expect(pendingIntents().map((r) => r.intent_id)).toContain("orphan-1");
     expect(inFlight.has("orphan-1")).toBe(false);
-    const healedOrphan = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
+    const healedOrphan = (await gad.call("vcsHealPublishDrift", {})) as { pendingIntents: number };
     expect(healedOrphan.pendingIntents).toBe(0);
     expect(pendingIntents()).toHaveLength(0);
   });
@@ -404,9 +396,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     // Ingest a main provenance commit whose editOp claims a WRONG first-parent
     // old_content_hash (base is `stateHash`, but the op claims a bogus old).
     const ingest = () =>
-      (
-        gad.instance as unknown as { ingestWorktreeState: (i: unknown) => Promise<unknown> }
-      ).ingestWorktreeState({
+      gad.call("ingestWorktreeState", {
         logId: "vcs:repo:packages/a",
         head: "main",
         logKind: "vcs",
@@ -438,7 +428,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     await editCommit("c1", "packages/a", "a.txt", "l1\nl2\nL3\n");
     await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
     // Merge main into c2 (clean) via the DO merge path.
-    const merged = (await doInstance().vcsMerge({
+    const merged = (await gad.call("vcsMerge", {
       logId: "vcs:repo:packages/a",
       targetHead: vcsContextHead("c2"),
       sourceHead: "main",
@@ -464,7 +454,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
     // No `actor`: the flipped userland client no longer threads it — the DO
     // derives it from the verified caller read-at-entry (system here).
-    const result = (await doInstance().vcsPush({
+    const result = (await gad.call("vcsPush", {
       repoPaths: ["packages/a"],
       sourceHead: vcsContextHead("c1"),
     })) as { status: string };
@@ -728,7 +718,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
 
     // Heal reconciles against the ref log: the CAS never landed (main absent, no
     // log transition into `next`) → the intent is a genuine orphan and is reaped.
-    const healed = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
+    const healed = (await gad.call("vcsHealPublishDrift", {})) as { pendingIntents: number };
     expect(healed.pendingIntents).toBe(0);
     expect(sql.exec("SELECT * FROM gad_publish_intents").toArray()).toHaveLength(0);
     // No recovery commit was fabricated for a main that never moved.
@@ -763,7 +753,18 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       const envelope = {
         from: caller.callerId,
         target: `do:test:${objectKey}`,
-        delivery: { caller },
+        delivery: {
+          caller: {
+            ...caller,
+            authorization: createTestDirectAuthority({
+              callerKind: caller.callerKind,
+              source: "test",
+              className: "TestDO",
+              objectKey,
+              method: "vcsPush",
+            }),
+          },
+        },
         provenance: [],
         message: {
           type: "request",

@@ -1114,7 +1114,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
   const definition: ServiceDefinition = {
     name: "blobstore",
     description: "Per-workspace content-addressable blob storage",
-    policy: READ_POLICY,
+    authority: READ_POLICY,
     methods: blobstoreMethods,
     handler: defineServiceHandler("blobstore", blobstoreMethods, {
       has: (_ctx, [hash]) => pathExists(blobPath(deps.blobsDir, hash)),

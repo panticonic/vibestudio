@@ -62,7 +62,7 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
     name: "mirror",
     description:
       "Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.",
-    policy: MIRROR_POLICY,
+    authority: MIRROR_POLICY,
     methods: mirrorMethods,
     handler: defineServiceHandler("mirror", mirrorMethods, {
       targets: async (ctx, [{ contextId }]) => {

@@ -10,7 +10,8 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { RuntimeSurface, RuntimeSurfaceTarget } from "@vibestudio/shared/runtimeSurface";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
+import type { AuthorityRequirement, PrincipalKind } from "@vibestudio/rpc";
+import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
 
@@ -41,16 +42,12 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       qualifiedName: def.name,
       title: def.name,
       ...(def.description ? { description: def.description } : {}),
-      access: { callers: def.policy.allowed },
+      access: { principals: def.authority.principals },
     });
     for (const [methodName, method] of agentFacingMethods) {
       const ser = serializeMethod(method);
-      // Effective caller set: method policy > service policy (mirrors the
-      // dispatcher's getMethodPolicy + checkServiceAccess fallback).
-      const callers: CallerKind[] = method.policy?.allowed ?? def.policy.allowed;
-      // Merge the declared access metadata with the resolved caller set so the
-      // catalog surfaces the same gate the dispatcher enforces.
-      const access = { ...(method.access ?? {}), callers };
+      const principals = authorityPrincipals(method, def);
+      const access = { ...(method.access ?? {}), principals };
       entries.push({
         id: `service:${def.name}.${methodName}`,
         surface: "service",
@@ -122,20 +119,65 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
 }
 
 /**
- * Whether a catalog entry is visible to a caller kind. Mirrors the dispatcher's
- * static gate (`checkServiceAccess`): the `access.callers` array, with the
- * DO userland inheritance rule for service entries. Runtime entries carry
- * target-specific callers because module exports are availability, not service
- * authorization: panels see panel runtime APIs, and workers/DOs see worker
- * runtime APIs. Conditional `restrictedTo` gates are surfaced as metadata, not
- * used to hide the entry.
+ * Capability discovery is presentation, not an authorization boundary. Runtime
+ * exports remain filtered by runtime shape because their availability differs by
+ * target. Service entries are filtered by the authority principal vocabulary so
+ * the catalog no longer reimplements caller-kind authorization.
  */
 export function isCatalogEntryVisible(entry: CatalogEntry, callerKind: CallerKind): boolean {
-  const callers = (entry.access as { callers?: CallerKind[] } | undefined)?.callers;
-  if (!callers) return true;
   if (entry.surface === "runtime") {
+    const callers = (entry.access as { callers?: CallerKind[] } | undefined)?.callers;
+    if (!callers) return true;
     if (callers.includes(callerKind)) return true;
     return callerKind === "do" && callers.includes("worker");
   }
-  return callerKindAllowedByPolicy(callerKind, callers);
+  const principals = (entry.access as { principals?: PrincipalKind[] } | undefined)?.principals;
+  if (!principals) return true;
+  return principals.some((principal) => presentationPrincipals(callerKind).includes(principal));
+}
+
+export function authorityPrincipals(
+  method: MethodSchema,
+  service: Pick<ServiceDefinition, "authority">
+): PrincipalKind[] {
+  const declaration = method.authority ?? service.authority;
+  if (!("requirement" in declaration)) return [...new Set(declaration.principals)];
+  return [...collectRequirementPrincipals(declaration.requirement)];
+}
+
+export function isServiceMethodVisible(
+  method: MethodSchema,
+  service: Pick<ServiceDefinition, "authority">,
+  callerKind: CallerKind
+): boolean {
+  const available = presentationPrincipals(callerKind);
+  return authorityPrincipals(method, service).some((principal) => available.includes(principal));
+}
+
+function collectRequirementPrincipals(
+  requirement: AuthorityRequirement,
+  found = new Set<PrincipalKind>()
+): Set<PrincipalKind> {
+  if (requirement.kind === "capability") found.add(requirement.principal);
+  if (requirement.kind === "all" || requirement.kind === "any") {
+    for (const child of requirement.requirements) collectRequirementPrincipals(child, found);
+  }
+  return found;
+}
+
+function presentationPrincipals(callerKind: CallerKind): PrincipalKind[] {
+  switch (callerKind) {
+    case "server":
+      return ["host"];
+    case "shell":
+      return ["user"];
+    case "agent":
+      return ["entity", "user"];
+    case "panel":
+    case "app":
+    case "worker":
+    case "do":
+    case "extension":
+      return ["code", "user", "entity"];
+  }
 }

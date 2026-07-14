@@ -8,12 +8,16 @@
 
 import { z } from "zod";
 import type { ServiceDefinition } from "./serviceDefinition.js";
-import type { MethodSchema } from "./typedServiceClient.js";
-import type { ServicePolicy } from "./servicePolicy.js";
-import { checkServiceAccess } from "./servicePolicy.js";
+import type { MethodAuthorityDescriptor, MethodSchema } from "./typedServiceClient.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
 import { rpcErrorKindOf, type AuthenticatedCaller } from "@vibestudio/rpc";
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
+import type { AuthorizationContext, AuthorityGrant } from "./authorization.js";
+import {
+  bindMethodCapability,
+  evaluateAuthority,
+  requirementForPrincipals,
+} from "./authorization.js";
 export type { CallerKind } from "./principalKinds.js";
 
 /**
@@ -132,7 +136,7 @@ function formatAccessHint(methodDef: MethodSchema | undefined): string {
   if (!access) return "";
   const parts: string[] = [];
   for (const r of access.restrictedTo ?? []) {
-    parts.push(`when ${r.when}, only [${r.callers.join(", ")}] (${r.reason})`);
+    parts.push(`when ${r.when}, requires [${r.principals.join(", ")}] (${r.reason})`);
   }
   for (const a of access.approval ?? []) {
     parts.push(`may require approval${a.capability ? ` for '${a.capability}'` : ""}: ${a.reason}`);
@@ -167,8 +171,10 @@ export interface VerifiedCodeIdentity {
   callerKind: CodeIdentityCallerKind;
   /** Workspace source path that produced this runtime. */
   repoPath: string;
-  /** Effective build/content version for policy and audit. */
-  effectiveVersion: string;
+  /** Full verified execution digest for policy and audit. */
+  executionDigest: string;
+  /** Immutable requests sealed into the exact execution recipe. */
+  requested: readonly import("@vibestudio/rpc").CapabilityScope[];
 }
 
 /**
@@ -184,6 +190,12 @@ export interface VerifiedCaller {
     id: string;
     kind: CallerKind;
   };
+  /**
+   * Host-attested operation origin. This is deliberately independent of
+   * runtime.kind: a transport or runtime labelled "server" does not acquire
+   * the product host principal. Only host-owned call sites can stamp it.
+   */
+  hostOriginated?: true;
   /** Code/build identity verified at the trust boundary, when applicable. */
   code?: VerifiedCodeIdentity;
   /** Entity/context binding for `agent`-kind callers (host-verified; §3.2). */
@@ -207,6 +219,19 @@ export function createVerifiedCaller(
     runtime: { id: callerId, kind: callerKind },
     ...(code ? { code } : {}),
     ...(agentBinding ? { agentBinding } : {}),
+    ...(subject ? { subject } : {}),
+  };
+}
+
+/** Construct a genuine product-host operation. Never use for relayed userland calls. */
+export function createHostCaller(
+  callerId: string,
+  callerKind: Extract<CallerKind, "server" | "shell"> = "server",
+  subject?: UserSubject | null
+): VerifiedCaller {
+  return {
+    runtime: { id: callerId, kind: callerKind },
+    hostOriginated: true,
     ...(subject ? { subject } : {}),
   };
 }
@@ -303,6 +328,25 @@ export function deferIfNeeded<T>(
 export type ServiceContext = {
   /** Canonical verified identity. Boundary code constructs this once. */
   caller: VerifiedCaller;
+  /** Complete host-authenticated authority facts for compositional methods. */
+  authorization?: AuthorizationContext;
+  /**
+   * Same live resolver/evaluator used by the dispatcher, exposed for a method
+   * whose resource contract is selected from authenticated host data at
+   * runtime (for example a manifest-declared userland service).
+   */
+  authority?: {
+    assert(input: {
+      capability: string;
+      resourceKey: string;
+      requirement: import("./authorization.js").AuthorityRequirement;
+    }): Promise<void>;
+    allows(input: {
+      capability: string;
+      resourceKey: string;
+      requirement: import("./authorization.js").AuthorityRequirement;
+    }): Promise<boolean>;
+  };
   /**
    * Upstream userland caller for an extension-originated service call. Set
    * only after the server validates an extension's opaque parent invocation
@@ -378,16 +422,15 @@ export class ServiceError extends Error {
 }
 
 /**
- * Structured access-denied error thrown when a caller's `callerKind` is not
- * permitted by a service / method policy. Carries `code: "EACCES"` so transports
- * can map this to a 403 / structured RPC error code rather than a bare string.
+ * Structured compositional-authority denial. Carries `code: "EACCES"` so
+ * transports can map this to a 403 / structured RPC error code.
  */
 export class ServiceAccessError extends ServiceError {
-  constructor(service: string, method: string, callerKind: CallerKind, message?: string) {
+  constructor(service: string, method: string, message?: string) {
     super(
       service,
       method,
-      message ?? `Service '${service}.${method}' is not accessible to ${callerKind} callers`,
+      message ?? `Authority denied for service '${service}.${method}'`,
       "EACCES",
       undefined,
       "access"
@@ -403,6 +446,29 @@ export class ServiceDispatcher {
   private handlers = new Map<string, ServiceHandler>();
   private definitions = new Map<string, ServiceDefinition>();
   private initialized = false;
+  private authorityResolver?: (input: {
+    caller: VerifiedCaller;
+    service: string;
+    method: string;
+    capability: string;
+    resourceKey: string;
+  }) =>
+    | { context: AuthorizationContext; grants: readonly AuthorityGrant[] }
+    | Promise<{ context: AuthorizationContext; grants: readonly AuthorityGrant[] }>;
+
+  setAuthorityResolver(
+    resolver: (input: {
+      caller: VerifiedCaller;
+      service: string;
+      method: string;
+      capability: string;
+      resourceKey: string;
+    }) =>
+      | { context: AuthorizationContext; grants: readonly AuthorityGrant[] }
+      | Promise<{ context: AuthorizationContext; grants: readonly AuthorityGrant[] }>
+  ): void {
+    this.authorityResolver = resolver;
+  }
 
   /**
    * Mark the dispatcher as initialized. Must be called after all services are registered.
@@ -420,6 +486,11 @@ export class ServiceDispatcher {
    * definition is returned so callers can detect the replacement.
    */
   registerService(def: ServiceDefinition): ServiceDefinition | undefined {
+    for (const [method, schema] of Object.entries(def.methods)) {
+      if (!schema.authority && !def.authority) {
+        throw new Error(`Service method ${def.name}.${method} has no authority declaration`);
+      }
+    }
     const previous = this.definitions.get(def.name);
     if (previous || this.handlers.has(def.name)) {
       // Keep the word "Overwriting" so existing audits/log queries still
@@ -453,30 +524,15 @@ export class ServiceDispatcher {
       throw new ServiceError(service, method, "Unknown service");
     }
 
-    // Single-choke-point policy enforcement (audit findings #3 / #18).
-    // Every dispatch path — Electron IPC, WS, HTTP-RPC, IpcDispatcher,
-    // serverClient forward — flows through here, so this is the one place
-    // policy MUST be checked. Transports may also keep their own
-    // checkServiceAccess() call as defense-in-depth, but this is the
-    // load-bearing check.
-    try {
-      checkServiceAccess(service, ctx.caller.runtime.kind, this, method);
-    } catch (error) {
-      const baseMsg = error instanceof Error ? error.message : String(error);
-      throw new ServiceAccessError(
-        service,
-        method,
-        ctx.caller.runtime.kind,
-        `${baseMsg}${formatAccessHint(this.getMethodSchema(service, method))}`
-      );
-    }
-
     // Validate args against schema if method has a definition
     const def = this.definitions.get(service);
     let methodDef: MethodSchema | undefined;
     if (def) {
       methodDef = def.methods[method];
-      if (methodDef) {
+      if (!methodDef) {
+        throw new ServiceError(service, method, "Unknown method");
+      }
+      {
         // Normalize args for wire compatibility: RPC args arrive as JSON arrays
         // where trailing optional args may be omitted (shorter array) or null
         // (JSON serialization of undefined). Pad short arrays to match the
@@ -500,20 +556,7 @@ export class ServiceDispatcher {
       }
     }
 
-    // Read-only containment: a caller may request a mode in which only methods
-    // explicitly declared `access.sensitivity === "read"` may run. Default-deny —
-    // an unmarked method is treated as mutating. This is the load-bearing
-    // enforcement point (every dispatch path funnels here), so the containment
-    // can't be bypassed.
-    if (ctx.readOnly && methodDef?.access?.sensitivity !== "read") {
-      throw new ServiceError(
-        service,
-        method,
-        `Blocked in read-only mode: '${service}.${method}' is not declared read-only ` +
-          `(sensitivity ${methodDef?.access?.sensitivity ?? "unknown"}). A read-only caller may ` +
-          `only invoke methods declaring access.sensitivity === "read".`
-      );
-    }
+    await this.assertAuthority(ctx, service, method, args);
 
     try {
       const result = await handler(ctx, method, args);
@@ -543,6 +586,144 @@ export class ServiceDispatcher {
         error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         error,
         rpcErrorKindOf(error, "service")
+      );
+    }
+  }
+
+  /**
+   * Enforce the exact same compositional contract for alternate transports
+   * whose byte streaming cannot pass through the ordinary handler invocation.
+   */
+  async assertAuthority(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<void> {
+    const serviceDef = this.definitions.get(service);
+    const methodDef = serviceDef?.methods[method];
+    if (!serviceDef || !methodDef) {
+      throw new ServiceError(service, method, "Unknown service method");
+    }
+    const declaration = methodDef?.authority ?? serviceDef?.authority;
+    if (!declaration) {
+      throw new ServiceAccessError(
+        service,
+        method,
+        `Method '${service}.${method}' has no authority declaration`
+      );
+    }
+    if (!this.authorityResolver) {
+      throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
+    }
+    const capabilityName = `service:${service}.${method}`;
+    const descriptor =
+      "requirement" in declaration
+        ? declaration
+        : {
+            requirement: requirementForPrincipals(declaration.principals, capabilityName),
+            resource: { kind: "literal" as const, key: capabilityName },
+          };
+    const resourceKey = deriveAuthorityResource(descriptor.resource, args);
+    ctx.authority = {
+      assert: ({ capability, resourceKey: dynamicResource, requirement }) =>
+        this.enforceRequirement(
+          ctx,
+          service,
+          method,
+          capability,
+          dynamicResource,
+          bindMethodCapability(requirement, capability),
+          methodDef
+        ),
+      allows: async ({ capability, resourceKey: dynamicResource, requirement }) => {
+        try {
+          await this.enforceRequirement(
+            ctx,
+            service,
+            method,
+            capability,
+            dynamicResource,
+            bindMethodCapability(requirement, capability),
+            methodDef
+          );
+          return true;
+        } catch (error) {
+          if (error instanceof ServiceAccessError) return false;
+          throw error;
+        }
+      },
+    };
+    await this.enforceRequirement(
+      ctx,
+      service,
+      method,
+      capabilityName,
+      resourceKey,
+      bindMethodCapability(descriptor.requirement, capabilityName),
+      methodDef
+    );
+    for (const additional of "additional" in descriptor ? (descriptor.additional ?? []) : []) {
+      const additionalResourceKey = deriveAuthorityResource(additional.resource, args);
+      await this.enforceRequirement(
+        ctx,
+        service,
+        method,
+        additional.capability,
+        additionalResourceKey,
+        bindMethodCapability(additional.requirement, additional.capability),
+        methodDef
+      );
+    }
+
+    // Read-only containment: a caller may request a mode in which only methods
+    // explicitly declared `access.sensitivity === "read"` may run. Default-deny —
+    // an unmarked method is treated as mutating. This is the load-bearing
+    // enforcement point (every dispatch path funnels here), so the containment
+    // can't be bypassed.
+    if (ctx.readOnly && methodDef.access?.sensitivity !== "read") {
+      throw new ServiceError(
+        service,
+        method,
+        `Blocked in read-only mode: '${service}.${method}' is not declared read-only ` +
+          `(sensitivity ${methodDef?.access?.sensitivity ?? "unknown"}). A read-only caller may ` +
+          `only invoke methods declaring access.sensitivity === "read".`
+      );
+    }
+  }
+
+  private async enforceRequirement(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    capability: string,
+    resourceKey: string,
+    requirement: import("./authorization.js").AuthorityRequirement,
+    methodDef: MethodSchema
+  ): Promise<void> {
+    const resolver = this.authorityResolver;
+    if (!resolver) {
+      throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
+    }
+    const resolved = await resolver({
+      caller: ctx.caller,
+      service,
+      method,
+      capability,
+      resourceKey,
+    });
+    ctx.authorization = resolved.context;
+    const decision = evaluateAuthority({
+      context: resolved.context,
+      requirement,
+      resourceKey,
+      grants: resolved.grants,
+    });
+    if (!decision.allowed) {
+      throw new ServiceAccessError(
+        service,
+        method,
+        `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`
       );
     }
   }
@@ -581,23 +762,25 @@ export class ServiceDispatcher {
   getMethodSchema(service: string, method: string): MethodSchema | undefined {
     return this.definitions.get(service)?.methods[method];
   }
+}
 
-  /**
-   * Get the policy for a service (from ServiceDefinition).
-   */
-  getPolicy(service: string): ServicePolicy | undefined {
-    return this.definitions.get(service)?.policy;
+function deriveAuthorityResource(
+  derivation: MethodAuthorityDescriptor["resource"],
+  args: unknown[]
+): string {
+  if (derivation.kind === "literal") return derivation.key;
+  let value: unknown = args[derivation.index];
+  for (const segment of derivation.path ?? []) {
+    if (value === null || typeof value !== "object") {
+      throw new Error(`Cannot derive authority resource from argument ${derivation.index}`);
+    }
+    value = (value as Record<string | number, unknown>)[segment];
   }
-
-  getMethodPolicy(service: string, method: string): ServicePolicy | undefined {
-    const def = this.definitions.get(service);
-    if (!def) return undefined;
-    const m = def.methods[method];
-    if (!m) return undefined;
-    // The method-level `policy` is the per-method caller gate; checkServiceAccess
-    // falls back to the service policy when this is undefined.
-    return m.policy;
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`Authority resource must resolve to a string or number`);
   }
+  const rendered = String(value);
+  return derivation.prefix ? `${derivation.prefix}${rendered}` : rendered;
 }
 
 /**

@@ -19,7 +19,27 @@
  */
 
 import type { z } from "zod";
-import type { ServicePolicy, MethodAccessDescriptor } from "./servicePolicy.js";
+import type { ServiceAuthorityPolicy, MethodAccessDescriptor } from "./serviceAuthority.js";
+import type { AuthorityRequirement } from "./authorization.js";
+
+export type AuthorityResourceDerivation =
+  | { kind: "literal"; key: string }
+  | { kind: "argument"; index: number; path?: readonly (string | number)[]; prefix?: string };
+
+export interface MethodAuthorityDescriptor {
+  requirement: AuthorityRequirement;
+  resource: AuthorityResourceDerivation;
+  /**
+   * Additional named capabilities required on their own canonical resources.
+   * These remain visible to manifest inference and dispatcher enforcement
+   * instead of being hidden in handler code.
+   */
+  additional?: readonly {
+    capability: string;
+    requirement: AuthorityRequirement;
+    resource: AuthorityResourceDerivation;
+  }[];
+}
 
 /** A worked example for a method. Realistic values allowed (hand-authored or
  *  redacted-from-real-usage); flows to the capability catalog and JIT errors. */
@@ -52,8 +72,9 @@ export interface MethodSchema {
    *  Defaults to true. Set false for implementation transports that remain
    *  callable by typed runtime clients but have a higher-level public API. */
   agentFacing?: boolean;
-  /** Enforced caller-kind gate. Overrides the service policy for this method. */
-  policy?: ServicePolicy;
+  /** Complete compositional contract. A principal list receives the canonical
+   * method capability/resource; structured descriptors express richer relations. */
+  authority?: ServiceAuthorityPolicy | MethodAuthorityDescriptor;
   /** Unified access & restrictedness descriptor (caller kinds, conditional
    *  restrictions, sensitivity, side-effects, approval/grant gates). */
   access?: MethodAccessDescriptor;

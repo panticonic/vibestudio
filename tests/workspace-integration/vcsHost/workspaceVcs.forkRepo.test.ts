@@ -23,12 +23,7 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -89,7 +84,11 @@ describe("GadWorkspaceDO.vcsForkRepo (history-preserving)", () => {
   }
 
   const forkRepo = (fromPath: string, toPath: string) =>
-    gad.instance.vcsForkRepo({ fromPath, toPath, actor: USER });
+    gad.call<{
+      repoPath: string;
+      inherited: number;
+      stateHash: string;
+    }>("vcsForkRepo", { fromPath, toPath, actor: USER });
 
   it("forks a repo to a new path, preserving history and rewriting the package name", async () => {
     await seedChat();
@@ -109,7 +108,7 @@ describe("GadWorkspaceDO.vcsForkRepo (history-preserving)", () => {
       text: expect.stringContaining("@workspace-panels/mychat"),
     });
     // The fork's log carries inherited history plus the rename commit.
-    const log = await gad.instance.vcsLog("panels/mychat", 100, VCS_MAIN_HEAD);
+    const log = await gad.call<Array<unknown>>("vcsLog", "panels/mychat", 100, VCS_MAIN_HEAD);
     expect(log.length).toBeGreaterThanOrEqual(1);
   });
 

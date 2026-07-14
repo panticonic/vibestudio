@@ -55,7 +55,7 @@ export interface ApprovalRequestedBy {
   callerId: string;
   callerKind: string;
   repoPath?: string;
-  effectiveVersion?: string;
+  executionDigest?: string;
   userId?: string;
 }
 

@@ -376,11 +376,16 @@ function createFsClient() {
   };
 }
 
-function createContext() {
+async function createContext() {
   const name = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   const version = requiredEnv("VIBESTUDIO_EXTENSION_VERSION");
   const storageRoot = requiredEnv("VIBESTUDIO_EXTENSION_STORAGE_DIR");
   const normalizedRoot = path.resolve(storageRoot);
+  // The runtime owns the extension-private storage boundary. A newly created
+  // workspace must therefore be writable on the extension's first activation;
+  // extensions should not need an out-of-band bootstrap step before using the
+  // storage API.
+  await nodeFs.mkdir(normalizedRoot, { recursive: true, mode: 0o700 });
   const rootWithSep = normalizedRoot.endsWith(path.sep)
     ? normalizedRoot
     : normalizedRoot + path.sep;
@@ -403,6 +408,7 @@ function createContext() {
     name,
     version,
     storage: {
+      resolvePath: storagePath,
       mkdir: (p: string, opts?: { recursive?: boolean }) =>
         nodeFs.mkdir(storagePath(p), { recursive: opts?.recursive ?? true }),
       readFile: (p: string, encoding?: BufferEncoding) => nodeFs.readFile(storagePath(p), encoding),
@@ -794,7 +800,7 @@ async function main(): Promise<void> {
   } catch (err) {
     throw extensionRuntimeError("runtime-import", err, { extension: extensionName, bundlePath });
   }
-  const ctx = createContext();
+  const ctx = await createContext();
   let api: unknown;
   try {
     api = typeof mod["activate"] === "function" ? await mod["activate"](ctx) : undefined;
@@ -883,6 +889,44 @@ async function main(): Promise<void> {
           caller: invocation.caller.callerId,
         });
       }
+    });
+  });
+
+  runtimeBridge.exposeStreaming("extension.invokeProviderStream", async (req, sink) => {
+    assertHostControlCaller(req, "extension.invokeProviderStream");
+    const [provider, method, args, invocation] = req.args as [
+      string,
+      string,
+      unknown[],
+      ExtensionInvocation,
+    ];
+    await invocationStore.run(invocation, async () => {
+      const providerApi = Object.prototype.hasOwnProperty.call(providerApis, provider)
+        ? providerApis[provider]
+        : undefined;
+      const fn =
+        providerApi && typeof providerApi === "object"
+          ? (providerApi as Record<string, unknown>)[method]
+          : undefined;
+      if (typeof fn !== "function") {
+        const error = new Error(
+          `Extension provider method not found: providers.${provider}.${method}`
+        ) as NodeJS.ErrnoException;
+        error.code = "ENOMETHOD";
+        throw error;
+      }
+      const result = await fn(...args);
+      if (result instanceof Response) {
+        await streamResponse(result, sink, req.signal);
+        return;
+      }
+      if (result instanceof ReadableStream) {
+        await streamResponse(new Response(result), sink, req.signal);
+        return;
+      }
+      throw new Error(
+        `Extension provider method providers.${provider}.${method} did not return a Response or ReadableStream`
+      );
     });
   });
 

@@ -22,7 +22,7 @@
  * pair — and keep using `EntityCache` directly.
  */
 
-import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { WORKSPACE_DO_SOURCE } from "./internalDOs/productBootManifest.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord, EntitySource } from "@vibestudio/shared/runtime/entitySpec";
@@ -39,6 +39,7 @@ const WORKSPACE_DO_CLASS = "WorkspaceDO";
 export interface EntityActivateInput {
   kind: EntityKind;
   source: EntitySource;
+  activeExecutionDigest?: string;
   contextId: string;
   className?: string;
   key: string;
@@ -66,7 +67,7 @@ export class WorkspaceEntityStore {
 
   constructor(private readonly deps: WorkspaceEntityStoreDeps) {
     this.ref = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: WORKSPACE_DO_CLASS,
       objectKey: deps.workspaceId,
     };

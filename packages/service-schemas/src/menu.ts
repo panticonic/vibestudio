@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 

@@ -18,7 +18,7 @@ describe("CredentialUseGrantStore", () => {
       action: "use" as const,
       scope: "version" as const,
       repoPath: "workers/agent.ts",
-      effectiveVersion: "ev-1",
+      executionDigest: "ev-1",
       grantedAt: 123,
       grantedBy: "user",
     };

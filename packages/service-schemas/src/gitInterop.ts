@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   defineServiceMethods,
   type TypedServiceClient,
@@ -118,8 +118,16 @@ export type GitCompleteWorkspaceDependenciesOptions = z.infer<
 
 export const gitImportedWorkspaceRepoSchema = z
   .object({
+    operationId: z.string().uuid(),
+    phase: z.literal("complete"),
     path: z.string(),
-    remote: gitRemoteSchema,
+    remote: z
+      .object({ name: z.string(), urlIdentity: z.string(), branch: z.string() })
+      .strict(),
+    stateHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
+    gitCommitSha: z.string().regex(/^[0-9a-f]{40}$/u),
+    changed: z.boolean(),
+    adoptedContextId: z.string().nullable(),
   })
   .strict();
 export type GitImportedWorkspaceRepo = z.infer<typeof gitImportedWorkspaceRepoSchema>;
@@ -254,6 +262,34 @@ export const gitImportResultSchema = z
   })
   .strict();
 export type GitImportResult = z.infer<typeof gitImportResultSchema>;
+
+export const gitImportOperationIdSchema = z.string().uuid();
+export const gitPreparedImportSchema = z
+  .object({
+    operationId: gitImportOperationIdSchema,
+    repoPath: z.string(),
+    branch: z.string(),
+    gitCommitSha: z.string().regex(/^[0-9a-f]{40}$/u),
+    stateHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
+    changed: z.boolean(),
+    phase: z.literal("prepared"),
+  })
+  .strict();
+export type GitPreparedImport = z.infer<typeof gitPreparedImportSchema>;
+
+export const gitProviderImportStatusSchema = z
+  .object({
+    operationId: gitImportOperationIdSchema,
+    repoPath: z.string(),
+    branch: z.string(),
+    gitCommitSha: z.string().regex(/^[0-9a-f]{40}$/u),
+    stateHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
+    changed: z.boolean(),
+    phase: z.enum(["prepared", "committed", "complete", "aborted", "requires-repair"]),
+    error: z.string().optional(),
+  })
+  .strict();
+export type GitProviderImportStatus = z.infer<typeof gitProviderImportStatusSchema>;
 
 export const gitPullUpstreamResultSchema = z
   .object({
@@ -693,10 +729,41 @@ export const gitInteropProviderMethods = defineServiceMethods({
       })
       .strict(),
   },
-  cloneRepo: {
-    description: "Clone one declared workspace dependency and import it into protected main.",
-    args: z.tuple([z.object({ repoPath: z.string() }).strict()]),
-    returns: gitImportResultSchema,
+  prepareImport: {
+    description:
+      "Clone an exact branch into operation-owned scratch, preflight its Git objects, mirror it, and stage it without authoritative workspace mutations.",
+    args: z.tuple([
+      z
+        .object({
+          operationId: gitImportOperationIdSchema,
+          repoPath: z.string(),
+          remote: gitRemoteSchema.extend({ branch: z.string() }).strict(),
+          credentialId: z.string().optional(),
+        })
+        .strict(),
+    ]),
+    returns: gitPreparedImportSchema,
+  },
+  commitImport: {
+    description: "Idempotently publish one prepared import onto protected main.",
+    args: z.tuple([z.object({ operationId: gitImportOperationIdSchema }).strict()]),
+    returns: gitProviderImportStatusSchema,
+  },
+  finalizeImport: {
+    description:
+      "Promote the operation checkout and finish reconstructible bridge bookkeeping after protected-main publication.",
+    args: z.tuple([z.object({ operationId: gitImportOperationIdSchema }).strict()]),
+    returns: gitProviderImportStatusSchema,
+  },
+  inspectImport: {
+    description: "Read the durable provider-side state of an import operation.",
+    args: z.tuple([z.object({ operationId: gitImportOperationIdSchema }).strict()]),
+    returns: gitProviderImportStatusSchema.nullable(),
+  },
+  abortImport: {
+    description: "Abort and remove scratch for an import that has not reached its commit point.",
+    args: z.tuple([z.object({ operationId: gitImportOperationIdSchema }).strict()]),
+    returns: gitProviderImportStatusSchema,
   },
   remoteDefaultBranch: {
     description:

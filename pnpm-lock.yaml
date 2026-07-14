@@ -64,12 +64,18 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:packages/browser-data
+      '@vibestudio/context-workspace':
+        specifier: workspace:*
+        version: link:packages/context-workspace
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:packages/credential-client
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:packages/dev-log
+      '@vibestudio/direct-client':
+        specifier: workspace:*
+        version: link:packages/direct-client
       '@vibestudio/durable':
         specifier: workspace:*
         version: link:packages/durable
@@ -199,6 +205,9 @@ importers:
       pathe:
         specifier: ^2.0.3
         version: 2.0.3
+      pnpm:
+        specifier: 10.12.4
+        version: 10.12.4
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
@@ -540,6 +549,12 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
+  packages/context-workspace:
+    dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+
   packages/credential-client:
     dependencies:
       '@vibestudio/env-paths':
@@ -562,11 +577,41 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/direct-client:
+    dependencies:
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../shell-core
+      node-datachannel:
+        specifier: ^0.32.0
+        version: 0.32.3
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   packages/durable:
     dependencies:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       sql.js:
         specifier: ^1.14.0
@@ -7568,6 +7613,11 @@ packages:
     resolution: {integrity: sha512-uysumyrvkUX0rX/dEVqt8gC3sTBzd4zoWfLeS29nb53imdaXVvLINYXTI2GNqzaMuvacNx4uJQ8+b3zXR0pkgQ==}
     engines: {node: '>=10.4.0'}
 
+  pnpm@10.12.4:
+    resolution: {integrity: sha512-Xqiw3u2U7WhpHJutTJVUknBcXuuKh++GvGLHSiawN7CP+VcPEIsuTb0d0akYb+qSXlJ/FBxkjoWvRWMQdGgBhA==}
+    engines: {node: '>=18.12'}
+    hasBin: true
+
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
     engines: {node: '>= 0.4'}
@@ -12612,7 +12662,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -17269,6 +17321,8 @@ snapshots:
       '@xmldom/xmldom': 0.8.11
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
+
+  pnpm@10.12.4: {}
 
   possible-typed-array-names@1.1.0: {}
 

@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 // `confirmSave` resolves a pending save/update prompt: "save" persists the

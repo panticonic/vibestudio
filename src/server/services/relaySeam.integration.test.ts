@@ -38,6 +38,7 @@ import {
   createWebhookIngressService,
 } from "./webhookIngressService.js";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceContext } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { WebhookIngressSubscriptionSummary } from "../../../packages/shared/src/webhooks/ingress.js";
 
 const RELAY_SECRET = "seam-relay-secret";
@@ -176,7 +177,7 @@ function makeRegistry(): { registry: RelayRegistry; state: FakeState } {
 }
 
 function shellCtx(): ServiceContext {
-  return { caller: createVerifiedCaller("shell", "shell") };
+  return createTestServiceContext(createVerifiedCaller("shell", "shell"));
 }
 
 async function tick(): Promise<void> {

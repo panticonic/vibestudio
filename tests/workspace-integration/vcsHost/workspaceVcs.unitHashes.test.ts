@@ -36,12 +36,7 @@ const text = (t: string) => ({ kind: "text" as const, text: t });
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -166,7 +161,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     expect(fromStore).toEqual(fromReference);
 
     // Shape sanity: dirs are manifest hashes, files plain content digests,
-    // absent paths null — the exact values effectiveVersion.ts folds into EVs.
+    // absent paths null — the exact values executionDigest.ts folds into EVs.
     expect(fromStore["packages/foo"]).toMatch(/^manifest:[0-9a-f]{64}$/);
     expect(fromStore["panels/chat/src"]).toMatch(/^manifest:[0-9a-f]{64}$/);
     expect(fromStore["meta/vibestudio.yml"]).toMatch(/^[0-9a-f]{64}$/);

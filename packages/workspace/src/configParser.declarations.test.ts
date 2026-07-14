@@ -3,7 +3,6 @@ import {
   parseWorkspaceConfigContentWithId,
   resolveHostTargetDecl,
   resolveHostTargetRequiredExtensions,
-  resolveWorkspaceTrustGrants,
   workspaceAppPackageName,
   workspaceExtensionPackageName,
   workspaceProviderExtensionPackageName,
@@ -35,10 +34,6 @@ providers:
     extension: extensions/git-bridge
   claudeCode:
     extension: extensions/claude-code
-trust:
-  chromeApps:
-    - apps/shell
-    - "@workspace-apps/mobile"
 hostTargets:
   electron:
     app: apps/shell
@@ -50,22 +45,38 @@ hostTargets:
     app: apps/remote-cli
 `;
 
-describe("manifest declarations: providers / trust / hostTargets", () => {
+describe("manifest declarations: initial panels", () => {
+  it("preserves a string environment alongside state arguments", () => {
+    expect(
+      parse(`
+initPanels:
+  - source: panels/spectrolite
+    env:
+      VIBESTUDIO_ENABLE_SPECTROLITE_E2E_HOOKS: "1"
+    stateArgs:
+      openPath: E2E.mdx
+`).initPanels
+    ).toEqual([
+      {
+        source: "panels/spectrolite",
+        env: { VIBESTUDIO_ENABLE_SPECTROLITE_E2E_HOOKS: "1" },
+        stateArgs: { openPath: "E2E.mdx" },
+      },
+    ]);
+  });
+
+  it("rejects non-string panel environment values", () => {
+    expect(() =>
+      parse("initPanels:\n  - source: panels/chat\n    env:\n      DEBUG: true\n")
+    ).toThrow(/initPanels\.0\.env\.DEBUG/);
+  });
+});
+
+describe("manifest declarations: providers / hostTargets", () => {
   it("parses a full declaration set", () => {
     const config = parse(FULL_MANIFEST);
     expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");
     expect(config.providers?.cdpClient?.source).toBe("@workspace/cdp-client");
-    expect(config.trust?.chromeApps).toHaveLength(2);
-  });
-
-  it("resolves trust grants to canonical repo paths (both identity forms)", () => {
-    const grants = resolveWorkspaceTrustGrants(parse(FULL_MANIFEST));
-    expect(grants.chromeApps).toEqual(["apps/shell", "apps/mobile"]);
-  });
-
-  it("resolves empty grants when trust is absent — trust is never assumed", () => {
-    const grants = resolveWorkspaceTrustGrants(parse("initPanels: []\n"));
-    expect(grants.chromeApps).toEqual([]);
   });
 
   it("resolves host target declarations (canonical forms + requires)", () => {
@@ -108,12 +119,8 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     expect(workspaceProviderExtensionPackageName(config, "missing")).toBeNull();
   });
 
-  it("rejects malformed trust lists", () => {
-    expect(() => parse("trust:\n  chromeApps: apps/shell\n")).toThrow(/must be a list/);
-    expect(() => parse("trust:\n  chromeApps:\n    - panels/chat\n")).toThrow(/trust\.chromeApps/);
-    expect(() =>
-      parse('trust:\n  chromeApps:\n    - apps/shell\n    - "@workspace-apps/shell"\n')
-    ).toThrow(/duplicate/);
+  it("rejects the removed process-global trust declaration", () => {
+    expect(() => parse("trust:\n  chromeApps:\n    - apps/shell\n")).toThrow(/unknown.*trust/i);
   });
 
   it("rejects unknown host targets and malformed app declarations", () => {

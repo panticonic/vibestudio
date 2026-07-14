@@ -8,7 +8,7 @@ function makeRecord(id: string): EntityRecord {
   return {
     id,
     kind: "panel",
-    source: { repoPath: "panels/test", effectiveVersion: "v1" },
+    source: { repoPath: "panels/test" },
     contextId: "ctx-1",
     key: id,
     createdAt: 1,

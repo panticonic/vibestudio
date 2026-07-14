@@ -1,6 +1,10 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelSearchIndex, PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
-import type { EntityRecord, RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
+import type {
+  EntityRecord,
+  RuntimeEntityHandle,
+  RuntimeEntitySummary,
+} from "@vibestudio/shared/runtime/entitySpec";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import {
   PanelManager,
@@ -40,8 +44,7 @@ export function createShellCore(deps: {
   const workspaceState: WorkspaceStateClient = {
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
-    getSlotHistory: (slotId) =>
-      call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
+    getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
     resolveSlotByEntity: (entityId) =>
@@ -66,6 +69,8 @@ export function createShellCore(deps: {
 
   const runtime: RuntimeClient = {
     createEntity: (spec) => call<RuntimeEntityHandle>("runtime", "createEntity", [spec]),
+    listEntities: (kind) =>
+      call<RuntimeEntitySummary[]>("runtime", "listEntities", [kind ? { kind } : undefined]),
     retireEntity: (id) => call<void>("runtime", "retireEntity", [{ id }]),
   };
 

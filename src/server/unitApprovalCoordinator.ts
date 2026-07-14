@@ -7,7 +7,7 @@ export interface UnitApprovalQueueLike {
     callerId: string;
     callerKind: "system";
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
     dedupKey?: string | null;
     trigger: PendingUnitBatchApproval["trigger"];
     title: string;
@@ -87,7 +87,7 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
               callerId: "system:units",
               callerKind: "system",
               repoPath: "meta",
-              effectiveVersion: "",
+              executionDigest: "",
               trigger,
               title: unitBatchTitle(units, trigger),
               description: unitBatchDescription(units),

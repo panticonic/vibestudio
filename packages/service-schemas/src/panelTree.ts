@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
   MovePanelRequestSchema,
@@ -14,7 +14,6 @@ import {
   PanelLifecycleResultSchema,
   PanelNavigationStateSchema,
   PanelRuntimeLeaseSchema,
-  PanelSchema,
   PanelTreeSnapshotSchema,
 } from "@vibestudio/shared/panelContracts";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
@@ -38,6 +37,37 @@ const ARCHIVE_ACCESS: MethodAccessDescriptor = {
 
 const PanelIdSchema = z.string();
 const StateArgsSchema = z.record(z.unknown());
+const PanelKindSchema = z.enum(["browser", "workspace"]);
+
+export const PanelTreeListItemSchema = z.object({
+  panelId: z.string(),
+  title: z.string(),
+  source: z.string(),
+  kind: PanelKindSchema,
+  parentId: z.string().nullable(),
+  contextId: z.string(),
+  runtimeEntityId: z.string().nullable().optional(),
+  executionDigest: z.string().nullable().optional(),
+  owner: z.string().nullable().optional(),
+});
+
+export type PanelTreeListItem = z.infer<typeof PanelTreeListItemSchema>;
+
+export const PanelTreeMetadataSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  source: z.string(),
+  kind: PanelKindSchema,
+  parentId: z.string().nullable(),
+  contextId: z.string(),
+  runtimeEntityId: z.string().nullable().optional(),
+  executionDigest: z.string().nullable().optional(),
+  ref: z.string().nullable().optional(),
+  privileged: z.boolean().optional(),
+});
+
+export type PanelTreeMetadata = z.infer<typeof PanelTreeMetadataSchema>;
+
 const CreateResultSchema = z.object({
   id: z.string().describe("Stable panel/slot id of the created panel."),
   title: z.string().describe("Display title resolved for the panel."),
@@ -46,17 +76,16 @@ const CreateResultSchema = z.object({
     .nullable()
     .optional()
     .describe("Stable parent panel/slot id, or null for a root panel."),
-  kind: z
-    .enum(["browser", "workspace"])
-    .optional()
-    .describe("Panel surface kind: an external browser view or a workspace runtime."),
+  kind: PanelKindSchema.describe(
+    "Panel surface kind: an external browser view or a workspace runtime."
+  ),
   contextId: z.string().optional().describe("Resolved storage-isolation context id."),
   source: z.string().optional().describe("Workspace-relative source path that backs the panel."),
   runtimeEntityId: z
     .string()
     .optional()
     .describe("Identifier of the runtime entity bound to the panel, when loaded."),
-  effectiveVersion: z
+  executionDigest: z
     .string()
     .nullable()
     .optional()
@@ -102,13 +131,13 @@ export const panelTreeMethods = defineServiceMethods({
     description:
       "List the children of a panel (or the root panels when the parent id is null/omitted).",
     args: z.tuple([z.string().nullable().optional()]),
-    returns: z.array(PanelSchema),
+    returns: z.array(PanelTreeListItemSchema),
     access: READ_ACCESS,
   },
   roots: {
     description: "List all root-level panels in the tree.",
     args: z.tuple([]),
-    returns: z.array(PanelSchema),
+    returns: z.array(PanelTreeListItemSchema),
     access: READ_ACCESS,
   },
   getTreeSnapshot: {
@@ -119,7 +148,7 @@ export const panelTreeMethods = defineServiceMethods({
     // `agent` (linked external sessions): tree enumeration is the discovery
     // step of the CLI panel screenshot/console loop. Read-only widening; every
     // mutating panelTree op stays closed to agent callers.
-    policy: { allowed: ["panel", "worker", "do", "shell", "server", "app", "agent"] },
+    authority: { principals: ["code", "user", "host", "entity"] },
   },
   getFocusedPanelId: {
     description: "Return the id of the currently focused panel, or null if none is focused.",
@@ -194,7 +223,7 @@ export const panelTreeMethods = defineServiceMethods({
       closedIds: z.array(z.string()),
     }),
     access: ARCHIVE_ACCESS,
-    policy: { allowed: ["server"] },
+    authority: { principals: ["host"] },
   },
   unload: {
     description:
@@ -274,12 +303,12 @@ export const panelTreeMethods = defineServiceMethods({
     examples: [{ args: ["panel-1", "_agent.snapshot"] }],
   },
   metadata: {
-    description: "Return the full Panel metadata for a panel id, or null if it does not exist.",
+    description: "Return compact runtime metadata for a panel id, or null if it does not exist.",
     args: z.tuple([PanelIdSchema]),
-    returns: PanelSchema.nullable(),
+    returns: PanelTreeMetadataSchema.nullable(),
     access: READ_ACCESS,
     // Read-only widening for agent callers (see getTreeSnapshot).
-    policy: { allowed: ["panel", "worker", "do", "shell", "server", "app", "agent"] },
+    authority: { principals: ["code", "user", "host", "entity"] },
   },
   getCollapsedIds: {
     description: "Return the ids of panels that are currently collapsed in the tree UI.",

@@ -15,8 +15,7 @@ import YAML from "yaml";
 import dotenv from "dotenv";
 import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
-import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
+import { parseWorkspaceConfigContentWithId } from "./configParser.js";
 export {
   resolveDeclaredApps,
   resolveDeclaredExtensions,
@@ -455,13 +454,9 @@ export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
 /**
  * Load and parse vibestudio.yml from a workspace directory.
  *
- * Loading the ACTIVE workspace manifest also seeds this process's workspace
- * app trust grants (`trust.chromeApps` → chromeTrust.ts). This is the single
- * establishment point for manifest-declared app trust: any process that owns
- * a workspace on disk (server, local Electron main) enforces the declared list;
- * parse-only consumers
- * (historical-commit previews via `parseWorkspaceConfigContent*`) do NOT
- * seed, so previewing a candidate manifest never changes live trust.
+ * Executable authority is sealed into each exact unit recipe and evaluated by
+ * the compositional dispatcher; loading configuration has no process-global
+ * trust side effect.
  */
 export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
   const configPath = path.join(workspacePath, WORKSPACE_CONFIG_FILE);
@@ -472,7 +467,6 @@ export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
 
   const content = fs.readFileSync(configPath, "utf-8");
   const config = parseWorkspaceConfigContent(content, workspacePath);
-  setWorkspaceAppTrust(resolveWorkspaceTrustGrants(config));
   return config;
 }
 

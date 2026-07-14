@@ -22,7 +22,7 @@ function declarations(withBinding: boolean): WorkspaceDeclarations {
             source: "workers/gad-store",
             name: "vcs",
             protocols: ["vibestudio.vcs.v1"],
-            policy: { allowed: ["server"] },
+            authority: { principals: ["host"] },
             durableObject: { className: "GadWorkspaceDO" },
           },
         ]

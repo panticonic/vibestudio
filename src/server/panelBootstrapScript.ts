@@ -121,7 +121,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
     __vibestudioInitialTheme: cfg.theme,
     __vibestudioGatewayConfig: gatewayConfig,
     __vibestudioSourceRepo: cfg.sourceRepo,
-    __vibestudioEffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__VIBESTUDIO_EFFECTIVE_VERSION ?? null,
+    __vibestudioSourceDigest: cfg.executionDigest ?? cfg.env?.__VIBESTUDIO_EXECUTION_DIGEST ?? null,
     __vibestudioEnv: cfg.env,
     __vibestudioStateArgs: effectiveStateArgs,
     __vibestudioConnectionId: connectionId,

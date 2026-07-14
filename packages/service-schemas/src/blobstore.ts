@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod";
-import type { ServicePolicy, MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy, MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { STATE_HASH_RE, TREE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
 
@@ -15,10 +15,10 @@ export const PREFIX_RE = /^[0-9a-f]{0,64}$/;
  *  `state:<hex>` (a root pointer, gad state-hash compatible). */
 export const TREE_REF_RE = /^(manifest|state):[0-9a-f]{64}$/;
 
-export const BLOBSTORE_READ_POLICY: ServicePolicy = {
-  allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"],
+export const BLOBSTORE_READ_POLICY: ServiceAuthorityPolicy = {
+  principals: ["code", "user", "host"],
 };
-export const BLOBSTORE_ADMIN_POLICY: ServicePolicy = { allowed: ["shell", "server"] };
+export const BLOBSTORE_ADMIN_POLICY: ServiceAuthorityPolicy = { principals: ["user", "host"] };
 
 // Access descriptors shared across the read/write/admin method groups. Caller-kind
 // policy remains declared on `policy`; these descriptors carry sensitivity metadata
@@ -134,7 +134,7 @@ export const blobstoreMethods = defineServiceMethods({
     description: "Whether a blob with this content digest exists in the workspace store.",
     args: z.tuple([DigestSchema]),
     returns: z.boolean(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
     examples: [
       {
@@ -147,7 +147,7 @@ export const blobstoreMethods = defineServiceMethods({
     description: "Size (bytes) and last-modified time of a blob, or null if it does not exist.",
     args: z.tuple([DigestSchema]),
     returns: z.object({ size: z.number(), mtime: z.number() }).nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   putText: {
@@ -155,7 +155,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Store a UTF-8 string; returns its content digest + byte size. Content-addressed, so identical text always yields the same digest (idempotent).",
     args: z.tuple([z.string()]),
     returns: z.object({ digest: z.string(), size: z.number() }),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: WRITE_ACCESS,
     examples: [{ args: ["hello world"] }],
   },
@@ -163,7 +163,7 @@ export const blobstoreMethods = defineServiceMethods({
     description: "Full UTF-8 text of a blob, or null if absent.",
     args: z.tuple([DigestSchema]),
     returns: z.string().nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   getRange: {
@@ -171,7 +171,7 @@ export const blobstoreMethods = defineServiceMethods({
       "UTF-8 text slice. offset/length are BYTES (so they compose with stat.size); the returned string is UTF-8-decoded, so partial codepoints at slice boundaries become U+FFFD replacement chars. Use getRangeBytes for a raw binary slice.",
     args: z.tuple([DigestSchema, z.number().int().nonnegative(), z.number().int().positive()]),
     returns: z.string().nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   getRangeBytes: {
@@ -179,7 +179,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Raw byte slice, base64-encoded on the wire so binary blobs (PDFs, images) round-trip intact. Decode with Buffer.from(result.bytesBase64, 'base64').",
     args: z.tuple([DigestSchema, z.number().int().nonnegative(), z.number().int().positive()]),
     returns: z.object({ bytesBase64: z.string() }).nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   grep: {
@@ -206,7 +206,7 @@ export const blobstoreMethods = defineServiceMethods({
         })
       )
       .nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   putBase64: {
@@ -214,7 +214,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Store raw bytes from exactly one base64 string; returns content digest + byte size (idempotent by content). The blobstore stores bytes only: do not pass MIME/options metadata, and instead carry it alongside the returned digest.",
     args: z.tuple([Base64Schema]),
     returns: z.object({ digest: z.string(), size: z.number() }),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: WRITE_ACCESS,
     examples: [{ args: ["iVBORw0KGgo="] }],
   },
@@ -222,7 +222,7 @@ export const blobstoreMethods = defineServiceMethods({
     description: "Full blob contents as a base64 string, or null if absent.",
     args: z.tuple([DigestSchema]),
     returns: z.string().nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   putTree: {
@@ -230,7 +230,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Store one immutable directory node (tree object) in the CAS from its entries; returns its `manifest:` tree hash (gad-manifest compatible). Every referenced child must already exist in the store — file contentHash blobs and dir childHash tree nodes are verified, so a tree hash can never be claimed while its objects are missing. Pass {root:true} to also store a `state:` root pointer and get the gad-compatible stateHash back. Idempotent by content. Build deep trees bottom-up (children before parents).",
     args: z.tuple([z.array(TreeEntrySchema).max(100_000), PutTreeOptsSchema]),
     returns: z.object({ treeHash: TreeHashSchema, stateHash: StateHashSchema.optional() }),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: WRITE_ACCESS,
     examples: [{ args: [[], { root: true }] }],
   },
@@ -239,7 +239,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node).",
     args: z.tuple([TreeRefSchema]),
     returns: z.array(TreeEntrySchema).nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   listTree: {
@@ -247,7 +247,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Recursive listing of a tree: every file (contentHash+mode) and directory (treeHash) under an optional prefix path, sorted by path. Returns null if the root tree object is absent.",
     args: z.union([z.tuple([TreeRefSchema]), z.tuple([TreeRefSchema, ListTreeOptsSchema])]),
     returns: z.array(TreeListEntrySchema).nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   readFileAtTree: {
@@ -255,7 +255,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Resolve a tree-relative file path to its content digest and mode, or null if the path is absent or not a file. Read the bytes via the ordinary blob APIs.",
     args: z.tuple([TreeRefSchema, z.string().min(1)]),
     returns: TreeFileStatSchema.nullable(),
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   diffTrees: {
@@ -263,7 +263,7 @@ export const blobstoreMethods = defineServiceMethods({
       "Authoritative diff between two trees: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing from the store.",
     args: z.tuple([TreeRefSchema, TreeRefSchema]),
     returns: DiffTreesResultSchema,
-    policy: BLOBSTORE_READ_POLICY,
+    authority: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
   materializeTree: {
@@ -275,14 +275,14 @@ export const blobstoreMethods = defineServiceMethods({
       z.object({ link: z.boolean().optional() }).optional(),
     ]),
     returns: z.object({ written: z.number(), unchanged: z.number() }),
-    policy: BLOBSTORE_ADMIN_POLICY,
+    authority: BLOBSTORE_ADMIN_POLICY,
     access: WRITE_ACCESS,
   },
   delete: {
     description: "Delete a blob by digest; returns true if it existed. Destructive, admin-only.",
     args: z.tuple([DigestSchema]),
     returns: z.boolean(),
-    policy: BLOBSTORE_ADMIN_POLICY,
+    authority: BLOBSTORE_ADMIN_POLICY,
     access: ADMIN_DESTRUCTIVE_ACCESS,
   },
   list: {
@@ -290,7 +290,7 @@ export const blobstoreMethods = defineServiceMethods({
       "List blob digests, optionally filtered by hex prefix and capped by limit. Admin-only.",
     args: ListArgsSchema,
     returns: z.array(z.string()),
-    policy: BLOBSTORE_ADMIN_POLICY,
+    authority: BLOBSTORE_ADMIN_POLICY,
     access: ADMIN_READ_ACCESS,
   },
 });

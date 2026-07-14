@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createProtectedRefStore, type RefGateBatch } from "./protectedRefStore.js";
 import { createRefsRpcService } from "./refsRpcService.js";
 import { VcsInvocationTable } from "./vcsInvocationTable.js";
@@ -14,6 +16,17 @@ const STATE_C = `state:${"c".repeat(64)}`;
 
 const WRITER_ID = "do:workers/gad-store:GadStore:vcs";
 
+async function dispatch(
+  service: ServiceDefinition,
+  ctx: Parameters<ServiceDefinition["handler"]>[0],
+  method: string,
+  args: unknown[]
+): Promise<unknown> {
+  const dispatcher = createTestServiceDispatcher();
+  dispatcher.registerService(service);
+  return dispatcher.dispatch(ctx, service.name, method, args);
+}
+
 function writerDoCaller(id = WRITER_ID) {
   return createVerifiedCaller(id, "do");
 }
@@ -23,7 +36,11 @@ function panelCaller(id = "chat-1") {
     callerId: id,
     callerKind: "panel",
     repoPath: "panels/chat",
-    effectiveVersion: "ev-1",
+    executionDigest: "ev-1",
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 }
 
@@ -65,20 +82,20 @@ describe("refsRpcService", () => {
       await refs.seedMain({ repoPath: "packages/notes", value: STATE_A });
       const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") } as never;
 
-      expect(await service.handler(ctx, "readMain", ["packages/notes"])).toMatchObject({
+      expect(await dispatch(service, ctx, "readMain", ["packages/notes"])).toMatchObject({
         stateHash: STATE_A,
       });
-      expect(await service.handler(ctx, "readMain", ["packages/other"])).toBeNull();
-      expect(await service.handler(ctx, "listMains", [])).toHaveLength(1);
+      expect(await dispatch(service, ctx, "readMain", ["packages/other"])).toBeNull();
+      expect(await dispatch(service, ctx, "listMains", [])).toHaveLength(1);
     });
 
     it("listMainRefLog surfaces the movement log over the RPC surface", async () => {
       const { service } = makeService();
       const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") } as never;
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), operation: "push" },
       ]);
-      const rows = (await service.handler(ctx, "listMainRefLog", [
+      const rows = (await dispatch(service, ctx, "listMainRefLog", [
         { repoPath: "packages/notes" },
       ])) as Array<{ operation: string; new: string | null }>;
       expect(rows).toHaveLength(1);
@@ -89,9 +106,12 @@ describe("refsRpcService", () => {
   describe("single-writer policy", () => {
     it("admits the VCS-DO writer (matched by target identity) and gates the advance", async () => {
       const { service, refs, gateBatches } = makeService();
-      const result = (await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-        { entries: oneAdvance(), operation: "push" },
-      ])) as { updated: Array<{ stateHash: string | null }> };
+      const result = (await dispatch(
+        service,
+        { caller: writerDoCaller() } as never,
+        "updateMains",
+        [{ entries: oneAdvance(), operation: "push" }]
+      )) as { updated: Array<{ stateHash: string | null }> };
 
       expect(result.updated[0]).toMatchObject({ stateHash: STATE_A });
       expect(refs.readMain("packages/notes")?.stateHash).toBe(STATE_A);
@@ -110,7 +130,7 @@ describe("refsRpcService", () => {
     ] as const)("rejects a %s caller with a structured policy error", async (_kind, caller) => {
       const { service, refs } = makeService();
       await expect(
-        service.handler({ caller } as never, "updateMains", [
+        dispatch(service, { caller } as never, "updateMains", [
           { entries: oneAdvance(), operation: "push" },
         ])
       ).rejects.toMatchObject({ code: "EACCES" });
@@ -120,7 +140,8 @@ describe("refsRpcService", () => {
     it("rejects a DIFFERENT (non-writer) DO — identity, not runtime.kind", async () => {
       const { service } = makeService();
       await expect(
-        service.handler(
+        dispatch(
+          service,
           { caller: writerDoCaller("do:workers/evil:Fake:vcs") } as never,
           "updateMains",
           [{ entries: oneAdvance(), operation: "push" }]
@@ -131,7 +152,7 @@ describe("refsRpcService", () => {
     it("rejects even the writer DO when no vcs binding exists (identity null)", async () => {
       const { service } = makeService({ writerIdentity: null });
       await expect(
-        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
           { entries: oneAdvance(), operation: "push" },
         ])
       ).rejects.toMatchObject({ code: "EACCES" });
@@ -144,7 +165,7 @@ describe("refsRpcService", () => {
       const upstream = panelCaller();
       const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
 
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), invocationToken: token, operation: "push" },
       ]);
 
@@ -167,7 +188,7 @@ describe("refsRpcService", () => {
         method: "vcsImportPublish",
       });
 
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), invocationToken: token, operation: "push" },
       ]);
 
@@ -182,7 +203,7 @@ describe("refsRpcService", () => {
       const upstream = panelCaller();
       const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
 
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         {
           entries: oneAdvance("packages/notes", null, STATE_A),
           invocationToken: token,
@@ -190,7 +211,7 @@ describe("refsRpcService", () => {
         },
       ]);
       // Second attempt re-uses the SAME token (still in flight); succeeds.
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         {
           entries: oneAdvance("packages/notes", STATE_A, STATE_B),
           invocationToken: token,
@@ -215,7 +236,7 @@ describe("refsRpcService", () => {
       });
 
       await expect(
-        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
           { entries: oneAdvance(), invocationToken: token, operation: "push" },
         ])
       ).rejects.toThrow(/different VCS writer/);
@@ -230,7 +251,7 @@ describe("refsRpcService", () => {
       });
       release();
       await expect(
-        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
           { entries: oneAdvance(), invocationToken: token, operation: "push" },
         ])
       ).rejects.toThrow(/invalid or expired invocation token/);
@@ -239,7 +260,7 @@ describe("refsRpcService", () => {
     it("fails closed on a forged/foreign token — never silently attributes to the DO", async () => {
       const { service, refs } = makeService();
       await expect(
-        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
           { entries: oneAdvance(), invocationToken: "forged-token", operation: "push" },
         ])
       ).rejects.toThrow(/invalid or expired invocation token/);
@@ -248,7 +269,7 @@ describe("refsRpcService", () => {
 
     it("attributes to the DO itself when no token is presented (no inherited grants)", async () => {
       const { service, gateBatches } = makeService();
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), operation: "push" },
       ]);
       const ctx = gateBatches[0]!.gateContext as RefAdvanceGateContext;
@@ -262,7 +283,7 @@ describe("refsRpcService", () => {
       const upstream = panelCaller();
       const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
 
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), invocationToken: token, operation: "push", reason: "landed" },
       ]);
 
@@ -280,7 +301,7 @@ describe("refsRpcService", () => {
 
     it("logs a no-token advance attributed to the DO itself (writer === onBehalfOf)", async () => {
       const { service, refs } = makeService();
-      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+      await dispatch(service, { caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), operation: "push" },
       ]);
       const row = refs.listMainRefLog("packages/notes")[0]!;
@@ -292,14 +313,14 @@ describe("refsRpcService", () => {
   it("enforces compare-and-swap and validates inputs at the schema boundary", async () => {
     const { service } = makeService();
     const ctx = { caller: writerDoCaller() } as never;
-    await service.handler(ctx, "updateMains", [{ entries: oneAdvance(), operation: "push" }]);
+    await dispatch(service, ctx, "updateMains", [{ entries: oneAdvance(), operation: "push" }]);
     await expect(
-      service.handler(ctx, "updateMains", [
+      dispatch(service, ctx, "updateMains", [
         { entries: oneAdvance("packages/notes", null, STATE_C), operation: "push" },
       ])
     ).rejects.toMatchObject({ code: "REF_CONFLICT" });
     await expect(
-      service.handler(ctx, "updateMains", [
+      dispatch(service, ctx, "updateMains", [
         {
           entries: [{ repoPath: "packages/notes", expectedOld: null, next: "not-a-tree-ref" }],
           operation: "push",

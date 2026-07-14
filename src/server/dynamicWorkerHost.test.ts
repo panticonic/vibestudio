@@ -21,6 +21,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
+import { executionArtifactFixture } from "./testing/executionArtifactFixture.js";
 import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
@@ -58,7 +59,7 @@ function workerBuild(bundle = WORKER_BUNDLE, ev = "ev-1"): BuildResult {
     metadata: {
       kind: "worker",
       name: "workers/echo",
-      ev,
+      sourceDigest: ev,
       sourceStateHash: "state:test",
       sourcemap: false,
       details: { kind: "generic" },
@@ -113,18 +114,18 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the gateway closure can reference a `const` manager.
   const portHolder = { value: 0 };
+  const executionBundles = new Map<string, ReturnType<typeof executionArtifactFixture>["bundle"]>();
   const deps: WorkerdManagerDeps = {
+    hostPrincipal: "host:test-product-build",
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
-    bindRuntimeImage: async (unitPath: string, ref?: string) => ({
-      source: unitPath,
-      unitName: unitPath,
-      stateHash: ref?.startsWith("state:") ? ref : "state:test",
-      effectiveVersion: currentBuild.value.metadata.ev,
-      buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
-    }),
-    getBuildByKey: () => currentBuild.value,
+    resolveExecutionArtifact: async (unitPath: string, ref?: string) => {
+      const fixture = executionArtifactFixture(unitPath, currentBuild.value, ref);
+      executionBundles.set(fixture.binding.artifact.executionDigest, fixture.bundle);
+      return fixture.binding;
+    },
+    getExecutionArtifact: (executionDigest) => executionBundles.get(executionDigest) ?? null,
     workerdPrograms: compiledWorkerdPrograms,
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
     statePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-")),
@@ -205,12 +206,20 @@ afterEach(async () => {
   }
 });
 
+async function launchWorker(
+  manager: WorkerdManager,
+  intent: Omit<Parameters<WorkerdManager["startWorker"]>[0], "execution">
+) {
+  const execution = await manager.resolveExecution(intent.source);
+  return manager.startWorker({ ...intent, execution });
+}
+
 describe("dynamic worker host (real workerd)", () => {
   it("loads a worker dynamically and dispatches RPC with no restart", async () => {
     active = await createHarness();
     const { manager, workerdCall } = active;
 
-    await manager.startWorker({
+    await launchWorker(manager, {
       source: "workers/echo",
       contextId: "ctx-1",
       key: "echo",
@@ -225,7 +234,7 @@ describe("dynamic worker host (real workerd)", () => {
     expect(await res.json()).toEqual({ result: { echo: "ping", workerId: "echo" } });
 
     // A second worker created while the first runs — still no restart.
-    await manager.startWorker({ source: "workers/echo", contextId: "ctx-2", key: "echo2" });
+    await launchWorker(manager, { source: "workers/echo", contextId: "ctx-2", key: "echo2" });
     expect(manager.getBootGeneration()).toBe(bootAfterCreate);
 
     const res2 = await workerdCall("/echo2/__rpc", {
@@ -239,7 +248,7 @@ describe("dynamic worker host (real workerd)", () => {
     active = await createHarness();
     const { manager, workerdCall, egressHits } = active;
 
-    await manager.startWorker({ source: "workers/echo", contextId: "ctx-1", key: "echo" });
+    await launchWorker(manager, { source: "workers/echo", contextId: "ctx-1", key: "echo" });
 
     const res = await workerdCall("/echo/egress");
     expect(res.status).toBe(200);
@@ -256,9 +265,9 @@ describe("dynamic worker host (real workerd)", () => {
     active = await createHarness();
     const { manager, workerdCall } = active;
 
-    await manager.startWorker({ source: "workers/echo", contextId: "ctx-1", key: "echo" });
+    await launchWorker(manager, { source: "workers/echo", contextId: "ctx-1", key: "echo" });
     // Keep a second instance so workerd stays up after the destroy.
-    await manager.startWorker({ source: "workers/echo", contextId: "ctx-2", key: "keep" });
+    await launchWorker(manager, { source: "workers/echo", contextId: "ctx-2", key: "keep" });
     const boot = manager.getBootGeneration();
 
     await manager.stopWorker("worker:workers/echo:echo");
@@ -284,7 +293,7 @@ describe("dynamic worker host (real workerd)", () => {
     active = await createHarness(buildRef);
     const { manager, workerdCall } = active;
 
-    await manager.startWorker({ source: "workers/echo", contextId: "ctx-1", key: "echo" });
+    await launchWorker(manager, { source: "workers/echo", contextId: "ctx-1", key: "echo" });
     const boot = manager.getBootGeneration();
 
     const before = await workerdCall("/echo/__rpc", {
@@ -298,7 +307,7 @@ describe("dynamic worker host (real workerd)", () => {
       WORKER_BUNDLE.replace("echo: body.method", 'echo: "v2:" + body.method'),
       "ev-2"
     );
-    await manager.updateInstance("echo", { env: { ROLLED: "1" } });
+    await manager.onSourceRebuilt("workers/echo", null);
     expect(manager.getBootGeneration()).toBe(boot);
 
     const after = await workerdCall("/echo/__rpc", {

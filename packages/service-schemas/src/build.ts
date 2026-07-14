@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 // Access descriptors shared across the build method groups. `callers` is left
@@ -46,7 +46,7 @@ export const buildMetadataSchema = z
   .object({
     kind: z.enum(["panel", "package", "worker", "extension", "app", "template"]),
     name: z.string(),
-    ev: z.string(),
+    sourceDigest: z.string(),
     sourceStateHash: z.string().nullable(),
     sourcemap: z.boolean(),
     framework: z.string().optional(),
@@ -65,6 +65,29 @@ export const buildResultSchema = z
   })
   .strict();
 export type BuildResultWire = z.infer<typeof buildResultSchema>;
+
+export const AuthorityResourceScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
+  z.object({ kind: z.literal("prefix"), prefix: z.string() }).strict(),
+  z.object({ kind: z.literal("origin"), origin: z.string() }).strict(),
+  z.object({ kind: z.literal("domain"), domain: z.string() }).strict(),
+  z.object({ kind: z.literal("network"), value: z.literal("*") }).strict(),
+]);
+
+export const CapabilityScopeSchema = z
+  .object({
+    capability: z.string().min(1),
+    resource: AuthorityResourceScopeSchema,
+  })
+  .strict();
+
+export const executionAuthoritySchema = z
+  .object({
+    source: z.string().min(1),
+    executionDigest: z.string().min(1),
+    requested: z.array(CapabilityScopeSchema),
+  })
+  .strict();
 
 export const buildChangeSetSchema = z
   .object({
@@ -183,7 +206,7 @@ export const buildProvenanceSchema = z
     workspaceRoot: z.string(),
     candidates: z.array(buildGraphUnitSchema).optional(),
     unit: buildGraphUnitSchema.optional(),
-    effectiveVersion: z.string().nullable().optional(),
+    sourceDigest: z.string().nullable().optional(),
     buildKeys: z
       .object({
         sourcemap: z.string().nullable(),
@@ -339,6 +362,14 @@ export const buildMethods = defineServiceMethods({
       .nullable(),
     access: READ_ACCESS,
   },
+  resolveExecutionAuthority: {
+    description:
+      "Resolve the source and immutable authority requests sealed into an exact retained execution artifact; returns null when the digest is unknown.",
+    args: z.tuple([z.string().min(1)]),
+    returns: executionAuthoritySchema.nullable(),
+    authority: { principals: ["host"] },
+    access: READ_ACCESS,
+  },
   validate: {
     description:
       "Gad-facing push validation (narrow-host VCS): build + cache + classify a composed candidate workspace view. Keyed by (viewHash, repoPaths, baseViewHash) — repoPaths are the pushed repos (buildable pushed units gate absolutely; content-only skip) and baseViewHash drives the dependent regression gate (a dependent also red on the base is informational; omitted ⇒ failed dependents gate absolutely). IDEMPOTENT: never promotes the EV baseline or records provenance, so it is safe to call on candidates that are never published.",
@@ -376,7 +407,7 @@ export const buildMethods = defineServiceMethods({
     returns: repoBuildReportSchema,
     access: BUILD_ACCESS,
   },
-  getEffectiveVersion: {
+  getSourceDigest: {
     description:
       "Effective version (content-derived identity) of a workspace unit, or null if unknown.",
     args: z.tuple([z.string()]),
@@ -413,11 +444,11 @@ export const buildMethods = defineServiceMethods({
   },
   gc: {
     description:
-      "Garbage-collect cached build artifacts not referenced by the given active units; returns the number of artifacts freed.",
-    args: z.tuple([z.array(z.string())]),
+      "Garbage-collect cached build artifacts from authoritative incarnation, registry, grant, and bootstrap roots; returns the number of artifacts freed.",
+    args: z.tuple([]),
     returns: z.object({ freed: z.number() }).strict(),
     access: GC_ACCESS,
-    examples: [{ args: [[]], returns: { freed: 0 } }],
+    examples: [{ args: [], returns: { freed: 0 } }],
   },
   getAboutPages: {
     description: "List available about pages for the launcher UI.",

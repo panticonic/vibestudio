@@ -142,12 +142,22 @@ function createUnitsWatch(
   return {
     [Symbol.asyncIterator]() {
       let closed = false;
+      let refreshInFlight = false;
+      let refreshQueued = false;
+      let lastRefreshError: string | null = null;
       let pendingResolve: ((result: IteratorResult<WorkspaceUnitStatus[]>) => void) | null = null;
       const queue: WorkspaceUnitStatus[][] = [];
       const pushSnapshot = () => {
+        if (closed) return;
+        if (refreshInFlight) {
+          refreshQueued = true;
+          return;
+        }
+        refreshInFlight = true;
         void listUnits()
           .then((snapshot) => {
             if (closed) return;
+            lastRefreshError = null;
             const resolve = pendingResolve;
             if (resolve) {
               pendingResolve = null;
@@ -158,9 +168,22 @@ function createUnitsWatch(
           })
           .catch((err) => {
             // Watch is best-effort (callers can still call list() for errors),
-            // but a recurring failure shouldn't be invisible — log it so a
-            // permanently-deaf watch is diagnosable instead of silent.
-            console.warn("[workspace.watch] snapshot refresh failed:", err);
+            // but a recurring failure shouldn't be invisible. Log each
+            // continuous failure once: console records are themselves unit-log
+            // events, so logging every refresh can create an event feedback
+            // loop while a capability or service is unavailable.
+            const message = err instanceof Error ? err.message : String(err);
+            if (message !== lastRefreshError) {
+              lastRefreshError = message;
+              console.warn("[workspace.watch] snapshot refresh failed:", err);
+            }
+          })
+          .finally(() => {
+            refreshInFlight = false;
+            if (!closed && refreshQueued) {
+              refreshQueued = false;
+              pushSnapshot();
+            }
           });
       };
       // Topics this watch reflects. We MUST `events.subscribe` each (not just
@@ -174,7 +197,6 @@ function createUnitsWatch(
         "apps:available",
         "apps:status",
         "apps:lifecycle",
-        "workspace:unit-log",
       ];
       const unsubscribers = topics
         .map((topic) => rpc.on?.(`event:${topic}`, pushSnapshot))

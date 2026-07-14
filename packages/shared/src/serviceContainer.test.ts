@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ServiceContainer } from "./serviceContainer.js";
 import type { ManagedService } from "./managedService.js";
+import type { ServiceDefinition } from "./serviceDefinition.js";
 
 vi.mock("./devLog.js", () => ({
   createDevLogger: vi.fn().mockReturnValue({
@@ -219,11 +220,11 @@ describe("ServiceContainer", () => {
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    const serviceDef = {
+    const serviceDef: ServiceDefinition = {
       name: "myRpc",
       methods: {},
       handler: vi.fn(),
-      policy: { allowed: ["shell" as const] },
+      authority: { principals: ["user"] },
     };
     container.registerManaged({
       name: "a",
@@ -265,11 +266,11 @@ describe("ServiceContainer", () => {
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    const serviceDef = {
+    const serviceDef: ServiceDefinition = {
       name: "myRpc",
       methods: {},
       handler: vi.fn(),
-      policy: { allowed: ["shell" as const] },
+      authority: { principals: ["user"] },
     };
     container.registerManaged({
       name: "noStart",
@@ -368,11 +369,11 @@ describe("ServiceContainer", () => {
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    const def = {
+    const def: ServiceDefinition = {
       name: "events",
       methods: {},
       handler: vi.fn(),
-      policy: { allowed: ["shell" as const] },
+      authority: { principals: ["user"] },
     };
 
     // registerRpc orders the service after its declared dependency and

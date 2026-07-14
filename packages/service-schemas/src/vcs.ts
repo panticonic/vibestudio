@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
 import type { VcsHeadAdvance, VcsWorkingAdvance } from "@vibestudio/shared/vcsEvents";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
   buildDiagnosticSchema,
@@ -152,6 +152,13 @@ export const vcsEditOpSchema = z.preprocess(normalizeVcsEditOp, vcsEditOpStrictS
 export type VcsEditOp = z.infer<typeof vcsEditOpStrictSchema>;
 
 const vcsApplyEditsInputStrictSchema = z.object({
+  clientEditId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Stable client-generated identity for an at-least-once edit batch. Retries with the same caller, head, repository, and ID return the original durable result; divergent reuse is rejected."
+    ),
   baseStateHash: z
     .string()
     .optional()

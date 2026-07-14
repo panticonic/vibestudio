@@ -14,6 +14,16 @@ describe("TokenManager", () => {
     expect(tm.validateToken(token)).toEqual({ callerId: "worker:one", callerKind: "worker" });
   });
 
+  it("preserves a host attestation minted for a managed transport", () => {
+    const token = tm.createToken("headless-host", "shell", { hostOriginated: true });
+
+    expect(tm.validateToken(token)).toEqual({
+      callerId: "headless-host",
+      callerKind: "shell",
+      hostOriginated: true,
+    });
+  });
+
   it("rejects panel bearer tokens", () => {
     expect(() => tm.createToken("panel:one", "panel")).toThrow(/Panel bearer tokens/);
   });

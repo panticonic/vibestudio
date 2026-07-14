@@ -29,7 +29,7 @@ export type PanelAccessOperation =
 export interface PanelAccessRequester {
   id: string;
   kind: CallerKind | string;
-  /** True when the caller is authorized chrome or a privileged shell/about panel. */
+  /** True after canonical authority evaluation, or for a privileged shell/about panel. */
   privileged?: boolean;
 }
 

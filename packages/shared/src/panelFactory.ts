@@ -33,7 +33,7 @@ export interface BuildBootstrapConfigOpts {
   slotId: PanelSlotId;
   contextId: string;
   source: string;
-  effectiveVersion?: string | null;
+  executionDigest?: string | null;
   parentId: PanelSlotId | null;
   parentEntityId?: PanelEntityId | null;
   theme: "light" | "dark";
@@ -91,13 +91,13 @@ export function buildBootstrapConfig(opts: BuildBootstrapConfigOpts): unknown {
     parentEntityId: opts.parentEntityId ?? null,
     theme: opts.theme,
     sourceRepo: opts.source,
-    effectiveVersion: opts.effectiveVersion ?? null,
+    executionDigest: opts.executionDigest ?? null,
     gatewayConfig: opts.gatewayConfig,
     env: {
       ...opts.env,
       PARENT_ID: opts.parentId ?? "",
       __VIBESTUDIO_SOURCE_REPO: opts.source,
-      __VIBESTUDIO_EFFECTIVE_VERSION: opts.effectiveVersion ?? "",
+      __VIBESTUDIO_EXECUTION_DIGEST: opts.executionDigest ?? "",
       __VIBESTUDIO_GATEWAY_CONFIG: JSON.stringify(opts.gatewayConfig),
     },
     stateArgs: opts.stateArgs ?? {},

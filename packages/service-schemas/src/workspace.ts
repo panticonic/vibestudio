@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
 import type {
@@ -23,6 +23,13 @@ import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspace
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 import { APP_CAPABILITIES_BY_TARGET } from "@vibestudio/shared/unitManifest";
 import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
+import { CapabilityScopeSchema } from "./build.js";
+import {
+  allOf,
+  anyOf,
+  methodCapability,
+  relationship,
+} from "@vibestudio/shared/authorization";
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
@@ -36,6 +43,23 @@ import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
+
+const workspaceAdminAuthority = (method: "create" | "delete") => ({
+  requirement: anyOf(
+    methodCapability("host"),
+    allOf(
+      methodCapability("user"),
+      relationship("workspace-member"),
+      anyOf(relationship("workspace-role", "root"), relationship("workspace-role", "admin"))
+    ),
+    allOf(
+      methodCapability("code"),
+      relationship("workspace-member"),
+      anyOf(relationship("workspace-role", "root"), relationship("workspace-role", "admin"))
+    )
+  ),
+  resource: { kind: "literal" as const, key: `service:workspace.${method}` },
+});
 
 // ─── Host target schemas ──────────────────────────────────────────────────────
 // Structural shapes live in `@vibestudio/shared/hostTargets`; these zod wrappers bind the
@@ -85,7 +109,7 @@ export const HostTargetCandidateSchema = z
       "stopped",
       "error",
     ]),
-    activeEv: z.string().nullable().optional(),
+    activeSourceDigest: z.string().nullable().optional(),
     activeBundleKey: z.string().nullable().optional(),
     capabilities: z.array(z.string()),
     canRollback: z.boolean(),
@@ -127,7 +151,8 @@ export const HostTargetLaunchResultSchema = z.discriminatedUnion("status", [
       buildKey: z.string(),
       artifactRoute: z.string().optional(),
       capabilities: z.array(AppCapabilitySchema).optional(),
-      effectiveVersion: z.string().nullable().optional(),
+      executionDigest: z.string().nullable().optional(),
+      authorityRequests: z.array(CapabilityScopeSchema).readonly().optional(),
       adoptionPolicy: z.enum(["immediate", "prompt", "artifact-only"]).optional(),
     })
     .strict(),
@@ -242,10 +267,10 @@ export const WorkspaceAppVersionRecordSchema = z.object({
   version: z.string(),
   target: z.string(),
   capabilities: z.array(z.string()),
-  activeEv: z.string().nullable(),
+  activeSourceDigest: z.string().nullable(),
   activeSourceHash: z.string().nullable(),
   activeBundleKey: z.string(),
-  activeDependencyEvs: z.record(z.string()),
+  activeDependencySourceDigests: z.record(z.string()),
   activeExternalDeps: z.record(z.string()),
   activeRuntimeDepsKey: z.string().nullable(),
   activatedAt: z.number(),
@@ -266,8 +291,8 @@ export const WorkspaceUnitStatusSchema = z.object({
   displayName: z.string().optional(),
   status: z.enum(["running", "stopped", "error", "pending-approval", "building", "available"]),
   version: z.string().optional(),
-  ev: z.string().nullable().optional(),
-  activeEv: z.string().nullable().optional(),
+  sourceDigest: z.string().nullable().optional(),
+  activeSourceDigest: z.string().nullable().optional(),
   activeBundleKey: z.string().nullable().optional(),
   activeRuntimeDepsKey: z.string().nullable().optional(),
   /** Epoch ms when the currently active build was produced (best-effort; null if unknown). */
@@ -529,7 +554,7 @@ export const workspaceMethods = defineServiceMethods({
         .describe("Optional creation options."),
     ]),
     returns: WorkspaceEntrySchema,
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: workspaceAdminAuthority("create"),
     access: { sensitivity: "write" },
     examples: [{ args: ["my-new-ws"] }, { args: ["fork-ws", { forkFrom: "main" }] }],
   },
@@ -538,7 +563,7 @@ export const workspaceMethods = defineServiceMethods({
       "Permanently delete a workspace directory and remove it from the catalog; refuses to delete the active workspace and is approval-gated for userland.",
     args: z.tuple([z.string().describe("Name (id) of the workspace to delete.")]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: workspaceAdminAuthority("delete"),
     access: { sensitivity: "destructive" },
     examples: [{ args: ["old-ws"] }],
   },
@@ -549,7 +574,7 @@ export const workspaceMethods = defineServiceMethods({
       "Switch the active workspace, touching the catalog and signalling the host to relaunch into it; disruptive and approval-gated for userland.",
     args: z.tuple([z.string().describe("Name (id) of the workspace to switch to.")]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "admin" },
     examples: [{ args: ["other-ws"] }],
   },
@@ -570,7 +595,7 @@ export const workspaceMethods = defineServiceMethods({
         .describe("Ordered list of init-panel descriptors."),
     ]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: [[{ source: "panels/chat" }]] }],
   },
@@ -584,7 +609,7 @@ export const workspaceMethods = defineServiceMethods({
       z.unknown().describe("New value for the field."),
     ]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["title", "My Workspace"] }],
   },
@@ -608,8 +633,8 @@ export const workspaceMethods = defineServiceMethods({
     // workspace skill catalog to Claude Code as MCP resources. Read-only
     // widening on the skill-discovery hot path (docs/architecture/
     // rpc-and-services.md, "Agent callers and the eval escape hatch").
-    policy: {
-      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
+    authority: {
+      principals: ["user", "code", "host", "entity"],
     },
   },
   readSkill: {
@@ -619,8 +644,8 @@ export const workspaceMethods = defineServiceMethods({
     returns: z.string(),
     access: READ_ACCESS,
     // Read-only widening for agent callers (see listSkills).
-    policy: {
-      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
+    authority: {
+      principals: ["user", "code", "host", "entity"],
     },
     examples: [{ args: ["skills/code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
@@ -640,7 +665,7 @@ export const workspaceMethods = defineServiceMethods({
     // Launch orchestration is an extension concern; panels/workers/DO drive it
     // too (e.g. opening a context terminal). Narrower than the service default
     // (drops `app`, which never places terminal sessions).
-    policy: { allowed: ["shell", "panel", "worker", "do", "extension", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["ctx-abc"] }],
   },
@@ -731,7 +756,7 @@ export const workspaceMethods = defineServiceMethods({
   },
   "units.bakeAppDist": {
     description:
-      "Bake an app unit's active approved build into a packaging payload directory; trusted-chrome callers only.",
+      "Bake an app unit's active approved build into a packaging payload directory; exact panel-hosting authority required.",
     args: z.tuple([
       z.string().describe("App unit name or source path."),
       z
@@ -741,7 +766,7 @@ export const workspaceMethods = defineServiceMethods({
         .optional(),
     ]),
     returns: JsonObjectSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
   },
   "recurring.list": {
@@ -749,14 +774,14 @@ export const workspaceMethods = defineServiceMethods({
       "List declarative scheduled jobs from meta/vibestudio.yml with their durable run state (next/last run, failures, backoff).",
     args: z.tuple([]),
     returns: z.array(WorkspaceRecurringJobStatusSchema),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,
   },
   "heartbeats.list": {
     description: "List registered heartbeats with their schedule, channel binding, and run state.",
     args: z.tuple([]),
     returns: z.array(WorkspaceHeartbeatStatusSchema),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,
   },
   "heartbeats.runNow": {
@@ -765,7 +790,7 @@ export const workspaceMethods = defineServiceMethods({
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
     ]),
     returns: HeartbeatTickResultSchema,
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
   },
@@ -775,7 +800,7 @@ export const workspaceMethods = defineServiceMethods({
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
     ]),
     returns: z.object({ ok: z.literal(true) }),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
   },
@@ -785,7 +810,7 @@ export const workspaceMethods = defineServiceMethods({
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
     ]),
     returns: z.object({ ok: z.literal(true) }),
-    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
   },
@@ -793,7 +818,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "List app candidates selectable as the active app for a host target.",
     args: z.tuple([HostTargetSchema.describe("Host target to list candidates for.")]),
     returns: z.array(HostTargetCandidateSchema),
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: READ_ACCESS,
     examples: [{ args: ["electron"] }],
   },
@@ -802,7 +827,7 @@ export const workspaceMethods = defineServiceMethods({
       "Read the active per-workspace selection for a host target along with whether it is still valid.",
     args: z.tuple([HostTargetSchema.describe("Host target to read the selection for.")]),
     returns: HostTargetSelectionStatusSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: READ_ACCESS,
     examples: [{ args: ["electron"] }],
   },
@@ -813,7 +838,7 @@ export const workspaceMethods = defineServiceMethods({
       HostTargetSelectionInputSchema.describe("Selection input (source, mode, ref/buildKey)."),
     ]),
     returns: HostTargetSelectionSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron", { source: "apps/shell" }] }],
   },
@@ -821,7 +846,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "Clear the persisted per-workspace app selection for a host target.",
     args: z.tuple([HostTargetSchema.describe("Host target to clear the selection for.")]),
     returns: z.void(),
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron"] }],
   },
@@ -832,7 +857,7 @@ export const workspaceMethods = defineServiceMethods({
       z.string().describe("Candidate app source or name."),
     ]),
     returns: WorkspaceAppVersionsSchema,
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: READ_ACCESS,
     examples: [{ args: ["electron", "apps/shell"] }],
   },
@@ -846,11 +871,11 @@ export const workspaceMethods = defineServiceMethods({
     ]),
     returns: z.object({
       buildKey: z.string(),
-      effectiveVersion: z.string(),
+      executionDigest: z.string(),
       appId: z.string(),
       source: z.string(),
     }),
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "write" },
   },
   "hostTargets.launch": {
@@ -858,7 +883,7 @@ export const workspaceMethods = defineServiceMethods({
       "Launch or reload the selected target app in this host, returning a ready/preparing/approval-required/unavailable status.",
     args: z.tuple([HostTargetSchema.describe("Host target to launch.")]),
     returns: HostTargetLaunchResultSchema,
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron"] }],
   },
@@ -867,7 +892,7 @@ export const workspaceMethods = defineServiceMethods({
       "Begin an asynchronous launch session for a host target, returning the initial session snapshot.",
     args: z.tuple([HostTargetSchema.describe("Host target to begin launching.")]),
     returns: HostTargetLaunchSessionSnapshotSchema,
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["electron"] }],
   },
@@ -875,7 +900,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "Fetch the current snapshot of a launch session by id, or null if it is unknown.",
     args: z.tuple([z.string().describe("Launch session id.")]),
     returns: HostTargetLaunchSessionSnapshotSchema.nullable(),
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: READ_ACCESS,
   },
   "hostTargets.resolveLaunchSessionApproval": {
@@ -886,7 +911,7 @@ export const workspaceMethods = defineServiceMethods({
       z.enum(["once", "deny"]).describe("Approval decision for the pending launch."),
     ]),
     returns: HostTargetLaunchSessionSnapshotSchema,
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: {
       sensitivity: "write",
     },
@@ -896,7 +921,7 @@ export const workspaceMethods = defineServiceMethods({
     description: "Cancel an in-flight launch session by id.",
     args: z.tuple([z.string().describe("Launch session id to cancel.")]),
     returns: z.void(),
-    policy: { allowed: ["shell", "app", "server"] },
+    authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
   },
 });

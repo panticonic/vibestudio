@@ -10,7 +10,7 @@ import type { AppRegistryEntry, WorkspaceAppDeclaration } from "./appHost.js";
 
 export interface AppBuildProviderDetails {
   name: string;
-  activeEv: string | null;
+  activeSourceDigest: string | null;
   activeBuildKey: string | null;
   contractVersion: string;
 }
@@ -51,7 +51,7 @@ type ReactNativeEntityCache = Pick<
 export interface ReactNativeAppBootstrap {
   appId: string;
   buildKey: string;
-  effectiveVersion: string | null;
+  executionDigest: string | null;
   capabilities: AppRegistryEntry["capabilities"];
   rnHostAbi: string;
   integrity: string;
@@ -178,7 +178,7 @@ export class ReactNativeAppAdapter {
     return {
       appId: entry.name,
       buildKey,
-      effectiveVersion: entry.activeEv,
+      executionDigest: entry.activeExecutionDigest,
       capabilities: entry.capabilities,
       rnHostAbi,
       integrity,
@@ -258,7 +258,7 @@ export class ReactNativeAppAdapter {
         (candidate) =>
           candidate.target === "react-native" &&
           candidate.status === "running" &&
-          !!candidate.activeEv &&
+          !!candidate.activeSourceDigest &&
           !!candidate.activeBundleKey &&
           normalizeRepoPath(candidate.source.repo) === normalizedSource
       );
@@ -419,7 +419,7 @@ export class ReactNativeAppAdapter {
 
   private activatePrincipal(entry: AppRegistryEntry, deviceId: string): string {
     const entityCache = this.deps.entityCache;
-    if (!entityCache || !entry.activeEv) {
+    if (!entityCache || !entry.activeSourceDigest) {
       throw new Error("Cannot activate device-scoped app principal without an active app entity");
     }
     const sourceRepo = normalizeRepoPath(entry.source.repo);
@@ -431,7 +431,8 @@ export class ReactNativeAppAdapter {
     const record: EntityRecord = {
       id: principalId,
       kind: "app",
-      source: { repoPath: sourceRepo, effectiveVersion: entry.activeEv },
+      source: { repoPath: sourceRepo },
+      activeExecutionDigest: entry.activeSourceDigest,
       contextId,
       key: principalId,
       createdAt: existing?.createdAt ?? Date.now(),
@@ -461,7 +462,7 @@ export function isBuildProviderDetailsLike(value: unknown): value is AppBuildPro
   return (
     typeof candidate.name === "string" &&
     candidate.name.length > 0 &&
-    (typeof candidate.activeEv === "string" || candidate.activeEv === null) &&
+    (typeof candidate.activeSourceDigest === "string" || candidate.activeSourceDigest === null) &&
     (typeof candidate.activeBuildKey === "string" || candidate.activeBuildKey === null) &&
     typeof candidate.contractVersion === "string" &&
     candidate.contractVersion.length > 0

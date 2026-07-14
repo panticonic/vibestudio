@@ -2,10 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { sealBuildEnvironment } from "./sourceClosure.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
@@ -49,11 +50,13 @@ describe("buildUnit terminal worker builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    sealBuildEnvironment({ appRoot: root, workspaceRoot });
     // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
     initBuilder([path.join(REPO_ROOT, "node_modules")]);
   });
 
   afterEach(() => {
+    sealBuildEnvironment(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -101,7 +104,7 @@ describe("buildUnit terminal worker builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-workers/terminal-min"),
-      "ev-terminal-min",
+      "sourceDigest-terminal-min",
       graph,
       workspaceRoot,
       "state:test"
@@ -181,7 +184,7 @@ describe("buildUnit terminal worker builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       graph.get("@workspace-workers/stale-dist-worker"),
-      "ev-stale-dist-worker",
+      "sourceDigest-stale-dist-worker",
       graph,
       workspaceRoot,
       "state:test"

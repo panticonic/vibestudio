@@ -48,7 +48,11 @@ describe("externalOpenService", () => {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
-      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
 
   const workerCaller = () =>
@@ -56,7 +60,11 @@ describe("externalOpenService", () => {
       callerId: "worker-1",
       callerKind: "worker",
       repoPath: "workers/example",
-      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
 
   const doCaller = () =>
@@ -64,7 +72,11 @@ describe("externalOpenService", () => {
       callerId: "do:workers/example:ExampleDO:agent-1",
       callerKind: "do",
       repoPath: "workers/example",
-      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     });
 
   it("requests approval for DO opens", async () => {

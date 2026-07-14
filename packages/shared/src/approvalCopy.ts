@@ -28,42 +28,24 @@ function prettifyApprovalId(id: string): string {
   return truncateId(last);
 }
 
-function isIdentityScopedVersionApproval(approval: PendingApproval): boolean {
-  if (
-    approval.requester?.category === "eval" ||
-    approval.requester?.category === "internal-service"
-  ) {
-    return true;
-  }
-  return approval.effectiveVersion === "internal" || approval.repoPath === "vibestudio/internal";
+function trustVersionLabel(_approval: PendingApproval, fallback = "Trust version"): string {
+  return fallback;
 }
 
-function trustVersionLabel(approval: PendingApproval, fallback = "Trust version"): string {
-  return isIdentityScopedVersionApproval(approval) ? "Trust identity" : fallback;
+function trustSubject(_approval: PendingApproval): string {
+  return "this code version";
 }
 
-function trustSubject(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "this requester identity"
-    : "this code version";
+function exactTrustSubject(_approval: PendingApproval): string {
+  return "this exact code version";
 }
 
-function exactTrustSubject(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "this exact runtime identity"
-    : "this exact code version";
+function networkTrustLabel(_approval: PendingApproval): string {
+  return "Trust version with network";
 }
 
-function networkTrustLabel(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "Trust identity with network"
-    : "Trust version with network";
-}
-
-function corsTrustLabel(approval: PendingApproval): string {
-  return isIdentityScopedVersionApproval(approval)
-    ? "Trust identity with CORS"
-    : "Trust version with CORS";
+function corsTrustLabel(_approval: PendingApproval): string {
+  return "Trust version with CORS";
 }
 
 export type ApprovalRiskTone = "standard" | "caution" | "danger";

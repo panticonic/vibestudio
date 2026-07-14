@@ -112,7 +112,7 @@ function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUs
         "action",
         "scope",
         "repoPath",
-        "effectiveVersion",
+        "executionDigest",
         "grantedAt",
         "grantedBy",
       ].includes(key)
@@ -126,7 +126,7 @@ function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUs
     Number.isFinite(grant.grantedAt) &&
     typeof grant.grantedBy === "string" &&
     typeof grant.repoPath === "string" &&
-    typeof grant.effectiveVersion === "string"
+    typeof grant.executionDigest === "string"
   );
 }
 
@@ -139,7 +139,7 @@ function storedCredentialUseGrantKey(grant: StoredCredentialUseGrant): string {
     grant.action,
     grant.scope,
     grant.repoPath,
-    grant.effectiveVersion,
+    grant.executionDigest,
   ].join("\x00");
 }
 

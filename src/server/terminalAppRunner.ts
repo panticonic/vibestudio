@@ -1,23 +1,14 @@
 import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
-import { artifactFilePath } from "./buildV2/buildStore.js";
-
-export interface TerminalAppBuild {
-  dir: string;
-  metadata: { ev: string };
-  artifacts?: Array<{
-    path: string;
-    role: string;
-  }>;
-}
+import { createNativeChildEnvironment } from "@vibestudio/shared/nativeProcessEnvironment";
 
 export interface TerminalAppLaunch {
   appId: string;
   source: string;
   buildKey: string;
-  effectiveVersion: string | null;
+  executionDigest: string;
   gatewayUrl: string;
-  build: TerminalAppBuild;
+  entryPath: string;
   /**
    * Interactive (TUI) apps get the server's real terminal via stdio "inherit"
    * (stdin/stdout/stderr) instead of piped capture. Required for apps that
@@ -82,31 +73,31 @@ export class TerminalAppRunner {
 
   private async startOnce(launch: TerminalAppLaunch): Promise<void> {
     await this.stop(launch.appId, "restart");
-    const artifact = (launch.build.artifacts ?? []).find(
-      (candidate) => candidate.role === "primary"
-    );
-    if (!artifact) throw new Error(`Terminal app ${launch.appId} has no primary artifact`);
-    const entryPath = artifactFilePath(launch.build, artifact);
     const rpcGrant = this.deps.connectionGrants.grant(
       launch.appId,
       "server",
       TERMINAL_APP_CONNECTION_GRANT_TTL_MS
     );
     const connectionId = `terminal:${launch.appId}:${launch.buildKey}`;
-    const proc = createProcessAdapter(
-      entryPath,
-      {
-        ...process.env,
+    const childEnvironment = createNativeChildEnvironment({
+      purpose: "terminal",
+      declared: {
         VIBESTUDIO_TERMINAL_APP_ID: launch.appId,
         VIBESTUDIO_TERMINAL_APP_SOURCE: launch.source,
         VIBESTUDIO_TERMINAL_APP_BUILD_KEY: launch.buildKey,
-        VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION: launch.effectiveVersion ?? "",
+        VIBESTUDIO_TERMINAL_APP_EXECUTION_DIGEST: launch.executionDigest,
         VIBESTUDIO_TERMINAL_APP_GATEWAY_URL: launch.gatewayUrl,
-        VIBESTUDIO_TERMINAL_APP_RPC_TOKEN: rpcGrant.token,
         VIBESTUDIO_TERMINAL_APP_CONNECTION_ID: connectionId,
       },
-      { preferNode: true, stdio: launch.interactive ? "inherit" : "pipe" }
-    );
+      purposeCredential: {
+        name: "VIBESTUDIO_TERMINAL_APP_RPC_TOKEN",
+        value: rpcGrant.token,
+      },
+    });
+    const proc = createProcessAdapter(launch.entryPath, childEnvironment.env, {
+      preferNode: true,
+      stdio: launch.interactive ? "inherit" : "pipe",
+    });
     const exitHandler = (code: number | null) => this.handleExit(launch.appId, code);
     this.running.set(launch.appId, { launch, proc, stopping: false, exitHandler });
     proc.on("exit", exitHandler);
@@ -115,7 +106,7 @@ export class TerminalAppRunner {
     proc.stdout?.on("data", (chunk) => this.handleOutput(launch.appId, "info", "stdout", chunk));
     proc.stderr?.on("data", (chunk) => this.handleOutput(launch.appId, "error", "stderr", chunk));
     this.deps.onStatus(launch.appId, "running", null);
-    this.deps.onLog(launch.appId, "info", `started ${entryPath}`, "runner");
+    this.deps.onLog(launch.appId, "info", `started ${launch.entryPath}`, "runner");
   }
 
   async stop(appId: string, reason = "stop"): Promise<void> {

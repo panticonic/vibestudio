@@ -34,8 +34,8 @@ export interface UnitBuildIdentity<Kind extends UnitKind = UnitKind> {
   unitKind: Kind;
   name: string;
   source: UnitSource;
-  effectiveVersion: string | null;
-  dependencyEvs: Record<string, string>;
+  sourceDigest: string | null;
+  dependencySourceDigests: Record<string, string>;
   externalDeps: Record<string, string>;
   capabilities?: string[];
 }
@@ -89,10 +89,11 @@ export interface UnitRegistryEntryBase {
   version: string;
   source: UnitSource;
   installedAt: number;
-  activeEv: string | null;
+  activeSourceDigest: string | null;
+  activeExecutionDigest: string | null;
   activeSourceHash: string | null;
   activeBundleKey: string | null;
-  activeDependencyEvs: Record<string, string>;
+  activeDependencySourceDigests: Record<string, string>;
   activeExternalDeps: Record<string, string>;
   activeRuntimeDepsKey: string | null;
   status: UnitRegistryStatus;
@@ -141,27 +142,27 @@ export function findUnitGraphNode<Node extends UnitTypedGraphNode>(
   throw new Error(`Unknown ${descriptor.approvalFraming.unitLabel} unit: ${nameOrRepo}`);
 }
 
-export function collectTransitiveUnitDependencyEvs<Node extends UnitDependencyGraphNode>(
+export function collectTransitiveUnitDependencySourceDigests<Node extends UnitDependencyGraphNode>(
   nodes: Iterable<Node>,
   root: Node,
-  getEffectiveVersion: (name: string) => string | null | undefined
+  getSourceDigest: (name: string) => string | null | undefined
 ): Record<string, string> {
-  const activeDependencyEvs: Record<string, string> = {};
+  const activeDependencySourceDigests: Record<string, string> = {};
   const byName = new Map(Array.from(nodes, (node) => [node.name, node] as const));
   const visited = new Set<string>();
 
   const visit = (depName: string): void => {
     if (visited.has(depName)) return;
     visited.add(depName);
-    const depEv = getEffectiveVersion(depName);
-    if (depEv) activeDependencyEvs[depName] = depEv;
+    const depEv = getSourceDigest(depName);
+    if (depEv) activeDependencySourceDigests[depName] = depEv;
     const depNode = byName.get(depName);
     if (!depNode) return;
     for (const transitive of depNode.internalDeps) visit(transitive);
   };
 
   for (const dep of root.internalDeps) visit(dep);
-  return activeDependencyEvs;
+  return activeDependencySourceDigests;
 }
 
 export interface UnitWorkspaceStatus<Kind extends UnitKind = UnitKind> {
@@ -171,8 +172,8 @@ export interface UnitWorkspaceStatus<Kind extends UnitKind = UnitKind> {
   displayName: string;
   status: UnitRegistryStatus;
   version: string;
-  ev: string | null;
-  activeEv: string | null;
+  sourceDigest: string | null;
+  executionDigest: string | null;
   activeBundleKey: string | null;
   activeRuntimeDepsKey: string | null;
   lastError: string | null;
@@ -192,10 +193,11 @@ export interface UnitBuildActivationOptions<Entry extends UnitRegistryEntryBase>
   version: string;
   sourceRepo: string;
   ref: string;
-  buildDir: string;
-  effectiveVersion: string;
+  buildKey: string;
+  sourceDigest: string;
+  executionDigest: string;
   activeSourceHash: string | null;
-  dependencyEvs: Record<string, string>;
+  dependencySourceDigests: Record<string, string>;
   externalDeps: Record<string, string>;
   runtimeDepsKey?: string | null;
   status?: UnitRegistryStatus;
@@ -205,8 +207,8 @@ export interface UnitBuildActivationOptions<Entry extends UnitRegistryEntryBase>
 export interface UnitBuildRefreshOptions {
   sourceRepo: string;
   ref: string;
-  effectiveVersion: string | null;
-  dependencyEvs: Record<string, string>;
+  sourceDigest: string | null;
+  dependencySourceDigests: Record<string, string>;
   externalDeps: Record<string, string>;
   runtimeDepsKey?: string | null;
 }
@@ -216,8 +218,8 @@ export interface UnitBuildIdentityOptions<Kind extends UnitKind> {
   name: string;
   sourceRepo: string;
   ref: string;
-  effectiveVersion: string | null;
-  dependencyEvs: Record<string, string>;
+  sourceDigest: string | null;
+  dependencySourceDigests: Record<string, string>;
   externalDeps: Record<string, string>;
   capabilities?: Iterable<string>;
 }
@@ -230,8 +232,8 @@ export function createUnitBuildIdentity<Kind extends UnitKind>(
     unitKind: opts.unitKind,
     name: opts.name,
     source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
-    effectiveVersion: opts.effectiveVersion,
-    dependencyEvs: opts.dependencyEvs,
+    sourceDigest: opts.sourceDigest,
+    dependencySourceDigests: opts.dependencySourceDigests,
     externalDeps: opts.externalDeps,
     ...(capabilities ? { capabilities } : {}),
   };
@@ -243,8 +245,8 @@ export interface UnitBatchEntryBase<Kind extends UnitKind = UnitKind> {
   displayName: string;
   version: string | null;
   source: UnitSource;
-  ev: string | null;
-  dependencyEvs: Record<string, string>;
+  sourceDigest: string | null;
+  dependencySourceDigests: Record<string, string>;
   externalDeps: Record<string, string>;
 }
 
@@ -255,8 +257,8 @@ export interface UnitBatchEntryBaseOptions<Kind extends UnitKind> {
   version: string | null;
   sourceRepo: string;
   ref: string;
-  effectiveVersion: string | null;
-  dependencyEvs: Record<string, string>;
+  sourceDigest: string | null;
+  dependencySourceDigests: Record<string, string>;
   externalDeps: Record<string, string>;
 }
 
@@ -333,7 +335,7 @@ export interface UnitBatchApprovalQueue<ApprovalEntry, ConfigWrite = unknown> {
     callerId: string;
     callerKind: "system";
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
     trigger: UnitReconcileTrigger;
     title: string;
     description: string;
@@ -358,7 +360,7 @@ export function requestUnitBatchApproval<
     callerId: `system:${opts.descriptor.sourceRoot}`,
     callerKind: "system",
     repoPath: "meta",
-    effectiveVersion: "",
+    executionDigest: "",
     trigger: opts.trigger,
     title: `Approve workspace ${opts.descriptor.approvalFraming.unitLabelPlural}`,
     description: unitBatchApprovalDescription(opts.descriptor, opts.entries.length),
@@ -453,7 +455,7 @@ export type UnitUserlandCallerKind = "panel" | "app" | "worker" | "do";
 export interface UnitSourceChangeCallerIdentity {
   callerKind: string;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
 }
 
 export interface UnitSourceChangeCaller {
@@ -762,10 +764,11 @@ export class UnitHost<
         ref: opts.ref,
       },
       version: opts.version,
-      activeEv: opts.effectiveVersion,
+      activeSourceDigest: opts.sourceDigest,
+      activeExecutionDigest: opts.executionDigest,
       activeSourceHash: opts.activeSourceHash,
-      activeBundleKey: path.basename(opts.buildDir),
-      activeDependencyEvs: opts.dependencyEvs,
+      activeBundleKey: opts.buildKey,
+      activeDependencySourceDigests: opts.dependencySourceDigests,
       activeExternalDeps: opts.externalDeps,
       activeRuntimeDepsKey: opts.runtimeDepsKey ?? null,
       status: opts.status ?? "running",
@@ -779,8 +782,8 @@ export class UnitHost<
 
   needsBuildRefresh(entry: Entry, opts: UnitBuildRefreshOptions): boolean {
     if (!unitEntrySourceMatches(entry, opts.sourceRepo, opts.ref)) return true;
-    if (opts.effectiveVersion && entry.activeEv !== opts.effectiveVersion) return true;
-    if (!recordsEqual(entry.activeDependencyEvs ?? {}, opts.dependencyEvs)) return true;
+    if (opts.sourceDigest && entry.activeSourceDigest !== opts.sourceDigest) return true;
+    if (!recordsEqual(entry.activeDependencySourceDigests ?? {}, opts.dependencySourceDigests)) return true;
     if (!recordsEqual(entry.activeExternalDeps ?? {}, opts.externalDeps)) return true;
     if (
       opts.runtimeDepsKey !== undefined &&
@@ -998,8 +1001,8 @@ export function unitWorkspaceStatus<Entry extends UnitRegistryEntryBase>(
     displayName: opts.displayName ?? entry.name,
     status: entry.status,
     version: entry.version,
-    ev: entry.activeEv,
-    activeEv: entry.activeEv,
+    sourceDigest: entry.activeSourceDigest,
+    executionDigest: entry.activeExecutionDigest,
     activeBundleKey: entry.activeBundleKey,
     activeRuntimeDepsKey: entry.activeRuntimeDepsKey,
     lastError: entry.lastError,
@@ -1038,10 +1041,11 @@ export function createPendingUnitRegistryEntry<Kind extends UnitKind>(opts: {
     version: opts.version,
     source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
     installedAt: opts.installedAt ?? Date.now(),
-    activeEv: null,
+    activeSourceDigest: null,
+    activeExecutionDigest: null,
     activeSourceHash: null,
     activeBundleKey: null,
-    activeDependencyEvs: {},
+    activeDependencySourceDigests: {},
     activeExternalDeps: {},
     activeRuntimeDepsKey: null,
     status: opts.building ? "building" : "pending-approval",
@@ -1058,8 +1062,8 @@ export function createUnitBatchEntryBase<Kind extends UnitKind>(
     displayName: opts.displayName ?? opts.name,
     version: opts.version,
     source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
-    ev: opts.effectiveVersion,
-    dependencyEvs: opts.dependencyEvs,
+    sourceDigest: opts.sourceDigest,
+    dependencySourceDigests: opts.dependencySourceDigests,
     externalDeps: opts.externalDeps,
   };
 }
@@ -1168,11 +1172,7 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
 export function normalizeUnitRegistryEntry<Entry extends UnitRegistryEntryBase>(
   entry: Entry
 ): Entry {
-  return {
-    ...entry,
-    activeDependencyEvs: entry.activeDependencyEvs ?? {},
-    activeExternalDeps: entry.activeExternalDeps ?? {},
-  };
+  return { ...entry };
 }
 
 export function isUnitRegistryEntry<Kind extends UnitKind>(
@@ -1190,6 +1190,16 @@ export function isUnitRegistryEntry<Kind extends UnitKind>(
     typeof entry.source.repo === "string" &&
     typeof entry.source.ref === "string" &&
     typeof entry.installedAt === "number" &&
+    (typeof entry.activeSourceDigest === "string" || entry.activeSourceDigest === null) &&
+    (typeof entry.activeExecutionDigest === "string" || entry.activeExecutionDigest === null) &&
+    (typeof entry.activeSourceHash === "string" || entry.activeSourceHash === null) &&
+    (typeof entry.activeBundleKey === "string" || entry.activeBundleKey === null) &&
+    !!entry.activeDependencySourceDigests &&
+    typeof entry.activeDependencySourceDigests === "object" &&
+    !!entry.activeExternalDeps &&
+    typeof entry.activeExternalDeps === "object" &&
+    (typeof entry.activeRuntimeDepsKey === "string" || entry.activeRuntimeDepsKey === null) &&
+    (typeof entry.lastError === "string" || entry.lastError === null) &&
     typeof entry.status === "string"
   );
 }
@@ -1203,8 +1213,8 @@ export function unitBuildIdentityFromRegistryEntry<Entry extends UnitRegistryEnt
     name: entry.name,
     sourceRepo: entry.source.repo,
     ref: entry.source.ref,
-    effectiveVersion: entry.activeEv,
-    dependencyEvs: entry.activeDependencyEvs ?? {},
+    sourceDigest: entry.activeSourceDigest,
+    dependencySourceDigests: entry.activeDependencySourceDigests ?? {},
     externalDeps: entry.activeExternalDeps ?? {},
     capabilities,
   });
@@ -1223,9 +1233,9 @@ function unitBuildIdentitiesMatch(
   if (approved.source.kind !== candidate.source.kind) return false;
   if (approved.source.repo !== candidate.source.repo) return false;
   if (approved.source.ref !== candidate.source.ref) return false;
-  if (approved.effectiveVersion === null || candidate.effectiveVersion === null) return false;
-  if (approved.effectiveVersion !== candidate.effectiveVersion) return false;
-  if (!recordsEqual(approved.dependencyEvs, candidate.dependencyEvs)) return false;
+  if (approved.sourceDigest === null || candidate.sourceDigest === null) return false;
+  if (approved.sourceDigest !== candidate.sourceDigest) return false;
+  if (!recordsEqual(approved.dependencySourceDigests, candidate.dependencySourceDigests)) return false;
   if (!recordsEqual(approved.externalDeps, candidate.externalDeps)) return false;
   const approvedCapabilities = approved.capabilities ?? null;
   const candidateCapabilities = candidate.capabilities ?? null;

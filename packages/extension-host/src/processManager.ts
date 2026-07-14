@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
+import { createNativeChildEnvironment } from "@vibestudio/shared/nativeProcessEnvironment";
 
 import type { ExtensionHealth, ExtensionProcessState } from "./types.js";
 
@@ -59,17 +60,10 @@ export class ExtensionProcessManager {
 
   private async spawn(state: ExtensionProcessState): Promise<void> {
     const childRuntime = resolveChildRuntimePath();
+    const base = createNativeChildEnvironment({ purpose: "helper" }).env;
     const proc = createProcessAdapter(
       childRuntime,
-      {
-        ...process.env,
-        VIBESTUDIO_EXTENSION_NAME: state.name,
-        VIBESTUDIO_EXTENSION_VERSION: state.version,
-        VIBESTUDIO_EXTENSION_BUNDLE_PATH: state.bundlePath,
-        VIBESTUDIO_EXTENSION_STORAGE_DIR: state.storageDir,
-        VIBESTUDIO_EXTENSION_GATEWAY_URL: state.gatewayUrl,
-        VIBESTUDIO_EXTENSION_RPC_TOKEN: state.rpcToken,
-      },
+      extensionProcessEnvironment(state, base),
       {
         execArgv: extensionRuntimeExecArgv(),
         preferNode: true,
@@ -299,6 +293,30 @@ export class ExtensionProcessManager {
     if (crashState?.timer) clearTimeout(crashState.timer);
     this.crashes.delete(name);
   }
+}
+
+/**
+ * Build the sealed child environment for an extension execution artifact.
+ * External native packages live in an ABI-keyed runtime layer rather than in
+ * the immutable JS artifact. NODE_PATH is set to that one exact layer; ambient
+ * parent resolution paths are intentionally discarded.
+ */
+export function extensionProcessEnvironment(
+  state: ExtensionProcessState,
+  base: NodeJS.ProcessEnv
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    VIBESTUDIO_EXTENSION_NAME: state.name,
+    VIBESTUDIO_EXTENSION_VERSION: state.version,
+    VIBESTUDIO_EXTENSION_BUNDLE_PATH: state.bundlePath,
+    VIBESTUDIO_EXTENSION_STORAGE_DIR: state.storageDir,
+    VIBESTUDIO_EXTENSION_GATEWAY_URL: state.gatewayUrl,
+    VIBESTUDIO_EXTENSION_RPC_TOKEN: state.rpcToken,
+  };
+  delete env["NODE_PATH"];
+  if (state.runtimeNodeModulesDir) env["NODE_PATH"] = state.runtimeNodeModulesDir;
+  return env;
 }
 
 export function resolveChildRuntimePath(): string {

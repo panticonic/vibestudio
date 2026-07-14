@@ -1,0 +1,1870 @@
+{
+  "account": {
+    "service": {
+      "principals": ["host", "user", "code"]
+    },
+    "methods": {
+      "getProfile": {
+        "principals": ["host", "user", "code", "entity"]
+      },
+      "isMember": {
+        "principals": ["host", "user", "code", "entity"]
+      },
+      "listWorkspaceMembers": {
+        "principals": ["host", "user", "code", "entity"]
+      },
+      "resolveProfiles": {
+        "principals": ["host", "user", "code", "entity"]
+      },
+      "updateProfile": {
+        "inherits": true
+      }
+    }
+  },
+  "audit": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "query": {
+        "inherits": true
+      }
+    }
+  },
+  "auth": {
+    "service": {
+      "principals": ["host", "user"]
+    },
+    "methods": {
+      "getConnectionInfo": {
+        "principals": ["host", "user", "code", "entity"]
+      },
+      "grantConnection": {
+        "principals": ["host", "user", "code"]
+      },
+      "mintAgentCredential": {
+        "principals": ["code", "host"]
+      },
+      "revokeAgentCredential": {
+        "principals": ["code", "host"]
+      }
+    }
+  },
+  "blobstore": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "delete": {
+        "principals": ["user", "host"]
+      },
+      "diffTrees": {
+        "principals": ["code", "user", "host"]
+      },
+      "getBase64": {
+        "principals": ["code", "user", "host"]
+      },
+      "getRange": {
+        "principals": ["code", "user", "host"]
+      },
+      "getRangeBytes": {
+        "principals": ["code", "user", "host"]
+      },
+      "getText": {
+        "principals": ["code", "user", "host"]
+      },
+      "getTree": {
+        "principals": ["code", "user", "host"]
+      },
+      "grep": {
+        "principals": ["code", "user", "host"]
+      },
+      "has": {
+        "principals": ["code", "user", "host"]
+      },
+      "list": {
+        "principals": ["user", "host"]
+      },
+      "listTree": {
+        "principals": ["code", "user", "host"]
+      },
+      "materializeTree": {
+        "principals": ["user", "host"]
+      },
+      "putBase64": {
+        "principals": ["code", "user", "host"]
+      },
+      "putText": {
+        "principals": ["code", "user", "host"]
+      },
+      "putTree": {
+        "principals": ["code", "user", "host"]
+      },
+      "readFileAtTree": {
+        "principals": ["code", "user", "host"]
+      },
+      "stat": {
+        "principals": ["code", "user", "host"]
+      }
+    }
+  },
+  "build": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "doctorExtension": {
+        "inherits": true
+      },
+      "gc": {
+        "inherits": true
+      },
+      "getAboutPages": {
+        "inherits": true
+      },
+      "getBuild": {
+        "inherits": true
+      },
+      "getBuildMetadata": {
+        "inherits": true
+      },
+      "getBuildNpm": {
+        "inherits": true
+      },
+      "getBuildReport": {
+        "inherits": true
+      },
+      "getPanelMetadata": {
+        "inherits": true
+      },
+      "getSourceDigest": {
+        "inherits": true
+      },
+      "hasUnit": {
+        "inherits": true
+      },
+      "inspectBuildProvenance": {
+        "inherits": true
+      },
+      "listRecentBuildEvents": {
+        "inherits": true
+      },
+      "listSkills": {
+        "inherits": true
+      },
+      "recompute": {
+        "inherits": true
+      },
+      "resolveExecutionAuthority": {
+        "principals": ["host"]
+      },
+      "validate": {
+        "inherits": true
+      }
+    }
+  },
+  "corsApproval": {
+    "service": {
+      "principals": ["code"]
+    },
+    "methods": {
+      "authorize": {
+        "inherits": true
+      }
+    }
+  },
+  "credentials": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "audit": {
+        "inherits": true
+      },
+      "cancelOAuth": {
+        "inherits": true
+      },
+      "completeCapture": {
+        "inherits": true
+      },
+      "configureClient": {
+        "inherits": true
+      },
+      "connect": {
+        "inherits": true
+      },
+      "deleteClientConfig": {
+        "inherits": true
+      },
+      "forwardOAuthCallback": {
+        "inherits": true
+      },
+      "getClientConfigStatus": {
+        "inherits": true
+      },
+      "inspectStoredCredentials": {
+        "inherits": true
+      },
+      "listStoredCredentials": {
+        "inherits": true
+      },
+      "proxyFetch": {
+        "inherits": true
+      },
+      "proxyGitHttp": {
+        "inherits": true
+      },
+      "requestCredentialInput": {
+        "inherits": true
+      },
+      "resolveCredential": {
+        "inherits": true
+      },
+      "revokeCredential": {
+        "inherits": true
+      },
+      "storeCredential": {
+        "inherits": true
+      }
+    }
+  },
+  "devHost": {
+    "service": {
+      "principals": ["user", "code", "host", "entity"]
+    },
+    "methods": {
+      "eval": {
+        "inherits": true
+      },
+      "launch": {
+        "inherits": true
+      },
+      "logs": {
+        "inherits": true
+      },
+      "rebuild": {
+        "inherits": true
+      },
+      "status": {
+        "inherits": true
+      },
+      "stop": {
+        "inherits": true
+      },
+      "watch": {
+        "inherits": true
+      }
+    }
+  },
+  "docs": {
+    "service": {
+      "principals": ["code", "host", "user", "entity"]
+    },
+    "methods": {
+      "describe": {
+        "inherits": true
+      },
+      "describeService": {
+        "inherits": true
+      },
+      "getSchema": {
+        "inherits": true
+      },
+      "listServices": {
+        "inherits": true
+      },
+      "listSurfaces": {
+        "inherits": true
+      },
+      "search": {
+        "inherits": true
+      }
+    }
+  },
+  "eval": {
+    "service": {
+      "principals": ["code", "user", "host", "entity"]
+    },
+    "methods": {
+      "cancel": {
+        "inherits": true
+      },
+      "deleteScopeValue": {
+        "inherits": true
+      },
+      "forceReset": {
+        "inherits": true
+      },
+      "getRun": {
+        "inherits": true
+      },
+      "readScopeTextPage": {
+        "inherits": true
+      },
+      "reset": {
+        "inherits": true
+      },
+      "run": {
+        "inherits": true
+      },
+      "startRun": {
+        "inherits": true
+      }
+    }
+  },
+  "events": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "subscribe": {
+        "inherits": true
+      },
+      "unsubscribe": {
+        "inherits": true
+      },
+      "unsubscribeAll": {
+        "inherits": true
+      }
+    }
+  },
+  "extensions": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "emit": {
+        "inherits": true
+      },
+      "fetchRequestBodyChunk": {
+        "inherits": true
+      },
+      "fetchRequestBodyClose": {
+        "inherits": true
+      },
+      "health": {
+        "inherits": true
+      },
+      "invoke": {
+        "inherits": true
+      },
+      "invokeProvider": {
+        "inherits": true
+      },
+      "invokeStream": {
+        "inherits": true
+      },
+      "list": {
+        "inherits": true
+      },
+      "log": {
+        "inherits": true
+      },
+      "on": {
+        "inherits": true
+      },
+      "ready": {
+        "inherits": true
+      },
+      "reload": {
+        "inherits": true
+      },
+      "streamingMethods": {
+        "inherits": true
+      }
+    }
+  },
+  "externalOpen": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "openExternal": {
+        "inherits": true
+      }
+    }
+  },
+  "fs": {
+    "service": {
+      "principals": ["code", "host", "user", "entity"]
+    },
+    "methods": {
+      "access": {
+        "inherits": true
+      },
+      "appendFile": {
+        "inherits": true
+      },
+      "chmod": {
+        "inherits": true
+      },
+      "copyFile": {
+        "inherits": true
+      },
+      "ensureMaterialized": {
+        "inherits": true
+      },
+      "exists": {
+        "inherits": true
+      },
+      "glob": {
+        "inherits": true
+      },
+      "grep": {
+        "inherits": true
+      },
+      "handleClose": {
+        "inherits": true
+      },
+      "handleRead": {
+        "inherits": true
+      },
+      "handleStat": {
+        "inherits": true
+      },
+      "handleWrite": {
+        "inherits": true
+      },
+      "lstat": {
+        "inherits": true
+      },
+      "mkdir": {
+        "inherits": true
+      },
+      "mktemp": {
+        "inherits": true
+      },
+      "open": {
+        "inherits": true
+      },
+      "readdir": {
+        "inherits": true
+      },
+      "readFile": {
+        "inherits": true
+      },
+      "readlink": {
+        "inherits": true
+      },
+      "realpath": {
+        "inherits": true
+      },
+      "rename": {
+        "inherits": true
+      },
+      "rm": {
+        "inherits": true
+      },
+      "rmdir": {
+        "inherits": true
+      },
+      "stat": {
+        "inherits": true
+      },
+      "symlink": {
+        "inherits": true
+      },
+      "truncate": {
+        "inherits": true
+      },
+      "unlink": {
+        "inherits": true
+      },
+      "utimes": {
+        "inherits": true
+      },
+      "writeFile": {
+        "inherits": true
+      }
+    }
+  },
+  "gateway": {
+    "service": {
+      "principals": ["user", "code"]
+    },
+    "methods": {
+      "fetch": {
+        "inherits": true
+      }
+    }
+  },
+  "gitInterop": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "commitMapping": {
+        "inherits": true
+      },
+      "completeWorkspaceDependencies": {
+        "inherits": true
+      },
+      "createDisposableRemote": {
+        "inherits": true
+      },
+      "detachUpstream": {
+        "inherits": true
+      },
+      "importProject": {
+        "inherits": true
+      },
+      "inspectDisposableRemote": {
+        "inherits": true
+      },
+      "publishRepo": {
+        "inherits": true
+      },
+      "publishToDisposableRemote": {
+        "inherits": true
+      },
+      "pullUpstream": {
+        "inherits": true
+      },
+      "pushDisposableRemote": {
+        "inherits": true
+      },
+      "pushUpstream": {
+        "inherits": true
+      },
+      "removeDisposableRemote": {
+        "inherits": true
+      },
+      "removeSharedRemote": {
+        "inherits": true
+      },
+      "removeUpstream": {
+        "inherits": true
+      },
+      "resetExportMarker": {
+        "inherits": true
+      },
+      "setAutoPush": {
+        "inherits": true
+      },
+      "setSharedRemote": {
+        "inherits": true
+      },
+      "setUpstream": {
+        "inherits": true
+      },
+      "upstreamStatus": {
+        "inherits": true
+      }
+    }
+  },
+  "governance": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "list": {
+        "inherits": true
+      }
+    }
+  },
+  "hostLifecycle": {
+    "service": {
+      "principals": ["user", "host"]
+    },
+    "methods": {
+      "shutdown": {
+        "inherits": true
+      }
+    }
+  },
+  "hubControl": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "addWorkspaceMember": {
+        "inherits": true
+      },
+      "createWorkspace": {
+        "inherits": true
+      },
+      "deleteWorkspace": {
+        "inherits": true
+      },
+      "getProfile": {
+        "inherits": true
+      },
+      "inviteUser": {
+        "inherits": true
+      },
+      "listDevices": {
+        "inherits": true
+      },
+      "listUserPresence": {
+        "inherits": true
+      },
+      "listWorkspaceMembers": {
+        "inherits": true
+      },
+      "listWorkspaces": {
+        "inherits": true
+      },
+      "pairDevice": {
+        "inherits": true
+      },
+      "removeWorkspaceMember": {
+        "inherits": true
+      },
+      "revokeDevice": {
+        "inherits": true
+      },
+      "revokeUser": {
+        "inherits": true
+      },
+      "routeWorkspace": {
+        "inherits": true
+      },
+      "setRole": {
+        "inherits": true
+      },
+      "updateProfile": {
+        "inherits": true
+      }
+    }
+  },
+  "mirror": {
+    "service": {
+      "principals": ["user", "entity", "code", "host"]
+    },
+    "methods": {
+      "objects": {
+        "principals": ["user", "entity", "code", "host"]
+      },
+      "targets": {
+        "principals": ["user", "entity", "code", "host"]
+      }
+    }
+  },
+  "notification": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "dismiss": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "service:notification.dismiss"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "service:notification.dismiss"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:notification.dismiss"
+        },
+        "additional": [
+          {
+            "capability": "notifications",
+            "requirement": {
+              "kind": "any",
+              "requirements": [
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "user",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "code",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                }
+              ]
+            },
+            "resource": {
+              "kind": "literal",
+              "key": "platform:notifications"
+            }
+          }
+        ]
+      },
+      "reportAction": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "service:notification.reportAction"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "service:notification.reportAction"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:notification.reportAction"
+        },
+        "additional": [
+          {
+            "capability": "notifications",
+            "requirement": {
+              "kind": "any",
+              "requirements": [
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "user",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "code",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                }
+              ]
+            },
+            "resource": {
+              "kind": "literal",
+              "key": "platform:notifications"
+            }
+          }
+        ]
+      },
+      "show": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "service:notification.show"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "service:notification.show"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:notification.show"
+        },
+        "additional": [
+          {
+            "capability": "notifications",
+            "requirement": {
+              "kind": "any",
+              "requirements": [
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "user",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "code",
+                      "capability": "notifications"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                }
+              ]
+            },
+            "resource": {
+              "kind": "literal",
+              "key": "platform:notifications"
+            }
+          }
+        ]
+      },
+      "signalUserInbox": {
+        "principals": ["code", "host"]
+      }
+    }
+  },
+  "panelCdp": {
+    "service": {
+      "principals": ["user", "host", "code", "entity"]
+    },
+    "methods": {
+      "consoleHistory": {
+        "inherits": true
+      },
+      "getCdpEndpoint": {
+        "inherits": true
+      },
+      "goBack": {
+        "inherits": true
+      },
+      "goForward": {
+        "inherits": true
+      },
+      "hostProvider.close": {
+        "principals": ["user", "host"]
+      },
+      "hostProvider.open": {
+        "principals": ["user", "host"]
+      },
+      "hostProvider.send": {
+        "principals": ["user", "host"]
+      },
+      "navigate": {
+        "inherits": true
+      },
+      "reload": {
+        "inherits": true
+      },
+      "screenshot": {
+        "inherits": true
+      },
+      "stop": {
+        "inherits": true
+      }
+    }
+  },
+  "panelLog": {
+    "service": {
+      "principals": ["user", "host"]
+    },
+    "methods": {
+      "append": {
+        "inherits": true
+      }
+    }
+  },
+  "panelRuntime": {
+    "service": {
+      "principals": ["user", "host"],
+      "description": "Authenticated clients and the product host control runtime leases"
+    },
+    "methods": {
+      "acquire": {
+        "inherits": true
+      },
+      "getSnapshot": {
+        "principals": ["user", "code", "entity", "host"]
+      },
+      "registerClient": {
+        "inherits": true
+      },
+      "release": {
+        "inherits": true
+      },
+      "takeOver": {
+        "inherits": true
+      },
+      "unregisterClient": {
+        "inherits": true
+      }
+    }
+  },
+  "panelTree": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "archive": {
+        "inherits": true
+      },
+      "archiveOwnedRoots": {
+        "principals": ["host"]
+      },
+      "callAgent": {
+        "inherits": true
+      },
+      "close": {
+        "inherits": true
+      },
+      "create": {
+        "inherits": true
+      },
+      "ensureLoaded": {
+        "inherits": true
+      },
+      "expandIds": {
+        "inherits": true
+      },
+      "focus": {
+        "inherits": true
+      },
+      "getCollapsedIds": {
+        "inherits": true
+      },
+      "getFocusedPanelId": {
+        "inherits": true
+      },
+      "getRuntimeLease": {
+        "inherits": true
+      },
+      "getStateArgs": {
+        "inherits": true
+      },
+      "getTreeSnapshot": {
+        "principals": ["code", "user", "host", "entity"]
+      },
+      "list": {
+        "inherits": true
+      },
+      "metadata": {
+        "principals": ["code", "user", "host", "entity"]
+      },
+      "movePanel": {
+        "inherits": true
+      },
+      "navigate": {
+        "inherits": true
+      },
+      "navigateHistory": {
+        "inherits": true
+      },
+      "openDevTools": {
+        "inherits": true
+      },
+      "rebuildAndReload": {
+        "inherits": true
+      },
+      "rebuildPanel": {
+        "inherits": true
+      },
+      "reload": {
+        "inherits": true
+      },
+      "roots": {
+        "inherits": true
+      },
+      "setCollapsed": {
+        "inherits": true
+      },
+      "setStateArgs": {
+        "inherits": true
+      },
+      "snapshot": {
+        "inherits": true
+      },
+      "takeOver": {
+        "inherits": true
+      },
+      "unload": {
+        "inherits": true
+      },
+      "updatePanelState": {
+        "inherits": true
+      }
+    }
+  },
+  "permissions": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "list": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "capability",
+              "principal": "host",
+              "capability": "$method"
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "code-source",
+                  "value": "about/permissions"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:permissions.list"
+        }
+      },
+      "revoke": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "capability",
+              "principal": "host",
+              "capability": "$method"
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "code-source",
+                  "value": "about/permissions"
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:permissions.revoke"
+        }
+      }
+    }
+  },
+  "phoneProvisioning": {
+    "service": {
+      "principals": ["entity", "code", "user"]
+    },
+    "methods": {
+      "devices": {
+        "inherits": true
+      },
+      "install": {
+        "inherits": true
+      },
+      "openPairing": {
+        "inherits": true
+      },
+      "providers": {
+        "inherits": true
+      }
+    }
+  },
+  "presence": {
+    "service": {
+      "principals": ["host", "user"]
+    },
+    "methods": {
+      "getPanelActiveOwner": {
+        "principals": ["host", "user", "code", "entity"]
+      },
+      "markPanelActive": {
+        "inherits": true
+      },
+      "markPanelsOwned": {
+        "inherits": true
+      }
+    }
+  },
+  "refs": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "listMainRefLog": {
+        "principals": ["code", "user", "host"]
+      },
+      "listMains": {
+        "principals": ["code", "user", "host"]
+      },
+      "readMain": {
+        "principals": ["code", "user", "host"]
+      },
+      "updateMains": {
+        "principals": ["code"]
+      }
+    }
+  },
+  "runtime": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "cloneContext": {
+        "inherits": true
+      },
+      "createContext": {
+        "principals": ["user", "host", "code"]
+      },
+      "createEntity": {
+        "inherits": true
+      },
+      "createSubagentContext": {
+        "principals": ["user", "host", "code"]
+      },
+      "destroyContext": {
+        "inherits": true
+      },
+      "listEntities": {
+        "principals": ["code", "host", "user", "entity"]
+      },
+      "listOwnedContexts": {
+        "principals": ["code", "host", "user", "entity"]
+      },
+      "recordContextEdge": {
+        "principals": ["user", "host"]
+      },
+      "resolveContext": {
+        "principals": ["code", "host", "user", "entity"]
+      },
+      "retireEntity": {
+        "inherits": true
+      },
+      "setTitle": {
+        "principals": ["code"]
+      }
+    }
+  },
+  "serverLog": {
+    "service": {
+      "principals": ["user", "code", "host", "entity"]
+    },
+    "methods": {
+      "query": {
+        "inherits": true
+      },
+      "stats": {
+        "inherits": true
+      },
+      "tail": {
+        "inherits": true
+      }
+    }
+  },
+  "shellApproval": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "blockCapability": {
+        "inherits": true
+      },
+      "listPending": {
+        "inherits": true
+      },
+      "resolve": {
+        "inherits": true
+      },
+      "resolveBootstrap": {
+        "inherits": true
+      },
+      "resolveExternalAgent": {
+        "inherits": true
+      },
+      "resolveExternalAgentByRequest": {
+        "principals": ["code", "user", "host"]
+      },
+      "resolveUserland": {
+        "inherits": true
+      },
+      "submitClientConfig": {
+        "inherits": true
+      },
+      "submitCredentialInput": {
+        "inherits": true
+      },
+      "submitSecretInput": {
+        "inherits": true
+      }
+    }
+  },
+  "shellPresence": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "heartbeat": {
+        "inherits": true
+      }
+    }
+  },
+  "userlandApproval": {
+    "service": {
+      "principals": ["code"]
+    },
+    "methods": {
+      "list": {
+        "inherits": true
+      },
+      "request": {
+        "inherits": true
+      },
+      "requestAs": {
+        "principals": ["code"]
+      },
+      "requestExternal": {
+        "principals": ["code"]
+      },
+      "requestSecretInput": {
+        "inherits": true
+      },
+      "requestSecretInputAs": {
+        "principals": ["code"]
+      },
+      "revoke": {
+        "inherits": true
+      },
+      "settleExternal": {
+        "principals": ["code"]
+      }
+    }
+  },
+  "vcs": {
+    "service": {
+      "principals": ["user", "code", "host", "entity"]
+    },
+    "methods": {
+      "abortMerge": {
+        "inherits": true
+      },
+      "commit": {
+        "inherits": true
+      },
+      "contextDiff": {
+        "inherits": true
+      },
+      "contextStatus": {
+        "inherits": true
+      },
+      "diff": {
+        "inherits": true
+      },
+      "diffContent": {
+        "inherits": true
+      },
+      "discardEdits": {
+        "inherits": true
+      },
+      "edit": {
+        "inherits": true
+      },
+      "listFiles": {
+        "inherits": true
+      },
+      "log": {
+        "inherits": true
+      },
+      "merge": {
+        "inherits": true
+      },
+      "pendingMerge": {
+        "inherits": true
+      },
+      "pick": {
+        "inherits": true
+      },
+      "previewBuild": {
+        "inherits": true
+      },
+      "pushStatus": {
+        "inherits": true
+      },
+      "readFile": {
+        "inherits": true
+      },
+      "rebaseContext": {
+        "inherits": true
+      },
+      "recall": {
+        "inherits": true
+      },
+      "resolveHead": {
+        "inherits": true
+      },
+      "revert": {
+        "inherits": true
+      },
+      "status": {
+        "inherits": true
+      },
+      "workspaceViewWithRepoAt": {
+        "inherits": true
+      }
+    }
+  },
+  "webhookIngress": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "createSubscription": {
+        "inherits": true
+      },
+      "listSubscriptions": {
+        "inherits": true
+      },
+      "revokeSubscription": {
+        "inherits": true
+      },
+      "rotateSecret": {
+        "inherits": true
+      }
+    }
+  },
+  "workerdInspector": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "getEndpoint": {
+        "inherits": true
+      },
+      "listTargets": {
+        "inherits": true
+      }
+    }
+  },
+  "workerLog": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "write": {
+        "inherits": true
+      }
+    }
+  },
+  "workers": {
+    "service": {
+      "principals": ["user", "host", "code"]
+    },
+    "methods": {
+      "listServices": {
+        "inherits": true
+      },
+      "listSources": {
+        "inherits": true
+      },
+      "resolveDurableObject": {
+        "inherits": true
+      },
+      "resolveService": {
+        "inherits": true
+      }
+    }
+  },
+  "workspace": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "create": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "capability",
+              "principal": "host",
+              "capability": "$method"
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                },
+                {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "root"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "admin"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                },
+                {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "root"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "admin"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:workspace.create"
+        }
+      },
+      "delete": {
+        "requirement": {
+          "kind": "any",
+          "requirements": [
+            {
+              "kind": "capability",
+              "principal": "host",
+              "capability": "$method"
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "user",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                },
+                {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "root"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "admin"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "all",
+              "requirements": [
+                {
+                  "kind": "capability",
+                  "principal": "code",
+                  "capability": "$method"
+                },
+                {
+                  "kind": "relationship",
+                  "name": "workspace-member"
+                },
+                {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "root"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-role",
+                      "value": "admin"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "resource": {
+          "kind": "literal",
+          "key": "service:workspace.delete"
+        }
+      },
+      "ensureContextFolder": {
+        "principals": ["user", "code", "host"]
+      },
+      "findUnitForPath": {
+        "inherits": true
+      },
+      "getActive": {
+        "inherits": true
+      },
+      "getActiveEntry": {
+        "inherits": true
+      },
+      "getAgentsMd": {
+        "inherits": true
+      },
+      "getConfig": {
+        "inherits": true
+      },
+      "getInfo": {
+        "inherits": true
+      },
+      "heartbeats.list": {
+        "principals": ["user", "code", "host"]
+      },
+      "heartbeats.pause": {
+        "principals": ["user", "code", "host"]
+      },
+      "heartbeats.resume": {
+        "principals": ["user", "code", "host"]
+      },
+      "heartbeats.runNow": {
+        "principals": ["user", "code", "host"]
+      },
+      "hostTargets.beginLaunch": {
+        "principals": ["user", "code", "host"]
+      },
+      "hostTargets.cancelLaunchSession": {
+        "principals": ["user", "code", "host"]
+      },
+      "hostTargets.clearSelection": {
+        "principals": ["user", "host"]
+      },
+      "hostTargets.getLaunchSession": {
+        "principals": ["user", "code", "host"]
+      },
+      "hostTargets.getSelection": {
+        "principals": ["user", "host"]
+      },
+      "hostTargets.launch": {
+        "principals": ["user", "code", "host"]
+      },
+      "hostTargets.list": {
+        "principals": ["user", "host"]
+      },
+      "hostTargets.preparePinnedRef": {
+        "principals": ["user", "host"]
+      },
+      "hostTargets.resolveLaunchSessionApproval": {
+        "principals": ["user", "code", "host"]
+      },
+      "hostTargets.setSelection": {
+        "principals": ["user", "host"]
+      },
+      "hostTargets.versions": {
+        "principals": ["user", "host"]
+      },
+      "list": {
+        "inherits": true
+      },
+      "listSkills": {
+        "principals": ["user", "code", "host", "entity"]
+      },
+      "readSkill": {
+        "principals": ["user", "code", "host", "entity"]
+      },
+      "recurring.list": {
+        "principals": ["user", "code", "host"]
+      },
+      "select": {
+        "principals": ["user", "code", "host"]
+      },
+      "setConfigField": {
+        "principals": ["user", "code", "host"]
+      },
+      "setInitPanels": {
+        "principals": ["user", "code", "host"]
+      },
+      "sourceTree": {
+        "inherits": true
+      },
+      "units.bakeAppDist": {
+        "principals": ["user", "host"]
+      },
+      "units.diagnostics": {
+        "inherits": true
+      },
+      "units.inspector": {
+        "inherits": true
+      },
+      "units.list": {
+        "inherits": true
+      },
+      "units.logs": {
+        "inherits": true
+      },
+      "units.restart": {
+        "inherits": true
+      },
+      "units.rollback": {
+        "inherits": true
+      },
+      "units.versions": {
+        "inherits": true
+      }
+    }
+  },
+  "workspace-state": {
+    "service": {
+      "principals": ["user", "code", "host"]
+    },
+    "methods": {
+      "alarmClear": {
+        "principals": ["host", "code"]
+      },
+      "alarmSet": {
+        "principals": ["host", "code"]
+      },
+      "entity.resolveActive": {
+        "principals": ["user", "code", "host"]
+      },
+      "heartbeatRegister": {
+        "principals": ["host", "code"]
+      },
+      "heartbeatRemove": {
+        "principals": ["host", "code"]
+      },
+      "lifecycleLeaseClear": {
+        "principals": ["host", "code"]
+      },
+      "lifecycleLeaseUpsert": {
+        "principals": ["host", "code"]
+      },
+      "panel.incrementAccess": {
+        "principals": ["user", "code", "host"]
+      },
+      "panel.index": {
+        "principals": ["user", "code", "host"]
+      },
+      "panel.rebuildIndex": {
+        "principals": ["user", "code", "host"]
+      },
+      "panel.search": {
+        "principals": ["user", "code", "host"]
+      },
+      "panel.updateTitle": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.appendHistory": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.close": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.create": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.get": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.history": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.list": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.move": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.replaceHistory": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.resolveByEntity": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.setCurrent": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.setParent": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.setPosition": {
+        "principals": ["user", "code", "host"]
+      },
+      "slot.updateCurrentStateArgs": {
+        "principals": ["user", "code", "host"]
+      }
+    }
+  },
+  "workspacePresence": {
+    "service": {
+      "principals": ["host", "user", "code"]
+    },
+    "methods": {
+      "list": {
+        "inherits": true
+      }
+    }
+  },
+  "worktree": {
+    "service": {
+      "principals": ["code", "user", "host"]
+    },
+    "methods": {
+      "dependentRepos": {
+        "principals": ["code", "host"]
+      },
+      "project": {
+        "principals": ["code", "host"]
+      },
+      "scan": {
+        "principals": ["code", "host"]
+      }
+    }
+  }
+}

@@ -15,8 +15,8 @@
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { allOf, capability, relationship } from "@vibestudio/shared/authorization";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { refsMethods } from "@vibestudio/service-schemas/refs";
 import type { ProtectedRefStore } from "./protectedRefStore.js";
@@ -63,7 +63,7 @@ export function createRefsRpcService(deps: RefsRpcServiceDeps): ServiceDefinitio
     name: "refs",
     description:
       "Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.",
-    policy: { allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: refsMethods,
     handler: defineServiceHandler("refs", refsMethods, {
       readMain: (_ctx, [repoPath]) => deps.refs.readMain(repoPath),
@@ -75,18 +75,24 @@ export function createRefsRpcService(deps: RefsRpcServiceDeps): ServiceDefinitio
         // A panel/app/worker/extension, a non-writer DO, or a re-declared fake
         // `vcs` service (whose identity differs) all fail here.
         const writerIdentity = deps.getVcsWriterIdentity();
-        if (
-          ctx.caller.runtime.kind !== "do" ||
-          writerIdentity === null ||
-          ctx.caller.runtime.id !== writerIdentity
-        ) {
-          throw new ServiceAccessError(
-            "refs",
-            "updateMains",
-            ctx.caller.runtime.kind,
-            "refs.updateMains is restricted to the workspace VCS store DO"
-          );
+        if (!ctx.authority) throw new Error("refs.updateMains authority evaluator is unavailable");
+        if (writerIdentity === null) {
+          await ctx.authority.assert({
+            capability: "service:refs.updateMains",
+            resourceKey: "service:refs.updateMains",
+            requirement: relationship("entity-self", "entity:unbound-vcs-writer"),
+          });
+          throw new Error("Unreachable: an unbound VCS writer cannot satisfy authority");
         }
+        await ctx.authority.assert({
+          capability: "service:refs.updateMains",
+          resourceKey: "service:refs.updateMains",
+          requirement: allOf(
+            capability("code", "service:refs.updateMains"),
+            relationship("entity-self", `entity:${writerIdentity}`),
+            relationship("workspace-member")
+          ),
+        });
 
         // On-behalf-of resolution (§4). The token is a correlation nonce, NOT
         // a credential: identity comes ONLY from the host invocation table.

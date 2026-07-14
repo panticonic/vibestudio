@@ -2,7 +2,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { evalMethods, type EvalRunArgs } from "@vibestudio/service-schemas/eval";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { EVAL_DO_SOURCE, productSeedExecutionDigest } from "../internalDOs/productBootManifest.js";
 import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
@@ -107,7 +107,7 @@ async function runHeldAndDeliver(
 
 const EVAL_DO_CLASS = "EvalDO";
 /** Stable — EvalDO ships in the internal bundle, not build-versioned; keeps entity identity stable. */
-const EVAL_DO_EFFECTIVE_VERSION = "internal";
+const EVAL_DO_EXECUTION_DIGEST = productSeedExecutionDigest(EVAL_DO_SOURCE);
 
 interface EvalOwner {
   ownerId: string;
@@ -162,7 +162,7 @@ export function createEvalService(deps: {
    * owner-scoped gateway token — the two MUST agree, so both derive it here.
    */
   const evalDoEntityId = (objectKey: string): string =>
-    `do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:${objectKey}`;
+    `do:${EVAL_DO_SOURCE}:${EVAL_DO_CLASS}:${objectKey}`;
 
   /**
    * Owner-scoped gateway token for THIS EvalDO. Pinned to the concrete
@@ -283,7 +283,8 @@ export function createEvalService(deps: {
     // THIS EvalDO's principal when it calls back to `main`. Idempotent.
     await store.activate({
       kind: "do",
-      source: { repoPath: INTERNAL_DO_SOURCE, effectiveVersion: EVAL_DO_EFFECTIVE_VERSION },
+      source: { repoPath: EVAL_DO_SOURCE },
+      activeExecutionDigest: EVAL_DO_EXECUTION_DIGEST,
       contextId,
       className: EVAL_DO_CLASS,
       key: objectKey,
@@ -334,7 +335,7 @@ export function createEvalService(deps: {
       route.subKey ?? "default",
       ctx.caller.subject?.userId
     );
-    return { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+    return { source: EVAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
   }
 
   async function prepareRun(
@@ -357,7 +358,7 @@ export function createEvalService(deps: {
     const chatBinding = isAgent ? { channelId: runArgs.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     return {
-      evalDoRef: { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+      evalDoRef: { source: EVAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
       assembledArgs: {
         code: runArgs.code,
         path: runArgs.path,
@@ -379,7 +380,7 @@ export function createEvalService(deps: {
   return {
     name: "eval",
     description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension", "shell", "server", "agent"] },
+    authority: { principals: ["code", "user", "host", "entity"] },
     methods: evalMethods,
     handler: defineServiceHandler("eval", evalMethods, {
       run: async (ctx, [runArgs]) => {

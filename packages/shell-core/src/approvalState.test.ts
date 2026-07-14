@@ -14,7 +14,7 @@ function approval(approvalId: string): PendingApproval {
     callerId: "panel:test",
     callerKind: "panel",
     repoPath: "panels/test",
-    effectiveVersion: "ev",
+    executionDigest: "ev",
     requestedAt: 1,
     capability: "workspace-repo-write",
     title: "Write files",

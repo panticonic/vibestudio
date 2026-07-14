@@ -1,4 +1,4 @@
-import type { ServicePolicy } from "./servicePolicy.js";
+import type { ServiceAuthorityPolicy } from "./serviceAuthority.js";
 import type { ServiceHandler } from "./serviceDispatcher.js";
 import type { MethodSchema } from "./typedServiceClient.js";
 
@@ -13,7 +13,7 @@ export interface ServiceDefinition {
    * not maintain a second service-name list.
    */
   hostRouting?: Partial<Record<"shell" | "app" | "panel", "host" | "session">>;
-  policy: ServicePolicy;
+  authority: ServiceAuthorityPolicy;
   /**
    * Method schema table — pure data (Zod arg tuples, optional return schemas,
    * per-method policies). For services with external callers this should be a

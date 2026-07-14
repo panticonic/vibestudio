@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RpcEnvelope } from "@vibestudio/rpc";
 import { DurableObjectBase, rpc } from "./index.js";
-import { createTestDO } from "./test-utils.js";
+import { createTestDirectAuthority, createTestDO } from "./test-utils.js";
 
 /**
  * `DurableObjectBase.invocationToken` — the host-minted on-behalf-of nonce for the
@@ -27,7 +27,7 @@ class TokenProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
   /** Read the token synchronously at entry — the supported contract. */
-  @rpc
+  @rpc({ principals: ["host"] })
   readToken(): string | null {
     return this.invocationToken ?? null;
   }
@@ -38,7 +38,7 @@ class TokenProbeDO extends DurableObjectBase {
    * entry capture and a post-await read. Only the entry capture is contractually
    * the current dispatch's token.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async readTokenAcrossBarrier(): Promise<{ atEntry: string | null; afterAwait: string | null }> {
     const atEntry = this.invocationToken ?? null;
     await barrierGate;
@@ -47,7 +47,7 @@ class TokenProbeDO extends DurableObjectBase {
   }
 
   /** Throws, so we can assert the token never leaks into an error response. */
-  @rpc
+  @rpc({ principals: ["host"] })
   boom(): never {
     if (this.invocationToken) throw new Error("probe exploded while serving a dispatch");
     throw new Error("probe exploded");
@@ -65,7 +65,18 @@ function postRpc(
   const envelope: RpcEnvelope = {
     from: "do:server",
     target: "do-service:test:TokenProbeDO",
-    delivery: { caller: { callerId: "do:gad-store", callerKind: "do" } },
+    delivery: {
+      caller: {
+        callerId: "do:gad-store",
+        callerKind: "do",
+        authorization: createTestDirectAuthority({
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+          method,
+        }),
+      },
+    },
     provenance: [],
     message: {
       type: "request",
@@ -85,7 +96,7 @@ function postRpc(
   );
 }
 
-/** POST a legacy method-path call carrying the host instance-token body shape. */
+/** POST a method-path call carrying the host instance-token body shape. */
 function postMethodPath(
   instance: unknown,
   method: string,
@@ -100,7 +111,16 @@ function postMethodPath(
       body: JSON.stringify({
         __instanceToken: "instance-token",
         args,
-        __caller: { callerId: "do:gad-store", callerKind: "do" },
+        __caller: {
+          callerId: "do:gad-store",
+          callerKind: "do",
+          authorization: createTestDirectAuthority({
+            source: "test",
+            className: "TestDO",
+            objectKey: "test-key",
+            method,
+          }),
+        },
         ...(invocationToken !== undefined ? { __invocationToken: invocationToken } : {}),
       }),
     })

@@ -32,12 +32,13 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import {
   GitBridge,
-  IMPORT_STAGING_HEAD,
+  importStagingHead,
   type BridgeHost,
 } from "../../workspace/extensions/git-bridge/bridge.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
@@ -109,8 +110,8 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
     return raw ? (JSON.parse(raw) as { stateHash: string; commitSha: string }) : null;
   };
 
-  const mainActorId = (): string => {
-    const top = doi.vcsLog(REPO, 1, "main")[0];
+  const mainActorId = async (): Promise<string> => {
+    const top = (await gad.call<Array<{ actor?: unknown }>>("vcsLog", REPO, 1, "main"))[0];
     const actor = top?.actor as { id?: unknown } | null | undefined;
     return actor && typeof actor === "object" ? String(actor.id) : "";
   };
@@ -134,26 +135,24 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
       fileList.push({ path: rel, contentHash: digest, size, mode: 33188 });
     }
     fileList.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-    await doi.ingestWorktreeState({
+    const operationId = randomUUID();
+    const sourceHead = importStagingHead(operationId);
+    await gad.call("ingestWorktreeState", {
       logId: LOG,
-      head: IMPORT_STAGING_HEAD,
+      head: sourceHead,
       logKind: "vcs",
       actor: { id: "git-bridge", kind: "system" },
       files: fileList,
       summary: opts.summary,
     });
-    const published = await (
-      doi as unknown as {
-        vcsImportPublish: (i: {
-          repoPath: string;
-          sourceHead: string;
-          message?: string;
-          actor?: { id: string; kind: string };
-        }) => Promise<{ status: string; repoPath: string; stateHash: string }>;
-      }
-    ).vcsImportPublish({
+    const published = await gad.call<{
+      status: string;
+      repoPath: string;
+      stateHash: string;
+    }>("vcsImportPublish", {
+      operationId,
       repoPath: REPO,
-      sourceHead: IMPORT_STAGING_HEAD,
+      sourceHead,
       message: opts.summary,
       actor: { id: opts.actorId, kind: "system" },
     });
@@ -194,19 +193,25 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
     const host: BridgeHost = {
       workspaceRoot: async () => workspaceRoot,
       store: {
-        vcsLog: async (repoPath, limit, head) => doi.vcsLog(repoPath, limit, head),
+        vcsLog: (repoPath, limit, head) => gad.call("vcsLog", repoPath, limit, head),
         ingestWorktreeState: (input) =>
-          doi.ingestWorktreeState(input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]),
+          gad.call(
+            "ingestWorktreeState",
+            input as Parameters<GadWorkspaceDO["ingestWorktreeState"]>[0]
+          ),
         importPublish: (input) =>
-          (
-            doi as unknown as {
-              vcsImportPublish: (i: unknown) => Promise<{
-                status: "published" | "up-to-date";
-                repoPath: string;
-                stateHash: string;
-              }>;
-            }
-          ).vcsImportPublish(input),
+          gad.call<{
+            status: "published" | "up-to-date";
+            repoPath: string;
+            stateHash: string;
+          }>("vcsImportPublish", input),
+        importStatus: (input) =>
+          gad.call<{
+            operationId: string;
+            repoPath: string;
+            stateHash: string;
+            changed: boolean;
+          } | null>("vcsImportOperationStatus", input),
       },
       blobstore: {
         has: async (digest) => (await statBlob(blobsDir, digest)) !== null,
@@ -300,7 +305,10 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
     expect(marker?.commitSha).toBe(clonedHead);
 
     // Main log carries the import transition.
-    expect(doi.vcsLog(REPO, 1, "main")[0]?.outputStateHash).toBe(state1);
+    expect(
+      (await gad.call<Array<{ outputStateHash?: string }>>("vcsLog", REPO, 1, "main"))[0]
+        ?.outputStateHash
+    ).toBe(state1);
   });
 
   it("advances gad main then exports exactly one new commit with GAD trailers", async () => {
@@ -312,7 +320,7 @@ describe("git upstream push/pull round trip (bridge + system git, real DO)", () 
     );
     expect(state2).not.toBe(state1);
     expect(readMain()).toBe(state2);
-    const publishedActor = mainActorId();
+    const publishedActor = await mainActorId();
     expect(publishedActor).toBe("release-bot-actor");
 
     // (4) Export — exactly one new commit on top of the imported (cloned) HEAD.

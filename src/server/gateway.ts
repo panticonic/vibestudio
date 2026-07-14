@@ -25,11 +25,12 @@ import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { encodeUniversalKey } from "./doDispatch.js";
-import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { requiresStaticDoHost } from "./internalDOs/productBootManifest.js";
 import { assertPresent } from "../lintHelpers";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
+import type { CapabilityScope } from "@vibestudio/rpc";
 
 const log = createDevLogger("Gateway");
 
@@ -173,6 +174,8 @@ export interface GatewayDeps {
   connectionGrants?: Pick<ConnectionGrantService, "validate">;
   /** Principal metadata for authenticated caller tokens. */
   entityCache?: Pick<EntityCache, "resolve" | "resolveActive" | "resolveSource">;
+  /** Immutable authority requests for an exact execution; absence fails code identity closed. */
+  resolveExecutionRequests?: (executionDigest: string) => readonly CapabilityScope[] | null;
   /** Route registry for `/_r/` dispatch (worker and service routes). Optional
    *  — when absent, `/_r/` paths fall through to 404. */
   routeRegistry?: RouteRegistry;
@@ -383,7 +386,8 @@ export class Gateway {
             req,
             tokenManager,
             this.deps.connectionGrants,
-            this.deps.entityCache
+            this.deps.entityCache,
+            this.deps.resolveExecutionRequests
           )
         ) {
           res.writeHead(401, { "Content-Type": "text/plain" });
@@ -427,7 +431,8 @@ export class Gateway {
           req,
           tokenManager,
           this.deps.connectionGrants,
-          this.deps.entityCache
+          this.deps.entityCache,
+          this.deps.resolveExecutionRequests
         );
         if (!entry) {
           res.writeHead(401, { "Content-Type": "text/plain" });
@@ -539,7 +544,8 @@ export class Gateway {
             req,
             tokenManager,
             this.deps.connectionGrants,
-            this.deps.entityCache
+            this.deps.entityCache,
+            this.deps.resolveExecutionRequests
           )
         ) {
           socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
@@ -851,7 +857,8 @@ function validateCallerBearer(
   req: IncomingMessage,
   tokenManager: TokenManager,
   connectionGrants?: Pick<ConnectionGrantService, "validate">,
-  entityCache?: Pick<EntityCache, "resolveActive">
+  entityCache?: Pick<EntityCache, "resolveActive">,
+  resolveExecutionRequests?: (executionDigest: string) => readonly CapabilityScope[] | null
 ): VerifiedCaller | null {
   const token = extractBearerToken(req);
   if (!token) return null;
@@ -862,13 +869,18 @@ function validateCallerBearer(
     return createVerifiedCaller(
       grant.principalId,
       grant.principalKind,
-      entityCache ? (resolveCodeIdentity(entityCache, grant.principalId) ?? undefined) : undefined
+      entityCache && resolveExecutionRequests
+        ? (resolveCodeIdentity(entityCache, grant.principalId, resolveExecutionRequests) ??
+            undefined)
+        : undefined
     );
   }
   return createVerifiedCaller(
     entry.callerId,
     entry.callerKind,
-    entityCache ? (resolveCodeIdentity(entityCache, entry.callerId) ?? undefined) : undefined
+    entityCache && resolveExecutionRequests
+      ? (resolveCodeIdentity(entityCache, entry.callerId, resolveExecutionRequests) ?? undefined)
+      : undefined
   );
 }
 
@@ -1003,7 +1015,7 @@ function buildWorkerTargetPath(
   const query = qIdx !== -1 ? originalUrl.slice(qIdx) : "";
   const remainder = lookup.remainder === "/" ? "" : lookup.remainder;
   if (lookup.kind === "worker-do") {
-    if (!isInternalDOSource(lookup.source)) {
+    if (!requiresStaticDoHost(lookup.source, lookup.className)) {
       const key = encodeUniversalKey({
         source: lookup.source,
         className: lookup.className,

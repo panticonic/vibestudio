@@ -7,7 +7,8 @@ import { WorkspaceEntityStore } from "./workspaceEntityStore.js";
 const RECORD: EntityRecord = {
   id: "do:vibestudio/internal:EvalDO:abc",
   kind: "do",
-  source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
+  source: { repoPath: "vibestudio/internal" },
+  activeExecutionDigest: "internal",
   contextId: "ctx-1",
   key: "abc",
   createdAt: 1,

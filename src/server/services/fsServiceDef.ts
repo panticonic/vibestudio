@@ -33,8 +33,8 @@ export function createFsServiceDefinition(getFsService: () => FsService): Servic
     name: "fs",
     description:
       "Filesystem operations. Context-bound callers are sandboxed to their context folder; supported workspace-repo file mutations route through GAD working edits, while platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.",
-    policy: {
-      allowed: ["panel", "app", "server", "worker", "do", "extension", "shell", "agent"],
+    authority: {
+      principals: ["code", "host", "user", "entity"],
     },
     methods: fsMethods,
     handler: (ctx, method, serviceArgs) => handleFsCall(getFsService(), ctx, method, serviceArgs),

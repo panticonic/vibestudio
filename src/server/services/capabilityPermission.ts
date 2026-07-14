@@ -13,6 +13,7 @@ import type {
 import { deferIfNeeded } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { parseSha256 } from "@vibestudio/shared/execution/identity";
 
 export const NETWORK_ALL_RESOURCE_KEY = "network:*" as const;
 
@@ -80,6 +81,14 @@ export async function requestCapabilityPermission(
   if (!identity) {
     return { allowed: false, reason: `Unknown capability caller: ${request.caller.runtime.id}` };
   }
+  try {
+    parseSha256(identity.executionDigest, "capability caller execution digest");
+  } catch (error) {
+    return {
+      allowed: false,
+      reason: error instanceof Error ? error.message : "Capability caller has no exact artifact",
+    };
+  }
 
   const resourceKey = request.resource.key ?? request.resource.value;
   const resourceScope = request.resource.scope ?? exactResourceScope(resourceKey);
@@ -97,7 +106,7 @@ export async function requestCapabilityPermission(
     callerKind,
     ...(request.caller.subject ? { requestedByUserId: request.caller.subject.userId } : {}),
     repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
+    executionDigest: identity.executionDigest,
     capability: request.capability,
     severity: request.severity,
     dedupKey,
@@ -132,7 +141,11 @@ export async function requestCapabilityPermission(
       grantIntent.resourceKey,
       identity,
       reusableDecision,
-      grantIntent.resourceScope
+      grantIntent.resourceScope,
+      Date.now(),
+      "allow",
+      request.caller.subject ? (`user:${request.caller.subject.userId}` as const) : undefined,
+      "interactive-capability-approval"
     );
     if (typeof deps.approvalQueue.resolveMatching === "function") {
       deps.approvalQueue.resolveMatching((approval) => {
@@ -145,7 +158,7 @@ export async function requestCapabilityPermission(
           {
             callerId: approval.callerId,
             repoPath: approval.repoPath,
-            effectiveVersion: approval.effectiveVersion,
+            executionDigest: approval.executionDigest,
           },
           approval.resourceScope
         );

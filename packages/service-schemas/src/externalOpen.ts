@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 

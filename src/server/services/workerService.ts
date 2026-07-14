@@ -9,12 +9,12 @@
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { resolveUserlandService, type ResolvedUserlandService } from "../userlandServices.js";
-import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { isReservedProductDo } from "../internalDOs/productBootManifest.js";
 
 type ServiceListRow =
   | {
@@ -100,7 +100,7 @@ export function createWorkerService(deps: {
   return {
     name: "workers",
     description: "Worker discovery and userland service resolution",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "extension"] },
+    authority: { principals: ["user", "host", "code"] },
     methods,
     handler: defineServiceHandler("workers", methods, {
       listSources: () => {
@@ -133,7 +133,12 @@ export function createWorkerService(deps: {
       resolveService: async (ctx, [query, objectKey]) => {
         const scoped = await resolveUserlandServiceForCaller(ctx, query, objectKey);
         const service = scoped.service;
-        assertUserlandServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
+        await assertUserlandServiceAuthority(
+          ctx,
+          service.name,
+          service.authority.principals,
+          service.kind === "durable-object" ? service.targetId : service.routeBasePath
+        );
         if (service.kind === "durable-object") {
           const singleton = scoped.decls.singletons.find(service.source, service.className);
           const contextId = singleton?.contextId ?? scoped.contextId;
@@ -154,6 +159,13 @@ export function createWorkerService(deps: {
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
         const scoped = await resolveDurableObjectForCaller(ctx, source, className);
         const targetId = `do:${source}:${className}:${objectKey}`;
+        await assertDurableObjectBackingServiceAuthority(
+          ctx,
+          scoped.decls,
+          source,
+          className,
+          targetId
+        );
         const singleton = scoped.decls.singletons.find(source, className);
         const contextId = singleton?.contextId ?? scoped.contextId;
         const buildRef = singleton?.contextId
@@ -216,13 +228,7 @@ export function createWorkerService(deps: {
     className: string
   ): Promise<ScopedDeclarations> {
     try {
-      assertDurableObjectExists(
-        buildSystem,
-        workspaceDecls,
-        source,
-        className,
-        ctx.caller.runtime.kind
-      );
+      assertDurableObjectExists(buildSystem, workspaceDecls, source, className);
       return { decls: workspaceDecls, scope: "main" };
     } catch (err) {
       if (!isMissingDurableObjectError(err, source, className)) throw err;
@@ -230,7 +236,7 @@ export function createWorkerService(deps: {
 
     const scoped = await declarationsForCallerContext(ctx);
     if (!scoped) throw new Error(missingDurableObjectMessage(source, className));
-    assertDurableObjectDeclared(scoped.decls, source, className, ctx.caller.runtime.kind);
+    assertDurableObjectDeclared(scoped.decls, source, className);
     return scoped;
   }
 }
@@ -286,13 +292,9 @@ function assertDurableObjectExists(
   buildSystem: BuildSystemV2,
   workspaceDecls: WorkspaceDeclarations,
   source: string,
-  className: string,
-  callerKind: CallerKind
+  className: string
 ): void {
-  if (
-    source === INTERNAL_DO_SOURCE &&
-    (INTERNAL_DO_CLASSES as readonly string[]).includes(className)
-  ) {
+  if (isReservedProductDo(source, className)) {
     return;
   }
 
@@ -302,7 +304,6 @@ function assertDurableObjectExists(
     .find((node) => node.kind === "worker" && node.relativePath === source);
   const classes = worker?.manifest.durable?.classes ?? [];
   if (classes.some((entry) => entry.className === className)) {
-    assertDurableObjectBackingServiceAccess(workspaceDecls, source, className, callerKind);
     return;
   }
 
@@ -312,8 +313,7 @@ function assertDurableObjectExists(
 function assertDurableObjectDeclared(
   decls: WorkspaceDeclarations,
   source: string,
-  className: string,
-  callerKind: CallerKind
+  className: string
 ): void {
   const declared =
     decls.singletons.find(source, className) ||
@@ -324,46 +324,39 @@ function assertDurableObjectDeclared(
       (route) => route.source === source && route.durableObject?.className === className
     );
   if (!declared) throw new Error(missingDurableObjectMessage(source, className));
-  assertDurableObjectBackingServiceAccess(decls, source, className, callerKind);
 }
 
-function assertDurableObjectBackingServiceAccess(
+async function assertDurableObjectBackingServiceAuthority(
+  ctx: ServiceContext,
   decls: WorkspaceDeclarations,
   source: string,
   className: string,
-  callerKind: CallerKind
-): void {
-  const backingPolicies = decls.services
-    .filter(
-      (service) => service.source === source && service.durableObject?.className === className
-    )
-    .map((service) => ({
-      name: service.name,
-      policy: service.policy as { allowed?: CallerKind[] } | undefined,
-    }));
-  for (const service of backingPolicies) {
-    assertUserlandServiceAccess(service.name, service.policy, callerKind);
+  resourceKey: string
+): Promise<void> {
+  const services = decls.services.filter(
+    (service) => service.source === source && service.durableObject?.className === className
+  );
+  for (const service of services) {
+    await assertUserlandServiceAuthority(
+      ctx,
+      service.name,
+      service.authority.principals,
+      resourceKey
+    );
   }
 }
 
-function assertUserlandServiceAccess(
+async function assertUserlandServiceAuthority(
+  ctx: ServiceContext,
   serviceName: string,
-  policy: { allowed?: CallerKind[] } | undefined,
-  callerKind: CallerKind
-): void {
-  const allowed = policy?.allowed;
-  if (!allowed || allowed.length === 0) {
-    const err = new Error(
-      `Userland service '${serviceName}' has no access policy`
-    ) as NodeJS.ErrnoException;
-    err.code = "EACCES";
-    throw err;
-  }
-  if (!callerKindAllowedByPolicy(callerKind, allowed)) {
-    const err = new Error(
-      `Caller kind '${callerKind}' cannot resolve userland service '${serviceName}'`
-    ) as NodeJS.ErrnoException;
-    err.code = "EACCES";
-    throw err;
-  }
+  principals: Parameters<typeof requirementForPrincipals>[0],
+  resourceKey: string
+): Promise<void> {
+  if (!ctx.authority) throw new Error("Compositional authority context is unavailable");
+  const capability = `userland-service:${serviceName}`;
+  await ctx.authority.assert({
+    capability,
+    resourceKey,
+    requirement: requirementForPrincipals(principals, capability),
+  });
 }

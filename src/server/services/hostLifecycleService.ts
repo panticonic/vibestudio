@@ -25,7 +25,7 @@ export function createHostLifecycleService(deps: {
   return {
     name: "hostLifecycle",
     description: "Host-process graceful shutdown for attached shells",
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     methods: hostLifecycleMethods,
     handler: defineServiceHandler("hostLifecycle", hostLifecycleMethods, {
       shutdown: (ctx) => {

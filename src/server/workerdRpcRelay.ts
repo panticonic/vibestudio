@@ -3,11 +3,12 @@ import {
   envelopeFromMessage,
   type AuthenticatedCaller,
   type CallerKind,
+  type DirectAuthorityAttestation,
   type RpcEnvelope,
   type RpcResponse,
 } from "@vibestudio/rpc";
 import { Agent } from "undici";
-import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { requiresStaticDoHost } from "./internalDOs/productBootManifest.js";
 
 export type DORef = DORefParam;
 
@@ -31,7 +32,7 @@ export function doRefUrl(ref: DORef, method: string): string {
   const methodPath = method.split("/").map(encodeURIComponent).join("/");
   // Userland DOs route through the UniversalDO facet host; internal DOs keep
   // their static per-class `/_w/` namespaces. Kept in sync with doDispatch.ts.
-  if (!isInternalDOSource(ref.source)) {
+  if (!requiresStaticDoHost(ref.source, ref.className)) {
     return `/_u/${encodeURIComponent(encodeUniversalKey(ref))}/${methodPath}`;
   }
   const sourcePath = ref.source.split("/").map(encodeURIComponent).join("/");
@@ -52,6 +53,8 @@ export interface DurableObjectRelayDeps {
   callerPanelId?: string;
   /** Host-verified owning account projected into the userland caller envelope. */
   userId?: string;
+  /** Fresh host mediation bound to this exact method and DO object. */
+  authorization?: DirectAuthorityAttestation;
   /** Correlation id for this call; lets the DO match a later deferred reply. */
   requestId?: string;
   /** Host-minted on-behalf-of correlation nonce for vcs-DO dispatches
@@ -85,6 +88,7 @@ function callerFromDeps(deps: DurableObjectRelayDeps): AuthenticatedCaller {
     callerKind: (deps.callerKind as CallerKind | undefined) ?? "server",
     ...(deps.callerPanelId ? { callerPanelId: deps.callerPanelId } : {}),
     ...(deps.userId ? { userId: deps.userId } : {}),
+    ...(deps.authorization ? { authorization: deps.authorization } : {}),
   };
 }
 

@@ -4,6 +4,7 @@ import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import type { CapabilityScope } from "@vibestudio/rpc";
 
 export interface Disposable {
   dispose(): void;
@@ -25,7 +26,8 @@ export interface ExtensionInvocation {
     callerId: string;
     callerKind: CodeIdentityCallerKind;
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
+    requested: readonly CapabilityScope[];
     contextId?: string;
   };
 }
@@ -364,6 +366,10 @@ export interface ExtensionContext {
   readonly name: string;
   readonly version: string;
   readonly storage: {
+    /** Resolve an extension-private relative path for native libraries that
+     * require an absolute directory. The boundary check is identical to every
+     * other storage operation. */
+    resolvePath(path: string): string;
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
     readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
     writeFile(path: string, data: string | Uint8Array): Promise<void>;

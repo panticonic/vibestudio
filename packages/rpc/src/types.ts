@@ -233,6 +233,11 @@ export interface AuthenticatedCaller {
    * enumerated pre-identity bootstrap principals and `"unknown"` delivery paths.
    */
   userId?: string;
+  /**
+   * Fresh, target-bound facts stamped by the host relay. Receivers never accept
+   * this field from an originating client envelope; the relay replaces it.
+   */
+  authorization?: import("./authority.js").DirectAuthorityAttestation;
 }
 
 export type CallerKind =

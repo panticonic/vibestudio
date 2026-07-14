@@ -1,8 +1,9 @@
 import * as fs from "fs";
+import { randomUUID } from "node:crypto";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -48,7 +49,7 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { GitImportJournal, type GitImportJournalRecord } from "./gitImportJournal.js";
 
 const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
 const GIT_UPSTREAM_CAPABILITY = "workspace-git-upstream";
@@ -70,12 +71,11 @@ type GitInteropServiceDeps = {
   workspaceConfig?: WorkspaceConfig;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   onWorkspaceSourceChanged?: (
     ctx: ServiceContext,
     summary: string,
     importedRepoPath?: string
-  ) => Promise<void>;
+  ) => Promise<string | null | undefined>;
   workspaceConfigMutationWouldChange?: (mutate: WorkspaceConfigMutation) => Promise<boolean>;
   persistWorkspaceConfigMutation?: (input: {
     ctx: ServiceContext;
@@ -90,6 +90,7 @@ type GitInteropServiceDeps = {
     args: GitInteropProviderArgs<M>
   ) => Promise<GitInteropProviderResult<M>>;
   disposableRemotes?: Pick<DisposableGitRemoteManager, "create" | "inspect" | "remove">;
+  importJournal: GitImportJournal;
 };
 
 type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
@@ -105,7 +106,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
   return {
     name: "gitInterop",
     description: "External Git interop: declared remotes and remote project imports",
-    policy: { allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"] },
+    authority: { principals: ["user", "code", "host"] },
     methods: gitInteropMethods,
     handler: defineServiceHandler("gitInterop", gitInteropMethods, {
       setSharedRemote: async (ctx, [repoPath, remoteInput]) => {
@@ -544,9 +545,25 @@ async function importWorkspaceRepo(
   if (!isSupportedImportRepoPath(validRepoPath)) {
     throw new Error(`Imports must target one of: ${WORKSPACE_IMPORT_PARENT_DIRS.join(", ")}`);
   }
-  if (fs.existsSync(absolutePath)) throw new Error(`Path already exists: ${request.path}`);
   assertWorkspaceCreateTargetSafe(deps.workspacePath, absolutePath, "importProject");
-  let normalizedRemote = validateWorkspaceGitRemote(request.remote);
+  const journal = deps.importJournal;
+  const callerKey = `${ctx.caller.runtime.kind}:${ctx.caller.runtime.id}`;
+  const requestedRemote = validateWorkspaceGitRemote(request.remote);
+  const active = journal.activeForRepo(validRepoPath);
+  if (
+    active &&
+    (active.callerKey !== callerKey || !sameRequestedRemote(active.remote, requestedRemote))
+  ) {
+    throw new Error(
+      `Import ${active.operationId} already owns ${validRepoPath} in phase ${active.phase}`
+    );
+  }
+  if (!active && fs.existsSync(absolutePath))
+    throw new Error(`Path already exists: ${request.path}`);
+  // A resumed operation uses the branch sealed into its journal. Re-running
+  // remote discovery would make recovery depend on mutable/unavailable network
+  // state after preparation or commit.
+  let normalizedRemote: WorkspaceGitRemoteConfig = active?.remote ?? requestedRemote;
   if (!normalizedRemote.branch) {
     // No branch declared: resolve the remote's ACTUAL default (ls-remote
     // symref HEAD) instead of assuming `main`, and bake it into the declared
@@ -556,95 +573,224 @@ async function importWorkspaceRepo(
         url: normalizedRemote.url,
         ...(request.credentialId ? { credentialId: request.credentialId } : {}),
       },
-    ]).catch(() => ({ branch: null }));
-    if (discovered.branch) {
-      normalizedRemote = { ...normalizedRemote, branch: discovered.branch };
+    ]);
+    if (!discovered.branch) {
+      throw new Error(
+        `Cannot import ${validRepoPath}: the remote has no concrete default branch. ` +
+          `Create an initial branch upstream or name an existing branch explicitly.`
+      );
     }
+    normalizedRemote = { ...normalizedRemote, branch: discovered.branch };
   }
+  if (!normalizedRemote.branch) throw new Error("Git import requires a concrete branch");
+  const exactRemote = normalizedRemote as WorkspaceGitRemoteConfig & { branch: string };
   const mutateConfig: WorkspaceConfigMutation = (currentConfig) => {
-    const withRemote = setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote);
+    const withRemote = setDeclaredRemoteInConfig(currentConfig, validRepoPath, exactRemote);
     return setDeclaredUpstreamInConfig(withRemote, validRepoPath, {
-      remote: normalizedRemote.name,
-      branch: normalizedRemote.branch,
+      remote: exactRemote.name,
+      branch: exactRemote.branch,
       autoPush: false,
       ...(request.credentialId ? { credentialId: request.credentialId } : {}),
     });
   };
 
-  await ensureWorkspaceConfigWritePermission(
-    ctx,
-    deps,
-    validRepoPath,
-    normalizedRemote,
-    mutateConfig
-  );
-  const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
-    mutate: mutateConfig,
-    summary: workspaceConfigImportSummary(validRepoPath, normalizedRemote),
-    operation: "import",
-  });
-  try {
-    await invokeConfiguredGitProvider(deps, ctx, "cloneRepo", [{ repoPath: validRepoPath }]);
-  } catch (err) {
-    // Never leave a phantom declaration behind a failed clone: roll the
-    // remote/upstream config back (when this call wrote it) and say exactly
-    // what happened and how to retry.
-    let rolledBack = false;
-    if (persisted.changed) {
-      try {
-        await persistWorkspaceConfigMutation(ctx, deps, {
-          mutate: (currentConfig) =>
-            removeDeclaredRemoteFromConfig(
-              removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath),
-              validRepoPath,
-              normalizedRemote.name
-            ),
-          summary: `meta/vibestudio.yml rolls back failed import of ${validRepoPath}`,
-          operation: "import",
-        });
-        rolledBack = true;
-        await notifyWorkspaceSourceChanged(
-          ctx,
-          deps,
-          `Roll back failed Git import of ${validRepoPath}`
+  await ensureWorkspaceConfigWritePermission(ctx, deps, validRepoPath, exactRemote, mutateConfig);
+  const now = Date.now();
+  let operation: GitImportJournalRecord = active ?? {
+    version: 1,
+    operationId: randomUUID(),
+    phase: "requested",
+    callerKey,
+    repoPath: validRepoPath,
+    remote: exactRemote,
+    ...(request.credentialId ? { credentialId: request.credentialId } : {}),
+    requestedAt: now,
+    updatedAt: now,
+  };
+  journal.put(operation);
+
+  const save = (patch: Partial<GitImportJournalRecord>): void => {
+    operation = { ...operation, ...patch, updatedAt: Date.now() };
+    journal.put(operation);
+  };
+
+  if (!operation.prepared) {
+    save({ phase: "preparing" });
+    try {
+      const prepared = await invokeConfiguredGitProvider(deps, ctx, "prepareImport", [
+        {
+          operationId: operation.operationId,
+          repoPath: validRepoPath,
+          remote: exactRemote,
+          ...(request.credentialId ? { credentialId: request.credentialId } : {}),
+        },
+      ]);
+      save({
+        phase: "prepared",
+        prepared: {
+          gitCommitSha: prepared.gitCommitSha,
+          stateHash: prepared.stateHash,
+          changed: prepared.changed,
+        },
+      });
+    } catch (error) {
+      await invokeConfiguredGitProvider(deps, ctx, "abortImport", [
+        { operationId: operation.operationId },
+      ]).catch(() => undefined);
+      save({ phase: "aborted", finalizationError: errorMessage(error) });
+      throw new Error(
+        `Import ${operation.operationId} of ${validRepoPath} failed during preparation: ${errorMessage(error)}`
+      );
+    }
+  }
+
+  if (!operation.config) {
+    const priorRemote = declaredRemoteConfig(deps.workspaceConfig, validRepoPath, exactRemote.name);
+    const priorUpstream = safeDeclaredUpstream(deps.workspaceConfig, validRepoPath);
+    const writtenUpstream: WorkspaceGitUpstreamConfig & { branch: string } = {
+      remote: exactRemote.name,
+      branch: exactRemote.branch,
+      autoPush: false,
+      ...(request.credentialId ? { credentialId: request.credentialId } : {}),
+    };
+    save({
+      phase: "configuring",
+      config: {
+        priorRemote,
+        priorUpstream,
+        writtenRemote: exactRemote,
+        writtenUpstream,
+      },
+    });
+    try {
+      await persistWorkspaceConfigMutation(ctx, deps, {
+        mutate: (current) => {
+          assertImportConfigPreimage(current, validRepoPath, exactRemote.name, {
+            remote: priorRemote,
+            upstream: priorUpstream,
+          });
+          return mutateConfig(current);
+        },
+        summary: workspaceConfigImportSummary(validRepoPath, exactRemote),
+        operation: "import",
+      });
+      save({ phase: "committing" });
+    } catch (error) {
+      await invokeConfiguredGitProvider(deps, ctx, "abortImport", [
+        { operationId: operation.operationId },
+      ]).catch(() => undefined);
+      save({ phase: "aborted", finalizationError: errorMessage(error) });
+      throw error;
+    }
+  }
+
+  if (
+    operation.phase !== "committed" &&
+    operation.phase !== "adopting" &&
+    operation.phase !== "committed-incomplete"
+  ) {
+    assertImportConfigOwned(deps.workspaceConfig, operation);
+    save({ phase: "committing" });
+    try {
+      const committed = await invokeConfiguredGitProvider(deps, ctx, "commitImport", [
+        { operationId: operation.operationId },
+      ]);
+      if (committed.phase !== "committed" && committed.phase !== "complete") {
+        throw new Error(`provider returned non-committed phase ${committed.phase}`);
+      }
+      save({ phase: "committed" });
+    } catch (commitError) {
+      save({ phase: "commit-outcome-unknown", finalizationError: errorMessage(commitError) });
+      const status = await invokeConfiguredGitProvider(deps, ctx, "inspectImport", [
+        { operationId: operation.operationId },
+      ]).catch(() => null);
+      if (status?.phase === "committed" || status?.phase === "complete") {
+        save({ phase: "committed" });
+      } else if (status?.phase === "prepared") {
+        try {
+          await compensateImportConfig(ctx, deps, operation);
+          await invokeConfiguredGitProvider(deps, ctx, "abortImport", [
+            { operationId: operation.operationId },
+          ]);
+          save({ phase: "aborted" });
+        } catch (compensationError) {
+          save({
+            phase: "requires-repair",
+            compensationError: errorMessage(compensationError),
+          });
+          throw new Error(
+            `Import ${operation.operationId} did not commit, and compensation failed: ` +
+              `${errorMessage(commitError)}; compensation: ${errorMessage(compensationError)}`
+          );
+        }
+        throw new Error(
+          `Import ${operation.operationId} did not commit: ${errorMessage(commitError)}; prior configuration was restored`
         );
-      } catch {
-        await notifyWorkspaceSourceChanged(ctx, deps, `Record Git remote for ${validRepoPath}`);
+      } else {
+        save({ phase: "requires-repair" });
+        throw new Error(
+          `Import ${operation.operationId} has an unknown commit outcome and requires repair: ${errorMessage(commitError)}`
+        );
       }
     }
-    const detail = err instanceof Error ? err.message : String(err);
+  }
+
+  save({ phase: "adopting" });
+  try {
+    const finalized = await invokeConfiguredGitProvider(deps, ctx, "finalizeImport", [
+      { operationId: operation.operationId },
+    ]);
+    if (finalized.phase !== "complete") {
+      throw new Error(finalized.error ?? `provider finalization is ${finalized.phase}`);
+    }
+    deps.treeScanner.invalidate();
+    const adoptedContextId =
+      (await notifyWorkspaceSourceChanged(
+        ctx,
+        deps,
+        `Import workspace project ${validRepoPath}`,
+        validRepoPath
+      )) ?? null;
+    save({ phase: "complete", adoptedContextId, finalizationError: undefined });
+  } catch (error) {
+    save({ phase: "committed-incomplete", finalizationError: errorMessage(error) });
     throw new Error(
-      `Import of ${validRepoPath} failed during clone: ${detail}. ` +
-        (rolledBack || !persisted.changed
-          ? `Nothing was persisted — re-run the same import command to retry.`
-          : `The remote/upstream declaration WAS persisted but could not be rolled back; ` +
-            `\`vibestudio vcs git status\` will show it as not-materialized — re-run the same ` +
-            `import command to finish, or \`vibestudio vcs git disable --repo ${validRepoPath} ` +
-            `--forget-remote\` to remove it.`)
+      `Import ${operation.operationId} committed protected main but finalization is incomplete: ${errorMessage(error)}. Retry the same import to resume.`
     );
   }
-  deps.treeScanner.invalidate();
-  await notifyWorkspaceSourceChanged(
-    ctx,
-    deps,
-    `Import workspace project ${validRepoPath}`,
-    validRepoPath
-  );
-  return { path: validRepoPath, remote: normalizedRemote };
+
+  const prepared = operation.prepared;
+  if (!prepared) {
+    throw new Error(`Import ${operation.operationId} completed without a prepared source state`);
+  }
+  return {
+    operationId: operation.operationId,
+    phase: "complete",
+    path: validRepoPath,
+    remote: {
+      name: exactRemote.name,
+      urlIdentity: remoteUrlIdentity(exactRemote.url),
+      branch: exactRemote.branch,
+    },
+    stateHash: prepared.stateHash,
+    gitCommitSha: prepared.gitCommitSha,
+    changed: prepared.changed,
+    adoptedContextId: operation.adoptedContextId ?? null,
+  };
 }
 
 async function ensureWorkspaceConfigWritePermission(
   ctx: ServiceContext,
   deps: Pick<
     GitInteropServiceDeps,
-    "workspaceConfig" | "workspaceConfigMutationWouldChange" | "approvalQueue" | "hasAppCapability"
+    "workspaceConfig" | "workspaceConfigMutationWouldChange" | "approvalQueue"
   >,
   unitPath: string,
   remote: WorkspaceGitRemoteConfig,
   mutateConfig: WorkspaceConfigMutation
 ): Promise<void> {
   if (!(await configMutationWouldChange(deps, mutateConfig))) return;
-  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
     ctx.caller.runtime.kind !== "app" &&
@@ -664,7 +810,7 @@ async function ensureWorkspaceConfigWritePermission(
     callerKind: ctx.caller.runtime.kind,
     ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
     repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
+    executionDigest: identity.executionDigest,
     dedupKey: `git-import-config:${unitPath}:${remote.name}:${remote.url}:${remote.branch ?? ""}`,
     trigger: "meta-change",
     title: "Import external Git project",
@@ -680,12 +826,12 @@ async function ensureWorkspaceConfigWritePermission(
 
 async function ensureSharedRemotePermission(
   ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
+  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore">,
   unitPath: string,
   operation: "set" | "remove",
   remote: WorkspaceGitRemoteConfig | null
 ): Promise<void> {
-  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
     ctx.caller.runtime.kind !== "app" &&
@@ -742,12 +888,12 @@ async function ensureSharedRemotePermission(
 
 async function ensureUpstreamPermission(
   ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
+  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore">,
   unitPath: string,
   operation: "set" | "remove",
   upstream: Pick<WorkspaceGitUpstreamConfig, "remote" | "branch" | "autoPush"> | null
 ): Promise<void> {
-  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
     ctx.caller.runtime.kind !== "app" &&
@@ -842,8 +988,8 @@ async function notifyWorkspaceSourceChanged(
   deps: Pick<GitInteropServiceDeps, "onWorkspaceSourceChanged">,
   summary: string,
   importedRepoPath?: string
-): Promise<void> {
-  await deps.onWorkspaceSourceChanged?.(ctx, summary, importedRepoPath);
+): Promise<string | null | undefined> {
+  return await deps.onWorkspaceSourceChanged?.(ctx, summary, importedRepoPath);
 }
 
 async function propagateSharedRemote(
@@ -863,6 +1009,132 @@ function mutateWorkspaceConfig(target: WorkspaceConfig, next: WorkspaceConfig): 
     deleteDynamicProperty(target, key);
   }
   Object.assign(target, next);
+}
+
+function sameRequestedRemote(
+  active: WorkspaceGitRemoteConfig & { branch: string },
+  requested: WorkspaceGitRemoteConfig
+): boolean {
+  return (
+    active.name === requested.name &&
+    normalizeRemoteUrl(active.url) === normalizeRemoteUrl(requested.url) &&
+    (requested.branch === undefined || requested.branch === active.branch)
+  );
+}
+
+function safeDeclaredUpstream(
+  config: WorkspaceConfig,
+  repoPath: string
+): WorkspaceGitUpstreamConfig | null {
+  const [section, ...rest] = normalizeWorkspaceRepoPath(repoPath).split("/");
+  if (!section) return null;
+  const value = config.git?.upstreams?.[section]?.[rest.join("/")];
+  return value ? structuredClone(value) : null;
+}
+
+function declaredRemoteConfig(
+  config: WorkspaceConfig,
+  repoPath: string,
+  remoteName: string
+): WorkspaceGitRemoteConfig | null {
+  const [section, ...rest] = normalizeWorkspaceRepoPath(repoPath).split("/");
+  if (!section) return null;
+  const declaration = config.git?.remotes?.[section]?.[rest.join("/")]?.[remoteName];
+  return declaration
+    ? {
+        name: remoteName,
+        url: declaration.url,
+        ...(declaration.branch ? { branch: declaration.branch } : {}),
+      }
+    : null;
+}
+
+function assertImportConfigPreimage(
+  config: WorkspaceConfig,
+  repoPath: string,
+  remoteName: string,
+  expected: {
+    remote: WorkspaceGitRemoteConfig | null;
+    upstream: WorkspaceGitUpstreamConfig | null;
+  }
+): void {
+  const currentRemote = declaredRemoteConfig(config, repoPath, remoteName);
+  const currentUpstream = safeDeclaredUpstream(config, repoPath);
+  if (
+    !sameConfigValue(currentRemote, expected.remote) ||
+    !sameConfigValue(currentUpstream, expected.upstream)
+  ) {
+    throw new Error(
+      `Git import configuration preimage changed concurrently for ${repoPath}; no fields were overwritten`
+    );
+  }
+}
+
+function assertImportConfigOwned(config: WorkspaceConfig, operation: GitImportJournalRecord): void {
+  if (!operation.config)
+    throw new Error(`Git import ${operation.operationId} has no config journal`);
+  const currentRemote = declaredRemoteConfig(
+    config,
+    operation.repoPath,
+    operation.config.writtenRemote.name
+  );
+  const currentUpstream = safeDeclaredUpstream(config, operation.repoPath);
+  if (
+    !sameConfigValue(currentRemote, operation.config.writtenRemote) ||
+    !sameConfigValue(currentUpstream, operation.config.writtenUpstream)
+  ) {
+    throw new Error(
+      `Git import ${operation.operationId} no longer owns its configuration write for ${operation.repoPath}`
+    );
+  }
+}
+
+async function compensateImportConfig(
+  ctx: ServiceContext,
+  deps: GitInteropServiceDeps,
+  operation: GitImportJournalRecord
+): Promise<void> {
+  const ownedConfig = operation.config;
+  if (!ownedConfig) return;
+  await persistWorkspaceConfigMutation(ctx, deps, {
+    mutate: (current) => {
+      assertImportConfigOwned(current, operation);
+      let next = ownedConfig.priorRemote
+        ? setDeclaredRemoteInConfig(current, operation.repoPath, ownedConfig.priorRemote)
+        : removeDeclaredRemoteFromConfig(
+            current,
+            operation.repoPath,
+            ownedConfig.writtenRemote.name
+          );
+      next = ownedConfig.priorUpstream
+        ? setDeclaredUpstreamInConfig(next, operation.repoPath, ownedConfig.priorUpstream)
+        : removeDeclaredUpstreamFromConfig(next, operation.repoPath);
+      return next;
+    },
+    summary: `meta/vibestudio.yml restores the exact pre-import Git configuration for ${operation.repoPath}`,
+    operation: "import",
+  });
+}
+
+function sameConfigValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function remoteUrlIdentity(value: string): string {
+  try {
+    const parsed = new URL(normalizeRemoteUrl(value));
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return "redacted-remote";
+  }
 }
 
 function getRemoteForApproval(

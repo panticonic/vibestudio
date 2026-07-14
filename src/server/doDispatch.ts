@@ -22,8 +22,9 @@ import type {
   LifecycleDoDispatcher,
 } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
-import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { requiresStaticDoHost } from "./internalDOs/productBootManifest.js";
 import { HELD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -47,7 +48,7 @@ export function encodeUniversalKey(ref: DORef): string {
  */
 export function doRefUrl(ref: DORef, method: string): string {
   const methodPath = method.split("/").map(encodeURIComponent).join("/");
-  if (!isInternalDOSource(ref.source)) {
+  if (!requiresStaticDoHost(ref.source, ref.className)) {
     return `/_u/${encodeURIComponent(encodeUniversalKey(ref))}/${methodPath}`;
   }
   const sourcePath = ref.source.split("/").map(encodeURIComponent).join("/");
@@ -88,6 +89,7 @@ export interface DOCallerEnvelope {
    * code identity, WP0 §6). Absent for server-originated and bootstrap dispatches.
    */
   userId?: string;
+  authorization?: DirectAuthorityAttestation;
 }
 
 /**
@@ -249,6 +251,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
   private getWorkerdGatewayToken: (() => string) | null = null;
+  private authorityAttester: ((ref: DORef, method: string) => DirectAuthorityAttestation) | null =
+    null;
 
   /**
    * Set the ensureDO callback for retry-on-failure.
@@ -296,6 +300,21 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   setGetWorkerdGatewayToken(fn: () => string): void {
     this.getWorkerdGatewayToken = fn;
+  }
+
+  setAuthorityAttester(fn: (ref: DORef, method: string) => DirectAuthorityAttestation): void {
+    this.authorityAttester = fn;
+  }
+
+  private serverCaller(ref: DORef, method: string): DOCallerEnvelope {
+    if (!this.authorityAttester) {
+      throw new Error("DODispatch requires a host authority attester");
+    }
+    return {
+      callerId: "main",
+      callerKind: "server",
+      authorization: this.authorityAttester(ref, method),
+    };
   }
 
   /**
@@ -398,7 +417,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
       ...(held ? { heldConnection: true } : {}),
     });
-    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    const serverCaller = this.serverCaller(ref, method);
     try {
       return await postToDOWithToken(
         ref,
@@ -457,7 +476,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    const serverCaller = this.serverCaller(ref, lifecycleMethod);
     try {
       return await postToDOWithToken(
         ref,
@@ -508,7 +527,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
+    const serverCaller = this.serverCaller(ref, "__alarm");
     try {
       return await postToDOWithToken(ref, "__alarm", [], buildDeps(), "main", serverCaller);
     } catch (err) {

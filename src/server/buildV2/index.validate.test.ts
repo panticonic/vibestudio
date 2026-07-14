@@ -3,7 +3,7 @@
  * `validate` surface and the host-internal `statusAt` cache read.
  *
  * `validate` must be idempotent on unpublished candidates — build + cache only,
- * never promoting the EV baseline (`persistEvState`) or recording provenance
+ * never promoting the source digest baseline (`persistSourceState`) or recording provenance
  * (`recordBuild`). `statusAt` must be a PURE lookup over recorded/cached per-unit
  * results — never triggering a build — and must preserve the coarse
  * validated/failed contract. The push report semantics (pushed gate absolutely,
@@ -31,7 +31,7 @@ const CANDIDATE_VIEW = "state:candidate";
 const UNKNOWN_VIEW = "state:unknown";
 
 // Per-test hook so a unit's build can be made to fail at a specific view.
-let shouldFail: (name: string, ev: string, stateRef: string) => boolean = () => false;
+let shouldFail: (name: string, sourceDigest: string, stateRef: string) => boolean = () => false;
 // Records every non-cache-hit build the mock actually performs.
 let buildCalls: Array<{ name: string; key: string }> = [];
 
@@ -58,7 +58,7 @@ function writeUnit(
 
 /**
  * Fake source. `packages/lib` content differs between base and candidate, so its
- * EV — and its dependent panel `app`'s EV — change across the two views, while
+ * source digest — and its dependent panel `app`'s source digest — change across the two views, while
  * standalone `solo` is stable.
  */
 function fakeSource(
@@ -94,7 +94,7 @@ async function loadWithMocks(): Promise<{
   cleanup: () => Promise<void>;
   buildStore: typeof import("./buildStore.js");
   diagnosticsStore: typeof import("./diagnosticsStore.js");
-  persistEvState: ReturnType<typeof vi.fn>;
+  persistSourceState: ReturnType<typeof vi.fn>;
 }> {
   vi.resetModules();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-validate-"));
@@ -108,11 +108,10 @@ async function loadWithMocks(): Promise<{
   const { setUserDataPath } = await import("@vibestudio/env-paths");
   setUserDataPath(path.join(root, "state"));
 
-  const persistEvState = vi.fn();
-  vi.doMock("./effectiveVersion.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("./effectiveVersion.js")>("./effectiveVersion.js");
-    return { ...actual, persistEvState };
+  const persistSourceState = vi.fn();
+  vi.doMock("./sourceClosure.js", async () => {
+    const actual = await vi.importActual<typeof import("./sourceClosure.js")>("./sourceClosure.js");
+    return { ...actual, persistSourceState };
   });
 
   vi.doMock("./typecheckFold.js", () => ({ typecheckUnit: vi.fn(async () => []) }));
@@ -125,18 +124,22 @@ async function loadWithMocks(): Promise<{
       buildUnit: vi.fn(
         async (
           node: { name: string; kind: string },
-          ev: string,
+          sourceDigest: string,
           _graph: unknown,
           _root: string,
           stateRef: string,
           options?: unknown
         ) => {
-          const key = actual.computeBuildUnitKey(node as never, ev, options as never);
+          const key = actual.computeUnitCompilationCacheKey(
+            node as never,
+            sourceDigest,
+            options as never
+          );
           // Cache hit → reuse (exactly like the real builder + coalescing).
           const cached = buildStore.get(key);
           if (cached) return cached;
           buildCalls.push({ name: node.name, key });
-          if (shouldFail(node.name, ev, stateRef)) {
+          if (shouldFail(node.name, sourceDigest, stateRef)) {
             throw new Error(`mock build failed: ${node.name}`);
           }
           return buildStore.put(
@@ -154,7 +157,7 @@ async function loadWithMocks(): Promise<{
             {
               kind: node.kind as never,
               name: node.name,
-              ev,
+              sourceDigest,
               sourceStateHash: stateRef,
               sourcemap: false,
               details: { kind: "generic" as const },
@@ -181,12 +184,12 @@ async function loadWithMocks(): Promise<{
     workspaceRoot,
     buildStore,
     diagnosticsStore,
-    persistEvState,
+    persistSourceState,
     cleanup: async () => {
       await buildSystem.shutdown();
       vi.doUnmock("./builder.js");
       vi.doUnmock("./typecheckFold.js");
-      vi.doUnmock("./effectiveVersion.js");
+      vi.doUnmock("./sourceClosure.js");
       vi.resetModules();
       fs.rmSync(root, { recursive: true, force: true });
     },
@@ -208,12 +211,12 @@ describe("BuildSystemV2 P2 — validate / statusAt", () => {
 
   it("validate is idempotent on an unpublished candidate: no baseline promotion", async () => {
     env = await loadWithMocks();
-    const { buildSystem, persistEvState } = env;
+    const { buildSystem, persistSourceState } = env;
     const recordBuild = vi.fn();
     // Re-point the source's recordBuild via a spy on the running system: the
-    // fake's recordBuild is a no-op, so assert persistEvState instead (the EV
+    // fake's recordBuild is a no-op, so assert persistSourceState instead (the source digest
     // baseline promotion) plus that a second validate rebuilds nothing.
-    persistEvState.mockClear();
+    persistSourceState.mockClear();
 
     const first = await buildSystem.validate({
       viewHash: CANDIDATE_VIEW,
@@ -231,8 +234,8 @@ describe("BuildSystemV2 P2 — validate / statusAt", () => {
 
     // Reports identical across calls.
     expect(second).toEqual(first);
-    // No EV baseline promotion happened as a side effect of either validate.
-    expect(persistEvState).not.toHaveBeenCalled();
+    // No source digest baseline promotion happened as a side effect of either validate.
+    expect(persistSourceState).not.toHaveBeenCalled();
     expect(recordBuild).not.toHaveBeenCalled();
     // Second validate recompiled nothing (per-unit build cache reuse).
     expect(buildCalls.length).toBe(buildsAfterFirst);
@@ -319,7 +322,7 @@ describe("BuildSystemV2 P2 — validate / statusAt", () => {
     env = await loadWithMocks();
     const { buildSystem } = env;
 
-    // Candidate changes lib → app's candidate EV is not yet built.
+    // Candidate changes lib → app's candidate source digest is not yet built.
     const before = await buildSystem.statusAt(CANDIDATE_VIEW);
     expect(before.validated).toBe(false);
     expect(buildCalls).toHaveLength(0); // pure read — no builds

@@ -214,7 +214,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     // Authorized chrome gets full access through requirePanelAccessPermission.
     // Runtime callers (panel/worker/do/app) may also reach this service but are
     // scoped by resource grants unless they hold the chrome capability.
-    policy: { allowed: ["panel", "worker", "do", "shell", "server", "app"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: panelTreeMethods,
     handler: defineServiceHandler("panelTree", panelTreeMethods, {
       ensureLoaded: (ctx, args) => dispatch(ctx, "ensureLoaded", args),

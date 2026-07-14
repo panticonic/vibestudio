@@ -104,7 +104,7 @@ export function createPhoneProvisioningProxyService(
   return {
     name: "phoneProvisioning",
     description: "Account-scoped proxy to phone capabilities on connected desktop clients",
-    policy: { allowed: ["agent", "panel", "app", "shell"] },
+    authority: { principals: ["entity", "code", "user"] },
     methods: phoneProvisioningMethods,
     handler: async (ctx, method, args) => {
       const userId = requireUserId(ctx);

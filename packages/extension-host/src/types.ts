@@ -1,5 +1,6 @@
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
+import type { CapabilityScope } from "@vibestudio/rpc";
 import type { ExtensionInvocation, ExtensionSource, RegistryEntry } from "@vibestudio/extension";
 
 export type { ExtensionInvocation, ExtensionSource, RegistryEntry };
@@ -16,6 +17,8 @@ export interface ExtensionProcessState {
   name: string;
   version: string;
   bundlePath: string;
+  /** Exact ABI-keyed dependency layer for native/external packages. */
+  runtimeNodeModulesDir?: string;
   storageDir: string;
   gatewayUrl: string;
   rpcToken: string;
@@ -25,7 +28,8 @@ export interface ExtensionUserlandCaller {
   callerId: string;
   callerKind: CodeIdentityCallerKind;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
+  requested: readonly CapabilityScope[];
   contextId?: string;
 }
 
@@ -63,7 +67,8 @@ export function invocationFromServiceContext(
           callerId: identity.callerId,
           callerKind: identity.callerKind,
           repoPath: identity.repoPath,
-          effectiveVersion: identity.effectiveVersion,
+          executionDigest: identity.executionDigest,
+          requested: identity.requested,
           ...(chainContextId ? { contextId: chainContextId } : {}),
         };
     }

@@ -3,17 +3,20 @@ import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { resolveApprovalCallerTitle, resolveApprovalRequester } from "./approvalCallerTitle.js";
 
+const INTERNAL_DIGEST = "d".repeat(64);
+
 function record(
   id: string,
   kind: EntityKind,
   parentId?: string,
   repoPath = "workers/test",
-  effectiveVersion = "hash-1"
+  executionDigest = "hash-1"
 ): EntityRecord {
   return {
     id,
     kind,
-    source: { repoPath, effectiveVersion },
+    source: { repoPath },
+    activeExecutionDigest: executionDigest,
     contextId: "ctx-1",
     key: id,
     parentId,
@@ -34,7 +37,7 @@ describe("resolveApprovalCallerTitle", () => {
         "do",
         "do:workers/agent:Agent:session",
         "vibestudio/internal",
-        "internal"
+        INTERNAL_DIGEST
       )
     );
     const titles = new Map([
@@ -78,7 +81,7 @@ describe("resolveApprovalCallerTitle", () => {
         "do",
         "do:workers/agent:AgentDO:session",
         "vibestudio/internal",
-        "internal"
+        INTERNAL_DIGEST
       ),
       className: "EvalDO",
       stateArgs: { ownerPrincipalId: "do:workers/agent:AgentDO:session", subKey: "turn-17" },
@@ -94,7 +97,7 @@ describe("resolveApprovalCallerTitle", () => {
         callerId: "do:vibestudio/internal:EvalDO:run-1",
         callerKind: "do",
         repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
+        executionDigest: INTERNAL_DIGEST,
       }
     );
 
@@ -102,7 +105,7 @@ describe("resolveApprovalCallerTitle", () => {
       category: "eval",
       title: "Agentic Chat",
       panel: { id: "panel:nav-chat", title: "Agentic Chat" },
-      stableIdentityKey: "do:vibestudio/internal:EvalDO:run-1",
+      stableIdentityKey: `vibestudio/internal@${INTERNAL_DIGEST}`,
       eval: {
         ownerId: "do:workers/agent:AgentDO:session",
         subKey: "turn-17",

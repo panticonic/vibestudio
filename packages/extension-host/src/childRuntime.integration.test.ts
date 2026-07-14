@@ -72,6 +72,7 @@ describe("extension child runtime process", () => {
       bundlePath,
       [
         "export async function activate(ctx) {",
+        "  await ctx.storage.writeFile('first-activation.json', JSON.stringify({ ready: true }));",
         "  ctx.log.info('activated');",
         "  return {",
         "    ping(value) { return `pong:${value}`; },",
@@ -197,6 +198,9 @@ describe("extension child runtime process", () => {
       hasFetch: false,
     });
     expect(extensionLogArgs).toEqual(["info", "activated"]);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(root, "storage", "first-activation.json"), "utf8"))
+    ).toEqual({ ready: true });
 
     const requestId = randomUUID();
     const response = await waitForMessage<RpcResponse>((resolve, reject) => {
@@ -464,7 +468,7 @@ describe("extension child runtime process", () => {
                   callerId: "panel-1",
                   callerKind: "panel",
                   repoPath: "panels/test",
-                  effectiveVersion: "ev-test",
+                  executionDigest: "ev-test",
                   contextId: "ctx-panel",
                 },
               },

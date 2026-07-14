@@ -23,12 +23,7 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -88,7 +83,11 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
     });
     await vcs.commit({ head: c1, repoPath: REPO, message: "v1", actor: USER });
     expect(
-      (await doInstance().vcsPush({ repoPaths: [REPO], sourceHead: c1, actor: USER })).status
+      (await gad.call<{ status: string }>("vcsPush", {
+        repoPaths: [REPO],
+        sourceHead: c1,
+        actor: USER,
+      })).status
     ).toBe("pushed");
     const v1 = refs.readMain(REPO)!.stateHash;
     // The DO recorded v1.
@@ -130,7 +129,12 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
     expect(
       doInstance().resolveWorktreeHeadInternal(logIdForRepo(REPO), VCS_MAIN_HEAD)?.stateHash
     ).toBe(v1);
-    const log = await doInstance().vcsLog(REPO, 3, VCS_MAIN_HEAD);
+    const log = await gad.call<Array<{ outputStateHash: string | null }>>(
+      "vcsLog",
+      REPO,
+      3,
+      VCS_MAIN_HEAD
+    );
     expect(log[0]?.outputStateHash).toBe(v1);
   });
 });

@@ -24,7 +24,7 @@ import path from "node:path";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalDetailFormat, ApprovalPrincipal } from "@vibestudio/shared/approvals";
 import type {
@@ -36,7 +36,6 @@ import type {
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import type { UserRole } from "@vibestudio/identity/types";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import type { HubWorkspaceRoute } from "@vibestudio/service-schemas/hubControl";
 import type {
@@ -53,8 +52,6 @@ import type {
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
-import { isRootOrAdmin } from "./capabilityAuthorizer.js";
 
 // Wire data types live in the shared schema module (single source of truth
 // for server registration and typed clients). Re-exported here because many
@@ -99,13 +96,6 @@ export interface WorkspaceServiceDeps {
   setConfigField: (key: string, value: unknown, ctx: ServiceContext) => void | Promise<void>;
   /** Required hub-owned catalog proxy; children never mutate the catalog. */
   workspaceCatalog: WorkspaceCatalogClient;
-  /**
-   * Live role lookup from the shared identity DB (WP9 §3/§6) — resolves the
-   * CURRENT role of a caller's `subject.userId`. Role-gates the host-administrative
-   * catalog ops (`create`/`delete`) to root/admin, evaluated live so a
-   * demotion takes effect immediately.
-   */
-  roleOf: (userId: string) => UserRole | null | undefined;
   /**
    * Event bus for `workspace:relaunch-requested`: an attached desktop shell
    * subscribes and relaunches itself into the selected workspace. With no
@@ -200,7 +190,6 @@ export interface WorkspaceServiceDeps {
   cancelHostTargetLaunchSession?: (sessionId: string) => Promise<void> | void;
   /** Queue used to gate userland workspace mutations. */
   approvalQueue?: Pick<ApprovalQueue, "requestUserland">;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
    * Materialize a context's working folder (idempotent) and return its absolute
    * path. Backs `workspace.ensureContextFolder`; delegates to the
@@ -268,16 +257,12 @@ async function resolveSkillMdPath(workspaceRoot: string, nameOrPath: string): Pr
   }
 }
 
-function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDeps): boolean {
-  return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
-}
-
 async function requireEnsureContextFolderAccess(
   deps: WorkspaceServiceDeps,
   ctx: ServiceContext,
   contextId: string
 ): Promise<void> {
-  if (isTrustedWorkspaceCaller(ctx, deps) || ctx.caller.runtime.kind === "extension") return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   const kind = ctx.caller.runtime.kind;
   if (kind !== "panel" && kind !== "worker" && kind !== "do") {
     throw new ServiceError(
@@ -312,7 +297,7 @@ async function requireAppUnitManagementAccess(
   method: string,
   name: string
 ): Promise<void> {
-  if (isTrustedWorkspaceCaller(ctx, deps)) return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   if (ctx.caller.runtime.kind !== "app") {
     throw new ServiceError(
       "workspace",
@@ -410,37 +395,8 @@ function resolveWorkspacePrincipal(
     callerId: identity.callerId,
     callerKind: identity.callerKind,
     repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
+    executionDigest: identity.executionDigest,
   };
-}
-
-/**
- * WP9 §5/§6 — role-gate the host-administrative catalog ops.
- *
- * `create`/`delete`/`select` (switch, which relaunches the app) are host-admin
- * operations: the acting user's LIVE role must be root/admin (resolved from the
- * identity DB via `deps.roleOf`, never a value frozen onto the connection). This
- * is ORTHOGONAL to the userland approval below (which still gates non-trusted
- * callers) and to capability-grant matching (untouched, code-identity-scoped) —
- * role gates WHO may drive the catalog, not whether the code is approved.
- *
- * Intra-workspace config writes (`setInitPanels`/`setConfigField`) are NOT
- * role-gated: members are mutually trusting inside a workspace (plan §0.0), so
- * those stay on the approval/trust path only.
- *
- */
-function requireWorkspaceAdminRole(
-  deps: WorkspaceServiceDeps,
-  ctx: ServiceContext,
-  operation: WorkspaceApprovalOperation
-): void {
-  if (isRootOrAdmin(ctx.caller, { roleOf: deps.roleOf })) return;
-  throw new ServiceError(
-    "workspace",
-    operation,
-    `workspace.${operation} requires the root or admin role`,
-    "EACCES"
-  );
 }
 
 async function requireWorkspaceApproval(
@@ -455,7 +411,7 @@ async function requireWorkspaceApproval(
     details?: WorkspaceApprovalDetail[];
   }
 ): Promise<void> {
-  if (isTrustedWorkspaceCaller(ctx, deps)) return;
+  if (await hasPanelHostingAuthority(ctx)) return;
   const principal = resolveWorkspacePrincipal(deps, ctx, operation);
   const approvalQueue = deps.approvalQueue;
   if (!approvalQueue) {
@@ -520,8 +476,8 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
   return {
     name: "workspace",
     description: "Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)",
-    policy: {
-      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"],
+    authority: {
+      principals: ["user", "code", "host"],
     },
     methods: workspaceMethods,
     handler: defineServiceHandler("workspace", workspaceMethods, {
@@ -564,7 +520,6 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       // -----------------------------------------------------------------
 
       create: async (ctx, [name, opts]) => {
-        requireWorkspaceAdminRole(deps, ctx, "create");
         await requireWorkspaceApproval(deps, ctx, "create", {
           target: name,
           title: "Create workspace?",
@@ -578,7 +533,6 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         if (name === deps.getConfig().id) {
           throw new Error("Cannot delete the currently running workspace");
         }
-        requireWorkspaceAdminRole(deps, ctx, "delete");
         await requireWorkspaceApproval(deps, ctx, "delete", {
           target: name,
           title: "Delete workspace?",
@@ -733,7 +687,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       },
 
       "units.bakeAppDist": async (ctx, [sourceOrName, opts]) => {
-        if (!isTrustedWorkspaceCaller(ctx, deps)) {
+        if (!(await hasPanelHostingAuthority(ctx))) {
           throw new ServiceError(
             "workspace",
             "units.bakeAppDist",

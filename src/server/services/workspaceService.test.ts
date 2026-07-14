@@ -162,7 +162,6 @@ function makeService(
     getConfig: () => makeConfig(),
     setConfigField: vi.fn(),
     workspaceCatalog: makeCentralData(),
-    roleOf: () => "root",
     eventService: opts.eventService,
     approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
   });
@@ -176,11 +175,19 @@ const panelCtx: ServiceContext = {
       callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/test",
-      effectiveVersion: "ev-test",
+      executionDigest: "ev-test",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     },
     undefined,
     { userId: "usr_root", handle: "root" }
   ),
+  authority: {
+    allows: vi.fn(async () => false),
+    assert: vi.fn(async () => undefined),
+  },
 };
 const appCtx: ServiceContext = {
   caller: createVerifiedCaller(
@@ -190,17 +197,29 @@ const appCtx: ServiceContext = {
       callerId: "@workspace-apps/shell",
       callerKind: "app",
       repoPath: "apps/shell",
-      effectiveVersion: "ev-app",
+      executionDigest: "ev-app",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     },
     undefined,
     { userId: "usr_root", handle: "root" }
   ),
+  authority: {
+    allows: vi.fn(async () => false),
+    assert: vi.fn(async () => undefined),
+  },
 };
 const shellCtx: ServiceContext = {
   caller: createVerifiedCaller("shell:dev_test", "shell", undefined, undefined, {
     userId: "usr_root",
     handle: "root",
   }),
+  authority: {
+    allows: vi.fn(async ({ capability }) => capability === "panel-hosting"),
+    assert: vi.fn(async () => undefined),
+  },
 };
 
 // ─── Contract: client/server method-name alignment ───────────────────────────
@@ -288,19 +307,17 @@ describe("workspace service ↔ client contract", () => {
   });
 });
 
-// ─── Policy: panel/worker reachability ────────────────────────────────────────
+// ─── Compositional authority ──────────────────────────────────────────────────
 
-describe("workspace service policy", () => {
-  it("allows panel callers (the regression target)", () => {
+describe("workspace service authority", () => {
+  it("admits exact userland code principals", () => {
     const service = makeService();
-    expect(service.policy.allowed).toContain("panel");
+    expect(service.authority.principals).toContain("code");
   });
 
-  it("allows worker, shell, and server callers as well", () => {
+  it("admits authenticated users and the exact host", () => {
     const service = makeService();
-    expect(service.policy.allowed).toContain("worker");
-    expect(service.policy.allowed).toContain("shell");
-    expect(service.policy.allowed).toContain("server");
+    expect(service.authority.principals).toEqual(expect.arrayContaining(["user", "host"]));
   });
 });
 
@@ -329,7 +346,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig({ id: "ws_opaque" }),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
@@ -351,7 +367,6 @@ describe("workspace service handler", () => {
         ...makeCentralData(),
         list: vi.fn(async () => []),
       },
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
@@ -372,7 +387,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listUnits: vi.fn(() => [
         {
           name: "@workspace-extensions/git-tools",
@@ -397,7 +411,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       bakeAppDist,
     });
 
@@ -422,7 +435,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listUnits: vi.fn(() => [
         {
           name: "@workspace-apps/other",
@@ -451,7 +463,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listUnits: vi.fn(() => [
         {
           name: "@workspace-apps/self",
@@ -474,8 +485,16 @@ describe("workspace service handler", () => {
         callerId: "@workspace-apps/self",
         callerKind: "app",
         repoPath: "apps/self",
-        effectiveVersion: "ev-self",
+        executionDigest: "ev-self",
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
+      authority: {
+        allows: vi.fn(async () => false),
+        assert: vi.fn(async () => undefined),
+      },
     };
 
     await expect(
@@ -532,7 +551,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog,
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
@@ -547,7 +565,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField,
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setInitPanels", [[{ source: "panels/chat" }]]);
@@ -565,7 +582,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField,
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
@@ -602,7 +618,6 @@ describe("workspace service handler", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
       listRecurringJobs: vi.fn(() => jobs),
     });
 
@@ -621,7 +636,6 @@ describe("workspace.select", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: central,
-      roleOf: () => "member",
       eventService: { emit },
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
@@ -642,7 +656,6 @@ describe("workspace.select", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: central,
-      roleOf: () => "root",
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
       // No eventService — no shell attached to relaunch.
     });
@@ -658,7 +671,6 @@ describe("workspace.select", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: central,
-      roleOf: () => "root",
     });
 
     await expect(service.handler(panelCtx, "select", ["other"])).rejects.toMatchObject({
@@ -709,7 +721,6 @@ describe("workspace service agent resources", () => {
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
       workspaceCatalog: makeCentralData(),
-      roleOf: () => "root",
     });
   }
 

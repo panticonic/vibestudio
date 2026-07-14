@@ -405,7 +405,8 @@ describe("FsService", () => {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
         callerKind: "do",
         repoPath: "workers/agent-worker",
-        effectiveVersion: "ev-1",
+        executionDigest: "ev-1",
+          requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }, { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } }],
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-agent");
       mkdirSync(path.join(tmpRoot, "ctx-agent", "skills", "system-testing"), { recursive: true });
@@ -428,7 +429,8 @@ describe("FsService", () => {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-2",
         callerKind: "do",
         repoPath: "workers/agent-worker",
-        effectiveVersion: "ev-1",
+        executionDigest: "ev-1",
+          requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }, { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } }],
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-realpath");
       mkdirSync(path.join(tmpRoot, "ctx-realpath"), { recursive: true });
@@ -444,7 +446,8 @@ describe("FsService", () => {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-3",
         callerKind: "do",
         repoPath: "workers/agent-worker",
-        effectiveVersion: "ev-1",
+        executionDigest: "ev-1",
+          requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }, { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } }],
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-not-ready");
 
@@ -733,7 +736,7 @@ describe("FsService", () => {
     const record: EntityRecord = {
       id: callerId,
       kind,
-      source: { repoPath: "", effectiveVersion: "" },
+      source: { repoPath: "" },
       contextId,
       key: callerId,
       createdAt: Date.now(),

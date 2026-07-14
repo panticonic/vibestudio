@@ -16,7 +16,7 @@
  */
 
 import { z } from "zod";
-import type { ServicePolicy, MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy, MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { TREE_REF_RE } from "./blobstore.js";
 
@@ -24,10 +24,10 @@ import { TREE_REF_RE } from "./blobstore.js";
  *  static DO-only caller-kind policy, then the service handler narrows that to
  *  the single VCS-DO writer by target identity (§3). Reads mirror
  *  BLOBSTORE_READ_POLICY. */
-export const REFS_POLICY: ServicePolicy = {
-  allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"],
+export const REFS_POLICY: ServiceAuthorityPolicy = {
+  principals: ["code", "user", "host"],
 };
-const UPDATE_MAINS_POLICY: ServicePolicy = { allowed: ["do"] };
+const UPDATE_MAINS_POLICY: ServiceAuthorityPolicy = { principals: ["code"] };
 
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
 const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
@@ -125,7 +125,7 @@ export const refsMethods = defineServiceMethods({
       "Current record of one repo's protected `main` (repoPath → state), or null when absent.",
     args: z.tuple([z.string().min(1)]),
     returns: MainRefRecordSchema.nullable(),
-    policy: REFS_POLICY,
+    authority: REFS_POLICY,
     access: READ_ACCESS,
     examples: [{ args: ["packages/notes"], returns: null }],
   },
@@ -133,7 +133,7 @@ export const refsMethods = defineServiceMethods({
     description: "Every repo's protected `main`, sorted by repoPath.",
     args: z.tuple([]),
     returns: z.array(MainRefRecordSchema),
-    policy: REFS_POLICY,
+    authority: REFS_POLICY,
     access: READ_ACCESS,
   },
   listMainRefLog: {
@@ -144,7 +144,7 @@ export const refsMethods = defineServiceMethods({
       "main-advance provenance from here; the DO's stale-intent discard consults it (§6).",
     args: z.tuple([listMainRefLogInputSchema]),
     returns: z.array(MainRefLogRowSchema),
-    policy: REFS_POLICY,
+    authority: REFS_POLICY,
     access: READ_ACCESS,
     examples: [{ args: [{ repoPath: "packages/notes" }], returns: [] }],
   },
@@ -158,7 +158,7 @@ export const refsMethods = defineServiceMethods({
       "gets a structured policy rejection.",
     args: z.tuple([updateMainsInputSchema]),
     returns: UpdateMainsResultSchema,
-    policy: UPDATE_MAINS_POLICY,
+    authority: UPDATE_MAINS_POLICY,
     access: WRITE_ACCESS,
   },
 });

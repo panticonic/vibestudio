@@ -12,6 +12,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           extension: {
             activationEvents: ["*"],
             dependencyMode: "external",
@@ -31,6 +32,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           extension: {
             activationEvents: ["*"],
             providerContracts: {
@@ -46,6 +48,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           extension: {
             activationEvents: ["*"],
             providerContracts: {
@@ -61,6 +64,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           extension: {
             activationEvents: ["*"],
             providerContracts: {
@@ -77,7 +81,10 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         extensionUnitManifestDescriptor,
-        { extension: { activationEvents: ["*"], contributes: { buildTargets: ["electron"] } } },
+        {
+          authority: { requests: [] },
+          extension: { activationEvents: ["*"], contributes: { buildTargets: ["electron"] } },
+        },
         { unitName: "@workspace-extensions/a" }
       )
     ).toThrow(/contributes.buildTargets/);
@@ -88,6 +95,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           extension: { activationEvents: ["*"] },
           app: { target: "electron", renderer: "index.tsx" },
         },
@@ -101,6 +109,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           app: {
             target: "electron",
             renderer: "index.tsx",
@@ -116,7 +125,10 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         appUnitManifestDescriptor,
-        { app: { target: "electron", renderer: "index.tsx", preload: "preload.ts" } },
+        {
+          authority: { requests: [] },
+          app: { target: "electron", renderer: "index.tsx", preload: "preload.ts" },
+        },
         { unitName: "@workspace-apps/shell" }
       )
     ).toThrow(/pure-thin/);
@@ -126,7 +138,10 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         appUnitManifestDescriptor,
-        { app: { target: "dist", renderer: "index.tsx", distDir: "dist" } },
+        {
+          authority: { requests: [] },
+          app: { target: "dist", renderer: "index.tsx", distDir: "dist" },
+        },
         { unitName: "@workspace-apps/prebuilt" }
       )
     ).toThrow(/target must be "electron", "react-native", or "terminal"/);
@@ -137,6 +152,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         appUnitManifestDescriptor,
         {
+          authority: { requests: [] },
           app: {
             target: "terminal",
             entry: "index.ts",
@@ -152,7 +168,10 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         appUnitManifestDescriptor,
-        { app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibestudio" } },
+        {
+          authority: { requests: [] },
+          app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibestudio" },
+        },
         { unitName: "@workspace-apps/mobile" }
       )
     ).toThrow(/requires rnComponentName and rnHostAbi/);
@@ -162,7 +181,14 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         appUnitManifestDescriptor,
-        { app: { target: "react-native", renderer: "index.tsx", capabilities: ["native-menus"] } },
+        {
+          authority: { requests: [] },
+          app: {
+            target: "react-native",
+            renderer: "index.tsx",
+            capabilities: ["native-menus"],
+          },
+        },
         { unitName: "@workspace-apps/mobile" }
       )
     ).toThrow(/known react-native capabilities/);

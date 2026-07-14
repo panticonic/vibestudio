@@ -2,16 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createVerifiedCaller,
   ServiceAccessError,
-  ServiceDispatcher,
   ServiceError,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import {
   createUserlandApprovalService,
   EXTERNAL_APPROVAL_TIMEOUT_MS,
 } from "./userlandApprovalService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrant } from "@vibestudio/shared/approvals";
+
+const TEST_EXECUTION_DIGEST = "a".repeat(64);
+const PANEL_EXECUTION_DIGEST = "b".repeat(64);
 
 function createDeps() {
   const queued = vi.fn<ApprovalQueue["requestUserland"]>(async () => ({
@@ -33,7 +36,8 @@ function createDeps() {
       ? {
           id,
           kind: "do" as const,
-          source: { repoPath: "workers/alpha", effectiveVersion: "hash-1" },
+          source: { repoPath: "workers/alpha" },
+          activeExecutionDigest: TEST_EXECUTION_DIGEST,
           contextId: "ctx-1",
           className: "AlphaDO",
           key: "agent-1",
@@ -71,7 +75,8 @@ const workerCtx: ServiceContext = {
     callerId: "worker:alpha",
     callerKind: "worker",
     repoPath: "workers/alpha",
-    effectiveVersion: "hash-1",
+    executionDigest: TEST_EXECUTION_DIGEST,
+    requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   }),
 };
 const doCtx: ServiceContext = {
@@ -79,7 +84,8 @@ const doCtx: ServiceContext = {
     callerId: "do:workers/alpha:AlphaDO:agent-1",
     callerKind: "do",
     repoPath: "workers/alpha",
-    effectiveVersion: "hash-1",
+    executionDigest: TEST_EXECUTION_DIGEST,
+    requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   }),
 };
 const extensionCtx: ServiceContext = {
@@ -88,7 +94,8 @@ const extensionCtx: ServiceContext = {
     callerId: "panel:alpha",
     callerKind: "panel",
     repoPath: "panels/alpha",
-    effectiveVersion: "panel-hash",
+    executionDigest: PANEL_EXECUTION_DIGEST,
+    requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   },
 };
 const validRequest = {
@@ -105,7 +112,7 @@ const validRequest = {
 describe("userlandApprovalService", () => {
   it("allows panels, workers, DOs, and extensions but rejects shell/server through policy", async () => {
     const { service } = createDeps();
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
@@ -146,7 +153,8 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "panel",
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
+        requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
       }),
     };
 
@@ -187,7 +195,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker" as const,
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       subject: { id: "team-x:foo" },
       choice: "allow",
@@ -208,7 +216,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker" as const,
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       subject: { id: "team-x:foo" },
       choice: "old-choice",
@@ -225,7 +233,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker",
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       "team-x:foo",
       undefined
@@ -240,7 +248,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker" as const,
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       subject: { id: "team-x:foo" },
       choice: "old-choice",
@@ -271,7 +279,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker",
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       validRequest.subject,
       "allow",
@@ -345,7 +353,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker",
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       scopedRequest.subject,
       "allow",
@@ -385,7 +393,7 @@ describe("userlandApprovalService", () => {
           callerId: "worker:alpha",
           callerKind: "worker" as const,
           repoPath: "workers/alpha",
-          effectiveVersion: "hash-1",
+          executionDigest: TEST_EXECUTION_DIGEST,
         },
         subject: { id: "team-x:foo" },
         choice: "allow",
@@ -399,7 +407,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker",
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       "team-x:foo",
       undefined
@@ -410,7 +418,7 @@ describe("userlandApprovalService", () => {
         callerId: "worker:alpha",
         callerKind: "worker",
         repoPath: "workers/alpha",
-        effectiveVersion: "hash-1",
+        executionDigest: TEST_EXECUTION_DIGEST,
       },
       undefined
     );
@@ -475,7 +483,7 @@ describe("userlandApprovalService", () => {
       callerId: "worker:deploy",
       callerKind: "worker" as const,
       repoPath: "workers/deploy",
-      effectiveVersion: "hash-deploy",
+      executionDigest: "hash-deploy",
     };
 
     await expect(
@@ -507,7 +515,15 @@ describe("userlandApprovalService", () => {
     const { service } = createDeps();
 
     await expect(
-      service.handler(workerCtx, "requestAs", [workerCtx.caller.code, validRequest])
+      service.handler(workerCtx, "requestAs", [
+        {
+          callerId: "worker:alpha",
+          callerKind: "worker",
+          repoPath: "workers/alpha",
+          executionDigest: TEST_EXECUTION_DIGEST,
+        },
+        validRequest,
+      ])
     ).rejects.toMatchObject({ code: "EACCES" });
   });
 
@@ -618,10 +634,10 @@ describe("userlandApprovalService", () => {
     ).resolves.toEqual({ settled: false });
   });
 
-  it("gates requestExternal/settleExternal to do and worker callers via policy", () => {
+  it("gates requestExternal/settleExternal to do and worker callers via compositional authority", () => {
     const { service } = createDeps();
-    expect(service.methods["requestExternal"]!.policy?.allowed).toEqual(["do", "worker"]);
-    expect(service.methods["settleExternal"]!.policy?.allowed).toEqual(["do", "worker"]);
+    expect(service.methods["requestExternal"]!.authority).toEqual({ principals: ["code"] });
+    expect(service.methods["settleExternal"]!.authority).toEqual({ principals: ["code"] });
   });
 
   it("throws ServiceError for unknown methods", async () => {

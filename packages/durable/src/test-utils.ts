@@ -1,4 +1,9 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
+import type {
+  AuthenticatedCaller,
+  DirectAuthorityAttestation,
+  PrincipalKind,
+} from "@vibestudio/rpc";
 
 type BindParams = Parameters<Database["run"]>[1];
 
@@ -112,6 +117,75 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
   WORKER_CLASS_NAME: "TestDO",
 };
 
+export function createTestDirectAuthority(input: {
+  source: string;
+  className: string;
+  objectKey: string;
+  method: string;
+  principal?: PrincipalKind;
+  now?: number;
+}): DirectAuthorityAttestation {
+  const now = input.now ?? Date.now();
+  const principalKind = input.principal ?? "host";
+  const principal = `${principalKind}:test` as const;
+  const audience = `do:${input.source}:${input.className}:${input.objectKey}`;
+  const capability = `rpc:${input.method}`;
+  const workspace = { workspaceId: "test", member: true, role: "member", revision: "test" };
+  return {
+    audience,
+    method: input.method,
+    resourceKey: audience,
+    issuedAt: now,
+    expiresAt: now + 5_000,
+    context: {
+      host: principalKind === "host" ? principal : null,
+      actingUser:
+        principalKind === "user"
+          ? principal
+          : principalKind === "device"
+            ? "user:test"
+            : null,
+      device: principalKind === "device" ? principal : null,
+      entity: principalKind === "entity" ? principal : null,
+      incarnation: null,
+      code: principalKind === "code" ? (`code:test@${"a".repeat(64)}` as const) : null,
+      codeManifest:
+        principalKind === "code"
+          ? {
+              principal: `code:test@${"a".repeat(64)}` as const,
+              requested: [{ capability, resource: { kind: "exact", key: audience } }],
+            }
+          : null,
+      deviceOwnership:
+        principalKind === "device"
+          ? { device: principal, user: "user:test", revision: "test" }
+          : null,
+      ownerChain: [],
+      agentBinding:
+        principalKind === "entity"
+          ? { entity: principal, contextId: "test", channelId: "test" }
+          : null,
+      delegation: [],
+      workspace,
+      session: { id: "test", audience, version: "1.0.0", expiresAt: now + 5_000 },
+    },
+    grants: [
+      {
+        subject:
+          principalKind === "code" ? (`code:test@${"a".repeat(64)}` as const) : principal,
+        capability,
+        resource: { kind: "exact", key: audience },
+        effect: "allow",
+        issuedBy: "host:test",
+        createdAt: now,
+        expiresAt: now + 5_000,
+        binding: { kind: "principal" },
+        provenance: "test",
+      },
+    ],
+  };
+}
+
 export async function createTestDO<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DOClass: new (ctx: any, env: any) => T,
@@ -185,16 +259,23 @@ export async function createTestDO<T>(
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // Attribute as the server (the trusted relay): `assertInboundAllowed`
-      // overrides (e.g. WebhookStoreDO/WorkspaceDO/EvalDO server-only,
-      // BrowserDataDO shell+server) refuse an unattributed caller. The
-      // instance-token gates whether `__caller` is trusted (the test token "token"
-      // resolves to this callerId; see assertInboundAllowed.test).
+      // Model the host's fresh, exact-target mediation. Caller kind remains
+      // attribution only; the method declaration is evaluated against this
+      // attestation by the same path production uses.
       body: JSON.stringify({
         args,
         __instanceToken: "token",
         __instanceId: "do:internal/WorkspaceDO:test-key",
-        __caller: { callerId: "main", callerKind: "server" },
+        __caller: {
+          callerId: "main",
+          callerKind: "server",
+          authorization: createTestDirectAuthority({
+            source: String(mergedEnv["WORKER_SOURCE"]),
+            className: String(mergedEnv["WORKER_CLASS_NAME"]),
+            objectKey,
+            method,
+          }),
+        } satisfies AuthenticatedCaller,
       }),
     });
     const response = await fetchable.fetch(request);

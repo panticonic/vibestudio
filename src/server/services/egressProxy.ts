@@ -1220,7 +1220,7 @@ export class EgressProxy {
       callerKind: attribution.callerKind,
       ...(requestedByUserId ? { requestedByUserId } : {}),
       repoPath: attribution.repoPath,
-      effectiveVersion: attribution.effectiveVersion,
+      executionDigest: attribution.executionDigest,
       credentialId: credential.id,
       credentialLabel: credential.label ?? credential.connectionLabel,
       audience: binding.audience,
@@ -1286,7 +1286,7 @@ export class EgressProxy {
       if (decision === "session") return approval.callerId === attribution.callerId;
       return (
         approval.repoPath === attribution.repoPath &&
-        approval.effectiveVersion === attribution.effectiveVersion
+        approval.executionDigest === attribution.executionDigest
       );
     }, "once");
   }
@@ -1947,7 +1947,7 @@ function isCallerAllowed(
       !!attribution &&
       grant.scope === "version" &&
       grant.repoPath === attribution.repoPath &&
-      grant.effectiveVersion === attribution.effectiveVersion
+      grant.executionDigest === attribution.executionDigest
   );
 }
 
@@ -2583,7 +2583,7 @@ function grantForDecision(
     ...base,
     scope: "version",
     repoPath: attribution.repoPath,
-    effectiveVersion: attribution.effectiveVersion,
+    executionDigest: attribution.executionDigest,
   };
 }
 
@@ -2605,6 +2605,6 @@ function credentialUseGrantKey(grant: CredentialUseGrant): string {
     grant.action,
     grant.scope,
     grant.repoPath,
-    grant.effectiveVersion,
+    grant.executionDigest,
   ].join("\x00");
 }

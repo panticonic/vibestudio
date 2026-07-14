@@ -5,36 +5,36 @@
  * Electron requests builds via RPC. The headless server gets builds for free.
  *
  * Builds are triggered by workspace state advances on the GAD vcs log
- * (`vcs:workspace`). Cold start compares the persisted EV state's workspace
+ * (`vcs:workspace`). Cold start compares the persisted source digest state's workspace
  * state hash against a fresh scan-on-demand snapshot — the snapshot IS the
  * change detection.
  *
  * Immutability: the PackageGraph is never mutated after creation. Content
  * hashes (GAD manifest subtree hashes) are tracked in a separate
- * ContentHashMap, ensuring EV computations are always consistent with their
- * inputs. Build sources are materialized from the immutable state the EVs
+ * ContentHashMap, ensuring source digest computations are always consistent with their
+ * inputs. Build sources are materialized from the immutable state the source digests
  * were computed at — the old commit/push race cannot exist.
  */
 
 import * as path from "path";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 import {
-  computeEffectiveVersions,
-  loadPersistedEvState,
-  persistEvState,
-  diffEvMaps,
-  computeBuildKey,
-  setBuildRootConfig,
+  computeSourceClosures,
+  loadPersistedSourceState,
+  persistSourceState,
+  diffSourceMaps,
+  computeCompilationCacheKey,
+  sealBuildEnvironment,
   type ContentHashMap,
   type ChangeSet,
-  type EffectiveVersionMap,
-} from "./effectiveVersion.js";
+  type SourceClosureMap,
+} from "./sourceClosure.js";
 import * as buildStore from "./buildStore.js";
 import { primaryTextArtifactContent, type BuildResult } from "./buildStore.js";
 import {
   analyzeExtensionDependencies,
   buildUnit,
-  computeBuildUnitKey,
+  computeUnitCompilationCacheKey,
   buildNpmLibrary,
   buildPlatformLibrary,
   initBuilder,
@@ -88,6 +88,19 @@ import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRunti
 import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
+import { getUserDataPath } from "@vibestudio/env-paths";
+import {
+  createSourceRevision,
+  parseSha256,
+  type ExecutionArtifactRef,
+  type ExecutionSelector,
+  type ArtifactBundleEntry,
+} from "@vibestudio/shared/execution/identity";
+import { ExecutionArtifactStore } from "../execution/executionArtifactStore.js";
+import { collectArtifactRetentionRoots } from "../execution/artifactRootCollector.js";
+import { createExecutionRecipe } from "./executionRecipe.js";
+import { authorityRequestsFromRecipe } from "@vibestudio/shared/authorityManifest";
+import type { CapabilityScope } from "@vibestudio/rpc";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,12 +138,14 @@ export interface BuildSystemUnitChangeEvent extends StateChangedUnit {
   trigger: StateAdvancedEvent;
 }
 
-export interface RuntimeImageBinding {
-  source: string;
+export interface ResolvedExecutionBinding {
   unitName: string;
-  stateHash: string;
-  effectiveVersion: string;
-  buildKey: string;
+  selectorPolicy: ExecutionSelector;
+  artifact: ExecutionArtifactRef;
+  /** Capability/resource requests sealed into this exact execution recipe. */
+  requested: readonly CapabilityScope[];
+  /** Internal output-cache lookup only; never an execution or authority identity. */
+  compilationCacheKey: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,9 +199,9 @@ export interface ValidateInput {
 /** Coarse per-unit build status at a composed view (host-internal `statusAt`). */
 export interface UnitBuildStatus {
   unit: string;
-  /** `ok` = a build artifact for this unit's effective version is cached;
-   *  `failed` = the most recent recorded build at this EV had error diagnostics;
-   *  `unknown` = no cached artifact and no recorded failure at this EV. */
+  /** `ok` = a build artifact for this unit's source digest is cached;
+   *  `failed` = the most recent recorded build at this source digest had error diagnostics;
+   *  `unknown` = no cached artifact and no recorded failure at this source digest. */
   status: "ok" | "failed" | "unknown";
 }
 
@@ -241,7 +256,7 @@ export interface RepoPushValidator {
   ): Promise<RepoBuildReport[]>;
   /**
    * On-demand build from a WORKING composed view, scoped to specific repos/units.
-   * Unlike the push gate (`validateRepoPush`) this NEVER persists the EV baseline
+   * Unlike the push gate (`validateRepoPush`) this NEVER persists the source digest baseline
    * or records builds — it never poisons the published baseline (builds are
    * authoritative only at push). Powers `vcs.previewBuild` (dev preview).
    */
@@ -302,7 +317,15 @@ export interface BuildSystemV2 extends RepoPushValidator {
    * state off the hot path, builds the unit from that immutable state, and
    * returns the global artifact identity the loader can fetch by key.
    */
-  bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
+  resolveExecutionArtifact(unitPath: string, ref?: string): Promise<ResolvedExecutionBinding>;
+
+  /** Verified immutable output bytes for a resolved execution digest. */
+  getExecutionArtifact(executionDigest: string): {
+    ref: ExecutionArtifactRef;
+    requested: readonly CapabilityScope[];
+    entries: ArtifactBundleEntry[];
+    entryPath(artifactPath: string): string;
+  } | null;
 
   /** Build an npm package as a CJS library bundle for sandbox use. */
   getBuildNpm(
@@ -311,8 +334,8 @@ export interface BuildSystemV2 extends RepoPushValidator {
     externals?: string[]
   ): Promise<{ bundle: string }>;
 
-  /** Get effective version by package name or workspace-relative source path. */
-  getEffectiveVersion(unitNameOrPath: string): string | null;
+  /** Get source digest by package name or workspace-relative source path. */
+  getSourceDigest(unitNameOrPath: string): string | null;
 
   /** Get external npm runtime/build dependencies for a unit. */
   getExternalDeps(unitName: string): Record<string, string>;
@@ -320,7 +343,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
   /** Get the active provider identity that affects builds for a pluggable target. */
   getBuildProviderDetails(target: "react-native"): {
     name: string;
-    activeEv: string | null;
+    activeSourceDigest: string | null;
     activeBuildKey: string | null;
     contractVersion: string;
   } | null;
@@ -332,7 +355,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
       target: "react-native";
       provider: {
         name: string;
-        activeEv: string | null;
+        activeSourceDigest: string | null;
         activeBuildKey: string | null;
         contractVersion: string;
       };
@@ -342,7 +365,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
   /** Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status. */
   doctorExtension(unitName: string): Promise<ExtensionDoctorReport>;
 
-  /** Force recompute all effective versions */
+  /** Force recompute all source digests */
   recompute(): Promise<ChangeSet>;
 
   /**
@@ -351,7 +374,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
    * (not via the public `getBuild`, which strips library results) — capturing
    * structured esbuild + tsc diagnostics. Packages are validated as library
    * bundles for dependent-inferred targets × (root + declared exports).
-   * EV-changed dependents are folded in under the regression gate (block only
+   * source digest-changed dependents are folded in under the regression gate (block only
    * if green on `baseView`, red on `candidateView`). Returns one
    * `RepoBuildReport` per repo, with artifact content stripped.
    */
@@ -365,7 +388,7 @@ export interface BuildSystemV2 extends RepoPushValidator {
    * Gad-facing build surface (narrow-host VCS plan §2.2). Build + cache the
    * per-unit results for a composed candidate view and return the classified
    * `RepoBuildReport[]` — IDEMPOTENT and side-effect-free w.r.t. the published
-   * EV baseline: unlike a main-advance reaction it never `persistEvState`s and
+   * source digest baseline: unlike a main-advance reaction it never `persistSourceState`s and
    * never `recordBuild`s, so it is safe for gad to call on any candidate,
    * including ones that are never published. Same report semantics as
    * `validateRepoPush` (the in-process push-pipeline caller during P1–P2); the
@@ -391,8 +414,8 @@ export interface BuildSystemV2 extends RepoPushValidator {
   /** Most recent structured build diagnostics for a unit, if any were captured. */
   getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null;
 
-  /** Garbage collect unreferenced builds */
-  gc(activeUnits: string[]): Promise<{ freed: number }>;
+  /** Garbage collect from authoritative durable roots only. */
+  gc(): Promise<{ freed: number }>;
 
   /** List available about pages (for launcher UI) */
   getAboutPages(): Promise<AboutPageMeta[]>;
@@ -456,7 +479,7 @@ export async function initBuildSystemV2(
   // Build cache identity depends on dependency manifests, not on where the
   // active managed workspace copy happens to live. Server startup passes these
   // roots explicitly; defaults preserve direct test construction.
-  setBuildRootConfig({
+  sealBuildEnvironment({
     appRoot:
       rootOptions.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? path.dirname(workspaceRoot),
     workspaceRoot: rootOptions.dependencyWorkspaceRoot ?? workspaceRoot,
@@ -465,6 +488,9 @@ export async function initBuildSystemV2(
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);
   setBuildSourceProvider(source);
+  const executionArtifacts = new ExecutionArtifactStore(
+    path.join(getUserDataPath(), "execution-artifacts")
+  );
 
   // Step 1: Snapshot the workspace + discover package graph from that state
   // (scan-on-demand —
@@ -475,16 +501,18 @@ export async function initBuildSystemV2(
   const nodeCount = graph.allNodes().length;
   console.log(`[BuildV2] Discovered ${nodeCount} units in workspace`);
 
-  // Step 2: Compute effective versions. Cold-start fast path: if the
-  // persisted EV state was computed at this exact workspace state, reuse it
+  // Step 2: Compute source digests. Cold-start fast path: if the
+  // persisted source digest state was computed at this exact workspace state, reuse it
   // wholesale (zero DO hashing calls).
-  const persisted = loadPersistedEvState();
-  let evMap: EffectiveVersionMap;
+  const persisted = loadPersistedSourceState();
+  let sourceMap: SourceClosureMap;
   let contentHashes: ContentHashMap;
   if (persisted && persisted.stateHash === stateHash) {
-    evMap = persisted.evMap;
+    sourceMap = persisted.sourceMap;
     contentHashes = persisted.contentHashes;
-    console.log(`[BuildV2] EV state reused (workspace unchanged at ${stateHash.slice(0, 18)}…)`);
+    console.log(
+      `[BuildV2] source digest state reused (workspace unchanged at ${stateHash.slice(0, 18)}…)`
+    );
   } else {
     const relPaths = graph.allNodes().map((node) => node.relativePath);
     const hashesByPath = await source.unitHashes(stateHash, relPaths);
@@ -493,15 +521,15 @@ export async function initBuildSystemV2(
       const hash = hashesByPath[node.relativePath];
       if (hash) fresh[node.name] = hash;
     }
-    const result = computeEffectiveVersions(graph, fresh);
-    evMap = result.evMap;
+    const result = computeSourceClosures(graph, fresh);
+    sourceMap = result.sourceMap;
     contentHashes = result.contentHashes;
-    const changeset = diffEvMaps(persisted?.evMap ?? {}, evMap);
+    const changeset = diffSourceMaps(persisted?.sourceMap ?? {}, sourceMap);
     console.log(
-      `[BuildV2] EV diff: ${changeset.changed.length} changed, ` +
+      `[BuildV2] source digest diff: ${changeset.changed.length} changed, ` +
         `${changeset.added.length} added, ${changeset.removed.length} removed`
     );
-    persistEvState({ stateHash, evMap, contentHashes });
+    persistSourceState({ stateHash, sourceMap, contentHashes });
   }
 
   // Step 3: Start the state trigger (subscribes to vcs state advances).
@@ -510,7 +538,7 @@ export async function initBuildSystemV2(
   // actually opens and makes shutdown wait for unrelated sample/test units.
   const trigger = new StateTransitionTrigger({
     graph,
-    evMap,
+    sourceMap,
     contentHashes,
     stateHash,
     workspaceRoot,
@@ -573,7 +601,7 @@ export async function initBuildSystemV2(
     bundle: primaryTextArtifactContent(build),
   });
 
-  /** Rediscover the graph and recompute all EVs at a state (new/unknown units). */
+  /** Rediscover the graph and recompute all source digests at a state (new/unknown units). */
   const contentHashesAt = async (
     graphAtState: PackageGraph,
     atStateHash: string
@@ -590,10 +618,13 @@ export async function initBuildSystemV2(
 
   const rediscoverAt = (atStateHash: string): Promise<void> => trigger.rediscoverAt(atStateHash);
 
-  const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef) => {
+  const resolveExecutionArtifact: BuildSystemV2["resolveExecutionArtifact"] = async (
+    unitPath,
+    requestedRef
+  ) => {
     const ref = validateBuildRef(requestedRef);
     let graphAtState: PackageGraph;
-    let evMapAtState: EffectiveVersionMap;
+    let sourceMapAtState: SourceClosureMap;
     let stateHash: string;
 
     if (!ref || ref === MAIN_HEAD) {
@@ -604,7 +635,7 @@ export async function initBuildSystemV2(
       }
       const snapshot = currentState();
       graphAtState = snapshot.graph;
-      evMapAtState = snapshot.evMap;
+      sourceMapAtState = snapshot.sourceMap;
       stateHash = snapshot.stateHash;
     } else {
       if (ref.startsWith("state:")) {
@@ -618,7 +649,7 @@ export async function initBuildSystemV2(
       }
       graphAtState = await source.discoverGraph(stateHash);
       const hashes = await contentHashesAt(graphAtState, stateHash);
-      evMapAtState = computeEffectiveVersions(graphAtState, hashes).evMap;
+      sourceMapAtState = computeSourceClosures(graphAtState, hashes).sourceMap;
     }
 
     let node = resolveUnit(graphAtState, unitPath, workspaceRoot);
@@ -626,22 +657,56 @@ export async function initBuildSystemV2(
       await rediscoverAt(stateHash);
       const snapshot = currentState();
       graphAtState = snapshot.graph;
-      evMapAtState = snapshot.evMap;
+      sourceMapAtState = snapshot.sourceMap;
       node = resolveUnit(graphAtState, unitPath, workspaceRoot);
     }
     if (!node) throw new Error(`Unknown runtime build unit at ${ref ?? MAIN_HEAD}: ${unitPath}`);
 
-    const ev = evMapAtState[node.name];
-    if (!ev) throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+    const sourceDigest = sourceMapAtState[node.name];
+    if (!sourceDigest) throw new Error(`No source digest for ${node.name} at ${stateHash}`);
 
-    const buildKey = computeBuildUnitKey(node, ev);
-    await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
-    return {
-      source: node.relativePath,
-      unitName: node.name,
+    const compilationCacheKey = computeUnitCompilationCacheKey(node, sourceDigest);
+    const build = await buildUnit(node, sourceDigest, graphAtState, workspaceRoot, stateHash);
+    const sourceRevision = createSourceRevision({
+      repoPath: node.relativePath,
       stateHash,
-      effectiveVersion: ev,
-      buildKey,
+      sourceEv: sourceDigest,
+    });
+    const recipe = createExecutionRecipe(node, undefined);
+    const artifact = executionArtifacts.put({
+      source: sourceRevision,
+      recipe,
+      entries: build.artifacts.map((entry) => ({
+        path: entry.path,
+        role: entry.role,
+        mode: 0o644,
+        contentType: entry.contentType,
+        bytes:
+          entry.encoding === "base64"
+            ? Buffer.from(entry.content, "base64")
+            : Buffer.from(entry.content, "utf8"),
+      })),
+    });
+    const selectorPolicy: ExecutionSelector =
+      !ref || ref === MAIN_HEAD
+        ? { kind: "head", repoPath: node.relativePath, head: "main" }
+        : ref.startsWith("ctx:")
+          ? {
+              kind: "head",
+              repoPath: node.relativePath,
+              head: { contextId: ref.slice("ctx:".length) },
+            }
+          : {
+              kind: "state",
+              repoPath: node.relativePath,
+              stateHash: parseSha256(stateHash, "resolved runtime state"),
+            };
+    return {
+      unitName: node.name,
+      selectorPolicy,
+      artifact,
+      requested: authorityRequestsFromRecipe(recipe),
+      compilationCacheKey,
     };
   };
 
@@ -651,15 +716,15 @@ export async function initBuildSystemV2(
 
   interface GraphView {
     graph: PackageGraph;
-    evMap: EffectiveVersionMap;
+    sourceMap: SourceClosureMap;
   }
 
-  /** Discover + EV-compute over a workspace-rooted view (composed live union). */
+  /** Discover + source digest-compute over a workspace-rooted view (composed live union). */
   const viewAt = async (viewStateHash: string): Promise<GraphView> => {
     const graph = await source.discoverGraph(viewStateHash);
     const hashes = await contentHashesAt(graph, viewStateHash);
-    const evMap = computeEffectiveVersions(graph, hashes).evMap;
-    return { graph, evMap };
+    const sourceMap = computeSourceClosures(graph, hashes).sourceMap;
+    return { graph, sourceMap };
   };
 
   /** Manifest-only artifacts (no byte content) for a report. */
@@ -678,7 +743,7 @@ export async function initBuildSystemV2(
    */
   const buildOneTarget = async (
     node: GraphNode,
-    ev: string,
+    sourceDigest: string,
     graphAtView: PackageGraph,
     viewStateHash: string,
     spec: { target: "runtime" } | { target: "library:panel" | "library:worker"; exportPath: string }
@@ -696,14 +761,21 @@ export async function initBuildSystemV2(
           libraryEntrySubpath: (spec as { exportPath: string }).exportPath,
         }
       : undefined;
-    const buildKey = computeBuildUnitKey(node, ev, options);
+    const buildKey = computeUnitCompilationCacheKey(node, sourceDigest, options);
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
     let artifacts: RepoBuildTarget["artifacts"] | undefined;
     let buildError: unknown = null;
     try {
-      const build = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
+      const build = await buildUnit(
+        node,
+        sourceDigest,
+        graphAtView,
+        workspaceRoot,
+        viewStateHash,
+        options
+      );
       artifacts = artifactManifests(build);
     } catch (error) {
       buildError = error;
@@ -815,7 +887,7 @@ export async function initBuildSystemV2(
     viewStateHash: string,
     role: "pushed" | "dependent"
   ): Promise<RepoBuildReport> => {
-    const ev = view.evMap[node.name];
+    const sourceDigest = view.sourceMap[node.name];
     const base: Omit<RepoBuildReport, "status" | "builds"> = {
       repoPath: node.relativePath,
       unitName: node.name,
@@ -823,7 +895,7 @@ export async function initBuildSystemV2(
       role,
       required: role === "pushed",
     };
-    if (!ev) {
+    if (!sourceDigest) {
       return { ...base, status: "skipped", builds: [] };
     }
     if (node.kind === "template") {
@@ -837,12 +909,17 @@ export async function initBuildSystemV2(
       for (const target of targets) {
         for (const exportPath of exports) {
           builds.push(
-            await buildOneTarget(node, ev, view.graph, viewStateHash, { target, exportPath })
+            await buildOneTarget(node, sourceDigest, view.graph, viewStateHash, {
+              target,
+              exportPath,
+            })
           );
         }
       }
     } else {
-      builds.push(await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" }));
+      builds.push(
+        await buildOneTarget(node, sourceDigest, view.graph, viewStateHash, { target: "runtime" })
+      );
     }
 
     const failed = builds.some((b) => hasErrors(b.diagnostics));
@@ -925,7 +1002,7 @@ export async function initBuildSystemV2(
       if (unitName) pushedUnitNames.add(unitName);
     }
 
-    // 2) Dependents of pushed buildable units — EV-changed only, regression gate.
+    // 2) Dependents of pushed buildable units — source digest-changed only, regression gate.
     const dependentNames = new Set<string>();
     for (const name of pushedUnitNames) {
       for (const dep of candidate.graph.getReverseDeps(name)) {
@@ -939,9 +1016,9 @@ export async function initBuildSystemV2(
       [...dependentNames].map(async (depName): Promise<RepoBuildReport | null> => {
         const node = candidate.graph.tryGet(depName);
         if (!node) return null;
-        const candEv = candidate.evMap[depName];
-        const baseEv = base?.evMap[depName];
-        // EV-changed only: skip dependents whose effective version is unchanged.
+        const candEv = candidate.sourceMap[depName];
+        const baseEv = base?.sourceMap[depName];
+        // source digest-changed only: skip dependents whose source digest is unchanged.
         if (base && candEv && baseEv && candEv === baseEv) return null;
 
         const report = await buildUnitReport(node, candidate, candidateView, "dependent");
@@ -975,7 +1052,7 @@ export async function initBuildSystemV2(
   /**
    * Gad-facing `build.validate` (plan §2.2). Object-param adapter over the push
    * gate: build + cache + classify the candidate view. Idempotent — it never
-   * promotes the EV baseline (`persistEvState`) nor records provenance builds
+   * promotes the source digest baseline (`persistSourceState`) nor records provenance builds
    * (`recordBuild`); those happen ONLY host-side in reaction to a main actually
    * moving (`stateTrigger.process` on a `head === "main"` advance). Overlapping
    * validations sharing units reuse the per-unit build cache (`buildUnit`
@@ -991,12 +1068,12 @@ export async function initBuildSystemV2(
   /**
    * `build.statusAt` (plan §2.2 / §5). PURE lookup over recorded/cached per-unit
    * results at an exact composed view — never calls `buildUnit`. Scoped to
-   * non-trusted buildable units whose EV differs from the published state;
+   * non-trusted buildable units whose source digest differs from the published state;
    * unchanged units need no candidate build, and extensions/apps remain
    * activation-gated. A unit is `failed` when the most recent recorded
    * diagnostics for that key carry errors, `ok` when no error diagnostics are
    * recorded and its runtime build key is in the store, else `unknown` (never
-   * validated at this EV).
+   * validated at this source digest).
    */
   const statusAtImpl = async (viewHash: string): Promise<BuildStatusAt> => {
     let view: GraphView;
@@ -1015,10 +1092,10 @@ export async function initBuildSystemV2(
       // path. Unchanged non-trusted units already have published-state evidence
       // and do not need a speculative candidate build.
       if (!isNodeBuildable(node) || node.kind === "extension" || node.kind === "app") continue;
-      const ev = view.evMap[node.name];
-      if (!ev) continue;
-      if (published.evMap[node.name] === ev) continue;
-      const buildKey = computeBuildUnitKey(node, ev);
+      const sourceDigest = view.sourceMap[node.name];
+      if (!sourceDigest) continue;
+      if (published.sourceMap[node.name] === sourceDigest) continue;
+      const buildKey = computeUnitCompilationCacheKey(node, sourceDigest);
       let status: UnitBuildStatus["status"];
       const diagnostics = diagnosticsForBuildKey(buildKey);
       if (diagnostics && hasErrors(diagnostics)) {
@@ -1042,7 +1119,7 @@ export async function initBuildSystemV2(
   /**
    * On-demand WORKING build (dev preview). Builds the requested repos/units from
    * a working composed view via the same ctx-ref build path as `validateRepoPush`
-   * — BUT never persists the EV baseline and never records builds, so a preview
+   * — BUT never persists the source digest baseline and never records builds, so a preview
    * can never poison the published main baseline. Builds are authoritative only
    * at the push gate. Reports are role:"pushed" but required:false (advisory).
    */
@@ -1077,7 +1154,7 @@ export async function initBuildSystemV2(
     }
 
     // Build each resolved unit from the working view. buildUnitReport only calls
-    // buildUnit + recordDiagnostics + typecheck (no persistEvState/recordBuild),
+    // buildUnit + recordDiagnostics + typecheck (no persistSourceState/recordBuild),
     // so this stays preview-only. Independent units build concurrently.
     const built = await Promise.all(
       [...nodes.values()].map((node) => buildUnitReport(node, view, workingView, "pushed"))
@@ -1127,17 +1204,17 @@ export async function initBuildSystemV2(
       assertNodeBuildable(node);
 
       const hashes = await contentHashesAt(graphAtState, buildState);
-      const result = computeEffectiveVersions(graphAtState, hashes);
-      const ev = result.evMap[node.name];
-      if (!ev) {
-        throw new Error(`No effective version for ${node.name} at ref ${ref}`);
+      const result = computeSourceClosures(graphAtState, hashes);
+      const sourceDigest = result.sourceMap[node.name];
+      if (!sourceDigest) {
+        throw new Error(`No source digest for ${node.name} at ref ${ref}`);
       }
       const buildOptions = options?.library
         ? { ...options, library: true, libraryEntrySubpath: resolved.libraryEntrySubpath ?? "." }
         : options;
       const build = await buildUnit(
         node,
-        ev,
+        sourceDigest,
         graphAtState,
         workspaceRoot,
         buildState,
@@ -1191,13 +1268,13 @@ export async function initBuildSystemV2(
         await trigger.whenSettled();
       }
     } catch {
-      // Scan failed — use cached EV (best effort)
+      // Scan failed — use cached source digest (best effort)
     }
 
-    const { graph: headGraph, evMap: headEvMap, stateHash: headStateHash } = currentState();
+    const { graph: headGraph, sourceMap: headEvMap, stateHash: headStateHash } = currentState();
     // Re-resolve the unit against the freshly-settled graph: settlement may have
     // rediscovered it with a changed entry/dependency set, and building the
-    // pre-settle node against the fresh EV map would miss those changes on the
+    // pre-settle node against the fresh source digest map would miss those changes on the
     // first build after a commit.
     const settled = resolveRequestedUnit();
     if (settled.node) {
@@ -1208,19 +1285,38 @@ export async function initBuildSystemV2(
         ? { ...options, library: true, libraryEntrySubpath: resolved.libraryEntrySubpath ?? "." }
         : options;
     }
-    const ev = headEvMap[node.name];
-    if (!ev) {
-      throw new Error(`No effective version for ${node.name}`);
+    const sourceDigest = headEvMap[node.name];
+    if (!sourceDigest) {
+      throw new Error(`No source digest for ${node.name}`);
     }
 
     // Build on demand (buildUnit handles cache + coalescing internally)
-    const build = await buildUnit(node, ev, headGraph, workspaceRoot, headStateHash, buildOptions);
+    const build = await buildUnit(
+      node,
+      sourceDigest,
+      headGraph,
+      workspaceRoot,
+      headStateHash,
+      buildOptions
+    );
     return options?.library ? libraryBuildResult(build) : build;
   } as BuildSystemV2["getBuild"];
 
   return {
     getBuild,
-    bindRuntimeImage,
+    resolveExecutionArtifact,
+    getExecutionArtifact(executionDigest: string) {
+      const stored = executionArtifacts.get(executionDigest);
+      if (!stored) return null;
+      const bundle = executionArtifacts.readBundle(executionDigest);
+      return {
+        ref: bundle.record.ref,
+        requested: authorityRequestsFromRecipe(bundle.record.recipe),
+        entries: bundle.entries,
+        entryPath: (artifactPath: string) =>
+          executionArtifacts.artifactPath(executionDigest, artifactPath),
+      };
+    },
 
     async resolveBuildUnit(
       unitPath: string,
@@ -1274,10 +1370,10 @@ export async function initBuildSystemV2(
       return buildStore.get(key);
     },
 
-    getEffectiveVersion(unitNameOrPath: string): string | null {
+    getSourceDigest(unitNameOrPath: string): string | null {
       const snapshot = currentState();
       const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
-      return node ? (snapshot.evMap[node.name] ?? null) : null;
+      return node ? (snapshot.sourceMap[node.name] ?? null) : null;
     },
 
     getExternalDeps(unitName: string): Record<string, string> {
@@ -1292,7 +1388,7 @@ export async function initBuildSystemV2(
         const provider = resolveBuildProvider(target);
         return {
           name: provider.name,
-          activeEv: provider.activeEv,
+          activeSourceDigest: provider.activeSourceDigest,
           activeBuildKey: provider.activeBuildKey,
           contractVersion: provider.contractVersion,
         };
@@ -1309,7 +1405,7 @@ export async function initBuildSystemV2(
           target: event.target,
           provider: {
             name: event.provider.name,
-            activeEv: event.provider.activeEv,
+            activeSourceDigest: event.provider.activeSourceDigest,
             activeBuildKey: event.provider.activeBuildKey,
             contractVersion: event.provider.contractVersion,
           },
@@ -1318,7 +1414,7 @@ export async function initBuildSystemV2(
     },
 
     async doctorExtension(unitName: string): Promise<ExtensionDoctorReport> {
-      const { graph, evMap } = currentState();
+      const { graph, sourceMap } = currentState();
       const node = resolveUnit(graph, unitName, workspaceRoot);
       if (!node) {
         throw new Error(`Unknown extension: ${unitName}`);
@@ -1349,11 +1445,11 @@ export async function initBuildSystemV2(
         nodePaths,
         dependencyMode
       );
-      const ev = evMap[node.name] ?? null;
-      const buildKey = ev
-        ? computeBuildKey(
+      const sourceDigest = sourceMap[node.name] ?? null;
+      const buildKey = sourceDigest
+        ? computeCompilationCacheKey(
             node.name,
-            `${ev}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`,
+            `${sourceDigest}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`,
             true
           )
         : null;
@@ -1420,10 +1516,10 @@ export async function initBuildSystemV2(
     async recompute(): Promise<ChangeSet> {
       const fresh = await source.ensureFresh();
       await trigger.whenSettled();
-      const previousEvMap = currentState().evMap;
+      const previousEvMap = currentState().sourceMap;
       await rediscoverAt(fresh.stateHash);
       const snapshot = currentState();
-      const changes = diffEvMaps(previousEvMap, snapshot.evMap);
+      const changes = diffSourceMaps(previousEvMap, snapshot.sourceMap);
 
       // Trigger builds for changed buildable units
       const buildableChanged = [...changes.changed, ...changes.added].filter((name) => {
@@ -1433,11 +1529,11 @@ export async function initBuildSystemV2(
 
       for (const name of buildableChanged) {
         const n = snapshot.graph.get(name);
-        const ev = assertPresent(snapshot.evMap[name]);
-        const bk = computeBuildKey(name, ev, sourcemapForNode(n));
+        const sourceDigest = assertPresent(snapshot.sourceMap[name]);
+        const bk = computeCompilationCacheKey(name, sourceDigest, sourcemapForNode(n));
         if (!buildStore.has(bk)) {
           try {
-            await buildUnit(n, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
+            await buildUnit(n, sourceDigest, snapshot.graph, workspaceRoot, snapshot.stateHash);
           } catch (error) {
             console.error(
               `[BuildV2] Failed to rebuild ${name}:`,
@@ -1488,7 +1584,7 @@ export async function initBuildSystemV2(
           // best effort — fall back to current snapshot
         }
         const snapshot = currentState();
-        view = { graph: snapshot.graph, evMap: snapshot.evMap };
+        view = { graph: snapshot.graph, sourceMap: snapshot.sourceMap };
         viewStateHash = snapshot.stateHash;
       } else {
         let resolvedState: string;
@@ -1521,17 +1617,20 @@ export async function initBuildSystemV2(
       return diagnosticsForUnit(node?.name ?? unitName);
     },
 
-    async gc(activeUnits: string[]): Promise<{ freed: number }> {
-      const { graph, evMap } = currentState();
+    async gc(): Promise<{ freed: number }> {
+      const { graph, sourceMap } = currentState();
       const activeKeys = new Set<string>();
-      for (const name of activeUnits) {
-        const ev = evMap[name];
-        if (!ev) continue;
-        const n = graph.tryGet(name);
-        if (!n) continue;
-        activeKeys.add(computeBuildKey(name, ev, sourcemapForNode(n)));
+      for (const node of graph.allNodes()) {
+        const sourceDigest = sourceMap[node.name];
+        if (!sourceDigest) continue;
+        activeKeys.add(computeCompilationCacheKey(node.name, sourceDigest, sourcemapForNode(node)));
       }
-      return buildStore.gc(activeKeys);
+      const buildCollection = await buildStore.gc(activeKeys);
+      const executionCollection = executionArtifacts.collect(
+        collectArtifactRetentionRoots(getUserDataPath()),
+        { graceEpochs: 2 }
+      );
+      return { freed: buildCollection.freed + executionCollection.eligible.length };
     },
 
     async getAboutPages(): Promise<AboutPageMeta[]> {

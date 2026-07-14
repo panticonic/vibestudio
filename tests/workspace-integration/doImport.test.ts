@@ -45,7 +45,6 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 const REPO = "packages/imported";
 const LOG = `vcs:repo:${REPO}`;
-const STAGING = "import:main";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -121,6 +120,17 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
               }>;
             }
           ).vcsImportPublish(input),
+        importStatus: (input) =>
+          (
+            doi as unknown as {
+              vcsImportOperationStatus: (i: unknown) => Promise<{
+                operationId: string;
+                repoPath: string;
+                stateHash: string;
+                changed: boolean;
+              } | null>;
+            }
+          ).vcsImportOperationStatus(input),
       },
       // The bridge's content store IS the host content store the DO reads via
       // attachLocalHostBridges — the same blob dir, so the mirror + publish see
@@ -208,7 +218,7 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
 
     // Imported history is preserved on BOTH the staging lineage and, after
     // publish, the main provenance lineage (the DO's recorded main head).
-    const staging = doi.resolveWorktreeHead({ logId: LOG, head: STAGING });
+    const staging = doi.resolveWorktreeHead({ logId: LOG, head: imported.sourceHead });
     expect(staging?.stateHash).toBe(imported.stateHash);
     const mainHead = (
       doi as unknown as {
@@ -241,7 +251,7 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
     expect(gateCalls).toHaveLength(1);
 
     const again = await bridge.importRepoTree(REPO);
-    expect(again).toEqual({ stateHash: first.stateHash, changed: false });
+    expect(again).toMatchObject({ stateHash: first.stateHash, changed: false });
     // No second advance — main untouched, gate not re-invoked.
     expect(gateCalls).toHaveLength(1);
     expect(readMain()).toBe(first.stateHash);

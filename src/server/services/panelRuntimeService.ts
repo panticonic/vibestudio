@@ -17,7 +17,10 @@ export function createPanelRuntimeService(deps: {
   return {
     name: "panelRuntime",
     description: "Panel runtime lease coordination",
-    policy: { allowed: ["shell", "app", "server"], description: "Shell/runtime coordination only" },
+    authority: {
+      principals: ["user", "host"],
+      description: "Authenticated clients and the product host control runtime leases",
+    },
     methods: panelRuntimeMethods,
     handler: defineServiceHandler("panelRuntime", panelRuntimeMethods, {
       registerClient: (ctx, [client]) => {

@@ -1,4 +1,4 @@
-import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { PrincipalKind } from "@vibestudio/rpc";
 import { VCS_SERVICE_PROTOCOL, type DORefParam } from "@vibestudio/shared/userlandServiceRpc";
 import type {
   WorkspaceDeclarations,
@@ -6,8 +6,8 @@ import type {
 } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 
-export interface UserlandServicePolicy {
-  allowed?: CallerKind[];
+export interface UserlandServiceAuthority {
+  principals: PrincipalKind[];
 }
 
 export interface UserlandServiceResolution {
@@ -16,7 +16,7 @@ export interface UserlandServiceResolution {
   description?: string;
   protocols: string[];
   source: string;
-  policy?: UserlandServicePolicy;
+  authority: UserlandServiceAuthority;
 }
 
 export interface DurableObjectServiceResolution extends UserlandServiceResolution {
@@ -97,7 +97,7 @@ function buildResolution(
   routes: WorkspaceDeclarations["routes"]
 ): ResolvedUserlandService {
   const protocols = service.protocols ?? [];
-  const policy = service.policy as UserlandServicePolicy | undefined;
+  const authority = service.authority as UserlandServiceAuthority;
   const source = service.source;
 
   if (service.durableObject) {
@@ -117,7 +117,7 @@ function buildResolution(
       description: service.description,
       protocols,
       source,
-      policy,
+      authority,
       className,
       objectKey: resolvedObjectKey,
       targetId: `do:${source}:${className}:${resolvedObjectKey}`,
@@ -144,7 +144,7 @@ function buildResolution(
     description: service.description,
     protocols,
     source,
-    policy,
+    authority,
     routePath,
     routeBasePath: `/_r/w/${source}${routePath === "/" ? "" : routePath}`,
   };

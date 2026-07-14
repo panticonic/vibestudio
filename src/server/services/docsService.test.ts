@@ -13,7 +13,7 @@ import { createDocsService } from "./docsService.js";
 const blobstore: ServiceDefinition = {
   name: "blobstore",
   description: "Content-addressable blob storage",
-  policy: { allowed: ["panel", "worker", "do", "server"] },
+  authority: { principals: ["code", "host"] },
   methods: {
     putText: {
       description: "Store a UTF-8 string and return its digest",
@@ -23,7 +23,7 @@ const blobstore: ServiceDefinition = {
     "admin.wipe": {
       description: "Delete everything",
       args: z.tuple([]),
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
     },
     internalTransport: {
       description: "Internal transport that has a higher-level runtime API",
@@ -36,9 +36,6 @@ const blobstore: ServiceDefinition = {
 
 const dispatcher = {
   getServiceDefinitions: () => [blobstore],
-  getPolicy: (service: string) => (service === blobstore.name ? blobstore.policy : undefined),
-  getMethodPolicy: (service: string, method: string) =>
-    service === blobstore.name ? blobstore.methods[method]?.policy : undefined,
 } as unknown as ServiceDispatcher;
 const emptySurface = (target: "panel" | "workerRuntime"): RuntimeSurface => ({
   target,
@@ -101,7 +98,7 @@ describe("docs service (caller-aware)", () => {
       "service:blobstore.admin.wipe",
     ])) as CatalogEntry;
     expect(entry.qualifiedName).toBe("blobstore.admin.wipe");
-    expect((entry.access as { callers?: string[] }).callers).toEqual(["server"]);
+    expect((entry.access as { principals?: string[] }).principals).toEqual(["host"]);
   });
 
   it("getSchema returns args/returns JSON Schema for visible methods", async () => {

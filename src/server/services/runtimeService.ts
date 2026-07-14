@@ -20,7 +20,6 @@ import {
 } from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
@@ -29,31 +28,33 @@ import {
   type RuntimeAgentBindingInput,
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
+  type RuntimeEntitySummary,
   type WorkspaceContext,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import type { ResolvedExecutionBinding } from "../buildV2/index.js";
 import {
   requireContextBoundaryPermission,
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
+import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 
 export interface RuntimeEntityHooks {
-  /** Prepare runtime resources for a "do" entity. Returns targetId + effectiveVersion. */
+  /** Prepare runtime resources for a "do" entity and return its exact code identity. */
   prepareDurableObject: (args: {
     source: string;
-    ref: string | undefined;
+    execution: ResolvedExecutionBinding;
     className: string;
     key: string;
     contextId: string;
     stateArgs?: unknown;
-  }) => Promise<{ targetId: string; effectiveVersion: string }>;
+  }) => Promise<{ targetId: string }>;
 
   /** Prepare runtime resources for a "worker" entity. */
   prepareWorker: (args: {
     source: string;
-    ref: string | undefined;
+    execution: ResolvedExecutionBinding;
     key: string;
     contextId: string;
     stateArgs?: unknown;
@@ -61,19 +62,13 @@ export interface RuntimeEntityHooks {
     /** Launch parent (the verified caller) → worker `PARENT_*` env, so the
      *  worker's `parent` resolves from the same source as `EntityRecord.parentId`. */
     parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
-  }) => Promise<{ targetId: string; effectiveVersion: string }>;
+  }) => Promise<{ targetId: string }>;
 
-  /** Start the lazy runtime image for a panel entity and resolve its EV. */
-  preparePanel: (args: {
-    source: string;
-    ref: string | undefined;
-  }) => Promise<{ effectiveVersion: string }>;
+  /** Resolve and verify the exact panel artifact before activation. */
+  preparePanel: (args: { source: string; execution: ResolvedExecutionBinding }) => Promise<void>;
 
-  /** Resolve effective version for "app" entities (no runtime prep). */
-  resolveAppEffectiveVersion: (args: {
-    source: string;
-    ref: string | undefined;
-  }) => Promise<string>;
+  /** Resolve and verify the exact app artifact before activation. */
+  prepareApp: (args: { source: string; execution: ResolvedExecutionBinding }) => Promise<void>;
 
   /** Cleanup hooks invoked on retire — closed at bootstrap. */
   onRetire: (record: EntityRecord) => Promise<void>;
@@ -137,6 +132,10 @@ export interface RuntimeServiceDeps {
    * can't drift.
    */
   entityStore: WorkspaceEntityStore;
+  /** The sole selector-to-artifact boundary; hooks launch only this exact result. */
+  resolveExecutionArtifact: (source: string, ref?: string) => Promise<ResolvedExecutionBinding>;
+  /** Cold exact lookup used by rollback/clone without re-resolving a moving head. */
+  resolveExecutionArtifactByDigest: (executionDigest: string) => ResolvedExecutionBinding;
   hooks: RuntimeEntityHooks;
   contextBoundary: ContextBoundaryDeps;
   contextFolders: RuntimeContextFolders;
@@ -152,7 +151,6 @@ export interface RuntimeServiceDeps {
     title: string | undefined,
     options?: { explicit?: boolean }
   ) => void | Promise<void>;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
    * Revoke every entity-scoped agent credential + the live agent TokenManager
    * token for a retired entity. Called
@@ -189,26 +187,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
 
   /**
    * The context-boundary gate for DIRECT (userland) entity launch/destroy/
-   * context ops. Trusted chrome/server callers bypass — they cannot be prompted
-   * (no code identity), and the only `server` entrants are (a) panel-mediated
-   * calls already gated at the panel layer or (b) genuine system creation
-   * (seed/CLI), which is free. Runs BEFORE any side effect, so denial is
-   * non-destructive.
+   * context ops. A genuinely host-originated operation bypasses the user prompt;
+   * a runtime kind or caller id never creates that authority. Runs BEFORE any
+   * side effect, so denial is non-destructive.
    */
   async function gateContextLaunch(
     caller: VerifiedCaller,
     targetContextId: string,
     action: ContextBoundaryAction
   ): Promise<void> {
-    // Panel-tree bridge calls retain the initiating entity id for durable
-    // lineage while using the server caller kind. They are already gated at
-    // the panel-tree boundary and must retain trusted-host authority here.
-    if (
-      caller.runtime.kind === "server" ||
-      isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })
-    ) {
-      return;
-    }
+    if (caller.hostOriginated === true) return;
     const originContextId = await store.resolveContext(caller.runtime.id);
     if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return;
     const result = await requireContextBoundaryPermission(deps.contextBoundary, {
@@ -223,7 +211,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   }
 
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
-    return caller.runtime.kind === "shell" || caller.runtime.kind === "server";
+    return caller.hostOriginated === true;
   }
 
   function requireTrustedRuntimeHost(caller: VerifiedCaller, method: string): void {
@@ -243,7 +231,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     caller: VerifiedCaller,
     spec: RuntimeEntityCreateSpec
   ): boolean {
-    if (caller.runtime.kind !== "extension") return false;
+    if (!caller.code?.repoPath.startsWith("extensions/")) return false;
     return spec.kind === "session" || bindingFromSpec(spec) !== undefined;
   }
 
@@ -254,13 +242,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     binding: RuntimeAgentBindingInput | undefined
   ): Promise<RuntimeAgentBinding | undefined> {
     if (!binding) return undefined;
-    if (
-      caller.runtime.kind !== "shell" &&
-      caller.runtime.kind !== "server" &&
-      caller.runtime.kind !== "extension"
-    ) {
+    if (!isTrustedRuntimeHost(caller) && !caller.code?.repoPath.startsWith("extensions/")) {
       throw new Error(
-        `runtime.${method} agentBinding is restricted to host callers and extensions`
+        `runtime.${method} agentBinding requires the host principal or exact extension code`
       );
     }
     const bound = await store.resolveRecord(binding.entityId);
@@ -340,18 +324,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   ): Promise<RuntimeEntityHandle> {
     const spec = rawSpec;
     if (spec.kind === "app") {
-      const callerKind = caller.runtime.kind;
-      if (callerKind !== "shell" && callerKind !== "server") {
+      if (!caller.hostOriginated && (!caller.subject || caller.code)) {
         throw new Error("App runtime entities are host-managed");
       }
     }
     if (spec.kind === "session") {
-      const callerKind = caller.runtime.kind;
-      // Session entities are host-managed, EXCEPT an extension may create a
-      // source-tagged session for a launch it owns. The source tag distinguishes
-      // an orchestrated launch from an ad-hoc device session.
-      const orchestratorExtension = callerKind === "extension" && Boolean(spec.source);
-      if (callerKind !== "shell" && callerKind !== "server" && !orchestratorExtension) {
+      // Session entities are host/user-device managed, except exact extension
+      // code may create a source-tagged session for a launch it owns.
+      const orchestratorExtension =
+        caller.code?.repoPath.startsWith("extensions/") === true && Boolean(spec.source);
+      if (!caller.hostOriginated && (!caller.subject || caller.code) && !orchestratorExtension) {
         throw new Error("Session runtime entities are host-managed");
       }
     }
@@ -378,13 +360,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     caller: VerifiedCaller,
     spec: RuntimeEntityCreateSpec,
     initialContextId: string,
-    agentBinding?: RuntimeAgentBinding
+    agentBinding?: RuntimeAgentBinding,
+    exactExecution?: ResolvedExecutionBinding
   ): Promise<RuntimeEntityHandle> {
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
 
     let canonicalId: string;
-    let effectiveVersion: string;
+    let executionDigest: string | undefined;
+    let authorityRequests: ResolvedExecutionBinding["requested"] | undefined;
     let targetId: string;
     let existing: EntityRecord | null = null;
 
@@ -396,26 +380,28 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         key,
       });
       existing = await store.resolveRecord(canonicalId);
+      const execution =
+        exactExecution ?? (await deps.resolveExecutionArtifact(spec.source, spec.ref));
       const prepared = await deps.hooks.prepareDurableObject({
         source: spec.source,
-        ref: spec.ref,
+        execution,
         className: spec.className,
         key,
         contextId,
         stateArgs: spec.stateArgs,
       });
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
+      executionDigest = execution.artifact.executionDigest;
+      authorityRequests = execution.requested;
       targetId = prepared.targetId;
     } else if (spec.kind === "worker") {
       canonicalId = canonicalEntityId({ kind: "worker", source: spec.source, key });
       existing = await store.resolveRecord(canonicalId);
       const parentKind = caller.runtime.kind;
+      const execution =
+        exactExecution ?? (await deps.resolveExecutionArtifact(spec.source, spec.ref));
       const prepared = await deps.hooks.prepareWorker({
         source: spec.source,
-        ref: spec.ref,
+        execution,
         key,
         contextId,
         stateArgs: spec.stateArgs,
@@ -431,20 +417,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
               : undefined,
         },
       });
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
+      executionDigest = execution.artifact.executionDigest;
+      authorityRequests = execution.requested;
       targetId = prepared.targetId;
     } else if (spec.kind === "app") {
       canonicalId = canonicalEntityId({ kind: "app", source: spec.source, key });
       existing = await store.resolveRecord(canonicalId);
-      const resolvedVersion = await deps.hooks.resolveAppEffectiveVersion({
+      const execution =
+        exactExecution ?? (await deps.resolveExecutionArtifact(spec.source, spec.ref));
+      await deps.hooks.prepareApp({
         source: spec.source,
-        ref: spec.ref,
+        execution,
       });
-      effectiveVersion =
-        existing?.status === "retired" ? existing.source.effectiveVersion : resolvedVersion;
+      executionDigest = execution.artifact.executionDigest;
+      authorityRequests = execution.requested;
       targetId = canonicalId;
     } else if (spec.kind === "session") {
       canonicalId = canonicalEntityId({ kind: "session", key });
@@ -460,19 +446,34 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       // eagerly materializing the context folder so host callers (e.g.
       // agent CLIs) get a working tree immediately.
       await deps.contextFolders.ensureContextFolder(contextId);
-      effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
       targetId = canonicalId;
-    } else {
+    } else if (spec.surface === "browser") {
+      const externalUrl = spec.source.startsWith("browser:")
+        ? spec.source.slice("browser:".length)
+        : "";
+      if (!externalUrl || !isOpenPanelBrowserUrl(externalUrl)) {
+        throw new Error(`Invalid external browser panel source: ${spec.source}`);
+      }
       canonicalId = canonicalEntityId({ kind: "panel", key });
       existing = await store.resolveRecord(canonicalId);
-      const prepared = await deps.hooks.preparePanel({
+      // Browser panels are host-rendered external documents, not workspace
+      // code. They receive a durable entity incarnation for slot lineage and
+      // leases, but deliberately have no code build or execution digest.
+      targetId = canonicalId;
+    } else {
+      if (spec.source.startsWith("browser:")) {
+        throw new Error(`Workspace panel source cannot use the browser: namespace: ${spec.source}`);
+      }
+      canonicalId = canonicalEntityId({ kind: "panel", key });
+      existing = await store.resolveRecord(canonicalId);
+      const execution =
+        exactExecution ?? (await deps.resolveExecutionArtifact(spec.source, spec.ref));
+      await deps.hooks.preparePanel({
         source: spec.source,
-        ref: spec.ref,
+        execution,
       });
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
+      executionDigest = execution.artifact.executionDigest;
+      authorityRequests = execution.requested;
       targetId = canonicalId;
     }
 
@@ -482,7 +483,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
 
     const activateInput = {
       kind: spec.kind,
-      source: { repoPath: spec.source, effectiveVersion },
+      source: { repoPath: spec.source },
+      activeExecutionDigest: executionDigest,
       contextId,
       className: spec.kind === "do" ? spec.className : undefined,
       key,
@@ -514,6 +516,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       id: record.id,
       kind: spec.kind,
       source: record.source,
+      ...(record.activeExecutionDigest ? { executionDigest: record.activeExecutionDigest } : {}),
+      ...(authorityRequests ? { authorityRequests } : {}),
       contextId: record.contextId,
       targetId,
     };
@@ -590,10 +594,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     }
   }
 
-  /** Build a clone spec from a source record: same source + class, new key/context.
-   *  `ref` is omitted, so the clone builds at the current main version (HEAD-tracking
-   *  entities — the common case — match; a source pinned to an older version is
-   *  re-resolved to main, an accepted trade-off vs. plumbing a state-hash build ref). */
+  /** Build clone identity fields; executable identity is supplied independently
+   *  from the source record's exact active incarnation. */
   function buildCloneSpec(
     src: EntityRecord,
     contextId: string,
@@ -756,10 +758,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
             });
             clonedStorage.push({ source: src.source.repoPath, className, key: newKey });
           }
+          if (!src.activeExecutionDigest) {
+            throw new Error(`cloneContext: code-backed entity ${src.id} has no active execution`);
+          }
+          const exactExecution = deps.resolveExecutionArtifactByDigest(src.activeExecutionDigest);
           const handle = await activateEntity(
             caller,
             buildCloneSpec(src, targetCtx, newKey),
-            targetCtx
+            targetCtx,
+            undefined,
+            exactExecution
           );
           created.push(handle);
           entityIdMap.set(src.id, handle.id);
@@ -1012,16 +1020,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return { contextId };
   }
 
-  interface EntitySummary {
-    id: string;
-    kind: string;
-    source: string;
-    contextId: string;
-    title?: string;
-    createdAt: number;
-  }
-
-  async function listEntities(kind?: string): Promise<EntitySummary[]> {
+  async function listEntities(kind?: string): Promise<RuntimeEntitySummary[]> {
     const live = await store.listActive(kind);
     return live.map((record) => {
       const stateArgs = record.stateArgs;
@@ -1031,6 +1030,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         typeof (stateArgs as { title?: unknown }).title === "string"
           ? ((stateArgs as { title: string }).title as string)
           : undefined;
+      const execution = record.activeExecutionDigest
+        ? deps.resolveExecutionArtifactByDigest(record.activeExecutionDigest)
+        : null;
+      if (
+        execution &&
+        (execution.artifact.executionDigest !== record.activeExecutionDigest ||
+          execution.artifact.source.repoPath !== record.source.repoPath)
+      ) {
+        throw new Error(`Active execution identity mismatch for runtime entity ${record.id}`);
+      }
       return {
         id: record.id,
         kind: record.kind,
@@ -1038,6 +1047,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         contextId: record.contextId,
         title,
         createdAt: record.createdAt,
+        ...(execution
+          ? {
+              executionDigest: execution.artifact.executionDigest,
+              authorityRequests: execution.requested,
+            }
+          : {}),
       };
     });
   }
@@ -1049,7 +1064,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   return {
     name: "runtime",
     description: "Runtime entity creation and retirement",
-    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
+    authority: { principals: ["code", "user", "host"] },
     methods: runtimeMethods,
     handler: defineServiceHandler("runtime", runtimeMethods, {
       createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
@@ -1070,7 +1085,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       createSubagentContext: (ctx, [subArgs]) => createSubagentContext(ctx.caller, subArgs),
       setTitle: async (ctx, [title, options]) => {
         // Access is enforced by the per-method policy on `runtimeMethods.setTitle`
-        // (allowed: panel/app/worker/do), checked by the dispatcher before this
+        // (principals: panel/app/worker/do), checked by the dispatcher before this
         // handler runs. We deliberately do NOT re-gate caller kind here — declared
         // policy == enforced, with a single source of truth (no handler-side narrowing).
         await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {

@@ -11,6 +11,7 @@ import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
+  RuntimeEntitySummary,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 
@@ -98,5 +99,6 @@ export interface WorkspaceStateClient {
  */
 export interface RuntimeClient {
   createEntity(spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  listEntities(kind?: RuntimeEntityHandle["kind"]): Promise<RuntimeEntitySummary[]>;
   retireEntity(id: string): Promise<void>;
 }

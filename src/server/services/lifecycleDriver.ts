@@ -1,6 +1,6 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef, LifecycleDoDispatcher } from "@vibestudio/shared/doDispatcher";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { WORKSPACE_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 import type { LifecycleKey, LifecycleOp } from "../internalDOs/workspaceDO.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
 
@@ -26,7 +26,7 @@ export class LifecycleDriver {
   constructor(deps: LifecycleDriverDeps) {
     this.deps = deps;
     this.workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: deps.workspaceId,
     };

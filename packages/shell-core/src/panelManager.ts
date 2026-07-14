@@ -2,7 +2,12 @@ import * as path from "path";
 import { randomBytes } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import type { Panel, PanelNavigationState, PanelSnapshot, ThemeAppearance } from "@vibestudio/shared/types";
+import type {
+  Panel,
+  PanelNavigationState,
+  PanelSnapshot,
+  ThemeAppearance,
+} from "@vibestudio/shared/types";
 import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { loadPanelManifest } from "@vibestudio/shared/panelTypes";
@@ -49,6 +54,10 @@ function browserNavigationSource(source: string): string | null {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   return `browser:${parsed.toString()}`;
+}
+
+function panelSurface(source: string): "workspace" | "browser" {
+  return source.startsWith("browser:") ? "browser" : "workspace";
 }
 
 // =============================================================================
@@ -185,7 +194,7 @@ export class PanelManager {
   private readonly currentEntityBySlot = new Map<PanelSlotId, PanelEntityId>();
   private readonly currentEntitySourceBySlot = new Map<
     PanelSlotId,
-    { repoPath: string; effectiveVersion: string }
+    { repoPath: string; executionDigest?: string }
   >();
   /**
    * Per-slot navigation history of {entryKey -> options} so back/forward
@@ -278,6 +287,7 @@ export class PanelManager {
 
     const handle = await this.runtime.createEntity({
       kind: "panel",
+      surface: "workspace",
       source: relativePath,
       key: historyEntryKey,
       contextId,
@@ -308,13 +318,16 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
-    this.currentEntitySourceBySlot.set(slotId, handle.source);
+    this.currentEntitySourceBySlot.set(slotId, {
+      ...handle.source,
+      ...(handle.executionDigest ? { executionDigest: handle.executionDigest } : {}),
+    });
 
     const panel: Panel = {
       id: slotId,
       title: manifest.title,
       runtimeEntityId: entityId,
-      effectiveVersion: handle.source.effectiveVersion,
+      executionDigest: handle.executionDigest ?? "",
       ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
@@ -371,6 +384,7 @@ export class PanelManager {
 
     const handle = await this.runtime.createEntity({
       kind: "panel",
+      surface: "browser",
       source: browserSource,
       key: historyEntryKey,
       contextId,
@@ -398,14 +412,17 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
-    this.currentEntitySourceBySlot.set(slotId, handle.source);
+    this.currentEntitySourceBySlot.set(slotId, {
+      ...handle.source,
+      ...(handle.executionDigest ? { executionDigest: handle.executionDigest } : {}),
+    });
 
     const title = opts?.name ?? (parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser");
     const panel: Panel = {
       id: slotId,
       title,
       runtimeEntityId: entityId,
-      effectiveVersion: handle.source.effectiveVersion,
+      executionDigest: handle.executionDigest ?? "",
       ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
@@ -639,6 +656,7 @@ export class PanelManager {
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
       kind: "panel",
+      surface: panelSurface(nextSnapshot.source),
       source: nextSnapshot.source,
       key: historyEntryKey,
       contextId: nextSnapshot.contextId,
@@ -659,14 +677,17 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, historyEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
-    this.currentEntitySourceBySlot.set(slotId, handle.source);
+    this.currentEntitySourceBySlot.set(slotId, {
+      ...handle.source,
+      ...(handle.executionDigest ? { executionDigest: handle.executionDigest } : {}),
+    });
 
     const livePanel = this.registry.getPanel(slotId);
     const nextHistory = this.pushHistory(panel, nextSnapshot);
     if (livePanel) {
       livePanel.title = title;
       livePanel.runtimeEntityId = entityId;
-      livePanel.effectiveVersion = handle.source.effectiveVersion;
+      livePanel.executionDigest = handle.executionDigest ?? "";
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, nextHistory);
     }
 
@@ -747,6 +768,7 @@ export class PanelManager {
     const stateArgsPayload = (targetSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
       kind: "panel",
+      surface: panelSurface(targetSnapshot.source),
       source: targetSnapshot.source,
       key: targetEntryKey,
       contextId: targetSnapshot.contextId,
@@ -756,7 +778,10 @@ export class PanelManager {
     await this.workspaceState.setSlotCurrent(slotId, targetEntryKey);
     const entityId = asPanelEntityId(handle.id);
     this.currentEntityBySlot.set(slotId, entityId);
-    this.currentEntitySourceBySlot.set(slotId, handle.source);
+    this.currentEntitySourceBySlot.set(slotId, {
+      ...handle.source,
+      ...(handle.executionDigest ? { executionDigest: handle.executionDigest } : {}),
+    });
 
     const livePanel = this.registry.getPanel(slotId);
     const nextHistoryState = {
@@ -765,7 +790,7 @@ export class PanelManager {
     };
     if (livePanel) {
       livePanel.runtimeEntityId = entityId;
-      livePanel.effectiveVersion = handle.source.effectiveVersion;
+      livePanel.executionDigest = handle.executionDigest ?? "";
       this.registry.replaceCurrentSnapshot(slotId, targetSnapshot, nextHistoryState);
     }
     return this.registry.getPanel(slotId) ?? null;
@@ -938,7 +963,7 @@ export class PanelManager {
       entityId,
       slotId,
       contextId: getPanelContextId(panel),
-      effectiveVersion: (await this.getCurrentEntitySource(slotId))?.effectiveVersion ?? null,
+      executionDigest: (await this.getCurrentEntitySource(slotId))?.executionDigest ?? null,
       parentId,
       parentEntityId,
       source: getPanelSource(panel),
@@ -998,12 +1023,19 @@ export class PanelManager {
 
   async getCurrentEntitySource(
     slotId: PanelSlotId
-  ): Promise<{ repoPath: string; effectiveVersion: string } | null> {
+  ): Promise<{ repoPath: string; executionDigest?: string } | null> {
     const cached = this.currentEntitySourceBySlot.get(slotId);
     if (cached) return cached;
     const entityId = await this.resolveCurrentEntityIdForSlot(slotId);
     const record = await this.workspaceState.resolveActiveEntity(entityId);
-    const source = record?.source ?? null;
+    const source = record
+      ? {
+          ...record.source,
+          ...(record.activeExecutionDigest
+            ? { executionDigest: record.activeExecutionDigest }
+            : {}),
+        }
+      : null;
     if (source) this.currentEntitySourceBySlot.set(slotId, source);
     return source;
   }
@@ -1026,12 +1058,19 @@ export class PanelManager {
     );
     const metadataBySource = await this.fetchPanelMetadataForHistories(histories);
 
-    const entitySourceById = new Map<string, { repoPath: string; effectiveVersion: string }>();
+    const entitySourceById = new Map<string, { repoPath: string; executionDigest?: string }>();
     await Promise.all(
       openSlots.map(async (slot) => {
         if (!slot.current_entity_id) return;
         const record = await this.workspaceState.resolveActiveEntity(slot.current_entity_id);
-        if (record?.source) entitySourceById.set(slot.current_entity_id, record.source);
+        if (record?.source) {
+          entitySourceById.set(slot.current_entity_id, {
+            ...record.source,
+            ...(record.activeExecutionDigest
+              ? { executionDigest: record.activeExecutionDigest }
+              : {}),
+          });
+        }
       })
     );
 
@@ -1062,7 +1101,7 @@ export class PanelManager {
         id: slot.slot_id,
         title,
         runtimeEntityId: currentEntityId,
-        effectiveVersion: entitySource?.effectiveVersion ?? null,
+        executionDigest: entitySource?.executionDigest ?? null,
         ...(slot.owner_user_id ? { owner: slot.owner_user_id } : {}),
         children: [],
         positionId: slot.position_id,
@@ -1236,6 +1275,7 @@ export class PanelManager {
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
       kind: "panel",
+      surface: panelSurface(nextSnapshot.source),
       source: nextSnapshot.source,
       key: newEntryKey,
       contextId: nextSnapshot.contextId,
@@ -1277,12 +1317,15 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, newEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
-    this.currentEntitySourceBySlot.set(slotId, handle.source);
+    this.currentEntitySourceBySlot.set(slotId, {
+      ...handle.source,
+      ...(handle.executionDigest ? { executionDigest: handle.executionDigest } : {}),
+    });
 
     const livePanel = this.registry.getPanel(slotId);
     if (livePanel) {
       livePanel.runtimeEntityId = entityId;
-      livePanel.effectiveVersion = handle.source.effectiveVersion;
+      livePanel.executionDigest = handle.executionDigest ?? "";
       const history = panel.history ?? { entries: [getCurrentSnapshot(panel)], index: 0 };
       const entries = history.entries.slice();
       entries[history.index] = nextSnapshot;

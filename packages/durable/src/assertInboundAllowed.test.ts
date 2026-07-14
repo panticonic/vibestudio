@@ -1,31 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import { DurableObjectBase, rpc } from "./index.js";
-import { createTestDO } from "./test-utils.js";
+import { createTestDirectAuthority, createTestDO } from "./test-utils.js";
 
 /**
- * Regression for the path-aware `assertInboundAllowed`: a server-only DO (like
- * the EvalDO) must REFUSE non-server method CALLS but still ACCEPT event
- * DELIVERIES (opt-in subscriptions pushed by a channel DO / server event-push).
- * A blanket server-only guard on both paths broke channel delivery to a
- * subscribed EvalDO ("DO RPC relay failed (500): EvalDO is server-only").
+ * Product-seed DOs use the same exact-target authority contract as ordinary
+ * Workspace DOs. Runtime shape is irrelevant; opt-in event deliveries remain
+ * outside the method-call capability surface.
  */
 class ServerOnlyProbeDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc
+  @rpc({ principals: ["host"] })
   echo(...args: unknown[]): unknown[] {
     return args;
-  }
-
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return; // deliveries are opt-in — accept any publisher
-    if (caller?.callerKind !== "server") {
-      throw new Error(`probe: server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`);
-    }
   }
 }
 
@@ -44,8 +31,8 @@ function post(
   );
 }
 
-describe("assertInboundAllowed path distinction", () => {
-  it("refuses a non-server METHOD CALL (call path)", async () => {
+describe("product-seed direct authority", () => {
+  it("refuses a method call without host mediation regardless of caller kind", async () => {
     const { instance } = await createTestDO(ServerOnlyProbeDO);
     const res = await post(instance, "test-key/echo", {
       args: ["hi"],
@@ -54,22 +41,33 @@ describe("assertInboundAllowed path distinction", () => {
       __caller: { callerId: "do:other", callerKind: "do" },
     });
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("server-only") });
+    await expect(res.json()).resolves.toMatchObject({
+      error: expect.stringContaining("authority attestation"),
+    });
   });
 
-  it("allows a server METHOD CALL (call path)", async () => {
+  it("allows an oddly-shaped caller carrying exact host authority", async () => {
     const { instance } = await createTestDO(ServerOnlyProbeDO);
     const res = await post(instance, "test-key/echo", {
       args: ["hi"],
       __instanceToken: "token",
       __instanceId: "do:internal/WorkspaceDO:test-key",
-      __caller: { callerId: "main", callerKind: "server" },
+      __caller: {
+        callerId: "do:odd-shape",
+        callerKind: "do",
+        authorization: createTestDirectAuthority({
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+          method: "echo",
+        }),
+      },
     });
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual(["hi"]);
   });
 
-  it("accepts an EVENT delivery from a non-server caller (event path)", async () => {
+  it("accepts an opt-in event delivery without a method capability", async () => {
     const { instance } = await createTestDO(ServerOnlyProbeDO);
     // An event envelope (message.type != request) POSTed to __rpc by a channel DO.
     const res = await post(instance, "test-key/__rpc", {

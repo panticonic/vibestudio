@@ -24,6 +24,7 @@ import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
+import { sha256 } from "@vibestudio/shared/execution/identity";
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-nav-"));
@@ -70,7 +71,7 @@ function makeDODispatch(instance: WorkspaceDO): {
 }
 
 describe("panel navigation: capability grants and retire hooks", () => {
-  it("a version-scoped grant on (repoPath, effectiveVersion) survives panel retire+recreate for the same source", async () => {
+  it("a version-scoped grant on (repoPath, executionDigest) survives panel retire+recreate for the same source", async () => {
     const approvalQueue = approvalQueueMock("version");
     const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
     const deps = { approvalQueue, grantStore };
@@ -81,7 +82,11 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerId: "panel:nav-1",
         callerKind: "panel" as const,
         repoPath: "workers/foo",
-        effectiveVersion: "abc",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
       capability: "egress.fetch",
       resource: { type: "host", label: "Host", value: "example.com", key: "example.com" },
@@ -100,7 +105,11 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerId: "panel:nav-2",
         callerKind: "panel" as const,
         repoPath: "workers/foo",
-        effectiveVersion: "abc",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     };
     const res2 = await requestCapabilityPermission(deps, request2);
@@ -109,7 +118,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
 
-  it("a version-scoped grant does NOT cross to a different effectiveVersion (re-prompt required)", async () => {
+  it("a version-scoped grant does NOT cross to a different executionDigest (re-prompt required)", async () => {
     const approvalQueue = approvalQueueMock("version");
     const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
     const deps = { approvalQueue, grantStore };
@@ -127,7 +136,11 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerId: "panel:v1",
         callerKind: "panel",
         repoPath: "workers/foo",
-        effectiveVersion: "abc",
+        executionDigest: "a".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
       }),
     });
 
@@ -137,7 +150,11 @@ describe("panel navigation: capability grants and retire hooks", () => {
         callerId: "panel:v2",
         callerKind: "panel",
         repoPath: "workers/foo",
-        effectiveVersion: "def", // <-- different version
+        executionDigest: "b".repeat(64),
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ], // <-- different version
       }),
     });
 
@@ -159,11 +176,31 @@ describe("panel navigation: capability grants and retire hooks", () => {
         workspaceId: "workspace-nav",
         entityCache,
       }),
+      resolveExecutionArtifact: async (source) => ({
+        unitName: source,
+        selectorPolicy: { kind: "head", repoPath: source, head: "main" },
+        artifact: {
+          source: {
+            repoPath: source,
+            sourceEv: sha256("source"),
+            stateHash: sha256("state"),
+          },
+          recipeDigest: sha256("recipe"),
+          buildKey: sha256("build"),
+          artifactDigest: sha256("artifact"),
+          executionDigest: sha256("execution"),
+        },
+        requested: [],
+        compilationCacheKey: `test:${source}`,
+      }),
+      resolveExecutionArtifactByDigest: (executionDigest) => {
+        throw new Error(`Unexpected exact execution lookup: ${executionDigest}`);
+      },
       hooks: {
-        prepareDurableObject: vi.fn(async () => ({ targetId: "t", effectiveVersion: "v" })),
-        prepareWorker: vi.fn(async () => ({ targetId: "t", effectiveVersion: "v" })),
-        preparePanel: vi.fn(async () => ({ effectiveVersion: "ev-panel" })),
-        resolveAppEffectiveVersion: vi.fn(async () => "ev-app"),
+        prepareDurableObject: vi.fn(async () => ({ targetId: "t", executionDigest: "v" })),
+        prepareWorker: vi.fn(async () => ({ targetId: "t", executionDigest: "v" })),
+        preparePanel: vi.fn(async () => {}),
+        prepareApp: vi.fn(async () => {}),
         onRetire: async (record) => {
           retiredRecords.push(record);
         },
@@ -181,6 +218,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
       [
         {
           kind: "panel",
+          surface: "workspace",
           source: "panels/chat",
           contextId: "ctx-x",
           key: "nav-entry-1",

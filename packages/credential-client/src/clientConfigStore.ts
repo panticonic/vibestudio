@@ -18,7 +18,7 @@ export interface ClientConfigRecord {
     callerId: string;
     callerKind: "panel" | "app" | "worker" | "do" | "shell" | "server";
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
   };
   authorizeUrl: string;
   tokenUrl: string;

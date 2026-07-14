@@ -71,11 +71,20 @@ export async function putBlobBytes(
   rootDir: string,
   bytes: Buffer
 ): Promise<{ digest: string; size: number }> {
+  const stored = await putBlobBytesWithStatus(rootDir, bytes);
+  return { digest: stored.digest, size: stored.size };
+}
+
+/** Same atomic insertion primitive, with an exact winner/duplicate result for protocol adapters. */
+export async function putBlobBytesWithStatus(
+  rootDir: string,
+  bytes: Buffer
+): Promise<{ digest: string; size: number; insertedContent: boolean }> {
   const digest = createHash("sha256").update(bytes).digest("hex");
   const filePath = blobCasPath(rootDir, digest);
   try {
     await fsp.access(filePath);
-    return { digest, size: bytes.byteLength };
+    return { digest, size: bytes.byteLength, insertedContent: false };
   } catch (error) {
     if (!isErrorCode(error, "ENOENT")) throw error;
   }
@@ -85,12 +94,14 @@ export async function putBlobBytes(
   try {
     await fsp.writeFile(tmpPath, bytes, { flag: "wx" });
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    let insertedContent = false;
     try {
       await fsp.link(tmpPath, filePath);
+      insertedContent = true;
     } catch (error) {
       if (!isErrorCode(error, "EEXIST")) throw error;
     }
-    return { digest, size: bytes.byteLength };
+    return { digest, size: bytes.byteLength, insertedContent };
   } finally {
     await fsp.unlink(tmpPath).catch((error) => {
       if (!isErrorCode(error, "ENOENT")) throw error;

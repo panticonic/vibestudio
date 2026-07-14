@@ -141,7 +141,7 @@ describe("createEvalImportLoader", () => {
       metadata: {
         kind: "package" as const,
         name: "@workspace/pkg",
-        ev: "ev-test",
+        sourceDigest: "source-digest-test",
         sourceStateHash: null,
         sourcemap: false,
         details: { kind: "package" },

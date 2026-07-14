@@ -2,14 +2,18 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { DODispatch } from "../doDispatch.js";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import {
+  EVAL_DO_SOURCE,
+  WORKSPACE_DO_SOURCE,
+  productSeedExecutionDigest,
+} from "../internalDOs/productBootManifest.js";
 import { createEvalService } from "./evalService.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 const WORKSPACE_REF = {
-  source: INTERNAL_DO_SOURCE,
+  source: WORKSPACE_DO_SOURCE,
   className: "WorkspaceDO",
   objectKey: "ws_1",
 };
@@ -128,10 +132,12 @@ describe("createEvalService", () => {
       args: [
         {
           kind: "do",
-          source: { repoPath: INTERNAL_DO_SOURCE, effectiveVersion: "internal" },
+          source: { repoPath: EVAL_DO_SOURCE },
           contextId: "ctx_1",
           className: "EvalDO",
           key: objectKey,
+          activeExecutionDigest: productSeedExecutionDigest(EVAL_DO_SOURCE),
+          ownerUserId: undefined,
           // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
           // eval (e.g. headless sub-agents) resolve up through the owner to the owner's panel.
           parentId: "session:default",
@@ -140,7 +146,7 @@ describe("createEvalService", () => {
       ],
     });
     expect(calls.find((c) => c.method === "run")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
       method: "run",
       args: [
         expect.objectContaining({
@@ -171,7 +177,7 @@ describe("createEvalService", () => {
       ],
     });
     expect(calls.find((c) => c.method === "run")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
       method: "run",
       args: [
         expect.objectContaining({
@@ -188,7 +194,7 @@ describe("createEvalService", () => {
     const rec = (
       over: Partial<EntityRecord> & { id: string; kind: EntityRecord["kind"] }
     ): EntityRecord => ({
-      source: { repoPath: "src", effectiveVersion: "v" },
+      source: { repoPath: "src" },
       contextId: "ctx_agent",
       key: over.id,
       createdAt: 0,
@@ -304,7 +310,7 @@ describe("createEvalService", () => {
     const objectKey = evalKey(ownerId, "chan_1");
     // startRun dispatched to the owner's EvalDO with the CALLER's runId + assembled args.
     expect(calls.find((c) => c.method === "startRun")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
       args: [expect.objectContaining({ runId: "inv-42", channelId: "chan_1", agentRef: ownerId })],
     });
 
@@ -344,7 +350,7 @@ describe("createEvalService", () => {
 
     const objectKey = evalKey(ownerId, "chan_1");
     expect(calls.find((c) => c.method === "getRun")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
       args: ["inv-42"],
     });
   });
@@ -367,7 +373,7 @@ describe("createEvalService", () => {
     expect(page).toEqual({ length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" });
     expect(calls.find((call) => call.method === "readScopeTextPage")).toMatchObject({
       ref: {
-        source: INTERNAL_DO_SOURCE,
+        source: EVAL_DO_SOURCE,
         className: "EvalDO",
         objectKey: evalKey(ownerId, "system-tests"),
       },
@@ -384,7 +390,7 @@ describe("createEvalService", () => {
     ]);
     expect(calls.find((call) => call.method === "deleteScopeValue")).toMatchObject({
       ref: {
-        source: INTERNAL_DO_SOURCE,
+        source: EVAL_DO_SOURCE,
         className: "EvalDO",
         objectKey: evalKey(ownerId, "system-tests"),
       },
@@ -403,7 +409,7 @@ describe("createEvalService", () => {
 
     const objectKey = evalKey(ownerId, "chan_1");
     expect(calls.find((c) => c.method === "cancel")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
       args: ["inv-42"],
     });
   });
@@ -421,7 +427,7 @@ describe("createEvalService", () => {
 
     const objectKey = evalKey(ownerId, "chan_1");
     expect(calls.find((c) => c.method === "forceReset")).toMatchObject({
-      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      ref: { source: EVAL_DO_SOURCE, className: "EvalDO", objectKey },
     });
   });
 });

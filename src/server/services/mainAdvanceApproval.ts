@@ -7,7 +7,6 @@ import {
 } from "@vibestudio/unit-host";
 import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
@@ -15,7 +14,6 @@ import { joinRepoPrefix } from "../vcsHost/paths.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./protectedRefStore.js";
 
 const WORKSPACE_REPO_WRITE_CAPABILITY = "workspace-repo-write";
@@ -441,7 +439,7 @@ export function createMainAdvanceApprovalGate(deps: {
   grantStore: MetaApprovalGrantStore;
   grantTtlMs: number;
   capabilityGrantStore: CapabilityGrantStore;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasPanelHostingAuthority?(caller: VerifiedCaller): boolean | Promise<boolean>;
   getProviders(): Array<UnitMetaChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
   /**
    * Host-sourced build-status read over the candidate view (§2.2 `build.statusAt`):
@@ -464,7 +462,7 @@ export function createMainAdvanceApprovalGate(deps: {
       const metaChanged = candidate.changedPaths.some(isMetaPath);
 
       const runtimeKind = candidate.caller.runtime.kind;
-      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
+      if (await deps.hasPanelHostingAuthority?.(candidate.caller)) {
         return;
       }
 
@@ -525,7 +523,7 @@ export function createMainAdvanceApprovalGate(deps: {
         callerKind,
         ...(candidate.caller.subject ? { requestedByUserId: candidate.caller.subject.userId } : {}),
         repoPath: identity.repoPath,
-        effectiveVersion: identity.effectiveVersion,
+        executionDigest: identity.executionDigest,
         dedupKey: `unit-meta-change:${candidate.caller.runtime.id}:${candidate.stateHash}`,
         trigger: "meta-change",
         title: metaChangeTitle(units),
@@ -552,10 +550,9 @@ export function createMainAdvanceApprovalGate(deps: {
     },
 
     async approveRepoDeletion(candidate) {
-      // The shell acts on the user's behalf (it carries its own confirm UX), so
-      // chrome callers pass — same trust model as `approve`. Every other caller
-      // (agents, panels, workers) must get explicit user approval.
-      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
+      // A principal with exact panel-hosting authority carries the product's
+      // confirmation UX. Every other caller must get explicit user approval.
+      if (await deps.hasPanelHostingAuthority?.(candidate.caller)) {
         return;
       }
       const callerKind = userlandCallerKind(candidate.caller.runtime.kind);

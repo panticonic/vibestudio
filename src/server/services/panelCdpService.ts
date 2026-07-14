@@ -2,6 +2,7 @@ import { z } from "zod";
 import { assertHttpUrl } from "@vibestudio/shared/httpUrl";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   PanelAccessPermissionDeps,
@@ -134,7 +135,7 @@ const screenshotResultSchema = z.object({
   height: z.number(),
 });
 
-const panelCdpMethods = {
+const panelCdpMethods = defineServiceMethods({
   getCdpEndpoint: {
     description: "Return a single-use CDP WebSocket endpoint for an approved panel target.",
     args: z.tuple([z.string()]),
@@ -175,7 +176,7 @@ const panelCdpMethods = {
     description: "Internal shell/server transport: open a streamed CDP host-provider channel.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.instanceof(Response),
-    policy: { allowed: ["shell", "server"] as CallerKind[] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "admin" as const },
   },
   "hostProvider.send": {
@@ -183,17 +184,17 @@ const panelCdpMethods = {
       "Internal shell/server transport: deliver a CDP host-provider frame to the bridge.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.void(),
-    policy: { allowed: ["shell", "server"] as CallerKind[] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "admin" as const },
   },
   "hostProvider.close": {
     description: "Internal shell/server transport: close a CDP host-provider channel.",
     args: z.tuple([z.string()]),
     returns: z.void(),
-    policy: { allowed: ["shell", "server"] as CallerKind[] },
+    authority: { principals: ["user", "host"] },
     access: { sensitivity: "admin" as const },
   },
-};
+});
 
 export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinition {
   async function requireTarget(panelId: string): Promise<PanelAccessPermissionTarget> {
@@ -254,7 +255,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     // `agent` = linked external sessions (Claude Code et al.) driving the
     // frontend-dev loop over the CLI; every target op below is gated by the
     // same context-boundary permission as sandboxed code callers.
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "agent"] },
+    authority: { principals: ["user", "host", "code", "entity"] },
     methods: panelCdpMethods,
     handler: defineServiceHandler("panelCdp", panelCdpMethods, {
       "hostProvider.open": (ctx, [sessionId, hostConnectionId]) => {

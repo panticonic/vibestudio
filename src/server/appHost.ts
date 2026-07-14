@@ -8,7 +8,7 @@ import {
   UnitSourceChangeGrantStore,
   UnitTrustResolver,
   authorizeUnitSourceChange,
-  collectTransitiveUnitDependencyEvs,
+  collectTransitiveUnitDependencySourceDigests,
   createPendingUnitRegistryEntry,
   createUnitBuildIdentity,
   createUnitBatchEntryBase,
@@ -28,16 +28,17 @@ import {
 } from "@vibestudio/unit-host";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
-import {
-  isAuthorizedChromeAppSource,
-  normalizeAppSourcePath,
-} from "@vibestudio/shared/chromeTrust";
 import type {
   PendingApproval,
   PendingUnitBatchApproval,
   UnitBatchEntry,
 } from "@vibestudio/shared/approvals";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type {
+  ArtifactBundleEntry,
+  ExecutionArtifactRef,
+} from "@vibestudio/shared/execution/identity";
+import type { CapabilityScope } from "@vibestudio/rpc";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import {
   parseWorkspaceConfigContentWithId,
@@ -62,10 +63,7 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
 import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
-import {
-  createCapabilityAuthorizer,
-  type CapabilityAuthorizer,
-} from "./services/capabilityAuthorizer.js";
+import { productCodeHasCapability } from "./services/productAuthorityGrants.js";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { FileHostTargetSelectionStore, HostTargetSelectionPolicy } from "./hostTargetSelection.js";
 import { TerminalAppRuntime } from "./terminalAppRuntime.js";
@@ -118,10 +116,11 @@ export interface AppVersionRecord {
   version: string;
   target: WorkspaceAppTarget;
   capabilities: AppCapability[];
-  activeEv: string | null;
+  activeSourceDigest: string | null;
+  activeExecutionDigest: string | null;
   activeSourceHash: string | null;
   activeBundleKey: string;
-  activeDependencyEvs: Record<string, string>;
+  activeDependencySourceDigests: Record<string, string>;
   activeExternalDeps: Record<string, string>;
   activeRuntimeDepsKey: string | null;
   activatedAt: number;
@@ -154,9 +153,10 @@ interface AppAvailablePayload {
   }>;
   capabilities: AppCapability[];
   buildKey: string | null;
-  effectiveVersion: string | null;
+  executionDigest: string | null;
+  authorityRequests: readonly CapabilityScope[];
   previousBuildKey: string | null;
-  previousEffectiveVersion: string | null;
+  previousSourceDigest: string | null;
   canRollback: boolean;
   adoptionPolicy: "immediate" | "prompt" | "artifact-only";
   selectedForHost?: boolean;
@@ -185,7 +185,20 @@ export type ElectronHostReadiness =
 interface BuildSystemLike {
   getBuild(unitPath: string, ref?: string): Promise<AppBuildResultLike>;
   getBuildByKey?(key: string): AppBuildResultLike | null;
-  getEffectiveVersion(unitName: string): string | null;
+  resolveExecutionArtifact(
+    unitPath: string,
+    ref?: string
+  ): Promise<{
+    artifact: ExecutionArtifactRef;
+    compilationCacheKey: string;
+  }>;
+  getExecutionArtifact(executionDigest: string): {
+    ref: ExecutionArtifactRef;
+    requested: readonly CapabilityScope[];
+    entries: ArtifactBundleEntry[];
+    entryPath(artifactPath: string): string;
+  } | null;
+  getSourceDigest(unitName: string): string | null;
   getExternalDeps(unitName: string): Record<string, string>;
   getBuildProviderDetails?(target: "react-native"): AppBuildProviderDetails | null;
   onBuildProviderChange?(
@@ -239,7 +252,7 @@ interface AppGraphNode {
 }
 
 interface AppBuildMetadataLike {
-  ev: string;
+  sourceDigest: string;
   sourceStateHash?: string | null;
   details?:
     | {
@@ -249,7 +262,7 @@ interface AppBuildMetadataLike {
         rnHostAbi?: string | null;
         provider?: {
           name: string;
-          activeEv: string | null;
+          activeSourceDigest: string | null;
           activeBuildKey: string | null;
           contractVersion: string;
         } | null;
@@ -264,7 +277,7 @@ interface ApprovalQueueLike {
     callerKind: "panel" | "app" | "worker" | "do" | "system";
     requestedByUserId?: string;
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
     dedupKey?: string | null;
     trigger: PendingUnitBatchApproval["trigger"];
     title: string;
@@ -345,7 +358,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       unitKind: "app",
       normalizeEntry: (entry) => ({
         ...entry,
-        activeDependencyEvs: entry.activeDependencyEvs ?? {},
+        activeDependencySourceDigests: entry.activeDependencySourceDigests ?? {},
         activeExternalDeps: entry.activeExternalDeps ?? {},
         capabilities: entry.capabilities ?? [],
         previousVersions: entry.previousVersions ?? [],
@@ -529,8 +542,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     displayName: string;
     status: AppRegistryEntry["status"];
     version: string;
-    ev: string | null;
-    activeEv: string | null;
+    sourceDigest: string | null;
+    executionDigest: string | null;
     activeBundleKey: string | null;
     activeRuntimeDepsKey: string | null;
     lastError: string | null;
@@ -631,7 +644,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     target: HostTarget,
     sourceOrName: string,
     ref: string
-  ): Promise<{ buildKey: string; effectiveVersion: string; appId: string; source: string }> {
+  ): Promise<{ buildKey: string; executionDigest: string; appId: string; source: string }> {
     const candidate = this.listHostTargetCandidates(target).find(
       (item) => item.name === sourceOrName || item.source === normalizeRepoPath(sourceOrName)
     );
@@ -643,19 +656,23 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       ref,
     };
     this.assertHostTargetMatchesManifest(node, target);
-    const build = await this.deps.buildSystem.getBuild(candidate.name, ref);
+    const binding = await this.deps.buildSystem.resolveExecutionArtifact(candidate.name, ref);
+    const build = this.deps.buildSystem.getBuildByKey?.(binding.compilationCacheKey);
+    if (!build) {
+      throw new Error(`Compilation record missing for resolved app artifact: ${candidate.name}`);
+    }
     this.validateBuildForTarget(candidate.name, target, build);
     const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const externalDeps = this.externalDepsForBuild(node, build.metadata, decl);
-    const dependencyEvs = this.currentDependencyEvs(node);
+    const dependencySourceDigests = this.currentDependencyEvs(node);
     const trust = this.hostPinnedRefTrustRecord(
       createUnitBuildIdentity({
         unitKind: "app",
         name: node.name,
         sourceRepo: node.relativePath,
         ref,
-        effectiveVersion: build.metadata.ev,
-        dependencyEvs,
+        sourceDigest: binding.artifact.source.sourceEv,
+        dependencySourceDigests,
         externalDeps,
         capabilities: this.appCapabilities(node),
       })
@@ -666,10 +683,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       version: readPackageVersion(node.path),
       sourceRepo: node.relativePath,
       ref,
-      buildDir: build.dir,
-      effectiveVersion: build.metadata.ev,
+      buildKey: binding.compilationCacheKey,
+      sourceDigest: binding.artifact.source.sourceEv,
+      executionDigest: binding.artifact.executionDigest,
       activeSourceHash,
-      dependencyEvs,
+      dependencySourceDigests,
       externalDeps,
       runtimeDepsKey: null,
       status: appRegistryStatusForTarget(target),
@@ -699,8 +717,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     await this.terminal.sync(entry, previous);
     this.emitAvailable(this.registry.get(entry.name) ?? entry);
     return {
-      buildKey: path.basename(build.dir),
-      effectiveVersion: build.metadata.ev,
+      buildKey: binding.compilationCacheKey,
+      executionDigest: binding.artifact.executionDigest,
       appId: candidate.name,
       source: candidate.source,
     };
@@ -896,10 +914,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       version: selected.version,
       target: selected.target,
       capabilities: selected.capabilities,
-      activeEv: selected.activeEv,
+      activeSourceDigest: selected.activeSourceDigest,
+      activeExecutionDigest: selected.activeExecutionDigest,
       activeSourceHash: selected.activeSourceHash,
       activeBundleKey: selected.activeBundleKey,
-      activeDependencyEvs: selected.activeDependencyEvs,
+      activeDependencySourceDigests: selected.activeDependencySourceDigests,
       activeExternalDeps: selected.activeExternalDeps,
       activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
       status: appRegistryStatusForTarget(selected.target),
@@ -935,47 +954,26 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       .sort((a, b) => a.timestamp - b.timestamp);
   }
 
-  hasAppCapability(callerId: string, capability: AppCapability): boolean {
-    const entry =
-      this.registry.get(callerId) ??
-      this.registry.list().find((candidate) => {
-        const source = normalizeRepoPath(candidate.source.repo);
-        return callerId.startsWith(`app:${source}:`);
-      });
+  /** Capability must be sealed into the exact artifact and granted to its exact source. */
+  private isCapabilityAuthorized(
+    entry: AppRegistryEntry,
+    requestedAuthority: readonly CapabilityScope[],
+    capability: AppCapability
+  ): boolean {
+    const requested = requestedAuthority.some((scope) => scope.capability === capability);
+    if (requested && productCodeHasCapability(normalizeRepoPath(entry.source.repo), capability)) {
+      return true;
+    }
     if (
       capability === "panel-hosting" &&
-      entry &&
-      isCapabilityActiveStatus(entry.status) &&
-      entry.capabilities.includes(capability) &&
-      !this.isTrustGatedCapabilityAuthorized(entry.source.repo, capability)
+      !this.loggedUnauthorizedPanelHostingSources.has(entry.source.repo)
     ) {
-      return false;
+      this.loggedUnauthorizedPanelHostingSources.add(entry.source.repo);
+      console.warn(
+        `[AppHost] Ignoring ungranted panel-hosting request from '${entry.source.repo}'`
+      );
     }
-    return (
-      !!entry && isCapabilityActiveStatus(entry.status) && entry.capabilities.includes(capability)
-    );
-  }
-
-  /**
-   * Authorization check for the trust-gated `panel-hosting` capability. It may
-   * only be granted to app sources in `trust.chromeApps`; every other capability
-   * is ungated. Emits a one-time warning when the gated capability is
-   * self-declared by an unauthorized source, matching the historical
-   * `hasAppCapability` logging behavior.
-   */
-  private isTrustGatedCapabilityAuthorized(repo: string, capability: AppCapability): boolean {
-    if (capability === "panel-hosting") {
-      if (isAuthorizedChromeAppSource(repo)) return true;
-      const source = normalizeAppSourcePath(repo);
-      if (!this.loggedUnauthorizedPanelHostingSources.has(source)) {
-        this.loggedUnauthorizedPanelHostingSources.add(source);
-        console.warn(
-          `[AppHost] Ignoring panel-hosting declaration from unauthorized app source '${source}'`
-        );
-      }
-      return false;
-    }
-    return true;
+    return false;
   }
 
   /**
@@ -985,16 +983,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
    * projected onto client-facing surfaces (e.g. the `apps:available` event), so
    * that a client can never treat an unauthorized self-declaration as granted.
    */
-  private effectiveCapabilities(entry: AppRegistryEntry): AppCapability[] {
+  private effectiveCapabilities(
+    entry: AppRegistryEntry,
+    requestedAuthority: readonly CapabilityScope[]
+  ): AppCapability[] {
     return entry.capabilities.filter((capability) =>
-      this.isTrustGatedCapabilityAuthorized(entry.source.repo, capability)
+      this.isCapabilityAuthorized(entry, requestedAuthority, capability)
     );
-  }
-
-  capabilityAuthorizer(): CapabilityAuthorizer {
-    return createCapabilityAuthorizer({
-      hasAppCapability: (callerId, capability) => this.hasAppCapability(callerId, capability),
-    });
   }
 
   bakeDist(sourceOrName: string, outDir: string): AppDistBakeManifest {
@@ -1013,12 +1008,20 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     if (!build) {
       throw new Error(`Active app build is missing from the build store: ${entry.activeBundleKey}`);
     }
+    if (!entry.activeExecutionDigest) {
+      throw new Error(`Active app execution identity is missing: ${entry.name}`);
+    }
+    const execution = this.deps.buildSystem.getExecutionArtifact(entry.activeExecutionDigest);
+    if (!execution || execution.ref.executionDigest !== entry.activeExecutionDigest) {
+      throw new Error(`Active app execution artifact is missing: ${entry.activeExecutionDigest}`);
+    }
     return writeAppDistBake({
       entry,
       build: {
         metadata: appBuildMetadataForDist(entry, build.metadata),
         artifacts: appArtifactsForDist(entry, build.artifacts ?? []),
       },
+      execution,
       outDir,
       buildKey: entry.activeBundleKey,
     });
@@ -1030,7 +1033,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     branch: string;
     commit: string;
   }): Promise<{ allowed: boolean; reason?: string }> {
-    return authorizeUnitSourceChange(
+    return authorizeUnitSourceChange<AppRegistryEntry, AppGraphNode>(
       {
         descriptor: APP_UNIT_DESCRIPTOR,
         grantStore: this.sourceChangeGrants,
@@ -1045,7 +1048,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
               ? { requestedByUserId: sourceChange.caller.subject.userId }
               : {}),
             repoPath: identity.repoPath,
-            effectiveVersion: identity.effectiveVersion,
+            executionDigest: identity.executionDigest,
             dedupKey: `app-source-change:${installed.entry.name}:${sourceChange.branch}`,
             trigger: "source-change",
             title: `${installed.entry.name} app source change`,
@@ -1056,7 +1059,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
                   source: installed.node.relativePath,
                   ref: installed.entry.source.ref,
                 }),
-                ev: installed.entry.activeEv,
+                sourceDigest: installed.entry.activeSourceDigest,
               },
             ],
             configWrite: null,
@@ -1077,22 +1080,32 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       res.end("Method Not Allowed");
       return;
     }
-    if (
-      !this.registry
-        .list()
-        .some(
-          (entry) =>
-            entry.activeBundleKey === buildKey ||
-            entry.previousVersions.some((version) => version.activeBundleKey === buildKey)
-        )
-    ) {
+    const retained = this.registry
+      .list()
+      .flatMap((entry) => [
+        {
+          buildKey: entry.activeBundleKey,
+          executionDigest: entry.activeExecutionDigest,
+        },
+        ...entry.previousVersions.map((version) => ({
+          buildKey: version.activeBundleKey,
+          executionDigest: version.activeExecutionDigest,
+        })),
+      ])
+      .find((candidate) => candidate.buildKey === buildKey);
+    if (!retained?.executionDigest) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("App artifact not active");
       return;
     }
-    const build = this.deps.buildSystem.getBuildByKey?.(buildKey);
+    const execution = this.deps.buildSystem.getExecutionArtifact(retained.executionDigest);
+    if (!execution || execution.ref.executionDigest !== retained.executionDigest) {
+      res.writeHead(503, { "Content-Type": "text/plain" });
+      res.end("App execution artifact unavailable");
+      return;
+    }
     const artifactPath = normalizeArtifactPath(remainderPath || "index.html");
-    const artifact = build?.artifacts?.find((entry) => entry.path === artifactPath);
+    const artifact = execution.entries.find((entry) => entry.path === artifactPath);
     if (!artifact) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("App artifact not found");
@@ -1106,10 +1119,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
     }
-    const body =
-      artifact.encoding === "base64"
-        ? Buffer.from(artifact.content, "base64")
-        : Buffer.from(artifact.content);
+    const body = Buffer.from(artifact.bytes);
     headers["Content-Length"] = String(body.byteLength);
     res.writeHead(200, headers);
     if (req.method === "HEAD") res.end();
@@ -1286,8 +1296,12 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     try {
       if (!previous) this.registry.upsert(this.pendingEntryFor(node, decl, true));
       else this.unitHost.markBuilding(node.name);
-      const build = await this.deps.buildSystem.getBuild(node.name, decl.ref);
-      diagnostic.buildKey = path.basename(build.dir);
+      const binding = await this.deps.buildSystem.resolveExecutionArtifact(node.name, decl.ref);
+      const build = this.deps.buildSystem.getBuildByKey?.(binding.compilationCacheKey);
+      if (!build) {
+        throw new Error(`Compilation record missing for resolved app artifact: ${node.name}`);
+      }
+      diagnostic.buildKey = binding.compilationCacheKey;
       diagnostic.phase = "target-validation";
       const target = this.appTarget(node, decl);
       diagnostic.target = target;
@@ -1300,10 +1314,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         version: readPackageVersion(node.path),
         sourceRepo: node.relativePath,
         ref: decl.ref,
-        buildDir: build.dir,
-        effectiveVersion: build.metadata.ev,
+        buildKey: binding.compilationCacheKey,
+        sourceDigest: binding.artifact.source.sourceEv,
+        executionDigest: binding.artifact.executionDigest,
         activeSourceHash,
-        dependencyEvs: this.currentDependencyEvs(node),
+        dependencySourceDigests: this.currentDependencyEvs(node),
         externalDeps: this.externalDepsForBuild(node, build.metadata, decl),
         runtimeDepsKey: null,
         status: appRegistryStatusForTarget(target),
@@ -1347,7 +1362,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       this.emitAvailable(entry, {
         lifecycleType: previousRecord ? "update-available" : "available",
         previousBuildKey: previous?.activeBundleKey ?? null,
-        previousEffectiveVersion: previous?.activeEv ?? null,
+        previousSourceDigest: previous?.activeSourceDigest ?? null,
         notify: !!previousRecord,
       });
     } catch (err) {
@@ -1370,7 +1385,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     opts: {
       lifecycleType?: "available" | "update-available" | "rolled-back";
       previousBuildKey?: string | null;
-      previousEffectiveVersion?: string | null;
+      previousSourceDigest?: string | null;
       notify?: boolean;
     } = {}
   ): AppAvailablePayload {
@@ -1404,6 +1419,12 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const artifactRoute = primaryArtifact?.route ?? appArtifactRoute(buildKey, "index.html");
     const url =
       primaryArtifact?.url ?? this.getAppArtifactUrl(buildKey, entry.target, "index.html");
+    const execution = entry.activeExecutionDigest
+      ? this.deps.buildSystem.getExecutionArtifact(entry.activeExecutionDigest)
+      : null;
+    if (!execution) {
+      throw new Error(`Active app execution authority is missing: ${entry.name}`);
+    }
     const payload: AppAvailablePayload = {
       appId: entry.name,
       source: normalizeRepoPath(entry.source.repo),
@@ -1411,11 +1432,12 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       launchMode: appLaunchMode(entry.target),
       artifactRoute,
       artifacts: artifactRefs,
-      capabilities: this.effectiveCapabilities(entry),
+      capabilities: this.effectiveCapabilities(entry, execution.requested),
       buildKey: entry.activeBundleKey,
-      effectiveVersion: entry.activeEv,
+      executionDigest: entry.activeExecutionDigest,
+      authorityRequests: execution.requested,
       previousBuildKey: opts.previousBuildKey ?? null,
-      previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
+      previousSourceDigest: opts.previousSourceDigest ?? null,
       canRollback: entry.previousVersions.length > 0,
       adoptionPolicy: appAdoptionPolicy(entry.target, opts.lifecycleType ?? "available"),
       selectedForHost,
@@ -1431,9 +1453,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       source: normalizeRepoPath(entry.source.repo),
       target: entry.target,
       buildKey: entry.activeBundleKey,
-      effectiveVersion: entry.activeEv,
+      executionDigest: entry.activeExecutionDigest,
       previousBuildKey: opts.previousBuildKey ?? null,
-      previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
+      previousSourceDigest: opts.previousSourceDigest ?? null,
       canRollback: entry.previousVersions.length > 0,
       requiresReload: entry.target !== "terminal",
       adoptionPolicy: appAdoptionPolicy(entry.target, opts.lifecycleType ?? "available"),
@@ -1542,7 +1564,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       error,
       errorDetails: errorDetails ?? entry?.lastErrorDetails ?? null,
       buildKey: entry?.activeBundleKey ?? null,
-      effectiveVersion: entry?.activeEv ?? null,
+      executionDigest: entry?.activeExecutionDigest ?? null,
       canRollback: !!entry?.previousVersions?.length,
       target: entry?.target,
     });
@@ -1555,9 +1577,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     source: string;
     target?: WorkspaceAppTarget;
     buildKey?: string | null;
-    effectiveVersion?: string | null;
+    executionDigest?: string | null;
     previousBuildKey?: string | null;
-    previousEffectiveVersion?: string | null;
+    previousSourceDigest?: string | null;
     error?: string;
     errorDetails?: AppUpdateErrorDiagnostic | null;
     canRollback: boolean;
@@ -1658,10 +1680,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       return;
     }
     this.registry.patch(name, {
-      activeEv: previous.activeEv,
+      activeSourceDigest: previous.activeSourceDigest,
+      activeExecutionDigest: previous.activeExecutionDigest,
       activeSourceHash: previous.activeSourceHash,
       activeBundleKey: previous.activeBundleKey,
-      activeDependencyEvs: previous.activeDependencyEvs ?? {},
+      activeDependencySourceDigests: previous.activeDependencySourceDigests ?? {},
       activeExternalDeps: previous.activeExternalDeps ?? {},
       activeRuntimeDepsKey: previous.activeRuntimeDepsKey ?? null,
       target: previous.target,
@@ -1733,7 +1756,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       target,
       declared,
       status: entry?.status ?? "not-built",
-      activeEv: entry?.activeEv ?? null,
+      activeSourceDigest: entry?.activeSourceDigest ?? null,
       activeBundleKey: entry?.activeBundleKey ?? null,
       capabilities,
       canRollback: !!entry?.previousVersions.length,
@@ -1758,7 +1781,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   }
 
   private activateAppEntity(entry: AppRegistryEntry): void {
-    if (!this.deps.entityCache || !entry.activeEv) return;
+    if (!this.deps.entityCache || !entry.activeExecutionDigest) return;
     const existing = this.deps.entityCache.resolve(entry.name);
     const sourceRepo = normalizeRepoPath(entry.source.repo);
     // WP3 §6: the shared workspace app is ONE instance every member reads and
@@ -1775,7 +1798,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const record: EntityRecord = {
       id: entry.name,
       kind: "app",
-      source: { repoPath: sourceRepo, effectiveVersion: entry.activeEv },
+      source: { repoPath: sourceRepo },
+      activeExecutionDigest: entry.activeExecutionDigest,
       contextId,
       key: entry.name,
       createdAt: existing?.createdAt ?? Date.now(),
@@ -1827,8 +1851,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         version: readPackageVersion(node.path),
         sourceRepo: node.relativePath,
         ref: decl.ref,
-        effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-        dependencyEvs: this.currentDependencyEvs(node),
+        sourceDigest: this.deps.buildSystem.getSourceDigest(node.name),
+        dependencySourceDigests: this.currentDependencyEvs(node),
         externalDeps: this.currentExternalDeps(node, decl, this.registry.get(node.name) ?? null),
       }),
       target: this.appTarget(node, decl),
@@ -1847,8 +1871,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       name: node.name,
       sourceRepo: node.relativePath,
       ref: decl.ref,
-      effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-      dependencyEvs: this.currentDependencyEvs(node),
+      sourceDigest: this.deps.buildSystem.getSourceDigest(node.name),
+      dependencySourceDigests: this.currentDependencyEvs(node),
       externalDeps: this.currentExternalDeps(node, decl, this.registry.get(node.name) ?? null),
       capabilities: this.appCapabilities(node),
     });
@@ -1879,8 +1903,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     return this.unitHost.needsBuildRefresh(entry, {
       sourceRepo: node.relativePath,
       ref: decl.ref,
-      effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-      dependencyEvs: this.currentDependencyEvs(node),
+      sourceDigest: this.deps.buildSystem.getSourceDigest(node.name),
+      dependencySourceDigests: this.currentDependencyEvs(node),
       externalDeps: this.currentExternalDeps(node, decl, entry),
     });
   }
@@ -1985,7 +2009,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         source: normalizeRepoPath(entry.source.repo),
         target: entry.target,
         buildKey: updated.activeBundleKey,
-        effectiveVersion: updated.activeEv,
+        executionDigest: updated.activeExecutionDigest,
         error: message,
         errorDetails: diagnostic,
         canRollback: updated.previousVersions.length > 0,
@@ -2005,7 +2029,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         const node = this.findAppNode(decl.source);
         const entry = this.registry.get(node.name);
         const target = this.appTarget(node, decl);
-        const activeEv = entry?.activeEv ? shortId(entry.activeEv) : "none";
+        const activeSourceDigest = entry?.activeSourceDigest
+          ? shortId(entry.activeSourceDigest)
+          : "none";
         const activeBuild = entry?.activeBundleKey ? shortId(entry.activeBundleKey) : "none";
         const error =
           entry?.status === "error" && entry.lastError
@@ -2013,7 +2039,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
             : "";
 
         rows.push(
-          `${node.name} target=${target} source=${node.relativePath} ref=${decl.ref} status=${entry?.status ?? "uninstalled"} ev=${activeEv} build=${activeBuild}${error}`
+          `${node.name} target=${target} source=${node.relativePath} ref=${decl.ref} status=${entry?.status ?? "uninstalled"} sourceDigest=${activeSourceDigest} build=${activeBuild}${error}`
         );
       } catch (error) {
         rows.push(
@@ -2112,10 +2138,10 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   }
 
   private currentDependencyEvs(node: AppGraphNode): Record<string, string> {
-    return collectTransitiveUnitDependencyEvs(
+    return collectTransitiveUnitDependencySourceDigests(
       this.deps.buildSystem.getGraph().allNodes(),
       node,
-      (name) => this.deps.buildSystem.getEffectiveVersion(name)
+      (name) => this.deps.buildSystem.getSourceDigest(name)
     );
   }
 
@@ -2186,9 +2212,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
 }
 
 function buildProviderIdentityValue(provider: AppBuildProviderDetails): string {
-  return [provider.activeEv ?? "", provider.activeBuildKey ?? "", provider.contractVersion].join(
-    ":"
-  );
+  return [
+    provider.activeSourceDigest ?? "",
+    provider.activeBuildKey ?? "",
+    provider.contractVersion,
+  ].join(":");
 }
 
 function launchReadyResult(
@@ -2196,7 +2224,7 @@ function launchReadyResult(
   entry: AppRegistryEntry,
   available?: Pick<
     AppAvailablePayload,
-    "artifactRoute" | "capabilities" | "effectiveVersion" | "adoptionPolicy"
+    "artifactRoute" | "capabilities" | "executionDigest" | "authorityRequests" | "adoptionPolicy"
   >
 ): HostTargetLaunchResult {
   return {
@@ -2210,7 +2238,8 @@ function launchReadyResult(
       ? {
           artifactRoute: available.artifactRoute,
           capabilities: available.capabilities,
-          effectiveVersion: available.effectiveVersion,
+          executionDigest: available.executionDigest,
+          authorityRequests: available.authorityRequests,
           adoptionPolicy: available.adoptionPolicy,
         }
       : {}),
@@ -2239,10 +2268,6 @@ function requireBuildSourceStateHash(unitName: string, build: AppBuildResultLike
   throw new Error(`Build for ${unitName} is missing workspace source state provenance`);
 }
 
-function isCapabilityActiveStatus(status: AppRegistryEntry["status"]): boolean {
-  return status === "running" || status === "available";
-}
-
 function appBuildMetadataForDist(
   entry: AppRegistryEntry,
   metadata: AppBuildMetadataLike
@@ -2254,7 +2279,7 @@ function appBuildMetadataForDist(
   return {
     kind: "app",
     name: entry.name,
-    ev: metadata.ev,
+    sourceDigest: metadata.sourceDigest,
     sourceStateHash: entry.activeSourceHash,
     sourcemap: true,
     details: {
@@ -2331,10 +2356,11 @@ function appVersionRecordFromEntry(entry: AppRegistryEntry): AppVersionRecord | 
     version: entry.version,
     target: entry.target,
     capabilities: [...entry.capabilities],
-    activeEv: entry.activeEv,
+    activeSourceDigest: entry.activeSourceDigest,
+    activeExecutionDigest: entry.activeExecutionDigest,
     activeSourceHash: entry.activeSourceHash,
     activeBundleKey: entry.activeBundleKey,
-    activeDependencyEvs: { ...(entry.activeDependencyEvs ?? {}) },
+    activeDependencySourceDigests: { ...(entry.activeDependencySourceDigests ?? {}) },
     activeExternalDeps: { ...(entry.activeExternalDeps ?? {}) },
     activeRuntimeDepsKey: entry.activeRuntimeDepsKey ?? null,
     activatedAt: Date.now(),

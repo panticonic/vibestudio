@@ -13,13 +13,13 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { execFile } from "node:child_process";
 import { createServerLogStore } from "./services/serverLogStore.js";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
+import { DEV_HOST_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/devHost";
+import { domainHash, sha256 } from "@vibestudio/shared/execution/identity";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
@@ -27,9 +27,15 @@ import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
 import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
+import { ensureRuntimeFoundationStateCompatible } from "./runtimeFoundationState.js";
 import { accountProfileSchema } from "@vibestudio/service-schemas/account";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
 import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
+import {
+  authorizeVerifiedCaller,
+  verifiedCallerHasAuthority,
+} from "./services/authorityRuntime.js";
+import { getProductExecutionArtifact } from "./internalDOs/productBootManifest.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -315,8 +321,7 @@ async function main() {
   const { TokenManager } = await import("@vibestudio/shared/tokenManager");
   const { ServiceDispatcher } = await import("@vibestudio/shared/serviceDispatcher");
   const { EventService } = await import("@vibestudio/shared/eventsService");
-  const { createEventsServiceDefinition } =
-    await import("@vibestudio/service-schemas/bindings/eventsServiceDefinition");
+  const { createEventsServiceDefinition } = await import("./services/eventsService.js");
   const { getExistingAppNodeModulesRoots } = await import("@vibestudio/shared/runtimePaths");
   const eventService = new EventService();
   const { RpcServer, SYSTEM_SUBJECT } = await import("./rpcServer.js");
@@ -407,6 +412,7 @@ async function main() {
   // Set user data path to workspace state dir for env-paths compatibility
   setUserDataPath(workspace.statePath);
   const layout = stateLayout(workspace.statePath);
+  ensureRuntimeFoundationStateCompatible(workspace.statePath);
   // Structured host-log persistence next to the spawn-time stdout log.
   serverLogStore.attachJsonlSink(layout.logsDir);
 
@@ -428,13 +434,11 @@ async function main() {
   // main-binding resolve through it; there is no separate provider slot.
   const { resolveUserlandService, resolveVcsStoreBinding } = await import("./userlandServices.js");
   const {
-    resolveWorkspaceTrustGrants,
     resolveHostTargetDecl,
     resolveHostTargetRequiredExtensions,
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
   } = await import("@vibestudio/workspace/configParser");
-  const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
   const restartBoundManifestChanges = (
     previousConfig: typeof workspaceConfig,
     nextConfig: typeof workspaceConfig,
@@ -503,7 +507,6 @@ async function main() {
     workspaceDecls.singletons.replaceAll(nextDecls.singletons.all());
     workspaceDecls.services = nextDecls.services;
     workspaceDecls.routes = nextDecls.routes;
-    setWorkspaceAppTrust(resolveWorkspaceTrustGrants(authoritativeNextConfig));
     if (opts.warnRestartBoundChanges !== false) {
       for (const change of restartBoundChanges) {
         console.warn(`[WorkspaceConfig] ${change}`);
@@ -512,19 +515,11 @@ async function main() {
     return { routeSources: Array.from(routeSources).sort() };
   };
 
-  // Manifest-declared host contracts (meta/vibestudio.yml `trust`/`providers`/
-  // `hostTargets`). Loading the disk config seeds trust once; the startup
-  // protected-main sync below re-seeds it before RPC/container services start.
-  const warnMissingWorkspaceTrust = (): void => {
-    const trustGrants = resolveWorkspaceTrustGrants(workspaceConfig);
-    if (trustGrants.chromeApps.length === 0) {
-      console.warn(
-        "[Trust] meta/vibestudio.yml declares no `trust.chromeApps` — no workspace app may render host chrome"
-      );
-    }
-  };
-  /** Manifest `providers.*` env bindings for internal DO classes (workerdManager). */
-  const internalDoProviderEnv = (className: string): Record<string, string> => {
+  // Manifest-declared host contracts (`providers`/`hostTargets`). Executable
+  // authority comes only from immutable per-unit recipes and exact-source
+  // product grants.
+  /** Manifest `providers.*` bindings for exact product-seed DO artifacts. */
+  const productDoProviderEnv = (_source: string, className: string): Record<string, string> => {
     if (className === "EvalDO") {
       const env: Record<string, string> = {};
       const providers = workspaceConfig.providers;
@@ -535,10 +530,6 @@ async function main() {
       if (providers?.cdpClient?.source)
         env["EVAL_CDP_CLIENT_SOURCE"] = providers.cdpClient.source.trim();
       return env;
-    }
-    if (className === "BrowserDataDO") {
-      const broker = workspaceProviderExtensionPackageName(workspaceConfig, "browserData");
-      return broker ? { BROWSER_DATA_BROKER_ID: broker } : {};
     }
     return {};
   };
@@ -591,6 +582,55 @@ async function main() {
   // VIBESTUDIO_APP_VERSION; attach-or-spawn compares it against the current app
   // build and stops-and-respawns on mismatch (converge to current version).
   const serverVersion = process.env["VIBESTUDIO_APP_VERSION"] ?? "0.1.0";
+  // Publish the one immutable command/runtime/toolchain distribution used by
+  // every extension and native child of this exact host build.
+  const cliArtifactPath = path.join(appRoot, "dist", "cli", "client.mjs");
+  const pnpmPackageRoot = path.join(appRoot, "node_modules", "pnpm");
+  const claudePluginRoot = path.join(appRoot, "plugin", "vibestudio");
+  const pnpmEntryPath = path.join(pnpmPackageRoot, "bin", "pnpm.cjs");
+  for (const [label, artifactPath] of [
+    ["CLI", cliArtifactPath],
+    ["pnpm", pnpmEntryPath],
+    ["Claude plugin", path.join(claudePluginRoot, ".claude-plugin", "plugin.json")],
+  ] as const) {
+    if (!fs.existsSync(artifactPath)) {
+      throw new Error(
+        `Host toolchain is incomplete: ${label} artifact is missing at ${artifactPath}. ` +
+          "Build/install the exact host distribution before startup."
+      );
+    }
+  }
+  const pnpmPackage = JSON.parse(
+    fs.readFileSync(path.join(pnpmPackageRoot, "package.json"), "utf8")
+  ) as {
+    version?: unknown;
+  };
+  if (typeof pnpmPackage.version !== "string") {
+    throw new Error("Host toolchain pnpm package has no version");
+  }
+  const hostBuildId = domainHash(
+    "vibestudio/host-build/v1",
+    sha256(fs.readFileSync(cliArtifactPath)),
+    sha256(fs.readFileSync(process.execPath)),
+    sha256(fs.readFileSync(pnpmEntryPath)),
+    sha256(fs.readFileSync(path.join(claudePluginRoot, ".claude-plugin", "plugin.json"))),
+    serverVersion
+  );
+  const { HostToolchainPublisher } = await import("./hostToolchainPublisher.js");
+  const hostToolchainPublisher = new HostToolchainPublisher(statePath);
+  const hostToolchainManifest = hostToolchainPublisher.publish({
+    hostBuildId,
+    vibestudioVersion: serverVersion,
+    runtimePath: process.execPath,
+    runtimeVersion: process.version,
+    runtimeNodeMode: typeof process.versions.electron === "string",
+    cliPath: cliArtifactPath,
+    packageManagerRoot: pnpmPackageRoot,
+    packageManagerEntry: "bin/pnpm.cjs",
+    packageManagerVersion: pnpmPackage.version,
+    pluginRoot: claudePluginRoot,
+  });
+  Object.assign(process.env, hostToolchainPublisher.extensionEnvironment(process.env));
   // Host-wide background-work registry (eval runs) — read by the idle-exit
   // monitor so a detached server won't self-reap while work is in flight.
   const { createActivityRegistry } = await import("./services/activityRegistry.js");
@@ -756,13 +796,13 @@ async function main() {
   // while DO writes only start landing once the container has spun up
   // `doDispatch` (registered alongside workerdManager).
   const { createEntityTitleService } = await import("./services/entityTitleService.js");
-  const { INTERNAL_DO_SOURCE: ENTITY_TITLE_INTERNAL_DO_SOURCE } =
-    await import("./internalDOs/internalDoLoader.js");
+  const { WORKSPACE_DO_SOURCE: ENTITY_TITLE_WORKSPACE_DO_SOURCE } =
+    await import("./internalDOs/productBootManifest.js");
   let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
   const entityTitleService = createEntityTitleService({
     getDoDispatch: () => resolvedDoDispatchForTitles,
     workspaceRef: {
-      source: ENTITY_TITLE_INTERNAL_DO_SOURCE,
+      source: ENTITY_TITLE_WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: workspace.config.id,
     },
@@ -850,32 +890,7 @@ async function main() {
       },
     });
   };
-  // In pnpm dev mode, the app runs from a throwaway workspace copied from
-  // `<appRoot>/workspace`. Mirror committed workspace changes back to that
-  // template so edits made in the generated workspace persist into the source
-  // checkout.
-  const templateDir = path.join(appRoot, "workspace");
-  const isPnpmDevMode = process.env["NODE_ENV"] === "development";
-  const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "vibestudio.yml"));
-  const templateDiffersFromActive =
-    templateDir !== workspacePath && !workspacePath.startsWith(templateDir + path.sep);
-  // pnpm dev mode: mirror committed workspace changes back to the template
-  // checkout so edits persist. Hooked onto vcs state advances (see below).
-  const devTemplateMirrorDir =
-    isPnpmDevMode &&
-    process.env["VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR"] !== "1" &&
-    workspaceIsEphemeral &&
-    hasDevTemplate &&
-    templateDiffersFromActive
-      ? templateDir
-      : null;
   const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(appRoot, workspacePath);
-  if (process.env["VIBESTUDIO_DOGFOOD"] === "1") {
-    console.warn(
-      "[Dogfood] VIBESTUDIO_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
-        "commit and push changes from the source workspace instead."
-    );
-  }
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
   const configuredProtocol = "http" as const;
   // Resolve the advertised gateway before registering workerd: workerd's
@@ -1035,13 +1050,6 @@ async function main() {
         return undefined;
       }
     },
-    // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
-    // the source dir only when there is a persistent dev source to extract to.
-    // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
-    // `<appRoot>/workspace` template); the rsync mirror below then bridges the
-    // exported source dir to that checkout. Off in production ephemeral
-    // workspaces, which have no source dir. Computed just above this block.
-    extractMainToSource: devTemplateMirrorDir !== null,
     // On-behalf-of attribution for the narrow host-authored metadata publish:
     // the host mints an invocation record and threads it to the writer DO.
     vcsInvocations: vcsInvocationTable,
@@ -1124,7 +1132,6 @@ async function main() {
         `[WorkspaceConfig] Loaded startup manifest from protected main ${startupConfig.stateHash}`
       );
     }
-    warnMissingWorkspaceTrust();
   } catch (err) {
     console.warn("[WorkspaceConfig] Failed to load startup manifest from workspace state:", err);
     throw err;
@@ -1145,14 +1152,22 @@ async function main() {
             (declaration) => !criticalSources.has(declaration.source)
           ),
         ];
-        const reconcileAll = () =>
-          extensionHost
-            .reconcileDeclared(declared, { trigger })
-            .then(() => extensionHost.whenReconciled())
-            .then(() => import("@vibestudio/workspace/extensionRegistry"))
-            .then(({ writeExtensionRegistry }) => {
-              writeExtensionRegistry(workspacePath);
-            });
+        const reconcileAll = async (settleApprovals = false): Promise<void> => {
+          await extensionHost.reconcileDeclared(declared, { trigger });
+          await extensionHost.whenReconciled();
+          if (settleApprovals) {
+            // Startup declarations that need native-code approval are applied
+            // by the coordinator's background flow. The startup barrier is a
+            // provider-readiness contract, so publish the completed batch and
+            // wait for activation (or an outstanding human decision) before
+            // releasing Git/provider consumers.
+            unitApprovalCoordinator.publishPending("startup");
+            await extensionHost.whenSettled();
+          }
+          const { writeExtensionRegistry } =
+            await import("@vibestudio/workspace/extensionRegistry");
+          writeExtensionRegistry(workspacePath);
+        };
         if (trigger === "startup") {
           console.info(
             "[StartupCriticalPath] Extension builds deferred until a host target or background reconcile needs them"
@@ -1162,8 +1177,7 @@ async function main() {
             .then(() => startupLaunchWindowComplete)
             .then(() => {
               const backgroundStartedAt = Date.now();
-              return reconcileAll().then(() => {
-                unitApprovalCoordinator.publishPending("startup");
+              return reconcileAll(true).then(() => {
                 console.info(
                   `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
                 );
@@ -1223,12 +1237,8 @@ async function main() {
       })
     );
   };
-  // Workspace state advances drive source-side reactions:
-  //  - meta/ changes reload the workspace config from the advanced VCS state
-  //    and reconcile declared units
-  //  - any change invalidates the tree scanner cache
-  //  - pnpm dev mode mirrors the committed tree back to the template checkout
-  let devMirrorTimer: NodeJS.Timeout | null = null;
+  // Workspace state advances reload committed metadata and invalidate derived
+  // views. GAD is authoritative; no state is mirrored into the host checkout.
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
@@ -1275,31 +1285,6 @@ async function main() {
         })();
       });
     }
-    if (devTemplateMirrorDir) {
-      // Debounced non-destructive rsync — state advances can arrive in bursts
-      // during agent commit loops; mirror once things settle.
-      if (devMirrorTimer) clearTimeout(devMirrorTimer);
-      devMirrorTimer = setTimeout(() => {
-        devMirrorTimer = null;
-        execFile(
-          "rsync",
-          [
-            "-a",
-            "--exclude=.git",
-            "--exclude=node_modules",
-            "--exclude=.contexts",
-            "--exclude=.gad",
-            "--exclude=.cache",
-            "--exclude=.databases",
-            `${workspacePath}/`,
-            `${devTemplateMirrorDir}/`,
-          ],
-          (err) => {
-            if (err) console.warn("[DevMirror] rsync to template failed:", err.message);
-          }
-        );
-      }, 500);
-    }
   });
   // Configure declared remotes for repos already present at startup — without
   // this, remotes are only synced when a later state advance touches meta/.
@@ -1312,6 +1297,21 @@ async function main() {
   // ===========================================================================
 
   const dispatcher = new ServiceDispatcher();
+  dispatcher.setAuthorityResolver(({ caller, service, method, capability, resourceKey }) =>
+    authorizeVerifiedCaller(caller, {
+      workspaceId: entryWorkspaceId,
+      workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+      workspaceRole:
+        caller.subject && caller.subject.userId !== "system"
+          ? (userStore.getUser(caller.subject.userId)?.role ?? null)
+          : null,
+      sessionId: `${caller.runtime.id}:${service}.${method}:${randomUUID()}`,
+      audience: `service:${service}`,
+      capability,
+      resourceKey,
+      grantStore: capabilityGrantStore,
+    })
+  );
   const container = new ServiceContainer(dispatcher);
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
@@ -1497,16 +1497,17 @@ async function main() {
     Object.assign(workspaceConfig, next);
   };
   const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
+  const { GitImportJournal } = await import("./services/gitImportJournal.js");
+  const gitImportJournal = new GitImportJournal(layout.gitImportJournalFile);
   const gitInteropDefinition = createGitInteropService({
     treeScanner,
     workspacePath,
     workspaceConfig,
     invokeGitProvider: invokeGitInteropProvider,
+    importJournal: gitImportJournal,
     approvalQueue,
     grantStore: capabilityGrantStore,
     disposableRemotes: disposableGitRemotes,
-    hasAppCapability: (callerId, capability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     workspaceConfigMutationWouldChange: (mutate) => workspaceConfigWriter.wouldMutate(mutate),
     persistWorkspaceConfigMutation: async (input) => {
       const result = await workspaceConfigWriter.applyMutation(input);
@@ -1518,7 +1519,7 @@ async function main() {
       // The host only refreshes source-tree bookkeeping so a freshly cloned
       // dependency is visible to existing workspace-unit queries.
       await workspaceVcs.ensureRepoLogsFromDisk();
-      if (!importedRepoPath) return;
+      if (!importedRepoPath) return null;
       const effectiveCallerId =
         ctx.caller.runtime.kind === "extension" && ctx.chainCaller
           ? ctx.chainCaller.callerId
@@ -1530,6 +1531,7 @@ async function main() {
       if (contextId) {
         await workspaceVcs.adoptMainRepoIntoContext(contextId, importedRepoPath);
       }
+      return contextId;
     },
   });
   container.registerRpc(gitInteropDefinition);
@@ -1558,11 +1560,9 @@ async function main() {
         const repos = [...pendingGitUpstreamRepos];
         pendingGitUpstreamRepos.clear();
         try {
-          await invokeGitInteropProvider(
-            { caller: createVerifiedCaller("server", "server") },
-            "onMainAdvanced",
-            [repos]
-          );
+          await invokeGitInteropProvider({ caller: createHostCaller("server") }, "onMainAdvanced", [
+            repos,
+          ]);
           readinessAttempts = 0;
         } catch (err) {
           const code =
@@ -1593,7 +1593,7 @@ async function main() {
   const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
     try {
       const result = (await gitInteropDefinition.handler(
-        { caller: createVerifiedCaller("server", "server") },
+        { caller: createHostCaller("server") },
         "completeWorkspaceDependencies",
         []
       )) as {
@@ -1625,8 +1625,24 @@ async function main() {
       grantStore: new FileMetaApprovalGrantStore({ statePath }),
       grantTtlMs: 4 * 60 * 60 * 1000,
       capabilityGrantStore,
-      hasAppCapability: (callerId, capability) =>
-        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+      hasPanelHostingAuthority: (caller) =>
+        verifiedCallerHasAuthority(
+          caller,
+          {
+            workspaceId: entryWorkspaceId,
+            workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+            workspaceRole:
+              caller.subject && caller.subject.userId !== "system"
+                ? (userStore.getUser(caller.subject.userId)?.role ?? null)
+                : null,
+            sessionId: `main-advance:${caller.runtime.id}:${randomUUID()}`,
+            audience: "main-advance",
+            capability: "panel-hosting",
+            resourceKey: "platform:panel-hosting",
+            grantStore: capabilityGrantStore,
+          },
+          ["host", "user", "code"]
+        ),
       getProviders: () => [...trustedUnitHosts(), recurringMetaChangeProvider],
       // Host-sourced build-status line for the approval prompt (§5):
       // `build.statusAt` is a PURE per-view cache read and MUST NEVER trigger
@@ -1719,8 +1735,6 @@ async function main() {
           getDefaultRepo: () => workspaceConfig.defaultRepo,
           getBuildSystem: () => buildSystemForVcs,
           mainAdvanceGate,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           // Cross-context READ authz (throw-not-prompt): back it with WS-3's
           // relationship registry so a caller may inspect only the contexts it
           // owns (lifecycle) or forked (lineage). Resolved lazily per call — the
@@ -1756,7 +1770,7 @@ async function main() {
               error: entry.lastError,
               errorDetails: entry.lastErrorDetails ?? null,
               buildKey: entry.activeBundleKey ?? null,
-              effectiveVersion: entry.activeEv ?? null,
+              executionDigest: entry.executionDigest ?? null,
               canRollback: entry.canRollback,
               target: entry.target,
             })) ?? [],
@@ -1934,8 +1948,6 @@ async function main() {
     hasConnectedShell: () => (rpcServerForGateway?.countConnectedClients(["shell"]) ?? 0) > 0,
     getAuthorizingShell: (principalId) =>
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
-    hasAppCapability: (callerId, capability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
   });
 
   // ── serverLog service (host log inspection + live tail) ──
@@ -2091,6 +2103,21 @@ async function main() {
         };
         runtimeDefinition = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
+          resolveExecutionArtifact: (source, ref) =>
+            buildSystem.resolveExecutionArtifact(source, ref),
+          resolveExecutionArtifactByDigest: (executionDigest) => {
+            const bundle = buildSystem.getExecutionArtifact(executionDigest);
+            if (!bundle) {
+              throw new Error(`Unknown immutable execution artifact: ${executionDigest}`);
+            }
+            return {
+              unitName: bundle.ref.source.repoPath,
+              selectorPolicy: { kind: "artifact", executionDigest: bundle.ref.executionDigest },
+              artifact: bundle.ref,
+              requested: bundle.requested,
+              compilationCacheKey: bundle.ref.buildKey,
+            };
+          },
           contextFolders: contextFolderManager,
           // VCS branch lifecycle for full-workspace contexts.
           vcsContexts: {
@@ -2111,22 +2138,24 @@ async function main() {
             destroyDurableStorage: async ({ source, className, key }) => {
               await workerdManager.destroyDO({ source, className, objectKey: key });
             },
-            preparePanel: async ({ source, ref }) => {
-              if (source.startsWith("browser:")) return { effectiveVersion: "" };
-              primePanelRuntimeImage(source, ref);
-              return { effectiveVersion: buildSystem.getEffectiveVersion(source) ?? "" };
+            preparePanel: async ({ source, execution }) => {
+              if (source.startsWith("browser:")) {
+                throw new Error("Browser panels do not create code-backed runtime entities");
+              }
+              if (execution.artifact.source.repoPath !== source) {
+                throw new Error(`Panel execution source mismatch for ${source}`);
+              }
             },
-            resolveAppEffectiveVersion: async ({ source, ref }) => {
-              void ref;
-              return buildSystem.getEffectiveVersion(source) ?? "";
+            prepareApp: async ({ source, execution }) => {
+              if (execution.artifact.source.repoPath !== source) {
+                throw new Error(`App execution source mismatch for ${source}`);
+              }
             },
             onRetire: async (record) => {
               await cleanupRuntimeEntityRecord(record);
             },
           },
           contextBoundary: contextBoundaryDeps,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           setEntityTitle: (entityId, title, options) =>
             entityTitleService.setTitle(entityId, title, options),
           // Agent credentials follow the entity (§3.2): on retire, revoke all
@@ -2155,7 +2184,7 @@ async function main() {
   // ── Generic public webhook ingress ──
   {
     const { createWebhookIngressService } = await import("./services/webhookIngressService.js");
-    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+    const { EVAL_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.registerManaged({
       name: "webhookIngress",
@@ -2187,7 +2216,7 @@ async function main() {
             // ergonomic runtime calls. Both the class/source and owner lineage
             // are server-authored entity state; no request value participates.
             if (
-              record?.source.repoPath !== INTERNAL_DO_SOURCE ||
+              record?.source.repoPath !== EVAL_DO_SOURCE ||
               record.className !== "EvalDO" ||
               typeof ownerPrincipalId !== "string" ||
               record.parentId !== ownerPrincipalId
@@ -2208,8 +2237,6 @@ async function main() {
             call: (targetId, method, ...args) =>
               rpcServer.server.callTarget(targetId, method, ...args),
           },
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           dispatchToTarget: async (target, event) => {
             await rpcServer.server.callTarget(
               `do:${target.source}:${target.className}:${target.objectKey}`,
@@ -2406,6 +2433,12 @@ async function main() {
       const server = new RpcServer({
         tokenManager,
         dispatcher,
+        workspaceId: workspace.config.id,
+        directCodeGrant: ({ caller, source, className }) => {
+          if (source !== "product/browser-data" || className !== "BrowserDataDO") return true;
+          const provider = workspaceProviderExtensionPackageName(workspaceConfig, "browserData");
+          return provider !== null && caller.runtime.id === provider;
+        },
         eventService,
         egressProxy,
         fsService,
@@ -2487,6 +2520,13 @@ async function main() {
           extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
         resolveExtensionCodeIdentity: (extensionName) =>
           extensionHostForGateway?.resolveCodeIdentity(extensionName) ?? null,
+        resolveExecutionRequests: (executionDigest) =>
+          getProductExecutionArtifact(executionDigest)?.requested ??
+          container
+            .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+            .getExecutionArtifact(executionDigest)?.requested ??
+          null,
+        capabilityGrantStore,
         // On-behalf-of tokens for userland vcs-DO dispatches (§4): the relay
         // mints one per dispatch to the single-writer DO; refs.updateMains
         // resolves it against the SAME table.
@@ -2569,7 +2609,7 @@ async function main() {
             listActiveEntities: () => entityCache.listActive(),
             retireEntity: async (id) => {
               await dispatcher.dispatch(
-                { caller: createVerifiedCaller("server", "server") },
+                { caller: createHostCaller("server") },
                 "runtime",
                 "retireEntity",
                 [{ id, removeContext: true }]
@@ -2579,7 +2619,7 @@ async function main() {
           userId
         );
         const archived = (await dispatcher.dispatch(
-          { caller: createVerifiedCaller("server", "server") },
+          { caller: createHostCaller("server") },
           "panelTree",
           "archiveOwnedRoots",
           [userId]
@@ -2983,6 +3023,7 @@ async function main() {
         providerSlots: WORKSPACE_EXTENSION_PROVIDER_NAMES,
         hostProviderContracts: {
           gitInterop: GIT_INTEROP_PROVIDER_METHOD_NAMES,
+          devHost: DEV_HOST_PROVIDER_METHOD_NAMES,
         },
         onWorkspaceUnitsChanged: (reason) =>
           hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason),
@@ -3015,6 +3056,279 @@ async function main() {
       return instance.createServiceDefinition();
     },
   });
+
+  // ── Exact-state in-workspace host development ──
+  {
+    const { ExecutionSnapshotService } = await import("./execution/executionSnapshotService.js");
+    const { getBytes: readExecutionBlob } = await import("./services/blobstoreService.js");
+    const { createDevHostService, DevHostSourceWatcher } =
+      await import("./services/devHostService.js");
+    const { requestCapabilityPermission } = await import("./services/capabilityPermission.js");
+    const { contextIdFromVcsHead, vcsContextHead } = await import("./vcsHost/paths.js");
+    const executionSnapshots = new ExecutionSnapshotService({
+      root: layout.executionSnapshotsDir,
+      listStateFiles: async (stateHash) =>
+        (await workspaceVcs.worktrees.listStateFiles(stateHash)).map((file) => ({
+          path: file.path,
+          contentHash: file.content_hash,
+          mode: file.mode,
+        })),
+      readBlob: (contentHash) => readExecutionBlob(layout.blobsDir, contentHash),
+      verifyStateFiles: async (stateHash) => workspaceVcs.worktrees.ensureStateMirrored(stateHash),
+    });
+    const devHostProvider = (
+      ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext
+    ): import("./services/devHostService.js").DevHostProvider => ({
+      prepare: async (input) =>
+        (await assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "prepare", [
+          input,
+        ])) as Awaited<
+          ReturnType<import("./services/devHostService.js").DevHostProvider["prepare"]>
+        >,
+      failPreparation: async (input, failure) =>
+        (await assertPresent(extensionHostForGateway).invokeProvider(
+          ctx,
+          "devHost",
+          "failPreparation",
+          [input, failure]
+        )) as import("@vibestudio/service-schemas/devHost").DevLaunchStatus,
+      launch: async (input) =>
+        (await assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "launch", [
+          input,
+        ])) as import("@vibestudio/service-schemas/devHost").DevLaunchStatus,
+      status: async () =>
+        (await assertPresent(extensionHostForGateway).invokeProvider(
+          ctx,
+          "devHost",
+          "status",
+          []
+        )) as import("@vibestudio/service-schemas/devHost").DevLaunchStatus[],
+      rebuild: async (input) =>
+        (await assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "rebuild", [
+          input,
+        ])) as Awaited<
+          ReturnType<import("./services/devHostService.js").DevHostProvider["rebuild"]>
+        >,
+      stop: async (launchId) =>
+        (await assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "stop", [
+          launchId,
+        ])) as { launchId: string; stopped: boolean },
+      eval: (launchId, code) =>
+        assertPresent(extensionHostForGateway).invokeProvider(ctx, "devHost", "eval", [
+          launchId,
+          code,
+        ]),
+      logs: (launchId, after) =>
+        assertPresent(extensionHostForGateway).invokeProviderStream(ctx, "devHost", "logs", [
+          launchId,
+          after,
+        ]),
+      watch: (launchId, after) =>
+        assertPresent(extensionHostForGateway).invokeProviderStream(ctx, "devHost", "watch", [
+          launchId,
+          after,
+        ]),
+    });
+    const resolveDevHostSource = async (contextId: string) => {
+      const stateHash = await workspaceVcs.contextRepoState(contextId, "projects/vibestudio");
+      if (!stateHash) {
+        throw new Error(
+          `Context ${contextId} does not contain the canonical projects/vibestudio repository`
+        );
+      }
+      const status = await workspaceVcs.statusHead(
+        vcsContextHead(contextId),
+        "projects/vibestudio"
+      );
+      return { stateHash, dirtyCount: status.uncommitted };
+    };
+    const createDevHostSnapshot = async ({
+      stateHash,
+      target,
+    }: {
+      stateHash: string;
+      target: import("@vibestudio/service-schemas/devHost").DevHostTarget;
+    }) => {
+      const recipe = {
+        target: `dev-host:${target.kind}:${"client" in target ? target.client : "none"}`,
+        platform: process.platform,
+        architecture: process.arch,
+        abi: process.versions.modules ?? null,
+        options: target,
+        toolchain: {
+          digest: hostToolchainManifest.manifestDigest,
+          components: {
+            runtime: hostToolchainManifest.runtime.digest,
+            cli: hostToolchainManifest.cli.digest,
+            packageManager: hostToolchainManifest.packageManager.digest,
+          },
+        },
+        dependencyGraph: {
+          digest: domainHash("vibestudio/dev-host-dependency-graph/v1", stateHash),
+        },
+        builderDigest: domainHash(
+          "vibestudio/dev-host-builder/v1",
+          hostBuildId,
+          hostToolchainManifest.manifestDigest
+        ),
+        declaredEnvironment: { CI: "1", NODE_ENV: "production" },
+      } satisfies import("@vibestudio/shared/execution/identity").BuildRecipe;
+      return executionSnapshots.create({
+        source: { repoPath: "projects/vibestudio", stateHash },
+        recipe,
+      });
+    };
+    const devHostDefinition = createDevHostService({
+      workspaceId: workspace.config.id,
+      resolveCallerContext: (callerId) => entityCache.resolveContext(callerId),
+      resolveSource: resolveDevHostSource,
+      createSnapshot: createDevHostSnapshot,
+      releaseSnapshot: (snapshot) => executionSnapshots.release(snapshot),
+      prepareCurrentHostClient: async (ctx, snapshot) => {
+        const contractSource = fs.readFileSync(
+          path.join(
+            snapshot.sourceRoot,
+            "packages",
+            "rpc",
+            "src",
+            "protocol",
+            "contractVersion.ts"
+          ),
+          "utf8"
+        );
+        const match = /RPC_CONTRACT_VERSION\s*=\s*([0-9]+)\s+as const/.exec(contractSource);
+        const capturedContract = match?.[1];
+        const candidateContract = capturedContract
+          ? Number.parseInt(capturedContract, 10)
+          : Number.NaN;
+        const { RPC_CONTRACT_VERSION } = await import("@vibestudio/rpc/protocol/contractVersion");
+        if (candidateContract !== RPC_CONTRACT_VERSION) {
+          throw new Error(
+            `Current-host client RPC contract ${String(candidateContract)} is incompatible with ` +
+              `host contract ${RPC_CONTRACT_VERSION}; use an isolated-host target`
+          );
+        }
+        const result = (await dispatcher.dispatch(ctx, "hubControl", "pairDevice", [{}])) as {
+          pairing?: unknown;
+        };
+        const { HubPairingInviteSchema } = await import("@vibestudio/service-schemas/hubControl");
+        return {
+          invite: HubPairingInviteSchema.parse(result.pairing),
+          expectedHost: {
+            serverId: deviceAuthStore.getServerId(),
+            workspaceId: workspace.config.id,
+          },
+          rpcContractVersion: RPC_CONTRACT_VERSION,
+        };
+      },
+      authorize: async ({ ctx, capability, resource, executionInputHash }) => {
+        if (capability === "devHost.admin") {
+          if (!ctx.authority) {
+            throw new Error("Compositional authority is unavailable for devHost.admin");
+          }
+          const {
+            allOf,
+            anyOf,
+            capability: requireCapability,
+            relationship,
+          } = await import("@vibestudio/shared/authorization");
+          await ctx.authority.assert({
+            capability,
+            resourceKey: resource,
+            requirement: anyOf(
+              requireCapability("host", capability),
+              allOf(
+                requireCapability("user", capability),
+                anyOf(
+                  relationship("workspace-role", "root"),
+                  relationship("workspace-role", "admin")
+                )
+              )
+            ),
+          });
+          return;
+        }
+        if (!ctx.authority) {
+          throw new Error(`Compositional authority is unavailable for ${capability}`);
+        }
+        const { allOf, relationship, requirementForPrincipals } =
+          await import("@vibestudio/shared/authorization");
+        await ctx.authority.assert({
+          capability,
+          resourceKey: resource,
+          requirement: allOf(
+            requirementForPrincipals(["host", "user", "code", "entity"], capability),
+            relationship("workspace-member")
+          ),
+        });
+        if (!executionInputHash) return;
+        if (!ctx.caller.code) {
+          throw new (await import("@vibestudio/shared/serviceDispatcher")).ServiceError(
+            "devHost",
+            capability.split(".").at(-1) ?? "authorize",
+            "Development host operations require host-verified exact code identity",
+            "EACCES"
+          );
+        }
+        const result = await requestCapabilityPermission(
+          { approvalQueue, grantStore: capabilityGrantStore },
+          {
+            caller: ctx.caller,
+            capability: "dev-host-execute",
+            severity: "severe",
+            resource: {
+              type: "execution-input",
+              label: "Exact Vibestudio development build",
+              value: `${resource}/execution:${executionInputHash}`,
+              key: `${resource}/execution:${executionInputHash}`,
+            },
+            title: "Build and run this Vibestudio source state?",
+            description:
+              "Runs pnpm bootstrap:frozen and pnpm build, then starts the selected target with your local OS authority.",
+            details: [
+              { label: "Execution input", value: executionInputHash },
+              { label: "Commands", value: "pnpm bootstrap:frozen\npnpm build", format: "code" },
+              {
+                label: "Isolation",
+                value: "Process and credential isolation; not an OS security sandbox",
+              },
+            ],
+            deniedReason: "Development build execution was not approved",
+          }
+        );
+        if (!result.allowed) {
+          throw new (await import("@vibestudio/shared/serviceDispatcher")).ServiceError(
+            "devHost",
+            capability.split(".").at(-1) ?? "authorize",
+            result.reason ?? "Development host capability denied",
+            "EACCES"
+          );
+        }
+      },
+      provider: devHostProvider,
+    });
+    container.registerRpc(devHostDefinition);
+    const sourceWatcher = new DevHostSourceWatcher({
+      provider: devHostProvider({ caller: createHostCaller("server") }),
+      resolveSource: resolveDevHostSource,
+      createSnapshot: createDevHostSnapshot,
+      releaseSnapshot: (snapshot) => executionSnapshots.release(snapshot),
+      onError: (contextId, error) => {
+        console.warn(
+          `[devHost:${contextId}] Failed to prepare the latest canonical source candidate:`,
+          error
+        );
+      },
+    });
+    const notifyDevHostSourceAdvance = (head: string, repoPath: string) => {
+      if (repoPath !== "projects/vibestudio" || !head.startsWith("ctx:")) return;
+      sourceWatcher.notify(contextIdFromVcsHead(head));
+    };
+    workspaceVcs.onStateAdvanced((event) => notifyDevHostSourceAdvance(event.head, event.repoPath));
+    workspaceVcs.onWorkingAdvanced((event) =>
+      notifyDevHostSourceAdvance(event.head, event.repoPath)
+    );
+  }
 
   // ── Workers RPC service ──
 
@@ -3085,9 +3399,9 @@ async function main() {
       }
       return;
     }
-    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+    const { WORKSPACE_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
     const workspaceDORef: import("@vibestudio/shared/doDispatcher").DORef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_DO_SOURCE,
       className: "WorkspaceDO",
       objectKey: workspace.config.id,
     };
@@ -3113,19 +3427,20 @@ async function main() {
       createHash("sha256")
         .update(`${workspace.config.id}\x00${source}\x00${className}\x00${objectKey}`)
         .digest("hex");
+    const execution = await workerdManagerInst.resolveExecution(source, buildRef);
     const prepared = await workerdManagerInst.ensureDurableObjectEntity({
       source,
+      execution,
       className,
       key: objectKey,
       contextId,
-      ref: buildRef,
     });
     const record = (await doDispatch.dispatch(workspaceDORef, "entityActivate", {
       kind: "do",
       source: {
         repoPath: source,
-        effectiveVersion: existing?.source.effectiveVersion ?? prepared.effectiveVersion,
       },
+      activeExecutionDigest: prepared.executionDigest,
       contextId,
       className,
       key: objectKey,
@@ -3264,7 +3579,7 @@ async function main() {
       externalHost: hostConfig.externalHost,
       configuredAliases: process.env["VIBESTUDIO_GATEWAY_ALIASES"],
     },
-    getInternalDoEnv: internalDoProviderEnv,
+    getProductDoEnv: productDoProviderEnv,
     runtimeDiagnostics,
     eventService,
     onManagerStarted: (manager) => {
@@ -3385,6 +3700,12 @@ async function main() {
     container,
     dispatcher,
     entityCache,
+    resolveExecutionRequests: (executionDigest: string) =>
+      getProductExecutionArtifact(executionDigest)?.requested ??
+      container
+        .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        .getExecutionArtifact(executionDigest)?.requested ??
+      null,
     connectionGrants,
     workspace,
     activeWorkspaceName: advertisedWorkspaceName ?? workspaceName,
@@ -3411,12 +3732,6 @@ async function main() {
     hostConfig,
     tokenManager,
     grantStore: capabilityGrantStore,
-    hasAppCapability: (callerId: string, capability: AppCapability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    // Live role lookup from the shared identity DB — gates host-administrative
-    // workspace.* methods to root/admin (WP4 §4). Read at call time, never
-    // frozen onto the connection.
-    roleOf: (userId: string) => userStore.getUser(userId)?.role ?? null,
     contextExists: contextBoundaryDeps.contextExists,
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
     panelRuntimeCoordinator,
@@ -3459,7 +3774,7 @@ async function main() {
               source: node.relativePath,
               displayName: node.manifest.displayName ?? node.name,
               status: "stopped",
-              ev: buildSystem?.getEffectiveVersion(node.name) ?? null,
+              sourceDigest: buildSystem?.getSourceDigest(node.name) ?? null,
               lastError: null,
               health: null,
               methods: [],
@@ -3489,7 +3804,7 @@ async function main() {
               ? "error"
               : "available",
           lastError: workerLastError?.message ?? null,
-          ev: workerInstance?.buildKey ?? buildSystem?.getEffectiveVersion(node.name) ?? null,
+          sourceDigest: buildSystem?.getSourceDigest(node.name) ?? null,
           inspectorUrl: workerInstance
             ? (workerdManagerForGateway?.getWorkerInspectorUrl(workerInstance.source) ?? null)
             : null,
@@ -3681,9 +3996,9 @@ async function main() {
     listRecurringJobs: () => recurringRegistryInstance?.listJobs() ?? [],
     listHeartbeats: async () => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+      const { WORKSPACE_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3727,9 +4042,9 @@ async function main() {
           }
     ) => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+      const { WORKSPACE_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3758,9 +4073,9 @@ async function main() {
           }
     ) => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+      const { WORKSPACE_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3789,9 +4104,9 @@ async function main() {
           }
     ) => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+      const { WORKSPACE_DO_SOURCE } = await import("./internalDOs/productBootManifest.js");
       const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
+        { source: WORKSPACE_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
         "heartbeatList"
       )) as Array<{
         name: string;
@@ -3887,9 +4202,9 @@ async function main() {
       slotStateListeners.add(listener);
       return () => slotStateListeners.delete(listener);
     },
-    getEffectiveVersion: async (source: string) => {
+    getSourceDigest: async (source: string) => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      return buildSystem?.getEffectiveVersion(source) ?? undefined;
+      return buildSystem?.getSourceDigest(source) ?? undefined;
     },
   };
   await registerPanelServices(commonDeps);
@@ -3981,8 +4296,6 @@ async function main() {
           },
           connectionGrants,
           auditLog,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           ensureMobileAppReady: (source) =>
             hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing(source),
           getMobileAppBootstrap: async (source) =>
@@ -4038,6 +4351,13 @@ async function main() {
     tokenManager,
     connectionGrants,
     entityCache,
+    resolveExecutionRequests: (executionDigest: string) =>
+      getProductExecutionArtifact(executionDigest)?.requested ??
+      (container.has("buildSystem")
+        ? (container
+            .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+            .getExecutionArtifact(executionDigest)?.requested ?? null)
+        : null),
     routeRegistry,
     healthProvider: (detailed) => {
       const base: Record<string, unknown> = {
@@ -4112,8 +4432,6 @@ async function main() {
         workerdInspectorDefinition = createWorkerdInspectorService({
           approvalQueue,
           grantStore: capabilityGrantStore,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           listTargets: () => bridge.listTargets(),
           getEndpoint: (targetPath, principalId) => bridge.getEndpoint(targetPath, principalId),
         });
@@ -4195,9 +4513,9 @@ async function main() {
   if (rpcServerForGateway) {
     try {
       const { startWebRtcIngress } = await import("./webrtcIngress.js");
-      const { ensurePersistentCert } = await import("../node/webrtc/cert.js");
+      const { ensurePersistentCert } = await import("@vibestudio/direct-client/cert");
       const { assertNodeDatachannelAvailable } =
-        await import("../node/webrtc/nodeDatachannelPeer.js");
+        await import("@vibestudio/direct-client/node-webrtc");
       assertNodeDatachannelAvailable();
       const pathMod = await import("node:path");
       const certDir = pathMod.join(appRoot, ".vibestudio", "webrtc");
@@ -4281,7 +4599,7 @@ async function main() {
   // ===========================================================================
   const doDispatchForBootstrap = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
   const workspaceDORefForBootstrap: import("@vibestudio/shared/doDispatcher").DORef = {
-    source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
+    source: (await import("./internalDOs/productBootManifest.js")).WORKSPACE_DO_SOURCE,
     className: "WorkspaceDO",
     objectKey: workspace.config.id,
   };
@@ -4345,16 +4663,21 @@ async function main() {
       });
       declaredKeys.add(targetId);
       try {
+        const execution = await workerdManager.resolveExecution(
+          decl.source,
+          decl.contextId ? undefined : "main"
+        );
         const prepared = await workerdManager.ensureDurableObjectEntity({
           source: decl.source,
+          execution,
           className: decl.className,
           key: decl.key,
           contextId,
-          ref: decl.contextId ? undefined : "main",
         });
         const record = await dispatchWorkspaceDO<EntityRecord>("entityActivate", {
           kind: "do",
-          source: { repoPath: decl.source, effectiveVersion: prepared.effectiveVersion },
+          source: { repoPath: decl.source },
+          activeExecutionDigest: prepared.executionDigest,
           contextId,
           className: decl.className,
           key: decl.key,

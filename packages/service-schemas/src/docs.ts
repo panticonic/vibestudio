@@ -30,7 +30,7 @@ export const catalogEntrySchema = z.object({
   parent: z.string().optional(),
   title: z.string(),
   description: z.string().optional(),
-  /** Access/restrictedness (callers, restrictedTo, sensitivity, approval, …). */
+  /** Access/restrictedness and authority-principal discovery metadata. */
   access: catalogAccessSchema.optional(),
   argsSchema: z.record(z.unknown()).optional(),
   returnsSchema: z.record(z.unknown()).optional(),
@@ -69,14 +69,46 @@ const READONLY_ACCESS = {
 // ── Serialized service-definition shapes (absorbed from the retired `meta`
 // service): the per-service view used by docs.listServices / docs.describeService
 // and by eval's help() + the CLI `services` command. ──
-const serializedPolicySchema = z.object({
-  allowed: z.array(z.string()),
+const serializedAuthoritySchema = z.object({
+  principals: z.array(z.enum(["host", "user", "device", "code", "entity"])),
   description: z.string().optional(),
 });
 
+const serializedRequirementSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.object({
+      kind: z.literal("capability"),
+      principal: z.enum(["host", "user", "device", "code", "entity"]),
+      capability: z.string(),
+      delegation: z
+        .object({ audience: z.string(), purpose: z.string(), issuer: z.string().optional() })
+        .optional(),
+    }),
+    z.object({ kind: z.literal("relationship"), name: z.string(), value: z.string().optional() }),
+    z.object({ kind: z.literal("session"), audience: z.string().optional(), minVersion: z.string().optional() }),
+    z.object({ kind: z.enum(["all", "any"]), requirements: z.array(serializedRequirementSchema) }),
+  ])
+);
+
+const serializedMethodAuthoritySchema = z.union([
+  serializedAuthoritySchema,
+  z.object({
+    requirement: serializedRequirementSchema,
+    resource: z.union([
+      z.object({ kind: z.literal("literal"), key: z.string() }),
+      z.object({
+        kind: z.literal("argument"),
+        index: z.number().int().nonnegative(),
+        path: z.array(z.union([z.string(), z.number()])).optional(),
+        prefix: z.string().optional(),
+      }),
+    ]),
+  }),
+]);
+
 export const serializedServiceMethodSchema = z.object({
   description: z.string().optional(),
-  policy: serializedPolicySchema.optional(),
+  authority: serializedMethodAuthoritySchema.optional(),
   access: z.record(z.unknown()).optional(),
   examples: z.array(z.unknown()).optional(),
   errors: z.array(z.unknown()).optional(),
@@ -88,7 +120,7 @@ export const serializedServiceMethodSchema = z.object({
 export const serializedServiceSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
-  policy: serializedPolicySchema,
+  authority: serializedAuthoritySchema,
   methods: z.record(serializedServiceMethodSchema),
 });
 export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema>;
@@ -96,7 +128,7 @@ export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema
 export const docsMethods = defineServiceMethods({
   search: {
     description:
-      "Search the capability catalog (services and runtime APIs) by keyword. Results are filtered to what the calling kind may invoke. Use docs.describe(id) for the full typed schema, access rules, and examples.",
+      "Search the capability catalog (services and runtime APIs) by keyword. Results are filtered by available runtime surface and authority principal shape. Use docs.describe(id) for the full typed schema, authority requirements, and examples.",
     args: z.tuple([z.string(), searchOptsSchema]),
     returns: z.array(catalogHitSchema),
     access: READONLY_ACCESS,
@@ -129,14 +161,14 @@ export const docsMethods = defineServiceMethods({
   },
   listServices: {
     description:
-      "List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...).",
+      "List registered RPC services and their methods with JSON-Schema args/returns and compositional authority declarations.",
     args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
     returns: z.array(serializedServiceSchema),
     access: READONLY_ACCESS,
   },
   describeService: {
     description:
-      "Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service.",
+      "Describe one registered RPC service by name, including each method's compositional authority and JSON-Schema contract. Returns null for an unknown service.",
     args: z.tuple([z.string()]),
     returns: serializedServiceSchema.nullable(),
     access: READONLY_ACCESS,

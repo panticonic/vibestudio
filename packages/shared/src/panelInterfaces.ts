@@ -12,6 +12,13 @@
  */
 
 import type { AppCapability } from "./unitManifest.js";
+import type { CapabilityScope } from "@vibestudio/rpc";
+
+export interface HostedAppIdentity {
+  source?: string;
+  executionDigest?: string | null;
+  requested?: readonly CapabilityScope[];
+}
 import type { PanelLifecycleResult } from "./types.js";
 
 /**
@@ -86,13 +93,13 @@ export interface PanelViewLike {
     url: string,
     contextId?: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedAppIdentity
   ): Promise<void>;
   updateAppView?(
     appId: string,
     url: string,
     capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    identity?: HostedAppIdentity
   ): Promise<void>;
   createViewForBrowser?(panelId: string, url: string, contextId: string): Promise<void>;
   hasView(panelId: string): boolean;

@@ -10,6 +10,8 @@ import {
 } from "./webhookIngressService.js";
 import type { RelayWebhookFrame } from "./relayBackhaulClient.js";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceContext } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { WEBHOOK_STORE_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 import type {
   CreateWebhookIngressSubscriptionRequest,
   WebhookDeliveryEvent,
@@ -22,29 +24,37 @@ const RELAY_BASE_URL = "https://hooks.test";
 const DIRECT_BASE_URL = "https://direct.test";
 
 function shellCtx(callerId = "shell"): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "shell") };
+  return createTestServiceContext(createVerifiedCaller(callerId, "shell"));
 }
 
 function panelCtx(callerId: string): ServiceContext {
-  return {
-    caller: createVerifiedCaller(callerId, "panel", {
+  return createTestServiceContext(
+    createVerifiedCaller(callerId, "panel", {
       callerId,
       callerKind: "panel",
       repoPath: TARGET.source,
-      effectiveVersion: "ev-test",
-    }),
-  };
+      executionDigest: "ev-test",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    })
+  );
 }
 
 function _workerCtx(callerId: string): ServiceContext {
-  return {
-    caller: createVerifiedCaller(callerId, "worker", {
+  return createTestServiceContext(
+    createVerifiedCaller(callerId, "worker", {
       callerId,
       callerKind: "worker",
       repoPath: TARGET.source,
-      effectiveVersion: "ev-test",
-    }),
-  };
+      executionDigest: "ev-test",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    })
+  );
 }
 
 const TARGET: WebhookTarget = {
@@ -185,7 +195,7 @@ describe("webhookIngressService — RPC surface", () => {
     await expect(svc.definition.handler(shellCtx(), "listSubscriptions", [])).resolves.toEqual([]);
     expect(dispatch).toHaveBeenCalledWith(
       {
-        source: "vibestudio/internal",
+        source: WEBHOOK_STORE_DO_SOURCE,
         className: "WebhookStoreDO",
         objectKey: "global",
       },
@@ -203,14 +213,18 @@ describe("webhookIngressService — RPC surface", () => {
         : null
     );
     const { svc, store } = setup({ resolveDelegatedCaller });
-    const ctx: ServiceContext = {
-      caller: createVerifiedCaller(evalId, "do", {
+    const ctx = createTestServiceContext(
+      createVerifiedCaller(evalId, "do", {
         callerId: evalId,
         callerKind: "do",
         repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
-      }),
-    };
+        executionDigest: "internal",
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
+      })
+    );
 
     const created = (await svc.definition.handler(ctx, "createSubscription", [
       {
@@ -340,14 +354,18 @@ describe("webhookIngressService — RPC surface", () => {
 
   it("rejects targets that do not match the caller source for non-shell callers", async () => {
     const { svc } = setup();
-    const wrongSourceCtx: ServiceContext = {
-      caller: createVerifiedCaller("worker:1", "worker", {
+    const wrongSourceCtx = createTestServiceContext(
+      createVerifiedCaller("worker:1", "worker", {
         callerId: "worker:1",
         callerKind: "worker",
         repoPath: "workers/elsewhere",
-        effectiveVersion: "ev-test",
-      }),
-    };
+        executionDigest: "ev-test",
+        requested: [
+          { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+          { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+        ],
+      })
+    );
     await expect(
       svc.definition.handler(wrongSourceCtx, "createSubscription", [
         {

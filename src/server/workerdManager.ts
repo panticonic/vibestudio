@@ -16,13 +16,20 @@ import { createRequire } from "module";
 import * as path from "path";
 import * as os from "os";
 import { stateLayout } from "./stateLayout.js";
+import { writeJsonFileAtomic } from "./hostCore/atomicFile.js";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "@vibestudio/shared/fsService";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
-import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
-import type { RuntimeImageBinding, StateAdvancedEvent } from "./buildV2/index.js";
+import type { ResolvedExecutionBinding, StateAdvancedEvent } from "./buildV2/index.js";
+import type {
+  ArtifactBundleEntry,
+  ExecutionArtifactRef,
+  ExecutionSelector,
+} from "@vibestudio/shared/execution/identity";
+import type { CapabilityScope } from "@vibestudio/rpc";
+import type { Principal } from "@vibestudio/rpc";
 import { validateBuildRef } from "./buildV2/refs.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
 import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
@@ -31,10 +38,17 @@ import {
   getPhysicalPathForAsarPath,
   getPlatformPackageBinaryPath,
 } from "@vibestudio/shared/runtimePaths";
-import { getInternalDOBundle, isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import {
+  getBootstrapBundle,
+  isBootstrapDoSource,
+  requiresStaticDoHost,
+} from "./internalDOs/productBootManifest.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
-import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
+import {
+  RuntimeIncarnationStore,
+  type RuntimeIncarnationRecord,
+} from "./runtimeIncarnationStore.js";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
 
 const log = createDevLogger("WorkerdManager");
@@ -46,12 +60,12 @@ const WORKERD_STARTUP_OUTPUT_LINES = 40;
 declare const __filename: string | undefined;
 declare const __dirname: string | undefined;
 
-export class RuntimeImageWarmingError extends Error {
-  readonly code = "RUNTIME_IMAGE_WARMING" as const;
+export class RuntimeIncarnationPreparingError extends Error {
+  readonly code = "RUNTIME_INCARNATION_PREPARING" as const;
 }
 
-export class RuntimeImageUnavailableError extends Error {
-  readonly code = "RUNTIME_IMAGE_UNAVAILABLE" as const;
+export class ExecutionArtifactUnavailableError extends Error {
+  readonly code = "EXECUTION_ARTIFACT_UNAVAILABLE" as const;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -70,6 +84,22 @@ function explicitScopeRef(explicitRef?: string): string | undefined {
   return explicitRef && explicitRef.length > 0
     ? assertPresent(validateBuildRef(explicitRef))
     : undefined;
+}
+
+function selectorScopeRef(selector: ExecutionSelector): string | undefined {
+  if (selector.kind === "head") {
+    return selector.head === "main" ? undefined : `ctx:${selector.head.contextId}`;
+  }
+  if (selector.kind === "state") return `state:${selector.stateHash}`;
+  return `artifact:${selector.executionDigest}`;
+}
+
+function assertExecutionSource(source: string, execution: ResolvedExecutionBinding): void {
+  if (execution.artifact.source.repoPath !== source) {
+    throw new Error(
+      `Execution artifact source ${execution.artifact.source.repoPath} does not match launch source ${source}`
+    );
+  }
 }
 
 function scopeTracksHead(scopeRef: string | undefined, head: string): boolean {
@@ -113,6 +143,15 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+function primaryTextExecutionArtifact(entries: readonly ArtifactBundleEntry[]): string {
+  const primary = entries.find((entry) => entry.role === "primary");
+  if (!primary) throw new Error("Execution artifact has no primary output");
+  if (!primary.contentType.startsWith("text/") && !primary.contentType.includes("javascript")) {
+    throw new Error(`Primary execution artifact is not text: ${primary.path}`);
+  }
+  return Buffer.from(primary.bytes).toString("utf8");
+}
+
 /** DO reference — matches DORef from @workspace/runtime/worker. */
 interface DORef {
   source: string;
@@ -120,10 +159,14 @@ interface DORef {
   objectKey: string;
 }
 
+interface PendingDoStorageDeletes {
+  version: 1;
+  refs: DORef[];
+}
+
 interface DOService {
-  buildKey: string;
   className: string;
-  imageId?: string;
+  logicalEntityId?: string;
   serviceName: string;
   source: string;
   /** Class-level/default follower scope. Object-specific scopes live in doObjectBuilds. */
@@ -131,8 +174,7 @@ interface DOService {
 }
 
 interface DOObjectBuild {
-  buildKey: string;
-  imageId: string;
+  logicalEntityId: string;
   scopeRef?: string;
   stateArgs?: Record<string, unknown>;
 }
@@ -214,11 +256,8 @@ export interface WorkerInstance {
   env: Record<string, string>;
   bindings: Record<string, WorkerBinding>;
   stateArgs?: Record<string, unknown>;
-  buildKey?: string;
-  /** Signed effective version of the bound image — the identity egress/approval
-   *  scoping must use (buildKey is the artifact key, not the signed EV). */
-  effectiveVersion?: string;
-  runtimeImageId: string;
+  executionDigest?: string;
+  logicalEntityId: string;
   /** Head/state this instance follows. The loader never resolves it. */
   scopeRef?: string;
   /** Monotonic version bumped on every create/update. The dynamic worker host
@@ -230,6 +269,8 @@ export interface WorkerInstance {
 }
 
 export interface WorkerdManagerDeps {
+  /** Product-build principal used for host-driven launch/rebuild transitions. */
+  hostPrincipal: Principal;
   tokenManager: TokenManager;
   fsService: FsService;
   /**
@@ -242,8 +283,12 @@ export interface WorkerdManagerDeps {
   getServerUrl: () => string;
   /** Additional externally advertised gateway URLs that map to this server. */
   getServerAliasUrls?: () => readonly string[];
-  bindRuntimeImage: (unitPath: string, ref?: string) => Promise<RuntimeImageBinding>;
-  getBuildByKey: (key: string) => BuildResult | null;
+  resolveExecutionArtifact: (unitPath: string, ref?: string) => Promise<ResolvedExecutionBinding>;
+  getExecutionArtifact: (executionDigest: string) => {
+    ref: ExecutionArtifactRef;
+    requested: readonly CapabilityScope[];
+    entries: ArtifactBundleEntry[];
+  } | null;
   /** Immutable, build-compiled programs used by the workerd host services. */
   readonly workerdPrograms: WorkerdProgramSources;
   /** Workspace source root — used for WORKER_SOURCE binding. */
@@ -279,14 +324,12 @@ export interface WorkerdManagerDeps {
    * backing the userland `vcs` service in meta/vibestudio.yml). Absent ⇒ no DO is
    * bootstrap-main-bound; the manager never assumes a hardcoded unit.
    */
-  getBootstrapMainBoundDos?: () => ReadonlyArray<{ source: string; className: string }>;
   /**
-   * Extra env text bindings for INTERNAL DO classes, keyed by className.
-   * The server derives these from the workspace manifest's `providers.*`
-   * slots (e.g. `EVAL_ENGINE_SOURCE` for EvalDO, `BROWSER_DATA_BROKER_ID`
-   * for BrowserDataDO) so internal DOs never hardcode workspace unit names.
+   * Extra env text bindings for exact product-seed classes. The server derives
+   * these from the workspace manifest's `providers.*` slots.
    */
-  getInternalDoEnv?: (className: string) => Record<string, string>;
+  getProductDoEnv?: (source: string, className: string) => Record<string, string>;
+  getProductDoCapabilities?: (source: string, className: string) => readonly "unsafe-eval"[];
   /** Override for tests; production uses the default router readiness window. */
   workerdStartupReadyTimeoutMs?: number;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
@@ -353,8 +396,7 @@ export class WorkerdManager {
   private port: number | null = null;
   private inspectorPort: number | null = null;
   private deps: ResolvedWorkerdManagerDeps;
-  private readonly runtimeImages: RuntimeImageStore;
-  private readonly runtimeImageRebinds = new Map<string, Promise<void>>();
+  private readonly runtimeIncarnations: RuntimeIncarnationStore;
   private workerdBinary: string | null = null;
   private lastWorkerdStartupOutput: string[] = [];
   private workerdStartedAtMs: number | null = null;
@@ -372,6 +414,8 @@ export class WorkerdManager {
   private bootGeneration: number;
   private pendingBootGeneration: number | null = null;
   private readonly bootGenerationFile: string;
+  private readonly pendingDoStorageDeletesFile: string;
+  private readonly pendingDoStorageDeletes = new Map<string, DORef>();
   private restartBeginHooks = new Set<(event: RestartBeginEvent) => Promise<void> | void>();
   private restartReadyHooks = new Set<(event: RestartReadyEvent) => Promise<void> | void>();
   /** Per-manager secret required by the generated router for direct DO dispatch. */
@@ -390,11 +434,90 @@ export class WorkerdManager {
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
     this.egressSecret = deps.egressSecret;
-    this.runtimeImages = new RuntimeImageStore(deps.statePath);
+    this.runtimeIncarnations = new RuntimeIncarnationStore(deps.statePath);
     this.configDir = path.join(os.tmpdir(), `vibestudio-workerd-${process.pid}`);
     fs.mkdirSync(this.configDir, { recursive: true });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
+    this.pendingDoStorageDeletesFile = stateLayout(this.deps.statePath).pendingDoStorageDeletesFile;
+    this.loadPendingDoStorageDeletes();
     this.bootGeneration = this.readBootGeneration();
+  }
+
+  private doRefKey(ref: DORef): string {
+    return `${ref.source}\u0000${ref.className}\u0000${ref.objectKey}`;
+  }
+
+  private loadPendingDoStorageDeletes(): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(this.pendingDoStorageDeletesFile, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw new Error(`Unable to read pending DO storage deletions: ${errorMessage(error)}`, {
+        cause: error,
+      });
+    }
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      (parsed as { version?: unknown }).version !== 1 ||
+      !Array.isArray((parsed as { refs?: unknown }).refs)
+    ) {
+      throw new Error("Invalid pending DO storage deletion manifest");
+    }
+    for (const value of (parsed as PendingDoStorageDeletes).refs) {
+      if (
+        !value ||
+        typeof value.source !== "string" ||
+        typeof value.className !== "string" ||
+        typeof value.objectKey !== "string"
+      ) {
+        throw new Error("Invalid pending DO storage deletion reference");
+      }
+      this.pendingDoStorageDeletes.set(this.doRefKey(value), value);
+    }
+  }
+
+  private persistPendingDoStorageDeletes(): void {
+    if (this.pendingDoStorageDeletes.size === 0) {
+      try {
+        fs.unlinkSync(this.pendingDoStorageDeletesFile);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      return;
+    }
+    writeJsonFileAtomic(this.pendingDoStorageDeletesFile, {
+      version: 1,
+      refs: [...this.pendingDoStorageDeletes.values()].sort((a, b) =>
+        this.doRefKey(a).localeCompare(this.doRefKey(b))
+      ),
+    } satisfies PendingDoStorageDeletes);
+  }
+
+  /** Physical SQLite deletion is safe only at a workerd process boundary.
+   * Retired entities become unreachable immediately; their bytes are durably
+   * queued and reclaimed after the process releases every facet handle. */
+  private async flushPendingDoStorageDeletes(): Promise<void> {
+    if (this.process) {
+      throw new Error("Cannot reclaim Durable Object storage while workerd is running");
+    }
+    const dir = this.universalDoStorageDir();
+    for (const [key, ref] of [...this.pendingDoStorageDeletes]) {
+      const hash = this.universalHostHash(ref);
+      const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
+      await Promise.all(
+        files
+          .filter((file) => file.startsWith(`${hash}.`))
+          .map((file) =>
+            fs.promises.unlink(path.join(dir, file)).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT") throw error;
+            })
+          )
+      );
+      this.pendingDoStorageDeletes.delete(key);
+      this.persistPendingDoStorageDeletes();
+    }
   }
 
   private ensureWorkerBearer(callerId: string): string {
@@ -411,80 +534,97 @@ export class WorkerdManager {
     return manager.revokeWorkerBearer?.(callerId) ?? manager.revokeToken(callerId);
   }
 
-  private async bindRuntimeImage(
-    imageId: string,
+  private async resolveRuntimeIncarnation(
+    logicalEntityId: string,
     source: string,
-    scopeRef?: string
-  ): Promise<RuntimeImageRecord> {
-    const binding = await this.deps.bindRuntimeImage(source, scopeRef);
-    return this.persistRuntimeImage(imageId, binding, scopeRef);
+    scopeRef?: string,
+    transition?: {
+      actor?: Principal;
+      trigger?: import("./runtimeIncarnationStore.js").RuntimeTransitionTrigger;
+    }
+  ): Promise<RuntimeIncarnationRecord> {
+    const binding = await this.deps.resolveExecutionArtifact(source, scopeRef);
+    return this.adoptResolvedRuntimeIncarnation(logicalEntityId, binding, scopeRef, transition);
   }
 
-  private persistRuntimeImage(
-    imageId: string,
-    binding: RuntimeImageBinding,
-    scopeRef?: string
-  ): RuntimeImageRecord {
-    return this.runtimeImages.upsert({
-      id: imageId,
-      source: binding.source,
-      unitName: binding.unitName,
-      stateHash: binding.stateHash,
-      buildKey: binding.buildKey,
-      effectiveVersion: binding.effectiveVersion,
+  private adoptResolvedRuntimeIncarnation(
+    logicalEntityId: string,
+    binding: ResolvedExecutionBinding,
+    scopeRef: string | undefined,
+    transition?: {
+      actor?: Principal;
+      trigger?: import("./runtimeIncarnationStore.js").RuntimeTransitionTrigger;
+    }
+  ): RuntimeIncarnationRecord {
+    if (
+      binding.selectorPolicy.kind !== "artifact" &&
+      binding.artifact.source.repoPath !== binding.selectorPolicy.repoPath
+    ) {
+      throw new Error(
+        `Resolved execution selector source mismatch: ${binding.selectorPolicy.repoPath} != ${binding.artifact.source.repoPath}`
+      );
+    }
+    if (
+      binding.selectorPolicy.kind === "artifact" &&
+      binding.selectorPolicy.executionDigest !== binding.artifact.executionDigest
+    ) {
+      throw new Error("Resolved exact selector does not match its execution artifact");
+    }
+    const prepared = this.runtimeIncarnations.prepare({
+      logicalEntityId,
+      artifact: binding.artifact,
+      selectorPolicy: binding.selectorPolicy,
+      compilationCacheKey: binding.compilationCacheKey,
+      actor: transition?.actor ?? this.deps.hostPrincipal,
+      trigger: transition?.trigger ?? "launch",
       ...(scopeRef ? { scopeRef } : {}),
     });
+    return this.runtimeIncarnations.adopt(prepared.transition.transitionId);
+  }
+
+  /** Selector resolution is explicit and separate from every launch method. */
+  resolveExecution(source: string, ref?: string): Promise<ResolvedExecutionBinding> {
+    return this.deps.resolveExecutionArtifact(source, explicitScopeRef(ref));
   }
 
   private advanceWorkerCodeVersion(instance: WorkerInstance, generation?: number): void {
     instance.codeVersion = Math.max(instance.codeVersion + 1, generation ?? 0);
   }
 
-  private getRuntimeImageBuild(
-    imageId: string,
-    onRebound?: (record: RuntimeImageRecord) => void
-  ): { image: RuntimeImageRecord; build: BuildResult } {
-    const image = this.runtimeImages.get(imageId);
-    if (!image) {
-      throw new RuntimeImageWarmingError(`Runtime image is not bound yet: ${imageId}`);
-    }
-    const build = this.deps.getBuildByKey(image.buildKey);
-    if (build) return { image, build };
-    if (image.error) {
-      throw new RuntimeImageUnavailableError(
-        `Runtime image ${imageId} is unavailable: ${image.error.message}`
+  private getRuntimeExecution(logicalEntityId: string): {
+    incarnation: RuntimeIncarnationRecord;
+    entries: ArtifactBundleEntry[];
+    requested: readonly CapabilityScope[];
+  } {
+    const incarnation = this.runtimeIncarnations.getActive(logicalEntityId);
+    if (!incarnation) {
+      throw new RuntimeIncarnationPreparingError(
+        `Runtime incarnation is not prepared: ${logicalEntityId}`
       );
     }
-
-    this.scheduleRuntimeImageRebind(image, onRebound);
-    throw new RuntimeImageWarmingError(
-      `Runtime image ${imageId} points at missing artifact ${image.buildKey}; warming`
-    );
+    const bundle = this.deps.getExecutionArtifact(incarnation.artifact.executionDigest);
+    if (!bundle) {
+      throw new ExecutionArtifactUnavailableError(
+        `Immutable execution artifact is unavailable: ${incarnation.artifact.executionDigest}`
+      );
+    }
+    if (bundle.ref.executionDigest !== incarnation.artifact.executionDigest) {
+      throw new ExecutionArtifactUnavailableError(
+        `Execution artifact lookup returned the wrong digest for ${logicalEntityId}`
+      );
+    }
+    return { incarnation, entries: bundle.entries, requested: bundle.requested };
   }
 
-  private scheduleRuntimeImageRebind(
-    image: RuntimeImageRecord,
-    onRebound?: (record: RuntimeImageRecord) => void
-  ): void {
-    if (this.runtimeImageRebinds.has(image.id)) return;
-    const flight = this.bindRuntimeImage(image.id, image.source, image.scopeRef)
-      .then(
-        (record) => {
-          onRebound?.(record);
-        },
-        (error) => {
-          const message = errorMessage(error);
-          this.runtimeImages.markError(image.id, {
-            code: "rebind_failed",
-            message,
-          });
-          log.warn(`Runtime image rebind failed for ${image.id}:`, error);
-        }
-      )
-      .finally(() => {
-        this.runtimeImageRebinds.delete(image.id);
-      });
-    this.runtimeImageRebinds.set(image.id, flight);
+  /**
+   * Non-serializable workerd bindings must be owned by the worker definition
+   * that executes the DO. A class with host capabilities therefore gets an
+   * exact static service; capability-free classes use the dynamic UniversalDO
+   * host. The decision comes from the product manifest, never from a source
+   * name special case.
+   */
+  private requiresStaticDoHost(source: string, className: string): boolean {
+    return requiresStaticDoHost(source, className);
   }
 
   // =========================================================================
@@ -643,31 +783,38 @@ export class WorkerdManager {
 
   /**
    * Ensure a DO class is registered with workerd and return the targetId +
-   * effectiveVersion that the runtime service will record on the entity row.
+   * exact execution identity that the runtime service records on its incarnation.
    *
    * Does NOT write an entity row — that's runtimeService.createEntity's job.
    */
   async ensureDurableObjectEntity(args: {
     source: string;
-    ref?: string;
+    execution: ResolvedExecutionBinding;
     className: string;
     key: string;
     contextId: string;
     stateArgs?: unknown;
-  }): Promise<{ targetId: string; effectiveVersion: string }> {
+  }): Promise<{ targetId: string; executionDigest: string }> {
+    const ref = { source: args.source, className: args.className, objectKey: args.key };
+    if (this.pendingDoStorageDeletes.has(this.doRefKey(ref))) {
+      throw new Error(
+        `Durable Object ${args.source}:${args.className}/${args.key} is pending physical deletion; ` +
+          "restart the host before reusing this exact object key"
+      );
+    }
     const targetId = canonicalEntityId({
       kind: "do",
       source: args.source,
       className: args.className,
       key: args.key,
     });
-    const explicitRef = explicitScopeRef(args.ref);
-    const bootstrapMainBound = this.isBootstrapMainBoundDo(args.source, args.className);
-    const scopeRef = bootstrapMainBound ? args.ref : explicitRef;
+    assertExecutionSource(args.source, args.execution);
+    const scopeRef = selectorScopeRef(args.execution.selectorPolicy);
     await this.ensureDOClass(args.source, args.className, {
       scopeRef,
+      execution: args.execution,
       objectKey: args.key,
-      imageId: targetId,
+      logicalEntityId: targetId,
       stateArgs: args.stateArgs,
     });
     const serviceKey = doServiceKey(args.source, args.className);
@@ -677,10 +824,11 @@ export class WorkerdManager {
         `ensureDurableObjectEntity: DO class ${serviceKey} missing from doServices after ensureDOClass`
       );
     }
-    const image =
-      this.runtimeImages.get(targetId) ??
-      (svc.imageId ? this.runtimeImages.get(svc.imageId) : null);
-    return { targetId, effectiveVersion: image?.effectiveVersion ?? svc.buildKey };
+    const incarnation =
+      this.runtimeIncarnations.getActive(targetId) ??
+      (svc.logicalEntityId ? this.runtimeIncarnations.getActive(svc.logicalEntityId) : null);
+    if (!incarnation) throw new Error(`DO entity has no active incarnation: ${targetId}`);
+    return { targetId, executionDigest: incarnation.artifact.executionDigest };
   }
 
   /**
@@ -691,13 +839,14 @@ export class WorkerdManager {
    */
   async startWorker(args: {
     source: string;
-    ref?: string;
+    execution: ResolvedExecutionBinding;
     key: string;
     contextId: string;
     stateArgs?: unknown;
     env?: Record<string, string>;
     parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
-  }): Promise<{ targetId: string; effectiveVersion: string }> {
+  }): Promise<{ targetId: string; executionDigest: string }> {
+    assertExecutionSource(args.source, args.execution);
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
     const name = args.key.replace(/[^a-zA-Z0-9_-]/g, "_");
 
@@ -712,7 +861,7 @@ export class WorkerdManager {
     const existingInstance = this.instances.get(name);
     if (existingInstance) {
       // Reattach ONLY on a FULL-identity match: the canonical targetId
-      // (`runtimeImageId` = worker:source:key) AND the contextId. targetId is
+      // (`logicalEntityId` = worker:source:key) AND the contextId. targetId is
       // context-free, so both checks are needed — the targetId guards distinct
       // raw keys that sanitize to the same `name` (e.g. `a:b`/`a_b`), and the
       // contextId prevents silently handing a launch a worker running in a
@@ -721,17 +870,17 @@ export class WorkerdManager {
       // includes contextId — callers must use context-unique keys; anything
       // short of a full match is a genuine collision and throws.
       if (
-        existingInstance.runtimeImageId === targetId &&
+        existingInstance.logicalEntityId === targetId &&
         existingInstance.contextId === args.contextId
       ) {
         return {
           targetId,
-          effectiveVersion: existingInstance.effectiveVersion ?? existingInstance.buildKey ?? "",
+          executionDigest: assertPresent(existingInstance.executionDigest),
         };
       }
       throw new Error(
         `Worker instance "${name}" already exists with a different identity ` +
-          `(existing targetId=${existingInstance.runtimeImageId} source=${existingInstance.source} ` +
+          `(existing targetId=${existingInstance.logicalEntityId} source=${existingInstance.source} ` +
           `context=${existingInstance.contextId}; requested targetId=${targetId} ` +
           `source=${args.source} context=${args.contextId})`
       );
@@ -739,8 +888,7 @@ export class WorkerdManager {
 
     const callerId = targetId;
     const token = this.ensureWorkerBearer(callerId);
-    const explicitRef = explicitScopeRef(args.ref);
-    const scopeRef = explicitRef;
+    const scopeRef = selectorScopeRef(args.execution.selectorPolicy);
 
     const stateArgs =
       args.stateArgs && typeof args.stateArgs === "object" && !Array.isArray(args.stateArgs)
@@ -757,7 +905,7 @@ export class WorkerdManager {
       env: args.env ?? {},
       bindings: {},
       stateArgs,
-      runtimeImageId: targetId,
+      logicalEntityId: targetId,
       scopeRef,
       codeVersion: 1,
       status: "building",
@@ -773,16 +921,17 @@ export class WorkerdManager {
 
     try {
       instance.status = "starting";
-      const [image] = await Promise.all([
-        this.bindRuntimeImage(targetId, args.source, scopeRef),
+      const [incarnation] = await Promise.all([
+        Promise.resolve(
+          this.adoptResolvedRuntimeIncarnation(targetId, args.execution, scopeRef, {
+            trigger: "launch",
+          })
+        ),
         this.ensureWorkerdRunning(),
       ]);
-      instance.scopeRef = image.scopeRef;
-      instance.buildKey = image.buildKey;
-      instance.effectiveVersion = image.effectiveVersion;
-      this.advanceWorkerCodeVersion(instance, image.generation);
-      // Register egress AFTER bind so the caller carries the signed effective
-      // version (not "unknown"/an artifact key) for version-scoped approvals/audit.
+      instance.scopeRef = incarnation.scopeRef;
+      instance.executionDigest = incarnation.artifact.executionDigest;
+      this.advanceWorkerCodeVersion(instance, incarnation.generation);
       this.registerEgressCaller(instance);
 
       instance.status = "running";
@@ -791,12 +940,11 @@ export class WorkerdManager {
         source: args.source,
         callerId,
         level: "info",
-        message: `Worker started (build ${image.buildKey})`,
+        message: `Worker started (${incarnation.artifact.executionDigest})`,
         fields: {
           event: "worker-started",
-          buildKey: image.buildKey,
-          generation: image.generation,
-          effectiveVersion: image.effectiveVersion,
+          executionDigest: incarnation.artifact.executionDigest,
+          generation: incarnation.generation,
         },
       });
       log.info(`Worker entity "${targetId}" started (source: ${args.source})`);
@@ -811,11 +959,11 @@ export class WorkerdManager {
         }
       }
 
-      return { targetId, effectiveVersion: image.effectiveVersion };
+      return { targetId, executionDigest: incarnation.artifact.executionDigest };
     } catch (error) {
       instance.status = "error";
       this.instances.delete(name);
-      this.runtimeImages.delete(targetId);
+      this.runtimeIncarnations.retire(targetId);
       this.deps.unregisterEgressCaller(callerId);
       this.revokeWorkerBearer(callerId);
       const message = error instanceof Error ? error.message : String(error);
@@ -835,7 +983,7 @@ export class WorkerdManager {
   /** Resolve a canonical runtime worker id to the loader's opaque instance name. */
   resolveWorkerInstanceName(targetId: string): string | null {
     for (const instance of this.instances.values()) {
-      if (instance.runtimeImageId === targetId) return instance.name;
+      if (instance.logicalEntityId === targetId) return instance.name;
     }
     return null;
   }
@@ -872,7 +1020,7 @@ export class WorkerdManager {
 
     foundInstance.status = "stopped";
     this.instances.delete(foundName);
-    this.runtimeImages.delete(foundInstance.runtimeImageId);
+    this.runtimeIncarnations.retire(foundInstance.logicalEntityId);
 
     // No restart: the worker host is static and loads code on demand, so a
     // destroyed worker simply stops being addressable (its `/_workerversion`
@@ -893,9 +1041,9 @@ export class WorkerdManager {
     this.revokeWorkerBearer(targetId);
     this.deps.fsService.closeHandlesForCaller(targetId);
     await this.deps.cleanupWebhookSubscriptions?.(targetId);
-    this.runtimeImages.delete(targetId);
+    this.runtimeIncarnations.retire(targetId);
     for (const [key, objectBuild] of Array.from(this.doObjectBuilds.entries())) {
-      if (objectBuild.imageId === targetId) this.doObjectBuilds.delete(key);
+      if (objectBuild.logicalEntityId === targetId) this.doObjectBuilds.delete(key);
     }
   }
 
@@ -905,11 +1053,15 @@ export class WorkerdManager {
    * `unregisterEgressCaller(callerId)` on destroy.
    */
   private registerEgressCaller(instance: WorkerInstance): void {
+    const executionDigest = assertPresent(instance.executionDigest);
+    const execution = this.deps.getExecutionArtifact(executionDigest);
+    if (!execution) throw new Error(`Missing execution authority for ${executionDigest}`);
     const caller = createVerifiedCaller(instance.callerId, "worker", {
       callerId: instance.callerId,
       callerKind: "worker",
       repoPath: instance.source,
-      effectiveVersion: instance.effectiveVersion ?? instance.buildKey ?? "unknown",
+      executionDigest,
+      requested: execution.requested,
     });
     this.deps.registerEgressCaller(instance.callerId, caller);
   }
@@ -946,15 +1098,15 @@ export class WorkerdManager {
     if (updates.stateArgs !== undefined) instance.stateArgs = updates.stateArgs;
     if (updates.ref !== undefined) {
       instance.scopeRef = explicitScopeRef(updates.ref);
-      const image = await this.bindRuntimeImage(
-        instance.runtimeImageId,
+      const incarnation = await this.resolveRuntimeIncarnation(
+        instance.logicalEntityId,
         instance.source,
-        instance.scopeRef
+        instance.scopeRef,
+        { trigger: "manual-repin" }
       );
-      instance.buildKey = image.buildKey;
-      instance.effectiveVersion = image.effectiveVersion;
-      this.advanceWorkerCodeVersion(instance, image.generation);
-      this.registerEgressCaller(instance); // refresh egress EV after a rebind
+      instance.executionDigest = incarnation.artifact.executionDigest;
+      this.advanceWorkerCodeVersion(instance, incarnation.generation);
+      this.registerEgressCaller(instance);
     }
 
     // Bump the loader-cache version so the host reloads fresh code+env on the
@@ -987,7 +1139,7 @@ export class WorkerdManager {
       if (
         instance.id === idOrName ||
         instance.callerId === idOrName ||
-        instance.runtimeImageId === idOrName
+        instance.logicalEntityId === idOrName
       ) {
         return name;
       }
@@ -1072,18 +1224,9 @@ export class WorkerdManager {
     const instance = this.instances.get(name);
     if (!instance) return null;
 
-    const { image, build: buildResult } = this.getRuntimeImageBuild(
-      instance.runtimeImageId,
-      (record) => {
-        instance.buildKey = record.buildKey;
-        instance.effectiveVersion = record.effectiveVersion;
-        this.advanceWorkerCodeVersion(instance, record.generation);
-        this.registerEgressCaller(instance);
-      }
-    );
-    instance.buildKey = image.buildKey;
-    instance.effectiveVersion = image.effectiveVersion;
-    const bundleContent = primaryTextArtifactContent(buildResult);
+    const { incarnation, entries } = this.getRuntimeExecution(instance.logicalEntityId);
+    instance.executionDigest = incarnation.artifact.executionDigest;
+    const bundleContent = primaryTextExecutionArtifact(entries);
 
     // WorkerCode `env` (unlike the old capnp config) supports non-string values
     // natively — so `json` bindings / STATE_ARGS / aliases keep their PARSED
@@ -1134,15 +1277,18 @@ export class WorkerdManager {
   getDoCodeIdentity(
     source: string,
     className: string
-  ): { repoPath: string; effectiveVersion: string } | null {
+  ): { repoPath: string; executionDigest: string } | null {
     const service = this.doServices.get(doServiceKey(source, className));
     if (!service) {
       return null;
     }
-    const image = service.imageId ? this.runtimeImages.get(service.imageId) : null;
+    const incarnation = service.logicalEntityId
+      ? this.runtimeIncarnations.getActive(service.logicalEntityId)
+      : null;
+    if (!incarnation) return null;
     return {
       repoPath: service.source,
-      effectiveVersion: image?.effectiveVersion ?? service.buildKey,
+      executionDigest: incarnation.artifact.executionDigest,
     };
   }
 
@@ -1157,17 +1303,20 @@ export class WorkerdManager {
     if (objectKey) {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
       if (objectBuild) {
-        const image = this.runtimeImages.get(objectBuild.imageId);
-        const version = image ? String(image.generation) : objectBuild.buildKey;
+        const incarnation = this.runtimeIncarnations.getActive(objectBuild.logicalEntityId);
+        if (!incarnation) return null;
+        const version = String(incarnation.generation);
         return objectBuild.stateArgs
           ? `${version}:state:${stableHash(objectBuild.stateArgs)}`
           : version;
       }
     }
     const svc = this.doServices.get(doServiceKey(source, className));
-    if (!svc || isInternalDOSource(source)) return null;
-    const image = svc.imageId ? this.runtimeImages.get(svc.imageId) : null;
-    return image ? String(image.generation) : svc.buildKey;
+    if (!svc || this.requiresStaticDoHost(source, className)) return null;
+    const incarnation = svc.logicalEntityId
+      ? this.runtimeIncarnations.getActive(svc.logicalEntityId)
+      : null;
+    return incarnation ? String(incarnation.generation) : null;
   }
 
   /**
@@ -1192,37 +1341,21 @@ export class WorkerdManager {
   } | null> {
     const serviceKey = doServiceKey(source, className);
     const svc = this.doServices.get(serviceKey);
-    if (!svc || isInternalDOSource(source)) return null;
+    if (!svc || this.requiresStaticDoHost(source, className)) return null;
 
     const objectBuildKey = objectKey ? doObjectBuildKey(source, className, objectKey) : null;
     const objectBuild = objectBuildKey ? this.doObjectBuilds.get(objectBuildKey) : undefined;
-    const imageId = objectBuild?.imageId ?? svc.imageId;
-    if (!imageId) return null;
-    const { image, build: buildResult } = this.getRuntimeImageBuild(imageId, (record) => {
-      if (objectBuildKey && objectBuild) {
-        this.doObjectBuilds.set(objectBuildKey, {
-          ...objectBuild,
-          buildKey: record.buildKey,
-        });
-      } else {
-        svc.buildKey = record.buildKey;
-      }
-      this.registerDoEgressCaller(source, className, record.effectiveVersion);
-    });
-    if (objectBuildKey && objectBuild) {
-      this.doObjectBuilds.set(objectBuildKey, {
-        ...objectBuild,
-        buildKey: image.buildKey,
-      });
-    } else {
-      svc.buildKey = image.buildKey;
-    }
-    const bundleContent = primaryTextArtifactContent(buildResult);
+    const logicalEntityId = objectBuild?.logicalEntityId ?? svc.logicalEntityId;
+    if (!logicalEntityId) return null;
+    const { incarnation, entries } = this.getRuntimeExecution(logicalEntityId);
+    const bundleContent = primaryTextExecutionArtifact(entries);
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
     // loaded alongside the JS bundle (the only way to run WASM in workerd).
     const wasmModules: Record<string, string> = {};
-    for (const artifact of buildResult.artifacts) {
-      if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
+    for (const artifact of entries) {
+      if (artifact.role === "wasm") {
+        wasmModules[artifact.path] = Buffer.from(artifact.bytes).toString("base64");
+      }
     }
 
     // Service-level token shared by all instances of this source:className —
@@ -1230,7 +1363,7 @@ export class WorkerdManager {
     const serviceCallerId = `do-service:${serviceKey}`;
     const serviceToken = this.ensureWorkerBearer(serviceCallerId);
     // Keep the egress attribution registered for this class identity.
-    this.registerDoEgressCaller(source, className, image.effectiveVersion);
+    this.registerDoEgressCaller(source, className, incarnation.artifact.executionDigest);
 
     const env: Record<string, unknown> = {
       RPC_AUTH_TOKEN: serviceToken,
@@ -1252,6 +1385,11 @@ export class WorkerdManager {
     if (objectBuild?.stateArgs && Object.keys(objectBuild.stateArgs).length > 0) {
       env["STATE_ARGS"] = objectBuild.stateArgs;
     }
+    for (const [name, value] of Object.entries(
+      this.deps.getProductDoEnv?.(source, className) ?? {}
+    )) {
+      env[name] = value;
+    }
 
     return {
       compatibilityDate: "2025-12-01",
@@ -1265,13 +1403,16 @@ export class WorkerdManager {
 
   /** Register a userland DO class's identity (`source:className`) for attributed
    *  egress through the shared listener. The UniversalDO host stamps this id. */
-  private registerDoEgressCaller(source: string, className: string, buildKey: string): void {
+  private registerDoEgressCaller(source: string, className: string, executionDigest: string): void {
+    const execution = this.deps.getExecutionArtifact(executionDigest);
+    if (!execution) throw new Error(`Missing execution authority for ${executionDigest}`);
     const identity = `${source}:${className}`;
     const caller = createVerifiedCaller(`do-service:${identity}`, "worker", {
       callerId: `do-service:${identity}`,
       callerKind: "worker",
       repoPath: source,
-      effectiveVersion: buildKey,
+      executionDigest,
+      requested: execution.requested,
     });
     this.deps.registerEgressCaller(identity, caller);
   }
@@ -1286,18 +1427,29 @@ export class WorkerdManager {
     // Collect DO service names that have been emitted (to avoid duplicating in regular loop)
     const doServiceNames = new Set<string>();
 
-    // ── Internal DO services (one workerd service per source:className) ──
-    // Userland DO classes do NOT get per-class services — they load
-    // dynamically into the static `universal-do` facet host (built below), so a
-    // new userland DO class needs no config change and no workerd restart.
-    // Internal DOs (WorkspaceDO, EvalDO, …) stay static (foundational).
+    // ── Exact static DO services ──
+    // WorkspaceDO is the substrate root. Product classes that declare a
+    // non-serializable host capability also live here because WorkerLoader env
+    // values must be structured-cloneable. Capability-free product and
+    // workspace classes remain dynamic in UniversalDO below.
     for (const [serviceKey, doService] of this.doServices) {
-      if (!isInternalDOSource(doService.source)) continue;
+      if (!this.requiresStaticDoHost(doService.source, doService.className)) continue;
       const { className } = doService;
-      // Internal DOs ship as a single pre-built bundle (no wasm artifacts).
-      const internalBundle = getInternalDOBundle();
-      const bundleContent = internalBundle.bundle;
-      doService.buildKey = internalBundle.buildKey;
+      const execution = isBootstrapDoSource(doService.source)
+        ? {
+            executionDigest: getBootstrapBundle().binding.artifact.executionDigest,
+            entries: getBootstrapBundle().bundle.entries,
+            requested: getBootstrapBundle().bundle.requested,
+          }
+        : (() => {
+            const resolved = this.getRuntimeExecution(assertPresent(doService.logicalEntityId));
+            return {
+              executionDigest: resolved.incarnation.artifact.executionDigest,
+              entries: resolved.entries,
+              requested: resolved.requested,
+            };
+          })();
+      const bundleContent = primaryTextExecutionArtifact(execution.entries);
 
       doServiceNames.add(doService.serviceName);
 
@@ -1316,7 +1468,8 @@ export class WorkerdManager {
         callerId: serviceCallerId,
         callerKind: "worker",
         repoPath: doService.source,
-        effectiveVersion: doService.buildKey,
+        executionDigest: execution.executionDigest,
+        requested: execution.requested,
       });
       const bindings: object[] = [
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
@@ -1335,21 +1488,15 @@ export class WorkerdManager {
         bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });
       }
 
-      // Manifest-declared provider bindings for this internal DO class
-      // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
-      // BROWSER_DATA_BROKER_ID for BrowserDataDO). Injected here so internal
-      // DOs consume workspace unit identities only through the manifest.
-      for (const [name, text] of Object.entries(this.deps.getInternalDoEnv?.(className) ?? {})) {
+      // Manifest-declared product bindings (normally empty for the substrate).
+      for (const [name, text] of Object.entries(
+        this.deps.getProductDoEnv?.(doService.source, className) ?? {}
+      )) {
         bindings.push({ name, text });
       }
-
-      // EvalDO runs sandboxed agent code and needs the workerd UnsafeEval API
-      // (`new Function` is blocked in workerd isolates). `--experimental` is already
-      // passed at spawn. `unsafeEval` is a Void union member in workerd's schema, so
-      // it must render as `unsafeEval = void` — `null` triggers that in capnpValue
-      // (an empty struct `{}` would emit `()`, which workerd rejects: "expected Void").
-      if (className === "EvalDO") {
-        bindings.push({ name: "UNSAFE_EVAL", unsafeEval: null });
+      for (const capability of this.deps.getProductDoCapabilities?.(doService.source, className) ??
+        []) {
+        if (capability === "unsafe-eval") bindings.push({ name: "UNSAFE_EVAL", unsafeEval: null });
       }
 
       // DO storage: create a disk service and reference it by name
@@ -1378,9 +1525,6 @@ export class WorkerdManager {
             className,
             uniqueKey: `${doService.source.replace(/\//g, "_")}:${className}`,
             enableSql: true,
-            // Pin EvalDO in memory (workerd skips the ~10s idle eviction) so warm eval
-            // scope/db survive idle gaps. Namespace-wide — applies only to EvalDO's namespace.
-            ...(className === "EvalDO" ? { preventEviction: true } : {}),
           },
         ],
         durableObjectStorage: {
@@ -1416,10 +1560,10 @@ export class WorkerdManager {
       }));
 
     // Auto-generate router worker + the static dynamic-worker host.
-    const hasUserlandDOs = Array.from(this.doServices.values()).some(
-      (svc) => !isInternalDOSource(svc.source)
+    const hasDynamicDOs = Array.from(this.doServices.values()).some(
+      (svc) => !this.requiresStaticDoHost(svc.source, svc.className)
     );
-    const hasAnyService = this.instances.size > 0 || doClassNames.length > 0 || hasUserlandDOs;
+    const hasAnyService = this.instances.size > 0 || doClassNames.length > 0 || hasDynamicDOs;
     if (hasAnyService) {
       // ── Static `worker-host` service: loads regular workers dynamically ──
       // Always present whenever workerd runs, so worker create/destroy never
@@ -1765,6 +1909,7 @@ export class WorkerdManager {
   }
 
   private async startWorkerdOnce(): Promise<void> {
+    await this.flushPendingDoStorageDeletes();
     const config = await this.generateConfig();
     const configPath = path.join(this.configDir, "config.capnp");
     const capnpText = this.toCapnpText(config as Record<string, unknown>);
@@ -1936,8 +2081,8 @@ export class WorkerdManager {
       regularWorkers: this.instances.size,
       doServices: this.doServices.size,
       doObjectBuilds: this.doObjectBuilds.size,
-      runtimeImages: this.runtimeImages.list().length,
-      runtimeImageRebinds: this.runtimeImageRebinds.size,
+      runtimeIncarnations: this.runtimeIncarnations.listIncarnations().length,
+      runtimeTransitions: this.runtimeIncarnations.listTransitions().length,
       bootGeneration: this.bootGeneration,
       pendingBootGeneration: this.pendingBootGeneration,
     };
@@ -2034,53 +2179,50 @@ export class WorkerdManager {
       releaseServicePort("workerdInspector", this.inspectorPort);
     }
     this.inspectorPort = null;
+    await this.flushPendingDoStorageDeletes();
   }
 
   /**
-   * Register a batch of DO classes. Internal DO classes are static workerd
-   * services and trigger a single restart when new. Userland DO classes load
-   * through universal-do; startup should prefer route metadata + lazy
-   * ensureDORoute unless an explicit prewarm is required.
+   * Register a batch of DO classes. Substrate and capability-bearing product
+   * classes are exact static services and trigger one coalesced restart when
+   * new. Every capability-free class loads through UniversalDO.
    */
   async registerAllDOClasses(
     doClasses: Array<{ source: string; className: string }>
   ): Promise<void> {
-    let internalAdded = false;
+    let staticServiceAdded = false;
     for (const { source, className } of doClasses) {
       const serviceKey = doServiceKey(source, className);
       if (this.doServices.has(serviceKey)) continue;
 
       try {
-        const imageId = `do-service:${serviceKey}`;
-        const image = isInternalDOSource(source)
+        const logicalEntityId = `do-service:${serviceKey}`;
+        const incarnation = isBootstrapDoSource(source)
           ? null
-          : await this.bindRuntimeImage(imageId, source, undefined);
-        const buildKey = isInternalDOSource(source)
-          ? getInternalDOBundle().buildKey
-          : assertPresent(image).buildKey;
+          : await this.resolveRuntimeIncarnation(logicalEntityId, source, undefined);
         const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
         const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
         this.doServices.set(serviceKey, {
-          buildKey,
           className,
-          ...(image ? { imageId: image.id } : {}),
+          ...(incarnation ? { logicalEntityId } : {}),
           serviceName,
           source,
         });
-        if (!isInternalDOSource(source)) {
+        if (!isBootstrapDoSource(source)) {
           this.registerRoutesForDoClass(source, className);
-          this.registerDoEgressCaller(source, className, assertPresent(image).effectiveVersion);
-        } else {
-          internalAdded = true;
+          this.registerDoEgressCaller(
+            source,
+            className,
+            assertPresent(incarnation).artifact.executionDigest
+          );
         }
+        if (this.requiresStaticDoHost(source, className)) staticServiceAdded = true;
       } catch (err) {
         log.warn(`Skipping DO class ${source}:${className} — build failed:`, err);
       }
     }
 
-    // Only INTERNAL DO classes change the static config (and need a restart);
-    // userland classes load on demand into the static universal-do host.
-    if (internalAdded) {
+    if (staticServiceAdded) {
       await this.restartWorkerd();
       log.info(`Pre-registered ${this.doServices.size} DO class(es)`);
     }
@@ -2148,76 +2290,86 @@ export class WorkerdManager {
     className: string,
     opts: {
       scopeRef?: string;
+      execution?: ResolvedExecutionBinding;
       objectKey?: string;
-      imageId?: string;
+      logicalEntityId?: string;
       stateArgs?: unknown;
     } = {}
-  ): Promise<string | undefined> {
+  ): Promise<void> {
     const serviceKey = doServiceKey(source, className);
     const isNew = !this.doServices.has(serviceKey);
-    let buildKey: string | undefined;
-    let image: RuntimeImageRecord | null = null;
+    let incarnation: RuntimeIncarnationRecord | null = null;
     if (isNew) {
       const sourceSegments = source.split("/").filter(Boolean);
-      if (!isInternalDOSource(source) && sourceSegments.length !== 2) {
+      if (!isBootstrapDoSource(source) && sourceSegments.length !== 2) {
         throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
       }
-      if (isInternalDOSource(source)) {
-        buildKey = getInternalDOBundle().buildKey;
+      if (isBootstrapDoSource(source)) {
+        // Internal foundational code is shipped in the product bundle.
       } else {
-        image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
-        buildKey = image.buildKey;
+        incarnation = opts.execution
+          ? this.adoptResolvedRuntimeIncarnation(
+              `do-service:${serviceKey}`,
+              opts.execution,
+              opts.scopeRef,
+              { trigger: "launch" }
+            )
+          : await this.resolveRuntimeIncarnation(`do-service:${serviceKey}`, source, opts.scopeRef);
       }
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
       this.doServices.set(serviceKey, {
-        buildKey,
         className,
-        ...(image ? { imageId: image.id } : {}),
+        ...(incarnation ? { logicalEntityId: incarnation.logicalEntityId } : {}),
         serviceName,
         source,
-        scopeRef: image?.scopeRef ?? opts.scopeRef,
+        scopeRef: incarnation?.scopeRef ?? opts.scopeRef,
       });
-      if (!isInternalDOSource(source)) {
+      if (!isBootstrapDoSource(source)) {
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, assertPresent(image).effectiveVersion);
+        this.registerDoEgressCaller(
+          source,
+          className,
+          assertPresent(incarnation).artifact.executionDigest
+        );
       }
     }
 
     const serviceScopeRef =
-      image?.scopeRef ?? this.doServices.get(serviceKey)?.scopeRef ?? opts.scopeRef;
-    if (!isInternalDOSource(source) && serviceScopeRef && opts.objectKey) {
-      const imageId =
-        opts.imageId ?? canonicalEntityId({ kind: "do", source, className, key: opts.objectKey });
-      image = await this.bindRuntimeImage(imageId, source, serviceScopeRef);
-      buildKey = image.buildKey;
+      incarnation?.scopeRef ?? this.doServices.get(serviceKey)?.scopeRef ?? opts.scopeRef;
+    if (!isBootstrapDoSource(source) && opts.objectKey) {
+      const logicalEntityId =
+        opts.logicalEntityId ??
+        canonicalEntityId({ kind: "do", source, className, key: opts.objectKey });
+      incarnation = opts.execution
+        ? this.adoptResolvedRuntimeIncarnation(logicalEntityId, opts.execution, serviceScopeRef, {
+            trigger: "launch",
+          })
+        : await this.resolveRuntimeIncarnation(logicalEntityId, source, serviceScopeRef);
     }
 
-    if (!isInternalDOSource(source) && opts.objectKey) {
+    if (!this.requiresStaticDoHost(source, className) && opts.objectKey) {
       const svc = this.doServices.get(serviceKey);
-      const imageId = image?.id ?? svc?.imageId;
-      const buildKey = image?.buildKey ?? svc?.buildKey;
-      if (imageId && buildKey) {
+      const logicalEntityId = incarnation?.logicalEntityId ?? svc?.logicalEntityId;
+      if (logicalEntityId) {
         const stateArgs = recordStateArgs(opts.stateArgs);
         this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
-          imageId,
+          logicalEntityId,
           ...(serviceScopeRef ? { scopeRef: serviceScopeRef } : {}),
-          buildKey,
           ...(stateArgs ? { stateArgs } : {}),
         });
       }
     }
 
-    // Userland DO classes load dynamically into the static `universal-do` facet
-    // host — registering one needs NO config change and NO restart. Just make
-    // sure workerd is up so the host is serving.
-    if (!isInternalDOSource(source)) {
+    // Dynamic classes need no config change or restart. Their exact artifact
+    // is loaded on first request by UniversalDO.
+    if (!this.requiresStaticDoHost(source, className)) {
       await this.ensureWorkerdRunning();
-      return buildKey;
+      return;
     }
 
-    // Internal DOs are static workerd services: a new one requires a config
-    // regeneration + restart (startup-rare, foundational classes only).
+    // Static services establish their exact worker definition and custody of
+    // any non-serializable host capability before their first request.
     if (isNew) {
       await this.restartWorkerd();
     } else if (!this.process || this.process.exitCode !== null) {
@@ -2225,7 +2377,7 @@ export class WorkerdManager {
     }
     // Do NOT probe-and-restart a live workerd (false positives killed all DOs
     // and fed the relay/restart cascade). The relay path retries transients.
-    return buildKey;
+    return;
   }
 
   /**
@@ -2241,20 +2393,7 @@ export class WorkerdManager {
     opts: { contextId?: string; ref?: string } = {}
   ): Promise<void> {
     const explicitRef = explicitScopeRef(opts.ref);
-    const bootstrapMainBound = this.isBootstrapMainBoundDo(source, className);
-    const scopeRef = bootstrapMainBound ? opts.ref : explicitRef;
-    await this.ensureDOClass(source, className, { scopeRef, objectKey });
-  }
-
-  /**
-   * Whether `(source, className)` is a manifest-declared bootstrap main-bound
-   * DO (see WorkerdManagerDeps.getBootstrapMainBoundDos). No declaration ⇒
-   * false — there is no hardcoded fallback unit.
-   */
-  private isBootstrapMainBoundDo(source: string, className: string): boolean {
-    return (this.deps.getBootstrapMainBoundDos?.() ?? []).some(
-      (decl) => decl.source === source && decl.className === className
-    );
+    await this.ensureDOClass(source, className, { scopeRef: explicitRef, objectKey });
   }
 
   private async waitForHttpReady(timeoutMs = 5_000): Promise<void> {
@@ -2316,12 +2455,18 @@ export class WorkerdManager {
    * for a consistent snapshot).
    */
   async cloneDO(ref: DORef, newObjectKey: string): Promise<DORef> {
-    if (isInternalDOSource(ref.source)) {
-      throw new Error(`cloneDO is not supported for internal DO source "${ref.source}"`);
+    if (this.requiresStaticDoHost(ref.source, ref.className)) {
+      throw new Error(`cloneDO is not supported for static DO ${ref.source}:${ref.className}`);
     }
     const dir = this.universalDoStorageDir();
     const srcHash = this.universalHostHash(ref);
-    const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
+    const target = { ...ref, objectKey: newObjectKey };
+    if (this.pendingDoStorageDeletes.has(this.doRefKey(target))) {
+      throw new Error(
+        `Clone target ${target.source}:${target.className}/${target.objectKey} is pending physical deletion`
+      );
+    }
+    const tgtHash = this.universalHostHash(target);
 
     const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
     // Upsert-safe (idempotent) for cloneContext targetKey retries: if the target
@@ -2347,27 +2492,16 @@ export class WorkerdManager {
     return { source: ref.source, className: ref.className, objectKey: newObjectKey };
   }
 
-  /**
-   * Destroy a userland DO's facet storage — every file prefixed by the host id
-   * hash (main + facet + index + WAL/SHM). Used to clean up orphaned clones on
-   * fork failure.
-   */
+  /** Queue a userland DO's facet storage for deletion at the next workerd
+   * process boundary. Unlinking an open SQLite facet poisons the live runtime;
+   * the durable queue gives logical retirement immediate effect without racing
+   * deferred calls, alarms, or workerd's lazy object eviction. */
   async destroyDO(ref: DORef): Promise<void> {
-    if (isInternalDOSource(ref.source)) {
-      throw new Error(`destroyDO is not supported for internal DO source "${ref.source}"`);
+    if (this.requiresStaticDoHost(ref.source, ref.className)) {
+      throw new Error(`destroyDO is not supported for static DO ${ref.source}:${ref.className}`);
     }
-    const dir = this.universalDoStorageDir();
-    const hash = this.universalHostHash(ref);
-    const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
-    await Promise.all(
-      files
-        .filter((f) => f.startsWith(`${hash}.`))
-        .map((f) =>
-          fs.promises.unlink(path.join(dir, f)).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== "ENOENT") throw err;
-          })
-        )
-    );
+    this.pendingDoStorageDeletes.set(this.doRefKey(ref), { ...ref });
+    this.persistPendingDoStorageDeletes();
   }
 
   // =========================================================================
@@ -2421,46 +2555,29 @@ export class WorkerdManager {
   async onSourceRebuilt(
     source: string,
     doClasses: Array<{ className: string }> | null,
-    trigger?: StateAdvancedEvent,
-    completedBuildKey?: string
+    trigger?: StateAdvancedEvent
   ): Promise<void> {
     const head = trigger?.head ?? "main";
-    // Dynamic loading makes a rebuild a loader-cache eviction, NOT a restart:
-    // runtime image generations advance, so the next request loads fresh code.
-    // No workerd restart — concurrent agents keep running.
 
-    const completed = completedBuildKey ? this.deps.getBuildByKey(completedBuildKey) : null;
-    const updateImageFromCompleted = (
-      imageId: string,
-      scopeRef: string | undefined
-    ): RuntimeImageRecord | null => {
-      if (!completedBuildKey || !trigger || !completed) return null;
-      return this.runtimeImages.upsert({
-        id: imageId,
-        source,
-        unitName: completed.metadata.name,
-        stateHash: trigger.stateHash,
-        buildKey: completedBuildKey,
-        effectiveVersion: completed.metadata.ev,
-        ...(scopeRef ? { scopeRef } : {}),
-      });
-    };
-
-    // Workers tracking this head reload on their next request.
+    // Resolve each follower policy to a verified artifact, then atomically adopt
+    // a new immutable incarnation. A failure leaves the previous incarnation
+    // active; loaders never resolve heads or infer identity from build events.
     for (const instance of this.instances.values()) {
       if (instance.source === source && scopeTracksHead(instance.scopeRef, head)) {
-        const image = updateImageFromCompleted(instance.runtimeImageId, instance.scopeRef);
-        if (image) {
-          instance.buildKey = image.buildKey;
-          instance.effectiveVersion = image.effectiveVersion;
-          this.advanceWorkerCodeVersion(instance, image.generation);
-          this.registerEgressCaller(instance);
-        }
+        const incarnation = await this.resolveRuntimeIncarnation(
+          instance.logicalEntityId,
+          source,
+          instance.scopeRef,
+          { trigger: "source-advanced" }
+        );
+        instance.executionDigest = incarnation.artifact.executionDigest;
+        this.advanceWorkerCodeVersion(instance, incarnation.generation);
+        this.registerEgressCaller(instance);
       }
     }
 
     // Refresh the build version for this source's userland DO classes so their
-    // facets reload. (Internal DOs aren't rebuilt through this push path.)
+    // facets reload. (The sealed bootstrap artifact never follows workspace pushes.)
     const trackedServices = Array.from(this.doServices.values()).filter(
       (s) => s.source === source && scopeTracksHead(s.scopeRef, head)
     );
@@ -2468,18 +2585,22 @@ export class WorkerdManager {
       ([key, build]) => key.startsWith(`${source}:`) && scopeTracksHead(build.scopeRef, head)
     );
     for (const svc of trackedServices) {
-      if (!svc.imageId) continue;
-      const image = updateImageFromCompleted(svc.imageId, svc.scopeRef);
-      if (image) {
-        svc.buildKey = image.buildKey;
-        this.registerDoEgressCaller(svc.source, svc.className, image.effectiveVersion);
-      }
+      if (!svc.logicalEntityId) continue;
+      const incarnation = await this.resolveRuntimeIncarnation(
+        svc.logicalEntityId,
+        source,
+        svc.scopeRef,
+        { trigger: "source-advanced" }
+      );
+      this.registerDoEgressCaller(svc.source, svc.className, incarnation.artifact.executionDigest);
     }
-    for (const [key, objectBuild] of trackedObjects) {
-      const image = updateImageFromCompleted(objectBuild.imageId, objectBuild.scopeRef);
-      if (image) {
-        this.doObjectBuilds.set(key, { ...objectBuild, buildKey: image.buildKey });
-      }
+    for (const [, objectBuild] of trackedObjects) {
+      await this.resolveRuntimeIncarnation(
+        objectBuild.logicalEntityId,
+        source,
+        objectBuild.scopeRef,
+        { trigger: "source-advanced" }
+      );
     }
 
     // Reconcile DO classes for this source against the new manifest — add new,
@@ -2491,11 +2612,11 @@ export class WorkerdManager {
         this.revokeWorkerBearer(`do-service:${serviceKey}`);
         this.deps.unregisterEgressCaller(`${svc.source}:${svc.className}`);
         this.doServices.delete(serviceKey);
-        if (svc.imageId) this.runtimeImages.delete(svc.imageId);
+        if (svc.logicalEntityId) this.runtimeIncarnations.retire(svc.logicalEntityId);
         for (const key of Array.from(this.doObjectBuilds.keys())) {
           if (key.startsWith(`${source}:${svc.className}/`)) {
             const objectBuild = this.doObjectBuilds.get(key);
-            if (objectBuild) this.runtimeImages.delete(objectBuild.imageId);
+            if (objectBuild) this.runtimeIncarnations.retire(objectBuild.logicalEntityId);
             this.doObjectBuilds.delete(key);
           }
         }
@@ -2505,20 +2626,23 @@ export class WorkerdManager {
       for (const { className } of doClasses) {
         const serviceKey = `${source}:${className}`;
         if (this.doServices.has(serviceKey)) continue;
-        const imageId = `do-service:${serviceKey}`;
-        const image = updateImageFromCompleted(imageId, undefined);
-        if (!image) continue;
+        const logicalEntityId = `do-service:${serviceKey}`;
+        const incarnation = await this.resolveRuntimeIncarnation(
+          logicalEntityId,
+          source,
+          undefined,
+          { trigger: "source-advanced" }
+        );
         const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
         const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
         this.doServices.set(serviceKey, {
-          buildKey: image.buildKey,
           className,
-          imageId,
+          logicalEntityId,
           serviceName,
           source,
         });
         this.registerRoutesForDoClass(source, className);
-        this.registerDoEgressCaller(source, className, image.effectiveVersion);
+        this.registerDoEgressCaller(source, className, incarnation.artifact.executionDigest);
         log.info(`Registered new DO class ${source}:${className} from push (no restart)`);
       }
     }

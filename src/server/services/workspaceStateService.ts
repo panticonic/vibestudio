@@ -17,7 +17,7 @@ import {
   workspaceStateMethods,
 } from "@vibestudio/service-schemas/workspaceState";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import { WORKSPACE_DO_SOURCE } from "../internalDOs/productBootManifest.js";
 
 export const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
@@ -48,7 +48,7 @@ export interface WorkspaceStateServiceDeps {
 
 export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): ServiceDefinition {
   const ref = {
-    source: INTERNAL_DO_SOURCE,
+    source: WORKSPACE_DO_SOURCE,
     className: WORKSPACE_DO_CLASS,
     objectKey: deps.workspaceId,
   };
@@ -58,7 +58,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
   return {
     name: "workspace-state",
     description: "Workspace slot/entity state (WorkspaceDO).",
-    policy: READ_POLICY,
+    authority: READ_POLICY,
     methods: workspaceStateMethods,
     handler: defineServiceHandler("workspace-state", workspaceStateMethods, {
       "slot.list": () => dispatch<unknown>("slotListOpen", []),

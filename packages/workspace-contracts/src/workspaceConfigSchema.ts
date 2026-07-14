@@ -42,19 +42,13 @@ const WorkspaceSourceRefSchema = z
   .object({ source: z.string(), ref: z.string().optional() })
   .strict();
 
-const WorkspaceServiceCallerKindSchema = z.enum([
-  "panel",
-  "app",
-  "shell",
-  "server",
-  "worker",
-  "do",
-  "extension",
-  "agent",
-  "system",
-  "user",
-  "external",
-]);
+const WorkspaceServicePrincipalKindSchema = z.enum(["host", "user", "device", "code", "entity"]);
+
+const WorkspaceServiceAuthoritySchema = z
+  .object({
+    principals: z.array(WorkspaceServicePrincipalKindSchema).nonempty(),
+  })
+  .strict();
 
 const WorkspaceServiceSchema = z.union([
   z
@@ -64,14 +58,7 @@ const WorkspaceServiceSchema = z.union([
       title: z.string().optional(),
       description: z.string().optional(),
       protocols: z.array(z.string()).optional(),
-      policy: z
-        .object({
-          allowed: z
-            .array(WorkspaceServiceCallerKindSchema)
-            .optional(),
-        })
-        .strict()
-        .optional(),
+      authority: WorkspaceServiceAuthoritySchema,
       durableObject: z.object({ className: z.string() }).strict(),
     })
     .strict(),
@@ -82,14 +69,7 @@ const WorkspaceServiceSchema = z.union([
       title: z.string().optional(),
       description: z.string().optional(),
       protocols: z.array(z.string()).optional(),
-      policy: z
-        .object({
-          allowed: z
-            .array(WorkspaceServiceCallerKindSchema)
-            .optional(),
-        })
-        .strict()
-        .optional(),
+      authority: WorkspaceServiceAuthoritySchema,
       worker: z.object({ routePath: z.string() }).strict(),
     })
     .strict(),
@@ -176,7 +156,11 @@ export const WorkspaceConfigSchema = z
     initPanels: z
       .array(
         z
-          .object({ source: z.string(), stateArgs: WorkspaceJsonObjectSchema.optional() })
+          .object({
+            source: z.string(),
+            env: z.record(z.string()).optional(),
+            stateArgs: WorkspaceJsonObjectSchema.optional(),
+          })
           .strict()
       )
       .optional(),
@@ -229,13 +213,7 @@ export const WorkspaceConfigSchema = z
         browserData: z.object({ extension: z.string() }).strict().optional(),
         gitInterop: z.object({ extension: z.string() }).strict().optional(),
         claudeCode: z.object({ extension: z.string() }).strict().optional(),
-      })
-      .strict()
-      .optional(),
-    trust: z
-      .object({
-        chromeApps: z.array(z.string()).optional(),
-        connectionManagementApps: z.array(z.string()).optional(),
+        devHost: z.object({ extension: z.string() }).strict().optional(),
       })
       .strict()
       .optional(),

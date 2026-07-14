@@ -6,18 +6,20 @@ import { Gateway } from "./gateway.js";
 import type {
   ServiceDispatcher,
   ServiceContext,
-  CallerKind,
 } from "../../packages/shared/src/serviceDispatcher.js";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { EntityCache } from "../../packages/shared/src/runtime/entityCache.js";
 import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
 import type { UserSubject } from "../../packages/identity/src/types.js";
 
-function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): EntityRecord {
+const TEST_EXECUTION_DIGEST = "1".repeat(64);
+
+function makeDoRecord(id: string, repoPath: string, executionDigest: string): EntityRecord {
   return {
     id,
     kind: "do",
-    source: { repoPath, effectiveVersion },
+    source: { repoPath },
+    activeExecutionDigest: executionDigest,
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -32,6 +34,9 @@ function createTestSetup(opts?: {
   entityCache?: EntityCache;
   userSubjectSource?: UserSubjectSource;
   membershipGate?: (subject: UserSubject | undefined) => boolean;
+  resolveExecutionRequests?: NonNullable<
+    ConstructorParameters<typeof RpcServer>[0]["resolveExecutionRequests"]
+  >;
 }) {
   const tokenManager = new TokenManager();
   const adminToken = "test-admin-token";
@@ -50,38 +55,33 @@ function createTestSetup(opts?: {
     args: unknown[];
   }> = [];
 
+  const dispatch = vi.fn(
+    async (ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
+      dispatched.push({ ctx, service, method, args });
+      // When the caller opted into deferral (ctx.deferral present), park the
+      // call — return the sentinel so the server acks {deferred,requestId}.
+      const deferral = (ctx as { deferral?: { run: (w: () => Promise<unknown>) => unknown } })
+        .deferral;
+      if (deferral) return deferral.run(async () => ({ deferredResolved: true }));
+      const key = `${service}.${method}`;
+      if (dispatchResults.has(key)) return dispatchResults.get(key);
+      return { ok: true };
+    }
+  );
   const dispatcher = {
-    dispatch: vi.fn(
-      async (ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
-        dispatched.push({ ctx, service, method, args });
-        // When the caller opted into deferral (ctx.deferral present), park the
-        // call — return the sentinel so the server acks {deferred,requestId}.
-        const deferral = (ctx as { deferral?: { run: (w: () => Promise<unknown>) => unknown } })
-          .deferral;
-        if (deferral) return deferral.run(async () => ({ deferredResolved: true }));
-        const key = `${service}.${method}`;
-        if (dispatchResults.has(key)) return dispatchResults.get(key);
-        return { ok: true };
-      }
-    ),
-    getPolicy: vi.fn((service: string) => {
-      if (service === "credentials")
-        return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-      if (service === "automation") return { allowed: ["server", "worker"] as CallerKind[] };
-      if (service === "build")
-        return { allowed: ["panel", "shell", "server", "worker"] as CallerKind[] };
-      return undefined;
-    }),
-    getMethodPolicy: vi.fn(() => undefined),
+    dispatch,
+    assertAuthority: vi.fn(),
     initialized: true,
   } as unknown as ServiceDispatcher;
 
   const server = new RpcServer({
+    workspaceId: "test-workspace",
     tokenManager,
     dispatcher,
     entityCache,
     userSubjectSource: opts?.userSubjectSource,
     membershipGate: opts?.membershipGate,
+    resolveExecutionRequests: opts?.resolveExecutionRequests,
   });
 
   return {
@@ -94,6 +94,7 @@ function createTestSetup(opts?: {
     remoteShellToken,
     entityCache,
     dispatcher,
+    dispatchMock: dispatch,
     dispatched,
     dispatchResults,
   };
@@ -364,7 +365,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
-          "hash-1"
+          TEST_EXECUTION_DIGEST
         )
       );
       setup = createTestSetup({ entityCache });
@@ -415,10 +416,13 @@ describe("RpcServer HTTP POST /rpc", () => {
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
-          "hash-1"
+          TEST_EXECUTION_DIGEST
         )
       );
-      setup = createTestSetup({ entityCache });
+      setup = createTestSetup({
+        entityCache,
+        resolveExecutionRequests: (digest) => (digest === TEST_EXECUTION_DIGEST ? [] : null),
+      });
       setup.server.initHandlers();
       gateway = new Gateway({
         tokenManager: setup.tokenManager,
@@ -455,7 +459,8 @@ describe("RpcServer HTTP POST /rpc", () => {
           callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
           callerKind: "do",
           repoPath: "workers/agent-worker",
-          effectiveVersion: "hash-1",
+          executionDigest: TEST_EXECUTION_DIGEST,
+          requested: [],
         },
       });
     });
@@ -644,17 +649,22 @@ describe("RpcServer HTTP POST /rpc", () => {
     });
   });
 
-  // ── Policy enforcement ──────────────────────────────────────────────────────
+  // ── Compositional authority enforcement ─────────────────────────────────────
 
-  describe("policy enforcement", () => {
-    it("rejects shell calling automation service", async () => {
+  describe("authority enforcement", () => {
+    it("preserves a dispatcher authority denial", async () => {
+      setup.dispatchMock.mockRejectedValueOnce(
+        Object.assign(new Error("authenticated code principal is required"), {
+          code: "EACCES",
+          errorKind: "access",
+        })
+      );
       const { body } = await postRpc(port, setup.shellToken, {
         method: "automation.spawn",
         args: [{}],
       });
 
-      expect(body["error"]).toContain("not accessible");
-      expect(setup.dispatched).toHaveLength(0);
+      expect(body["error"]).toContain("authenticated code principal is required");
     });
 
     it("allows worker calling credentials service", async () => {
@@ -676,6 +686,7 @@ describe("RpcServer HTTP POST /rpc", () => {
     });
 
     it("rejects unknown service", async () => {
+      setup.dispatchMock.mockRejectedValueOnce(new Error("Unknown service"));
       const { body } = await postRpc(port, setup.workerToken, {
         method: "nonexistent.foo",
         args: [],
@@ -885,25 +896,25 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
     });
 
-    it("denies a caller-kind not in the credentials service policy", async () => {
-      // Set up an RpcServer whose dispatcher only allows `shell` on
-      // `credentials`. A worker token should be rejected by
-      // `validateStreamingProxyFetch` BEFORE any frames are emitted.
+    it("preserves a compositional denial on the streaming proxy path", async () => {
       const tokenManager = new TokenManager();
       const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
       const stubEgress = { forwardProxyFetchStream: vi.fn() };
       const dispatcher = {
         dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
+        assertAuthority: vi.fn().mockRejectedValue(
+          Object.assign(new Error("authenticated user principal is required"), {
+            code: "EACCES",
+          })
+        ),
         initialized: true,
       } as unknown as ServiceDispatcher;
-      const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
+      const server = new RpcServer({
+        workspaceId: "test-workspace",
+        tokenManager,
+        dispatcher,
+        egressProxy: stubEgress,
+      });
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
@@ -940,22 +951,21 @@ describe("RpcServer HTTP POST /rpc", () => {
       const stubEgress = { forwardProxyFetchStream: vi.fn() };
       const dispatcher = {
         dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
-        getMethodSchema: vi.fn((service: string, method: string) => {
-          if (service === "credentials" && method === "proxyFetch") {
-            return { access: { sensitivity: "write" } };
-          }
-          return undefined;
-        }),
+        assertAuthority: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              "Blocked in read-only mode: 'credentials.proxyFetch' is not declared read-only"
+            )
+          ),
         initialized: true,
       } as unknown as ServiceDispatcher;
-      const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
+      const server = new RpcServer({
+        workspaceId: "test-workspace",
+        tokenManager,
+        dispatcher,
+        egressProxy: stubEgress,
+      });
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
@@ -1020,7 +1030,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         makeDoRecord(
           "do:workers/agent-worker:AiChatWorker:agent-1",
           "workers/agent-worker",
-          "hash-1"
+          TEST_EXECUTION_DIGEST
         )
       );
       const stubEgress = {
@@ -1041,20 +1051,16 @@ describe("RpcServer HTTP POST /rpc", () => {
       };
       const dispatcher = {
         dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
+        assertAuthority: vi.fn(),
         initialized: true,
       } as unknown as ServiceDispatcher;
       const server = new RpcServer({
+        workspaceId: "test-workspace",
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,
         entityCache,
+        resolveExecutionRequests: (digest) => (digest === TEST_EXECUTION_DIGEST ? [] : null),
       });
       server.initHandlers();
       const gw = new Gateway({
@@ -1092,7 +1098,8 @@ describe("RpcServer HTTP POST /rpc", () => {
                 callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
                 callerKind: "do",
                 repoPath: "workers/agent-worker",
-                effectiveVersion: "hash-1",
+                executionDigest: TEST_EXECUTION_DIGEST,
+                requested: [],
               },
             },
           }),
@@ -1113,16 +1120,11 @@ describe("RpcServer HTTP POST /rpc", () => {
       };
       const dispatcher = {
         dispatch: vi.fn(async () => ({ ok: true })),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
+        assertAuthority: vi.fn(),
         initialized: true,
       } as unknown as ServiceDispatcher;
       const server = new RpcServer({
+        workspaceId: "test-workspace",
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,
@@ -1171,19 +1173,10 @@ describe("RpcServer HTTP POST /rpc", () => {
               headers: { "content-type": "text/plain" },
             })
         ),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "extensions") {
-            return { allowed: ["worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
+        assertAuthority: vi.fn(),
         initialized: true,
       } as unknown as ServiceDispatcher;
-      const server = new RpcServer({
-        tokenManager,
-        dispatcher,
-      });
+      const server = new RpcServer({ workspaceId: "test-workspace", tokenManager, dispatcher });
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
@@ -1266,16 +1259,11 @@ describe("RpcServer HTTP POST /rpc", () => {
       };
       const dispatcher = {
         dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
+        assertAuthority: vi.fn(),
         initialized: true,
       } as unknown as ServiceDispatcher;
       const server = new RpcServer({
+        workspaceId: "test-workspace",
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,
@@ -1348,16 +1336,11 @@ describe("RpcServer HTTP POST /rpc", () => {
       };
       const dispatcher = {
         dispatch: vi.fn(),
-        getPolicy: vi.fn((service: string) => {
-          if (service === "credentials") {
-            return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-          }
-          return undefined;
-        }),
-        getMethodPolicy: vi.fn(() => undefined),
+        assertAuthority: vi.fn(),
         initialized: true,
       } as unknown as ServiceDispatcher;
       const server = new RpcServer({
+        workspaceId: "test-workspace",
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,

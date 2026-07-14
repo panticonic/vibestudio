@@ -6,7 +6,7 @@ function record(kind: EntityRecord["kind"], id = `${kind}:one`): EntityRecord {
   return {
     id,
     kind,
-    source: { repoPath: `${kind}s/example`, effectiveVersion: "v1" },
+    source: { repoPath: `${kind}s/example` },
     contextId: "ctx-one",
     key: "one",
     createdAt: 1,

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceContext } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import { createPanelCdpService, type PanelCdpServiceDeps } from "./panelCdpService.js";
@@ -42,25 +43,33 @@ function approvalQueueMock(
 }
 
 function ctx(id = "panel:requester") {
-  return {
-    caller: createVerifiedCaller(id, "panel", {
+  return createTestServiceContext(
+    createVerifiedCaller(id, "panel", {
       callerId: id,
       callerKind: "panel",
       repoPath: "panels/requester",
-      effectiveVersion: "version-1",
-    }),
-  };
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    })
+  );
 }
 
 function runtimeCtx(kind: "worker" | "do", id: string) {
-  return {
-    caller: createVerifiedCaller(id, kind, {
+  return createTestServiceContext(
+    createVerifiedCaller(id, kind, {
       callerId: id,
       callerKind: kind,
       repoPath: `workers/${id}`,
-      effectiveVersion: "version-1",
-    }),
-  };
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
+    })
+  );
 }
 
 /**
@@ -85,7 +94,11 @@ function accessFields(
           callerId: id,
           callerKind: "panel",
           repoPath: "panels/anchor",
-          effectiveVersion: "version-1",
+          executionDigest: "a".repeat(64),
+          requested: [
+            { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+            { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+          ],
         })
     ),
     ...overrides,
@@ -524,7 +537,7 @@ describe("panelCdpService", () => {
     });
 
     await expect(
-      service.handler({ caller: agentCaller }, "screenshot", ["target", undefined])
+      service.handler(createTestServiceContext(agentCaller), "screenshot", ["target", undefined])
     ).resolves.toEqual(shot);
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
@@ -564,7 +577,7 @@ describe("panelCdpService", () => {
     });
 
     await expect(
-      service.handler({ caller: agentCaller }, "screenshot", ["target", undefined])
+      service.handler(createTestServiceContext(agentCaller), "screenshot", ["target", undefined])
     ).rejects.toThrow(/agents may only automate panels in their own context/);
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(screenshot).not.toHaveBeenCalled();
@@ -582,9 +595,11 @@ describe("panelCdpService", () => {
     });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getCdpEndpoint", [
-        "target",
-      ])
+      service.handler(
+        createTestServiceContext(createVerifiedCaller("shell", "shell")),
+        "getCdpEndpoint",
+        ["target"]
+      )
     ).resolves.toEqual(endpoint);
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
@@ -636,10 +651,14 @@ describe("panelCdpService", () => {
       kind: "shell",
     });
     expect(getTarget).not.toHaveBeenCalled();
-    expect(service.methods["hostProvider.open"]?.policy).toEqual({ allowed: ["shell", "server"] });
-    expect(service.methods["hostProvider.send"]?.policy).toEqual({ allowed: ["shell", "server"] });
-    expect(service.methods["hostProvider.close"]?.policy).toEqual({
-      allowed: ["shell", "server"],
+    expect(service.methods["hostProvider.open"]?.authority).toEqual({
+      principals: ["user", "host"],
+    });
+    expect(service.methods["hostProvider.send"]?.authority).toEqual({
+      principals: ["user", "host"],
+    });
+    expect(service.methods["hostProvider.close"]?.authority).toEqual({
+      principals: ["user", "host"],
     });
   });
 });

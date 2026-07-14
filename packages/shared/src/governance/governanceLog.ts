@@ -61,7 +61,7 @@ export const ApprovalRecordSchema = z
         callerId: z.string().min(1),
         callerKind: z.string().min(1),
         repoPath: z.string().min(1).optional(),
-        effectiveVersion: z.string().min(1).optional(),
+        executionDigest: z.string().min(1).optional(),
         userId: z.string().min(1).optional(),
       })
       .strict(),

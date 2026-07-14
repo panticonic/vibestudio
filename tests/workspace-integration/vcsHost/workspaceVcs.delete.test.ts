@@ -20,12 +20,7 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -139,9 +134,9 @@ describe("GadWorkspaceDO — whole-repo deletion", () => {
     repoPath: string;
     actor: { id: string; kind: string };
     force?: boolean;
-  }) => lifecycleDo().vcsDeleteRepo(input);
+  }) => gad.call("vcsDeleteRepo", input) as ReturnType<ReturnType<typeof lifecycleDo>["vcsDeleteRepo"]>;
   const restoreRepo = (input: { repoPath: string; actor: { id: string; kind: string } }) =>
-    lifecycleDo().vcsRestoreRepo(input);
+    gad.call("vcsRestoreRepo", input) as ReturnType<ReturnType<typeof lifecycleDo>["vcsRestoreRepo"]>;
   // Fork a repo onto a context head (what an agent's context does): a working
   // edit folded into a deliberate commit, which is what creates the ctx head.
   async function forkCtx(ctxId: string, repoPath: string, file: string, body: string) {
@@ -251,7 +246,7 @@ describe("GadWorkspaceDO — whole-repo deletion", () => {
 
     expect(await repoPaths()).toContain("packages/foo");
     // The new main's log is fresh — a single seed commit, not the old lineage.
-    const log = await gad.instance.vcsLog("packages/foo", 50, VCS_MAIN_HEAD);
+    const log = await gad.call<Array<unknown>>("vcsLog", "packages/foo", 50, VCS_MAIN_HEAD);
     expect(log.length).toBe(1);
     const view = await vcs.repositories.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({

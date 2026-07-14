@@ -111,7 +111,7 @@ async function createSinglePanelBridge(options?: {
   const entity = {
     id: slot.current_entity_id,
     kind: "panel",
-    source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+    source: { repoPath: "panels/target" },
     contextId: "ctx-target",
     key: "entry-a",
     createdAt: now,
@@ -245,7 +245,7 @@ describe("createServerPanelTreeBridge reload", () => {
     const entity = {
       id: "panel:entry-a",
       kind: "panel",
-      source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+      source: { repoPath: "panels/target" },
       contextId: "ctx-target",
       key: "entry-a",
       createdAt: now,
@@ -338,7 +338,7 @@ describe("createServerPanelTreeBridge reload", () => {
     const entity = {
       id: "panel:entry-a",
       kind: "panel",
-      source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+      source: { repoPath: "panels/target" },
       contextId: "ctx-target",
       key: "entry-a",
       createdAt: now,
@@ -429,7 +429,7 @@ describe("createServerPanelTreeBridge reload", () => {
     const entity = {
       id: "panel:entry-a",
       kind: "panel",
-      source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+      source: { repoPath: "panels/target" },
       contextId: "ctx-target",
       key: "entry-a",
       createdAt: now,
@@ -541,7 +541,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     entities.set("panel:existing", {
       id: "panel:existing",
       kind: "panel",
-      source: { repoPath: "panels/existing", effectiveVersion: "ev" },
+      source: { repoPath: "panels/existing" },
       contextId: "ctx-existing",
       key: "entry-existing",
       createdAt: 1,
@@ -618,7 +618,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
         const record = {
           id,
           kind: "panel",
-          source: { repoPath: spec.source, effectiveVersion: "ev" },
+          source: { repoPath: spec.source },
           contextId: spec.contextId,
           key: spec.key,
           createdAt: 2,
@@ -721,7 +721,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     entities.set(parentEntityId, {
       id: parentEntityId,
       kind: "panel",
-      source: { repoPath: "panels/existing", effectiveVersion: "ev-existing" },
+      source: { repoPath: "panels/existing" },
       contextId: "ctx-existing",
       key: "entry-existing",
       createdAt: 1,
@@ -799,7 +799,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           const record = {
             id,
             kind: "panel",
-            source: { repoPath: spec.source, effectiveVersion: "ev-child" },
+            source: { repoPath: spec.source },
             contextId: spec.contextId,
             key: spec.key,
             parentId: ctx.caller.runtime.id,
@@ -897,7 +897,7 @@ describe("createServerPanelTreeBridge self-heal", () => {
     const entity = {
       id: "panel:entry-a",
       kind: "panel",
-      source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+      source: { repoPath: "panels/target" },
       contextId: "ctx-target",
       key: "entry-a",
       createdAt: now,
@@ -974,7 +974,7 @@ describe("createServerPanelTreeBridge self-heal", () => {
     const entity = {
       id: "panel:entry-a",
       kind: "panel",
-      source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+      source: { repoPath: "panels/target" },
       contextId: "ctx-target",
       key: "entry-a",
       createdAt: now,
@@ -1047,6 +1047,19 @@ describe("seedPanelTreeIfEmpty", () => {
     const bridge = async (request: PanelTreeBridgeRequest): Promise<unknown> => {
       calls.push(request);
       if (request.method === "roots") return roots;
+      if (request.method === "getTreeSnapshot") {
+        return roots.map((root) => {
+          const id = root.panelId ?? root.id;
+          return {
+            id,
+            snapshot: {
+              options: {},
+              stateArgs: id ? (stateArgsByRoot[id] ?? {}) : {},
+            },
+            children: [],
+          };
+        });
+      }
       if (request.method === "getStateArgs") return stateArgsByRoot[String(request.args[0])] ?? {};
       return { id: `panel:${request.args[0]}` };
     };
@@ -1057,14 +1070,24 @@ describe("seedPanelTreeIfEmpty", () => {
     const { bridge, calls } = makeBridge([]);
     await seedPanelTreeIfEmpty(
       bridge,
-      [{ source: "panels/chat" }, { source: "panels/notes", stateArgs: { folder: "inbox" } }],
+      [
+        { source: "panels/chat" },
+        {
+          source: "panels/notes",
+          env: { NOTES_MODE: "compact" },
+          stateArgs: { folder: "inbox" },
+        },
+      ],
       { userId: "alice", handle: "alice" }
     );
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(2);
     expect(creates.every((c) => c.callerId === "server" && c.callerKind === "server")).toBe(true);
-    expect(creates[0]?.args).toEqual(["panels/chat", { stateArgs: undefined }]);
-    expect(creates[1]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
+    expect(creates[0]?.args).toEqual(["panels/chat", { env: undefined, stateArgs: undefined }]);
+    expect(creates[1]?.args).toEqual([
+      "panels/notes",
+      { env: { NOTES_MODE: "compact" }, stateArgs: { folder: "inbox" } },
+    ]);
   });
 
   it("seeds missing init panels when a previous seed only partially completed", async () => {
@@ -1080,7 +1103,10 @@ describe("seedPanelTreeIfEmpty", () => {
 
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(1);
-    expect(creates[0]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
+    expect(creates[0]?.args).toEqual([
+      "panels/notes",
+      { env: undefined, stateArgs: { folder: "inbox" } },
+    ]);
   });
 
   it("reconciles only the attaching owner's roots and stamps every create", async () => {
@@ -1104,7 +1130,7 @@ describe("seedPanelTreeIfEmpty", () => {
     expect(creates).toHaveLength(1);
     expect(creates[0]).toMatchObject({
       subject: { userId: "alice", handle: "alice" },
-      args: ["panels/notes", { stateArgs: undefined }],
+      args: ["panels/notes", { env: undefined, stateArgs: undefined }],
     });
   });
 

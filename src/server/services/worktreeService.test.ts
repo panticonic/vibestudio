@@ -8,7 +8,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 import { WorktreeStore } from "../vcsHost/worktreeStore.js";
 import { DiskProjector } from "../vcsHost/diskProjector.js";
@@ -20,7 +22,18 @@ const CTX_HEAD = vcsContextHead("demo");
 const REPO = "packages/demo";
 const WRITER_ID = "do:workers/gad-store:GadStore:vcs";
 const writerCtx = { caller: createVerifiedCaller(WRITER_ID, "do") } as never;
-const shellCtx = { caller: createVerifiedCaller("shell:dev", "shell") } as never;
+const hostShellCtx = { caller: createHostCaller("shell:dev", "shell") } as never;
+
+async function dispatch(
+  service: ServiceDefinition,
+  ctx: Parameters<ServiceDefinition["handler"]>[0],
+  method: string,
+  args: unknown[]
+): Promise<unknown> {
+  const dispatcher = createTestServiceDispatcher();
+  dispatcher.registerService(service);
+  return dispatcher.dispatch(ctx, service.name, method, args);
+}
 
 describe("worktree.scan primitive", () => {
   let root: string;
@@ -71,7 +84,7 @@ describe("worktree.scan primitive", () => {
       getVcsWriterIdentity: () => WRITER_ID,
     });
 
-    const result = (await service.handler(writerCtx, "scan", [REPO, CTX_HEAD])) as {
+    const result = (await dispatch(service, writerCtx, "scan", [REPO, CTX_HEAD])) as {
       stateHash: string;
       files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
     };
@@ -105,7 +118,7 @@ describe("worktree.scan primitive", () => {
       dependentRepos: async () => [],
       getVcsWriterIdentity: () => WRITER_ID,
     });
-    await expect(service.handler(shellCtx, "nope", [])).rejects.toThrow(/Unknown worktree method/);
+    await expect(dispatch(service, hostShellCtx, "nope", [])).rejects.toThrow(/Unknown method/);
   });
 
   it("allows shell callers for host-side diagnostics", async () => {
@@ -121,7 +134,7 @@ describe("worktree.scan primitive", () => {
       getVcsWriterIdentity: () => WRITER_ID,
     });
 
-    await expect(service.handler(shellCtx, "dependentRepos", [REPO])).resolves.toEqual([]);
+    await expect(dispatch(service, hostShellCtx, "dependentRepos", [REPO])).resolves.toEqual([]);
   });
 
   it("rejects non-writer DO callers before reaching disk primitives", async () => {
@@ -141,9 +154,9 @@ describe("worktree.scan primitive", () => {
       caller: createVerifiedCaller("do:workers/other:Other:vcs", "do"),
     } as never;
 
-    await expect(service.handler(foreignDoCtx, "scan", [REPO, CTX_HEAD])).rejects.toThrow(
-      /restricted to the workspace VCS store DO/
-    );
+    await expect(dispatch(service, foreignDoCtx, "scan", [REPO, CTX_HEAD])).rejects.toMatchObject({
+      code: "EACCES",
+    });
     expect(scan).not.toHaveBeenCalled();
   });
 });

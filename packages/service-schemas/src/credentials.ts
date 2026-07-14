@@ -20,7 +20,7 @@ import type {
 } from "@vibestudio/credential-client/types";
 import type { DeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import { isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
@@ -886,7 +886,7 @@ const StoredCredentialSummarySchema = z
 const EntitySourceSchema = z
   .object({
     repoPath: z.string(),
-    effectiveVersion: z.string(),
+    executionDigest: z.string(),
   })
   .strict();
 
@@ -916,7 +916,7 @@ const CredentialAccessGrantSummarySchema = z
     action: z.enum(["read", "write", "use"]),
     scope: z.literal("version"),
     repoPath: z.string(),
-    effectiveVersion: z.string(),
+    executionDigest: z.string(),
     grantedAt: z.number(),
     grantedBy: z.string(),
     subjects: z.array(CredentialAccessSubjectSummarySchema),

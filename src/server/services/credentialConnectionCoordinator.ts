@@ -246,7 +246,7 @@ interface OAuthConnectionTransaction {
   callerId: string;
   callerKind: CallerKind;
   repoPath: string;
-  effectiveVersion: string;
+  executionDigest: string;
   stateParam: string;
   redirectUri: string;
   redirectStrategy: OAuthRedirectStrategy;
@@ -290,7 +290,7 @@ export interface CredentialConnectionCoordinatorDeps {
   resolveApprovalIdentity(ctx: ServiceContext): {
     callerId: string;
     repoPath: string;
-    effectiveVersion: string;
+    executionDigest: string;
   };
   requestCredentialApproval(
     ctx: ServiceContext,
@@ -301,7 +301,7 @@ export interface CredentialConnectionCoordinatorDeps {
       injection: CredentialBinding["injection"];
       accountIdentity: Credential["accountIdentity"];
       scopes: string[];
-      identity: { repoPath: string; effectiveVersion: string };
+      identity: { repoPath: string; executionDigest: string };
       metadata?: Record<string, string>;
       replacementCredentialLabel?: string;
       signal?: AbortSignal;
@@ -1055,7 +1055,7 @@ export function createCredentialConnectionCoordinator(
       callerKind: ctx.caller.runtime.kind,
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
       title: request.flow.title ?? request.credential.label,
       description: request.flow.description,
       credentialLabel: request.credential.label,
@@ -1142,7 +1142,7 @@ export function createCredentialConnectionCoordinator(
       callerKind: ctx.caller.runtime.kind,
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
       title: request.flow.title ?? request.credential.label,
       description: request.flow.description,
       credentialLabel: request.credential.label,
@@ -1254,7 +1254,7 @@ export function createCredentialConnectionCoordinator(
         callerKind: ctx.caller.runtime.kind,
         ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
         repoPath: identity.repoPath,
-        effectiveVersion: identity.effectiveVersion,
+        executionDigest: identity.executionDigest,
         title: request.flow.title ?? request.credential.label,
         description: request.flow.description,
         credentialLabel: request.credential.label,
@@ -1835,7 +1835,7 @@ export function createCredentialConnectionCoordinator(
       callerId: ctx.caller.runtime.id,
       callerKind: isUserlandRuntimeCaller(ctx) ? ctx.caller.runtime.kind : "panel",
       repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
       credentialLabel: request.credential.label,
       userCode: device.userCode,
       verificationUri: device.verificationUri,
@@ -2866,7 +2866,7 @@ export function createCredentialConnectionCoordinator(
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
-      effectiveVersion: identity.effectiveVersion,
+      executionDigest: identity.executionDigest,
       stateParam: params.stateParam,
       redirectUri: params.redirectUri,
       redirectStrategy: params.redirectStrategy,

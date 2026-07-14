@@ -46,11 +46,7 @@ function tempBuild() {
   const dir = path.join(root, "build");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "index.mjs"), "console.log('terminal app');\n");
-  return {
-    dir,
-    metadata: { ev: "ev-cli" },
-    artifacts: [{ path: "index.mjs", role: "primary" }],
-  };
+  return path.join(dir, "index.mjs");
 }
 
 describe("TerminalAppRunner", () => {
@@ -73,9 +69,9 @@ describe("TerminalAppRunner", () => {
       appId: "@workspace-apps/remote-cli",
       source: "apps/remote-cli",
       buildKey: "build-cli",
-      effectiveVersion: "ev-cli",
+      executionDigest: "ev-cli",
       gatewayUrl: "http://127.0.0.1:1234",
-      build: tempBuild(),
+      entryPath: tempBuild(),
     });
 
     expect(grants.grant).toHaveBeenCalledWith(
@@ -89,7 +85,7 @@ describe("TerminalAppRunner", () => {
         VIBESTUDIO_TERMINAL_APP_ID: "@workspace-apps/remote-cli",
         VIBESTUDIO_TERMINAL_APP_SOURCE: "apps/remote-cli",
         VIBESTUDIO_TERMINAL_APP_BUILD_KEY: "build-cli",
-        VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION: "ev-cli",
+        VIBESTUDIO_TERMINAL_APP_EXECUTION_DIGEST: "ev-cli",
         VIBESTUDIO_TERMINAL_APP_GATEWAY_URL: "http://127.0.0.1:1234",
         VIBESTUDIO_TERMINAL_APP_RPC_TOKEN: "grant-token",
         VIBESTUDIO_TERMINAL_APP_CONNECTION_ID: "terminal:@workspace-apps/remote-cli:build-cli",
@@ -129,9 +125,9 @@ describe("TerminalAppRunner", () => {
       appId: "@workspace-apps/remote-cli",
       source: "apps/remote-cli",
       buildKey: "build-cli",
-      effectiveVersion: "ev-cli",
+      executionDigest: "ev-cli",
       gatewayUrl: "http://127.0.0.1:1234",
-      build: tempBuild(),
+      entryPath: tempBuild(),
     });
 
     proc.emit("exit", 7);
@@ -160,9 +156,9 @@ describe("TerminalAppRunner", () => {
       appId: "@workspace-apps/remote-cli",
       source: "apps/remote-cli",
       buildKey: "build-cli",
-      effectiveVersion: "ev-cli",
+      executionDigest: "ev-cli",
       gatewayUrl: "http://127.0.0.1:1234",
-      build: tempBuild(),
+      entryPath: tempBuild(),
     };
 
     await Promise.all([runner.start(launch), runner.start(launch), runner.start(launch)]);

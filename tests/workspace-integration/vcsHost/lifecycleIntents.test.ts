@@ -38,12 +38,7 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -135,10 +130,11 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
     };
 
   const del = (repoPath: string) =>
-    doInstance().vcsDeleteRepo({ repoPath, actor: USER, force: true });
-  const restore = (repoPath: string) => doInstance().vcsRestoreRepo({ repoPath, actor: USER });
+    gad.call<Record<string, unknown>>("vcsDeleteRepo", { repoPath, actor: USER, force: true });
+  const restore = (repoPath: string) =>
+    gad.call<Record<string, unknown>>("vcsRestoreRepo", { repoPath, actor: USER });
   const fork = (fromPath: string, toPath: string) =>
-    doInstance().vcsForkRepo({ fromPath, toPath, actor: USER });
+    gad.call<Record<string, unknown>>("vcsForkRepo", { fromPath, toPath, actor: USER });
 
   /** Make the next N updateMains calls APPLY host-side then throw `err` — the
    *  lost-response hazard (CAS landed, response never returned). */
@@ -220,7 +216,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       expect(refs.readMain("packages/foo")).toBeNull();
       expect(lifecycleIntents()).toHaveLength(1);
       // Heal converges: keep archived (ref is authority), drain the intent.
-      const healed = await doInstance().vcsHealPublishDrift({});
+      const healed = await gad.call<{ pendingIntents: number }>("vcsHealPublishDrift", {});
       expect(healed.pendingIntents).toBe(0);
       expect(await worktreeHead("packages/foo", VCS_MAIN_HEAD)).toBeNull();
       expect(lifecycleIntents()).toHaveLength(0);
@@ -301,7 +297,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       expect(await worktreeHead("packages/foo", VCS_MAIN_HEAD)).toBeNull();
       expect(lifecycleIntents()).toHaveLength(1);
       // Heal rolls forward: DO main re-adopted, intent drained.
-      const healed = await doInstance().vcsHealPublishDrift({});
+      const healed = await gad.call<{ pendingIntents: number }>("vcsHealPublishDrift", {});
       expect(healed.pendingIntents).toBe(0);
       expect((await worktreeHead("packages/foo", VCS_MAIN_HEAD))?.stateHash).toBe(archivedState);
       expect(lifecycleIntents()).toHaveLength(0);
@@ -410,7 +406,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       expect(ref).toBeTruthy();
       expect(lifecycleIntents()).toHaveLength(1);
       // Heal converges: keep the forked lineage, drain intent, project to disk.
-      const healed = await doInstance().vcsHealPublishDrift({});
+      const healed = await gad.call<{ pendingIntents: number }>("vcsHealPublishDrift", {});
       expect(healed.pendingIntents).toBe(0);
       expect((await worktreeHead("packages/clone", VCS_MAIN_HEAD))?.stateHash).toBe(ref);
       expect(lifecycleIntents()).toHaveLength(0);

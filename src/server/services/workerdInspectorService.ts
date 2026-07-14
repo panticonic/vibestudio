@@ -11,18 +11,16 @@
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { hasPanelHostingAuthority } from "@vibestudio/shared/serviceAuthorityChecks";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
 import {
   requestCapabilityPermission,
   type CapabilityPermissionDeps,
 } from "./capabilityPermission.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export const WORKERD_INSPECTOR_CAPABILITY = "workerd.inspector";
 
 export interface WorkerdInspectorServiceDeps extends CapabilityPermissionDeps {
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   listTargets(): Promise<WorkerdInspectorTarget[]>;
   getEndpoint(
     targetPath: string,
@@ -41,13 +39,13 @@ export function createWorkerdInspectorService(
   return {
     name: "workerdInspector",
     description: "Approval-gated workerd V8 inspector access for profiling workers and DOs",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    authority: { principals: ["user", "host", "code"] },
     methods,
     handler: defineServiceHandler("workerdInspector", methods, {
       listTargets: () => deps.listTargets(),
       getEndpoint: async (ctx, [targetPath]) => {
         const caller = ctx.caller;
-        if (!isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
+        if (!(await hasPanelHostingAuthority(ctx))) {
           const permission = await requestCapabilityPermission(deps, {
             caller,
             capability: WORKERD_INSPECTOR_CAPABILITY,

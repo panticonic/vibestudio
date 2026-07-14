@@ -22,7 +22,7 @@ class MigrationProbeDO extends DurableObjectBase {
     );
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   countMigrations(): number {
     return (this.sql.exec(`SELECT COUNT(*) as count FROM migration_log`).one() as { count: number })
       .count;
@@ -44,7 +44,7 @@ class DestructiveMigrationProbeDO extends DurableObjectBase {
     if (fromVersion > 0) this.sql.exec(`DROP TABLE IF EXISTS required_table`);
   }
 
-  @rpc
+  @rpc({ principals: ["host"] })
   hasRequiredTable(): boolean {
     return (
       this.sql

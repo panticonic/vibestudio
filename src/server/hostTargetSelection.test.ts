@@ -44,7 +44,7 @@ function candidate(
     target: "electron",
     declared: true,
     status: "running",
-    activeEv: "ev",
+    activeSourceDigest: "ev",
     activeBundleKey: "build-1",
     capabilities: ["panel-hosting"],
     canRollback: false,

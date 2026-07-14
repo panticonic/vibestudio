@@ -13,7 +13,7 @@ import type {
   UnitBatchEntry,
 } from "@vibestudio/shared/approvals";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 export const shellApprovalValuesSchema = z
@@ -42,7 +42,7 @@ const approvalRequesterSchema = z
     panel: z.object({ id: z.string(), title: z.string().optional() }).strict().optional(),
     sourcePath: z.string().optional(),
     repoPath: z.string(),
-    effectiveVersion: z.string(),
+    executionDigest: z.string(),
     contextId: z.string().optional(),
     stableIdentityKey: z.string(),
     ephemeralInstanceKey: z.string(),
@@ -151,7 +151,7 @@ const pendingApprovalBaseShape = {
   callerId: z.string(),
   callerKind: z.enum(["panel", "app", "worker", "do", "extension", "system"]),
   repoPath: z.string(),
-  effectiveVersion: z.string(),
+  executionDigest: z.string(),
   requestedAt: z.number(),
   callerTitle: z.string().optional(),
   requester: approvalRequesterSchema.optional(),
@@ -169,15 +169,15 @@ const unitBatchEntrySchema = z
     source: z
       .object({ kind: z.literal("workspace-repo"), repo: z.string(), ref: z.string() })
       .strict(),
-    ev: z.string().nullable().optional(),
+    sourceDigest: z.string().nullable().optional(),
     capabilities: z.array(z.string()),
-    dependencyEvs: z.record(z.string()).optional(),
+    dependencySourceDigests: z.record(z.string()).optional(),
     externalDeps: z.record(z.string()).optional(),
     integrity: z.string().nullable().optional(),
     provider: z
       .object({
         name: z.string(),
-        activeEv: z.string().nullable(),
+        activeSourceDigest: z.string().nullable(),
         activeBuildKey: z.string().nullable(),
         contractVersion: z.string(),
       })
@@ -512,7 +512,7 @@ export const shellApprovalMethods = defineServiceMethods({
     // `panel` is admitted here (the service-level policy is shell/app/server for
     // the trusted approval bar). Resolution is scoped to
     // (channelId, requestId, resolveToken).
-    policy: { allowed: ["panel", "shell", "app", "server"] },
+    authority: { principals: ["code", "user", "host"] },
     access: RESOLVE_ACCESS,
     examples: [
       {

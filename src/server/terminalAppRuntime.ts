@@ -2,6 +2,10 @@ import { normalizeUnitRepoPath as normalizeRepoPath } from "@vibestudio/unit-hos
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { AppBuildResultLike, AppRegistryEntry } from "./appHost.js";
+import type {
+  ArtifactBundleEntry,
+  ExecutionArtifactRef,
+} from "@vibestudio/shared/execution/identity";
 import { TerminalAppRunner } from "./terminalAppRunner.js";
 
 export interface AppRuntimeLog {
@@ -25,6 +29,11 @@ export interface TerminalAppRuntimeDeps {
   registry: TerminalRegistry;
   buildSystem: {
     getBuildByKey?(key: string): AppBuildResultLike | null;
+    getExecutionArtifact(executionDigest: string): {
+      ref: ExecutionArtifactRef;
+      entries: ArtifactBundleEntry[];
+      entryPath(artifactPath: string): string;
+    } | null;
   };
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   entityCache?: Pick<EntityCache, "resolve">;
@@ -93,18 +102,26 @@ export class TerminalAppRuntime {
       this.deps.emitStatus(entry.name, "error", "Terminal app runner is not configured");
       return;
     }
-    if (!entry.activeBundleKey) throw new Error(`Terminal app ${entry.name} has no active build`);
+    if (!entry.activeBundleKey || !entry.activeExecutionDigest) {
+      throw new Error(`Terminal app ${entry.name} has no active execution artifact`);
+    }
     const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
     if (!build) throw new Error(`Terminal app build is missing: ${entry.activeBundleKey}`);
     this.deps.validateBuild(entry.name, build);
+    const execution = this.deps.buildSystem.getExecutionArtifact(entry.activeExecutionDigest);
+    if (!execution || execution.ref.executionDigest !== entry.activeExecutionDigest) {
+      throw new Error(`Terminal app execution artifact is missing: ${entry.activeExecutionDigest}`);
+    }
+    const primary = execution.entries.find((artifact) => artifact.role === "primary");
+    if (!primary) throw new Error(`Terminal app ${entry.name} has no primary artifact`);
     await this.runner.start(
       {
         appId: entry.name,
         source: normalizeRepoPath(entry.source.repo),
         buildKey: entry.activeBundleKey,
-        effectiveVersion: entry.activeEv,
+        executionDigest: entry.activeExecutionDigest,
         gatewayUrl: this.deps.getGatewayUrl(),
-        build,
+        entryPath: execution.entryPath(primary.path),
         interactive: entry.interactive ?? false,
       },
       options

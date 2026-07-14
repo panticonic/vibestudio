@@ -22,13 +22,14 @@ import type {
   WorkspaceStateClient,
 } from "@vibestudio/shell-core/workspaceStateClient";
 import {
+  createHostCaller,
   createVerifiedCaller,
   type ServiceContext,
   type ServiceDispatcher,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
-import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import type { InitPanelEntry, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import {
   getCurrentSnapshot,
@@ -43,6 +44,7 @@ import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
+  RuntimeEntitySummary,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelNavigationState } from "@vibestudio/shared/types";
 import type {
@@ -167,8 +169,8 @@ function stableJson(value: unknown): string {
     .join(",")}}`;
 }
 
-function initPanelSeedKey(source: string, stateArgs: Record<string, unknown> | undefined): string {
-  return `${source}\u0000${stableJson(stateArgs ?? {})}`;
+function initPanelSeedKey(entry: InitPanelEntry): string {
+  return `${entry.source}\u0000${stableJson(entry.env ?? {})}\u0000${stableJson(entry.stateArgs ?? {})}`;
 }
 
 type InitPanelRoot = {
@@ -177,6 +179,27 @@ type InitPanelRoot = {
   source?: unknown;
   owner?: unknown;
 };
+
+type InitPanelSnapshotNode = {
+  id?: unknown;
+  snapshot?: {
+    options?: { env?: Record<string, string> };
+    stateArgs?: Record<string, unknown>;
+  };
+  children?: InitPanelSnapshotNode[];
+};
+
+function flattenInitPanelSnapshots(
+  nodes: InitPanelSnapshotNode[]
+): Map<string, InitPanelSnapshotNode["snapshot"]> {
+  const snapshots = new Map<string, InitPanelSnapshotNode["snapshot"]>();
+  const visit = (node: InitPanelSnapshotNode) => {
+    if (typeof node.id === "string") snapshots.set(node.id, node.snapshot);
+    for (const child of node.children ?? []) visit(child);
+  };
+  for (const node of nodes) visit(node);
+  return snapshots;
+}
 
 /**
  * The SERVER is the single authority that seeds the initial panel tree from the workspace's
@@ -192,7 +215,7 @@ export async function seedPanelTreeIfEmpty(
   bridge: (
     request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
   ) => Promise<unknown>,
-  initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
+  initPanels: readonly InitPanelEntry[],
   ownerSubject: UserSubject
 ): Promise<void> {
   if (initPanels.length === 0) return;
@@ -214,12 +237,19 @@ export async function seedPanelTreeIfEmpty(
 
   const desiredCounts = new Map<string, number>();
   for (const entry of initPanels) {
-    const key = initPanelSeedKey(entry.source, entry.stateArgs);
+    const key = initPanelSeedKey(entry);
     desiredCounts.set(key, (desiredCounts.get(key) ?? 0) + 1);
   }
 
   const existingCounts = new Map<string, number>();
   if (roots.length > 0) {
+    const tree = (await bridge({
+      callerId: "server",
+      callerKind: "server",
+      method: "getTreeSnapshot",
+      args: [],
+    })) as InitPanelSnapshotNode[];
+    const snapshots = flattenInitPanelSnapshots(Array.isArray(tree) ? tree : []);
     for (const root of roots) {
       if (typeof root.source !== "string") return;
       const rootId =
@@ -229,13 +259,20 @@ export async function seedPanelTreeIfEmpty(
             ? root.id
             : null;
       if (!rootId) return;
-      const stateArgs = (await bridge({
-        callerId: "server",
-        callerKind: "server",
-        method: "getStateArgs",
-        args: [rootId],
-      })) as Record<string, unknown> | undefined;
-      const key = initPanelSeedKey(root.source, stateArgs);
+      const snapshot = snapshots.get(rootId);
+      const stateArgs =
+        snapshot?.stateArgs ??
+        ((await bridge({
+          callerId: "server",
+          callerKind: "server",
+          method: "getStateArgs",
+          args: [rootId],
+        })) as Record<string, unknown> | undefined);
+      const key = initPanelSeedKey({
+        source: root.source,
+        ...(snapshot?.options?.env ? { env: snapshot.options.env } : {}),
+        ...(stateArgs ? { stateArgs } : {}),
+      });
       if (!desiredCounts.has(key)) return;
       existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1);
     }
@@ -243,7 +280,7 @@ export async function seedPanelTreeIfEmpty(
 
   const remainingCounts = new Map(existingCounts);
   for (const entry of initPanels) {
-    const key = initPanelSeedKey(entry.source, entry.stateArgs);
+    const key = initPanelSeedKey(entry);
     const remaining = remainingCounts.get(key) ?? 0;
     if (remaining > 0) {
       remainingCounts.set(key, remaining - 1);
@@ -253,7 +290,7 @@ export async function seedPanelTreeIfEmpty(
       callerId: "server",
       callerKind: "server",
       method: "create",
-      args: [entry.source, { stateArgs: entry.stateArgs }],
+      args: [entry.source, { env: entry.env, stateArgs: entry.stateArgs }],
       // Stamp the seeded root under its owner's tree (WP3).
       subject: ownerSubject,
     });
@@ -304,7 +341,7 @@ export function createOwnerSeedingPanelTreeBridge(
   bridge: (
     request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
   ) => Promise<unknown>,
-  initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
+  initPanels: readonly InitPanelEntry[],
   seedStore?: OwnerPanelSeedStore
 ): (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown> {
   const ownerSeedPromises = new Map<string, Promise<void>>();
@@ -340,7 +377,7 @@ export async function createServerPanelTreeBridge(
   (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
 > {
   const registry = new PanelRegistry({});
-  const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+  const serverCtx: ServiceContext = { caller: createHostCaller("server") };
   const call = <T>(service: string, method: string, args: unknown[]) =>
     deps.dispatcher.dispatch(serverCtx, service, method, args) as Promise<T>;
   const runtimeCaller = new AsyncLocalStorage<VerifiedCaller>();
@@ -380,6 +417,8 @@ export async function createServerPanelTreeBridge(
   const runtime: RuntimeClient = {
     createEntity: (spec: RuntimeEntityCreateSpec) =>
       callRuntime<RuntimeEntityHandle>("createEntity", [spec]),
+    listEntities: (kind) =>
+      callRuntime<RuntimeEntitySummary[]>("listEntities", [kind ? { kind } : undefined]),
     retireEntity: (id) => callRuntime<undefined>("retireEntity", [{ id }]),
   };
   const searchIndex: PanelSearchIndex = {
@@ -508,13 +547,13 @@ export async function createServerPanelTreeBridge(
   });
   const withRuntimeEntity = async <T extends { panelId: string }>(
     item: T
-  ): Promise<T & { runtimeEntityId: string; effectiveVersion?: string | null }> => {
+  ): Promise<T & { runtimeEntityId: string; executionDigest?: string | null }> => {
     const slotId = asPanelSlotId(item.panelId);
     const source = await panelManager.getCurrentEntitySource(slotId);
     return {
       ...item,
       runtimeEntityId: await panelManager.getCurrentEntityId(slotId),
-      effectiveVersion: source?.effectiveVersion ?? null,
+      executionDigest: source?.executionDigest ?? null,
     };
   };
   const panelToListItem = (
@@ -675,8 +714,8 @@ export async function createServerPanelTreeBridge(
           kind: getPanelSource(panel).startsWith("browser:") ? "browser" : "workspace",
           parentId: registry.findParentId(panelId),
           runtimeEntityId: await panelManager.getCurrentEntityId(asPanelSlotId(panelId)),
-          effectiveVersion:
-            (await panelManager.getCurrentEntitySource(asPanelSlotId(panelId)))?.effectiveVersion ??
+          executionDigest:
+            (await panelManager.getCurrentEntitySource(asPanelSlotId(panelId)))?.executionDigest ??
             null,
           contextId: getPanelContextId(panel),
           ref: snapshot.options.ref,
@@ -690,6 +729,7 @@ export async function createServerPanelTreeBridge(
           parentId?: string | null;
           name?: string;
           focus?: boolean;
+          env?: Record<string, string>;
           ref?: string;
           stateArgs?: Record<string, unknown>;
         };
@@ -751,7 +791,7 @@ export async function createServerPanelTreeBridge(
           contextId: created.contextId,
           source: created.source,
           runtimeEntityId,
-          effectiveVersion: entitySource?.effectiveVersion ?? null,
+          executionDigest: entitySource?.executionDigest ?? null,
         };
       }
       case "focus": {
@@ -875,7 +915,13 @@ export async function createServerPanelTreeBridge(
         emitTreeSnapshot();
         if (!panel) return null;
         const snap = getCurrentSnapshot(panel);
-        return { id: panel.id, title: panel.title, source: snap.source, contextId: snap.contextId };
+        return {
+          id: panel.id,
+          title: panel.title,
+          kind: snap.source.startsWith("browser:") ? "browser" : "workspace",
+          source: snap.source,
+          contextId: snap.contextId,
+        };
       }
       case "updatePanelState":
         await panelManager.updatePanelState(

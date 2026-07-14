@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 export interface ActivePanelRecord {
   panelId: string;
@@ -43,18 +43,18 @@ export function createPresenceTracker(
 }
 
 export function createPresenceService(deps: { presence: PresenceTracker }): ServiceDefinition {
-  const readPolicy: ServicePolicy = {
-    allowed: ["server", "shell", "app", "panel", "worker", "do", "extension", "agent"],
+  const readPolicy: ServiceAuthorityPolicy = {
+    principals: ["host", "user", "code", "entity"],
   };
   const methods = {
     markPanelActive: { args: z.tuple([z.string()]) },
     markPanelsOwned: { args: z.tuple([z.array(z.string())]) },
-    getPanelActiveOwner: { args: z.tuple([z.string()]), policy: readPolicy },
+    getPanelActiveOwner: { args: z.tuple([z.string()]), authority: readPolicy },
   };
   return {
     name: "presence",
     description: "Active shell/panel ownership",
-    policy: { allowed: ["server", "shell"] },
+    authority: { principals: ["host", "user"] },
     methods,
     handler: defineServiceHandler("presence", methods, {
       markPanelActive: (ctx, [panelId]) =>

@@ -161,28 +161,14 @@ export type WorkspaceGitUpstreamsConfig = Record<
  */
 export interface InitPanelEntry {
   source: string;
+  /** Environment sealed into the initial panel runtime snapshot. */
+  env?: Record<string, string>;
   stateArgs?: Record<string, unknown>;
 }
 
 export type PanelRestorePolicy = "focused" | "none";
 
-/**
- * Caller kinds permitted in workspace `services[].policy.allowed`.
- * Kept inline (rather than re-imported from serviceDispatcher) so this types
- * file stays free of runtime-side dependencies.
- */
-export type WorkspaceServiceCallerKind =
-  | "panel"
-  | "app"
-  | "shell"
-  | "server"
-  | "worker"
-  | "do"
-  | "agent"
-  | "system"
-  | "user"
-  | "external"
-  | "extension";
+export type WorkspaceServicePrincipalKind = "host" | "user" | "device" | "code" | "entity";
 
 /**
  * A stable Durable Object singleton declared in `workspace/meta/vibestudio.yml`.
@@ -207,7 +193,7 @@ export type WorkspaceServiceDecl = {
   title?: string;
   description?: string;
   protocols?: string[];
-  policy?: { allowed?: WorkspaceServiceCallerKind[] };
+  authority: { principals: WorkspaceServicePrincipalKind[] };
 } & (
   | { durableObject: { className: string }; worker?: never }
   | { worker: { routePath: string }; durableObject?: never }
@@ -345,6 +331,8 @@ export interface WorkspaceProvidersDecl {
   gitInterop?: WorkspaceExtensionProviderDecl;
   /** Extension-backed Claude Code launch/session adapter. */
   claudeCode?: WorkspaceExtensionProviderDecl;
+  /** Trusted exact-state host build and supervision provider. */
+  devHost?: WorkspaceExtensionProviderDecl;
 }
 
 /**
@@ -353,16 +341,10 @@ export interface WorkspaceProvidersDecl {
  * manifest lives in the approval-gated meta repo, editing these lists rides
  * the existing main-advance approval flow — trust changes stay user-gated.
  *
- * A workspace app listed under `chromeApps` may render host chrome
+ * An app whose exact execution artifact receives `panel-hosting` authority may render host chrome
  * (`panel-hosting`). An app not listed never receives that capability even if
  * its own unit manifest requests it.
  */
-export interface WorkspaceTrustDecl {
-  chromeApps?: string[];
-  /** Apps allowed to manage pairing and connection recovery. */
-  connectionManagementApps?: string[];
-}
-
 /**
  * Per-host-target app declaration: which declared workspace app a host target
  * (electron / react-native / terminal) prefers to launch, plus any extensions
@@ -470,10 +452,6 @@ export interface WorkspaceConfig {
    * missing slot cleanly disables the corresponding host feature.
    */
   providers?: WorkspaceProvidersDecl;
-  /**
-   * App trust grants for chrome rendering. Approval-gated via the meta repo.
-   */
-  trust?: WorkspaceTrustDecl;
   /** Preferred app (and startup-ordering constraints) per host target. */
   hostTargets?: WorkspaceHostTargetsDecl;
 }

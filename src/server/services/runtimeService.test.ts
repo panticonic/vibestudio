@@ -1,3 +1,4 @@
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,11 +15,39 @@ import {
   type EntityRecord,
   type RuntimeEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
+import type { ResolvedExecutionBinding } from "../buildV2/index.js";
+import { sha256 } from "@vibestudio/shared/execution/identity";
+import type { CapabilityScope } from "@vibestudio/rpc";
+
+function resolvedExecution(source: string, ref?: string, revision = "1"): ResolvedExecutionBinding {
+  const selectorPolicy: ResolvedExecutionBinding["selectorPolicy"] = ref?.startsWith("ctx:")
+    ? { kind: "head", repoPath: source, head: { contextId: ref.slice(4) } }
+    : ref?.startsWith("state:")
+      ? { kind: "state", repoPath: source, stateHash: sha256(ref) }
+      : { kind: "head", repoPath: source, head: "main" };
+  return {
+    unitName: source,
+    selectorPolicy,
+    artifact: {
+      source: {
+        repoPath: source,
+        sourceEv: sha256("source"),
+        stateHash: sha256("state"),
+      },
+      recipeDigest: sha256(`recipe:${source}:${revision}`),
+      buildKey: sha256(`build:${source}:${revision}`),
+      artifactDigest: sha256(`artifact:${source}:${revision}`),
+      executionDigest: sha256(`execution:${source}:${revision}`),
+    },
+    requested: [],
+    compilationCacheKey: `test:${source}`,
+  };
+}
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
@@ -79,9 +108,7 @@ interface BuildDepsOptions {
   prepareWorker?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["prepareWorker"];
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
   preparePanel?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["preparePanel"];
-  resolveAppEffectiveVersion?: NonNullable<
-    Parameters<typeof createRuntimeService>[0]["hooks"]
-  >["resolveAppEffectiveVersion"];
+  prepareApp?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["prepareApp"];
   setEntityTitle?: Parameters<typeof createRuntimeService>[0]["setEntityTitle"];
   vcsContexts?: Parameters<typeof createRuntimeService>[0]["vcsContexts"];
   cloneDurableStorage?: NonNullable<
@@ -90,6 +117,7 @@ interface BuildDepsOptions {
   destroyDurableStorage?: NonNullable<
     Parameters<typeof createRuntimeService>[0]["hooks"]
   >["destroyDurableStorage"];
+  authorityRequests?: readonly CapabilityScope[];
 }
 
 /** In-memory context-folder fake tracking which contexts exist. */
@@ -118,20 +146,35 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     opts.prepareDurableObject ??
     vi.fn(async (args: { className: string; key: string }) => ({
       targetId: `target:${args.className}:${args.key}`,
-      effectiveVersion: "ev-do",
+      executionDigest: "e".repeat(64),
     }));
   const prepareWorker =
     opts.prepareWorker ??
     vi.fn(async (args: { source: string; key: string }) => ({
       targetId: `target:worker:${args.source}:${args.key}`,
-      effectiveVersion: "ev-worker",
+      executionDigest: "f".repeat(64),
     }));
   const contextFolders = contextFoldersFake();
   const onRetire = opts.onRetire ?? vi.fn(async () => {});
-  const preparePanel = opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel" }));
-  const resolveAppEffectiveVersion = opts.resolveAppEffectiveVersion ?? vi.fn(async () => "ev-app");
+  const preparePanel = opts.preparePanel ?? vi.fn(async () => {});
+  const prepareApp = opts.prepareApp ?? vi.fn(async () => {});
   const cloneDurableStorage = opts.cloneDurableStorage ?? vi.fn(async () => {});
   const destroyDurableStorage = opts.destroyDurableStorage ?? vi.fn(async () => {});
+  const executions = new Map<string, ResolvedExecutionBinding>();
+  let resolution = 0;
+  const resolveExecutionArtifact = vi.fn(async (source: string, ref?: string) => {
+    const execution = {
+      ...resolvedExecution(source, ref, String(++resolution)),
+      requested: opts.authorityRequests ?? [],
+    };
+    executions.set(execution.artifact.executionDigest, execution);
+    return execution;
+  });
+  const resolveExecutionArtifactByDigest = (executionDigest: string) => {
+    const execution = executions.get(executionDigest);
+    if (!execution) throw new Error(`Unknown test execution: ${executionDigest}`);
+    return execution;
+  };
 
   const entityStore = new WorkspaceEntityStore({
     doDispatch: dispatch,
@@ -141,11 +184,13 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
 
   const service = createRuntimeService({
     entityStore,
+    resolveExecutionArtifact,
+    resolveExecutionArtifactByDigest,
     hooks: {
       prepareDurableObject,
       prepareWorker,
       preparePanel,
-      resolveAppEffectiveVersion,
+      prepareApp,
       onRetire,
       cloneDurableStorage,
       destroyDurableStorage,
@@ -175,7 +220,8 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     prepareWorker,
     onRetire,
     preparePanel,
-    resolveAppEffectiveVersion,
+    prepareApp,
+    resolveExecutionArtifact,
     cloneDurableStorage,
     destroyDurableStorage,
   };
@@ -186,7 +232,11 @@ const panelCaller = (id = "panel:caller", _contextId = "ctx-caller") =>
     callerId: id,
     callerKind: "panel",
     repoPath: "panels/caller",
-    effectiveVersion: "v1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 
 const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
@@ -194,7 +244,11 @@ const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
     callerId: id,
     callerKind: "app",
     repoPath: "apps/shell",
-    effectiveVersion: "v1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 
 const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
@@ -202,12 +256,26 @@ const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
     callerId: id,
     callerKind: "do",
     repoPath: "vibestudio/internal",
-    effectiveVersion: "v1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 
-const shellCaller = createVerifiedCaller("shell", "shell");
-const serverCaller = createVerifiedCaller("server", "server");
-const extensionCaller = (id = "extension:agent-launcher") => createVerifiedCaller(id, "extension");
+const shellCaller = createHostCaller("shell", "shell");
+const serverCaller = createHostCaller("server");
+const extensionCaller = (id = "extension:agent-launcher") =>
+  createVerifiedCaller(id, "extension", {
+    callerId: id,
+    callerKind: "extension",
+    repoPath: "extensions/agent-launcher",
+    executionDigest: "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
+  });
 
 const doCreateSpec = (
   overrides: Partial<Extract<RuntimeEntityCreateSpec, { kind: "do" }>> = {}
@@ -371,11 +439,11 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(prepareDurableObject).toHaveBeenCalledTimes(2);
   });
 
-  it("reactivates a retired row without changing its effective version", async () => {
+  it("reactivates a retired row by adopting the newly prepared incarnation", async () => {
     const prepareDurableObject = vi
       .fn()
-      .mockResolvedValueOnce({ targetId: "target:MyDO:k1", effectiveVersion: "ev-do-v1" })
-      .mockResolvedValueOnce({ targetId: "target:MyDO:k1", effectiveVersion: "ev-do-v2" });
+      .mockResolvedValueOnce({ targetId: "target:MyDO:k1", executionDigest: "1".repeat(64) })
+      .mockResolvedValueOnce({ targetId: "target:MyDO:k1", executionDigest: "2".repeat(64) });
     const { service, instance } = await buildDeps({ prepareDurableObject });
 
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
@@ -389,17 +457,15 @@ describe("runtimeService.createEntity (do kind)", () => {
 
     const reactivated = instance.entityResolve(handle.id);
     expect(reactivated?.status).toBe("active");
-    expect(reactivated?.source.effectiveVersion).toBe("ev-do-v1");
+    expect(reactivated?.activeExecutionDigest).toBe(sha256("execution:workers/example:2"));
   });
 
-  it("reactivates a retired panel row without changing its effective version", async () => {
-    const preparePanel = vi
-      .fn()
-      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v1" })
-      .mockResolvedValueOnce({ effectiveVersion: "ev-panel-v2" });
+  it("reactivates a retired panel row with its newly resolved artifact", async () => {
+    const preparePanel = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
     const { service, instance } = await buildDeps({ preparePanel });
     const spec: RuntimeEntityCreateSpec = {
       kind: "panel",
+      surface: "workspace",
       source: "panels/example",
       key: "nav-1",
       contextId: "ctx-x",
@@ -414,12 +480,12 @@ describe("runtimeService.createEntity (do kind)", () => {
 
     const reactivated = instance.entityResolve(handle.id);
     expect(reactivated?.status).toBe("active");
-    expect(reactivated?.source.effectiveVersion).toBe("ev-panel-v1");
+    expect(reactivated?.activeExecutionDigest).toBe(sha256("execution:panels/example:2"));
   });
 
   it("creates app entities as first-class runtime records", async () => {
-    const resolveAppEffectiveVersion = vi.fn(async () => "ev-app-shell");
-    const { service, entityCache } = await buildDeps({ resolveAppEffectiveVersion });
+    const prepareApp = vi.fn(async () => {});
+    const { service, entityCache } = await buildDeps({ prepareApp });
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
       source: "apps/shell",
@@ -445,15 +511,21 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(handle.targetId).toBe(handle.id);
     expect(entityCache.resolveActive(handle.id)).toMatchObject({
       kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "ev-app-shell" },
+      source: { repoPath: "apps/shell" },
       contextId: "ctx-app",
       key: "desktop",
       stateArgs: { window: "main" },
     });
-    expect(resolveAppEffectiveVersion).toHaveBeenCalledWith({
-      source: "apps/shell",
-      ref: undefined,
-    });
+    expect(prepareApp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "apps/shell",
+        execution: expect.objectContaining({
+          artifact: expect.objectContaining({
+            source: expect.objectContaining({ repoPath: "apps/shell" }),
+          }),
+        }),
+      })
+    );
   });
 
   it("rejects non-host callers creating app entities", async () => {
@@ -470,12 +542,9 @@ describe("runtimeService.createEntity (do kind)", () => {
     ).rejects.toThrow(/host-managed/);
   });
 
-  it("reactivates a retired app row without changing its effective version", async () => {
-    const resolveAppEffectiveVersion = vi
-      .fn()
-      .mockResolvedValueOnce("ev-app-v1")
-      .mockResolvedValueOnce("ev-app-v2");
-    const { service, instance } = await buildDeps({ resolveAppEffectiveVersion });
+  it("reactivates a retired app row with its newly resolved artifact", async () => {
+    const prepareApp = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
+    const { service, instance } = await buildDeps({ prepareApp });
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
       source: "apps/shell",
@@ -492,7 +561,7 @@ describe("runtimeService.createEntity (do kind)", () => {
 
     const reactivated = instance.entityResolve(handle.id);
     expect(reactivated?.status).toBe("active");
-    expect(reactivated?.source.effectiveVersion).toBe("ev-app-v1");
+    expect(reactivated?.activeExecutionDigest).toBe(sha256("execution:apps/shell:2"));
   });
 });
 
@@ -511,7 +580,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "p1",
       createdAt: 1,
@@ -536,7 +605,7 @@ describe("runtimeService.createEntity context policy", () => {
 
   it("keeps trusted host authority for a panel-tree-mediated server caller", async () => {
     const { service, approvalQueue, entityCache } = await buildDeps();
-    const mediated = createVerifiedCaller("panel:tree/about-new", "server");
+    const mediated = createHostCaller("panel:tree/about-new");
     const handle = (await service.handler({ caller: mediated }, "createEntity", [
       doCreateSpec({ contextId: "ctx-other" }),
     ])) as EntityRecord;
@@ -560,7 +629,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "pf",
       createdAt: 1,
@@ -583,7 +652,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "p2",
       createdAt: 1,
@@ -594,7 +663,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: "panel:resident-2",
       kind: "panel",
-      source: { repoPath: "panels/resident", effectiveVersion: "v1" },
+      source: { repoPath: "panels/resident" },
       contextId: "ctx-target",
       key: "resident-2",
       createdAt: 1,
@@ -617,7 +686,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "v1" },
+      source: { repoPath: "apps/shell" },
       contextId: "ctx-caller",
       key: "desktop",
       createdAt: 1,
@@ -627,7 +696,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: "panel:resident-app",
       kind: "panel",
-      source: { repoPath: "panels/resident", effectiveVersion: "v1" },
+      source: { repoPath: "panels/resident" },
       contextId: "ctx-target",
       key: "resident-app",
       createdAt: 1,
@@ -654,7 +723,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "p3",
       createdAt: 1,
@@ -664,7 +733,7 @@ describe("runtimeService.createEntity context policy", () => {
     entityCache._onActivate({
       id: "panel:resident-3",
       kind: "panel",
-      source: { repoPath: "panels/resident", effectiveVersion: "v1" },
+      source: { repoPath: "panels/resident" },
       contextId: "ctx-target",
       key: "resident-3",
       createdAt: 1,
@@ -679,26 +748,56 @@ describe("runtimeService.createEntity context policy", () => {
 
 describe("runtimeService.createEntity build refs", () => {
   it("starts the exact panel runtime image selected by an explicit ref", async () => {
-    const { service, preparePanel } = await buildDeps();
+    const { service, preparePanel, resolveExecutionArtifact } = await buildDeps();
+    const stateRef = `state:${"a".repeat(64)}`;
 
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
+        surface: "workspace",
         source: "panels/chat",
         key: "chat",
         contextId: "ctx-branch",
-        ref: "state:panel-commit",
+        ref: stateRef,
       } satisfies RuntimeEntityCreateSpec,
     ]);
 
-    expect(preparePanel).toHaveBeenCalledWith({
-      source: "panels/chat",
-      ref: "state:panel-commit",
+    expect(resolveExecutionArtifact).toHaveBeenCalledWith("panels/chat", stateRef);
+    expect(preparePanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "panels/chat",
+        execution: expect.objectContaining({
+          selectorPolicy: expect.objectContaining({ kind: "state" }),
+        }),
+      })
+    );
+  });
+
+  it("activates external browser panels without inventing a code execution", async () => {
+    const { service, preparePanel, resolveExecutionArtifact, entityCache } = await buildDeps();
+
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        surface: "browser",
+        source: "browser:https://example.com/path",
+        key: "browser-nav",
+        contextId: "ctx-browser",
+      } satisfies RuntimeEntityCreateSpec,
+    ])) as { id: string; executionDigest?: string; targetId: string };
+
+    expect(handle.targetId).toBe(handle.id);
+    expect(handle.executionDigest).toBeUndefined();
+    expect(resolveExecutionArtifact).not.toHaveBeenCalled();
+    expect(preparePanel).not.toHaveBeenCalled();
+    expect(entityCache.resolveActive(handle.id)).toMatchObject({
+      source: { repoPath: "browser:https://example.com/path" },
     });
+    expect(entityCache.resolveActive(handle.id)?.activeExecutionDigest).toBeUndefined();
   });
 
   it("keeps context identity separate from worker build ref", async () => {
-    const { service, prepareWorker } = await buildDeps();
+    const { service, prepareWorker, resolveExecutionArtifact } = await buildDeps();
 
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
@@ -712,13 +811,16 @@ describe("runtimeService.createEntity build refs", () => {
     expect(prepareWorker).toHaveBeenCalledWith(
       expect.objectContaining({
         contextId: "ctx-branch",
-        ref: undefined,
+        execution: expect.objectContaining({
+          selectorPolicy: { kind: "head", repoPath: "workers/agent", head: "main" },
+        }),
       })
     );
+    expect(resolveExecutionArtifact).toHaveBeenCalledWith("workers/agent", undefined);
   });
 
   it("forwards explicit context refs for targeted worker builds", async () => {
-    const { service, prepareWorker } = await buildDeps();
+    const { service, prepareWorker, resolveExecutionArtifact } = await buildDeps();
 
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
@@ -733,9 +835,16 @@ describe("runtimeService.createEntity build refs", () => {
     expect(prepareWorker).toHaveBeenCalledWith(
       expect.objectContaining({
         contextId: "ctx-branch",
-        ref: "ctx:ctx-branch",
+        execution: expect.objectContaining({
+          selectorPolicy: {
+            kind: "head",
+            repoPath: "workers/agent",
+            head: { contextId: "ctx-branch" },
+          },
+        }),
       })
     );
+    expect(resolveExecutionArtifact).toHaveBeenCalledWith("workers/agent", "ctx:ctx-branch");
   });
 });
 
@@ -773,7 +882,7 @@ describe("runtimeService.setTitle", () => {
   it("the dispatcher (single gate) rejects shell/server setTitle via the declared per-method policy", async () => {
     const setEntityTitle = vi.fn();
     const { service } = await buildDeps({ setEntityTitle });
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
@@ -785,7 +894,7 @@ describe("runtimeService.setTitle", () => {
           "setTitle",
           ["T"]
         )
-      ).rejects.toThrow(/not accessible to/i);
+      ).rejects.toThrow(/authenticated code principal is required/i);
     }
     expect(setEntityTitle).not.toHaveBeenCalled();
   });
@@ -793,7 +902,7 @@ describe("runtimeService.setTitle", () => {
   it("the dispatcher admits worker/do setTitle (per-method policy, single gate)", async () => {
     const setEntityTitle = vi.fn();
     const { service } = await buildDeps({ setEntityTitle });
-    const dispatcher = new ServiceDispatcher();
+    const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
@@ -962,7 +1071,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
       entityCache._onActivate({
         id,
         kind: "panel",
-        source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+        source: { repoPath: "panels/caller" },
         contextId: ctx,
         key: id,
         createdAt: 1,
@@ -1005,7 +1114,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     entityCache._onActivate({
       id: panel.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/host", effectiveVersion: "v1" },
+      source: { repoPath: "panels/host" },
       contextId: "ctx-host",
       key: "host",
       createdAt: 1,
@@ -1015,7 +1124,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     // Persist a host panel row.
     instance.entityActivate({
       kind: "panel",
-      source: { repoPath: "panels/host", effectiveVersion: "v1" },
+      source: { repoPath: "panels/host" },
       contextId: "ctx-host",
       key: "host",
     });
@@ -1067,7 +1176,7 @@ describe("runtimeService session entities", () => {
     // Cache + title registry updated.
     expect(entityCache.resolveActive(handle.id)).toMatchObject({
       kind: "session",
-      source: { repoPath: "agent-cli", effectiveVersion: "" },
+      source: { repoPath: "agent-cli" },
       stateArgs: { title: "My agent session" },
     });
     expect(setEntityTitle).toHaveBeenCalledWith(handle.id, "My agent session", {
@@ -1086,7 +1195,7 @@ describe("runtimeService session entities", () => {
 
   it("allows host callers and rejects non-host callers", async () => {
     const { service } = await buildDeps();
-    const hostCaller = createVerifiedCaller("shell", "shell");
+    const hostCaller = createHostCaller("shell", "shell");
     await expect(
       service.handler({ caller: hostCaller }, "createEntity", [sessionSpec()])
     ).resolves.toMatchObject({ kind: "session" });
@@ -1134,6 +1243,47 @@ describe("runtimeService session entities", () => {
       title: "Listed session",
     });
     expect(sessions[0]?.createdAt).toBeGreaterThan(0);
+  });
+
+  it("lists the authority sealed into the exact active panel execution", async () => {
+    const requested = [
+      {
+        capability: "rpc:shell.open",
+        resource: { kind: "exact", key: "workspace" },
+      },
+    ] as const satisfies readonly CapabilityScope[];
+    const { service } = await buildDeps({ authorityRequests: requested });
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        surface: "workspace",
+        source: "panels/terminal",
+        key: "terminal-list",
+        contextId: "ctx-terminal",
+      } satisfies RuntimeEntityCreateSpec,
+    ])) as {
+      id: string;
+      executionDigest: string;
+      authorityRequests: readonly CapabilityScope[];
+    };
+
+    expect(handle.authorityRequests).toEqual(requested);
+    const panels = (await service.handler({ caller: shellCaller }, "listEntities", [
+      { kind: "panel" },
+    ])) as Array<{
+      id: string;
+      source: string;
+      executionDigest?: string;
+      authorityRequests?: readonly CapabilityScope[];
+    }>;
+    expect(panels).toContainEqual(
+      expect.objectContaining({
+        id: handle.id,
+        source: "panels/terminal",
+        executionDigest: handle.executionDigest,
+        authorityRequests: requested,
+      })
+    );
   });
 
   it("retire with removeContext deletes the context folder when no live entity shares it", async () => {
@@ -1243,7 +1393,11 @@ const workerCaller = (id = "worker:workers/fork:fork", _ctx = "ctx-fork") =>
     callerId: id,
     callerKind: "worker",
     repoPath: "workers/fork",
-    effectiveVersion: "v1",
+    executionDigest: "a".repeat(64),
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 
 /** Seed a channel + agent DO in `contextId` (parented to `parent`). */
@@ -1392,7 +1546,7 @@ describe("runtimeService.cloneContext", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-mine",
       key: "o",
       createdAt: 1,
@@ -1413,7 +1567,7 @@ describe("runtimeService.cloneContext", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "f",
       createdAt: 1,
@@ -1602,7 +1756,7 @@ describe("runtimeService.destroyContext", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "x",
       createdAt: 1,
@@ -1832,7 +1986,7 @@ describe("runtimeService.createSubagentContext", () => {
     entityCache._onActivate({
       id: caller.runtime.id,
       kind: "panel",
-      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      source: { repoPath: "panels/caller" },
       contextId: "ctx-caller",
       key: "subagent-owner",
       createdAt: 1,

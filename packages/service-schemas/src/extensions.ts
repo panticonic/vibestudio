@@ -4,7 +4,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { JsonValueSchema } from "@vibestudio/shared/wireValues";
 
@@ -42,10 +42,11 @@ export const extensionRegistryEntrySchema = z
       })
       .strict(),
     installedAt: z.number(),
-    activeEv: z.string().nullable(),
+    activeSourceDigest: z.string().nullable(),
+    activeExecutionDigest: z.string().nullable(),
     activeSourceHash: z.string().nullable(),
     activeBundleKey: z.string().nullable(),
-    activeDependencyEvs: z.record(z.string()),
+    activeDependencySourceDigests: z.record(z.string()),
     activeExternalDeps: z.record(z.string()),
     activeRuntimeDepsKey: z.string().nullable(),
     status: z.enum(["running", "available", "stopped", "error", "pending-approval", "building"]),

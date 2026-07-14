@@ -7,7 +7,12 @@ import { Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import { ExtensionHost } from "./service.js";
+import { executionArtifactFixture } from "../../../src/server/testing/executionArtifactFixture.js";
+import { sha256 } from "@vibestudio/shared/execution/identity";
 import type { ExtensionHostDeps } from "./service.js";
+
+const CURRENT_SOURCE = sha256("extension-source-current");
+const CANDIDATE_SOURCE = sha256("extension-source-candidate");
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-host-"));
@@ -19,7 +24,11 @@ function panelCtx(callerId = "panel-1") {
       callerId,
       callerKind: "panel",
       repoPath: "panels/test",
-      effectiveVersion: "ev-test",
+      executionDigest: "sourceDigest-test",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     }),
   };
 }
@@ -30,7 +39,11 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
       callerId,
       callerKind: "do",
       repoPath: "workers/agent-worker",
-      effectiveVersion: "ev-agent",
+      executionDigest: "sourceDigest-agent",
+      requested: [
+        { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+        { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+      ],
     }),
   };
 }
@@ -38,13 +51,16 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
 function makeHost(
   overrides: {
     approvalDecision?: "once" | "session" | "version" | "deny";
-    activeEv?: string | null;
+    activeSourceDigest?: string | null;
     depEv?: string | null;
     activeDepEv?: string | null;
     activeExternalDeps?: Record<string, string>;
     candidateExternalDeps?: Record<string, string>;
     activeRuntimeDepsKey?: string | null;
-    extensionTransport?: { call: ReturnType<typeof vi.fn> };
+    extensionTransport?: {
+      call: ReturnType<typeof vi.fn>;
+      streamCallTarget?: ReturnType<typeof vi.fn>;
+    };
     buildTargets?: string[];
     registerBuildProvider?: ReturnType<typeof vi.fn>;
     unregisterBuildProvider?: ReturnType<typeof vi.fn>;
@@ -72,6 +88,7 @@ function makeHost(
     dependencies: overrides.candidateExternalDeps ?? {},
     internalDeps: ["@workspace/runtime"],
     manifest: {
+      authority: { requests: [] },
       displayName: "Git Tools",
       extension: {
         activationEvents: ["*"],
@@ -89,6 +106,7 @@ function makeHost(
       name: extensionNode.name,
       version: "1.0.0",
       vibestudio: {
+        authority: { requests: [] },
         displayName: "Git Tools",
         extension: {
           activationEvents: ["*"],
@@ -133,50 +151,64 @@ function makeHost(
       content: `export default ${JSON.stringify(key)};`,
     },
   ];
-  const buildSystem = {
-    getBuild: vi.fn(async () => ({
-      dir: path.join(statePath, "builds", "candidate-key"),
-      artifacts: buildArtifacts("candidate-key"),
-      metadata: {
-        ev: "ev-candidate",
-        sourceStateHash: "state:test",
-        details: {
-          kind: "extension",
-          runtimeDepsKey: "runtime-candidate",
-          runtimeAbi: "3",
-          providerContracts:
-            overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {},
-          externalDeps: {},
-        },
+  const buildForKey = (key: "bundle-key" | "candidate-key") => ({
+    dir: path.join(statePath, "builds", key),
+    artifacts: buildArtifacts(key),
+    metadata: {
+      sourceDigest:
+        key === "candidate-key"
+          ? CANDIDATE_SOURCE
+          : (overrides.activeSourceDigest ?? CURRENT_SOURCE),
+      sourceStateHash: "state:test",
+      details: {
+        kind: "extension",
+        runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
+        runtimeAbi: "3",
+        providerContracts:
+          key === "candidate-key"
+            ? (overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {})
+            : (overrides.activeProviderContracts ?? {}),
+        externalDeps: key === "candidate-key" ? {} : (overrides.activeExternalDeps ?? {}),
       },
-    })),
-    getBuildByKey: vi.fn((key: string) =>
-      key === "bundle-key" || key === "candidate-key"
-        ? {
-            dir: path.join(statePath, "builds", key),
-            artifacts: buildArtifacts(key),
-            metadata: {
-              ev: key === "candidate-key" ? "ev-candidate" : (overrides.activeEv ?? "ev-current"),
-              sourceStateHash: "state:test",
-              details: {
-                kind: "extension",
-                runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
-                runtimeAbi: "3",
-                providerContracts:
-                  key === "candidate-key"
-                    ? (overrides.candidateProviderContracts ??
-                      overrides.sourceProviderContracts ??
-                      {})
-                    : (overrides.activeProviderContracts ?? {}),
-                externalDeps: overrides.activeExternalDeps ?? {},
-              },
-            },
-          }
-        : null
-    ),
-    getEffectiveVersion: vi.fn((name: string) => {
-      if (name === extensionNode.name) return overrides.activeEv ?? "ev-current";
-      if (name === "@workspace/runtime") return overrides.depEv ?? "ev-runtime";
+    },
+  });
+  const currentExecution = executionArtifactFixture(
+    extensionNode.relativePath,
+    buildForKey("bundle-key") as never,
+    "main",
+    "bundle-key"
+  );
+  const candidateExecution = executionArtifactFixture(
+    extensionNode.relativePath,
+    buildForKey("candidate-key") as never,
+    "main",
+    "candidate-key"
+  );
+  const executionBundles = new Map<string, typeof currentExecution.bundle>([
+    [currentExecution.binding.artifact.executionDigest, currentExecution.bundle],
+    [candidateExecution.binding.artifact.executionDigest, candidateExecution.bundle],
+  ]);
+  const compilationRecords = new Map([
+    ["bundle-key", buildForKey("bundle-key")],
+    ["candidate-key", buildForKey("candidate-key")],
+  ]);
+  const getBuild = vi.fn(async (_unitPath?: string, _ref?: string) => buildForKey("candidate-key"));
+  const resolveExecutionArtifact = vi.fn(async (unitPath: string, ref = "main") => {
+    const build = await getBuild(unitPath, ref);
+    const key = path.basename(build.dir) as "bundle-key" | "candidate-key";
+    const exact = executionArtifactFixture(extensionNode.relativePath, build as never, ref, key);
+    compilationRecords.set(key, build);
+    executionBundles.set(exact.binding.artifact.executionDigest, exact.bundle);
+    return exact.binding;
+  });
+  const buildSystem = {
+    getBuild,
+    resolveExecutionArtifact,
+    getExecutionArtifact: vi.fn((digest: string) => executionBundles.get(digest) ?? null),
+    getBuildByKey: vi.fn((key: string) => compilationRecords.get(key) ?? null),
+    getSourceDigest: vi.fn((name: string) => {
+      if (name === extensionNode.name) return currentExecution.binding.artifact.source.sourceEv;
+      if (name === "@workspace/runtime") return overrides.depEv ?? "sourceDigest-runtime";
       return null;
     }),
     getExternalDeps: vi.fn((name: string) => {
@@ -216,12 +248,13 @@ function makeHost(
       version: "1.0.0",
       source: { kind: "workspace-repo", repo: extensionNode.relativePath, ref: "main" },
       installedAt: Date.now(),
-      activeEv: overrides.activeEv ?? "ev-current",
+      activeSourceDigest: currentExecution.binding.artifact.source.sourceEv,
+      activeExecutionDigest: currentExecution.binding.artifact.executionDigest,
       activeSourceHash: "abc123",
       activeBundleKey:
         overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
-      activeDependencyEvs: {
-        "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
+      activeDependencySourceDigests: {
+        "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "sourceDigest-runtime",
       },
       activeExternalDeps: overrides.activeExternalDeps ?? {},
       activeRuntimeDepsKey:
@@ -279,6 +312,36 @@ describe("ExtensionHost invocation attribution", () => {
         method: "providers.gitInterop.upstreamStatus",
       })
     );
+  });
+
+  it("streams a provider method only through its configured host-owned slot", async () => {
+    const extensionTransport = {
+      call: vi.fn(),
+      streamCallTarget: vi.fn(async () => new Response('{"seq":1}\n')),
+    };
+    const { host, extensionNode } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: (provider) =>
+        provider === "devHost" ? "@workspace-extensions/git-tools" : null,
+      hostProviderContracts: { devHost: ["logs"] },
+      activeProviderContracts: { devHost: { methods: ["logs"] } },
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    const response = await host.invokeProviderStream(panelCtx("panel-1"), "devHost", "logs", [
+      "launch",
+      0,
+    ]);
+    await expect(response.text()).resolves.toBe('{"seq":1}\n');
+    expect(extensionTransport.streamCallTarget).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invokeProviderStream",
+      "devHost",
+      "logs",
+      ["launch", 0],
+      expect.objectContaining({ method: "providers.devHost.logs" })
+    );
+    expect(extensionTransport.call).not.toHaveBeenCalled();
   });
 
   it("fails internal provider dispatch when the approved build does not declare that contract", async () => {
@@ -461,7 +524,7 @@ describe("ExtensionHost reload approval", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
-        effectiveVersion: "ev-test",
+        executionDigest: "sourceDigest-test",
         trigger: "management",
         title: "Reload extension",
         units: [
@@ -469,7 +532,7 @@ describe("ExtensionHost reload approval", () => {
             unitKind: "extension",
             unitName: extensionNode.name,
             source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "main" }),
-            ev: "ev-current",
+            sourceDigest: CURRENT_SOURCE,
           }),
         ],
         configWrite: null,
@@ -520,14 +583,14 @@ describe("ExtensionHost source change authorization", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
-        effectiveVersion: "ev-test",
+        executionDigest: "sourceDigest-test",
         trigger: "source-change",
         title: `${extensionNode.name} source change`,
         units: [
           expect.objectContaining({
             unitKind: "extension",
             unitName: extensionNode.name,
-            ev: "ev-current",
+            sourceDigest: CURRENT_SOURCE,
             source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "main" }),
           }),
         ],
@@ -682,8 +745,8 @@ describe("ExtensionHost reconcileDeclared", () => {
       }),
     };
     const { host, approvalQueue, extensionNode } = makeHost({
-      depEv: "ev-runtime-new",
-      activeDepEv: "ev-runtime-old",
+      depEv: "sourceDigest-runtime-new",
+      activeDepEv: "sourceDigest-runtime-old",
       extensionTransport,
     });
     approvalQueue.request.mockImplementation(() => new Promise(() => {}));
@@ -742,9 +805,9 @@ describe("ExtensionHost reconcileDeclared", () => {
 
   it("rebuilds an extension whose dependency EV changed", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
-      activeEv: "ev-current",
-      depEv: "ev-runtime-next",
-      activeDepEv: "ev-runtime-old",
+      activeSourceDigest: CURRENT_SOURCE,
+      depEv: "sourceDigest-runtime-next",
+      activeDepEv: "sourceDigest-runtime-old",
     });
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
@@ -801,7 +864,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.whenSettled();
 
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      activeEv: "ev-candidate",
+      activeSourceDigest: CANDIDATE_SOURCE,
       activeBundleKey: "candidate-key",
       status: "error",
       lastError: "ready timeout",
@@ -837,7 +900,7 @@ describe("ExtensionHost reconcileDeclared", () => {
 });
 
 describe("ExtensionHost activation", () => {
-  it("starts the approved active bundle instead of rebuilding the current ref", async () => {
+  it("starts the approved active bundle without rebuilding the current ref", async () => {
     const { host, buildSystem, extensionNode } = makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
@@ -849,6 +912,24 @@ describe("ExtensionHost activation", () => {
       expect.objectContaining({
         name: extensionNode.name,
         bundlePath: expect.stringContaining("bundle-key"),
+      })
+    );
+  });
+
+  it("binds the approved native dependency layer to the extension process", async () => {
+    const { host, extensionNode, statePath } = makeHost({
+      activeExternalDeps: { "native-addon": "1.0.0" },
+    });
+    const nodeModulesDir = path.join(statePath, "builds", "bundle-key", "node_modules");
+    fs.mkdirSync(nodeModulesDir, { recursive: true });
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await host.activate(extensionNode.name);
+
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: extensionNode.name,
+        runtimeNodeModulesDir: fs.realpathSync(nodeModulesDir),
       })
     );
   });
@@ -884,7 +965,7 @@ describe("ExtensionHost activation", () => {
       expect.objectContaining({
         name: extensionNode.name,
         target: "react-native",
-        activeEv: "ev-current",
+        activeSourceDigest: CURRENT_SOURCE,
         activeBuildKey: "bundle-key",
       })
     );
@@ -1012,6 +1093,16 @@ describe("ExtensionHost activation", () => {
     );
     const invocation = extensionTransport.call.mock.calls[0]![4] as { invocationToken: string };
     expect(host.resolveActiveInvocation(extensionNode.name, invocation.invocationToken)).toBeNull();
+  });
+
+  it("represents successful void extension invocations as JSON null", async () => {
+    const extensionTransport = { call: vi.fn(async () => undefined) };
+    const { host, extensionNode } = makeHost({ extensionTransport });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
+    ).resolves.toBeNull();
   });
 
   it("accepts workspace-relative extension paths on invocation", async () => {
@@ -1333,8 +1424,8 @@ describe("ExtensionHost activation", () => {
     ).rejects.toMatchObject({ code: "EPROTO" });
   });
 
-  it("allows server callers to invoke extension providers through the dispatcher", () => {
+  it("declares host authority for extension provider dispatch", () => {
     const { host } = makeHost();
-    expect(host.createServiceDefinition().policy?.allowed).toContain("server");
+    expect(host.createServiceDefinition().authority.principals).toContain("host");
   });
 });

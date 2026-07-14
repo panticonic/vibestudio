@@ -24,7 +24,7 @@ function build(overrides: Partial<BuildResult> = {}): BuildResult {
     metadata: {
       kind: "worker",
       name: "workers/a",
-      ev: "ev-worker",
+      sourceDigest: "sourceDigest-worker",
       sourceStateHash: "state:test",
       sourcemap: false,
       details: { kind: "generic" },

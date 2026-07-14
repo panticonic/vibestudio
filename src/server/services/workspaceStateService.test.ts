@@ -39,20 +39,28 @@ function makeService(opts: {
 }
 
 describe("workspaceStateService — title mirror hooks", () => {
-  it("allows approved shell apps to read and write workspace slot state", () => {
+  it("declares user and code authority for workspace slot state", () => {
     const { svc } = makeService({});
 
-    expect(svc.policy.allowed).toContain("app");
-    expect(svc.methods["slot.list"]?.policy?.allowed).toContain("app");
-    expect(svc.methods["slot.create"]?.policy?.allowed).toContain("app");
+    expect(svc.authority.principals).toContain("code");
+    expect(svc.methods["slot.list"]?.authority).toEqual(
+      expect.objectContaining({ principals: expect.arrayContaining(["user", "code"]) })
+    );
+    expect(svc.methods["slot.create"]?.authority).toEqual(
+      expect.objectContaining({ principals: expect.arrayContaining(["user", "code"]) })
+    );
   });
 
-  it("exposes lifecycle lease methods to DO callers", async () => {
+  it("exposes lifecycle lease methods to exact code principals", async () => {
     const { svc, calls } = makeService({});
     const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
 
-    expect(svc.methods["lifecycleLeaseUpsert"]?.policy?.allowed).toContain("do");
-    expect(svc.methods["lifecycleLeaseClear"]?.policy?.allowed).toContain("do");
+    expect(svc.methods["lifecycleLeaseUpsert"]?.authority).toEqual(
+      expect.objectContaining({ principals: expect.arrayContaining(["code"]) })
+    );
+    expect(svc.methods["lifecycleLeaseClear"]?.authority).toEqual(
+      expect.objectContaining({ principals: expect.arrayContaining(["code"]) })
+    );
 
     await svc.handler(makeCtx() as never, "lifecycleLeaseUpsert", [{ ...key, detail: "turn" }]);
     await svc.handler(makeCtx() as never, "lifecycleLeaseClear", [key]);

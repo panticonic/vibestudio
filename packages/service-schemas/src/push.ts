@@ -4,7 +4,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "@vibestudio/shared/servicePolicy";
+import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 export const PushPlatformSchema = z.enum(["ios", "android", "web"]);
@@ -85,14 +85,14 @@ export const pushMethods = defineServiceMethods({
       "Deliver a push notification to a registered device via Firebase, degrading to log-only when credentials are unavailable. Server-only.",
     args: z.tuple([PushSendOptionsSchema]),
     returns: PushSendResultSchema,
-    policy: { allowed: ["server"] },
+    authority: { principals: ["host"] },
     access: WRITE_ACCESS,
   },
   listRegistrations: {
     description: "List all currently persisted push registrations. Server-only.",
     args: z.tuple([]),
     returns: z.array(PushRegistrationSchema),
-    policy: { allowed: ["server"] },
+    authority: { principals: ["host"] },
     access: READ_ACCESS,
   },
 });

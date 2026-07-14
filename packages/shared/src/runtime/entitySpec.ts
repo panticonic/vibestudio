@@ -12,7 +12,6 @@ export type EntityKind = "panel" | "app" | "worker" | "do" | "session" | "shell"
 
 export interface EntitySource {
   repoPath: string;
-  effectiveVersion: string;
 }
 
 /**
@@ -207,6 +206,8 @@ export interface EntityRecord {
   id: string;
   kind: EntityKind;
   source: EntitySource;
+  /** Exact code selected for the active incarnation; absent for inert entities. */
+  activeExecutionDigest?: string;
   contextId: string;
   className?: string;
   key: string;
@@ -252,11 +253,20 @@ export type RuntimeEntityBuildRef = string;
 export type RuntimeEntityCreateSpec =
   | {
       kind: "panel";
+      surface: "workspace";
       source: string;
       ref?: RuntimeEntityBuildRef;
       contextId?: string | null;
       key?: string;
       stateArgs?: unknown;
+    }
+  | {
+      kind: "panel";
+      surface: "browser";
+      /** Canonical external source in the form `browser:<URL>`. */
+      source: string;
+      contextId?: string | null;
+      key?: string;
     }
   | {
       kind: "app";
@@ -299,8 +309,23 @@ export interface RuntimeEntityHandle {
   id: string;
   kind: "panel" | "app" | "worker" | "do" | "session";
   source: EntitySource;
+  executionDigest?: string;
+  /** Capability/resource requests sealed into the selected exact execution. */
+  authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
   contextId: string;
   targetId: string;
+}
+
+export interface RuntimeEntitySummary {
+  id: string;
+  kind: string;
+  source: string;
+  contextId: string;
+  title?: string;
+  createdAt: number;
+  executionDigest?: string;
+  /** Present whenever executionDigest is present. */
+  authorityRequests?: readonly import("@vibestudio/rpc").CapabilityScope[];
 }
 
 /**

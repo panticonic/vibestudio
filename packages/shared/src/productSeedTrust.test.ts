@@ -43,7 +43,7 @@ describe("product seed trust", () => {
         unitKind: "app",
         name: "@workspace-apps/shell",
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-        effectiveVersion: "ev-seeded",
+        executionDigest: "ev-seeded",
       },
     })?.record.name).toBe("@workspace-apps/shell");
   });
@@ -63,7 +63,7 @@ describe("product seed trust", () => {
         unitKind: "app",
         name: "@workspace-apps/shell",
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-        effectiveVersion: null,
+        executionDigest: null,
       },
     })).toBeNull();
 
@@ -75,7 +75,7 @@ describe("product seed trust", () => {
         unitKind: "app",
         name: "@workspace-apps/shell",
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-        effectiveVersion: "ev-changed",
+        executionDigest: "ev-changed",
       },
     })).toBeNull();
   });
@@ -95,7 +95,7 @@ describe("product seed trust", () => {
         unitKind: "app",
         name: "@workspace-apps/shell",
         source: { kind: "workspace-repo", repo: "apps/copy", ref: "main" },
-        effectiveVersion: "ev-seeded",
+        executionDigest: "ev-seeded",
       },
     })).toBeNull();
   });
@@ -119,7 +119,7 @@ describe("product seed trust", () => {
           repo: "extensions/react-native",
           ref: "main",
         },
-        effectiveVersion: "ev-provider",
+        executionDigest: "ev-provider",
       },
     })?.record.sourceRepo).toBe("extensions/react-native");
   });
@@ -151,7 +151,7 @@ describe("product seed trust", () => {
         unitKind: "app",
         name: "@workspace-apps/shell",
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-        effectiveVersion: "ev-seeded",
+        executionDigest: "ev-seeded",
       },
     })?.record.signatureKeyId).toBe("vibestudio-product-test-v1");
   });
@@ -173,7 +173,7 @@ describe("product seed trust", () => {
         unitKind: "app",
         name: "@workspace-apps/shell",
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-        effectiveVersion: "ev-seeded",
+        executionDigest: "ev-seeded",
       },
     })).toBeNull();
   });

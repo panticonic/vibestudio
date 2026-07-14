@@ -7,7 +7,7 @@ function makePanelRecord(id: string): EntityRecord {
   return {
     id,
     kind: "panel",
-    source: { repoPath: "", effectiveVersion: "" },
+    source: { repoPath: "" },
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -20,7 +20,8 @@ function makeAppRecord(id: string): EntityRecord {
   return {
     id,
     kind: "app",
-    source: { repoPath: "apps/example", effectiveVersion: "1.0.0" },
+    source: { repoPath: "apps/example" },
+    activeExecutionDigest: "1.0.0",
     contextId: "device-1",
     key: "device-1",
     createdAt: Date.now(),

@@ -293,7 +293,9 @@ export class HeadlessHostManager {
     });
 
     // Token over the IPC channel — not visible in /proc/*/environ or ps.
-    const token = this.deps.tokenManager.ensureToken(HEADLESS_HOST_CALLER_ID, "shell");
+    const token = this.deps.tokenManager.ensureToken(HEADLESS_HOST_CALLER_ID, "shell", {
+      hostOriginated: true,
+    });
     child.send({
       type: "init",
       token,

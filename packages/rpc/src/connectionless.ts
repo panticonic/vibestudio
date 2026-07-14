@@ -25,6 +25,7 @@ import type {
   RpcEnvelope,
   RpcResponse,
 } from "./types.js";
+import type { AuthorityRequirement, PrincipalKind } from "./authority.js";
 
 export interface ConnectionlessRpcConfig extends HttpClientTransportConfig {
   callerKind?: CallerKind | "unknown";
@@ -50,42 +51,38 @@ function generateRequestId(): string {
 
 /** Per-class registry of `@rpc`-marked method names (own + inherited), keyed on the constructor. */
 const RPC_EXPOSED_METHODS = Symbol.for("vibestudio.rpc.exposedMethods");
-/** Per-class registry of `@rpc({ callers })` caller policies, keyed by method name. */
-const RPC_METHOD_POLICIES = Symbol.for("vibestudio.rpc.methodPolicies");
+/** Per-class registry of direct method authority declarations. */
+const RPC_METHOD_AUTHORITIES = Symbol.for("vibestudio.rpc.methodAuthorities");
 
 type RpcExposedCtor = {
   [RPC_EXPOSED_METHODS]?: Set<string>;
-  [RPC_METHOD_POLICIES]?: Map<string, RpcCallerPolicy>;
+  [RPC_METHOD_AUTHORITIES]?: Map<string, RpcAuthorityPolicy>;
 };
 
-/**
- * Declarative caller policy for an `@rpc` method. The `callers` set is the coarse
- * caller-KIND floor the dispatch enforces (default-deny: a "call" from any kind not
- * listed is refused). Identity-level tightening — "this agent's own EvalDO", "a
- * PubSubChannel DO", "a known agent-vessel class" — stays as an inline check inside
- * the method; the policy is the kind floor beneath it, NOT a replacement for it.
- */
-export interface RpcCallerPolicy {
-  callers: ReadonlyArray<CallerKind>;
-}
+/** Complete principal classes admitted to one direct RPC method. */
+export type RpcAuthorityPolicy =
+  | { principals: ReadonlyArray<PrincipalKind>; requires?: never }
+  | { requires: AuthorityRequirement; principals?: never };
 
 type RpcMethodDecorator = <This, Args extends unknown[], Return>(
   value: (this: This, ...args: Args) => Return,
   context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Return>
 ) => void;
 
-function registerRpc(target: object, name: string, policy?: RpcCallerPolicy): void {
+function registerRpc(target: object, name: string, authority?: RpcAuthorityPolicy): void {
   const ctor = (target as { constructor: RpcExposedCtor }).constructor;
   (ctor[RPC_EXPOSED_METHODS] ??= new Set<string>()).add(name);
-  if (policy) (ctor[RPC_METHOD_POLICIES] ??= new Map<string, RpcCallerPolicy>()).set(name, policy);
+  if (authority) {
+    (ctor[RPC_METHOD_AUTHORITIES] ??= new Map<string, RpcAuthorityPolicy>()).set(name, authority);
+  }
 }
 
-function applyRpc(context: ClassMethodDecoratorContext, policy?: RpcCallerPolicy): void {
+function applyRpc(context: ClassMethodDecoratorContext, authority?: RpcAuthorityPolicy): void {
   if (context.kind !== "method") {
     throw new Error(`@rpc may only decorate methods (got ${context.kind})`);
   }
   context.addInitializer(function (this: unknown) {
-    registerRpc(this as object, String(context.name), policy);
+    registerRpc(this as object, String(context.name), authority);
   });
 }
 
@@ -95,11 +92,10 @@ function applyRpc(context: ClassMethodDecoratorContext, policy?: RpcCallerPolicy
  * forgetting it fails *loud* ("not exposed", caught by tests) rather than silently exposing a helper.
  *
  * Two forms:
- *   - `@rpc method() {}` — exposed; NO caller policy (the realm's `assertInboundAllowed` governs who
- *     may call it — the server realm's coarse per-DO gate).
- *   - `@rpc({ callers: ["panel", "do"] }) method() {}` — exposed WITH a caller-kind floor. The
- *     workspace realm enforces this per-method (default-deny: a call from an unlisted kind is
- *     refused via `rpcMethodPolicy`), so every workspace DO method must declare its callers.
+ *   - `@rpc method() {}` — exposed with no direct authority and therefore not callable through the
+ *     workspace relay.
+ *   - `@rpc({ principals: ["user", "code"] }) method() {}` — exposed with a complete principal
+ *     requirement. The workspace realm evaluates it against fresh host-attested facts and grants.
  *
  * Standard TC39 decorator (no `experimentalDecorators`, no reflect-metadata). It registers via
  * `addInitializer`, so inherited decorated methods land on the CONCRETE subclass's set (verified):
@@ -109,16 +105,15 @@ export function rpc<This, Args extends unknown[], Return>(
   value: (this: This, ...args: Args) => Return,
   context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Return>
 ): void;
-export function rpc(policy: RpcCallerPolicy): RpcMethodDecorator;
+export function rpc(authority: RpcAuthorityPolicy): RpcMethodDecorator;
 export function rpc(arg0: unknown, arg1?: unknown): void | RpcMethodDecorator {
   // Bare usage: `@rpc method() {}` → (value, context).
   if (arg1 && typeof arg1 === "object" && "kind" in (arg1 as object)) {
     applyRpc(arg1 as ClassMethodDecoratorContext);
     return;
   }
-  // Factory usage: `@rpc({ callers }) method() {}` → return the decorator.
-  const policy = arg0 as RpcCallerPolicy;
-  return (_value, context) => applyRpc(context as ClassMethodDecoratorContext, policy);
+  const authority = arg0 as RpcAuthorityPolicy;
+  return (_value, context) => applyRpc(context as ClassMethodDecoratorContext, authority);
 }
 
 /** The set of `@rpc`-exposed method names for an instance's concrete class (own + inherited). */
@@ -127,12 +122,13 @@ export function rpcExposedMethodNames(instance: object): ReadonlySet<string> {
   return ctor[RPC_EXPOSED_METHODS] ?? EMPTY_SET;
 }
 
-/** The declarative caller policy for `method` on an instance's concrete class, or undefined if the
- *  method was decorated with bare `@rpc` (no policy). Used by the workspace realm's default-deny
- *  inbound gate. */
-export function rpcMethodPolicy(instance: object, method: string): RpcCallerPolicy | undefined {
+/** The authority declaration for `method`, or undefined for bare `@rpc`. */
+export function rpcMethodAuthority(
+  instance: object,
+  method: string
+): RpcAuthorityPolicy | undefined {
   const ctor = (instance as { constructor: RpcExposedCtor }).constructor;
-  return ctor[RPC_METHOD_POLICIES]?.get(method);
+  return ctor[RPC_METHOD_AUTHORITIES]?.get(method);
 }
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 

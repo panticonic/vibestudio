@@ -3,8 +3,13 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor, ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type {
+  MethodAccessDescriptor,
+  ServiceAuthorityPolicy,
+} from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { DigestSchema } from "./blobstore.js";
+import { CapabilityScopeSchema } from "./build.js";
 
 // Access descriptors carry sensitivity metadata; caller-kind authorization
 // belongs exclusively to the service/method `policy`.
@@ -23,8 +28,8 @@ const TITLE_ACCESS: MethodAccessDescriptor = {
 // deliberately omits `agent` — mutating/lifecycle methods (createEntity,
 // retireEntity, cloneContext, destroyContext, …) stay agent-denied — so the
 // agent grant is opted into per read method here (still a subset of `do`).
-const RUNTIME_AGENT_READ_POLICY: ServicePolicy = {
-  allowed: ["app", "do", "panel", "server", "shell", "worker", "agent"],
+const RUNTIME_AGENT_READ_POLICY: ServiceAuthorityPolicy = {
+  principals: ["code", "host", "user", "entity"],
 };
 
 export const RuntimeEntityHandleSchema = z
@@ -36,12 +41,19 @@ export const RuntimeEntityHandleSchema = z
     source: z
       .object({
         repoPath: z.string().describe("Workspace-relative source repo path."),
-        effectiveVersion: z
-          .string()
-          .describe("Resolved build/state version this entity is pinned to."),
       })
       .strict()
-      .describe("Resolved source identity (repo path + effective version)."),
+      .describe("Logical workspace source identity."),
+    executionDigest: DigestSchema.optional().describe(
+      "Full immutable execution-artifact digest selected for this runtime; absent for inert sessions and external browser panels."
+    ),
+    authorityRequests: z
+      .array(CapabilityScopeSchema)
+      .readonly()
+      .optional()
+      .describe(
+        "Capability/resource requests sealed into the exact selected execution; present whenever executionDigest is present."
+      ),
     contextId: z.string().describe("Context (working-tree) this entity belongs to."),
     targetId: z
       .string()
@@ -67,9 +79,10 @@ const RuntimeAgentBindingSchema = z
     "Host-verified binding input for runtimes that relay an external agent/session. The host derives context from the bound entity."
   );
 
-export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
+export const CreateEntitySpecSchema = z.union([
   z.object({
     kind: z.literal("panel"),
+    surface: z.literal("workspace"),
     source: z.string().describe("Workspace-relative panel source repo path."),
     ref: BuildRefSchema.optional(),
     contextId: z
@@ -79,6 +92,17 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .describe("Target context; omit/null to mint a fresh one in the caller's context."),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the panel runtime."),
+  }),
+  z.object({
+    kind: z.literal("panel"),
+    surface: z.literal("browser"),
+    source: z.string().describe("Canonical external browser source in the form browser:<URL>."),
+    contextId: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("Storage and lineage context for the browser panel."),
+    key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
   }),
   z.object({
     kind: z.literal("app"),
@@ -231,12 +255,12 @@ export const runtimeMethods = defineServiceMethods({
       restrictedTo: [
         {
           when: "spec.kind is 'app'",
-          callers: ["shell", "server"],
+          principals: ["user", "host"],
           reason: "app runtime entities are host-managed",
         },
         {
           when: "spec.kind is 'session'",
-          callers: ["shell", "server", "extension"],
+          principals: ["user", "host", "code"],
           reason:
             "session entities are host-managed, except a launch-orchestrator extension may create a source-tagged session",
         },
@@ -276,7 +300,8 @@ export const runtimeMethods = defineServiceMethods({
     examples: [{ args: [{ id: "do:workers/agent:AgentDO:agent-1", removeContext: true }] }],
   },
   listEntities: {
-    description: "List live entities (id, kind, source, contextId, title, createdAt).",
+    description:
+      "List live entities with their active exact execution identity and sealed authority requests.",
     args: z.tuple([
       z
         .object({
@@ -295,10 +320,20 @@ export const runtimeMethods = defineServiceMethods({
         contextId: z.string().describe("Owning context id."),
         title: z.string().optional().describe("Display title, when one has been set."),
         createdAt: z.number().describe("Creation timestamp (epoch ms)."),
+        executionDigest: DigestSchema.optional().describe(
+          "Full immutable execution digest; absent for inert and external entities."
+        ),
+        authorityRequests: z
+          .array(CapabilityScopeSchema)
+          .readonly()
+          .optional()
+          .describe(
+            "Capability/resource requests sealed into the active execution; present whenever executionDigest is present."
+          ),
       })
     ),
     access: READ_ACCESS,
-    policy: RUNTIME_AGENT_READ_POLICY,
+    authority: RUNTIME_AGENT_READ_POLICY,
     examples: [{ args: [] }, { args: [{ kind: "session" }] }],
   },
   resolveContext: {
@@ -307,7 +342,7 @@ export const runtimeMethods = defineServiceMethods({
     args: z.tuple([z.string().describe("Canonical entity id to resolve.")]),
     returns: z.string().nullable(),
     access: READ_ACCESS,
-    policy: RUNTIME_AGENT_READ_POLICY,
+    authority: RUNTIME_AGENT_READ_POLICY,
   },
   setTitle: {
     description:
@@ -324,12 +359,9 @@ export const runtimeMethods = defineServiceMethods({
         .optional(),
     ]),
     returns: z.void(),
-    // Single source of truth for setTitle's access: only an entity that HAS a title
-    // (panel/app/worker/do) may set its own. The dispatcher checks this per-method
-    // policy first (checkServiceAccess → getMethodPolicy), so it is the sole gate —
-    // the handler performs NO caller-kind rejection. This narrows the service-level
-    // policy (which keeps shell/server for createEntity/retireEntity) for setTitle only.
-    policy: { allowed: ["panel", "app", "worker", "do"] },
+    // Single source of truth for setTitle's access: an exact code principal may
+    // title its bound runtime. Runtime shape remains routing/attribution only.
+    authority: { principals: ["code"] },
     access: TITLE_ACCESS,
     examples: [{ args: ["Workspace Shell", { explicit: true }] }],
   },
@@ -346,7 +378,7 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: WorkspaceContextSchema,
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    authority: { principals: ["user", "host", "code"] },
     examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
   cloneContext: {
@@ -452,7 +484,7 @@ export const runtimeMethods = defineServiceMethods({
       })
       .strict(),
     access: READ_ACCESS,
-    policy: RUNTIME_AGENT_READ_POLICY,
+    authority: RUNTIME_AGENT_READ_POLICY,
     examples: [{ args: [{ contextId: "ctx-abc", kind: "lifecycle" }] }],
   },
   recordContextEdge: {
@@ -471,7 +503,7 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server"] },
+    authority: { principals: ["user", "host"] },
     examples: [
       {
         args: [{ contextId: "ctx-child", ownerContextId: "ctx-parent", kind: "lifecycle" }],
@@ -492,7 +524,7 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: z.object({ contextId: z.string() }).strict(),
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server", "panel", "worker", "do"] },
+    authority: { principals: ["user", "host", "code"] },
     examples: [
       {
         args: [

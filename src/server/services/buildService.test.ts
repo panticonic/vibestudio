@@ -1,8 +1,13 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
+import { sealBuildEnvironment } from "../buildV2/sourceClosure.js";
+
+beforeEach(() => {
+  sealBuildEnvironment({ appRoot: "/tmp/workspace", workspaceRoot: "/tmp/workspace" });
+});
 
 function buildTrigger(path: string) {
   return {
@@ -41,7 +46,7 @@ function makeBuildSystem(): BuildSystemV2 {
             metadata: {
               kind: "extension",
               name: "@workspace-extensions/example",
-              ev: "ev-1",
+              sourceDigest: "sourceDigest-1",
               sourcemap: true,
               details: {
                 kind: "extension",
@@ -54,7 +59,7 @@ function makeBuildSystem(): BuildSystemV2 {
           }
         : null
     ),
-    getEffectiveVersion: vi.fn(),
+    getSourceDigest: vi.fn(),
     getExternalDeps: vi.fn(),
     listRecentBuildEvents: vi.fn(() => []),
     doctorExtension: vi.fn(async () => ({
@@ -109,7 +114,7 @@ function makeBuildSystem(): BuildSystemV2 {
 }
 
 describe("build service extension diagnostics", () => {
-  it("preserves the legacy { bundle } contract for library builds", async () => {
+  it("preserves the { bundle } contract for library builds", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
     const service = createBuildService({ buildSystem });
@@ -158,7 +163,7 @@ describe("build service extension diagnostics", () => {
 
   it("reports build provenance for a workspace unit", async () => {
     const buildSystem = makeBuildSystem();
-    vi.mocked(buildSystem.getEffectiveVersion).mockReturnValue("ev-1");
+    vi.mocked(buildSystem.getSourceDigest).mockReturnValue("sourceDigest-1");
     vi.mocked(buildSystem.listRecentBuildEvents).mockReturnValue([
       {
         type: "build-error",
@@ -186,7 +191,7 @@ describe("build service extension diagnostics", () => {
         kind: "extension",
         relativePath: "extensions/example",
       },
-      effectiveVersion: "ev-1",
+      sourceDigest: "sourceDigest-1",
       cachedBuilds: {
         sourcemap: expect.objectContaining({
           cached: expect.any(Boolean),

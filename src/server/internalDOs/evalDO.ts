@@ -1,5 +1,4 @@
 import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   createBuildServiceClient,
   createEvalImportLoader,
@@ -526,35 +525,6 @@ export class EvalDO extends DurableObjectBase {
     return 0;
   }
 
-  /**
-   * The EvalDO's METHOD-CALL surface is server-ONLY: the eval service is the sole
-   * dispatcher (callerKind "server"; it derives the objectKey from the verified
-   * caller and registers the owner context). The generic DO relay is open
-   * (rpcServer.checkRelayAuth) AND `exposeAll` reflects every method — including
-   * TS-private helpers like `runLocked` (runs arbitrary owner code) and
-   * `callMainService` (arbitrary `main` call as the owner), which are
-   * runtime-public. So we reject EVERY non-server inbound CALL as a blanket guard.
-   *
-   * Event DELIVERIES are different: the EvalDO (or eval code) subscribes to topics
-   * /channels (vcs.subscribeHead, channel messages), and the publisher — the
-   * server event-push (caller "server") OR a PubSubChannel DO (caller "do") —
-   * pushes events to it. Those are opt-in notifications routed to `rpc.on`
-   * handlers (owner-scoped, non-privileged), NOT method invocations, so we accept
-   * them regardless of caller. Blocking them broke channel delivery to a
-   * subscribed EvalDO ("DO RPC relay failed (500): EvalDO is server-only").
-   */
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return;
-    if (caller?.callerKind !== "server") {
-      throw new Error(
-        `eval: EvalDO is server-only (dispatched by the eval service); refusing caller kind ${caller?.callerKind ?? "unknown"}`
-      );
-    }
-  }
-
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
 
   /**
@@ -562,7 +532,7 @@ export class EvalDO extends DurableObjectBase {
    * insert + execute in this held handler, return the result in one response. The CALLER holds its
    * own leg; the server holds the EvalDO leg. workerd does not cap a held request.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async run(args: RunArgs): Promise<RunResult> {
     const runId = args.runId ?? crypto.randomUUID();
     await this.startRun({ ...args, runId });
@@ -574,7 +544,7 @@ export class EvalDO extends DurableObjectBase {
    * service awaits this before returning `runId` to an async (agent) caller, so the row exists for
    * `getRun`. Idempotent on `run_id`: a replayed run returns the existing row, never a duplicate.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async startRun(args: RunArgs & { runId: string }): Promise<{ runId: string; status: string }> {
     const runId = args.runId;
     const existing = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
@@ -608,7 +578,7 @@ export class EvalDO extends DurableObjectBase {
    * rather than starting a second sandbox run — so a deferRedrive that races the first dispatch can
    * never double-run the eval (which would double-spawn headless agents).
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async executeRun(runId: string): Promise<RunResult> {
     const inFlight = this.inFlightRuns.get(runId);
     if (inFlight) return inFlight;
@@ -731,7 +701,7 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** Poll backstop: a run's status + result (`status` is 'pending'|'running'|'done'|'cancelled'|'unknown'). */
-  @rpc
+  @rpc({ principals: ["host"] })
   getRun(runId: string): { status: string; result?: RunResult; progress?: unknown } {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
@@ -755,7 +725,7 @@ export class EvalDO extends DurableObjectBase {
    * scope. Reads join `runChain`, so they observe every prior eval's persisted
    * mutations and cannot race a later eval that overwrites the same key.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async readScopeTextPage(
     key: string,
     offset: number,
@@ -792,7 +762,7 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /** Persistently remove one temporary large-result cache key. */
-  @rpc
+  @rpc({ principals: ["host"] })
   async deleteScopeValue(key: string): Promise<{ ok: boolean; existed: boolean }> {
     const remove = this.runChain.then(async () => {
       const manager = await this.ensureScopeManager(await this.ensureEngine());
@@ -845,7 +815,7 @@ export class EvalDO extends DurableObjectBase {
 
   /** Reset the eval context: cancel in-flight runs, then wipe user tables + scope
    *  while preserving the durable queue and its progress rows. */
-  @rpc
+  @rpc({ principals: ["host"] })
   async reset(): Promise<{ ok: boolean }> {
     // Cancel queued + in-flight runs FIRST so a run finishing normally can't CAS itself `done`
     // (executeRun's write requires status='running'); then abort any live run.
@@ -881,7 +851,7 @@ export class EvalDO extends DurableObjectBase {
    * Then abort the run's controller so a run wedged on an outbound rpc.call unwinds (the signal is
    * threaded into every outbound call in `runLocked`). A no-op for an already-terminal run.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async cancel(runId: string): Promise<{ ok: boolean }> {
     this.sql.exec(
       `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status IN ('pending', 'running')`,
@@ -936,7 +906,7 @@ export class EvalDO extends DurableObjectBase {
    * safely — and even if the orphan later runs `exitEval` against the wiped scope, its `cancelled`
    * status already discarded its result, so a fresh run is unaffected.
    */
-  @rpc
+  @rpc({ principals: ["host"] })
   async forceReset(): Promise<{ ok: boolean }> {
     this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
     const runIds = new Set([...this.runAborts.keys(), ...this.runCancelHandlers.keys()]);
@@ -1049,7 +1019,7 @@ export class EvalDO extends DurableObjectBase {
     //     …), `services.<name>` is that SAME curated object (so `services.vcs` === the bare `vcs`),
     //  2. dynamic fallback — any other service becomes `callMain("<name>.<method>", …)`.
     // It adds no access: the fallback routes through `callMain`, so the server dispatcher's
-    // per-method `policy.allowed` is still the sole gate (a `do`-denied method still rejects).
+    // each method's canonical authority declaration remains the sole gate.
     const services = support.createServicesProxy(rt);
 
     // Layer 2 — the importable surface (gad/workspace/credentials/openPanel/…)

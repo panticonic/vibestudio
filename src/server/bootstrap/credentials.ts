@@ -1,6 +1,6 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { createVerifiedCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { RouteRegistry, ServiceRouteDecl } from "../routeRegistry.js";
 import { serviceWithHttpRoutes } from "../serviceWithHttpRoutes.js";
@@ -31,7 +31,6 @@ export interface CredentialBootstrapDeps {
   getAuthorizingShell: NonNullable<
     CredentialServiceDeps["connectionLookup"]
   >["getAuthorizingShell"];
-  hasAppCapability: NonNullable<CredentialServiceDeps["hasAppCapability"]>;
 }
 
 export type BootstrappedCredentialService = ReturnType<typeof createCredentialService> & {
@@ -71,19 +70,18 @@ export function wireCredentialService(
     sessionGrantStore: deps.sessionGrantStore,
     credentialUseGrantStore: deps.credentialUseGrantStore,
     credentialLifecycle: deps.credentialLifecycle,
-    hasAppCapability: deps.hasAppCapability,
     runtimeInspector: {
       listActiveEntities: () => deps.entityCache.listActive(),
       resolvePanelSlotByEntity: async (entityId: string) =>
         (await deps.dispatcher.dispatch(
-          { caller: createVerifiedCaller("server", "server") },
+          { caller: createHostCaller("server") },
           "workspace-state",
           "slot.resolveByEntity",
           [entityId]
         )) as string | null,
       listPanels: async () =>
         (await deps.dispatcher.dispatch(
-          { caller: createVerifiedCaller("server", "server") },
+          { caller: createHostCaller("server") },
           "panelTree",
           "list",
           [null]

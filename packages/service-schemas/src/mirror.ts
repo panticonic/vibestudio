@@ -12,12 +12,12 @@
 
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import type { ServicePolicy } from "@vibestudio/shared/servicePolicy";
+import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 /** shell + agent are the remote-mirror drivers; `do` keeps the agent⊆do
  *  invariant; server/panel for host-side tooling and tests. */
-export const MIRROR_POLICY: ServicePolicy = {
-  allowed: ["shell", "agent", "do", "server", "panel"],
+export const MIRROR_POLICY: ServiceAuthorityPolicy = {
+  principals: ["user", "entity", "code", "host"],
 };
 
 export const mirrorTargetSchema = z
@@ -69,7 +69,7 @@ export const mirrorMethods = defineServiceMethods({
     returns: z.array(mirrorTargetSchema),
     description:
       "The per-repo { repoPath, stateHash } targets a context resolves to (read-side of the projector). Fetch these, then stream each state's tree via `objects`.",
-    policy: MIRROR_POLICY,
+    authority: MIRROR_POLICY,
     access: { sensitivity: "read" },
   },
   objects: {
@@ -77,7 +77,7 @@ export const mirrorMethods = defineServiceMethods({
     returns: mirrorObjectsResultSchema,
     description:
       "Stream the content-addressed tree for a `stateHash` as size-bounded pages of { path, mode, content (base64), size }. Page with the returned `next` cursor until absent; optionally restrict to `paths`.",
-    policy: MIRROR_POLICY,
+    authority: MIRROR_POLICY,
     access: { sensitivity: "read" },
   },
 });

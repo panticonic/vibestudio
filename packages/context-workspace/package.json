@@ -1,0 +1,11 @@
+{
+  "name": "@vibestudio/context-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@vibestudio/shared": "workspace:*" }
+}

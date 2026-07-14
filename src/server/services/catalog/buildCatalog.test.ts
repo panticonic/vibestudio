@@ -8,7 +8,7 @@ import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
 const demo: ServiceDefinition = {
   name: "demo",
   description: "Demo service",
-  policy: { allowed: ["panel", "server"] },
+  authority: { principals: ["code", "host"] },
   methods: {
     get: {
       description: "Get a value.",
@@ -18,12 +18,12 @@ const demo: ServiceDefinition = {
     "admin.wipe": {
       description: "Destroy everything (server only).",
       args: z.tuple([]),
-      policy: { allowed: ["server"] },
+      authority: { principals: ["host"] },
     },
     probe: {
       description: "A probe method.",
       args: z.tuple([]),
-      policy: { allowed: ["do", "worker"] },
+      authority: { principals: ["code"] },
       access: { sensitivity: "read" },
     },
     internalTransport: {
@@ -74,7 +74,7 @@ describe("buildCatalog", () => {
     const transportOnly: ServiceDefinition = {
       name: "transportOnly",
       description: "Internal transport",
-      policy: { allowed: ["panel", "worker", "do"] },
+      authority: { principals: ["code"] },
       methods: {
         call: { args: z.tuple([]), agentFacing: false },
       },
@@ -161,12 +161,12 @@ describe("buildCatalog", () => {
     expect(wipe.returnsSchema).toBeUndefined();
   });
 
-  it("derives access.callers with method > service precedence", () => {
+  it("derives authority principals with method > service precedence", () => {
     const access = (id: string) =>
-      (byId(entries, id).access as { callers?: string[] } | undefined) ?? {};
-    expect(access("service:demo.get").callers).toEqual(["panel", "server"]); // service policy
-    expect(access("service:demo.admin.wipe").callers).toEqual(["server"]); // method policy
-    expect(access("service:demo.probe").callers).toEqual(["do", "worker"]); // method policy
+      (byId(entries, id).access as { principals?: string[] } | undefined) ?? {};
+    expect(access("service:demo.get").principals).toEqual(["code", "host"]);
+    expect(access("service:demo.admin.wipe").principals).toEqual(["host"]);
+    expect(access("service:demo.probe").principals).toEqual(["code"]);
   });
 
   it("emits runtime entries", () => {
@@ -191,20 +191,19 @@ describe("isCatalogEntryVisible", () => {
   const runtimeFoo = byId(entries, "runtime:panel.foo");
   const runtimeBar = byId(entries, "runtime:workerRuntime.bar");
 
-  it("filters by caller kind", () => {
-    expect(isCatalogEntryVisible(wipe, "panel")).toBe(false); // server-only hidden from panel
+  it("filters service discovery by authority principal shape", () => {
+    expect(isCatalogEntryVisible(wipe, "panel")).toBe(false);
     expect(isCatalogEntryVisible(wipe, "server")).toBe(true);
     expect(isCatalogEntryVisible(get, "panel")).toBe(true);
-    expect(isCatalogEntryVisible(get, "do")).toBe(true); // DO inherits panel userland access
+    expect(isCatalogEntryVisible(get, "do")).toBe(true);
   });
 
-  it("applies the DO userland inheritance rule", () => {
-    expect(isCatalogEntryVisible(probe, "do")).toBe(true); // explicit do
-    // a worker-only method is visible to do
-    const workerOnly: CatalogEntry = { ...probe, access: { callers: ["worker"] } };
-    expect(isCatalogEntryVisible(workerOnly, "do")).toBe(true);
-    const panelOnly: CatalogEntry = { ...probe, access: { callers: ["panel"] } };
-    expect(isCatalogEntryVisible(panelOnly, "do")).toBe(true);
+  it("does not turn runtime shape into service privilege", () => {
+    expect(isCatalogEntryVisible(probe, "do")).toBe(true);
+    const codeOnly: CatalogEntry = { ...probe, access: { principals: ["code"] } };
+    expect(isCatalogEntryVisible(codeOnly, "panel")).toBe(true);
+    expect(isCatalogEntryVisible(codeOnly, "worker")).toBe(true);
+    expect(isCatalogEntryVisible(codeOnly, "shell")).toBe(false);
   });
 
   it("filters runtime surfaces by target caller", () => {

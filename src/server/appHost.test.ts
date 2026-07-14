@@ -1,37 +1,53 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { writeProductSeedSourceRecord } from "@vibestudio/shared/productSeedTrust";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { sha256 } from "@vibestudio/shared/execution/identity";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { AppHost } from "./appHost.js";
+import { executionArtifactFixture } from "./testing/executionArtifactFixture.js";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
 const roots: string[] = [];
 const originalAppDevStatus = process.env["VIBESTUDIO_APP_DEV_STATUS"];
 const REACT_NATIVE_PROVIDER = {
   name: "@workspace-extensions/react-native",
-  activeEv: "ev-provider",
+  activeSourceDigest: "sourceDigest-provider",
   activeBuildKey: "provider-build",
   contractVersion: "vibestudio-build-provider-v1",
 };
-
-// App trust is manifest-declared (meta/vibestudio.yml trust.*) and seeded per
-// process by the workspace loader / server startup. Seed the shipped default
-// grants here so the AppHost's trust filtering is exercised the way a live
-// server sees it.
-beforeEach(() => {
-  setWorkspaceAppTrust({
-    chromeApps: ["apps/shell", "apps/mobile"],
-  });
+const APP_SOURCE = sha256("app-source-v1");
+const APP_SOURCE_2 = sha256("app-source-v2");
+const testAuthority = (capabilities: readonly string[] = []) => ({
+  requests: capabilities.map((capability) => ({
+    capability,
+    resource: { kind: "prefix" as const, prefix: "" },
+  })),
 });
+const TEST_APP_EXECUTION = executionArtifactFixture(
+  "apps/shell",
+  {
+    dir: "/test/app-key",
+    metadata: { sourceDigest: APP_SOURCE, kind: "app", name: "@workspace-apps/shell" },
+    artifacts: [
+      {
+        path: "index.html",
+        role: "html",
+        contentType: "text/html; charset=utf-8",
+        encoding: "utf8",
+        content: "<!doctype html><div>app</div>",
+      },
+    ],
+  } as never,
+  "main",
+  "app-key"
+);
 
 afterEach(() => {
-  setWorkspaceAppTrust(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   if (originalAppDevStatus === undefined) delete process.env["VIBESTUDIO_APP_DEV_STATUS"];
   else process.env["VIBESTUDIO_APP_DEV_STATUS"] = originalAppDevStatus;
@@ -72,6 +88,7 @@ function makeHarness(
           capabilities: ["notifications"],
           ...(opts.invalidManifest ? { preload: "preload.ts" } : {}),
         },
+        authority: testAuthority(["notifications", "panel-hosting"]),
       },
     })
   );
@@ -100,6 +117,7 @@ function makeHarness(
     manifest: {
       displayName: "Shell App",
       app: { target: "electron" as const, capabilities: ["notifications" as const] },
+      authority: testAuthority(["notifications", "panel-hosting"]),
     },
   };
   const providerChangeCallbacks: Array<
@@ -108,44 +126,52 @@ function makeHarness(
       target: "react-native";
       provider: {
         name: string;
-        activeEv: string | null;
+        activeSourceDigest: string | null;
         activeBuildKey: string | null;
         contractVersion: string;
       };
     }) => void
   > = [];
+  const appBuild = {
+    dir: path.join(root, "state", "builds", "app-key"),
+    metadata: {
+      sourceDigest: APP_SOURCE,
+      sourceStateHash: "state:test",
+      details: { kind: "app", target: "electron", integrity: "sha256-app" },
+    },
+    artifacts: [artifact],
+  };
+  const exact = TEST_APP_EXECUTION;
+  const compilationRecords = new Map<string, typeof appBuild>([["app-key", appBuild]]);
+  const executionBundles = new Map<string, typeof exact.bundle>([
+    [exact.binding.artifact.executionDigest, exact.bundle],
+  ]);
+  const getBuild = vi.fn(async (_unitPath?: string, _ref?: string) => appBuild);
+  const registerExecution = (build: typeof appBuild, ref = "main") => {
+    const key = path.basename(build.dir);
+    const resolved = executionArtifactFixture(graphNode.relativePath, build as never, ref, key);
+    compilationRecords.set(key, build);
+    executionBundles.set(resolved.binding.artifact.executionDigest, resolved.bundle);
+    return resolved;
+  };
+  const resolveExecutionArtifact = vi.fn(async (unitPath: string, ref = "main") => {
+    const build = await getBuild(unitPath, ref);
+    return registerExecution(build as typeof appBuild, ref).binding;
+  });
   const buildSystem = {
-    getBuild: vi.fn(async () => ({
-      dir: path.join(root, "state", "builds", "app-key"),
-      metadata: {
-        ev: "ev-app",
-        sourceStateHash: "state:test",
-        details: { kind: "app", target: "electron", integrity: "sha256-app" },
-      },
-      artifacts: [artifact],
-    })),
-    getBuildByKey: vi.fn((key: string) =>
-      key === "app-key"
-        ? {
-            dir: path.join(root, "state", "builds", "app-key"),
-            metadata: {
-              ev: "ev-app",
-              sourceStateHash: "state:test",
-              details: { kind: "app", target: "electron", integrity: "sha256-app" },
-            },
-            artifacts: [artifact],
-          }
-        : null
-    ),
-    getEffectiveVersion: vi.fn((name: string) =>
-      name === "@workspace-apps/shell" ? "ev-app" : null
+    getBuild,
+    resolveExecutionArtifact,
+    getExecutionArtifact: vi.fn((digest: string) => executionBundles.get(digest) ?? null),
+    getBuildByKey: vi.fn((key: string) => compilationRecords.get(key) ?? null),
+    getSourceDigest: vi.fn((name: string) =>
+      name === "@workspace-apps/shell" ? exact.binding.artifact.source.sourceEv : null
     ),
     getExternalDeps: vi.fn(() => ({})),
     getBuildProviderDetails: vi.fn(
       () =>
         null as {
           name: string;
-          activeEv: string | null;
+          activeSourceDigest: string | null;
           activeBuildKey: string | null;
           contractVersion: string;
         } | null
@@ -157,7 +183,7 @@ function makeHarness(
           target: "react-native";
           provider: {
             name: string;
-            activeEv: string | null;
+            activeSourceDigest: string | null;
             activeBuildKey: string | null;
             contractVersion: string;
           };
@@ -224,6 +250,7 @@ function makeHarness(
     workspacePath,
     entityCache,
     providerChangeCallbacks,
+    registerExecution,
   };
 }
 
@@ -232,7 +259,11 @@ function panelCaller(callerId = "panel-1") {
     callerId,
     callerKind: "panel",
     repoPath: "panels/test",
-    effectiveVersion: "ev-panel",
+    executionDigest: "sourceDigest-panel",
+    requested: [
+      { capability: "service:*", resource: { kind: "prefix", prefix: "" } },
+      { capability: "rpc:*", resource: { kind: "prefix", prefix: "" } },
+    ],
   });
 }
 
@@ -245,10 +276,11 @@ function installApp(host: AppHost, graphNode: ReturnType<typeof makeHarness>["gr
     capabilities: ["notifications"],
     source: { kind: "workspace-repo", repo: graphNode.relativePath, ref: "main" },
     installedAt: Date.now(),
-    activeEv: "ev-app",
+    activeSourceDigest: TEST_APP_EXECUTION.binding.artifact.source.sourceEv,
+    activeExecutionDigest: TEST_APP_EXECUTION.binding.artifact.executionDigest,
     activeSourceHash: "abc123",
     activeBundleKey: "app-key",
-    activeDependencyEvs: {},
+    activeDependencySourceDigests: {},
     activeExternalDeps: {},
     activeRuntimeDepsKey: null,
     status: "running",
@@ -281,6 +313,7 @@ function createAppGraphNode(
           renderer: opts.target === "terminal" ? "index.mjs" : "index.tsx",
           capabilities: opts.capabilities ?? [],
         },
+        authority: testAuthority(opts.capabilities ?? []),
       },
     })
   );
@@ -297,6 +330,7 @@ function createAppGraphNode(
     manifest: {
       displayName: opts.displayName ?? opts.name,
       app: { target: opts.target, capabilities: opts.capabilities ?? [] },
+      authority: testAuthority(opts.capabilities ?? []),
     },
   };
 }
@@ -328,6 +362,7 @@ function setAppManifestTarget(
       vibestudio: {
         displayName: node.manifest.displayName,
         app: appBlock,
+        authority: testAuthority(capabilities),
       },
     })
   );
@@ -348,11 +383,13 @@ function installAppEntry(
   opts: {
     target?: "electron" | "react-native" | "terminal";
     activeBundleKey?: string;
-    activeEv?: string;
+    activeSourceDigest?: string;
+    activeExecutionDigest?: string;
     capabilities?: string[];
     previousVersions?: Array<{
       activeBundleKey: string;
-      activeEv: string | null;
+      activeSourceDigest: string | null;
+      activeExecutionDigest?: string | null;
       target?: "electron" | "react-native" | "terminal";
       capabilities?: string[];
     }>;
@@ -367,10 +404,11 @@ function installAppEntry(
     capabilities: (opts.capabilities ?? node.manifest.app.capabilities) as never,
     source: { kind: "workspace-repo", repo: node.relativePath, ref: "main" },
     installedAt: Date.now(),
-    activeEv: opts.activeEv ?? `ev-${node.name}`,
+    activeSourceDigest: opts.activeSourceDigest ?? `sourceDigest-${node.name}`,
+    activeExecutionDigest: opts.activeExecutionDigest ?? `execution-${node.name}`,
     activeSourceHash: "abc123",
     activeBundleKey: opts.activeBundleKey ?? `${node.name}-key`,
-    activeDependencyEvs: {},
+    activeDependencySourceDigests: {},
     activeExternalDeps: {},
     activeRuntimeDepsKey: null,
     status: target === "terminal" ? "available" : "running",
@@ -381,10 +419,12 @@ function installAppEntry(
       capabilities: (version.capabilities ??
         opts.capabilities ??
         node.manifest.app.capabilities) as never,
-      activeEv: version.activeEv,
+      activeSourceDigest: version.activeSourceDigest,
+      activeExecutionDigest:
+        version.activeExecutionDigest ?? `execution-${version.activeBundleKey}`,
       activeSourceHash: "previous-sha",
       activeBundleKey: version.activeBundleKey,
-      activeDependencyEvs: {},
+      activeDependencySourceDigests: {},
       activeExternalDeps: {},
       activeRuntimeDepsKey: null,
       activatedAt: Date.now() - 1000,
@@ -457,7 +497,7 @@ describe("AppHost", () => {
     expect(entityCache.resolveActive("@workspace-apps/shell")).toMatchObject({
       id: "@workspace-apps/shell",
       kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
+      source: { repoPath: "apps/shell" },
       status: "active",
     });
   });
@@ -475,7 +515,7 @@ describe("AppHost", () => {
     expect(entityCache.resolveActive("@workspace-apps/shell")).toMatchObject({
       id: "@workspace-apps/shell",
       kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
+      source: { repoPath: "apps/shell" },
       status: "active",
     });
   });
@@ -497,7 +537,7 @@ describe("AppHost", () => {
       lastError: "broken app code",
       lastErrorDetails: expect.objectContaining({ phase: "build", source: "apps/shell" }),
       activeBundleKey: "app-key",
-      activeEv: "ev-app",
+      activeSourceDigest: APP_SOURCE,
     });
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:status",
@@ -533,7 +573,7 @@ describe("AppHost", () => {
     const changedBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
       metadata: {
-        ev: "ev-app-2",
+        sourceDigest: APP_SOURCE_2,
         sourceStateHash: "state:test",
         details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app-2" },
       },
@@ -580,9 +620,9 @@ describe("AppHost", () => {
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       status: "running",
       activeBundleKey: "app-key-2",
-      activeEv: "ev-app-2",
+      activeSourceDigest: APP_SOURCE_2,
       previousVersions: [
-        expect.objectContaining({ activeBundleKey: "app-key", activeEv: "ev-app" }),
+        expect.objectContaining({ activeBundleKey: "app-key", activeSourceDigest: APP_SOURCE }),
       ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -596,7 +636,8 @@ describe("AppHost", () => {
   });
 
   it("records app version history and can roll back to the previous build", async () => {
-    const { host, buildSystem, eventService, notificationService, graphNode } = makeHarness();
+    const { host, buildSystem, eventService, notificationService, graphNode, registerExecution } =
+      makeHarness();
     installApp(host, graphNode);
     const buildByKey = new Map([
       [
@@ -604,7 +645,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key"),
           metadata: {
-            ev: "ev-app",
+            sourceDigest: APP_SOURCE,
             sourceStateHash: "state:test",
             details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app" },
           },
@@ -624,7 +665,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
           metadata: {
-            ev: "ev-app-2",
+            sourceDigest: APP_SOURCE_2,
             sourceStateHash: "state:test",
             details: {
               kind: "app" as const,
@@ -647,6 +688,10 @@ describe("AppHost", () => {
     buildSystem.getBuildByKey.mockImplementation(
       (key: string) => (buildByKey.get(key) ?? null) as never
     );
+    const oldExecution = registerExecution(buildByKey.get("app-key")! as never);
+    host.registry.patch("@workspace-apps/shell", {
+      activeExecutionDigest: oldExecution.binding.artifact.executionDigest,
+    });
     buildSystem.getBuild.mockResolvedValueOnce(buildByKey.get("app-key-2")! as never);
 
     const onPush = buildSystem.onPushBuild.mock.calls[0]?.[0] as
@@ -659,9 +704,9 @@ describe("AppHost", () => {
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       status: "running",
       activeBundleKey: "app-key-2",
-      activeEv: "ev-app-2",
+      activeSourceDigest: APP_SOURCE_2,
       previousVersions: [
-        expect.objectContaining({ activeBundleKey: "app-key", activeEv: "ev-app" }),
+        expect.objectContaining({ activeBundleKey: "app-key", activeSourceDigest: APP_SOURCE }),
       ],
     });
     expect(notificationService.show).toHaveBeenCalledWith(
@@ -695,9 +740,9 @@ describe("AppHost", () => {
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       status: "running",
       activeBundleKey: "app-key",
-      activeEv: "ev-app",
+      activeSourceDigest: APP_SOURCE,
       previousVersions: [
-        expect.objectContaining({ activeBundleKey: "app-key-2", activeEv: "ev-app-2" }),
+        expect.objectContaining({ activeBundleKey: "app-key-2", activeSourceDigest: APP_SOURCE_2 }),
       ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -987,9 +1032,8 @@ describe("AppHost", () => {
     );
   });
 
-  it("keeps panel-hosting in apps:available for a trusted chrome app", async () => {
+  it("projects capabilities granted to the exact artifact source", async () => {
     const { host, eventService, graphNode } = makeHarness();
-    // apps/shell is seeded into trust.chromeApps by the shared beforeEach.
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
@@ -1005,27 +1049,22 @@ describe("AppHost", () => {
     );
   });
 
-  it("strips panel-hosting from apps:available for an app absent from trust.chromeApps", async () => {
+  it("strips capabilities from a source absent from the exact product catalog", async () => {
     const { host, eventService, graphNode } = makeHarness();
-    // Remove apps/shell from the chrome trust list: the app now self-declares
-    // panel-hosting without authorization, so the server-vetted (effective)
-    // capability set projected into apps:available must drop it.
-    setWorkspaceAppTrust({ chromeApps: [] });
+    graphNode.relativePath = "apps/unreviewed";
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
 
-    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+    await host.reconcileDeclared([{ source: "apps/unreviewed", ref: "main" }]);
     await host.whenSettled();
 
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
       expect.objectContaining({
         appId: "@workspace-apps/shell",
-        source: "apps/shell",
-        capabilities: ["notifications"],
+        source: "apps/unreviewed",
+        capabilities: [],
       })
     );
-    // And the server-side authorization check agrees: the capability is not granted.
-    expect(host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
   });
 
   it("uses the selected React Native source instead of the canonical mobile fallback", () => {
@@ -1038,14 +1077,14 @@ describe("AppHost", () => {
     buildSystem.getGraph.mockReturnValue({
       allNodes: () => [graphNode, otherNode],
     } as never);
-    const rnBuild = (ev: string) => ({
-      dir: path.join(workspacePath, "..", "state", "builds", ev),
+    const rnBuild = (sourceDigest: string) => ({
+      dir: path.join(workspacePath, "..", "state", "builds", sourceDigest),
       metadata: {
-        ev,
+        sourceDigest,
         details: {
           kind: "app" as const,
           target: "react-native" as const,
-          integrity: `sha256-${ev}`,
+          integrity: `sha256-${sourceDigest}`,
           rnHostAbi: "rn-host-2",
           provider: REACT_NATIVE_PROVIDER,
         },
@@ -1057,20 +1096,20 @@ describe("AppHost", () => {
           contentType: "application/javascript; charset=utf-8",
           encoding: "utf8",
           platform: "ios",
-          integrity: `sha256-${ev}-ios`,
+          integrity: `sha256-${sourceDigest}-ios`,
           content: "bundle",
         },
       ],
     });
     buildSystem.getBuildByKey.mockImplementation((key: string) => {
-      if (key === "mobile-key") return rnBuild("ev-mobile") as never;
-      if (key === "field-key") return rnBuild("ev-field") as never;
+      if (key === "mobile-key") return rnBuild("sourceDigest-mobile") as never;
+      if (key === "field-key") return rnBuild("sourceDigest-field") as never;
       return null;
     });
     installAppEntry(host, graphNode, {
       target: "react-native",
       activeBundleKey: "mobile-key",
-      activeEv: "ev-mobile",
+      activeSourceDigest: "sourceDigest-mobile",
       capabilities: ["notifications"],
     });
     host.registry.patch(graphNode.name, {
@@ -1079,7 +1118,7 @@ describe("AppHost", () => {
     installAppEntry(host, otherNode, {
       target: "react-native",
       activeBundleKey: "field-key",
-      activeEv: "ev-field",
+      activeSourceDigest: "sourceDigest-field",
       capabilities: ["notifications", "panel-hosting"],
     });
 
@@ -1088,11 +1127,9 @@ describe("AppHost", () => {
     expect(host.reactNative.getBootstrap()).toMatchObject({
       appId: "@workspace-apps/field-mobile",
       buildKey: "field-key",
-      effectiveVersion: "ev-field",
+      executionDigest: "execution-@workspace-apps/field-mobile",
     });
     expect(host.reactNative.registerPrincipal("device-1")).toBe("app:apps/field-mobile:device-1");
-    expect(host.hasAppCapability("app:apps/field-mobile:device-1", "panel-hosting")).toBe(false);
-    expect(host.hasAppCapability("app:apps/mobile:device-1", "panel-hosting")).toBe(false);
   });
 
   it("records explicit host trust identity when activating a pinned ref", async () => {
@@ -1101,7 +1138,7 @@ describe("AppHost", () => {
     const pinnedBuild = {
       dir: path.join(root, "state", "builds", "pinned-ref-key"),
       metadata: {
-        ev: "ev-pinned",
+        sourceDigest: "sourceDigest-pinned",
         sourceStateHash: "state:test",
         details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-pinned" },
       },
@@ -1117,23 +1154,24 @@ describe("AppHost", () => {
     };
     buildSystem.getBuild.mockResolvedValueOnce(pinnedBuild as never);
 
+    const pinnedState = sha256("pinned-state");
     const result = await host.prepareHostTargetPinnedRef(
       "electron",
       "apps/shell",
-      "state:0123456789abcdef"
+      `state:${pinnedState}`
     );
 
     expect(result).toMatchObject({
       buildKey: "pinned-ref-key",
-      effectiveVersion: "ev-pinned",
+      executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
       appId: "@workspace-apps/shell",
       source: "apps/shell",
     });
     const entry = host.registry.get("@workspace-apps/shell");
     expect(entry).toMatchObject({
       activeBundleKey: "pinned-ref-key",
-      activeEv: "ev-pinned",
-      source: { ref: "state:0123456789abcdef" },
+      activeSourceDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      source: { ref: `state:${pinnedState}` },
       activationTrust: {
         decision: "host-target-pinned-ref",
         actor: "shell-host",
@@ -1144,8 +1182,8 @@ describe("AppHost", () => {
     expect(identity).toMatchObject({
       unitKind: "app",
       name: "@workspace-apps/shell",
-      source: { repo: "apps/shell", ref: "state:0123456789abcdef" },
-      effectiveVersion: "ev-pinned",
+      source: { repo: "apps/shell", ref: `state:${pinnedState}` },
+      sourceDigest: entry?.activeSourceDigest,
       capabilities: ["notifications", "panel-hosting"],
     });
   });
@@ -1159,7 +1197,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key"),
           metadata: {
-            ev: "ev-app",
+            sourceDigest: APP_SOURCE,
             sourceStateHash: "state:test",
             details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app" },
           },
@@ -1179,7 +1217,7 @@ describe("AppHost", () => {
         {
           dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
           metadata: {
-            ev: "ev-app-2",
+            sourceDigest: APP_SOURCE_2,
             sourceStateHash: "state:test",
             details: {
               kind: "app" as const,
@@ -1205,7 +1243,7 @@ describe("AppHost", () => {
     installAppEntry(host, graphNode, {
       target: "electron",
       activeBundleKey: "app-key",
-      activeEv: "ev-app",
+      activeSourceDigest: APP_SOURCE,
       capabilities: ["panel-hosting"],
     });
     host.setHostTargetSelection("electron", {
@@ -1224,10 +1262,8 @@ describe("AppHost", () => {
 
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       activeBundleKey: "app-key",
-      activeEv: "ev-app",
-      previousVersions: [
-        expect.objectContaining({ activeBundleKey: "app-key-2", activeEv: "ev-app-2" }),
-      ],
+      activeSourceDigest: APP_SOURCE,
+      previousVersions: [],
     });
   });
 
@@ -1241,7 +1277,9 @@ describe("AppHost", () => {
       await host.whenSettled();
 
       expect(consoleInfo).toHaveBeenCalledWith(expect.stringContaining("@workspace-apps/shell"));
-      expect(consoleInfo).toHaveBeenCalledWith(expect.stringContaining("ev=ev-app"));
+      expect(consoleInfo).toHaveBeenCalledWith(
+        expect.stringContaining(`sourceDigest=${APP_SOURCE.slice(0, 12)}`)
+      );
       expect(consoleInfo).toHaveBeenCalledWith(expect.stringContaining("build=app-key"));
       expect(consoleInfo).toHaveBeenCalledWith(expect.stringContaining("ref=main"));
     } finally {
@@ -1263,8 +1301,9 @@ describe("AppHost", () => {
         target: "electron",
       },
       build: {
-        key: "app-key",
-        effectiveVersion: "ev-app",
+        key: TEST_APP_EXECUTION.binding.artifact.buildKey,
+        compilationCacheKey: "app-key",
+        executionDigest: TEST_APP_EXECUTION.binding.artifact.executionDigest,
         target: "electron",
         integrity: "sha256-app",
       },
@@ -1281,7 +1320,7 @@ describe("AppHost", () => {
     host.registry.patch(graphNode.name, {
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-      activeEv: "ev-mobile",
+      activeSourceDigest: "sourceDigest-mobile",
       activeBundleKey: "mobile-key",
       capabilities: ["notifications"],
     });
@@ -1292,7 +1331,7 @@ describe("AppHost", () => {
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toMatchObject({
       id: "app:apps/mobile:device-1",
       kind: "app",
-      source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
+      source: { repoPath: "apps/mobile" },
       status: "active",
     });
 
@@ -1308,7 +1347,7 @@ describe("AppHost", () => {
     host.registry.patch(graphNode.name, {
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/other-mobile", ref: "main" },
-      activeEv: "ev-other-mobile",
+      activeSourceDigest: "sourceDigest-other-mobile",
       activeBundleKey: "other-mobile-key",
       capabilities: ["notifications"],
     });
@@ -1317,7 +1356,7 @@ describe("AppHost", () => {
       name: "@workspace-apps/mobile",
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-      activeEv: "ev-mobile",
+      activeSourceDigest: "sourceDigest-mobile",
       activeBundleKey: "mobile-key",
       capabilities: ["notifications"],
     });
@@ -1326,39 +1365,9 @@ describe("AppHost", () => {
 
     expect(callerId).toBe("app:apps/mobile:device-1");
     expect(entityCache.resolveActive("app:apps/mobile:device-1")).toMatchObject({
-      source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
+      source: { repoPath: "apps/mobile" },
     });
     expect(entityCache.resolveActive("app:apps/other-mobile:device-1")).toBeNull();
-  });
-
-  it("authorizes app capabilities by installed app and device-scoped principals", () => {
-    const { host, graphNode } = makeHarness();
-    installApp(host, graphNode);
-    host.registry.patch(graphNode.name, {
-      capabilities: ["notifications", "panel-hosting"],
-      source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-    });
-    const authorizer = host.capabilityAuthorizer();
-
-    expect(
-      authorizer.check(createVerifiedCaller("@workspace-apps/shell", "app"), "notifications")
-    ).toEqual({ allowed: true });
-    expect(
-      authorizer.check(createVerifiedCaller("app:apps/shell:device-1", "app"), "notifications")
-    ).toEqual({ allowed: true });
-    expect(
-      authorizer.check(createVerifiedCaller("@workspace-apps/shell", "app"), "panel-hosting")
-    ).toEqual({ allowed: true });
-
-    host.registry.patch(graphNode.name, {
-      source: { kind: "workspace-repo", repo: "apps/field-mobile", ref: "main" },
-    });
-    expect(
-      authorizer.check(
-        createVerifiedCaller("app:apps/field-mobile:device-1", "app"),
-        "panel-hosting"
-      )
-    ).toMatchObject({ allowed: false });
   });
 
   it("activates terminal apps as launchable terminal process builds", async () => {
@@ -1375,17 +1384,19 @@ describe("AppHost", () => {
             entry: "index.ts",
             capabilities: ["clipboard"],
           },
+          authority: testAuthority(["clipboard"]),
         },
       })
     );
     graphNode.manifest = {
       displayName: "Remote CLI",
       app: { target: "terminal", capabilities: ["clipboard"] },
+      authority: testAuthority(["clipboard"]),
     } as never;
     const terminalBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
       metadata: {
-        ev: "ev-terminal",
+        sourceDigest: "sourceDigest-terminal",
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -1463,7 +1474,7 @@ describe("AppHost", () => {
     const terminalBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
       metadata: {
-        ev: "ev-terminal",
+        sourceDigest: "sourceDigest-terminal",
         sourceStateHash: "state:test",
         details: {
           kind: "app" as const,
@@ -1511,7 +1522,8 @@ describe("AppHost", () => {
   });
 
   it("rolls terminal apps back to a retained terminal build", async () => {
-    const { host, buildSystem, eventService, notificationService, graphNode } = makeHarness();
+    const { host, buildSystem, eventService, notificationService, graphNode, registerExecution } =
+      makeHarness();
     const buildByKey = new Map([
       [
         "terminal-key-1",
@@ -1525,7 +1537,7 @@ describe("AppHost", () => {
             "terminal-key-1"
           ),
           metadata: {
-            ev: "ev-terminal-1",
+            sourceDigest: "sourceDigest-terminal-1",
             sourceStateHash: "state:test",
             details: {
               kind: "app" as const,
@@ -1558,7 +1570,7 @@ describe("AppHost", () => {
             "terminal-key-2"
           ),
           metadata: {
-            ev: "ev-terminal-2",
+            sourceDigest: "sourceDigest-terminal-2",
             sourceStateHash: "state:test",
             details: {
               kind: "app" as const,
@@ -1583,6 +1595,8 @@ describe("AppHost", () => {
     buildSystem.getBuildByKey.mockImplementation(
       (key: string) => (buildByKey.get(key) ?? null) as never
     );
+    const currentExecution = registerExecution(buildByKey.get("terminal-key-2") as never);
+    const previousExecution = registerExecution(buildByKey.get("terminal-key-1") as never);
     host.registry.upsert({
       unitKind: "app",
       name: graphNode.name,
@@ -1591,10 +1605,11 @@ describe("AppHost", () => {
       capabilities: ["clipboard"],
       source: { kind: "workspace-repo", repo: graphNode.relativePath, ref: "main" },
       installedAt: Date.now(),
-      activeEv: "ev-terminal-2",
+      activeSourceDigest: "sourceDigest-terminal-2",
+      activeExecutionDigest: currentExecution.binding.artifact.executionDigest,
       activeSourceHash: "sha-2",
       activeBundleKey: "terminal-key-2",
-      activeDependencyEvs: {},
+      activeDependencySourceDigests: {},
       activeExternalDeps: {},
       activeRuntimeDepsKey: null,
       status: "available",
@@ -1604,10 +1619,11 @@ describe("AppHost", () => {
           version: "1.0.0",
           target: "terminal",
           capabilities: ["clipboard"],
-          activeEv: "ev-terminal-1",
+          activeSourceDigest: "sourceDigest-terminal-1",
+          activeExecutionDigest: previousExecution.binding.artifact.executionDigest,
           activeSourceHash: "sha-1",
           activeBundleKey: "terminal-key-1",
-          activeDependencyEvs: {},
+          activeDependencySourceDigests: {},
           activeExternalDeps: {},
           activeRuntimeDepsKey: null,
           activatedAt: Date.now() - 1000,
@@ -1621,9 +1637,12 @@ describe("AppHost", () => {
       target: "terminal",
       status: "available",
       activeBundleKey: "terminal-key-1",
-      activeEv: "ev-terminal-1",
+      activeSourceDigest: "sourceDigest-terminal-1",
       previousVersions: [
-        expect.objectContaining({ activeBundleKey: "terminal-key-2", activeEv: "ev-terminal-2" }),
+        expect.objectContaining({
+          activeBundleKey: "terminal-key-2",
+          activeSourceDigest: "sourceDigest-terminal-2",
+        }),
       ],
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -1692,12 +1711,12 @@ describe("AppHost", () => {
       target: "react-native",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-old:provider-build-old:vibestudio-build-provider-v1",
+          "sourceDigest-provider-old:provider-build-old:vibestudio-build-provider-v1",
       },
     });
     const provider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider-new",
+      activeSourceDigest: "sourceDigest-provider-new",
       activeBuildKey: "provider-build-new",
       contractVersion: "vibestudio-build-provider-v1",
     };
@@ -1710,7 +1729,7 @@ describe("AppHost", () => {
         provider,
         externalDeps: expect.objectContaining({
           "build-provider:@workspace-extensions/react-native":
-            "ev-provider-new:provider-build-new:vibestudio-build-provider-v1",
+            "sourceDigest-provider-new:provider-build-new:vibestudio-build-provider-v1",
         }),
       }),
     ]);
@@ -1718,7 +1737,7 @@ describe("AppHost", () => {
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-app-key"),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -1783,7 +1802,7 @@ describe("AppHost", () => {
       activeBundleKey: "rn-app-key",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-new:provider-build-new:vibestudio-build-provider-v1",
+          "sourceDigest-provider-new:provider-build-new:vibestudio-build-provider-v1",
       },
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -1851,18 +1870,18 @@ describe("AppHost", () => {
       target: "react-native",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-old:provider-build-old:vibestudio-build-provider-v1",
+          "sourceDigest-provider-old:provider-build-old:vibestudio-build-provider-v1",
       },
     });
     const oldProvider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider-old",
+      activeSourceDigest: "sourceDigest-provider-old",
       activeBuildKey: "provider-build-old",
       contractVersion: "vibestudio-build-provider-v1",
     };
     const newProvider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider-new",
+      activeSourceDigest: "sourceDigest-provider-new",
       activeBuildKey: "provider-build-new",
       contractVersion: "vibestudio-build-provider-v1",
     };
@@ -1897,7 +1916,7 @@ describe("AppHost", () => {
         provider: newProvider,
         externalDeps: expect.objectContaining({
           "build-provider:@workspace-extensions/react-native":
-            "ev-provider-new:provider-build-new:vibestudio-build-provider-v1",
+            "sourceDigest-provider-new:provider-build-new:vibestudio-build-provider-v1",
         }),
       }),
     ]);
@@ -1912,7 +1931,7 @@ describe("AppHost", () => {
         "rn-provider-change-key"
       ),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2015,7 +2034,7 @@ describe("AppHost", () => {
 
     const provider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider",
+      activeSourceDigest: "sourceDigest-provider",
       activeBuildKey: "provider-build",
       contractVersion: "vibestudio-build-provider-v1",
     };
@@ -2029,7 +2048,7 @@ describe("AppHost", () => {
         "rn-preflight-key"
       ),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2079,18 +2098,18 @@ describe("AppHost", () => {
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     const provider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider",
+      activeSourceDigest: "sourceDigest-provider",
       activeBuildKey: "provider-build",
       contractVersion: "vibestudio-build-provider-v1",
     };
     const providerDep = {
       [`build-provider:${provider.name}`]:
-        "ev-provider:provider-build:vibestudio-build-provider-v1",
+        "sourceDigest-provider:provider-build:vibestudio-build-provider-v1",
     };
     installAppEntry(host, graphNode, {
       target: "react-native",
       activeBundleKey: "rn-existing-key",
-      activeEv: "ev-app",
+      activeSourceDigest: APP_SOURCE,
       capabilities: ["notifications"],
     });
     host.registry.patch(graphNode.name, { activeExternalDeps: providerDep });
@@ -2104,7 +2123,7 @@ describe("AppHost", () => {
         "rn-existing-key"
       ),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2159,14 +2178,14 @@ describe("AppHost", () => {
 
     const provider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider",
+      activeSourceDigest: "sourceDigest-provider",
       activeBuildKey: "provider-build",
       contractVersion: "vibestudio-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-ready-key"),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2222,14 +2241,14 @@ describe("AppHost", () => {
 
     const provider = {
       name: "@workspace-extensions/react-native",
-      activeEv: "ev-provider",
+      activeSourceDigest: "sourceDigest-provider",
       activeBuildKey: "provider-build",
       contractVersion: "vibestudio-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-delayed-key"),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2273,7 +2292,7 @@ describe("AppHost", () => {
     host.registry.patch(graphNode.name, {
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-      activeEv: "ev-mobile",
+      activeSourceDigest: "sourceDigest-mobile",
       activeBundleKey: "rn-platformless-key",
       capabilities: ["notifications"],
     });
@@ -2289,7 +2308,7 @@ describe("AppHost", () => {
               "rn-platformless-key"
             ),
             metadata: {
-              ev: "ev-mobile",
+              sourceDigest: "sourceDigest-mobile",
               sourceStateHash: "state:test",
               details: {
                 kind: "app",
@@ -2323,7 +2342,7 @@ describe("AppHost", () => {
     host.registry.patch(graphNode.name, {
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-      activeEv: "ev-mobile",
+      activeSourceDigest: "sourceDigest-mobile",
       activeBundleKey: "rn-android-only-key",
       capabilities: ["notifications"],
     });
@@ -2339,7 +2358,7 @@ describe("AppHost", () => {
               "rn-android-only-key"
             ),
             metadata: {
-              ev: "ev-mobile",
+              sourceDigest: "sourceDigest-mobile",
               sourceStateHash: "state:test",
               details: {
                 kind: "app",
@@ -2384,7 +2403,7 @@ describe("AppHost", () => {
     host.registry.patch(graphNode.name, {
       target: "react-native",
       source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-      activeEv: "ev-mobile",
+      activeSourceDigest: "sourceDigest-mobile",
       activeBundleKey: "rn-no-provider-key",
       capabilities: ["notifications"],
     });
@@ -2400,7 +2419,7 @@ describe("AppHost", () => {
               "rn-no-provider-key"
             ),
             metadata: {
-              ev: "ev-mobile",
+              sourceDigest: "sourceDigest-mobile",
               sourceStateHash: "state:test",
               details: {
                 kind: "app",
@@ -2451,7 +2470,7 @@ describe("AppHost", () => {
         "rn-no-provider-key"
       ),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2510,7 +2529,7 @@ describe("AppHost", () => {
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-bad-key"),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2565,7 +2584,7 @@ describe("AppHost", () => {
         "rn-android-only-key"
       ),
       metadata: {
-        ev: "ev-app",
+        sourceDigest: APP_SOURCE,
         sourceStateHash: "state:test",
         details: {
           kind: "app",
@@ -2654,14 +2673,14 @@ describe("AppHost", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
-        effectiveVersion: "ev-panel",
+        executionDigest: "sourceDigest-panel",
         trigger: "source-change",
         title: "@workspace-apps/shell app source change",
         units: [
           expect.objectContaining({
             unitKind: "app",
             unitName: "@workspace-apps/shell",
-            ev: "ev-app",
+            sourceDigest: APP_SOURCE,
             source: expect.objectContaining({ repo: graphNode.relativePath, ref: "main" }),
           }),
         ],

@@ -44,6 +44,42 @@
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
     {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/agentic-chat",
+      "category": "workspace-reference",
+      "reason": "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/agentic-core",
+      "category": "workspace-reference",
+      "reason": "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/agentic-do",
+      "category": "workspace-reference",
+      "reason": "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/agentic-session",
+      "category": "workspace-reference",
+      "reason": "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/pubsub",
+      "category": "workspace-reference",
+      "reason": "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope"
+    },
+    {
+      "file": "scripts/generate-unit-authority-manifests.mjs",
+      "specifier": "@workspace/runtime",
+      "category": "workspace-reference",
+      "reason": "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope"
+    },
+    {
       "file": "src/server/buildV2/platformModules.ts",
       "specifier": "@workspace/cdp-client",
       "category": "workspace-reference",

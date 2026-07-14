@@ -12,8 +12,9 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { EgressProxy } from "../services/egressProxy.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import type { RouteRegistry } from "../routeRegistry.js";
-import { resolveVcsStoreBinding } from "../userlandServices.js";
 import type { WorkerdManager } from "../workerdManager.js";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
+import { attestDirectRpc } from "../services/authorityRuntime.js";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
@@ -34,7 +35,7 @@ export interface WorkerdBootstrapDeps {
   egressProxy: Pick<EgressProxy, "startForCaller" | "startShared" | "setCallerResolver">;
   gatewayToken: string;
   gateway: WorkerdGatewayBootstrapConfig;
-  getInternalDoEnv(className: string): Record<string, string>;
+  getProductDoEnv(source: string, className: string): Record<string, string>;
   runtimeDiagnostics: Pick<RuntimeDiagnosticsStore, "record">;
   eventService: Pick<EventService, "emit">;
   onManagerStarted(manager: WorkerdManager): void;
@@ -84,10 +85,20 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     async start(resolve) {
       const { WorkerdManager } = await import("../workerdManager.js");
       const { getWorkerdProgramSources } = await import("../workerdProgramLoader.js");
+      const {
+        PRODUCT_SEED_DOS,
+        WORKSPACE_DO_CLASS,
+        WORKSPACE_DO_SOURCE,
+        getProductExecutionArtifact,
+        getProductBootManifest,
+        productSeedHostCapabilities,
+        resolveProductSeedArtifact,
+      } = await import("../internalDOs/productBootManifest.js");
       const buildSystem = assertPresent(resolve<BuildSystemV2>("buildSystem"));
       const fsService = assertPresent(resolve<FsService>("fsService"));
       const egressSecret = randomBytes(32).toString("hex");
       const manager: WorkerdManager = new WorkerdManager({
+        hostPrincipal: getProductBootManifest().hostPrincipal,
         tokenManager: deps.tokenManager,
         fsService,
         getServerUrl: () => {
@@ -96,8 +107,19 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           return `http://127.0.0.1:${port}`;
         },
         getServerAliasUrls: () => resolveWorkerdServerAliasUrls(deps.gateway),
-        bindRuntimeImage: (unitPath, ref) => buildSystem.bindRuntimeImage(unitPath, ref),
-        getBuildByKey: (key) => buildSystem.getBuildByKey(key),
+        resolveExecutionArtifact: (unitPath, ref) => {
+          const productSeed = resolveProductSeedArtifact(unitPath);
+          if (productSeed) {
+            if (ref !== undefined) {
+              throw new Error(`Exact product seed ${unitPath} does not accept a moving ref`);
+            }
+            return Promise.resolve(productSeed);
+          }
+          return buildSystem.resolveExecutionArtifact(unitPath, ref);
+        },
+        getExecutionArtifact: (executionDigest) =>
+          getProductExecutionArtifact(executionDigest) ??
+          buildSystem.getExecutionArtifact(executionDigest),
         workerdPrograms: getWorkerdProgramSources(),
         workspacePath: deps.workspacePath,
         statePath: deps.statePath,
@@ -118,11 +140,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         unregisterEgressCaller: (callerId) => egressCallers.delete(callerId),
         egressSecret,
         getWorkerdGatewayToken: () => deps.gatewayToken,
-        getBootstrapMainBoundDos: () => {
-          const binding = resolveVcsStoreBinding(deps.workspaceDeclarations);
-          return binding ? [{ source: binding.source, className: binding.className }] : [];
-        },
-        getInternalDoEnv: deps.getInternalDoEnv,
+        getProductDoEnv: deps.getProductDoEnv,
+        getProductDoCapabilities: (source, className) =>
+          productSeedHostCapabilities(source, className),
         recordLifecycleEvent: (event) => {
           deps.runtimeDiagnostics.record({
             workspaceId: deps.workspaceId,
@@ -149,10 +169,10 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
 
       // An explicit empty class list reconciles manifest removals instead of
       // leaving stale DO services bound after a rebuild.
-      buildSystem.onPushBuild((source, trigger, buildKey) => {
+      buildSystem.onPushBuild((source, trigger) => {
         const head = trigger?.head ?? "main";
         if (head !== "main") {
-          manager.onSourceRebuilt(source, null, trigger, buildKey).catch((error: unknown) => {
+          manager.onSourceRebuilt(source, null, trigger).catch((error: unknown) => {
             console.error(
               `[WorkerdManager] Failed to handle rebuilt source ${source}@${head}:`,
               error
@@ -169,26 +189,20 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         const durable = manifest?.["durable"] as
           | { classes?: Array<{ className: string }> }
           | undefined;
-        manager
-          .onSourceRebuilt(source, durable?.classes ?? [], trigger, buildKey)
-          .catch((error: unknown) => {
-            console.error(`[WorkerdManager] Failed to handle rebuilt source ${source}:`, error);
-          });
+        manager.onSourceRebuilt(source, durable?.classes ?? [], trigger).catch((error: unknown) => {
+          console.error(`[WorkerdManager] Failed to handle rebuilt source ${source}:`, error);
+        });
       });
 
-      const { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } =
-        await import("../internalDOs/internalDoLoader.js");
-      const internalDoClasses = INTERNAL_DO_CLASSES.map((className) => ({
-        source: INTERNAL_DO_SOURCE,
-        className,
-      }));
-      if (internalDoClasses.length > 0) {
-        console.log(
-          "[WorkerdManager] Pre-registering internal DO classes:",
-          internalDoClasses.map((entry) => `${entry.source}:${entry.className}`).join(", ")
-        );
-        await manager.registerAllDOClasses(internalDoClasses);
-      }
+      const productDos = [
+        { source: WORKSPACE_DO_SOURCE, className: WORKSPACE_DO_CLASS },
+        ...PRODUCT_SEED_DOS.map(({ source, className }) => ({ source, className })),
+      ];
+      console.log(
+        "[WorkerdManager] Verifying bootstrap and exact product-seed DO artifacts:",
+        productDos.map((entry) => `${entry.source}:${entry.className}`).join(", ")
+      );
+      await manager.registerAllDOClasses(productDos);
 
       if (deps.workspaceDeclarations.routes.some((route) => route.durableObject)) {
         for (const node of buildSystem.getGraph().allNodes()) {
@@ -236,6 +250,21 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return `http://127.0.0.1:${port}`;
       });
       dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
+      dispatch.setAuthorityAttester((ref, method) =>
+        attestDirectRpc({
+          caller: createHostCaller("main", "server", {
+            userId: "system",
+            handle: "system",
+          }),
+          source: ref.source,
+          className: ref.className,
+          objectKey: ref.objectKey,
+          method,
+          workspaceId: deps.workspaceId,
+          workspaceMember: true,
+          sessionId: `host:${method}`,
+        })
+      );
       dispatch.setEnsureDO((source, className, objectKey) => {
         const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
         const record = deps.entityCache.resolveActive(targetId);

@@ -21,7 +21,7 @@ const base = {
   callerId: "worker-abcdef123456",
   callerKind: "worker",
   repoPath: "/projects/foo",
-  effectiveVersion: "v1",
+  executionDigest: "v1",
   requestedAt: 1,
 } as const;
 
@@ -238,7 +238,7 @@ describe("approvalCopy", () => {
             version: "1.0.0",
             target: "electron",
             source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-            ev: "ev-shell",
+            sourceDigest: "sourceDigest-shell",
             capabilities: ["notifications"],
           },
         ],
@@ -267,7 +267,7 @@ describe("approvalCopy", () => {
             version: "1.2.3",
             target: null,
             source: { kind: "workspace-repo", repo: "extensions/acme", ref: "main" },
-            ev: "ev-acme",
+            sourceDigest: "sourceDigest-acme",
             capabilities: ["node:fs", "node:child_process"],
           },
         ],
@@ -420,6 +420,7 @@ describe("approvalCopy", () => {
   });
 
   it("formats standard action labels by approval subtype", () => {
+    const internalDigest = "d".repeat(64);
     const [capability, oauth, gitWrite] = fixtures.map((fixture) => fixture.approval);
     const workspaceSourceChange = fixtures.find(
       (fixture) => fixture.name === "workspace source change"
@@ -431,15 +432,15 @@ describe("approvalCopy", () => {
     const evalCredential = {
       ...repoBinding,
       repoPath: "vibestudio/internal",
-      effectiveVersion: "internal",
+      executionDigest: internalDigest,
       requester: {
         id: "do:vibestudio/internal:EvalDO:one",
         kind: "do" as const,
         category: "eval" as const,
         title: "Agentic Chat",
         repoPath: "vibestudio/internal",
-        effectiveVersion: "internal",
-        stableIdentityKey: "do:vibestudio/internal:EvalDO:one",
+        executionDigest: internalDigest,
+        stableIdentityKey: `vibestudio/internal@${internalDigest}`,
         ephemeralInstanceKey: "do:vibestudio/internal:EvalDO:one",
         breadcrumbs: [],
       },
@@ -447,7 +448,7 @@ describe("approvalCopy", () => {
     const evalNetworkEgress = {
       ...networkEgress,
       repoPath: "vibestudio/internal",
-      effectiveVersion: "internal",
+      executionDigest: internalDigest,
       requester: evalCredential.requester,
     };
 
@@ -473,11 +474,11 @@ describe("approvalCopy", () => {
     expect(getStandardActionCopy(networkEgress).session!.description).toContain("localhost:42531");
     expect(getStandardActionCopy(networkEgress).version!.label).toBe("Trust version with network");
     expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
-      "Trust identity with network"
+      "Trust version with network"
     );
-    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust identity");
+    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust version");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain(
-      "runtime identity"
+      "exact code version"
     );
   });
 

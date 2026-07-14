@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   unitChangeSessionGrantKey,
   type UnitMetaChangeApprovalProvider,
@@ -76,7 +76,8 @@ function panelCaller() {
     callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/test",
-    effectiveVersion: "ev-panel",
+    executionDigest: "c".repeat(64),
+    requested: [{ capability: "service:*", resource: { kind: "prefix", prefix: "" } }],
   });
 }
 
@@ -94,6 +95,7 @@ function gateDeps(opts: { decision?: "once" | "session" | "version" | "repo" | "
     grantStore,
     grantTtlMs: 1000,
     capabilityGrantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    hasPanelHostingAuthority: () => false,
     getProviders: () => [] as UnitMetaChangeApprovalProvider<UnitBatchEntry>[],
   };
 }
@@ -122,7 +124,7 @@ describe("createMainAdvanceApprovalGate", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
-        effectiveVersion: "ev-panel",
+        executionDigest: "c".repeat(64),
         trigger: "meta-change",
         configWrite: {
           repoPath: "meta",
@@ -177,7 +179,7 @@ describe("createMainAdvanceApprovalGate", () => {
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
-        effectiveVersion: "ev-panel",
+        executionDigest: "c".repeat(64),
         capability: "workspace-repo-write",
         grantResourceKey: "workspace-source-change:main",
         title: "Update workspace main",
@@ -205,8 +207,9 @@ describe("createMainAdvanceApprovalGate", () => {
     // on-behalf-of caller. A chrome/shell principal keeps its user-level trust,
     // so no approval is queued — regardless of the (untrusted) writer DO.
     const deps = gateDeps({ decision: "deny" });
+    deps.hasPanelHostingAuthority = () => true;
     const gate = createMainAdvanceApprovalGate(deps);
-    const shell = createVerifiedCaller("shell:device-1", "shell");
+    const shell = createHostCaller("shell:device-1", "shell");
 
     await gate.approve(
       candidate({
@@ -365,7 +368,7 @@ describe("createMainAdvanceApprovalGate", () => {
       deps.capabilityGrantStore.grant(
         "workspace-repo-write",
         "workspace-source-change:main",
-        { callerId: "panel-1", repoPath: "panels/test", effectiveVersion: "ev-panel" },
+        { callerId: "panel-1", repoPath: "panels/test", executionDigest: "c".repeat(64) },
         "session"
       );
       const gate = createMainAdvanceApprovalGate(deps);

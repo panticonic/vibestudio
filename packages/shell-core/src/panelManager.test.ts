@@ -106,7 +106,8 @@ function createWorkspaceMemory() {
       return {
         id: e.id,
         kind: e.kind,
-        source: { repoPath: e.source, effectiveVersion: "test" },
+        source: { repoPath: e.source },
+        activeExecutionDigest: "test",
         contextId: e.contextId,
         key: e.key,
         createdAt: Date.now(),
@@ -240,10 +241,14 @@ function createWorkspaceMemory() {
       return {
         id,
         kind: spec.kind,
-        source: { repoPath: spec.source, effectiveVersion: "test" },
+        source: { repoPath: spec.source },
+        executionDigest: "test",
         contextId: spec.contextId ?? "ctx-default",
         targetId: id,
       };
+    },
+    async listEntities() {
+      return [];
     },
     async retireEntity(id) {
       retired.push(id);
@@ -436,7 +441,7 @@ describe("PanelManager", () => {
       slotId: string;
       contextId: string;
       sourceRepo: string;
-      effectiveVersion: string;
+      executionDigest: string;
       gatewayConfig: { serverUrl: string; token: string };
       stateArgs: Record<string, unknown>;
     };
@@ -448,7 +453,7 @@ describe("PanelManager", () => {
     expect(init.slotId).toBe(created.panelId);
     expect(init.contextId).toBe(created.contextId);
     expect(init.sourceRepo).toBe("panels/example");
-    expect(init.effectiveVersion).toBe("test");
+    expect(init.executionDigest).toBe("test");
     expect(init.gatewayConfig).toEqual({
       serverUrl: "http://127.0.0.1:42773",
       token: `rpc-${currentEntityId}`,
@@ -459,8 +464,8 @@ describe("PanelManager", () => {
       source: "panels/example",
       contextId: init.contextId,
       runtimeEntityId: currentEntityId,
-      effectiveVersion: "test",
-      build: { effectiveVersion: "test" },
+      executionDigest: "test",
+      build: { executionDigest: "test" },
     });
 
     const onStateArgsChanged = vi.fn();

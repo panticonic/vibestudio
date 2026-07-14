@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { createNotificationService } from "./notificationService.js";
+import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 
 describe("server notification service", () => {
   it("scopes transient runtime notifications to the caller's verified account", async () => {
@@ -54,16 +55,35 @@ describe("server notification service", () => {
       eventService: { emit: vi.fn(), emitToUser: vi.fn() } as never,
     }).definition;
     const dispatcher = new ServiceDispatcher();
+    dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+      authorizeVerifiedCaller(caller, {
+        workspaceId: "test-workspace",
+        workspaceMember: true,
+        sessionId: "test-session",
+        audience: "main",
+        capability,
+        resourceKey,
+      })
+    );
     dispatcher.registerService(service);
     dispatcher.markInitialized();
 
+    const callerId = "panel:chat";
+    const caller = createVerifiedCaller(callerId, "panel", {
+      callerId,
+      callerKind: "panel",
+      repoPath: "panels/chat",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "service:notification.signalUserInbox",
+          resource: { kind: "exact", key: "service:notification.signalUserInbox" },
+        },
+      ],
+    });
+
     await expect(
-      dispatcher.dispatch(
-        { caller: createVerifiedCaller("panel:chat", "panel") },
-        "notification",
-        "signalUserInbox",
-        ["usr_bob"]
-      )
-    ).rejects.toThrow(/not accessible/);
+      dispatcher.dispatch({ caller }, "notification", "signalUserInbox", ["usr_bob"])
+    ).rejects.toMatchObject({ code: "EACCES" });
   });
 });

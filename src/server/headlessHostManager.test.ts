@@ -65,6 +65,7 @@ describe("HeadlessHostManager keep-alive", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.mocked(tokenManager.ensureToken).mockClear();
     coordinator = new PanelRuntimeCoordinator();
     children = [];
   });
@@ -102,6 +103,9 @@ describe("HeadlessHostManager keep-alive", () => {
     manager.startKeepAlive();
     await vi.advanceTimersByTimeAsync(0);
     expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(tokenManager.ensureToken).toHaveBeenCalledWith("headless-host", "shell", {
+      hostOriginated: true,
+    });
     await manager.stop();
   });
 

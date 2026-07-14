@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverPackageGraph } from "./packageGraph.js";
-import { computeEffectiveVersions } from "./effectiveVersion.js";
+import { computeSourceClosures } from "./sourceClosure.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import {
   StateTransitionTrigger,
@@ -18,7 +18,7 @@ import {
  * SAME composed workspace `stateHash` but DISTINCT per-repo `changedPaths`. The
  * trigger must process EVERY event for its own changed paths — deduping on
  * `stateHash` alone would drop every repo after the first, leaving its units'
- * content hashes / EV stale.
+ * content hashes / source digest stale.
  */
 describe("StateTransitionTrigger — multi-repo group push", () => {
   let root: string;
@@ -64,7 +64,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
 
   it("processes BOTH repos when their events share one composed workspace stateHash", async () => {
     const graph = discoverPackageGraph(workspaceRoot);
-    const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
+    const { sourceMap, contentHashes } = computeSourceClosures(graph, {});
 
     let advanceCb: ((event: StateAdvancedEvent) => void) | null = null;
     const source: WorkspaceStateSource & BuildSourceProvider = {
@@ -85,7 +85,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
 
     trigger = new StateTransitionTrigger({
       graph,
-      evMap,
+      sourceMap,
       contentHashes,
       stateHash: "state:0",
       workspaceRoot,

@@ -43,12 +43,7 @@ type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function callerFor(gad: TestGad): GadCaller {
   return {
-    async call<T>(method: string, input: unknown): Promise<T> {
-      const instance = gad.instance as unknown as Record<string, (arg: unknown) => unknown>;
-      const fn = instance[method];
-      if (typeof fn !== "function") throw new Error(`no such gad method: ${method}`);
-      return (await fn.call(gad.instance, input)) as T;
-    },
+    call: <T>(method: string, input: unknown): Promise<T> => gad.call<T>(method, input),
   };
 }
 
@@ -120,7 +115,7 @@ describe("main provenance — DO-owned push lineage + fail-closed drift", () => 
   };
 
   const push = (ctxId: string, repoPaths: string[], message?: string) =>
-    doInstance().vcsPush({
+    gad.call<{ status: string; repoPaths?: string[] }>("vcsPush", {
       repoPaths,
       sourceHead: vcsContextHead(ctxId),
       actor: USER,
@@ -171,14 +166,18 @@ describe("main provenance — DO-owned push lineage + fail-closed drift", () => 
 
     // The DO's per-repo main log records the REAL transition (not a synthetic
     // recovery commit), attributed to the pushing actor.
-    const log = doInstance().vcsLog(FOO, 3, VCS_MAIN_HEAD);
+    const log = await gad.call<
+      Array<{ actor: unknown; summary: string | null; outputStateHash: string | null }>
+    >("vcsLog", FOO, 3, VCS_MAIN_HEAD);
     expect(log[0]?.outputStateHash).toBe(stateHash);
     expect(log[0]?.summary).toBe("publish foo");
     expect(JSON.stringify(log[0]?.actor)).toContain("user");
 
     // Blame vehicle: the main commit carries per-file edit ops (the create of
     // index.ts), re-keyed at commit to this main event.
-    const edits = doInstance().listCommitEdits({ commitEventId: head!.commitEventId! });
+    const edits = await gad.call<Array<Record<string, unknown>>>("listCommitEdits", {
+      commitEventId: head!.commitEventId!,
+    });
     expect(edits.length).toBeGreaterThan(0);
     expect(edits.map((e) => String(e["path"]))).toContain("index.ts");
   });
@@ -225,7 +224,7 @@ describe("main provenance — DO-owned push lineage + fail-closed drift", () => 
     // alone, so the heal must fail closed rather than fabricate provenance.
     const drifted = "state:" + "a".repeat(64);
     await refs.seedMain({ repoPath: "packages/orphan", value: drifted });
-    await expect(doInstance().vcsHealPublishDrift({})).rejects.toThrow(
+    await expect(gad.call("vcsHealPublishDrift", {})).rejects.toThrow(
       /no publish intent covers it|drift/i
     );
   });
