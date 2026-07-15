@@ -16,6 +16,7 @@ import { connectionStatusAtom, networkReachableAtom } from "../state/connectionA
 import { shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import type { ConnectionStatus } from "../services/mobileTransport";
+import { spacing, type } from "../design/tokens";
 
 interface ConnectionBarProps {
   /**
@@ -209,18 +210,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 12,
+    paddingHorizontal: spacing.md,
   },
   dot: {
     width: 6,
     height: 6,
     borderRadius: 3,
     backgroundColor: "rgba(255, 255, 255, 0.8)",
-    marginRight: 6,
+    marginRight: spacing.xs + 2,
   },
   text: {
+    ...type.micro,
     color: "#ffffff",
-    fontSize: 12,
-    fontWeight: "600",
   },
 });

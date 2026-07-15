@@ -18,7 +18,13 @@ import { registerBackgroundHandlers } from "./src/services/backgroundHandlers";
 import { setupOAuthHandler } from "./src/services/oauthHandler";
 import { setupNotificationCategories } from "./src/services/notificationCategories";
 import { registerForPushNotifications } from "./src/services/pushNotifications";
-import { colorSchemeAtom, isDarkModeAtom } from "./src/state/themeAtoms";
+import {
+  colorSchemeAtom,
+  hydrateThemePreferenceAtom,
+  isDarkModeAtom,
+  systemColorSchemeAtom,
+} from "./src/state/themeAtoms";
+import { ActionSheetHost } from "./src/components/ui/ActionSheetHost";
 import { shellClientAtom } from "./src/state/shellClientAtom";
 import { approvalDeepLinkAtom } from "./src/state/approvalDeepLinkAtom";
 import { pushToastAtom } from "./src/state/toastAtoms";
@@ -37,23 +43,33 @@ registerBackgroundHandlers();
 function AppContent() {
   const shellClient = useAtomValue(shellClientAtom);
   const isDark = useAtomValue(isDarkModeAtom);
-  const setColorScheme = useSetAtom(colorSchemeAtom);
+  const effectiveScheme = useAtomValue(colorSchemeAtom);
+  const setSystemColorScheme = useSetAtom(systemColorSchemeAtom);
+  const hydrateThemePreference = useSetAtom(hydrateThemePreferenceAtom);
   const setApprovalDeepLink = useSetAtom(approvalDeepLinkAtom);
   const pushToast = useSetAtom(pushToastAtom);
   const consumedPanelLinks = useRef(new Set<string>());
 
+  useEffect(() => {
+    void hydrateThemePreference();
+  }, [hydrateThemePreference]);
+
   // Track the system color scheme at the app root so the theme follows the OS
   // on every screen (login, settings, panels) — not only while MainScreen is
-  // mounted. When a shell session exists, mirror the change to managed panels.
+  // mounted.
   useEffect(() => {
     const subscription = Appearance.addChangeListener(({ colorScheme: nextScheme }) => {
-      setColorScheme(nextScheme);
-      if (shellClient) {
-        void shellClient.panels.updateTheme(nextScheme === "light" ? "light" : "dark");
-      }
+      setSystemColorScheme(nextScheme);
     });
     return () => subscription.remove();
-  }, [shellClient, setColorScheme]);
+  }, [setSystemColorScheme]);
+
+  // Mirror the effective theme (system scheme + user override) into managed
+  // panels whenever it changes.
+  useEffect(() => {
+    if (!shellClient) return;
+    void shellClient.panels.updateTheme(effectiveScheme === "light" ? "light" : "dark");
+  }, [effectiveScheme, shellClient]);
 
   // Set up OAuth deep link handler when the shell client is available
   useEffect(() => {
@@ -162,6 +178,7 @@ function AppContent() {
           <RootNavigator />
         </NavigationContainer>
         <Toast />
+        <ActionSheetHost />
       </ErrorBoundary>
     </>
   );

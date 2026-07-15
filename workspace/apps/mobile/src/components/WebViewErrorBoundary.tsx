@@ -7,7 +7,9 @@
  */
 
 import React, { type ErrorInfo, type ReactNode } from "react";
-import { View, Text, Pressable, StyleSheet } from "react-native";
+import { View, StyleSheet } from "react-native";
+import { EmptyState, Button } from "./ui/primitives";
+import { RefreshCw } from "../design/icons";
 
 interface WebViewErrorBoundaryProps {
   children: ReactNode;
@@ -64,33 +66,19 @@ export class WebViewErrorBoundary extends React.Component<
             colors?.background != null && { backgroundColor: colors.background },
           ]}
         >
-          <Text style={[styles.title, colors?.text != null && { color: colors.text }]}>
-            Panel failed to load
-          </Text>
-          <Text
-            style={[
-              styles.message,
-              colors?.textSecondary != null && { color: colors.textSecondary },
-            ]}
-          >
-            {this.state.error?.message || "An unexpected error occurred."}
-          </Text>
-          <Pressable
-            style={[
-              styles.reloadButton,
-              colors?.accent != null && { backgroundColor: colors.accent },
-            ]}
-            onPress={this.handleReload}
-          >
-            <Text
-              style={[
-                styles.reloadText,
-                colors?.accentText != null && { color: colors.accentText },
-              ]}
-            >
-              Reload
-            </Text>
-          </Pressable>
+          <EmptyState
+            icon={RefreshCw}
+            title="Panel failed to load"
+            message={this.state.error?.message || "An unexpected error occurred."}
+            action={
+              <Button
+                label="Reload"
+                variant="filled"
+                icon={RefreshCw}
+                onPress={this.handleReload}
+              />
+            }
+          />
         </View>
       );
     }
@@ -106,33 +94,6 @@ export class WebViewErrorBoundary extends React.Component<
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 32,
     backgroundColor: "#0a0b0c",
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#e0e0e0",
-    marginBottom: 8,
-  },
-  message: {
-    fontSize: 14,
-    color: "#888",
-    textAlign: "center",
-    marginBottom: 24,
-    lineHeight: 20,
-  },
-  reloadButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    backgroundColor: "#0f3460",
-    borderRadius: 8,
-  },
-  reloadText: {
-    color: "#e0e0e0",
-    fontSize: 16,
-    fontWeight: "600",
   },
 });

@@ -7,7 +7,6 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  ActionSheetIOS,
   AppState,
   Pressable,
 } from "react-native";
@@ -81,6 +80,47 @@ import {
   channelInviteFromNotification,
   type UserNotification,
 } from "@vibestudio/shared/userNotifications";
+import { showActionSheetAtom } from "../state/actionSheetAtoms";
+import { spacing, type as typeScale } from "../design/tokens";
+import {
+  Archive as ArchiveIcon,
+  ArrowLeft as ArrowLeftIcon,
+  ArrowRight as ArrowRightIcon,
+  Bell as BellIcon,
+  Copy as CopyIcon,
+  CopyPlus as CopyPlusIcon,
+  ExternalLink as ExternalLinkIcon,
+  Link2 as Link2Icon,
+  MessageCircle as MessageCircleIcon,
+  Pin as PinIcon,
+  PinOff as PinOffIcon,
+  Power as PowerIcon,
+  RefreshCw as RefreshCwIcon,
+  Square as SquareIcon,
+  type IconComponent,
+} from "../design/icons";
+import { Button, EmptyState } from "./ui/primitives";
+
+/** Icons + one-line explanations for panel commands (discoverability). */
+const PANEL_COMMAND_PRESENTATION: Partial<
+  Record<PanelCommandId, { icon?: IconComponent; description?: string }>
+> = {
+  back: { icon: ArrowLeftIcon, description: "Go back in this panel's history" },
+  forward: { icon: ArrowRightIcon, description: "Go forward in this panel's history" },
+  "reload-panel": { icon: RefreshCwIcon, description: "Reload the panel" },
+  "reload-view": { icon: RefreshCwIcon, description: "Reload the view" },
+  "force-reload-view": { icon: RefreshCwIcon, description: "Reload, bypassing caches" },
+  "rebuild-panel": { icon: RefreshCwIcon, description: "Rebuild the panel from source" },
+  stop: { icon: SquareIcon, description: "Stop loading" },
+  "copy-address": { icon: CopyIcon, description: "Copy this panel's address" },
+  "open-external": { icon: ExternalLinkIcon, description: "Open in your device browser" },
+  duplicate: { icon: CopyPlusIcon, description: "Open another copy as a new root panel" },
+  "toggle-pin": { icon: PinIcon, description: "Pinned panels stay loaded in the background" },
+  unload: { icon: PowerIcon, description: "Free memory; reloads next time you open it" },
+  archive: { icon: ArchiveIcon, description: "Remove from the tree (recoverable on desktop)" },
+  "focus-address": { icon: Link2Icon, description: "Edit the address" },
+};
+
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -110,6 +150,7 @@ export function MainScreen() {
   const colors = useAtomValue(themeColorsAtom);
   const [approvalDeepLinkId, setApprovalDeepLinkId] = useAtom(approvalDeepLinkAtom);
   const pushToast = useSetAtom(pushToastAtom);
+  const showActionSheet = useSetAtom(showActionSheetAtom);
   const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const pinsHydrated = useAtomValue(pinsHydratedAtom);
@@ -1080,30 +1121,23 @@ export function MainScreen() {
           "archive",
         ]
       );
-      const labels = commands.map((command) => command.label);
-      if (Platform.OS === "ios") {
-        const destructiveIndex = commands.findIndex((command) => command.id === "archive");
-        ActionSheetIOS.showActionSheetWithOptions(
-          {
-            options: [...labels, "Cancel"],
-            cancelButtonIndex: labels.length,
-            destructiveButtonIndex: destructiveIndex >= 0 ? destructiveIndex : undefined,
-          },
-          (buttonIndex) => {
-            const command = commands[buttonIndex];
-            if (command) performPanelCommand(command.id, panelId);
-          }
-        );
-        return;
-      }
-      Alert.alert(panel?.title ?? "Panel", undefined, [
-        ...commands.map((command) => ({
-          text: command.label,
-          onPress: () => performPanelCommand(command.id, panelId),
-          style: command.id === "archive" ? ("destructive" as const) : ("default" as const),
-        })),
-        { text: "Cancel", style: "cancel" },
-      ]);
+      const isPinned = pinnedPanelIds.has(panelId);
+      showActionSheet({
+        title: panel?.title ?? "Panel",
+        subtitle: chrome?.editableAddress,
+        items: commands.map((command) => {
+          const presentation = PANEL_COMMAND_PRESENTATION[command.id];
+          return {
+            id: command.id,
+            label: command.label,
+            description: presentation?.description,
+            icon:
+              command.id === "toggle-pin" && isPinned ? PinOffIcon : presentation?.icon,
+            tone: command.id === "archive" ? ("danger" as const) : ("default" as const),
+          };
+        }),
+        onSelect: (id) => performPanelCommand(id as PanelCommandId, panelId),
+      });
     },
     [
       activeChromeState,
@@ -1112,6 +1146,7 @@ export function MainScreen() {
       performPanelCommand,
       pinnedPanelIds,
       shellClient,
+      showActionSheet,
     ]
   );
   const executeAddressAction = useCallback(
@@ -1534,6 +1569,59 @@ export function MainScreen() {
       });
     }
   }, [currentChannelInvite, currentUserNotification, pushToast, shellClient]);
+  // Inbox: the banner shows only the newest notification; this sheet lists all
+  // of them. Selecting a channel invite joins it, anything else acknowledges.
+  const openNotificationInbox = useCallback(() => {
+    if (!shellClient || userNotifications.length === 0) return;
+    showActionSheet({
+      title: "Notifications",
+      subtitle: `${userNotifications.length} waiting`,
+      items: [
+        ...userNotifications.map((notification) => {
+          const invite = channelInviteFromNotification(notification);
+          return {
+            id: notification.id,
+            label: notification.title,
+            description:
+              (notification.message ?? notification.kind) +
+              (invite ? " — tap to join" : " — tap to dismiss"),
+            icon: invite ? MessageCircleIcon : BellIcon,
+          };
+        }),
+        {
+          id: "__dismiss_all__",
+          label: "Dismiss all",
+          description: "Acknowledge every notification",
+          tone: "danger" as const,
+        },
+      ],
+      onSelect: (id) => {
+        void (async () => {
+          try {
+            if (id === "__dismiss_all__") {
+              for (const notification of userNotifications) {
+                await shellClient.userNotifications.acknowledge(notification.id);
+              }
+              setUserNotifications([]);
+              return;
+            }
+            const notification = userNotifications.find((entry) => entry.id === id);
+            if (!notification) return;
+            const invite = channelInviteFromNotification(notification);
+            if (invite) await shellClient.userNotifications.openChannel(invite.channelId);
+            await shellClient.userNotifications.acknowledge(notification.id);
+            setUserNotifications((current) => current.filter((entry) => entry.id !== id));
+          } catch (error) {
+            pushToast({
+              title: "Notification action failed",
+              message: error instanceof Error ? error.message : String(error),
+              tone: "danger",
+            });
+          }
+        })();
+      },
+    });
+  }, [pushToast, shellClient, showActionSheet, userNotifications]);
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ConnectionBar onRepair={handleRepair} />
@@ -1564,25 +1652,40 @@ export function MainScreen() {
       />
 
       {currentUserNotification ? (
-        <View
+        <Pressable
           accessibilityLiveRegion="polite"
-          style={[
+          accessibilityRole="button"
+          accessibilityLabel={`Notification: ${currentUserNotification.title}. Tap to view all notifications.`}
+          onPress={openNotificationInbox}
+          style={({ pressed }) => [
             styles.userNotification,
-            { backgroundColor: colors.surface, borderColor: colors.primary },
+            {
+              backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
+              borderBottomColor: colors.borderSubtle,
+            },
           ]}
         >
+          <BellIcon size={17} color={colors.primary} />
           <View style={styles.userNotificationCopy}>
-            <Text style={[styles.userNotificationTitle, { color: colors.text }]}>
+            <Text
+              style={[styles.userNotificationTitle, { color: colors.text }]}
+              numberOfLines={1}
+            >
               {currentUserNotification.title}
             </Text>
-            <Text style={[styles.userNotificationMessage, { color: colors.textSecondary }]}>
+            <Text
+              style={[styles.userNotificationMessage, { color: colors.textSecondary }]}
+              numberOfLines={1}
+            >
               {currentUserNotification.message ?? currentUserNotification.kind}
             </Text>
           </View>
           {userNotifications.length > 1 ? (
-            <Text style={[styles.userNotificationCount, { color: colors.textSecondary }]}>
-              +{userNotifications.length - 1}
-            </Text>
+            <View style={[styles.userNotificationCountPill, { backgroundColor: colors.accentSoft }]}>
+              <Text style={[typeScale.micro, { color: colors.primary }]}>
+                +{userNotifications.length - 1}
+              </Text>
+            </View>
           ) : null}
           {currentChannelInvite ? (
             <Pressable
@@ -1599,26 +1702,22 @@ export function MainScreen() {
             accessibilityRole="button"
             accessibilityLabel={`Dismiss ${currentUserNotification.title}`}
             onPress={() => void dismissUserNotification()}
-            style={[styles.userNotificationButton, { borderColor: colors.textSecondary }]}
+            style={[styles.userNotificationButton, { borderColor: colors.border }]}
           >
             <Text style={[styles.userNotificationButtonText, { color: colors.textSecondary }]}>
               Dismiss
             </Text>
           </Pressable>
-        </View>
+        </Pressable>
       ) : null}
 
       <View style={styles.contentArea}>
         {!activePanelId && (
-          <View style={styles.placeholderContainer}>
-            <VibestudioLogo size={76} variant="mark" style={styles.placeholderLogo} />
-            <Text style={[styles.placeholderText, { color: colors.textSecondary }]}>
-              Select a panel from the drawer
-            </Text>
-            <Text style={[styles.placeholderSubtext, { color: colors.textSecondary }]}>
-              Swipe from the left edge or tap the menu button
-            </Text>
-          </View>
+          <EmptyState
+            art={<VibestudioLogo size={76} variant="mark" />}
+            title="No panel selected"
+            message="Swipe from the left edge or tap the menu button to pick a panel."
+          />
         )}
 
         {loadingPanelId &&
@@ -1629,7 +1728,7 @@ export function MainScreen() {
               <VibestudioLogo size={64} variant="mark" style={styles.placeholderLogo} />
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
-                Loading panel...
+                Loading panel…
               </Text>
             </View>
           )}
@@ -1638,50 +1737,28 @@ export function MainScreen() {
           activePanelLoadError &&
           !activePanelLeasedElsewhere &&
           !webViewStack.some((entry) => entry.panelId === activePanelId) && (
-            <View style={styles.placeholderContainer}>
-              <VibestudioLogo size={72} variant="mark" style={styles.placeholderLogo} />
-              <Text style={[styles.placeholderText, { color: colors.text }]}>
-                Panel failed to load
-              </Text>
-              <Text style={[styles.placeholderSubtext, { color: colors.textSecondary }]}>
-                {activePanelLoadError}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Retry loading panel"
-                hitSlop={8}
-                style={({ pressed }) => [
-                  styles.retryButton,
-                  { borderColor: colors.primary },
-                  pressed && { opacity: 0.6 },
-                ]}
-                onPress={() => activatePanel(activePanelId)}
-              >
-                <Text style={[styles.retryButtonText, { color: colors.primary }]}>Retry</Text>
-              </Pressable>
-            </View>
+            <EmptyState
+              art={<VibestudioLogo size={72} variant="mark" />}
+              title="Panel failed to load"
+              message={activePanelLoadError}
+              action={
+                <Button
+                  label="Retry"
+                  variant="filled"
+                  icon={RefreshCwIcon}
+                  onPress={() => activatePanel(activePanelId)}
+                />
+              }
+            />
           )}
 
         {activePanelId && activePanelLeasedElsewhere && (
-          <View style={styles.placeholderContainer}>
-            <VibestudioLogo size={72} variant="mark" style={styles.placeholderLogo} />
-            <Text style={[styles.placeholderText, { color: colors.text }]}>
-              Running on {activeRuntimeLease?.holderLabel ?? "another client"}
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Take over this panel"
-              hitSlop={8}
-              style={({ pressed }) => [
-                styles.takeOverButton,
-                { borderColor: colors.primary },
-                pressed && { opacity: 0.6 },
-              ]}
-              onPress={takeOverActivePanel}
-            >
-              <Text style={[styles.takeOverButtonText, { color: colors.primary }]}>Take Over</Text>
-            </Pressable>
-          </View>
+          <EmptyState
+            art={<VibestudioLogo size={72} variant="mark" />}
+            title={`Running on ${activeRuntimeLease?.holderLabel ?? "another client"}`}
+            message="This panel is live on another device. Taking over moves it here."
+            action={<Button label="Take over" variant="filled" onPress={takeOverActivePanel} />}
+          />
         )}
 
         {!activePanelLeasedElsewhere &&
@@ -1795,9 +1872,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-  userNotificationCount: {
-    fontSize: 12,
-    fontWeight: "600",
+  userNotificationCountPill: {
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
   },
   userNotificationButton: {
     minHeight: 34,
@@ -1814,22 +1892,6 @@ const styles = StyleSheet.create({
   webViewSlot: {
     ...StyleSheet.absoluteFillObject,
   },
-  placeholderContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 32,
-  },
-  placeholderText: {
-    fontSize: 16,
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  placeholderSubtext: {
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 20,
-  },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
@@ -1843,33 +1905,5 @@ const styles = StyleSheet.create({
   },
   placeholderLogo: {
     marginBottom: 18,
-  },
-  takeOverButton: {
-    marginTop: 12,
-    minHeight: 44,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  takeOverButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  retryButton: {
-    marginTop: 16,
-    minHeight: 44,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  retryButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
   },
 });

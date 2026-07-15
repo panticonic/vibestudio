@@ -5,7 +5,8 @@
  * - Indentation based on tree depth
  * - Panel title (truncated if too long)
  * - Expand/collapse chevron for panels with children
- * - Active panel highlight
+ * - Active panel highlight (soft accent fill + accent text, not a solid slab)
+ * - Pin indicator
  * - Swipe-to-archive gesture (swipe left reveals "Archive" action)
  */
 
@@ -25,6 +26,9 @@ import Animated, {
   Extrapolation,
 } from "react-native-reanimated";
 import ReactNativeHapticFeedback from "react-native-haptic-feedback";
+import type { ThemeColors } from "../state/themeAtoms";
+import { radius, spacing, type } from "../design/tokens";
+import { Archive, ChevronDown, ChevronRight, Pin } from "../design/icons";
 
 function triggerHaptic() {
   try {
@@ -37,9 +41,9 @@ function triggerHaptic() {
   }
 }
 
-const INDENT_PER_LEVEL = 16;
+const INDENT_PER_LEVEL = 14;
 const ARCHIVE_THRESHOLD = -120;
-const ITEM_HEIGHT = 48;
+const ITEM_HEIGHT = 46;
 
 export interface FlatPanelItem {
   id: string;
@@ -53,14 +57,7 @@ interface PanelTreeItemProps {
   item: FlatPanelItem;
   isActive: boolean;
   isPinned?: boolean;
-  colors: {
-    surface: string;
-    text: string;
-    textSecondary: string;
-    primary: string;
-    danger: string;
-    background: string;
-  };
+  colors: ThemeColors;
   onPress: (panelId: string) => void;
   onLongPress?: (panelId: string) => void;
   onToggleCollapse: (panelId: string, collapsed: boolean) => void;
@@ -144,6 +141,9 @@ export function PanelTreeItem({
     onToggleCollapse(item.id, !item.isCollapsed);
   }, [item.id, item.isCollapsed, onToggleCollapse]);
 
+  const titleColor = isActive ? colors.primary : colors.text;
+  const mutedColor = isActive ? colors.primary : colors.textTertiary;
+
   return (
     <Animated.View style={[styles.outerContainer, containerAnimatedStyle]}>
       {/* Archive background revealed on swipe */}
@@ -154,6 +154,7 @@ export function PanelTreeItem({
           archiveBackgroundStyle,
         ]}
       >
+        <Archive size={16} color="#ffffff" />
         <Text style={styles.archiveText}>Archive</Text>
       </Animated.View>
 
@@ -162,20 +163,26 @@ export function PanelTreeItem({
           style={[
             styles.row,
             {
-              backgroundColor: isActive ? colors.primary : colors.surface,
-              paddingLeft: 12 + item.depth * INDENT_PER_LEVEL,
+              backgroundColor: isActive ? colors.accentSoft : "transparent",
+              paddingLeft: spacing.sm + item.depth * INDENT_PER_LEVEL,
             },
             rowAnimatedStyle,
           ]}
         >
           {/* Expand/collapse chevron */}
           {item.childCount > 0 ? (
-            <Pressable onPress={handleChevronPress} style={styles.chevronButton} hitSlop={8}>
-              <Text
-                style={[styles.chevron, { color: isActive ? "#ffffff" : colors.textSecondary }]}
-              >
-                {item.isCollapsed ? "\u25B6" : "\u25BC"}
-              </Text>
+            <Pressable
+              onPress={handleChevronPress}
+              style={styles.chevronButton}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={item.isCollapsed ? "Expand children" : "Collapse children"}
+            >
+              {item.isCollapsed ? (
+                <ChevronRight size={15} color={mutedColor} />
+              ) : (
+                <ChevronDown size={15} color={mutedColor} />
+              )}
             </Pressable>
           ) : (
             <View style={styles.chevronSpacer} />
@@ -186,9 +193,16 @@ export function PanelTreeItem({
             onPress={handlePress}
             onLongPress={() => onLongPress?.(item.id)}
             style={styles.titlePressable}
+            accessibilityRole="button"
+            accessibilityLabel={`${item.title}. Long-press for actions.`}
           >
             <Text
-              style={[styles.title, { color: isActive ? "#ffffff" : colors.text }]}
+              style={[
+                type.body,
+                isActive && type.bodyStrong,
+                styles.title,
+                { color: titleColor },
+              ]}
               numberOfLines={1}
               ellipsizeMode="tail"
             >
@@ -198,25 +212,14 @@ export function PanelTreeItem({
 
           {/* Pin indicator — quiet glyph, only when pinned */}
           {isPinned && (
-            <Text
-              accessibilityLabel="Pinned"
-              style={[
-                styles.pinIndicator,
-                { color: isActive ? "rgba(255,255,255,0.7)" : colors.textSecondary },
-              ]}
-            >
-              {"\u{1F4CC}"}
-            </Text>
+            <View accessibilityLabel="Pinned" style={styles.pinIndicator}>
+              <Pin size={13} color={mutedColor} />
+            </View>
           )}
 
           {/* Child count badge */}
           {item.childCount > 0 && (
-            <Text
-              style={[
-                styles.childCount,
-                { color: isActive ? "rgba(255,255,255,0.7)" : colors.textSecondary },
-              ]}
-            >
+            <Text style={[type.micro, styles.childCount, { color: mutedColor }]}>
               {item.childCount}
             </Text>
           )}
@@ -236,8 +239,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    paddingRight: 20,
-    borderRadius: 6,
+    gap: spacing.sm,
+    paddingRight: spacing.xl,
+    borderRadius: radius.md,
   },
   archiveText: {
     color: "#ffffff",
@@ -248,8 +252,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     height: ITEM_HEIGHT,
-    borderRadius: 6,
-    paddingRight: 12,
+    borderRadius: radius.md,
+    paddingRight: spacing.md,
   },
   chevronButton: {
     width: 24,
@@ -260,24 +264,20 @@ const styles = StyleSheet.create({
   chevronSpacer: {
     width: 24,
   },
-  chevron: {
-    fontSize: 10,
-  },
   titlePressable: {
     flex: 1,
     justifyContent: "center",
-    marginLeft: 4,
+    marginLeft: spacing.xs,
+    alignSelf: "stretch",
   },
   title: {
-    fontSize: 15,
+    lineHeight: undefined,
   },
   childCount: {
-    fontSize: 12,
-    marginLeft: 8,
+    marginLeft: spacing.sm,
   },
   pinIndicator: {
-    fontSize: 12,
-    marginLeft: 6,
+    marginLeft: spacing.xs,
     flexShrink: 0,
   },
 });

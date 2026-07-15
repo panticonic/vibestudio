@@ -7,7 +7,9 @@
  */
 
 import React, { type ErrorInfo, type ReactNode } from "react";
-import { View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
+import { View, Text, ScrollView, StyleSheet } from "react-native";
+import { EmptyState, Button } from "./ui/primitives";
+import { AlertTriangle, RefreshCw } from "../design/icons";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -64,35 +66,15 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           ]}
         >
           <View style={styles.content}>
-            <Text style={[styles.title, colors?.text != null && { color: colors.text }]}>
-              Something went wrong
-            </Text>
-            <Text
-              style={[
-                styles.message,
-                colors?.textSecondary != null && { color: colors.textSecondary },
-              ]}
-            >
-              {label} encountered an unexpected error.
-            </Text>
+            <EmptyState
+              icon={AlertTriangle}
+              title="Something went wrong"
+              message={`${label} encountered an unexpected error.`}
+              action={
+                <Button label="Retry" variant="filled" icon={RefreshCw} onPress={this.handleRetry} />
+              }
+            />
             {error?.message ? <Text style={styles.errorMessage}>{error.message}</Text> : null}
-
-            <Pressable
-              style={[
-                styles.retryButton,
-                colors?.accent != null && { backgroundColor: colors.accent },
-              ]}
-              onPress={this.handleRetry}
-            >
-              <Text
-                style={[
-                  styles.retryText,
-                  colors?.accentText != null && { color: colors.accentText },
-                ]}
-              >
-                Retry
-              </Text>
-            </Pressable>
 
             {__DEV__ && error?.stack ? (
               <ScrollView style={styles.stackContainer}>
@@ -112,46 +94,23 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0a0b0c",
-    justifyContent: "center",
-    alignItems: "center",
   },
   content: {
+    flex: 1,
     padding: 32,
     alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    width: "100%",
     maxWidth: 400,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#e0e0e0",
-    marginBottom: 12,
-    textAlign: "center",
-  },
-  message: {
-    fontSize: 15,
-    color: "#999",
-    textAlign: "center",
-    marginBottom: 8,
-    lineHeight: 22,
   },
   errorMessage: {
     fontSize: 13,
     color: "#cc6666",
     textAlign: "center",
+    marginTop: 16,
     marginBottom: 24,
     lineHeight: 20,
-  },
-  retryButton: {
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    backgroundColor: "#0f3460",
-    borderRadius: 8,
-    marginBottom: 24,
-  },
-  retryText: {
-    color: "#e0e0e0",
-    fontSize: 16,
-    fontWeight: "600",
   },
   stackContainer: {
     maxHeight: 200,

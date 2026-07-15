@@ -3,12 +3,13 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  Pressable,
   SafeAreaView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { Button } from "./ui/primitives";
+import { radius, spacing, type } from "../design/tokens";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useAtomValue, useSetAtom } from "jotai";
 import type { RootStackParamList } from "../navigation/RootNavigator";
@@ -264,54 +265,57 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
               {connectionPhase}
               {connectionAttempt > 0 ? ` Attempt ${connectionAttempt}.` : ""}
             </Text>
-            <Pressable
-              style={[styles.secondaryButton, { borderColor: colors.border }]}
+            <Button
+              label="Cancel"
+              variant="outline"
               onPress={() => cancelConnectionRef.current?.()}
-              accessibilityRole="button"
-            >
-              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Cancel</Text>
-            </Pressable>
+              style={styles.fullButton}
+            />
           </View>
         ) : null}
 
         {authError ? (
           <View style={styles.errorBlock}>
-            <Text style={[styles.errorText, { color: colors.danger }]} accessibilityRole="alert">
-              {authError}
-            </Text>
-            <Text style={[styles.message, { color: colors.textSecondary }]}>
-              {needsHostApproval
-                ? "Review the workspace app in the pairing screen. Your saved pairing will stay intact."
-                : "Retry keeps your saved pairing. Only re-pair if you want to replace this connection."}
-            </Text>
-            <Pressable
-              style={[styles.button, { backgroundColor: colors.primary }]}
+            <View
+              style={[
+                styles.errorCallout,
+                { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+              ]}
+            >
+              <Text
+                style={[type.bodyStrong, { color: colors.danger }]}
+                accessibilityRole="alert"
+              >
+                {authError}
+              </Text>
+              <Text style={[type.caption, styles.calloutHint, { color: colors.textSecondary }]}>
+                {needsHostApproval
+                  ? "Review the workspace app in the pairing screen. Your saved pairing will stay intact."
+                  : "Retry keeps your saved pairing. Only re-pair if you want to replace this connection."}
+              </Text>
+            </View>
+            <Button
+              label={needsHostApproval ? "Review and approve" : "Retry"}
+              variant="filled"
               onPress={() =>
                 needsHostApproval
                   ? void resetToBootstrap(false)
                   : setRetryNonce((value) => value + 1)
               }
-            >
-              <Text style={[styles.buttonText, { color: colors.text }]}>
-                {needsHostApproval ? "Review and approve" : "Retry"}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.secondaryButton, { borderColor: colors.border }]}
+              style={styles.fullButton}
+            />
+            <Button
+              label="Paste pairing link"
+              variant="outline"
               onPress={() => void handlePastePairingLink()}
-            >
-              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>
-                Paste pairing link
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.secondaryButton, { borderColor: colors.border }]}
+              style={styles.fullButton}
+            />
+            <Button
+              label="Re-pair device…"
+              variant="outline"
               onPress={handleResetToBootstrap}
-            >
-              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>
-                Re-pair device…
-              </Text>
-            </Pressable>
+              style={styles.fullButton}
+            />
           </View>
         ) : null}
       </View>
@@ -327,62 +331,47 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flex: 1,
     justifyContent: "center",
-    padding: 24,
+    padding: spacing.xl,
   },
   brandMark: {
-    marginBottom: 18,
+    marginBottom: spacing.lg,
   },
   title: {
+    ...type.title,
     fontSize: 32,
-    fontWeight: "bold",
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
   subtitle: {
+    ...type.body,
     fontSize: 16,
-    marginBottom: 32,
+    marginBottom: spacing.xxl,
     textAlign: "center",
   },
   loadingBlock: {
     alignItems: "center",
-    gap: 12,
+    gap: spacing.md,
+    width: "100%",
   },
   errorBlock: {
     alignItems: "center",
-    gap: 16,
+    gap: spacing.md,
     width: "100%",
   },
   message: {
-    fontSize: 14,
-    lineHeight: 20,
+    ...type.caption,
     textAlign: "center",
   },
-  errorText: {
-    fontSize: 15,
-    lineHeight: 21,
-    textAlign: "center",
-  },
-  button: {
-    alignItems: "center",
-    borderRadius: 8,
-    height: 48,
-    justifyContent: "center",
-    marginTop: 8,
+  errorCallout: {
     width: "100%",
-  },
-  secondaryButton: {
-    alignItems: "center",
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
-    height: 48,
-    justifyContent: "center",
+    padding: spacing.lg,
+    gap: spacing.xs,
+  },
+  calloutHint: {
+    marginTop: spacing.xs,
+  },
+  fullButton: {
     width: "100%",
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  secondaryButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
   },
 });

@@ -21,6 +21,8 @@ import type {
 } from "../services/shellClient";
 import { readClipboardImageOrText } from "../services/nativeCapabilities";
 import { themeColorsAtom } from "../state/themeAtoms";
+import { spacing, radius, type, pressedOpacity } from "../design/tokens";
+import { Card, SectionHeader } from "./ui/primitives";
 
 const COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
@@ -180,238 +182,229 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
   };
 
   return (
-    <View style={styles.section} accessibilityLabel="Account profile">
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>Your profile</Text>
-      <Text style={[styles.help, { color: colors.textSecondary }]}>
-        Shown across your workspaces.
-      </Text>
+    <View accessibilityLabel="Account profile">
+      <SectionHeader label="Your profile" />
+      <Card>
+        <Text style={[type.caption, styles.help, { color: colors.textSecondary }]}>
+          Shown across your workspaces.
+        </Text>
 
-      {loading ? (
-        <View style={styles.loading} accessibilityRole="progressbar">
-          <ActivityIndicator size="small" color={colors.primary} />
-          <Text style={[styles.statusText, { color: colors.textSecondary }]}>Loading profile…</Text>
-        </View>
-      ) : null}
+        {loading ? (
+          <View style={styles.loading} accessibilityRole="progressbar">
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={[type.caption, { color: colors.textSecondary }]}>Loading profile…</Text>
+          </View>
+        ) : null}
 
-      {!loading && profile ? (
-        <>
-          <View style={styles.identityRow}>
-            <View
-              style={[
-                styles.avatar,
-                {
-                  borderColor: colors.border,
-                  backgroundColor: normalizedColor || colors.border,
-                },
-              ]}
-            >
+        {!loading && profile ? (
+          <>
+            <View style={styles.identityRow}>
+              <View
+                style={[
+                  styles.avatar,
+                  {
+                    borderColor: colors.border,
+                    backgroundColor: normalizedColor || colors.border,
+                  },
+                ]}
+              >
+                {previewAvatar ? (
+                  <Image
+                    source={{ uri: previewAvatar }}
+                    accessibilityLabel="Profile avatar preview"
+                    style={styles.avatarImage}
+                  />
+                ) : (
+                  <Text style={styles.initials}>{initials(draft)}</Text>
+                )}
+              </View>
+              <View style={styles.identityCopy}>
+                <Text style={[type.bodyStrong, { color: colors.text }]} numberOfLines={1}>
+                  {draft.displayName.trim() || "Your name"}
+                </Text>
+                <Text
+                  style={[type.caption, styles.previewHandle, { color: colors.textSecondary }]}
+                  numberOfLines={1}
+                >
+                  @{draft.handle.trim() || "handle"}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.avatarActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Paste profile avatar"
+                disabled={saving || avatarLoading}
+                onPress={() => void pasteAvatar()}
+                style={({ pressed }) => [styles.avatarAction, pressed && styles.pressed]}
+              >
+                <Text style={[type.body, { color: colors.primary }]}>
+                  {avatarLoading
+                    ? "Reading…"
+                    : previewAvatar
+                      ? "Replace from clipboard"
+                      : "Paste avatar"}
+                </Text>
+              </Pressable>
               {previewAvatar ? (
-                <Image
-                  source={{ uri: previewAvatar }}
-                  accessibilityLabel="Profile avatar preview"
-                  style={styles.avatarImage}
-                />
-              ) : (
-                <Text style={styles.initials}>{initials(draft)}</Text>
-              )}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear avatar"
+                  disabled={saving}
+                  onPress={() => {
+                    setAvatarDraft(null);
+                    setError(null);
+                    setSuccess(null);
+                  }}
+                  style={({ pressed }) => [styles.avatarAction, pressed && styles.pressed]}
+                >
+                  <Text style={[type.body, { color: colors.danger }]}>Clear</Text>
+                </Pressable>
+              ) : null}
+              {avatarDraft !== undefined ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Undo avatar change"
+                  disabled={saving}
+                  onPress={() => setAvatarDraft(undefined)}
+                  style={({ pressed }) => [styles.avatarAction, pressed && styles.pressed]}
+                >
+                  <Text style={[type.body, { color: colors.textSecondary }]}>Undo</Text>
+                </Pressable>
+              ) : null}
             </View>
-            <View style={styles.identityCopy}>
-              <Text style={[styles.previewName, { color: colors.text }]} numberOfLines={1}>
-                {draft.displayName.trim() || "Your name"}
-              </Text>
-              <Text
-                style={[styles.previewHandle, { color: colors.textSecondary }]}
-                numberOfLines={1}
-              >
-                @{draft.handle.trim() || "handle"}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.avatarActions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Paste profile avatar"
-              disabled={saving || avatarLoading}
-              onPress={() => void pasteAvatar()}
-              style={({ pressed }) => [styles.avatarAction, pressed && styles.pressed]}
-            >
-              <Text style={{ color: colors.primary }}>
-                {avatarLoading
-                  ? "Reading…"
-                  : previewAvatar
-                    ? "Replace from clipboard"
-                    : "Paste avatar"}
-              </Text>
-            </Pressable>
-            {previewAvatar ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Clear avatar"
-                disabled={saving}
-                onPress={() => {
-                  setAvatarDraft(null);
-                  setError(null);
-                  setSuccess(null);
-                }}
-                style={({ pressed }) => [styles.avatarAction, pressed && styles.pressed]}
-              >
-                <Text style={{ color: colors.danger }}>Clear</Text>
-              </Pressable>
-            ) : null}
-            {avatarDraft !== undefined ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Undo avatar change"
-                disabled={saving}
-                onPress={() => setAvatarDraft(undefined)}
-                style={({ pressed }) => [styles.avatarAction, pressed && styles.pressed]}
-              >
-                <Text style={{ color: colors.textSecondary }}>Undo</Text>
-              </Pressable>
-            ) : null}
-          </View>
 
-          <Text style={[styles.fieldLabel, { color: colors.text }]}>Display name</Text>
-          <TextInput
-            accessibilityLabel="Display name"
-            value={draft.displayName}
-            editable={!saving}
-            maxLength={200}
-            autoCapitalize="words"
-            returnKeyType="next"
-            onChangeText={(displayName) => updateDraft({ displayName })}
-            style={[
-              styles.input,
-              { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
-            ]}
-            placeholderTextColor={colors.textSecondary}
-          />
-
-          <Text style={[styles.fieldLabel, { color: colors.text }]}>Handle</Text>
-          <TextInput
-            accessibilityLabel="Handle"
-            value={draft.handle}
-            editable={!saving}
-            maxLength={64}
-            autoCapitalize="none"
-            autoCorrect={false}
-            onChangeText={(handle) => updateDraft({ handle })}
-            style={[
-              styles.input,
-              { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
-            ]}
-            placeholderTextColor={colors.textSecondary}
-          />
-
-          <Text style={[styles.fieldLabel, { color: colors.text }]}>Profile color</Text>
-          <View style={styles.colorRow}>
-            <View
-              accessibilityLabel="Profile color preview"
-              style={[
-                styles.colorSwatch,
-                { borderColor: colors.border, backgroundColor: normalizedColor || colors.surface },
-              ]}
-            />
+            <Text style={[styles.fieldLabel, { color: colors.text }]}>Display name</Text>
             <TextInput
-              accessibilityLabel="Profile color"
-              value={draft.color}
+              accessibilityLabel="Display name"
+              value={draft.displayName}
               editable={!saving}
-              maxLength={9}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="#4a90d9"
-              onChangeText={(color) => updateDraft({ color })}
+              maxLength={200}
+              autoCapitalize="words"
+              returnKeyType="next"
+              onChangeText={(displayName) => updateDraft({ displayName })}
               style={[
                 styles.input,
-                styles.colorInput,
-                { color: colors.text, borderColor: colors.border, backgroundColor: colors.surface },
+                { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceSunken },
               ]}
               placeholderTextColor={colors.textSecondary}
             />
-          </View>
 
-          {validationError ? (
-            <Text accessibilityRole="alert" style={[styles.message, { color: colors.danger }]}>
-              {validationError}
-            </Text>
-          ) : null}
+            <Text style={[styles.fieldLabel, { color: colors.text }]}>Handle</Text>
+            <TextInput
+              accessibilityLabel="Handle"
+              value={draft.handle}
+              editable={!saving}
+              maxLength={64}
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={(handle) => updateDraft({ handle })}
+              style={[
+                styles.input,
+                { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceSunken },
+              ]}
+              placeholderTextColor={colors.textSecondary}
+            />
 
-          <Pressable
-            testID="profile-save"
-            accessibilityRole="button"
-            accessibilityLabel="Save profile"
-            accessibilityState={{
-              disabled: !dirty || Boolean(validationError) || saving,
-              busy: saving,
-            }}
-            disabled={!dirty || Boolean(validationError) || saving}
-            onPress={() => void save()}
-            style={({ pressed }) => [
-              styles.saveButton,
-              { backgroundColor: colors.primary },
-              (!dirty || Boolean(validationError) || saving) && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-          >
-            {saving ? <ActivityIndicator size="small" color="#ffffff" /> : null}
-            <Text style={styles.saveText}>{saving ? "Saving…" : "Save profile"}</Text>
-          </Pressable>
-        </>
-      ) : null}
+            <Text style={[styles.fieldLabel, { color: colors.text }]}>Profile color</Text>
+            <View style={styles.colorRow}>
+              <View
+                accessibilityLabel="Profile color preview"
+                style={[
+                  styles.colorSwatch,
+                  { borderColor: colors.border, backgroundColor: normalizedColor || colors.surface },
+                ]}
+              />
+              <TextInput
+                accessibilityLabel="Profile color"
+                value={draft.color}
+                editable={!saving}
+                maxLength={9}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="#4a90d9"
+                onChangeText={(color) => updateDraft({ color })}
+                style={[
+                  styles.input,
+                  styles.colorInput,
+                  { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceSunken },
+                ]}
+                placeholderTextColor={colors.textSecondary}
+              />
+            </View>
 
-      {error ? (
-        <View style={[styles.messageCard, { backgroundColor: colors.dangerSoft }]}>
-          <Text accessibilityRole="alert" style={[styles.message, { color: colors.danger }]}>
-            {error}
-          </Text>
-          {!profile && !loading ? (
+            {validationError ? (
+              <Text accessibilityRole="alert" style={[styles.message, { color: colors.danger }]}>
+                {validationError}
+              </Text>
+            ) : null}
+
             <Pressable
+              testID="profile-save"
               accessibilityRole="button"
-              accessibilityLabel="Retry loading profile"
-              onPress={() => void load()}
+              accessibilityLabel="Save profile"
+              accessibilityState={{
+                disabled: !dirty || Boolean(validationError) || saving,
+                busy: saving,
+              }}
+              disabled={!dirty || Boolean(validationError) || saving}
+              onPress={() => void save()}
+              style={({ pressed }) => [
+                styles.saveButton,
+                { backgroundColor: colors.primary },
+                (!dirty || Boolean(validationError) || saving) && styles.disabled,
+                pressed && styles.pressed,
+              ]}
             >
-              <Text style={[styles.retry, { color: colors.primary }]}>Retry</Text>
+              {saving ? <ActivityIndicator size="small" color={colors.onPrimary} /> : null}
+              <Text style={[type.bodyStrong, { color: colors.onPrimary }]}>
+                {saving ? "Saving…" : "Save profile"}
+              </Text>
             </Pressable>
-          ) : null}
-        </View>
-      ) : null}
+          </>
+        ) : null}
 
-      {success ? (
-        <Text accessibilityRole="summary" style={[styles.message, { color: colors.success }]}>
-          {success}
-        </Text>
-      ) : null}
+        {error ? (
+          <View style={[styles.messageCard, { backgroundColor: colors.dangerSoft }]}>
+            <Text accessibilityRole="alert" style={[styles.message, { color: colors.danger }]}>
+              {error}
+            </Text>
+            {!profile && !loading ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading profile"
+                onPress={() => void load()}
+              >
+                <Text style={[styles.retry, { color: colors.primary }]}>Retry</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+
+        {success ? (
+          <Text accessibilityRole="summary" style={[styles.message, { color: colors.success }]}>
+            {success}
+          </Text>
+        ) : null}
+      </Card>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-  },
   help: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 4,
-    marginBottom: 14,
+    marginBottom: spacing.md,
   },
   loading: {
     minHeight: 52,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-  },
-  statusText: {
-    fontSize: 14,
+    gap: spacing.sm,
   },
   identityRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   avatar: {
     width: 48,
@@ -434,14 +427,9 @@ const styles = StyleSheet.create({
   identityCopy: {
     flex: 1,
     minWidth: 0,
-    marginLeft: 12,
-  },
-  previewName: {
-    fontSize: 16,
-    fontWeight: "600",
+    marginLeft: spacing.md,
   },
   previewHandle: {
-    fontSize: 13,
     marginTop: 2,
   },
   avatarAction: {
@@ -453,70 +441,64 @@ const styles = StyleSheet.create({
   avatarActions: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 12,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   fieldLabel: {
-    fontSize: 13,
+    ...type.caption,
     fontWeight: "600",
-    marginBottom: 6,
+    marginBottom: spacing.xs,
   },
   input: {
     minHeight: 46,
     borderWidth: 1,
-    borderRadius: 9,
-    paddingHorizontal: 12,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
     fontSize: 16,
-    marginBottom: 14,
+    marginBottom: spacing.md,
   },
   colorRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: spacing.sm,
   },
   colorSwatch: {
     width: 38,
     height: 38,
     borderRadius: 19,
     borderWidth: 1,
-    marginBottom: 14,
+    marginBottom: spacing.md,
   },
   colorInput: {
     flex: 1,
   },
   saveButton: {
     minHeight: 46,
-    borderRadius: 9,
+    borderRadius: radius.sm,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    marginTop: 4,
-  },
-  saveText: {
-    color: "#ffffff",
-    fontSize: 15,
-    fontWeight: "700",
+    gap: spacing.sm,
+    marginTop: spacing.xs,
   },
   disabled: {
     opacity: 0.45,
   },
   pressed: {
-    opacity: 0.72,
+    opacity: pressedOpacity,
   },
   messageCard: {
-    borderRadius: 9,
-    padding: 10,
-    marginTop: 10,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
   },
   message: {
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 8,
+    ...type.caption,
+    marginTop: spacing.sm,
   },
   retry: {
     fontSize: 14,
     fontWeight: "700",
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
 });

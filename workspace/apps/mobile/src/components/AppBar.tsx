@@ -1,71 +1,59 @@
 /**
- * AppBar -- Top navigation bar for the mobile workspace app.
+ * AppBar -- Top chrome for the mobile workspace app.
  *
- * Layout:
- *   [Hamburger]  [Panel Title]  [+ New Panel]
+ * Layout (browse mode):
+ *   [Menu]  [ address pill: title + host/meta caption ]  [⋯]  [+]
  *
- * Features:
- * - Left: hamburger menu button to open the panel drawer
- * - Center: current panel title (or "Vibestudio" if no panel selected)
- * - Right: "+" button to create a new panel
- * - Uses safe area insets for status bar spacing
+ * The pill is the discoverability hub: tap to edit the address, long-press for
+ * panel actions, and its caption line surfaces the source/URL + repo state
+ * that used to hide behind the address toggle. Address mode swaps in an
+ * edit row (back/forward/input/reload) plus autocomplete suggestions.
  */
 
-import React, { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
+  ActivityIndicator,
   Pressable,
-  ActionSheetIOS,
-  Platform,
-  Alert,
+  StyleSheet,
+  Text,
   TextInput,
+  View,
 } from "react-native";
 import type { StyleProp, TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
+import { showActionSheetAtom } from "../state/actionSheetAtoms";
+import { pushToastAtom } from "../state/toastAtoms";
 import {
   splitTextByMatchRanges,
   type AddressAutocompleteItem,
   type TextMatchRange,
 } from "@vibestudio/shared/panelChrome";
-import { VibestudioLogo } from "./VibestudioLogo";
-
-declare const require: (id: string) => unknown;
-type IconProps = { size?: number; color?: string; strokeWidth?: number };
-type IconComponent = ComponentType<IconProps>;
-type IconModule = Record<string, IconComponent | undefined>;
-let lucideIcons: IconModule = {};
-try {
-  lucideIcons = require("lucide-react-native") as IconModule;
-} catch {
-  lucideIcons = {};
-}
-const fallbackIcon =
-  (glyph: string): IconComponent =>
-  ({ size = 18, color }) => (
-    <Text style={{ color, fontSize: size, lineHeight: size }}>{glyph}</Text>
-  );
-const icon = (name: string, glyph: string) => lucideIcons[name] ?? fallbackIcon(glyph);
-const ArrowLeft = icon("ArrowLeft", "‹");
-const ArrowRight = icon("ArrowRight", "›");
-const Bookmark = icon("Bookmark", "★");
-const Clock3 = icon("Clock3", "◷");
-const Globe2 = icon("Globe2", "◎");
-const Link2 = icon("Link2", "↗");
-const Menu = icon("Menu", "≡");
-const PanelTop = icon("PanelTop", "□");
-const Plus = icon("Plus", "+");
-const RefreshCw = icon("RefreshCw", "↻");
-const Search = icon("Search", "?");
-const Square = icon("Square", "■");
-const Workflow = icon("Workflow", "◇");
+import { hairline, radius, spacing, touchTarget, type } from "../design/tokens";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bookmark,
+  Clock3,
+  Globe2,
+  LayoutGrid,
+  Menu,
+  MoreHorizontal,
+  PanelTop,
+  Plus,
+  RefreshCw,
+  Search,
+  Square,
+  Workflow,
+  X,
+  type IconComponent,
+} from "../design/icons";
+import { IconButton } from "./ui/primitives";
 
 interface AppBarProps {
-  /** Title to display in the center */
+  /** Title to display in the address pill */
   title: string;
   /** Called when the hamburger menu button is pressed */
   onMenuPress: () => void;
@@ -117,8 +105,11 @@ export function AppBar({
   const insets = useSafeAreaInsets();
   const colors = useAtomValue(themeColorsAtom);
   const shellClient = useAtomValue(shellClientAtom);
+  const showActionSheet = useSetAtom(showActionSheetAtom);
+  const pushToast = useSetAtom(pushToastAtom);
   const [addressValue, setAddressValue] = useState(address);
   const [addressFocused, setAddressFocused] = useState(false);
+  const inputRef = useRef<TextInput | null>(null);
   const visibleSuggestions = useMemo(
     () => (addressFocused ? addressSuggestions.slice(0, 8) : []),
     [addressFocused, addressSuggestions]
@@ -132,40 +123,57 @@ export function AppBar({
     if (addressBarVisible) onAddressQueryChange?.(addressValue);
   }, [addressBarVisible, addressValue, onAddressQueryChange]);
 
+  // Focus the input as soon as address mode opens.
+  useEffect(() => {
+    if (addressBarVisible) {
+      const timer = setTimeout(() => inputRef.current?.focus(), 60);
+      return () => clearTimeout(timer);
+    }
+    setAddressFocused(false);
+    return undefined;
+  }, [addressBarVisible]);
+
   const handleCreatePanel = useCallback(() => {
     if (!shellClient) return;
-
-    const createPanel = async (type: "new" | "browser") => {
+    const createPanel = async (kind: "new" | "browser") => {
       try {
-        const result = await shellClient.panels.createAboutPanel(type);
+        const result = await shellClient.panels.createAboutPanel(kind);
         onPanelCreated?.(result.id);
       } catch (error) {
-        Alert.alert(
-          "Panel Creation Failed",
-          error instanceof Error ? error.message : "Could not create panel."
-        );
+        pushToast({
+          title: "Panel creation failed",
+          message: error instanceof Error ? error.message : "Could not create panel.",
+          tone: "danger",
+        });
       }
     };
-
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
+    showActionSheet({
+      title: "New panel",
+      items: [
         {
-          options: ["New Panel", "Browser", "Cancel"],
-          cancelButtonIndex: 2,
+          id: "new",
+          label: "New panel",
+          description: "Pick an app or workspace unit to open",
+          icon: LayoutGrid,
         },
-        (buttonIndex) => {
-          if (buttonIndex === 0) createPanel("new");
-          else if (buttonIndex === 1) createPanel("browser");
-        }
-      );
-    } else {
-      Alert.alert("Create Panel", undefined, [
-        { text: "New Panel", onPress: () => createPanel("new") },
-        { text: "Browser", onPress: () => createPanel("browser") },
-        { text: "Cancel", style: "cancel" },
-      ]);
-    }
-  }, [shellClient, onPanelCreated]);
+        {
+          id: "browser",
+          label: "Browser",
+          description: "Open a web page in a browser panel",
+          icon: Globe2,
+        },
+      ],
+      onSelect: (id) => void createPanel(id as "new" | "browser"),
+    });
+  }, [onPanelCreated, pushToast, shellClient, showActionSheet]);
+
+  const caption = useMemo(() => {
+    const parts: string[] = [];
+    if (address && address !== title) parts.push(address);
+    if (metadata) parts.push(metadata);
+    if (chromeKind === "panel" && dirty) parts.push("● uncommitted");
+    return parts.join("  ·  ");
+  }, [address, chromeKind, dirty, metadata, title]);
 
   return (
     <View
@@ -174,150 +182,126 @@ export function AppBar({
         {
           paddingTop: insets.top,
           backgroundColor: colors.surface,
-          borderBottomColor: colors.border,
+          borderBottomColor: colors.borderSubtle,
         },
       ]}
     >
-      <View style={styles.content}>
-        {/* Hamburger menu button */}
-        <Pressable
-          onPress={onMenuPress}
-          style={styles.iconButton}
-          hitSlop={8}
-          accessibilityLabel="Open panel drawer"
-          accessibilityRole="button"
-        >
-          <Menu size={23} color={colors.text} />
-        </Pressable>
-
-        <VibestudioLogo size={30} variant="mark" style={styles.brandLogo} />
-
-        {/* Panel title */}
-        <Text
-          style={[styles.title, { color: colors.text }]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-          onPress={onToggleAddressBar}
-          onLongPress={onShowActions}
-        >
-          {title}
-        </Text>
-
-        <Pressable
-          onPress={onToggleAddressBar}
-          onLongPress={onShowActions}
-          style={styles.urlButton}
-          hitSlop={8}
-          accessibilityLabel={addressBarVisible ? "Hide address bar" : "Show address bar"}
-          accessibilityRole="button"
-        >
-          <Link2 size={18} color={colors.textSecondary} />
-        </Pressable>
-
-        {/* Create new panel button */}
-        <Pressable
-          onPress={handleCreatePanel}
-          style={styles.iconButton}
-          hitSlop={8}
-          accessibilityLabel="Create new panel"
-          accessibilityRole="button"
-        >
-          <Plus size={25} color={colors.text} />
-        </Pressable>
-      </View>
-      {addressBarVisible && (
-        <View style={[styles.addressRow, { borderTopColor: colors.border }]}>
+      {!addressBarVisible ? (
+        <View style={styles.content}>
+          <IconButton icon={Menu} onPress={onMenuPress} label="Open panel drawer" />
           <Pressable
-            onPress={onBack}
-            disabled={!canGoBack}
-            style={[styles.navButton, !canGoBack && styles.disabledButton]}
-            accessibilityLabel="Back"
+            onPress={onToggleAddressBar}
+            onLongPress={onShowActions}
             accessibilityRole="button"
-            hitSlop={8}
-          >
-            <ArrowLeft size={20} color={colors.text} />
-          </Pressable>
-          <Pressable
-            onPress={onForward}
-            disabled={!canGoForward}
-            style={[styles.navButton, !canGoForward && styles.disabledButton]}
-            accessibilityLabel="Forward"
-            accessibilityRole="button"
-            hitSlop={8}
-          >
-            <ArrowRight size={20} color={colors.text} />
-          </Pressable>
-          <TextInput
-            testID="address-input"
-            value={addressValue}
-            onFocus={() => {
-              setAddressFocused(true);
-              onAddressQueryChange?.(addressValue);
-            }}
-            onBlur={() => {
-              setTimeout(() => setAddressFocused(false), 120);
-            }}
-            onChangeText={(text) => {
-              setAddressValue(text);
-              onAddressQueryChange?.(text);
-            }}
-            onSubmitEditing={() => {
-              setAddressFocused(false);
-              onNavigateAddress?.(addressValue);
-            }}
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="go"
-            selectTextOnFocus
-            style={[
-              styles.addressInput,
+            accessibilityLabel="Edit address. Long-press for panel actions."
+            style={({ pressed }) => [
+              styles.pill,
               {
-                color: colors.text,
-                backgroundColor: colors.background,
-                borderColor: colors.border,
+                backgroundColor: pressed ? colors.surfaceRaised : colors.surfaceSunken,
+                borderColor: colors.borderSubtle,
               },
             ]}
-            placeholder="Search or enter address"
-            placeholderTextColor={colors.textSecondary}
-          />
-          {metadata && (
-            <Text
-              style={[styles.metadataText, { color: colors.textSecondary }]}
-              numberOfLines={1}
-              ellipsizeMode="middle"
-            >
-              {metadata}
-            </Text>
-          )}
-          {chromeKind === "panel" && dirty && (
-            <Text style={[styles.dirtyText, { color: colors.textSecondary }]}>dirty</Text>
-          )}
-          <Pressable
-            onPress={isLoading ? onStop : onReload}
-            style={styles.navButton}
-            accessibilityLabel={isLoading ? "Stop loading" : "Reload"}
-            accessibilityRole="button"
-            hitSlop={8}
           >
             {isLoading ? (
-              <Square size={16} color={colors.text} />
-            ) : (
-              <RefreshCw size={19} color={colors.text} />
-            )}
+              <ActivityIndicator size="small" color={colors.textSecondary} style={styles.pillSpinner} />
+            ) : null}
+            <View style={styles.pillCopy}>
+              <Text
+                style={[type.bodyStrong, styles.pillTitle, { color: colors.text }]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {title}
+              </Text>
+              {caption ? (
+                <Text
+                  style={[type.micro, { color: colors.textTertiary }]}
+                  numberOfLines={1}
+                  ellipsizeMode="middle"
+                >
+                  {caption}
+                </Text>
+              ) : null}
+            </View>
           </Pressable>
+          {onShowActions ? (
+            <IconButton
+              icon={MoreHorizontal}
+              onPress={onShowActions}
+              label="Panel actions"
+              color={colors.textSecondary}
+            />
+          ) : null}
+          <IconButton icon={Plus} onPress={handleCreatePanel} label="Create new panel" size={23} />
+        </View>
+      ) : (
+        <View style={styles.content}>
+          <IconButton
+            icon={ArrowLeft}
+            onPress={onBack}
+            disabled={!canGoBack}
+            label="Back"
+            color={colors.text}
+          />
+          <IconButton
+            icon={ArrowRight}
+            onPress={onForward}
+            disabled={!canGoForward}
+            label="Forward"
+            color={colors.text}
+          />
+          <View
+            style={[
+              styles.inputWrap,
+              { backgroundColor: colors.surfaceSunken, borderColor: colors.primary },
+            ]}
+          >
+            <TextInput
+              ref={inputRef}
+              testID="address-input"
+              value={addressValue}
+              onFocus={() => {
+                setAddressFocused(true);
+                onAddressQueryChange?.(addressValue);
+              }}
+              onBlur={() => {
+                setTimeout(() => setAddressFocused(false), 120);
+              }}
+              onChangeText={(text) => {
+                setAddressValue(text);
+                onAddressQueryChange?.(text);
+              }}
+              onSubmitEditing={() => {
+                setAddressFocused(false);
+                onNavigateAddress?.(addressValue);
+              }}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="go"
+              selectTextOnFocus
+              style={[styles.addressInput, { color: colors.text }]}
+              placeholder="Search or enter address"
+              placeholderTextColor={colors.textTertiary}
+            />
+            <IconButton
+              icon={isLoading ? Square : RefreshCw}
+              onPress={isLoading ? onStop : onReload}
+              label={isLoading ? "Stop loading" : "Reload"}
+              size={16}
+              color={colors.textSecondary}
+              style={styles.inlineReload}
+            />
+          </View>
+          <IconButton
+            icon={X}
+            onPress={onToggleAddressBar}
+            label="Close address bar"
+            color={colors.textSecondary}
+          />
         </View>
       )}
       {addressBarVisible && visibleSuggestions.length > 0 && (
-        <View
-          style={[
-            styles.suggestions,
-            {
-              backgroundColor: colors.surface,
-              borderTopColor: colors.border,
-              borderBottomColor: colors.border,
-            },
-          ]}
-        >
+        <View style={[styles.suggestions, { borderTopColor: colors.borderSubtle }]}>
           {visibleSuggestions.map((item, index) => (
             <Pressable
               key={`${item.kind}:${item.value}`}
@@ -327,27 +311,30 @@ export function AppBar({
                 setAddressFocused(false);
                 onSelectAddressSuggestion?.(item);
               }}
-              style={styles.suggestionRow}
+              style={({ pressed }) => [
+                styles.suggestionRow,
+                pressed && { backgroundColor: colors.surfaceSunken },
+              ]}
               accessibilityRole="button"
               accessibilityLabel={item.label}
             >
               <View style={styles.suggestionContent}>
                 {React.createElement(iconForSuggestion(item.iconKind), {
-                  size: 18,
-                  color: colors.textSecondary,
+                  size: 17,
+                  color: colors.textTertiary,
                 })}
                 <View style={styles.suggestionText}>
                   <HighlightedText
                     text={item.label}
                     ranges={item.matchRanges?.label}
                     style={[styles.suggestionLabel, { color: colors.text }]}
-                    highlightStyle={styles.suggestionMatch}
+                    highlightStyle={[styles.suggestionMatch, { color: colors.primary }]}
                   />
                   <HighlightedText
                     text={item.meta}
                     ranges={item.matchRanges?.meta}
                     style={[styles.suggestionMeta, { color: colors.textSecondary }]}
-                    highlightStyle={styles.suggestionMatch}
+                    highlightStyle={[styles.suggestionMatch, { color: colors.primary }]}
                   />
                 </View>
               </View>
@@ -398,52 +385,72 @@ function HighlightedText({
 
 const styles = StyleSheet.create({
   container: {
-    borderBottomWidth: 1,
+    borderBottomWidth: hairline,
   },
   content: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    height: 48,
-    paddingHorizontal: 8,
+    height: 56,
+    paddingHorizontal: spacing.xs,
+    gap: spacing.xxs,
   },
-  addressRow: {
-    height: 44,
+  pill: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: touchTarget - 4,
+    borderRadius: radius.pill,
+    borderWidth: hairline,
     flexDirection: "row",
     alignItems: "center",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 8,
-    gap: 6,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    marginHorizontal: spacing.xxs,
+  },
+  pillSpinner: {
+    marginRight: spacing.sm,
+  },
+  pillCopy: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+  },
+  pillTitle: {
+    maxWidth: "100%",
+  },
+  inputWrap: {
+    flex: 1,
+    minWidth: 0,
+    height: touchTarget - 4,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingLeft: spacing.md,
+    marginHorizontal: spacing.xxs,
   },
   addressInput: {
     flex: 1,
-    height: 32,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    fontSize: 14,
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+  inlineReload: {
+    width: 36,
+    height: 36,
   },
   suggestions: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 4,
+    borderTopWidth: hairline,
+    paddingVertical: spacing.xs,
   },
   suggestionRow: {
-    minHeight: 44,
+    minHeight: touchTarget,
     justifyContent: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
   },
   suggestionContent: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-  },
-  suggestionIcon: {
-    width: 22,
-    fontSize: 11,
-    fontWeight: "700",
-    textAlign: "center",
+    gap: spacing.md,
   },
   suggestionText: {
     flex: 1,
@@ -454,71 +461,10 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   suggestionMeta: {
-    marginTop: 2,
+    marginTop: 1,
     fontSize: 12,
   },
   suggestionMatch: {
     fontWeight: "800",
-  },
-  metadataText: {
-    maxWidth: 120,
-    fontSize: 11,
-  },
-  dirtyText: {
-    fontSize: 10,
-  },
-  navButton: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  navButtonText: {
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  disabledButton: {
-    opacity: 0.35,
-  },
-  iconButton: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  brandLogo: {
-    marginLeft: -4,
-  },
-  hamburger: {
-    width: 22,
-    height: 16,
-    justifyContent: "space-between",
-  },
-  hamburgerLine: {
-    width: 22,
-    height: 2,
-    borderRadius: 1,
-  },
-  title: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: "600",
-    textAlign: "center",
-    marginHorizontal: 8,
-  },
-  urlButton: {
-    paddingHorizontal: 6,
-    height: 28,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  urlButtonText: {
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  plusIcon: {
-    fontSize: 28,
-    fontWeight: "300",
-    lineHeight: 30,
   },
 });

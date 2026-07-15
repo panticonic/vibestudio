@@ -4,7 +4,6 @@ import React, {
   useMemo,
   useRef,
   useState,
-  type ComponentType,
 } from "react";
 import {
   AccessibilityInfo,
@@ -62,47 +61,36 @@ import {
 } from "@vibestudio/shared/approvalCopy";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
+import {
+  hairline,
+  pressedOpacity,
+  radius,
+  shadow,
+  spacing,
+  touchTarget,
+  type as typeRamp,
+} from "../design/tokens";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Globe,
+  Info,
+  LayoutPanelTop,
+  Lock,
+  Settings2,
+  User,
+  Workflow,
+  X,
+  XCircle,
+  type IconComponent,
+} from "../design/icons";
+import { Badge } from "./ui/primitives";
 import { Toast } from "./Toast";
-
-declare const require: (id: string) => unknown;
-
-type IconProps = { size?: number; color?: string; strokeWidth?: number };
-type IconComponent = ComponentType<IconProps>;
-type IconModule = Record<string, IconComponent | undefined>;
-
-let lucideIcons: IconModule = {};
-try {
-  lucideIcons = require("lucide-react-native") as IconModule;
-} catch {
-  lucideIcons = {};
-}
-
-function fallbackIcon(glyph: string): IconComponent {
-  return function FallbackIcon({ size = 16, color }: IconProps) {
-    return <Text style={{ color, fontSize: size, lineHeight: size }}>{glyph}</Text>;
-  };
-}
-
-function icon(name: string, glyph: string): IconComponent {
-  return lucideIcons[name] ?? fallbackIcon(glyph);
-}
-
-const AlertTriangle = icon("AlertTriangle", "!");
-const ArrowRight = icon("ArrowRight", ">");
-const CheckCircle2 = icon("CheckCircle2", "+");
-const ChevronDown = icon("ChevronDown", "v");
-const ChevronLeft = icon("ChevronLeft", "<");
-const ChevronRight = icon("ChevronRight", ">");
-const ExternalLink = icon("ExternalLink", ">");
-const Globe = icon("Globe", "@");
-const Info = icon("Info", "i");
-const LayoutPanelTop = icon("LayoutPanelTop", "#");
-const Lock = icon("Lock", "*");
-const Settings2 = icon("Settings2", "=");
-const User = icon("User", "u");
-const Workflow = icon("Workflow", "~");
-const X = icon("X", "x");
-const XCircle = icon("XCircle", "x");
 
 interface CallerInfo {
   /** Friendly user-visible label — panel title, worker source basename, etc. */
@@ -393,7 +381,9 @@ export function ApprovalSheet({
   return (
     <Modal visible transparent animationType="none" presentationStyle="overFullScreen">
       <View style={styles.modalRoot}>
-        <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]}>
+        <Animated.View
+          style={[styles.backdrop, { backgroundColor: colors.overlay, opacity: backdropOpacity }]}
+        >
           <Pressable
             accessibilityLabel="Dismiss approval"
             disabled={isBusy}
@@ -411,9 +401,11 @@ export function ApprovalSheet({
               accessibilityViewIsModal
               style={[
                 styles.sheet,
+                shadow.sheet,
                 {
-                  backgroundColor: colors.surface,
+                  backgroundColor: colors.surfaceRaised,
                   borderColor: colors.border,
+                  shadowColor: colors.shadow,
                   transform: [{ translateY }],
                 },
               ]}
@@ -490,7 +482,7 @@ export function ApprovalSheet({
               <View
                 style={[
                   styles.actionBar,
-                  { borderTopColor: colors.border, backgroundColor: colors.surface },
+                  { borderTopColor: colors.borderSubtle, backgroundColor: colors.surfaceRaised },
                 ]}
               >
                 {current.kind === "client-config" ? (
@@ -697,7 +689,7 @@ function CallerRow({
     <View
       style={[
         styles.callerChip,
-        { backgroundColor: colors.background, borderColor: colors.border },
+        { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
       ]}
     >
       <KindIcon size={12} color={colors.textSecondary} />
@@ -733,7 +725,7 @@ function CallerRow({
           <View
             style={[
               styles.callerChip,
-              { backgroundColor: colors.background, borderColor: colors.border },
+              { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
             ]}
           >
             <Text numberOfLines={1} style={[styles.callerChipLabel, { color: colors.text }]}>
@@ -771,7 +763,7 @@ function WarningBand({ message }: { message: string }) {
       accessibilityRole="alert"
       style={[
         styles.warningBand,
-        { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+        { backgroundColor: colors.dangerSoft },
       ]}
     >
       <AlertTriangle size={14} color={colors.danger} />
@@ -893,7 +885,7 @@ function InlineError({ message }: { message: string }) {
     <View
       style={[
         styles.warningBand,
-        { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+        { backgroundColor: colors.dangerSoft },
       ]}
     >
       <AlertTriangle size={14} color={colors.danger} />
@@ -926,8 +918,8 @@ function SecretConfigFields({
         <View key={field.name} style={styles.fieldBlock}>
           <View style={styles.fieldLabelRow}>
             <Text style={[styles.fieldLabel, { color: colors.text }]}>{field.label}</Text>
-            {field.required ? <Pill tone="warning">Required</Pill> : null}
-            {field.type === "secret" ? <Pill>Secret</Pill> : null}
+            {field.required ? <Badge label="Required" tone="warning" /> : null}
+            {field.type === "secret" ? <Badge label="Secret" /> : null}
           </View>
           <TextInput
             accessibilityLabel={field.label}
@@ -935,12 +927,12 @@ function SecretConfigFields({
             autoCorrect={false}
             onChangeText={(text) => onChange(field.name, text)}
             placeholder={field.label}
-            placeholderTextColor={colors.textSecondary}
+            placeholderTextColor={colors.textTertiary}
             secureTextEntry={field.type === "secret"}
             style={[
               styles.input,
               {
-                backgroundColor: colors.background,
+                backgroundColor: colors.surfaceSunken,
                 borderColor: colors.border,
                 color: colors.text,
               },
@@ -1327,7 +1319,7 @@ function DeviceCodePanel({ approval }: { approval: PendingDeviceCodeApproval }) 
     <View
       style={[
         styles.issuerPanel,
-        { backgroundColor: colors.background, borderColor: colors.border },
+        { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
       ]}
     >
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>Enter this code:</Text>
@@ -1384,7 +1376,7 @@ function ExternalAgentPanel({ approval }: { approval: PendingExternalAgentApprov
     <View
       style={[
         styles.issuerPanel,
-        { backgroundColor: colors.background, borderColor: colors.border },
+        { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
       ]}
     >
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>Tool input:</Text>
@@ -1866,24 +1858,6 @@ function buttonStyle(
   };
 }
 
-function Pill({ children, tone }: { children: React.ReactNode; tone?: "warning" }) {
-  const colors = useAtomValue(themeColorsAtom);
-  return (
-    <Text
-      style={[
-        styles.pill,
-        {
-          color: tone === "warning" ? colors.warning : colors.textSecondary,
-          borderColor: tone === "warning" ? colors.warning : colors.border,
-          backgroundColor: colors.background,
-        },
-      ]}
-    >
-      {children}
-    </Text>
-  );
-}
-
 function RememberedHint({
   approval,
   caller,
@@ -1914,18 +1888,17 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: "flex-end",
     justifyContent: "flex-end",
-    padding: 16,
+    padding: spacing.lg,
   },
   minimizedApproval: {
-    borderRadius: 999,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    minHeight: 44,
+    minHeight: touchTarget,
     justifyContent: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: spacing.lg,
   },
   minimizedApprovalText: {
-    fontSize: 14,
-    fontWeight: "600",
+    ...typeRamp.bodyStrong,
   },
   modalRoot: {
     flex: 1,
@@ -1933,7 +1906,6 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.5)",
   },
   keyboardRoot: {
     flex: 1,
@@ -1944,9 +1916,9 @@ const styles = StyleSheet.create({
   },
   sheet: {
     alignSelf: "stretch",
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    borderWidth: hairline,
     maxHeight: Dimensions.get("window").height * 0.9,
     minHeight: Dimensions.get("window").height * 0.4,
     overflow: "hidden",
@@ -1956,38 +1928,38 @@ const styles = StyleSheet.create({
   },
   dismissButton: {
     alignItems: "center",
-    height: 44,
+    height: touchTarget,
     justifyContent: "center",
     position: "absolute",
-    right: 6,
-    top: 8,
-    width: 44,
+    right: spacing.xs,
+    top: spacing.sm,
+    width: touchTarget,
     zIndex: 2,
   },
   handleWrap: {
     alignItems: "center",
-    paddingBottom: 10,
-    paddingTop: 8,
+    paddingBottom: spacing.sm,
+    paddingTop: spacing.sm,
   },
   handle: {
-    borderRadius: 2,
+    borderRadius: radius.pill,
     height: 4,
-    width: 36,
+    width: 40,
   },
   scrollContent: {
-    paddingBottom: 18,
-    paddingHorizontal: 18,
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
   },
   headerRow: {
     alignItems: "center",
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
+    gap: spacing.sm,
     paddingRight: 42,
   },
   categoryIcon: {
     alignItems: "center",
-    borderRadius: 8,
+    borderRadius: radius.sm,
     height: 32,
     justifyContent: "center",
     width: 32,
@@ -1995,83 +1967,74 @@ const styles = StyleSheet.create({
   queueNavigator: {
     alignItems: "center",
     flexDirection: "row",
-    gap: 6,
+    gap: spacing.xs,
     marginLeft: "auto",
   },
   queueButton: {
     alignItems: "center",
-    borderRadius: 6,
+    borderRadius: radius.sm,
     height: 28,
     justifyContent: "center",
     width: 28,
   },
   queueLabel: {
-    fontSize: 12,
+    ...typeRamp.micro,
     fontVariant: ["tabular-nums"],
-    fontWeight: "600",
     minWidth: 36,
     textAlign: "center",
   },
   title: {
-    fontSize: 22,
-    fontWeight: "600",
-    marginTop: 16,
+    ...typeRamp.title,
+    marginTop: spacing.lg,
   },
   callerRow: {
     alignItems: "center",
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
-    marginTop: 8,
+    gap: spacing.xs,
+    marginTop: spacing.sm,
   },
   callerRowLabel: {
-    fontSize: 12,
-    fontWeight: "500",
+    ...typeRamp.micro,
   },
   callerChip: {
     alignItems: "center",
-    borderRadius: 999,
+    borderRadius: radius.pill,
     borderWidth: 1,
     flexDirection: "row",
     gap: 5,
     maxWidth: 220,
-    paddingHorizontal: 8,
+    paddingHorizontal: spacing.sm,
     paddingVertical: 3,
   },
   callerChipLabel: {
+    ...typeRamp.micro,
     flexShrink: 1,
-    fontSize: 12,
-    fontWeight: "600",
   },
   warningBand: {
     alignItems: "flex-start",
-    borderRadius: 8,
-    borderWidth: 1,
+    borderRadius: radius.sm,
     flexDirection: "row",
-    gap: 8,
-    marginTop: 12,
-    padding: 10,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.md,
   },
   warningText: {
+    ...typeRamp.caption,
     flex: 1,
-    fontSize: 13,
-    fontWeight: "500",
-    lineHeight: 18,
   },
   markdownFlex: {
     flex: 1,
   },
   markdownBlock: {
-    gap: 6,
-    marginTop: 8,
+    gap: spacing.xs,
+    marginTop: spacing.sm,
   },
   markdownBlockCompact: {
     marginTop: 0,
   },
   markdownText: {
-    fontSize: 13,
-    fontWeight: "400",
-    lineHeight: 18,
+    ...typeRamp.caption,
   },
   markdownList: {
     gap: 3,
@@ -2079,11 +2042,10 @@ const styles = StyleSheet.create({
   markdownListRow: {
     alignItems: "flex-start",
     flexDirection: "row",
-    gap: 6,
+    gap: spacing.xs,
   },
   markdownBullet: {
-    fontSize: 13,
-    lineHeight: 18,
+    ...typeRamp.caption,
     width: 18,
   },
   markdownStrong: {
@@ -2093,106 +2055,106 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   markdownInlineCode: {
-    borderRadius: 4,
+    borderRadius: radius.sm / 2,
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
     fontSize: 12,
-    paddingHorizontal: 4,
+    paddingHorizontal: spacing.xs,
     paddingVertical: 1,
   },
   markdownCodeBlock: {
-    borderRadius: 6,
+    borderRadius: radius.sm,
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
     fontSize: 12,
     lineHeight: 17,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs + 2,
   },
   issuerPanel: {
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 14,
-    padding: 12,
+    borderRadius: radius.md,
+    borderWidth: hairline,
+    marginTop: spacing.md,
+    padding: spacing.md,
   },
   helperText: {
-    fontSize: 12,
-    fontWeight: "400",
-    lineHeight: 18,
+    ...typeRamp.caption,
   },
   fields: {
-    gap: 12,
-    marginTop: 14,
+    gap: spacing.md,
+    marginTop: spacing.md,
   },
   fieldBlock: {
-    gap: 6,
+    gap: spacing.xs + 2,
   },
   fieldLabelRow: {
     alignItems: "center",
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
+    gap: spacing.sm,
   },
   fieldLabel: {
-    fontSize: 13,
+    ...typeRamp.caption,
     fontWeight: "500",
   },
   input: {
-    borderRadius: 10,
-    borderWidth: 1,
+    borderRadius: radius.md,
+    borderWidth: hairline,
     fontSize: 15,
-    minHeight: Platform.OS === "ios" ? 44 : 48,
-    paddingHorizontal: 12,
+    minHeight: touchTarget,
+    paddingHorizontal: spacing.md,
   },
   detailsBlock: {
-    marginTop: 14,
+    marginTop: spacing.md,
   },
   detailsSummary: {
     alignItems: "center",
     flexDirection: "row",
-    gap: 6,
+    gap: spacing.xs + 2,
     minHeight: 34,
   },
   detailsSummaryText: {
-    fontSize: 13,
+    ...typeRamp.caption,
     fontWeight: "600",
   },
   detailRows: {
     gap: 9,
-    paddingTop: 6,
+    paddingTop: spacing.xs + 2,
   },
   detailRow: {
     alignItems: "flex-start",
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.sm,
   },
   detailLabel: {
-    flexShrink: 0,
-    fontSize: 12,
+    ...typeRamp.micro,
     fontWeight: "500",
+    flexShrink: 0,
+    letterSpacing: undefined,
     width: 80,
   },
   detailValueColumn: {
     flex: 1,
     flexDirection: "column",
-    gap: 4,
+    gap: spacing.xs,
     minWidth: 0,
   },
   detailValue: {
-    borderRadius: 6,
+    ...typeRamp.caption,
+    borderRadius: radius.sm - 2,
     flexWrap: "wrap",
-    fontSize: 13,
     fontWeight: "500",
-    lineHeight: 18,
     minWidth: 0,
   },
   detailValueSecondary: {
+    ...typeRamp.micro,
+    fontWeight: "400",
+    letterSpacing: undefined,
     alignSelf: "flex-start",
-    borderRadius: 6,
-    fontSize: 11,
+    borderRadius: radius.sm - 2,
     lineHeight: 16,
   },
   codeText: {
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
-    paddingHorizontal: 6,
+    paddingHorizontal: spacing.xs + 2,
     paddingVertical: 2,
   },
   deviceCode: {
@@ -2200,46 +2162,45 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "700",
     letterSpacing: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginVertical: 8,
+    paddingHorizontal: spacing.md + 2,
+    paddingVertical: spacing.sm + 2,
+    marginVertical: spacing.sm,
     alignSelf: "flex-start",
-    borderRadius: 6,
+    borderRadius: radius.sm,
   },
   actionBar: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingBottom: 14,
-    paddingHorizontal: 14,
-    paddingTop: 12,
+    borderTopWidth: hairline,
+    paddingBottom: spacing.md + 2,
+    paddingHorizontal: spacing.md + 2,
+    paddingTop: spacing.md,
   },
   actionGroups: {
-    gap: 8,
+    gap: spacing.sm,
   },
   actionRow: {
     flexDirection: "row",
-    gap: 8,
+    gap: spacing.sm,
   },
   userlandActionWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
+    gap: spacing.sm,
   },
   decisionButton: {
     alignItems: "center",
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
     flex: 1,
     flexDirection: "row",
-    gap: 6,
+    gap: spacing.xs + 2,
     justifyContent: "center",
-    minHeight: Platform.OS === "ios" ? 44 : 48,
+    minHeight: touchTarget,
     minWidth: 96,
-    paddingHorizontal: 10,
+    paddingHorizontal: spacing.md,
   },
   decisionText: {
+    ...typeRamp.bodyStrong,
     flexShrink: 1,
-    fontSize: 14,
-    fontWeight: "600",
     letterSpacing: 0,
     textAlign: "center",
   },
@@ -2247,21 +2208,12 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   pressed: {
-    transform: [{ scale: 0.96 }],
-  },
-  pill: {
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    fontSize: 11,
-    fontWeight: "600",
-    overflow: "hidden",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    opacity: pressedOpacity,
   },
   rememberedHint: {
     alignItems: "center",
     flexDirection: "row",
-    gap: 6,
-    marginTop: 10,
+    gap: spacing.xs + 2,
+    marginTop: spacing.md,
   },
 });

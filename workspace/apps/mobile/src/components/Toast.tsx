@@ -1,36 +1,10 @@
-import React, { useEffect, type ComponentType } from "react";
+import React, { useEffect } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAtomValue, useSetAtom } from "jotai";
 import { dismissToastAtom, toastQueueAtom, type ToastTone } from "../state/toastAtoms";
 import { themeColorsAtom } from "../state/themeAtoms";
-
-declare const require: (id: string) => unknown;
-
-type IconProps = { size?: number; color?: string; strokeWidth?: number };
-type IconComponent = ComponentType<IconProps>;
-type IconModule = Record<string, IconComponent | undefined>;
-
-let lucideIcons: IconModule = {};
-try {
-  lucideIcons = require("lucide-react-native") as IconModule;
-} catch {
-  lucideIcons = {};
-}
-
-function fallbackIcon(glyph: string): IconComponent {
-  return function FallbackIcon({ size = 16, color }: IconProps) {
-    return <Text style={{ color, fontSize: size, lineHeight: size }}>{glyph}</Text>;
-  };
-}
-
-function icon(name: string, glyph: string): IconComponent {
-  return lucideIcons[name] ?? fallbackIcon(glyph);
-}
-
-const AlertTriangle = icon("AlertTriangle", "!");
-const CheckCircle2 = icon("CheckCircle2", "+");
-const Info = icon("Info", "i");
-const XCircle = icon("XCircle", "x");
+import { AlertTriangle, CheckCircle2, Info, XCircle, type IconComponent } from "../design/icons";
+import { radius, shadow, spacing, type } from "../design/tokens";
 
 const DEFAULT_DURATION_MS = 4500;
 
@@ -69,16 +43,19 @@ export function Toast() {
             style={[
               styles.toast,
               {
-                backgroundColor: colors.surface,
-                borderColor: toneColor,
+                backgroundColor: colors.surfaceRaised,
+                shadowColor: colors.shadow,
               },
             ]}
             testID={`toast-${toast.id}`}
           >
+            <View style={[styles.accent, { backgroundColor: toneColor }]} />
             <Icon size={18} color={toneColor} />
             <View style={styles.copy}>
-              {toast.title ? <Text style={[styles.title, { color: colors.text }]}>{toast.title}</Text> : null}
-              <Text style={[styles.message, { color: colors.textSecondary }]}>{toast.message}</Text>
+              {toast.title ? (
+                <Text style={[type.bodyStrong, { color: colors.text }]}>{toast.title}</Text>
+              ) : null}
+              <Text style={[type.caption, { color: colors.textSecondary }]}>{toast.message}</Text>
             </View>
           </Pressable>
         );
@@ -106,39 +83,32 @@ function toneToColor(
 
 const styles = StyleSheet.create({
   viewport: {
-    left: 12,
+    left: spacing.md,
     position: "absolute",
-    right: 12,
-    top: 12,
+    right: spacing.md,
+    top: spacing.md,
     zIndex: 50,
   },
   toast: {
     alignItems: "flex-start",
-    borderRadius: 8,
-    borderWidth: 1,
-    elevation: 6,
+    borderRadius: radius.lg,
     flexDirection: "row",
-    gap: 10,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 5 },
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+    overflow: "hidden",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    ...shadow.toast,
+  },
+  accent: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
   },
   copy: {
     flex: 1,
-    gap: 2,
-  },
-  title: {
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 18,
-  },
-  message: {
-    fontSize: 13,
-    fontWeight: "500",
-    lineHeight: 18,
+    gap: spacing.xxs,
   },
 });
