@@ -1,6 +1,25 @@
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 import type { HeadlessRunner } from "./runner.js";
+import type { SystemTestFailure } from "./structured-error.js";
+import type { WorkspaceRepoFixtureSpec } from "./workspace-repo-fixture.js";
+
+export type {
+  StructuredSystemTestError,
+  SystemTestFailure,
+  SystemTestJsonValue,
+} from "./structured-error.js";
+export type { WorkspaceRepoFixtureSpec } from "./workspace-repo-fixture.js";
+
+export const CONTENT_WORKSPACE_REPO_FIXTURE = {
+  kind: "content",
+  section: "projects",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
+export const BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE = {
+  kind: "buildable-package",
+  section: "packages",
+} as const satisfies WorkspaceRepoFixtureSpec;
 
 export interface ToolFailureSummary {
   id?: string;
@@ -36,12 +55,16 @@ export interface TestCase {
    */
   resources?: string[];
   /**
-   * Give tests that create/publish workspace repos a harness-owned disposable
-   * namespace. The runner removes stale repos in that namespace before the
-   * test, removes repos created in it afterward, and surfaces any teardown
-   * failure. This keeps the user-like prompt free of fixture mechanics.
+   * Give tests that create/publish workspace repos one fresh semantic task
+   * context and one exactly owned disposable repository. Setup commits a local
+   * fixture; cleanup point-inspects only repository identities derived from the
+   * task's exact work and touches protected main only when a task event is
+   * reachable from it. Published task work is counteracted in reverse causal
+   * order; newer local work disappears with the task context. Sibling fixtures
+   * remain concurrent.
+   * This keeps fixture mechanics out of the user-like prompt.
    */
-  workspaceRepoFixture?: boolean;
+  workspaceRepoFixture?: WorkspaceRepoFixtureSpec;
   /**
    * Optional custom orchestration for tests that need multiple independent
    * headless agents, ordered phases, or other harness-level setup that a single
@@ -54,8 +77,8 @@ export interface TestCase {
 
 export interface TestOrchestrationContext {
   runner: HeadlessRunner;
-  /** Optional operator-supplied deadline; normal system tests are unbounded. */
-  testTimeoutMs?: number;
+  /** Milliseconds left in this test's one agent-turn budget, or undefined when unbounded. */
+  remainingTimeMs(): number | undefined;
   sendAndWait(session: HeadlessSession, prompt: string, phase: string): Promise<void>;
 }
 
@@ -74,8 +97,12 @@ export interface TestExecutionResult {
   duration: number;
   /** Transport/session-level error (if the session itself failed) */
   error?: string;
+  /** Schema-safe structured evidence for the primary failure. */
+  failure?: SystemTestFailure;
   /** Cleanup errors from closing the headless session or retiring its agent */
   cleanupErrors?: string[];
+  /** Schema-safe structured evidence for cleanup failures. */
+  cleanupFailures?: SystemTestFailure[];
   /** Full diagnostic snapshot from the session (invocations, debug events, participants) */
   snapshot?: SessionSnapshot;
   /** Journal-derived proof of provider/model requests and completed usage. */

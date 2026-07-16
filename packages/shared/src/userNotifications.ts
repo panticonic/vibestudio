@@ -4,7 +4,7 @@ import type { ChannelInvite } from "./channelInvites.js";
  * Durable, account-scoped userland notification.
  *
  * The host only transports an opaque "inbox changed" signal. Notification
- * content remains in the workspace's GAD store and is returned only to a
+ * content remains in the workspace semantic control plane and is returned only to a
  * caller whose host-stamped `AuthenticatedCaller.userId` matches `userId`.
  */
 export interface UserNotification {

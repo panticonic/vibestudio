@@ -23,6 +23,7 @@
     "paths": {
       "@vibestudio/browser-data": ["packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
+      "@vibestudio/content-addressing": ["packages/content-addressing/src/index.ts"],
       "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["packages/credential-client/src/*"],
       "@vibestudio/dev-log": ["packages/dev-log/src/index.ts"],
@@ -35,6 +36,7 @@
       "@vibestudio/git": ["packages/git/src/index.ts"],
       "@vibestudio/git/formatting": ["packages/git/src/formatting.ts"],
       "@vibestudio/identity/*": ["packages/identity/src/*"],
+      "@vibestudio/trajectory-identity": ["packages/trajectory-identity/src/index.ts"],
       "@workspace/*": ["workspace/packages/*/src/index.ts"],
       "@workspace/*/entry": ["workspace/packages/*/src/entry.ts"],
       "@workspace/*/types": ["workspace/packages/*/src/types.ts"],
@@ -121,9 +123,6 @@
         "workspace/packages/gmail/src/renderers/gmail-thread.reducer.ts"
       ],
       "@workspace/pubsub": ["workspace/packages/pubsub/src/index.ts"],
-      "@workspace/pubsub/internal-constants": [
-        "workspace/packages/pubsub/src/internal-constants.ts"
-      ],
       "@workspace/react": ["workspace/packages/react/src/index.ts"],
       "@workspace/react/responsive": ["workspace/packages/react/src/responsive.ts"],
       "@workspace/runtime": ["workspace/packages/runtime/src/panel/index.ts"],
@@ -133,6 +132,9 @@
       "@workspace/runtime/portable": ["workspace/packages/runtime/src/shared/portable.ts"],
       "@workspace/runtime/credentials": ["workspace/packages/runtime/src/shared/credentials.ts"],
       "@workspace/runtime/worker": ["workspace/packages/runtime/src/worker/index.ts"],
+      "@workspace/runtime/worker/durable-base": [
+        "workspace/packages/runtime/src/worker/durable-base.ts"
+      ],
       "@workspace/runtime/worker/credentials": [
         "workspace/packages/runtime/src/worker/credentials.ts"
       ],

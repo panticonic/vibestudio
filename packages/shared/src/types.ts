@@ -89,10 +89,10 @@ export interface PackageManifest {
   /**
    * Marks this worker as a selectable chat agent and supplies gallery metadata.
    * Presence of this block is what distinguishes chat-agent DOs from service DOs
-   * (pubsub-channel, gad-store, fork, …) in the chat panel's agent picker.
+   * (pubsub-channel, semantic control plane, fork, …) in the chat panel's agent picker.
    */
   agent?: { displayName?: string; description?: string; icon?: string };
-  // Note: userland services and HTTP routes are no longer declared per worker.
+  // Note: workspace services and HTTP routes are no longer declared per worker.
   // They live in `workspace/meta/vibestudio.yml` under `services:` and `routes:`,
   // joined against `singletonObjects:` for DO singleton keys.
 }

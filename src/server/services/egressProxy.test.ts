@@ -25,6 +25,12 @@ import {
 } from "./egressProxy.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError } from "./credentialLifecycle.js";
+
+const PUBLIC_REFRESH_RECIPE = {
+  tokenUrl: "https://auth.example.test/oauth/token",
+  clientId: "public-client",
+  tokenAuth: "none" as const,
+};
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
 
@@ -148,6 +154,36 @@ function createCredential(overrides: Partial<Credential> = {}): Credential {
     scopes: ["read"],
     ...overrides,
   };
+}
+
+function createLocalFetchCredential(
+  upstreamPort: number,
+  overrides: Partial<Credential> = {}
+): Credential {
+  return createCredential({
+    bindings: [
+      {
+        id: "api",
+        use: "fetch",
+        audience: [{ url: `http://127.0.0.1:${upstreamPort}/v1`, match: "path-prefix" }],
+        injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+      },
+    ],
+    grants: [
+      {
+        bindingId: "api",
+        use: "fetch",
+        resource: `http://127.0.0.1:${upstreamPort}/v1`,
+        action: "use",
+        scope: "version",
+        repoPath: "/repo",
+        effectiveVersion: "hash-1",
+        grantedAt: 1,
+        grantedBy: "self",
+      },
+    ],
+    ...overrides,
+  });
 }
 
 function createProxy(
@@ -517,6 +553,91 @@ describe("EgressProxy", () => {
     }
   });
 
+  it("refreshes a stale credential before committing a WebSocket 401", async () => {
+    const auditLog = new MemoryAuditLog();
+    const upstreamServer = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const credential = createLocalFetchCredential(upstreamPort, {
+      accessToken: "stale-token",
+      refreshToken: "refresh-token",
+      oauthRefresh: PUBLIC_REFRESH_RECIPE,
+      expiresAt: Date.now() + 3_600_000,
+    });
+    const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
+    const credentialLifecycle = {
+      refreshIfNeeded: vi.fn(),
+      refreshCredential: vi.fn(async (current: Credential & { id: string }) => {
+        const refreshed = {
+          ...current,
+          accessToken: "fresh-token",
+          expiresAt: Date.now() + 3_600_000,
+        };
+        store.saveUrlBound(refreshed);
+        return refreshed;
+      }),
+    };
+    const proxy = new EgressProxy({
+      credentialStore: store,
+      auditLog: auditLog as never,
+      credentialLifecycle: credentialLifecycle as never,
+    });
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    const seenAuthorization: Array<string | undefined> = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    upstreamServer.on("upgrade", (req, socket, head) => {
+      seenAuthorization.push(req.headers.authorization);
+      if (req.headers.authorization === "Bearer stale-token") {
+        const body = "expired upstream response";
+        socket.end(
+          `HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
+        );
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.close(1000, "done");
+      });
+    });
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
+        headers: {
+          "X-Vibestudio-Egress-Caller": "worker:test",
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(101);
+      expect(response.body).toBeUndefined();
+      expect(seenAuthorization).toEqual(["Bearer stale-token", "Bearer fresh-token"]);
+      expect(credentialLifecycle.refreshCredential).toHaveBeenCalledOnce();
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        status: 101,
+        retries: 1,
+      });
+      expect(warn).not.toHaveBeenCalledWith(
+        "[EgressProxy] WebSocket upgrade failed",
+        expect.objectContaining({ phase: "upstream_response", statusCode: 401 })
+      );
+    } finally {
+      warn.mockRestore();
+      await proxy.stop();
+      wss.close();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
   it("does not forward local WebSocket proxy-hop origin without provider metadata", async () => {
     const auditLog = new MemoryAuditLog();
     const upstreamServer = createServer();
@@ -760,7 +881,141 @@ describe("EgressProxy", () => {
     }
   });
 
-  it("does not retry WebSocket upstream HTTP responses after committing them", async () => {
+  it("commits a final WebSocket 401 exactly once when refresh is unavailable", async () => {
+    const auditLog = new MemoryAuditLog();
+    let upstreamRequests = 0;
+    const upstreamServer = createServer((_req, res) => {
+      upstreamRequests += 1;
+      res.writeHead(401, {
+        "Content-Type": "application/json",
+        "X-Upstream-Rejection": "final",
+      });
+      res.end('{"error":"token expired"}');
+    });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const proxy = createProxy(createLocalFetchCredential(upstreamPort), auditLog);
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
+        headers: {
+          "X-Vibestudio-Egress-Caller": "worker:test",
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(401);
+      expect(response.headers["x-upstream-rejection"]).toBe("final");
+      expect(response.body).toBe('{"error":"token expired"}');
+      expect(upstreamRequests).toBe(1);
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        status: 401,
+        retries: 0,
+        bytesIn: Buffer.byteLength('{"error":"token expired"}'),
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "[EgressProxy] WebSocket upgrade failed",
+        expect.objectContaining({
+          phase: "upstream_response",
+          reason: "upstream_non_upgrade_response",
+          statusCode: 401,
+          body: '{"error":"token expired"}',
+        })
+      );
+    } finally {
+      warn.mockRestore();
+      await proxy.stop();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
+  it("discards a provisional WebSocket 401 when credential refresh fails", async () => {
+    const auditLog = new MemoryAuditLog();
+    let upstreamRequests = 0;
+    const upstreamServer = createServer((_req, res) => {
+      upstreamRequests += 1;
+      res.writeHead(401, { "Content-Type": "text/plain" });
+      res.end("expired upstream response");
+    });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const credential = createLocalFetchCredential(upstreamPort, {
+      accessToken: "stale-token",
+      refreshToken: "refresh-token",
+      oauthRefresh: PUBLIC_REFRESH_RECIPE,
+      expiresAt: Date.now() + 3_600_000,
+    });
+    const credentialLifecycle = {
+      refreshIfNeeded: vi.fn(),
+      refreshCredential: vi.fn(async () => {
+        throw new CredentialLifecycleError("client_not_authorized");
+      }),
+    };
+    const proxy = new EgressProxy({
+      credentialStore: new MemoryCredentialStore(new Map([[credential.id!, credential]])),
+      auditLog: auditLog as never,
+      credentialLifecycle: credentialLifecycle as never,
+    });
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
+        headers: {
+          "X-Vibestudio-Egress-Caller": "worker:test",
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(403);
+      expect(response.body).toBe("client_not_authorized");
+      expect(response.body).not.toContain("expired upstream response");
+      expect(upstreamRequests).toBe(1);
+      expect(credentialLifecycle.refreshCredential).toHaveBeenCalledOnce();
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        status: 403,
+        retries: 0,
+      });
+      expect(warn).not.toHaveBeenCalledWith(
+        "[EgressProxy] WebSocket upgrade failed",
+        expect.objectContaining({ phase: "upstream_response", statusCode: 401 })
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "[EgressProxy] WebSocket upgrade failed",
+        expect.objectContaining({
+          phase: "reject",
+          reason: "client_not_authorized",
+          statusCode: 403,
+        })
+      );
+    } finally {
+      warn.mockRestore();
+      await proxy.stop();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
+  it("commits final WebSocket upstream responses without status retries", async () => {
     const auditLog = new MemoryAuditLog();
     let upstreamRequests = 0;
     const upstreamServer = createServer((_req, res) => {
@@ -1358,8 +1613,8 @@ describe("EgressProxy", () => {
     const credential = createCredential({
       accessToken: "expired-token",
       refreshToken: "refresh-token",
+      oauthRefresh: PUBLIC_REFRESH_RECIPE,
       expiresAt: Date.now() - 1,
-      metadata: { clientConfigId: "google", clientConfigVersion: "v1" },
     });
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const credentialLifecycle = {
@@ -1401,8 +1656,8 @@ describe("EgressProxy", () => {
     const credential = createCredential({
       accessToken: "stale-token",
       refreshToken: "refresh-token",
+      oauthRefresh: PUBLIC_REFRESH_RECIPE,
       expiresAt: Date.now() + 3_600_000,
-      metadata: { clientConfigId: "openai-codex", clientConfigVersion: "v1" },
     });
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const credentialLifecycle = {
@@ -1449,8 +1704,8 @@ describe("EgressProxy", () => {
     const credential = createCredential({
       accessToken: "stale-token",
       refreshToken: "refresh-token",
+      oauthRefresh: PUBLIC_REFRESH_RECIPE,
       expiresAt: Date.now() + 3_600_000,
-      metadata: { clientConfigId: "openai-codex", clientConfigVersion: "v1" },
     });
     const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
     const credentialLifecycle = {
@@ -1503,8 +1758,8 @@ describe("EgressProxy", () => {
   it("surfaces stable OAuth refresh errors from egress", async () => {
     const credential = createCredential({
       refreshToken: "refresh-token",
+      oauthRefresh: PUBLIC_REFRESH_RECIPE,
       expiresAt: Date.now() - 1,
-      metadata: { clientConfigId: "google", clientConfigVersion: "missing" },
     });
     const proxy = new EgressProxy({
       credentialStore: new MemoryCredentialStore(new Map([[credential.id!, credential]])),

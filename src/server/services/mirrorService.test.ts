@@ -33,7 +33,6 @@ const AGENT_CALLER = {
     contextId: "ctx-agent",
     channelId: "chan-1",
     agentId: "agent:session-1",
-    userId: "usr_test",
   }),
 };
 
@@ -84,17 +83,57 @@ describe("createMirrorService", () => {
     expect(result.next).toBeUndefined();
   });
 
-  it("agent objects require a state hash returned by an authorized targets call", async () => {
+  it("agent objects derive reachable states without a prior targets call", async () => {
     const { deps } = fixture();
     const service = createMirrorService(deps);
 
     await expect(
-      service.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-foreign" }])
-    ).rejects.toThrow(/not authorized/);
+      service.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-agent" }])
+    ).resolves.toMatchObject({ files: expect.any(Array) });
+  });
+
+  it("agent objects reject states from another context even after targets", async () => {
+    const { deps } = fixture();
+    const service = createMirrorService(deps);
 
     await service.handler(AGENT_CALLER, "targets", [{ contextId: "ctx-agent" }]);
     await expect(
+      service.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-foreign" }])
+    ).rejects.toThrow(/not reachable from this agent context/);
+  });
+
+  it("agent object reachability is independent of service lifetime and call order", async () => {
+    const { deps } = fixture();
+
+    const firstService = createMirrorService(deps);
+    await expect(
+      firstService.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-agent" }])
+    ).resolves.toMatchObject({ files: expect.any(Array) });
+
+    const restartedService = createMirrorService(deps);
+    await expect(
+      restartedService.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-agent" }])
+    ).resolves.toMatchObject({ files: expect.any(Array) });
+  });
+
+  it("agent object reachability follows the context's current targets", async () => {
+    const { deps } = fixture();
+    let stateHash = "state-ctx-agent";
+    const service = createMirrorService({
+      ...deps,
+      contextRepoTargets: async () => [{ repoPath: "packages/x", stateHash }],
+    });
+
+    await expect(
       service.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-agent" }])
+    ).resolves.toMatchObject({ files: expect.any(Array) });
+
+    stateHash = "state-next";
+    await expect(
+      service.handler(AGENT_CALLER, "objects", [{ stateHash: "state-ctx-agent" }])
+    ).rejects.toThrow(/not reachable from this agent context/);
+    await expect(
+      service.handler(AGENT_CALLER, "objects", [{ stateHash: "state-next" }])
     ).resolves.toMatchObject({ files: expect.any(Array) });
   });
 

@@ -17,8 +17,16 @@ const mocks = vi.hoisted(() => ({
     call: vi.fn(),
   },
   gad: {},
+  blobstore: { putText: vi.fn() },
   vcs: {
-    deleteRepo: vi.fn(),
+    status: vi.fn(),
+    inspect: vi.fn(),
+    neighbors: vi.fn(),
+    history: vi.fn(),
+    importSnapshot: vi.fn(),
+    revert: vi.fn(),
+    commit: vi.fn(),
+    push: vi.fn(),
   },
 }));
 
@@ -28,6 +36,7 @@ vi.mock("@workspace/agentic-session", () => ({
 
 vi.mock("@workspace/runtime", () => ({
   gad: mocks.gad,
+  blobstore: mocks.blobstore,
   rpc: mocks.rpc,
   vcs: mocks.vcs,
 }));
@@ -38,12 +47,14 @@ import {
   SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
 } from "./config.js";
 import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
+import { CONTENT_WORKSPACE_REPO_FIXTURE } from "./types.js";
 
 describe("HeadlessRunner", () => {
   beforeEach(() => {
     mocks.createWithAgent.mockClear();
-    mocks.rpc.call.mockClear();
-    mocks.vcs.deleteRepo.mockReset();
+    mocks.rpc.call.mockReset();
+    for (const method of Object.values(mocks.vcs)) method.mockReset();
+    mocks.blobstore.putText.mockReset();
     mocks.messageListeners.length = 0;
   });
 
@@ -197,51 +208,163 @@ describe("HeadlessRunner", () => {
     expect(SYSTEM_TEST_AGENT_PROMPT).not.toContain("smallest relevant canonical workspace docs");
   });
 
-  it("owns a namespaced published-repo fixture lifecycle outside the user prompt", async () => {
+  it("owns an exact local repository fixture lifecycle outside the user prompt", async () => {
     const runner = new HeadlessRunner("ctx-test").forTest("docs-workspace-loop", {
-      workspaceRepoFixture: true,
+      workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     });
     const repoName = runner.workspaceRepoName!;
-    const prefix = "system-test-docs-workspace-loop-";
-    const refs = (...repoPaths: string[]) => repoPaths.map((repoPath) => ({ repoPath }));
+    const status = (contextId: string, eventId = "event:main", mainEventId = "event:main") => ({
+      contextId,
+      committed: { kind: "event" as const, eventId },
+      workingHead: { kind: "event" as const, eventId },
+      clean: true,
+      mainEventId,
+      mainRelation: eventId === mainEventId ? ("at" as const) : ("ahead" as const),
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    });
     mocks.rpc.call
-      .mockResolvedValueOnce(refs("panels/normal", `panels/${prefix}stale`))
-      .mockResolvedValueOnce(refs("panels/normal"))
-      .mockResolvedValueOnce(
-        refs("panels/normal", `panels/${repoName}`, "panels/outside-fixture")
-      )
-      .mockResolvedValueOnce(refs("panels/normal", "panels/outside-fixture"));
-    mocks.vcs.deleteRepo.mockResolvedValue({ archived: true });
+      .mockResolvedValueOnce({ contextId: "ctx-fixture" })
+      .mockResolvedValueOnce(undefined);
+    mocks.vcs.status
+      .mockResolvedValueOnce(status("ctx-fixture"))
+      .mockResolvedValueOnce(status("ctx-fixture", "event:import"));
+    mocks.vcs.importSnapshot.mockResolvedValueOnce({
+      contextId: "ctx-fixture",
+      eventId: "event:import",
+      workUnitId: "work:import",
+      importedRepositoryIds: [`repository:projects/${repoName}`],
+    });
+    mocks.vcs.inspect
+      .mockImplementationOnce(async () => {
+        const imported = mocks.vcs.importSnapshot.mock.calls[0]![0] as {
+          commandId: string;
+          source: { kind: string; uri: string; snapshotRevision: string };
+        };
+        return {
+          root: { kind: "work-unit", workUnitId: "work:import" },
+          node: {
+            kind: "work-unit",
+            value: {
+              kind: "import",
+              commandId: imported.commandId,
+              authoredChangeIds: ["change:repository-create"],
+              externalSnapshot: {
+                sourceKind: imported.source.kind,
+                sourceUri: imported.source.uri,
+                snapshotRevision: imported.source.snapshotRevision,
+                targetRepositoryIds: [`repository:projects/${repoName}`],
+              },
+            },
+          },
+          edges: [],
+          hasMoreEdges: false,
+        };
+      })
+      .mockResolvedValueOnce({
+        root: { kind: "event", eventId: "event:import" },
+        node: {
+          kind: "event",
+          value: {
+            eventId: "event:import",
+            applicationIds: ["application:import"],
+            parentEventIds: ["event:main"],
+          },
+        },
+        edges: [],
+        hasMoreEdges: false,
+      });
+    mocks.vcs.history.mockResolvedValueOnce({
+      root: { kind: "event", eventId: "event:main" },
+      entries: [
+        {
+          node: { kind: "event", eventId: "event:main" },
+          createdAt: "2026-07-16T00:00:00.000Z",
+          summary: "main",
+        },
+      ],
+      nextCursor: null,
+    });
 
     const state = await runner.prepareWorkspaceRepoFixture();
     await runner.spawn();
     const cleanup = await runner.cleanupWorkspaceRepoFixture(state);
 
     expect(state).toMatchObject({
+      kind: "content",
+      section: "projects",
       testName: "docs-workspace-loop",
+      contextId: "ctx-fixture",
       repoName,
-      repoNamePrefix: prefix,
-      staleReposRemoved: [`panels/${prefix}stale`],
-      reposBefore: ["panels/normal"],
+      repositoryId: `repository:projects/${repoName}`,
+      repoPath: `projects/${repoName}`,
+      seedFilePaths: [],
+      importWorkUnitId: "work:import",
+      importChangeIds: ["change:repository-create"],
     });
     expect(cleanup).toEqual({
-      reposRemoved: [`panels/${repoName}`],
-      escapedRepos: ["panels/outside-fixture"],
-      reposAfter: ["panels/normal", "panels/outside-fixture"],
+      publishedFixtureRemoved: null,
+      unexpectedPublishedRepositoriesRemoved: [],
+      counteractedChangeIds: [],
     });
-    expect(mocks.vcs.deleteRepo).toHaveBeenNthCalledWith(1, {
-      repoPath: `panels/${prefix}stale`,
-      force: true,
-    });
-    expect(mocks.vcs.deleteRepo).toHaveBeenNthCalledWith(2, {
-      repoPath: `panels/${repoName}`,
-      force: true,
-    });
+    expect(mocks.vcs.importSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "ctx-fixture",
+        repositories: [expect.objectContaining({ repoPath: `projects/${repoName}`, files: [] })],
+      })
+    );
+    expect(mocks.vcs.revert).not.toHaveBeenCalled();
+    expect(mocks.vcs.commit).not.toHaveBeenCalled();
+    expect(mocks.vcs.push).not.toHaveBeenCalled();
     const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      contextId?: string;
       extraConfig: Record<string, unknown>;
     };
+    expect(config.contextId).toBe("ctx-fixture");
     expect(config.extraConfig["systemPrompt"]).toContain(
-      `use the exact repo basename ${JSON.stringify(repoName)}`
+      `the exact disposable repository ${JSON.stringify(`projects/${repoName}`)} is already present`
     );
+    expect(config.extraConfig["systemPrompt"]).not.toContain("if the task creates");
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createContext", [{}]);
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(2, "main", "runtime.destroyContext", [
+      { contextId: "ctx-fixture", recursive: true },
+    ]);
+  });
+
+  it("preserves structured runner diagnostic failures without serializing stacks", async () => {
+    const error = Object.assign(new Error("build provenance unavailable"), {
+      name: "RemoteRpcError",
+      code: "InternalFailure",
+      errorKind: "application",
+      errorData: {
+        code: "InternalFailure",
+        handle: "diagnostic:build:01JABC",
+        credential: "must-not-persist",
+      },
+    });
+    mocks.rpc.call.mockRejectedValueOnce(error);
+
+    const diagnostics = await new HeadlessRunner("ctx-test").collectDiagnostics();
+
+    expect(diagnostics).toMatchObject({
+      contextId: "ctx-test",
+      channelId: null,
+      buildProvenanceFailure: {
+        phase: "diagnostic:build-provenance",
+        error: {
+          name: "RemoteRpcError",
+          message: "build provenance unavailable",
+          code: "InternalFailure",
+          errorKind: "application",
+          errorData: {
+            code: "InternalFailure",
+            handle: "diagnostic:build:01JABC",
+            credential: "[redacted]",
+          },
+          diagnosticHandles: ["diagnostic:build:01JABC"],
+        },
+      },
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("must-not-persist");
+    expect(diagnostics).not.toHaveProperty("buildProvenanceError");
   });
 });

@@ -16,10 +16,10 @@ const approvedRawMainCalls = new Set([
   // Streaming Response boundary; `createTypedServiceClient` models JSON-style
   // call/return RPC, while invokeStream is intentionally carried by rpc.stream.
   "packages/extension/src/index.ts:extensions.invokeStream",
-  // Generic userland service resolver. The first hop resolves a dynamic
+  // Generic workspace service resolver. The first hop resolves a dynamic
   // Durable Object target, and subsequent calls intentionally address that
-  // userland target rather than a typed host service table.
-  "packages/shared/src/userlandServiceRpc.ts:workers.resolveService",
+  // workspace target rather than a typed host service table.
+  "packages/shared/src/workspaceServiceRpc.ts:workers.resolveService",
   // Help-text/documentation string: evalSurfaceHelp renders an example showing
   // eval users the raw call form for a low-level method — not an actual call site.
   "src/server/internalDOs/evalSurfaceHelp.ts:workers.listSources",

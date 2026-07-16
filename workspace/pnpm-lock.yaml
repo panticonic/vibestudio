@@ -54,6 +54,8 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
+  ../packages/content-addressing: {}
+
   ../packages/credential-client:
     dependencies:
       '@vibestudio/env-paths':
@@ -237,6 +239,9 @@ importers:
 
   ../packages/service-schemas:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../credential-client
@@ -261,6 +266,9 @@ importers:
 
   ../packages/shared:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../credential-client
@@ -279,6 +287,9 @@ importers:
       '@vibestudio/sqlite':
         specifier: workspace:*
         version: link:../sqlite
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../trajectory-identity
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
@@ -315,6 +326,12 @@ importers:
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   ../packages/sqlite: {}
+
+  ../packages/trajectory-identity:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
 
   ../packages/typecheck:
     dependencies:
@@ -712,6 +729,9 @@ importers:
 
   extensions/claude-code:
     dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../../packages/agentic-core
@@ -727,6 +747,9 @@ importers:
 
   extensions/git-bridge:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
@@ -748,12 +771,6 @@ importers:
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
-      '@workspace/vcs-engine':
-        specifier: workspace:*
-        version: link:../../packages/vcs-engine
-      ignore:
-        specifier: ^5.3.2
-        version: 5.3.2
 
   extensions/image-service:
     dependencies:
@@ -833,6 +850,9 @@ importers:
 
   packages/agent-loop:
     dependencies:
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../../../packages/trajectory-identity
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../agentic-protocol
@@ -926,12 +946,21 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
         version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../../../packages/trajectory-identity
       '@workspace/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
@@ -956,6 +985,9 @@ importers:
 
   packages/agentic-protocol:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -1090,12 +1122,12 @@ importers:
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/pi-core':
         specifier: workspace:*
         version: link:../pi-core
-      '@workspace/vcs-engine':
-        specifier: workspace:*
-        version: link:../vcs-engine
       diff:
         specifier: ^7.0.0
         version: 7.0.0
@@ -1260,6 +1292,9 @@ importers:
 
   packages/pubsub:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -1378,6 +1413,34 @@ importers:
         specifier: ^1.14.0
         version: 1.14.1
 
+  packages/semantic-control-plane:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      '@workspace/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@workspace/vcs-engine':
+        specifier: workspace:*
+        version: link:../vcs-engine
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
   packages/svelte:
     dependencies:
       '@workspace/runtime':
@@ -1480,7 +1543,14 @@ importers:
         specifier: ^3.23.0
         version: 3.23.0
 
-  packages/vcs-engine: {}
+  packages/vcs-engine:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
 
   panels/chat:
     dependencies:
@@ -1888,6 +1958,12 @@ importers:
 
   skills/system-testing:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
+      '@workspace-skills/vibestudio-vcs':
+        specifier: workspace:*
+        version: link:../vibestudio-vcs
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../../packages/agentic-core
@@ -1900,6 +1976,8 @@ importers:
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
+
+  skills/vibestudio-vcs: {}
 
   skills/web-research:
     dependencies:
@@ -1961,26 +2039,14 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
-  workers/gad-store:
-    dependencies:
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-      '@workspace/vcs-engine':
-        specifier: workspace:*
-        version: link:../../packages/vcs-engine
-
   workers/gmail-agent:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
         version: 0.80.6(patch_hash=9cb9253c4a617b555aabd45cafb053d8eab28a39f55b2be1636dbba2cadaff0c)(ws@8.21.0)(zod@3.25.76)
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../../../packages/trajectory-identity
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -2008,6 +2074,9 @@ importers:
 
   workers/linked-agent:
     dependencies:
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../../../packages/trajectory-identity
       '@workspace/agent-loop':
         specifier: workspace:*
         version: link:../../packages/agent-loop

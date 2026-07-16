@@ -15,6 +15,7 @@ import * as path from "path";
 import { randomBytes } from "node:crypto";
 import type { FileHandle as NodeFileHandle } from "fs/promises";
 import type { ServiceContext } from "./serviceDispatcher.js";
+import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { ContextFolderManager } from "./contextFolderManager.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { EntityCache } from "./runtime/entityCache.js";
@@ -26,6 +27,23 @@ import {
   type RepoPath,
 } from "./runtime/entitySpec.js";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import type {
+  VcsCopyInput,
+  VcsEditInput,
+  VcsInspectInput,
+  VcsInspectResult,
+  VcsListFilesInput,
+  VcsListFilesResult,
+  VcsMoveInput,
+  VcsNeighborsInput,
+  VcsNeighborsResult,
+  VcsReadFileInput,
+  VcsReadFileResult,
+  VcsStateNodeRef,
+  VcsStatusInput,
+  VcsStatusResult,
+  VcsWorkingMutationResult,
+} from "@vibestudio/service-schemas/vcs";
 
 const log = createDevLogger("FsService");
 const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);
@@ -94,7 +112,7 @@ function scopeForPath(wsRel: string): RepoPath[] | "all" | null {
 }
 
 /** The path a disk-reading fs method scopes to (its search/target path), or null
- *  for methods that don't read tracked disk (writes route through GAD). */
+ *  for methods that don't read managed content. */
 function readScopePath(method: string, args: unknown[]): string | null {
   if (method === "grep") return (args[1] as { path?: string } | undefined)?.path ?? "/";
   // glob(pattern, opts) — pattern is args[0] (a string); the search `path` lives on
@@ -103,8 +121,8 @@ function readScopePath(method: string, args: unknown[]): string | null {
   // whole workspace instead of just the scoped subtree.
   if (method === "glob") return (args[1] as { path?: string } | undefined)?.path ?? "/";
   // NB: `realpath`/`readlink` are path canonicalization (no content read) and are
-  // intentionally excluded — canonicalizing the always-present sparse root must
-  // not force a whole-workspace materialize.
+  // intentionally excluded — path canonicalization alone must not provision a
+  // context projection.
   const READ_PATH_METHODS = new Set([
     "readFile",
     "readdir",
@@ -121,6 +139,57 @@ function readScopePath(method: string, args: unknown[]): string | null {
     return typeof a === "string" ? a : null;
   }
   return null;
+}
+
+/** Paths whose data is owned by the semantic workspace authority for a call.
+ * This is deliberately operation-shaped: scratch-only construction must reject
+ * before a generic disk switch can observe or mutate a reserved source root. */
+function authorityPathsForCall(method: string, args: unknown[]): string[] {
+  if (method === "ensureMaterialized") {
+    const value = args[0];
+    return value === "all"
+      ? ["/"]
+      : (Array.isArray(value) ? value : [value]).filter(
+          (item): item is string => typeof item === "string"
+        );
+  }
+  if (method === "grep" || method === "glob") {
+    return [String((args[1] as { path?: string } | undefined)?.path ?? "/")];
+  }
+  if (method === "copyFile" || method === "rename") {
+    return [args[0], args[1]].filter((item): item is string => typeof item === "string");
+  }
+  if (method === "symlink") {
+    return [args[0], args[1]].filter((item): item is string => typeof item === "string");
+  }
+  const PATH_METHODS = new Set([
+    "readFile",
+    "writeFile",
+    "appendFile",
+    "readdir",
+    "mkdir",
+    "rmdir",
+    "rm",
+    "stat",
+    "lstat",
+    "exists",
+    "access",
+    "unlink",
+    "truncate",
+    "readlink",
+    "realpath",
+    "chmod",
+    "utimes",
+    "open",
+  ]);
+  return PATH_METHODS.has(method) && typeof args[0] === "string" ? [args[0]] : [];
+}
+
+function requiresSemanticAuthority(userPath: string): boolean {
+  const normalized = userPath.replaceAll("\\", "/").replace(/^\/+|\/+$/gu, "");
+  if (normalized === "" || normalized === ".") return true;
+  const sourceRoot = normalized.split("/", 1)[0] ?? "";
+  return CANONICAL_SOURCE_ROOT_BY_LOWER.has(sourceRoot.toLowerCase());
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +300,7 @@ async function resolveFsFilePath(
  * symlink/case aliases. The target file may not exist yet, so resolve the
  * nearest existing ancestor and append the missing suffix. Mutation routing
  * must classify this canonical path; otherwise an alias such as `alias/lib/x`
- * → `packages/lib/x` could be mistaken for scratch and written behind GAD.
+ * → `packages/lib/x` could be mistaken for scratch and written behind semantic state.
  */
 async function canonicalContextRelativePath(
   scope: FsCallScope,
@@ -311,12 +380,32 @@ function decodeBinary(envelope: BinaryEnvelope): Buffer {
   return Buffer.from(envelope.data, "base64");
 }
 
+function requestedReadEncoding(value: unknown): BufferEncoding | undefined {
+  if (typeof value === "string") return value as BufferEncoding;
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { encoding?: unknown }).encoding === "string"
+  ) {
+    return (value as { encoding: BufferEncoding }).encoding;
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
-// GAD reroute — context source mutations commit through GAD, not raw disk
+// Semantic VCS reroute — managed source mutations never write raw disk
 // ---------------------------------------------------------------------------
 
-/** Write content for a GAD edit op (text, or base64 bytes). */
+/** Write content for a semantic edit (text, or base64 bytes). */
 export type FsVcsContent = { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+
+/** Managed trees model regular files plus the executable bit, not arbitrary inode modes. */
+function isExecutableMode(mode: number): boolean {
+  if (!Number.isInteger(mode) || mode < 0) {
+    throw codedError("EINVAL", `invalid file mode: ${String(mode)}`);
+  }
+  return (mode & 0o111) !== 0;
+}
 
 /** The edit ops the fs reroute emits (a subset of the vcs edit-op union). */
 export type FsVcsEditOp =
@@ -325,54 +414,42 @@ export type FsVcsEditOp =
   | { kind: "chmod"; path: string; mode: number };
 
 /**
- * Bridge from the fs service to the workspace GAD VCS. When a sandboxed context
- * caller mutates a GAD-tracked path, the mutation commits through GAD
- * (`edit`) — which advances the owning repo's context head AND projects to
- * disk — rather than writing the worktree projection directly behind GAD's back.
+ * Bridge from the fs service to the workspace semantic VCS. When a sandboxed
+ * context caller mutates a managed path, `edit` advances the working state and
+ * the host materializes that state; the caller never writes managed disk bytes.
  * Scratch/ignored paths (`.tmp`, `.testkit`, `node_modules`, `*.log`, …) are
  * not tracked and stay direct disk writes.
  *
- * Edits are routed per-repo. Each workspace-relative edit path maps to its
- * owning repo (by the section taxonomy, `taxonomyRepoForPath`); the bridge
- * applies the repo-relative ops on that repo's `ctx:{contextId}` head/log.
- * Ordinary paths outside workspace source roots are context-local scratch and
- * stay direct disk writes. Paths under a reserved workspace source root that do
- * not identify a repo remain invalid and are rejected up front (EACCES).
+ * All tracked paths are resolved against one exact working state and one
+ * workspace-wide edit transaction. Repository coordinates route content; they
+ * do not split history or atomicity. Ordinary paths outside workspace source
+ * roots remain context-local scratch.
  */
 export interface FsVcsBridge {
   /** True iff `relPath` passes the VCS content-path policy (safe and not
    *  platform-ignored). FsService separately checks workspace repo taxonomy. */
   isTracked(relPath: string): Promise<boolean>;
-  /**
-   * Commit edit ops to a single repo's `ctx:{contextId}` head/log (edit-first:
-   * also projects to the composed disk tree). `repoPath` selects the repo log
-   * (`vcs:repo:{repoPath}`); `edits` paths are repo-relative (the repo prefix
-   * has already been stripped).
-   */
-  /** Record fs writes as WORKING edits (vcs.edit) on the context head — tracked
-   *  durably with provenance, projected to disk, but NOT a commit. */
   edit(
-    contextId: string,
-    repoPath: RepoPath,
-    edits: FsVcsEditOp[],
-    actor: { id: string; kind: string }
-  ): Promise<void>;
+    input: VcsEditInput,
+    causalParent: RpcCausalParent | null
+  ): Promise<VcsWorkingMutationResult>;
+  move(
+    input: VcsMoveInput,
+    causalParent: RpcCausalParent | null
+  ): Promise<VcsWorkingMutationResult>;
+  copy(
+    input: VcsCopyInput,
+    causalParent: RpcCausalParent | null
+  ): Promise<VcsWorkingMutationResult>;
+  status(input: VcsStatusInput): Promise<VcsStatusResult>;
+  inspect(input: VcsInspectInput): Promise<VcsInspectResult>;
+  neighbors(input: VcsNeighborsInput): Promise<VcsNeighborsResult>;
+  readFile(input: VcsReadFileInput): Promise<VcsReadFileResult>;
+  listFiles(input: VcsListFilesInput): Promise<VcsListFilesResult>;
   /**
-   * Read a file from the context's composed workspace view. `repoPath` selects
-   * the repo and `relPath` is repo-relative.
-   */
-  readFile(contextId: string, repoPath: RepoPath, relPath: string): Promise<FsVcsContent | null>;
-  /**
-   * List every tracked file path at a context head, WORKSPACE-RELATIVE (repo
-   * prefixes re-applied) so callers can match against composed-tree paths.
-   * Spans the full composed workspace branch.
-   */
-  listFiles(contextId: string): Promise<string[]>;
-  /**
-   * Demand-materialize specific repos (or the whole view, `"all"`) into the
-   * context's on-disk folder. Sparse + intelligent: only the requested repos'
-   * subtrees are written. Every disk-walking consumer (grep/glob/extensions/
-   * typecheck) must call this for EXACTLY the repos it needs before reading disk.
+   * Ensure the context's complete authority-published projection exists before
+   * a disk consumer walks it. `repos` records the caller's narrow read intent;
+   * it does not create a partial or parallel projection channel.
    */
   ensureMaterialized(contextId: string, repos: RepoPath[] | "all"): Promise<void>;
   /** True iff `repoPath`'s subtree is currently materialized on disk for the
@@ -380,8 +457,138 @@ export interface FsVcsBridge {
   isMaterialized(contextId: string, repoPath: RepoPath): Promise<boolean>;
 }
 
+interface ManagedWorkspaceRepository {
+  repositoryId: string;
+  repoPath: RepoPath;
+}
+
+interface ManagedWorkspaceSnapshot {
+  state: VcsStateNodeRef;
+  repositories: ManagedWorkspaceRepository[];
+}
+
+function sameStateNode(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
+  return (
+    left.kind === right.kind &&
+    (left.kind === "event"
+      ? right.kind === "event" && left.eventId === right.eventId
+      : right.kind === "application" && left.applicationId === right.applicationId)
+  );
+}
+
+/** Resolve a context through the public graph instead of a second revision API. */
+async function managedWorkspaceSnapshot(
+  bridge: FsVcsBridge,
+  contextId: string
+): Promise<ManagedWorkspaceSnapshot> {
+  const { workingHead: state } = await bridge.status({ contextId });
+  const repositoryRefs = new Map<
+    string,
+    Extract<VcsNeighborsResult["edges"][number]["to"], { kind: "repository" }>
+  >();
+  let cursor: string | undefined;
+  do {
+    const page = await bridge.neighbors({
+      root: state,
+      limit: 500,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const edge of page.edges) {
+      for (const node of [edge.from, edge.to]) {
+        if (node.kind === "repository" && sameStateNode(node.state, state)) {
+          repositoryRefs.set(node.repositoryId, node);
+        }
+      }
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+
+  const repositories: ManagedWorkspaceRepository[] = [];
+  for (const ref of repositoryRefs.values()) {
+    const inspected = await bridge.inspect({ node: ref, edgeLimit: 1 });
+    if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") continue;
+    repositories.push({
+      repositoryId: ref.repositoryId,
+      repoPath: inspected.node.value.repoPath as RepoPath,
+    });
+  }
+  repositories.sort((left, right) => left.repoPath.localeCompare(right.repoPath));
+  return { state, repositories };
+}
+
+function managedRepository(
+  snapshot: ManagedWorkspaceSnapshot,
+  repoPath: RepoPath
+): ManagedWorkspaceRepository {
+  const repository = snapshot.repositories.find((candidate) => candidate.repoPath === repoPath);
+  if (!repository) {
+    throw codedError("ENOENT", `managed repository is absent at working state: ${repoPath}`);
+  }
+  return repository;
+}
+
+async function managedFile(
+  bridge: FsVcsBridge,
+  snapshot: ManagedWorkspaceSnapshot,
+  repositoryId: string,
+  filePath: string
+): Promise<VcsListFilesResult["files"][number] | null> {
+  let cursor: string | undefined;
+  do {
+    const page = await bridge.listFiles({
+      state: snapshot.state,
+      repositoryId,
+      prefix: filePath,
+      limit: 500,
+      ...(cursor ? { cursor } : {}),
+    });
+    const file = page.files.find((candidate) => candidate.path === filePath);
+    if (file) return file;
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return null;
+}
+
+async function managedWorkspaceFiles(
+  bridge: FsVcsBridge,
+  snapshot: ManagedWorkspaceSnapshot
+): Promise<Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>> {
+  const files: Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]> = [];
+  for (const repository of snapshot.repositories) {
+    let cursor: string | undefined;
+    do {
+      const page = await bridge.listFiles({
+        state: snapshot.state,
+        repositoryId: repository.repositoryId,
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      });
+      files.push(...page.files.map((file) => ({ ...repository, ...file })));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+  }
+  return files;
+}
+
 /**
- * Decide whether a context mutation belongs on a repo's GAD working state or
+ * Explicit construction authority for context-bound filesystem calls.
+ *
+ * `semantic` is the production adapter and owns every reserved workspace source
+ * root. `scratch-only` is useful for deliberately isolated context-local files;
+ * it may never observe or mutate a reserved root. There is no optional bridge
+ * and therefore no missing-dependency fallthrough to a projected worktree.
+ */
+export type FsContextAuthority =
+  | { kind: "semantic"; bridge: FsVcsBridge }
+  | { kind: "scratch-only" };
+
+export interface FsServiceOptions {
+  contextAuthority: FsContextAuthority;
+  hostFsCapableExtensions?: Iterable<string>;
+}
+
+/**
+ * Decide whether a context mutation belongs on a repo's semantic working state or
  * on the context-local scratch disk.
  *
  * VCS content-path admissibility and workspace repo membership are distinct:
@@ -389,13 +596,13 @@ export interface FsVcsBridge {
  * is therefore scratch, not a malformed VCS edit. Conversely, paths beneath a
  * reserved workspace source root must not silently become scratch when their
  * repo shape is invalid (`packages`, `agents/foo`, etc.), because such files can
- * shadow or corrupt later sparse materialization.
+ * shadow or corrupt the authority-published context projection.
  *
  * Repo roots return `true` even though they have no repo-relative filename so
  * the existing operation-specific router can either handle subtree operations
  * or emit its actionable repo-root error for file mutations.
  */
-async function isGadMutationPath(bridge: FsVcsBridge, wsRel: string): Promise<boolean> {
+async function isManagedVcsPath(bridge: FsVcsBridge, wsRel: string): Promise<boolean> {
   const sourceRoot = wsRel.split("/", 1)[0] ?? "";
   const canonicalSourceRoot = CANONICAL_SOURCE_ROOT_BY_LOWER.get(sourceRoot.toLowerCase());
   if (canonicalSourceRoot && sourceRoot !== canonicalSourceRoot) {
@@ -459,11 +666,24 @@ function appendVcsContent(existing: FsVcsContent | null, data: unknown): FsVcsCo
 }
 
 function truncateVcsContent(existing: FsVcsContent | null, len: number): FsVcsContent {
-  if (!existing) return { kind: "text", text: "" };
-  const sliced = contentToBuffer(existing).subarray(0, Math.max(0, len));
-  return existing.kind === "text"
-    ? { kind: "text", text: sliced.toString("utf8") }
-    : { kind: "bytes", base64: sliced.toString("base64") };
+  if (!existing) throw codedError("ENOENT", "truncate: managed file not found");
+  const targetLength = Math.max(0, len);
+  const source = contentToBuffer(existing);
+  const truncated = Buffer.alloc(targetLength);
+  source.copy(truncated, 0, 0, Math.min(source.length, targetLength));
+
+  if (existing.kind === "bytes") {
+    return { kind: "bytes", base64: truncated.toString("base64") };
+  }
+  // POSIX truncate is byte-oriented. Preserve the text representation only
+  // when the exact result remains valid UTF-8; a cut through a code point must
+  // not be repaired with U+FFFD because that changes the requested bytes.
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(truncated);
+    return { kind: "text", text };
+  } catch {
+    return { kind: "bytes", base64: truncated.toString("base64") };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -816,8 +1036,8 @@ export class FsService {
   private readonly entityCache: EntityCache;
   /** Extensions granted explicit unrestricted host-fs access (Phase 3 capability). */
   private readonly hostFsCapableExtensions?: ReadonlySet<string>;
-  /** Routes GAD-tracked context mutations through GAD instead of raw disk. */
-  private readonly vcsBridge?: FsVcsBridge;
+  /** Explicit semantic-workspace or scratch-only construction authority. */
+  private readonly contextAuthority: FsContextAuthority;
 
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
@@ -825,15 +1045,33 @@ export class FsService {
 
   constructor(
     contextFolderManager: ContextFolderManager,
-    entityCache: EntityCache = new EntityCache(),
-    opts?: { hostFsCapableExtensions?: Iterable<string>; vcsBridge?: FsVcsBridge }
+    entityCache: EntityCache,
+    opts: FsServiceOptions
   ) {
     this.contextFolderManager = contextFolderManager;
     this.entityCache = entityCache;
-    this.hostFsCapableExtensions = opts?.hostFsCapableExtensions
+    this.hostFsCapableExtensions = opts.hostFsCapableExtensions
       ? new Set(opts.hostFsCapableExtensions)
       : undefined;
-    this.vcsBridge = opts?.vcsBridge;
+    this.contextAuthority = opts.contextAuthority;
+  }
+
+  private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
+    if (scope.unrestricted || !scope.contextId) return null;
+    return this.contextAuthority.kind === "semantic" ? this.contextAuthority.bridge : null;
+  }
+
+  private assertScratchOnlyCall(scope: FsCallScope, method: string, args: unknown[]): void {
+    if (scope.unrestricted || !scope.contextId || this.contextAuthority.kind !== "scratch-only") {
+      return;
+    }
+    const managedPath = authorityPathsForCall(method, args).find(requiresSemanticAuthority);
+    if (managedPath === undefined) return;
+    throw codedError(
+      "ESEMANTICAUTHORITY",
+      `fs.${method} cannot access managed workspace path ${JSON.stringify(managedPath)}: ` +
+        `this filesystem adapter has scratch-only authority and no semantic VCS capability`
+    );
   }
 
   // =========================================================================
@@ -861,7 +1099,7 @@ export class FsService {
 
   /**
    * Resolve the COMPOSED context root path for a service call. The root is the
-   * `.contexts/{contextId}/` working tree for a full logical workspace branch.
+   * current-epoch disposable projection for a full logical workspace branch.
    * Repos are materialized on demand under their workspace subtrees. Edit
    * routing maps each path back to its owning repo by section taxonomy.
    * - panel/app/worker/DO callers: look up contextId from EntityCache
@@ -1013,48 +1251,131 @@ export class FsService {
   }
 
   // =========================================================================
-  // GAD reroute
+  // Semantic VCS reroute
   // =========================================================================
 
   /**
-   * Intercept mutating fs calls from a sandboxed context caller whose target is
-   * a GAD-tracked path, and commit them through GAD instead of writing the
-   * worktree projection directly. Returns `{ handled: false }` for reads,
-   * scratch/ignored paths, host-fs/unrestricted callers, or when no vcs bridge
-   * is wired — those fall through to the direct-disk implementation.
+   * Intercept managed single-file reads and mutating fs calls from a sandboxed
+   * context caller. Reads resolve the exact working state and return its
+   * content-addressed bytes; mutations advance semantic state before materialization.
+   * Scratch/ignored paths and host-fs/unrestricted callers deliberately retain
+   * the direct-disk implementation.
    */
-  private async maybeRouteToGad(
+  private async maybeRouteToVcs(
+    bridge: FsVcsBridge | null,
     scope: FsCallScope,
     ctx: ServiceContext,
     method: string,
     args: unknown[]
   ): Promise<{ handled: boolean; result?: unknown }> {
-    const bridge = this.vcsBridge;
     if (!bridge || scope.unrestricted || !scope.contextId) return { handled: false };
     const contextId = scope.contextId;
-    const actor = { id: ctx.caller.runtime.id, kind: ctx.caller.runtime.kind };
+    const commandId = `fs:${ctx.idempotencyKey ?? ctx.requestId ?? randomBytes(16).toString("hex")}:${method}`;
+    const causalParent = ctx.causalParent ?? null;
+    const agentBinding =
+      ctx.caller.agentBinding ??
+      this.entityCache.resolveActive(ctx.caller.runtime.id)?.agentBinding ??
+      null;
+    const requireManagedCause = (): void => {
+      if (!agentBinding || ctx.causalParent) return;
+      throw codedError(
+        "EACCES",
+        "Agent-bound managed filesystem mutation requires an exact causal tool invocation"
+      );
+    };
 
     const router = this.buildRepoRouter();
 
     const relOf = (userPath: string, options: { preserveLeaf?: boolean } = {}): Promise<string> =>
       canonicalContextRelativePath(scope, userPath, options);
-    const tracked = (rel: string) => isGadMutationPath(bridge, rel);
-    // Commit a batch of WORKSPACE-RELATIVE edit ops: group by owning repo,
-    // enforce writability, strip the repo prefix, apply per-repo on its ctx head.
-    const commit = (edits: FsVcsEditOp[]) =>
-      this.commitRoutedEdits(bridge, router, contextId, edits, actor);
-    // Read a workspace-relative tracked file via the owning repo's ctx head.
-    const readWsFile = (wsRel: string): Promise<FsVcsContent | null> => {
+    const tracked = (rel: string) => isManagedVcsPath(bridge, rel);
+    // Author one workspace-wide edit on the exact working state.
+    const commit = (edits: FsVcsEditOp[]) => {
+      requireManagedCause();
+      return this.commitRoutedEdits(bridge, router, contextId, commandId, edits, causalParent);
+    };
+    const importFile = async (sourceRel: string, sourceAbs: string, destinationRel: string) => {
+      requireManagedCause();
+      const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+      const destinationRoute = router.route(destinationRel);
+      router.assertWritable(destinationRel);
+      const destinationRepository = managedRepository(snapshot, destinationRoute.repoPath);
+      const existing = await managedFile(
+        bridge,
+        snapshot,
+        destinationRepository.repositoryId,
+        destinationRoute.repoRelPath
+      );
+      if (existing) {
+        throw codedError("EEXIST", `copyFile: managed destination exists: ${destinationRel}`);
+      }
+      const [bytes, sourceStat] = await Promise.all([fs.readFile(sourceAbs), fs.stat(sourceAbs)]);
+      await bridge.edit(
+        {
+          commandId,
+          contextId,
+          expectedWorkingHead: snapshot.state,
+          intentSummary: `Import ${sourceRel} to ${destinationRel}`,
+          changes: [
+            {
+              kind: "file-create",
+              repositoryId: destinationRepository.repositoryId,
+              path: destinationRoute.repoRelPath,
+              content: { kind: "bytes", base64: bytes.toString("base64") },
+              mode: isExecutableMode(sourceStat.mode) ? 0o755 : 0o644,
+            },
+          ],
+        },
+        causalParent
+      );
+    };
+    const readWsFile = async (wsRel: string): Promise<FsVcsContent | null> => {
+      const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
       const routed = router.route(wsRel);
-      return bridge.readFile(contextId, routed.repoPath, routed.repoRelPath);
+      const repository = managedRepository(snapshot, routed.repoPath);
+      return (
+        (
+          await bridge.readFile({
+            state: snapshot.state,
+            repositoryId: repository.repositoryId,
+            file: { kind: "path", path: routed.repoRelPath },
+          })
+        )?.content ?? null
+      );
     };
 
     switch (method) {
+      case "readFile": {
+        const userPath = args[0] as string;
+        const rel = await relOf(userPath);
+        if (!(await tracked(rel))) return { handled: false };
+        const content = await readWsFile(rel);
+        if (!content) {
+          throw codedError("ENOENT", `readFile: managed file not found: ${userPath}`);
+        }
+        const bytes = contentToBuffer(content);
+        const encoding = requestedReadEncoding(args[1]);
+        return {
+          handled: true,
+          result: encoding ? bytes.toString(encoding) : encodeBinary(bytes),
+        };
+      }
       case "writeFile": {
         const rel = await relOf(args[0] as string);
         if (!(await tracked(rel))) return { handled: false };
         await commit([{ kind: "write", path: rel, content: dataToVcsContent(args[1]) }]);
         return { handled: true };
+      }
+      case "mkdir": {
+        const rel = await relOf(args[0] as string, { preserveLeaf: true });
+        if (!(await tracked(rel))) return { handled: false };
+        requireManagedCause();
+        throw codedError(
+          "ENOTSUP",
+          `fs.mkdir cannot create managed empty directory ${JSON.stringify(rel)}: ` +
+            `semantic workspace state contains repositories and files, and parent directories ` +
+            `are created implicitly when a file is authored`
+        );
       }
       case "appendFile": {
         const rel = await relOf(args[0] as string);
@@ -1110,7 +1431,10 @@ export class FsService {
         }
         if (force && !(await readWsFile(rel))) {
           const prefix = `${rel}/`;
-          const hasSubtree = (await bridge.listFiles(contextId)).some((p) => p.startsWith(prefix));
+          const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+          const hasSubtree = (await managedWorkspaceFiles(bridge, snapshot)).some((file) =>
+            `${file.repoPath}/${file.path}`.startsWith(prefix)
+          );
           if (!hasSubtree) return { handled: true };
         }
         await commit([{ kind: "delete", path: rel }]);
@@ -1120,13 +1444,49 @@ export class FsService {
         const dstRel = await relOf(args[1] as string);
         if (!(await tracked(dstRel))) return { handled: false };
         const srcRel = await relOf(args[0] as string);
-        const content = (await tracked(srcRel))
-          ? await readWsFile(srcRel)
-          : dataToVcsContent(
-              encodeBinary(await fs.readFile(await resolveFsFilePath(scope, args[0] as string)))
-            );
-        if (!content) throw codedError("ENOENT", `copyFile: source not found: ${String(args[0])}`);
-        await commit([{ kind: "write", path: dstRel, content }]);
+        if (await tracked(srcRel)) {
+          const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+          const [sourceRoute, destinationRoute] = [router.route(srcRel), router.route(dstRel)];
+          router.assertWritable(srcRel);
+          router.assertWritable(dstRel);
+          const sourceRepository = managedRepository(snapshot, sourceRoute.repoPath);
+          const destinationRepository = managedRepository(snapshot, destinationRoute.repoPath);
+          const source = await managedFile(
+            bridge,
+            snapshot,
+            sourceRepository.repositoryId,
+            sourceRoute.repoRelPath
+          );
+          if (!source) {
+            throw codedError("ENOENT", `copyFile: source not found: ${String(args[0])}`);
+          }
+          requireManagedCause();
+          await bridge.copy(
+            {
+              commandId,
+              contextId,
+              expectedWorkingHead: snapshot.state,
+              intentSummary: `Copy ${srcRel} to ${dstRel}`,
+              copies: [
+                {
+                  source: {
+                    state: snapshot.state,
+                    repositoryId: sourceRepository.repositoryId,
+                    fileId: source.fileId,
+                  },
+                  destination: {
+                    repositoryId: destinationRepository.repositoryId,
+                    path: destinationRoute.repoRelPath,
+                  },
+                },
+              ],
+            },
+            causalParent
+          );
+          return { handled: true };
+        }
+        const srcAbs = await resolveFsFilePath(scope, args[0] as string);
+        await importFile(srcRel, srcAbs, dstRel);
         return { handled: true };
       }
       case "rename": {
@@ -1143,41 +1503,81 @@ export class FsService {
           if (!dstTracked) return { handled: false };
           throw codedError(
             "EACCES",
-            `fs.rename cannot move or replace a symbolic link at the GAD-tracked destination ` +
-              `${JSON.stringify(dstPath)}; GAD edits cannot faithfully represent symlink entries.`
+            `fs.rename cannot move or replace a symbolic link at the managed destination ` +
+              `${JSON.stringify(dstPath)}; semantic edits cannot represent symlink entries.`
           );
         }
         const srcTracked = await tracked(srcRel);
         if (dstTracked && dstIsSymlink) {
           throw codedError(
             "EACCES",
-            `fs.rename cannot move or replace a symbolic link at the GAD-tracked destination ` +
-              `${JSON.stringify(dstPath)}; GAD edits cannot faithfully represent symlink entries.`
+            `fs.rename cannot move or replace a symbolic link at the managed destination ` +
+              `${JSON.stringify(dstPath)}; semantic edits cannot represent symlink entries.`
           );
         }
         if (!srcTracked && !dstTracked) return { handled: false };
         if (srcTracked && dstTracked) {
-          // A cross-repo rename fans out: a delete in the source repo + a write
-          // in the destination repo. commitRoutedEdits enforces both are writable
-          // and applies each on its own repo head.
-          await commit(await this.renameEdits(bridge, router, contextId, srcRel, dstRel));
+          const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+          const prefix = `${srcRel}/`;
+          const sourcePaths = (await managedWorkspaceFiles(bridge, snapshot))
+            .map((candidate) => `${candidate.repoPath}/${candidate.path}`)
+            .filter((candidate) => candidate === srcRel || candidate.startsWith(prefix));
+          if (sourcePaths.length === 0) {
+            throw codedError("ENOENT", `rename: source not found: ${String(args[0])}`);
+          }
+          const moves = await Promise.all(
+            sourcePaths.map(async (sourcePath) => {
+              router.assertWritable(sourcePath);
+              const destinationPath =
+                sourcePath === srcRel ? dstRel : `${dstRel}/${sourcePath.slice(prefix.length)}`;
+              router.assertWritable(destinationPath);
+              const sourceRoute = router.route(sourcePath);
+              const destinationRoute = router.route(destinationPath);
+              const sourceRepository = managedRepository(snapshot, sourceRoute.repoPath);
+              const destinationRepository = managedRepository(snapshot, destinationRoute.repoPath);
+              const source = await managedFile(
+                bridge,
+                snapshot,
+                sourceRepository.repositoryId,
+                sourceRoute.repoRelPath
+              );
+              if (!source) {
+                throw codedError("ENOENT", `rename: source not found: ${sourcePath}`);
+              }
+              return {
+                kind: "file" as const,
+                repositoryId: sourceRepository.repositoryId,
+                fileId: source.fileId,
+                destinationRepositoryId: destinationRepository.repositoryId,
+                destinationPath: destinationRoute.repoRelPath,
+              };
+            })
+          );
+          requireManagedCause();
+          await bridge.move(
+            {
+              commandId,
+              contextId,
+              expectedWorkingHead: snapshot.state,
+              intentSummary: `Move ${srcRel} to ${dstRel}`,
+              moves,
+            },
+            causalParent
+          );
           return { handled: true };
         }
         if (!srcTracked && dstTracked) {
-          // Atomic-write pattern: a scratch temp file renamed into a tracked
-          // path. Commit its bytes through GAD, then drop the temp file.
-          const srcAbs = await resolveFsFilePath(scope, args[0] as string);
-          const buf = await fs.readFile(srcAbs);
-          await commit([
-            { kind: "write", path: dstRel, content: dataToVcsContent(encodeBinary(buf)) },
-          ]);
-          await fs.rm(srcAbs, { force: true });
-          return { handled: true };
+          throw codedError(
+            "EACCES",
+            `fs.rename cannot infer managed replacement intent from scratch path ` +
+              `${JSON.stringify(srcPath)}. Use fs.copyFile for a new external import, or submit ` +
+              `an exact-baseline managed edit for an existing file identity.`
+          );
         }
-        // tracked → scratch: moving source out of the GAD tree.
+        // managed → scratch: moving source out of semantic state.
         throw new Error(
-          `fs.rename of the GAD-tracked path ${JSON.stringify(args[0])} to a scratch path is not ` +
-            `supported. Source mutations must go through GAD (vcs.edit / the write tool).`
+          `fs.rename of the managed path ${JSON.stringify(args[0])} to a scratch path is not ` +
+            `supported. Source mutations must go through vcs.edit or the write tool.`
         );
       }
       case "open": {
@@ -1186,8 +1586,8 @@ export class FsService {
         const rel = await relOf(args[0] as string);
         if (!(await tracked(rel))) return { handled: false };
         throw new Error(
-          `fs.open with write flags is not supported on the GAD-tracked path ${JSON.stringify(args[0])}. ` +
-            `Source edits must commit through GAD — use the write/edit tool or vcs.edit.`
+          `fs.open with write flags is not supported on the managed path ${JSON.stringify(args[0])}. ` +
+            `Source edits must use the write/edit tool or vcs.edit.`
         );
       }
       default:
@@ -1234,44 +1634,123 @@ export class FsService {
     };
   }
 
-  /**
-   * Group workspace-relative edit ops by owning repo, enforce that each path
-   * belongs to a workspace repo, strip the repo prefix, and apply each group on
-   * its repo's `ctx:{contextId}` head/log.
-   */
+  /** Resolve every path and optimistic guard at one state, then author one
+   * workspace-wide edit transaction. Repository coordinates never divide the
+   * work unit or create partial success. */
   private async commitRoutedEdits(
     bridge: FsVcsBridge,
     router: RepoRouter,
     contextId: string,
+    commandId: string,
     edits: FsVcsEditOp[],
-    actor: { id: string; kind: string }
+    causalParent: RpcCausalParent | null
   ): Promise<void> {
     if (edits.length === 0) return;
-    const byRepo = new Map<RepoPath, FsVcsEditOp[]>();
-    for (const edit of edits) {
-      router.assertWritable(edit.path);
-      const { repoPath, repoRelPath } = router.route(edit.path);
-      const rerooted: FsVcsEditOp =
-        edit.kind === "delete"
-          ? { kind: "delete", path: repoRelPath }
-          : edit.kind === "chmod"
-            ? { kind: "chmod", path: repoRelPath, mode: edit.mode }
-            : {
-                kind: "write",
-                path: repoRelPath,
-                content: edit.content,
-                ...(edit.mode !== undefined ? { mode: edit.mode } : {}),
-              };
-      const bucket = byRepo.get(repoPath);
-      if (bucket) bucket.push(rerooted);
-      else byRepo.set(repoPath, [rerooted]);
-    }
-    // Apply each repo's edits on its own head/log. Cross-repo edits are recorded
-    // as per-repo working edits; later commit/push calls decide which repos move
-    // together.
-    for (const [repoPath, repoEdits] of byRepo) {
-      await bridge.edit(contextId, repoPath, repoEdits, actor);
-    }
+    const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+    const scoped = (
+      await Promise.all(
+        edits.map(async (requested) => {
+          router.assertWritable(requested.path);
+          const route = router.route(requested.path);
+          const repository = managedRepository(snapshot, route.repoPath);
+          const file = await managedFile(
+            bridge,
+            snapshot,
+            repository.repositoryId,
+            route.repoRelPath
+          );
+          if (requested.kind !== "write" && !file) {
+            throw codedError("ENOENT", `${requested.kind}: target not found: ${requested.path}`);
+          }
+          if (requested.kind === "write") {
+            if (!file) {
+              return [
+                {
+                  kind: "file-create" as const,
+                  repositoryId: repository.repositoryId,
+                  path: route.repoRelPath,
+                  content: requested.content,
+                  mode:
+                    requested.mode === undefined
+                      ? 0o644
+                      : isExecutableMode(requested.mode)
+                        ? 0o755
+                        : 0o644,
+                },
+              ];
+            }
+            const nextContent = requested.content;
+            const contentChange =
+              nextContent.kind === "bytes"
+                ? {
+                    kind: "binary-replace" as const,
+                    repositoryId: repository.repositoryId,
+                    fileId: file.fileId,
+                    base64: nextContent.base64,
+                  }
+                : await (async () => {
+                    const current = await bridge.readFile({
+                      state: snapshot.state,
+                      repositoryId: repository.repositoryId,
+                      file: { kind: "id", fileId: file.fileId },
+                    });
+                    return current?.content.kind === "text"
+                      ? {
+                          kind: "text-edit" as const,
+                          repositoryId: repository.repositoryId,
+                          fileId: file.fileId,
+                          edits: [
+                            { start: 0, end: current.content.text.length, text: nextContent.text },
+                          ],
+                        }
+                      : {
+                          kind: "binary-replace" as const,
+                          repositoryId: repository.repositoryId,
+                          fileId: file.fileId,
+                          base64: Buffer.from(nextContent.text, "utf8").toString("base64"),
+                        };
+                  })();
+            return requested.mode === undefined
+              ? [contentChange]
+              : [
+                  contentChange,
+                  {
+                    kind: "file-mode" as const,
+                    repositoryId: repository.repositoryId,
+                    fileId: file.fileId,
+                    mode: isExecutableMode(requested.mode) ? 0o755 : 0o644,
+                  },
+                ];
+          }
+          if (requested.kind === "delete") {
+            return [
+              {
+                kind: "file-delete" as const,
+                repositoryId: repository.repositoryId,
+                fileId: file!.fileId,
+              },
+            ];
+          }
+          return [
+            {
+              kind: "file-mode" as const,
+              repositoryId: repository.repositoryId,
+              fileId: file!.fileId,
+              mode: isExecutableMode(requested.mode) ? 0o755 : 0o644,
+            },
+          ];
+        })
+      )
+    ).flat();
+    await bridge.edit(
+      {
+        commandId,
+        contextId,
+        expectedWorkingHead: snapshot.state,
+        changes: scoped,
+      },
+      causalParent
+    );
   }
 
   /** Delete ops for a path and (if it is a directory) its whole tracked subtree. */
@@ -1281,43 +1760,19 @@ export class FsService {
     rel: string
   ): Promise<FsVcsEditOp[]> {
     const prefix = `${rel}/`;
-    const files = await bridge.listFiles(contextId);
+    const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+    const files = (await managedWorkspaceFiles(bridge, snapshot)).map(
+      (file) => `${file.repoPath}/${file.path}`
+    );
     return files
       .filter((p) => p === rel || p.startsWith(prefix))
       .map((p) => ({ kind: "delete" as const, path: p }));
   }
 
-  /** Move a tracked file (or directory subtree) from `srcRel` to `dstRel`.
-   *  All paths are workspace-relative; reads route through the owning repo head
-   *  and the returned ops are re-routed/enforced by `commitRoutedEdits`. */
-  private async renameEdits(
-    bridge: FsVcsBridge,
-    router: RepoRouter,
-    contextId: string,
-    srcRel: string,
-    dstRel: string
-  ): Promise<FsVcsEditOp[]> {
-    const prefix = `${srcRel}/`;
-    const files = (await bridge.listFiles(contextId)).filter(
-      (p) => p === srcRel || p.startsWith(prefix)
-    );
-    const edits: FsVcsEditOp[] = [];
-    for (const oldPath of files) {
-      const routed = router.route(oldPath);
-      const content = await bridge.readFile(contextId, routed.repoPath, routed.repoRelPath);
-      if (!content) continue;
-      const newPath = oldPath === srcRel ? dstRel : `${dstRel}/${oldPath.slice(prefix.length)}`;
-      edits.push({ kind: "write", path: newPath, content });
-      edits.push({ kind: "delete", path: oldPath });
-    }
-    return edits;
-  }
-
   /**
-   * Before a disk-reading op runs, demand-materialize the narrowest repo scope
-   * its target path needs, then assert it's present. Sparse contexts only have
-   * on disk what's been materialized; this guarantees a read sees real data (or
-   * throws) instead of silently missing an unmaterialized repo.
+   * Before a disk-reading op runs, ensure the complete exact context projection
+   * exists, retaining the narrowest repo scope as caller intent, then assert the
+   * requested repository is present in that projection.
    *
    * A repo can legitimately stay unmaterialized after `ensureMaterialized` when
    * it simply does not exist (nothing to project) — e.g. a read of a path under
@@ -1331,23 +1786,24 @@ export class FsService {
    * materialize failure (which would also surface here).
    */
   private async demandForReadMethod(
+    bridge: FsVcsBridge,
     scope: FsCallScope,
     method: string,
     args: unknown[]
   ): Promise<void> {
-    if (!scope.contextId || scope.unrestricted || !this.vcsBridge) return;
+    if (!scope.contextId || scope.unrestricted) return;
     const p = readScopePath(method, args);
     if (p === null) return;
     const fileOrSearchMethod = method !== "readdir" && method !== "glob";
     const wsRel = (fileOrSearchMethod ? canonicalizeWorkspaceFilePath(p) : p).replace(/^\/+/, "");
     const repos = scopeForPath(wsRel);
     if (repos === null) return;
-    if (repos !== "all" && !(await this.vcsBridge.isTracked(wsRel.replace(/\/+$/, "")))) {
+    if (repos !== "all" && !(await bridge.isTracked(wsRel.replace(/\/+$/, "")))) {
       return;
     }
-    await this.vcsBridge.ensureMaterialized(scope.contextId, repos);
+    await bridge.ensureMaterialized(scope.contextId, repos);
     const repo = taxonomyRepoForPath(wsRel.replace(/\/+$/, ""));
-    if (repo && !(await this.vcsBridge.isMaterialized(scope.contextId, repo))) {
+    if (repo && !(await bridge.isMaterialized(scope.contextId, repo))) {
       console.warn(
         `[fs] ${method} ${JSON.stringify(wsRel)} (repo ${repo}) is not materialized for ` +
           `context ${scope.contextId} after ensureMaterialized — the repo likely does not ` +
@@ -1365,12 +1821,15 @@ export class FsService {
     const args = [...rawArgs];
     const scope = await this.resolveContextRoot(ctx, args);
     const { panelId } = scope;
+    const bridge = this.semanticBridge(scope);
+    this.assertScratchOnlyCall(scope, method, args);
 
-    // Explicit sparse-materialize request (for consumers that read disk OUTSIDE
-    // fs.* — e.g. a grep/find subprocess in an extension). Declares the narrowest
-    // scope it needs; never blanket-materializes unless asked for "all".
+    // Explicit projection request for consumers that read disk OUTSIDE fs.*
+    // (for example, grep/find in an extension). The argument declares the
+    // narrowest read intent while the authority still publishes one complete
+    // context projection.
     if (method === "ensureMaterialized") {
-      if (scope.contextId && !scope.unrestricted && this.vcsBridge) {
+      if (scope.contextId && !scope.unrestricted && bridge) {
         const arg = args[0];
         let repos: RepoPath[] | "all";
         if (arg === "all") {
@@ -1388,21 +1847,21 @@ export class FsService {
           if (!any && set.size === 0) return undefined;
           repos = any ? "all" : [...set];
         }
-        await this.vcsBridge.ensureMaterialized(scope.contextId, repos);
+        await bridge.ensureMaterialized(scope.contextId, repos);
       }
       return undefined;
     }
 
     // Sandboxed context mutations + single-file tracked reads commit/read through
-    // GAD (edit-first / content-addressed) — those never touch the context disk.
-    const routed = await this.maybeRouteToGad(scope, ctx, method, args);
+    // Semantic edits are content-addressed and never mutate materialized bytes directly.
+    const routed = await this.maybeRouteToVcs(bridge, scope, ctx, method, args);
     if (routed.handled) return routed.result;
 
     // Anything that falls through here reads the context folder ON DISK. Demand
-    // the narrowest repo scope its target path needs (sparse), then loudly assert
-    // it's present — surfacing any scope/materialize bug instead of a silent
-    // partial read.
-    await this.demandForReadMethod(scope, method, args);
+    // the narrowest repo scope as read intent, ensure the one complete context
+    // projection, then loudly assert the repository is present — surfacing any
+    // authority/projection mismatch instead of a silent partial read.
+    if (bridge) await this.demandForReadMethod(bridge, scope, method, args);
 
     switch (method) {
       // ----- File content -----
@@ -1576,13 +2035,13 @@ export class FsService {
         }
         const wsRel = await canonicalContextRelativePath(scope, linkPath, { preserveLeaf: true });
         const sourceRoot = wsRel.split("/", 1)[0] ?? "";
-        const isWorkspaceSourcePath = this.vcsBridge
-          ? await isGadMutationPath(this.vcsBridge, wsRel)
+        const isWorkspaceSourcePath = bridge
+          ? await isManagedVcsPath(bridge, wsRel)
           : splitRepoPath(wsRel) !== null || WORKSPACE_SOURCE_ROOTS.has(sourceRoot);
         if (isWorkspaceSourcePath) {
           throw codedError(
             "ENOTSUP",
-            `Symbolic links are supported for context-local scratch paths, not GAD workspace-repo paths: ${JSON.stringify(linkPath)}`
+            `Symbolic links are supported for context-local scratch paths, not managed workspace paths: ${JSON.stringify(linkPath)}`
           );
         }
         const virtualLinkDir = path.posix.dirname(linkPath.replaceAll("\\", "/"));

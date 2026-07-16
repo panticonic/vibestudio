@@ -80,11 +80,11 @@ describe("dogfood server supervisor", () => {
     expect(env.VIBESTUDIO_GATEWAY_ALIASES).toBe(JSON.stringify(["http://127.0.0.1:3456"]));
   });
 
-  it("bootstraps a dogfood project with the host checkout remote", () => {
+  it("bootstraps a dogfood project with an explicit network upstream", () => {
     const configRoot = tmpRoot();
     vi.stubEnv("XDG_CONFIG_HOME", configRoot);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const remoteUrl = tmpRoot();
+    const remoteUrl = "https://example.com/vibestudio.git";
 
     const wsDir = bootstrapWorkspace("dogfood-test", { gitRemoteUrl: remoteUrl });
     const projectDir = path.join(wsDir, "source", "projects", "vibestudio");
@@ -99,5 +99,37 @@ describe("dogfood server supervisor", () => {
       fs.readFileSync(path.join(wsDir, "source", "meta", "dogfood.json"), "utf8")
     );
     expect(dogfoodMeta.gitRemoteUrl).toBe(remoteUrl);
+  });
+
+  it("does not publish the local host checkout as a workspace Git upstream", () => {
+    const configRoot = tmpRoot();
+    vi.stubEnv("XDG_CONFIG_HOME", configRoot);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const wsDir = bootstrapWorkspace("dogfood-test");
+    const workspaceConfig = YAML.parse(
+      fs.readFileSync(path.join(wsDir, "source", "meta", "vibestudio.yml"), "utf8")
+    );
+    expect(workspaceConfig.git?.remotes?.projects?.vibestudio?.origin).toBeUndefined();
+    const dogfoodMeta = JSON.parse(
+      fs.readFileSync(path.join(wsDir, "source", "meta", "dogfood.json"), "utf8")
+    );
+    expect(dogfoodMeta.gitRemoteUrl).toBeNull();
+  });
+
+  it("replaces the generated source snapshot while preserving the dogfood project", () => {
+    const configRoot = tmpRoot();
+    vi.stubEnv("XDG_CONFIG_HOME", configRoot);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const wsDir = bootstrapWorkspace("dogfood-test");
+    const ghost = path.join(wsDir, "source", "workers", "removed-worker.ts");
+    const projectDir = path.join(wsDir, "source", "projects", "vibestudio");
+    fs.writeFileSync(ghost, "export {};\n", "utf8");
+
+    bootstrapWorkspace("dogfood-test");
+
+    expect(fs.existsSync(ghost)).toBe(false);
+    expect(fs.existsSync(path.join(projectDir, ".git"))).toBe(true);
   });
 });

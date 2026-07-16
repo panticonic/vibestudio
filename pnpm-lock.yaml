@@ -64,6 +64,9 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:packages/browser-data
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:packages/content-addressing
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:packages/credential-client
@@ -106,6 +109,9 @@ importers:
       '@vibestudio/sqlite':
         specifier: workspace:*
         version: link:packages/sqlite
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:packages/trajectory-identity
       '@vibestudio/typecheck':
         specifier: workspace:*
         version: link:packages/typecheck
@@ -320,6 +326,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -540,6 +549,8 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
+  packages/content-addressing: {}
+
   packages/credential-client:
     dependencies:
       '@vibestudio/env-paths':
@@ -723,6 +734,9 @@ importers:
 
   packages/service-schemas:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../credential-client
@@ -747,6 +761,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../credential-client
@@ -765,6 +782,9 @@ importers:
       '@vibestudio/sqlite':
         specifier: workspace:*
         version: link:../sqlite
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../trajectory-identity
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
@@ -801,6 +821,12 @@ importers:
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
   packages/sqlite: {}
+
+  packages/trajectory-identity:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
 
   packages/typecheck:
     dependencies:

@@ -234,24 +234,111 @@ describe("system-testing diagnostics", () => {
     entry.execution.diagnostics = {
       workspaceRepoFixture: {
         testName: "fixture-test",
+        contextId: "context:fixture-test",
+        kind: "buildable-package",
+        section: "packages",
         repoName: "system-test-fixture-test-1234",
-        repoNamePrefix: "system-test-fixture-test-",
-        reposBefore: ["meta"],
-        staleReposRemoved: ["panels/system-test-fixture-test-stale"],
-        reposRemoved: ["panels/system-test-fixture-test-1234"],
-        escapedRepos: [],
-        reposAfter: ["meta"],
+        repositoryId: "repository:fixture-test-1234",
+        repoPath: "packages/system-test-fixture-test-1234",
+        seedFilePaths: ["package.json", "src/index.ts"],
+        importWorkUnitId: "work:import",
+        taskBaseEventId: "event:main",
+        importChangeIds: ["change:repository-create", "change:file-create"],
+        publishedFixtureRemoved: {
+          repositoryId: "repository:fixture-test-1234",
+          repoPath: "packages/system-test-fixture-test-1234",
+        },
+        unexpectedPublishedRepositoriesRemoved: [
+          { repositoryId: "repository:escaped", repoPath: "projects/outside-fixture" },
+        ],
+        counteractedChangeIds: ["change:repository-create", "change:file-create"],
       },
     };
 
     expect(summarizeEntry(entry).workspaceRepoFixture).toEqual({
       testName: "fixture-test",
+      contextId: "context:fixture-test",
+      kind: "buildable-package",
+      section: "packages",
       repoName: "system-test-fixture-test-1234",
-      repoNamePrefix: "system-test-fixture-test-",
-      staleReposRemoved: ["panels/system-test-fixture-test-stale"],
-      reposRemoved: ["panels/system-test-fixture-test-1234"],
-      escapedRepos: [],
-      reposAfter: ["meta"],
+      repositoryId: "repository:fixture-test-1234",
+      repoPath: "packages/system-test-fixture-test-1234",
+      seedFilePaths: ["package.json", "src/index.ts"],
+      importWorkUnitId: "work:import",
+      taskBaseEventId: "event:main",
+      importChangeCount: 2,
+      publishedFixtureRemoved: {
+        repositoryId: "repository:fixture-test-1234",
+        repoPath: "packages/system-test-fixture-test-1234",
+      },
+      unexpectedPublishedRepositoriesRemoved: [
+        { repositoryId: "repository:escaped", repoPath: "projects/outside-fixture" },
+      ],
+      counteractedChangeCount: 2,
     });
+  });
+
+  it("reports normalized session cleanup once when the raw snapshot retains it", () => {
+    const entry = entryWithMessages([]);
+    entry.execution.cleanupErrors = ["unsubscribeHeadlessAgent: relay failed"];
+    entry.execution.snapshot = {
+      channelId: "channel-cleanup",
+      agentEntityId: "agent-cleanup",
+      agentTargetId: "agent-cleanup",
+      agentContextId: "context-cleanup",
+      ownsAgentContext: false,
+      messages: [],
+      invocations: [],
+      debugEvents: [],
+      cleanupErrors: [
+        {
+          phase: "unsubscribeHeadlessAgent",
+          message: "relay failed",
+          at: 1,
+        },
+      ],
+      participants: {},
+      localMethodNames: [],
+      connected: false,
+      duration: 1,
+      title: null,
+    };
+
+    expect(summarizeEntry(entry).cleanupErrors).toEqual(["unsubscribeHeadlessAgent: relay failed"]);
+  });
+
+  it("keeps structured failures and handles in bounded diagnostics", () => {
+    const entry = entryWithMessages([]);
+    entry.execution.error = "fixture setup failed";
+    entry.execution.failure = {
+      phase: "workspace-fixture-setup",
+      error: {
+        name: "RemoteRpcError",
+        message: "fixture setup failed",
+        code: "InternalFailure",
+        errorKind: "application",
+        errorData: { code: "InternalFailure", handle: "diagnostic:vcs:setup" },
+        diagnosticHandles: ["diagnostic:vcs:setup"],
+      },
+    };
+    entry.execution.cleanupFailures = [
+      {
+        phase: "workspace-fixture-cleanup",
+        error: {
+          name: "RemoteRpcError",
+          message: "fixture cleanup failed",
+          code: "InternalFailure",
+          errorData: { handle: "diagnostic:vcs:cleanup" },
+          diagnosticHandles: ["diagnostic:vcs:cleanup"],
+        },
+      },
+    ];
+
+    const diagnostic = summarizeEntry(entry);
+
+    expect(diagnostic.failure).toEqual(entry.execution.failure);
+    expect(diagnostic.cleanupFailures).toEqual(entry.execution.cleanupFailures);
+    expect(JSON.stringify(diagnostic)).toContain("diagnostic:vcs:setup");
+    expect(JSON.stringify(diagnostic)).toContain("diagnostic:vcs:cleanup");
   });
 });

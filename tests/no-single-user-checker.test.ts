@@ -50,6 +50,18 @@ describe("multi-user cutover regression rules", () => {
     expect(ruleIds("hubControl.pairDevice();")).not.toContain("generic-device-invite");
   });
 
+  it("distinguishes an ephemeral fenced hub origin from a persisted nested credential", () => {
+    const cliFile = "src/cli/localHubTransport.ts";
+    expect(ruleIds("const hubUrl = fencedLease.origin;", cliFile)).not.toContain(
+      "nested-hub-credential"
+    );
+    expect(ruleIds("credential.hubUrl", cliFile)).toContain("nested-hub-credential");
+    expect(ruleIds("type Stored = { hubUrl?: string }", cliFile)).toContain(
+      "nested-hub-credential"
+    );
+    expect(ruleIds('record["hubUrl"]', cliFile)).toContain("nested-hub-credential");
+  });
+
   it("scans userland source and current documentation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "no-single-user-check-"));
     temporaryRoots.push(root);

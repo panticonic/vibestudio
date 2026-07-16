@@ -15,8 +15,10 @@
  * `defineServiceHandler`. Each fs schema accepts two tuple shapes because the
  * server/shell form prepends a context id, but schema data alone cannot choose
  * between them: verified caller identity does. FsService first resolves that
- * identity-dependent scope and consumes the prefix, then applies shared GAD /
- * materialization routing before operation dispatch. An exhaustive forwarding
+ * identity-dependent scope and consumes the prefix, then applies the explicitly
+ * constructed semantic-context or scratch-only authority before operation
+ * dispatch. Scratch-only adapters fail closed for every reserved workspace
+ * source root; a missing semantic bridge can never fall through to disk. An exhaustive forwarding
  * table here would neither type the normalized tuples nor remove that dispatch;
  * it would only duplicate every method name around the real adapter boundary.
  *
@@ -32,7 +34,7 @@ export function createFsServiceDefinition(getFsService: () => FsService): Servic
   return {
     name: "fs",
     description:
-      "Filesystem operations. Context-bound callers are sandboxed to their context folder; supported workspace-repo file mutations route through GAD working edits, while platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.",
+      "Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.",
     policy: {
       allowed: ["panel", "app", "server", "worker", "do", "extension", "shell", "agent"],
     },

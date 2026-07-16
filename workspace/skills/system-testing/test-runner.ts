@@ -9,12 +9,24 @@ import type {
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
+import { logIdForChannel } from "@vibestudio/trajectory-identity";
+import { systemTestFailure } from "./structured-error.js";
+
+const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
+  "model_credential_required",
+  "model_credential_reconnect_required",
+] as const;
 
 type MaybePromise<T> = T | Promise<T>;
 type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
 const DEFAULT_PARALLEL_CONCURRENCY = 4;
+const INTERRUPT_TIMEOUT_MS = 10_000;
 
 export class TestRunner {
+  private cancellationError: Error | null = null;
+  private readonly activeWaits = new Set<AbortController>();
+  private wakeSuiteSchedulers: (() => void) | null = null;
+
   constructor(
     private runner: HeadlessRunner,
     private opts?: {
@@ -39,6 +51,24 @@ export class TestRunner {
   run = this.runSuite.bind(this);
   /** Alias for runSuite */
   runTests = this.runSuite.bind(this);
+
+  get cancelled(): boolean {
+    return this.cancellationError !== null;
+  }
+
+  /**
+   * Stop admitting new cases and abort every active agent wait. The cases keep
+   * ownership of their ordinary `finally` blocks; callers await `runSuite` for
+   * session retirement and fixture cleanup instead of manufacturing a second
+   * teardown path.
+   */
+  cancel(reason = new Error("System-test run cancelled")): void {
+    if (this.cancellationError) return;
+    this.cancellationError = reason;
+    for (const controller of this.activeWaits) controller.abort(reason);
+    this.wakeSuiteSchedulers?.();
+  }
+
   /** Alias for runSuite with an explicit concurrency cap */
   runSuiteParallel = (tests: TestCase[], opts?: RunSuiteFilter): Promise<TestSuiteResult> => {
     return this.runSuite(tests, {
@@ -65,18 +95,17 @@ export class TestRunner {
     let scheduleWaiters: Array<() => void> = [];
 
     const resourcesFor = (test: TestCase): string[] => [
-      ...new Set([
-        ...(test.resources ?? []).filter(Boolean),
-        ...(test.workspaceRepoFixture ? ["workspace:repo-fixtures"] : []),
-      ]),
+      ...new Set((test.resources ?? []).filter(Boolean)),
     ];
     const wakeSchedulers = (): void => {
       const waiters = scheduleWaiters;
       scheduleWaiters = [];
       for (const wake of waiters) wake();
     };
+    this.wakeSuiteSchedulers = wakeSchedulers;
     const claimRunnable = async (): Promise<{ index: number; resources: string[] } | null> => {
       for (;;) {
+        if (this.cancelled) return null;
         for (const index of pending) {
           const resources = resourcesFor(filtered[index]!);
           if (resources.some((resource) => activeResources.has(resource))) continue;
@@ -126,7 +155,11 @@ export class TestRunner {
       }
     };
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    } finally {
+      if (this.wakeSuiteSchedulers === wakeSchedulers) this.wakeSuiteSchedulers = null;
+    }
 
     return this.buildSuiteResult(tests.length, filtered.length, results, startTime);
   }
@@ -173,10 +206,11 @@ export class TestRunner {
   async runOne(test: TestCase): Promise<{ result: TestResult; execution: TestExecutionResult }> {
     const startTime = Date.now();
     const testTimeoutMs = this.opts?.testTimeoutMs;
+    const testDeadline = testTimeoutMs === undefined ? undefined : startTime + testTimeoutMs;
     const testRunner =
       typeof this.runner.forTest === "function"
         ? this.runner.forTest(test.name, {
-            workspaceRepoFixture: test.workspaceRepoFixture === true,
+            workspaceRepoFixture: test.workspaceRepoFixture,
           })
         : this.runner;
     let session: HeadlessSession | undefined;
@@ -184,49 +218,74 @@ export class TestRunner {
     let workspaceRepoFixtureState:
       | Awaited<ReturnType<HeadlessRunner["prepareWorkspaceRepoFixture"]>>
       | undefined;
+    let failurePhase = test.workspaceRepoFixture ? "workspace-fixture-setup" : "session-setup";
     try {
       if (test.workspaceRepoFixture) {
         workspaceRepoFixtureState = await testRunner.prepareWorkspaceRepoFixture();
       }
+      failurePhase = test.orchestrate ? "orchestration" : "session-setup";
+      const remainingTimeMs = (): number | undefined =>
+        testDeadline === undefined ? undefined : Math.max(0, testDeadline - Date.now());
+      const sendAndCapture = async (
+        targetSession: HeadlessSession,
+        prompt: string,
+        phase?: string
+      ): Promise<unknown> => {
+        const timeoutMessage = phase
+          ? `Timed out waiting for agent to finish test "${test.name}" during ${phase}`
+          : `Timed out waiting for agent to finish test "${test.name}"`;
+        const controller = new AbortController();
+        this.activeWaits.add(controller);
+        if (this.cancellationError) controller.abort(this.cancellationError);
+        try {
+          if (controller.signal.aborted) {
+            throw this.cancellationError ?? new Error("System-test wait aborted");
+          }
+          const remaining = remainingTimeMs();
+          if (remaining !== undefined && remaining <= 0) throw new Error(timeoutMessage);
+          const wait = targetSession.sendAndWait(prompt, {
+            signal: controller.signal,
+            terminalWaitingReasons: NON_INTERACTIVE_TERMINAL_WAIT_REASONS,
+          });
+          if (remaining === undefined) {
+            await wait;
+          } else {
+            await this.withTimeout(wait, remaining, timeoutMessage, controller);
+          }
+        } catch (error) {
+          const terminalError = this.cancellationError ?? error;
+          try {
+            await this.interruptActiveTurn(targetSession);
+          } catch (interruptError) {
+            throw new AggregateError(
+              [terminalError, interruptError],
+              `${errorMessage(terminalError)}; agent interruption failed: ${errorMessage(
+                interruptError
+              )}`
+            );
+          }
+          throw terminalError;
+        } finally {
+          this.activeWaits.delete(controller);
+        }
+        return await this.captureAndAssertModelExecution(
+          targetSession,
+          test.name,
+          phase ?? "agent turn"
+        );
+      };
       const execution = test.orchestrate
         ? await test.orchestrate({
             runner: testRunner,
-            testTimeoutMs,
+            remainingTimeMs,
             sendAndWait: async (targetSession, prompt, phase) => {
-              if (testTimeoutMs === undefined) {
-                await targetSession.sendAndWait(prompt);
-              } else {
-                const controller = new AbortController();
-                await this.withTimeout(
-                  targetSession.sendAndWait(prompt, { signal: controller.signal }),
-                  testTimeoutMs,
-                  `Timed out waiting for agent to finish test "${test.name}" during ${phase}`,
-                  controller
-                );
-              }
-              await this.captureAndAssertModelExecution(targetSession, test.name, phase);
+              await sendAndCapture(targetSession, prompt, phase);
             },
           })
         : await (async (): Promise<TestExecutionResult> => {
             session = await testRunner.spawn();
-
-            if (testTimeoutMs === undefined) {
-              await session.sendAndWait(test.prompt);
-            } else {
-              const controller = new AbortController();
-              await this.withTimeout(
-                session.sendAndWait(test.prompt, { signal: controller.signal }),
-                testTimeoutMs,
-                `Timed out waiting for agent to finish test "${test.name}"`,
-                controller
-              );
-            }
-
-            const modelExecutionEvidence = await this.captureAndAssertModelExecution(
-              session,
-              test.name,
-              "agent turn"
-            );
+            failurePhase = "agent-turn";
+            const modelExecutionEvidence = await sendAndCapture(session, test.prompt);
 
             const messages = [...session.messages] as ChatMessage[];
             const snapshot = session.snapshot();
@@ -245,6 +304,7 @@ export class TestRunner {
         collectToolFailures(execution),
         test.expectedToolFailures
       );
+      failurePhase = "validation";
       const result = test.validate(execution);
       outcome = { result, execution };
     } catch (err) {
@@ -267,11 +327,13 @@ export class TestRunner {
       } catch (snapshotErr) {
         console.warn("[system-testing] Failed to snapshot failed headless session:", snapshotErr);
       }
-      const errorMessage = formatExecutionError(err, messages, snapshot);
+      const failure = systemTestFailure(failurePhase, err);
+      const errorMessage = formatExecutionError(failure.error.message, messages, snapshot);
       const execution: TestExecutionResult = {
         messages,
         duration,
         error: errorMessage,
+        failure,
         snapshot,
         ...(modelExecutionEvidence !== undefined ? { modelExecutionEvidence } : {}),
         ...(snapshot ? { provenance: provenanceFromSnapshot(snapshot) } : {}),
@@ -283,13 +345,11 @@ export class TestRunner {
       try {
         execution.diagnostics = await testRunner.collectDiagnostics({
           channelId: session?.channelId,
-          error: new Error(errorMessage),
         });
       } catch (diagnosticErr) {
         execution.diagnostics = {
           generatedAt: new Date().toISOString(),
-          diagnosticCollectionError:
-            diagnosticErr instanceof Error ? diagnosticErr.message : String(diagnosticErr),
+          diagnosticCollectionFailure: systemTestFailure("diagnostic:collection", diagnosticErr),
         };
       }
       outcome = {
@@ -317,34 +377,8 @@ export class TestRunner {
           }
         }
       } catch (cleanupErr) {
-        const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         console.warn("[system-testing] Failed to close headless session:", cleanupErr);
-        if (outcome) {
-          const cleanupMessage = `close: ${message}`;
-          outcome.execution.cleanupErrors = [
-            ...(outcome.execution.cleanupErrors ?? []),
-            cleanupMessage,
-          ];
-          outcome.execution.error ??= `Headless cleanup failed: ${cleanupMessage}`;
-          if (outcome.result.passed) {
-            outcome.result = {
-              passed: false,
-              reason: `Headless cleanup failed: ${cleanupMessage}`,
-              details: { cleanupErrors: [cleanupMessage] },
-            };
-          } else {
-            outcome.result = {
-              ...outcome.result,
-              details: {
-                ...(outcome.result.details ?? {}),
-                cleanupErrors: [
-                  ...((outcome.result.details?.["cleanupErrors"] as string[] | undefined) ?? []),
-                  cleanupMessage,
-                ],
-              },
-            };
-          }
-        }
+        recordCleanupFailure(outcome, "session-close", cleanupErr, "close");
       }
       let cleanupErrors: NonNullable<SessionSnapshot["cleanupErrors"]> = [];
       try {
@@ -356,8 +390,20 @@ export class TestRunner {
         );
       }
       if (cleanupErrors.length > 0 && outcome) {
-        const messages = cleanupErrors.map((error) => `${error.phase}: ${error.message}`);
+        const failures = cleanupErrors.map((error) =>
+          systemTestFailure(`session-cleanup:${error.phase}`, {
+            name: "SessionCleanupError",
+            message: error.message,
+          })
+        );
+        const messages = failures.map(
+          (failure, index) => `${cleanupErrors[index]!.phase}: ${failure.error.message}`
+        );
         outcome.execution.cleanupErrors = [...(outcome.execution.cleanupErrors ?? []), ...messages];
+        outcome.execution.cleanupFailures = [
+          ...(outcome.execution.cleanupFailures ?? []),
+          ...failures,
+        ];
         outcome.execution.error ??= `Headless cleanup failed: ${messages.join("; ")}`;
         outcome.execution.snapshot = session?.snapshot();
         if (outcome.result.passed) {
@@ -389,22 +435,24 @@ export class TestRunner {
               },
             };
           }
-          if (fixtureCleanup.escapedRepos.length > 0) {
+          if (fixtureCleanup.unexpectedPublishedRepositoriesRemoved.length > 0) {
             recordCleanupFailure(
               outcome,
-              `workspace-repo-fixture: test published repo(s) outside its reserved namespace: ${fixtureCleanup.escapedRepos.join(
-                ", "
-              )}; left intact`
+              "workspace-fixture-scope",
+              new Error(
+                `test published repository identity or identities outside its fixture scope: ${fixtureCleanup.unexpectedPublishedRepositoriesRemoved
+                  .map((repository) => repository.repoPath)
+                  .join(", ")}; counteracted during teardown`
+              ),
+              "workspace-repo-fixture"
             );
           }
         } catch (fixtureCleanupErr) {
           recordCleanupFailure(
             outcome,
-            `workspace-repo-fixture: ${
-              fixtureCleanupErr instanceof Error
-                ? fixtureCleanupErr.message
-                : String(fixtureCleanupErr)
-            }`
+            "workspace-fixture-cleanup",
+            fixtureCleanupErr,
+            "workspace-repo-fixture"
           );
         }
       }
@@ -435,6 +483,21 @@ export class TestRunner {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
+  }
+
+  private async interruptActiveTurn(session: HeadlessSession): Promise<void> {
+    const agentId = session.agentTargetId ?? session.snapshot().agentTargetId;
+    if (!agentId) return;
+    const controller = new AbortController();
+    await this.withTimeout(
+      session.interrupt(agentId, {
+        timeoutMs: INTERRUPT_TIMEOUT_MS,
+        signal: controller.signal,
+      }),
+      INTERRUPT_TIMEOUT_MS,
+      `Timed out interrupting agent ${agentId}`,
+      controller
+    );
   }
 
   private async captureAndAssertModelExecution(
@@ -498,9 +561,7 @@ export class TestRunner {
         calls
           .slice(0, fallbackIndex)
           .some(
-            (call) =>
-              call?.["ref"] !== policy.primaryModel ||
-              call?.["outcome"] !== "failed"
+            (call) => call?.["ref"] !== policy.primaryModel || call?.["outcome"] !== "failed"
           ) ||
         refs.slice(fallbackIndex).some((ref) => ref !== policy.activeModel);
       if (invalidTransition) {
@@ -538,10 +599,15 @@ export class TestRunner {
 
 function recordCleanupFailure(
   outcome: { result: TestResult; execution: TestExecutionResult } | undefined,
-  message: string
+  phase: string,
+  error: unknown,
+  humanPrefix?: string
 ): void {
   if (!outcome) return;
+  const failure = systemTestFailure(phase, error);
+  const message = humanPrefix ? `${humanPrefix}: ${failure.error.message}` : failure.error.message;
   outcome.execution.cleanupErrors = [...(outcome.execution.cleanupErrors ?? []), message];
+  outcome.execution.cleanupFailures = [...(outcome.execution.cleanupFailures ?? []), failure];
   outcome.execution.error ??= `Headless cleanup failed: ${message}`;
   if (outcome.result.passed) {
     outcome.result = {
@@ -574,7 +640,7 @@ function provenanceFromSnapshot(
 ): NonNullable<TestExecutionResult["provenance"]> {
   return {
     channelId: snapshot.channelId,
-    branchId: snapshot.channelId ? `branch:channel:${snapshot.channelId}` : null,
+    branchId: snapshot.channelId ? logIdForChannel(snapshot.channelId) : null,
     agentEntityId: snapshot.agentEntityId,
     agentTargetId: snapshot.agentTargetId,
     contextId: snapshot.agentContextId,
@@ -582,14 +648,18 @@ function provenanceFromSnapshot(
 }
 
 function formatExecutionError(
-  err: unknown,
+  message: string,
   messages: readonly ChatMessage[],
   snapshot?: SessionSnapshot
 ): string {
-  const base = err instanceof Error ? err.message : String(err);
+  const base = message;
   if (!/^Timed out waiting for agent to finish test/.test(base)) return base;
   const details = timeoutDiagnosticDetails(messages, snapshot);
   return details.length > 0 ? `${base}. ${details.join(" ")}` : base;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function timeoutDiagnosticDetails(
