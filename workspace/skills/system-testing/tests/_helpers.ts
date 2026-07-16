@@ -66,14 +66,16 @@ export function responseContains(result: TestExecutionResult, text: string): boo
  * Agent answers are user-facing text, so `field: **yes**`, `field = yes`, and
  * `FIELD:yes` should carry the same semantic evidence. */
 function normalizeMarkerText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[*_`~]/g, "")
-    // Hyphenated prose tokens are formatting, not protocol identifiers. Treat
-    // ordinary spaces and hyphens equivalently while underscore-based sentinel
-    // markers remain collapsed/exact after the line above.
-    .replace(/[\s-]+/g, " ")
-    .replace(/\s*([:=])\s*/g, "$1");
+  return (
+    value
+      .toLowerCase()
+      .replace(/[*_`~]/g, "")
+      // Hyphenated prose tokens are formatting, not protocol identifiers. Treat
+      // ordinary spaces and hyphens equivalently while underscore-based sentinel
+      // markers remain collapsed/exact after the line above.
+      .replace(/[\s-]+/g, " ")
+      .replace(/\s*([:=])\s*/g, "$1")
+  );
 }
 
 export function finalMessageHasAll(
@@ -287,6 +289,17 @@ export function completedToolNames(result: TestExecutionResult): Set<string> {
   return new Set(
     getToolCalls(result)
       .filter((call) => call.execution?.status === "complete" && !call.execution?.isError)
+      .map((call) => call.name)
+  );
+}
+
+/** Tool names whose invocation reached any terminal outcome. Expected negative
+ * cases still exercised the real tool even though the terminal result is an
+ * intentional error. */
+export function settledToolNames(result: TestExecutionResult): Set<string> {
+  return new Set(
+    getToolCalls(result)
+      .filter(isSettledInvocation)
       .map((call) => call.name)
   );
 }

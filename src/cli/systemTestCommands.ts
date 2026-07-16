@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { executeEval } from "@vibestudio/service-schemas/clients/evalClient";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { CliError, UsageError, jsonMode, printError, printResult } from "./output.js";
 import {
@@ -14,12 +15,11 @@ import { loadCliCredentials } from "./credentialStore.js";
 import { RpcClient } from "@vibestudio/direct-client";
 import { loadAgentSession } from "./sessionStore.js";
 import { typedClient } from "./typedClients.js";
+import { resolveVerifiedLocalWorkspaceClient } from "./verifiedLocalWorkspaceClient.js";
 import {
   loadSystemTestRun,
   loadSystemTestArtifact,
-  loadSystemTestTarget,
   listSystemTestRuns,
-  clearSystemTestTarget,
   saveSystemTestRun,
   saveSystemTestTarget,
   systemTestArtifactDir,
@@ -29,7 +29,7 @@ import {
 } from "./systemTestStore.js";
 
 type EvalClient = ReturnType<typeof evalClientFor>;
-type EvalStatus = Awaited<ReturnType<EvalClient["getRun"]>>;
+type EvalStatus = Awaited<ReturnType<EvalClient["get"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
 // Stay below EvalDO's 60k structured-return preview threshold even after wire
@@ -52,82 +52,58 @@ async function resolveSystemTestScope(
   inv: ParsedInvocation,
   preferredSession = SYSTEM_TEST_SESSION
 ): Promise<SessionScope> {
+  const credentials = loadCliCredentials();
+  const localResolution = credentials
+    ? await resolveVerifiedLocalWorkspaceClient(credentials)
+    : { local: null };
+  if (localResolution.unavailableReason) {
+    console.warn(
+      `[system-test] doctor-verified local gateway became unavailable: ${localResolution.unavailableReason}; ` +
+        "continuing over the paired transport"
+    );
+  }
+  const localClient = localResolution.local?.client;
   const explicitSession =
     typeof inv.flags["session"] === "string" ? inv.flags["session"] : undefined;
   if (explicitSession) {
-    await ensureNamedAgentSession(explicitSession);
-    return await preferDoctorVerifiedLocalTarget(resolveSessionScope(inv));
+    await ensureNamedAgentSession(explicitSession, localClient);
+    return replaceScopeClient(resolveSessionScope(inv), localClient);
   }
 
   // System tests are a self-contained CLI workflow. When no ordinary scope
   // source exists, create/recover a dedicated session instead of requiring a
   // prior `agent attach default`. Preserve explicit context, agent-token,
   // mirrored-folder, and an existing default-session precedence.
-  const hasAmbientScope =
+  const hasNonSessionAmbientScope =
     typeof inv.flags["context"] === "string" ||
     Boolean(process.env["VIBESTUDIO_AGENT_TOKEN"]) ||
-    findContextMarker() !== null ||
-    loadAgentSession(DEFAULT_SESSION) !== null;
-  if (!hasAmbientScope) {
-    await ensureNamedAgentSession(preferredSession);
-    return await preferDoctorVerifiedLocalTarget(
+    findContextMarker() !== null;
+  if (!hasNonSessionAmbientScope && loadAgentSession(DEFAULT_SESSION) !== null) {
+    // A disposable checkout restart retires its runtime entities while the
+    // local session file necessarily survives. Reconcile before selecting the
+    // context so doctor/list/run never issue eval.start against a dead owner.
+    await ensureNamedAgentSession(DEFAULT_SESSION, localClient);
+    return replaceScopeClient(resolveSessionScope(inv), localClient);
+  }
+  if (!hasNonSessionAmbientScope) {
+    await ensureNamedAgentSession(preferredSession, localClient);
+    return replaceScopeClient(
       resolveSessionScope({
         ...inv,
         flags: { ...inv.flags, session: preferredSession },
-      })
+      }),
+      localClient
     );
   }
-  return await preferDoctorVerifiedLocalTarget(resolveSessionScope(inv));
+  return replaceScopeClient(resolveSessionScope(inv), localClient);
 }
 
-/**
- * Use the loopback gateway discovered by `system-test doctor` for subsequent
- * orchestration/status traffic. The paired credential still supplies the
- * principal, and WebRTC remains the bootstrap/fallback for remote hosts.
- *
- * A stale local route is reported and removed before falling back. That makes
- * a source-server restart self-healing without silently hiding the failed
- * transport claim that doctor previously recorded.
- */
-async function preferDoctorVerifiedLocalTarget(scope: SessionScope): Promise<SessionScope> {
-  const target = loadSystemTestTarget();
-  const credentials = loadCliCredentials();
-  if (
-    !target ||
-    !credentials ||
-    target.pairedUrl !== credentials.url ||
-    target.workspaceName !== credentials.workspaceName ||
-    target.serverId !== credentials.serverId
-  ) {
-    return scope;
-  }
-
-  const direct = new RpcClient({
-    url: target.serverUrl,
-    deviceId: credentials.deviceId,
-    refreshToken: credentials.refreshToken,
-  });
-  try {
-    const info = await direct.call<Record<string, unknown>>("auth.getConnectionInfo", []);
-    if (
-      info["serverId"] !== target.serverId ||
-      info["serverBootId"] !== target.serverBootId ||
-      info["workspaceId"] !== target.workspaceId
-    ) {
-      throw new Error("the gateway identity no longer matches the doctor-verified target");
-    }
-    await scope.client.close();
-    return { ...scope, client: direct };
-  } catch (error) {
-    await direct.close().catch(() => undefined);
-    clearSystemTestTarget();
-    console.warn(
-      `[system-test] doctor-verified local gateway became unavailable: ${
-        error instanceof Error ? error.message : String(error)
-      }; continuing over the paired transport`
-    );
-    return scope;
-  }
+function replaceScopeClient(scope: SessionScope, client?: RpcClient): SessionScope {
+  if (!client) return scope;
+  // resolveSessionScope constructs its transport lazily. Replacing it here does
+  // not open WebRTC, and closing remains correct if that implementation changes.
+  void scope.client.close().catch(() => undefined);
+  return { ...scope, client };
 }
 
 function isLoopbackServerUrl(value: unknown): value is string {
@@ -154,6 +130,12 @@ function positiveInt(inv: ParsedInvocation, name: string, fallback?: number): nu
   return value;
 }
 
+function approvalPolicy(inv: ParsedInvocation): "fail-fast" | "wait" | "reachable" {
+  const value = inv.flags["approval-policy"] ?? "fail-fast";
+  if (value === "fail-fast" || value === "wait" || value === "reachable") return value;
+  throw new UsageError("--approval-policy must be fail-fast, wait, or reachable");
+}
+
 function requireRunId(inv: ParsedInvocation): string {
   const runId = inv.positionals[0];
   if (!runId) throw new UsageError("missing run id");
@@ -168,15 +150,26 @@ function routing(scope: SessionScope, stored?: StoredSystemTestRun | null) {
     );
   }
   return {
-    ownerId: stored?.ownerId ?? scope.session.entityId,
-    // A session entity and its eval scope are durable, but its context is not:
-    // ephemeral workspace recovery can rebind the same session owner to a new
-    // context. The stored context is useful provenance only. Always route an
-    // old run through the owner's current, server-registered context so status,
-    // inspect, trajectory, cancel, and rerun survive a source-server restart.
-    contextId: scope.contextId,
-    subKey: stored?.subKey ?? scope.session.scopeKey,
+    target: {
+      kind: "attached-session" as const,
+      ownerId: stored?.ownerId ?? scope.session.entityId,
+      // A session entity and its eval scope are durable, but its context is not:
+      // always route an old run through the owner's current registered context.
+      contextId: scope.contextId,
+    },
+    scope: { key: stored?.subKey ?? scope.session.scopeKey },
   };
+}
+
+async function executeSystemEval(
+  scope: SessionScope,
+  code: string,
+  stored?: StoredSystemTestRun | null
+) {
+  return await executeEval(evalClientFor(scope), {
+    ...routing(scope, stored),
+    source: { kind: "inline", code, syntax: "typescript" },
+  });
 }
 
 function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
@@ -209,6 +202,7 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
       const record = await runSystemTests({
         ...${options},
         contextId: ctx.contextId,
+        signal: ctx.signal,
         onProgress: publishProgress,
         onInspectionUpdate: (liveRecord) => {
           const limits = { failures: 2, messages: 4, invocations: 6, debugEvents: 6, text: 300 };
@@ -231,7 +225,7 @@ function runCode(runId: string, config: StoredSystemTestRun["config"]): string {
             liveInspection: { inspect, trajectories },
           });
         },
-        registerCancellationCleanup: (cleanup) => ctx.onCancel(async () => {
+        registerTerminalCleanup: (cleanup) => ctx.onCleanup(async () => {
           const cancelledRecord = await cleanup();
           if (cancelledRecord) {
             const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
@@ -278,15 +272,52 @@ function readCode(runId: string, expression: string): string {
   `;
 }
 
-async function startRun(
+function pagedReadCode(
+  runId: string,
+  expression: string,
+  start: number,
+  end: number,
+  pageKey: string,
+  description: string
+): string {
+  return readCode(
+    runId,
+    `(() => {
+      const pageKey = ${JSON.stringify(pageKey)};
+      if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
+        const value = ${expression};
+        scope[pageKey] = JSON.stringify(value, null, 2);
+      }
+      const source = scope[pageKey];
+      if (typeof source !== "string") {
+        throw new Error(${JSON.stringify(`Cached system-test ${description} is not text`)});
+      }
+      const chunk = source.slice(${start}, ${end});
+      return {
+        length: source.length,
+        encoding: "utf16le-base64",
+        chunk: Buffer.from(chunk, "utf16le").toString("base64"),
+      };
+    })()`
+  );
+}
+
+async function startSystemTestRun(
   scope: SessionScope,
   config: StoredSystemTestRun["config"],
   artifactRoot?: string
 ): Promise<StoredSystemTestRun> {
   const runId = `st_${randomUUID().replaceAll("-", "")}`;
+  const client = evalClientFor(scope);
+  const handle = await client.start({
+    ...routing(scope),
+    source: { kind: "inline", code: runCode(runId, config), syntax: "typescript" },
+    idempotencyKey: runId,
+  });
   const stored: StoredSystemTestRun = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId,
+    evalRunId: handle.runId,
     createdAt: Date.now(),
     serverUrl: scope.session.serverUrl,
     sessionName: scope.session.name,
@@ -296,13 +327,6 @@ async function startRun(
     artifactDir: systemTestArtifactDir(runId, artifactRoot),
     config,
   };
-  const client = evalClientFor(scope);
-  await client.startRun({
-    ...routing(scope, stored),
-    runId,
-    code: runCode(runId, config),
-    syntax: "typescript",
-  });
   saveSystemTestRun(stored);
   return stored;
 }
@@ -312,7 +336,8 @@ async function waitForRun(
   route: ReturnType<typeof routing>,
   runId: string,
   pollMs: number,
-  connection: RpcClient
+  connection: RpcClient,
+  signal?: AbortSignal
 ): Promise<EvalStatus> {
   // Hold one transport for the bounded wait. Re-negotiating the single-peer
   // WebRTC room every second races signaling teardown and can starve an
@@ -322,19 +347,78 @@ async function waitForRun(
   const release = connection.retainConnection();
   try {
     for (;;) {
-      const status = await client.getRun({ ...route, runId });
-      if (!["pending", "running"].includes(status.status)) return status;
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
+      signal?.throwIfAborted();
+      const status = await client.get({ ...route, runId });
+      if (["succeeded", "failed", "cancelled", "expired", "interrupted"].includes(status.status)) {
+        return status;
+      }
+      await new Promise<void>((resolve, reject) => {
+        const complete = () => {
+          signal?.removeEventListener("abort", abort);
+          resolve();
+        };
+        const timer = setTimeout(complete, pollMs);
+        const abort = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+          reject(signal?.reason ?? new Error("system-test wait interrupted"));
+        };
+        if (!signal) return;
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      });
     }
   } finally {
     await release();
   }
 }
 
+async function waitForForegroundRun(
+  client: EvalClient,
+  route: ReturnType<typeof routing>,
+  runId: string,
+  pollMs: number,
+  connection: RpcClient
+): Promise<EvalStatus> {
+  const controller = new AbortController();
+  let interruptedBy: "SIGINT" | "SIGTERM" | null = null;
+  const interrupt = (signal: "SIGINT" | "SIGTERM") => {
+    if (controller.signal.aborted) return;
+    interruptedBy = signal;
+    controller.abort(new Error(`system-test foreground wait interrupted by ${signal}`));
+  };
+  const onSigint = () => interrupt("SIGINT");
+  const onSigterm = () => interrupt("SIGTERM");
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  try {
+    return await waitForRun(client, route, runId, pollMs, connection, controller.signal);
+  } catch (error) {
+    if (!interruptedBy) throw error;
+    try {
+      const cancellation = await client.cancel({ ...route, runId });
+      throw new CliError(
+        `system-test run cancellation ${cancellation.status} after ${interruptedBy}`
+      );
+    } catch (cancelError) {
+      if (cancelError instanceof CliError) throw cancelError;
+      throw new CliError(
+        `could not cancel interrupted system-test run after ${interruptedBy}: ${
+          cancelError instanceof Error ? cancelError.message : String(cancelError)
+        }`
+      );
+    }
+  } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  }
+}
+
 function resultValue(status: EvalStatus): unknown {
-  if (status.status === "unknown") throw new CliError("system-test run is unknown to the server");
-  if (status.status === "cancelled") throw new CliError("system-test run was cancelled");
-  if (status.status !== "done") return undefined;
+  if (["cancelled", "expired", "interrupted"].includes(status.status)) {
+    throw new CliError(status.terminalReason ?? `system-test run ${status.status}`);
+  }
+  if (status.status !== "succeeded" && status.status !== "failed") return undefined;
   if (!status.result?.success) {
     throw new CliError(status.result?.error ?? "system-test orchestration failed");
   }
@@ -368,15 +452,14 @@ async function list(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const scope = await resolveSystemTestScope(inv);
-    const result = await evalClientFor(scope).run({
-      ...routing(scope),
-      code: `
+    const result = await executeSystemEval(
+      scope,
+      `
         import { listSystemTests } from "@workspace-skills/system-testing/cli";
         const category = ${JSON.stringify(typeof inv.flags["category"] === "string" ? inv.flags["category"] : null)};
         return listSystemTests().filter((test) => !category || test.category === category);
-      `,
-      syntax: "typescript",
-    });
+      `
+    );
     if (!result.success) throw new CliError(result.error ?? "could not list system tests");
     const tests = result.returnValue;
     printResult(tests, {
@@ -408,17 +491,17 @@ async function run(inv: ParsedInvocation): Promise<number> {
       throw new UsageError("select exact test names, --category CATEGORY, or --all");
     }
     const scope = await resolveSystemTestScope(inv);
+    const testTimeoutMs = positiveInt(inv, "test-timeout-ms");
     const config: StoredSystemTestRun["config"] = {
       names,
       ...(category ? { category } : {}),
       all,
       ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
       concurrency: positiveInt(inv, "concurrency", 1) ?? 1,
-      ...(inv.flags["test-timeout-ms"] !== undefined
-        ? { testTimeoutMs: positiveInt(inv, "test-timeout-ms") }
-        : {}),
+      ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+      approvalPolicy: approvalPolicy(inv),
     };
-    const stored = await startRun(scope, config, outDir(inv));
+    const stored = await startSystemTestRun(scope, config, outDir(inv));
     if (inv.flags["detach"] === true) {
       const value = {
         runId: stored.runId,
@@ -428,10 +511,10 @@ async function run(inv: ParsedInvocation): Promise<number> {
       printResult(value, { json });
       return 0;
     }
-    const status = await waitForRun(
+    const status = await waitForForegroundRun(
       evalClientFor(scope),
       routing(scope, stored),
-      stored.runId,
+      stored.evalRunId,
       positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
       scope.client
     );
@@ -456,17 +539,17 @@ async function status(inv: ParsedInvocation): Promise<number> {
         ? await waitForRun(
             client,
             routing(scope, stored),
-            runId,
+            stored?.evalRunId ?? runId,
             positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
             scope.client
           )
-        : await client.getRun({ ...routing(scope, stored), runId });
+        : await client.get({ ...routing(scope, stored), runId: stored?.evalRunId ?? runId });
     const progress = withElapsedProgress(state.progress);
     const value = {
       runId,
       status: state.status,
       ...(progress ? { progress } : {}),
-      ...(state.status === "done" && state.result?.success
+      ...(state.status === "succeeded" && state.result?.success
         ? { summary: state.result.returnValue }
         : state.result?.error
           ? { error: state.result.error }
@@ -476,7 +559,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
     // ephemeral source workspace. Persist the terminal summary at the moment
     // status observes it so `rerun RUN_ID` can recover failed/tool-failure test
     // names without depending on the old EvalDO still existing.
-    if (state.status === "done" && state.result?.success) {
+    if (state.status === "succeeded" && state.result?.success) {
       writeSystemTestArtifact(
         runId,
         "summary",
@@ -485,8 +568,8 @@ async function status(inv: ParsedInvocation): Promise<number> {
       );
     }
     printResult(value, { json });
-    if (state.status === "unknown" || state.status === "cancelled") return 1;
-    if (state.status === "done") {
+    if (["cancelled", "expired", "interrupted"].includes(state.status)) return 1;
+    if (state.status === "succeeded" || state.status === "failed") {
       if (!state.result?.success) return 1;
       return failedSummary(state.result.returnValue) ? 1 : 0;
     }
@@ -574,13 +657,12 @@ async function readPersisted(
   const runId = requireRunId(inv);
   const stored = loadSystemTestRun(runId);
   const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
-  const outer = await evalClientFor(scope).getRun({ ...routing(scope, stored), runId });
-  // Eval run handles are process-local. After a source-server restart a
-  // completed system-test run is legitimately "unknown", while its record is
-  // still durable in the owner's EvalDO scope. Probe that durable record below
-  // instead of making the volatile orchestration handle a prerequisite for
-  // inspect/trajectory/rerun.
-  if (outer.status !== "done" && outer.status !== "unknown" && outer.status !== "cancelled") {
+  if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
+  const outer = await evalClientFor(scope).get({
+    ...routing(scope, stored),
+    runId: stored.evalRunId,
+  });
+  if (!["succeeded", "failed", "cancelled", "expired", "interrupted"].includes(outer.status)) {
     const progress =
       outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
         ? (outer.progress as Record<string, unknown>)
@@ -591,12 +673,8 @@ async function readPersisted(
       `system-test run ${runId} is ${outer.status}; live inspection is not available yet, retry shortly`
     );
   }
-  if (outer.status === "done") resultValue(outer);
-  const result = await evalClientFor(scope).run({
-    ...routing(scope, stored),
-    code: code(runId),
-    syntax: "typescript",
-  });
+  if (outer.status === "succeeded" || outer.status === "failed") resultValue(outer);
+  const result = await executeSystemEval(scope, code(runId), stored);
   if (!result.success) throw new CliError(result.error ?? "could not inspect system-test run");
   const value = await expandTruncatedReturn(
     scope,
@@ -656,11 +734,14 @@ async function expandTruncatedReturn(
         encoding?: unknown;
       } | null = null;
       if (offset === 0) {
-        const page = await client.run({
+        const page = await executeEval(client, {
           ...routing(scope, stored),
-          code:
-            pageCode?.(offset, offset + requestedChars, pageKey) ??
-            `
+          source: {
+            kind: "inline",
+            syntax: "typescript",
+            code:
+              pageCode?.(offset, offset + requestedChars, pageKey) ??
+              `
               const pageKey = ${JSON.stringify(pageKey)};
               if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
                 scope[pageKey] = scope[${JSON.stringify(truncated.scopeKey)}];
@@ -676,7 +757,7 @@ async function expandTruncatedReturn(
                 chunk: Buffer.from(chunk, "utf16le").toString("base64"),
               };
             `,
-          syntax: "typescript",
+          },
         });
         if (!page.success) {
           throw new CliError(page.error ?? "could not page large system-test result");
@@ -742,13 +823,10 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const testName = typeof inv.flags["test"] === "string" ? inv.flags["test"] : undefined;
+    const inspectExpression = `inspectSystemTestRun(record, ${testName ? `{ testName: ${JSON.stringify(testName)} }` : "{}"})`;
     const { runId, stored, value } = await readPersisted(
       inv,
-      (id) =>
-        readCode(
-          id,
-          `inspectSystemTestRun(record, ${testName ? `{ testName: ${JSON.stringify(testName)} }` : "{}"})`
-        ),
+      (id) => readCode(id, inspectExpression),
       (progress) => {
         const live = progress["liveInspection"] as Record<string, unknown> | undefined;
         if (!live) return undefined;
@@ -758,7 +836,9 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
         const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
         const row = trajectories?.[testName] as Record<string, unknown> | undefined;
         return row?.["bounded"];
-      }
+      },
+      (id, start, end, pageKey) =>
+        pagedReadCode(id, inspectExpression, start, end, pageKey, "inspection")
     );
     const artifact = writeSystemTestArtifact(
       runId,
@@ -806,26 +886,7 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
       },
       full
         ? (id, start, end, pageKey) =>
-            readCode(
-              id,
-              `(() => {
-                const pageKey = ${JSON.stringify(pageKey)};
-                if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
-                  const value = ${trajectoryExpression};
-                  scope[pageKey] = JSON.stringify(value, null, 2);
-                }
-                const source = scope[pageKey];
-                if (typeof source !== "string") {
-                  throw new Error("Cached system-test trajectory is not text");
-                }
-                const chunk = source.slice(${start}, ${end});
-                return {
-                  length: source.length,
-                  encoding: "utf16le-base64",
-                  chunk: Buffer.from(chunk, "utf16le").toString("base64"),
-                };
-              })()`
-            )
+            pagedReadCode(id, trajectoryExpression, start, end, pageKey, "trajectory")
         : undefined
     );
     const artifact = writeSystemTestArtifact(
@@ -880,7 +941,9 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
     }
     const scope = await resolveSystemTestScope(inv, storedPrior.sessionName);
     const concurrency = positiveInt(inv, "concurrency");
-    const stored = await startRun(
+    const nextApprovalPolicy =
+      typeof inv.flags["approval-policy"] === "string" ? approvalPolicy(inv) : undefined;
+    const stored = await startSystemTestRun(
       scope,
       {
         ...prior.config,
@@ -888,6 +951,7 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
         all: false,
         ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
         ...(concurrency !== undefined ? { concurrency } : {}),
+        ...(nextApprovalPolicy !== undefined ? { approvalPolicy: nextApprovalPolicy } : {}),
       },
       outDir(inv)
     );
@@ -898,10 +962,10 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
       );
       return 0;
     }
-    const state = await waitForRun(
+    const state = await waitForForegroundRun(
       evalClientFor(scope),
       routing(scope, stored),
-      stored.runId,
+      stored.evalRunId,
       positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
       scope.client
     );
@@ -920,9 +984,13 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
     const runId = requireRunId(inv);
     const stored = loadSystemTestRun(runId);
     const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
-    const value = await evalClientFor(scope).cancel({ ...routing(scope, stored), runId });
+    if (!stored) throw new CliError(`no local metadata for system-test run ${runId}`);
+    const value = await evalClientFor(scope).cancel({
+      ...routing(scope, stored),
+      runId: stored.evalRunId,
+    });
     printResult({ runId, ...value }, { json });
-    return value.ok ? 0 : 1;
+    return value.status === "terminal" ? 1 : 0;
   } catch (error) {
     return printError(error, { json });
   }
@@ -932,14 +1000,13 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const scope = await resolveSystemTestScope(inv);
-    const result = await evalClientFor(scope).run({
-      ...routing(scope),
-      code: `
+    const result = await executeSystemEval(
+      scope,
+      `
         import { systemTestDoctor } from "@workspace-skills/system-testing/cli";
         return await systemTestDoctor(${JSON.stringify(typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined)});
-      `,
-      syntax: "typescript",
-    });
+      `
+    );
     if (!result.success) throw new CliError(result.error ?? "system-test doctor failed");
     const value = result.returnValue as {
       ok?: boolean;
@@ -1013,7 +1080,16 @@ const RUN_FLAGS = [
   { name: "all", takesValue: false, description: "Run the complete catalog" },
   { name: "model", takesValue: true, description: "Model ref for spawned test agents" },
   { name: "concurrency", takesValue: true, description: "Maximum concurrent test agents" },
-  { name: "test-timeout-ms", takesValue: true, description: "Per-test timeout in milliseconds" },
+  {
+    name: "approval-policy",
+    takesValue: true,
+    description: "Approval handling: fail-fast (default), wait, or reachable",
+  },
+  {
+    name: "test-timeout-ms",
+    takesValue: true,
+    description: "Optional operator-requested per-test cancellation deadline in milliseconds",
+  },
   { name: "poll-ms", takesValue: true, description: "Status polling interval (default 1000)" },
   {
     name: "detach",
@@ -1119,6 +1195,7 @@ export const systemTestCommands: CliCommand[] = [
     flags: [
       { name: "model", takesValue: true },
       { name: "concurrency", takesValue: true },
+      { name: "approval-policy", takesValue: true },
       { name: "poll-ms", takesValue: true },
       { name: "detach", takesValue: false },
       { name: "out-dir", takesValue: true },

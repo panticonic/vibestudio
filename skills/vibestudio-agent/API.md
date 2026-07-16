@@ -35,16 +35,6 @@ Authority principals: `host`, `user`, `code`
 | `account.listWorkspaceMembers` | List live account profiles for this child server's bound workspace, including implicit root membership. |
 | `account.updateProfile` | Update personalization (displayName/avatar/color/handle). Self, or root for others. The hub is the sole identity writer. |
 
-## `audit`
-
-Audit log query access
-
-Authority principals: `user`, `code`, `host`
-
-| Method | Description |
-|--------|-------------|
-| `audit.query` |  |
-
 ## `auth`
 
 Gateway authentication bootstrap routes
@@ -146,7 +136,10 @@ Authority principals: `user`, `code`, `host`, `entity`
 | `devHost.status` | List only development launches owned by the verified caller. |
 | `devHost.rebuild` | Rebuild the same owned launch from a new exact context snapshot. |
 | `devHost.stop` | Stop an owned development launch and all of its managed processes. |
-| `devHost.eval` | Evaluate code against the verified active generation of an owned launch. |
+| `devHost.eval.start` | Start an eval against the verified active generation of an owned launch. |
+| `devHost.eval.get` | Read a child eval snapshot after re-authorizing launch ownership and generation. |
+| `devHost.eval.events` | Read bounded child eval events for the active verified generation. |
+| `devHost.eval.cancel` | Cooperatively cancel a child eval in the active verified generation. |
 | `devHost.logs` | Stream development launch logs after re-authorizing ownership. |
 | `devHost.watch` | Stream lifecycle transitions after re-authorizing ownership. |
 
@@ -164,6 +157,7 @@ Authority principals: `code`, `host`, `user`, `entity`
 | `docs.listSurfaces` | List catalog surfaces and the number of entries the caller can see in each. |
 | `docs.listServices` | List registered RPC services and their methods with JSON-Schema args/returns and compositional authority declarations. |
 | `docs.describeService` | Describe one registered RPC service by name, including each method's compositional authority and JSON-Schema contract. Returns null for an unknown service. |
+| `docs.evalCapabilityCensus` | Return a bounded live proof that every eval-exposed capability leaf is classified, the exposure catalog contains no wildcard, and an injected unclassified fixture is rejected closed. |
 
 ## `eval`
 
@@ -173,14 +167,17 @@ Authority principals: `code`, `user`, `host`, `entity`
 
 | Method | Description |
 |--------|-------------|
-| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
-| `eval.reset` | Reset the eval context: wipe the persistent scope + the user `db` tables (a fresh scope), preserving the kernel's own state. The owner's existing data is cleared. |
-| `eval.startRun` | Start an eval run for a caller that cannot hold a connection (an agent DO): returns a runId at once; reset:true atomically clears scope/db before the idempotent run is first inserted. The eval runs server-held in the EvalDO and the result is delivered out-of-band (onEvalComplete) and/or polled via getRun. Connection-holding callers (panels/CLI) should use `run` for a one-request result. |
-| `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. |
-| `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
-| `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
-| `eval.cancel` | Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal. |
-| `eval.forceReset` | Forced recovery for a wedged eval DO: cancel every non-terminal run, abort all in-flight runs, and reset the eval context (wipe scope + user db) IMMEDIATELY without waiting on the stuck run chain. Use when `reset` itself would hang behind a wedged run. |
+| `eval.start` | Accept an owner-scoped eval run and return its durable handle. Defaults to adaptive, mutable, prompt-capable authority. |
+| `eval.delegatedStart` | Managed child-host transport for a parent-attested eval initiator. Not an agent-facing execution API. |
+| `eval.renew` | Renew an active EvalDO invocation lease. Trusted eval-kernel lifecycle only. |
+| `eval.beginCleanup` | Enter the bounded terminal-cleanup phase for an active invocation. Trusted eval-kernel lifecycle only. |
+| `eval.get` | Read the latest durable snapshot for an eval run. |
+| `eval.events` | Read a bounded page of run lifecycle, authority, and progress events. |
+| `eval.cancel` | Request cooperative cancellation, settle bounded structured cleanup, then invalidate run authority. |
+| `eval.reset` | Reset durable eval scope at a safe execution boundary. |
+| `eval.forceReset` | Invalidate live authority immediately and reset only after execution reaches a safe boundary. |
+| `eval.readScopeTextPage` | Read a bounded lossless page from a string in durable eval scope. |
+| `eval.deleteScopeValue` | Delete one value from durable eval scope. |
 
 ## `events`
 
@@ -479,6 +476,7 @@ Authority principals: `code`, `user`, `host`
 | `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
 | `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
 | `refs.listMainRefLog` | The host main-ref movement log for a repo (§2): every `main` advance with its operation, host-verified writer/on-behalf-of attribution, reason, and old→new values, oldest first. `sinceId` pages movements after a known id (omit for the full log). The render paths read main-advance provenance from here; the DO's stale-intent discard consults it (§6). |
+| `refs.updateMains` | Semantics-free atomic group compare-and-swap over protected `main` refs. Every entry validates (`expectedOld` matches current, null = must-not-exist) under one critical section; the batch persists in ONE atomic file replace. `next: null` removes a main. Any per-entry conflict fails the whole batch with structured per-entry data. Host-approval-gated (the host computes the content diff itself, D3) and restricted to the single VCS-DO writer (§3): every other caller gets a structured policy rejection. |
 
 ## `runtime`
 
@@ -538,7 +536,8 @@ Authority principals: `user`, `code`, `host`
 
 | Method | Description |
 |--------|-------------|
-| `shellPresence.heartbeat` |  |
+| `shellPresence.heartbeat` | Mark the authenticated shell or CLI approval surface as active |
+| `shellPresence.status` | Report whether any approval-capable client is currently reachable |
 
 ## `vcs`
 

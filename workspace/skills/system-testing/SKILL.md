@@ -31,6 +31,11 @@ Suite orchestrators should import suite collections from the public
 `workerTests`). Do not infer an internal source-file subpath from the Files
 table.
 
+For the eval capability census, do not recursively launch this suite. Call the
+live read-only `docs.evalCapabilityCensus()` service. It reports the classified
+leaf count, wildcard exposure, and the result of injecting an unclassified
+fixture into the closed-world validator.
+
 ## Deterministic tests (testkit)
 
 The `deterministic` stage wraps the exact-assertion suites from
@@ -124,6 +129,16 @@ eval({
 
 Workspace packages like `@workspace-skills/system-testing/stages` are auto-resolved - the build system builds them on first import. No `imports` parameter needed.
 
+The CLI orchestrator registers `HeadlessRunner.closeAll()` with
+`ctx.onCleanup`, so every spawned channel client is detached and ordinary
+terminal runs retire their agent contexts promptly. Fresh agent contexts are
+also owned automatically by the outer eval. If cancellation has already revoked
+user-code authority, the EvalDO kernel reclaims any remaining owned context
+through the runtime's server-verified lifecycle relationship. Custom eval
+orchestrators should register local subscriptions/timers with `ctx.onCleanup`;
+fresh runtime contexts need no manual terminal hook unless the orchestrator
+intentionally calls `ctx.detachContext(contextId)` to keep one alive.
+
 ## CLI/headless orchestrator mode
 
 When the orchestrator is an external CLI agent rather than a workspace chat
@@ -139,11 +154,14 @@ vibestudio system-test trajectory <run-id> eval-return-value --full --json
 vibestudio system-test rerun <run-id>
 ```
 
-For a disposable unattended server, enable the host's existing development
-auto-approver when starting it:
+For a disposable unattended server, either use the host's existing development
+auto-approver or operate the real queue from a second CLI:
 
 ```bash
 vibestudio remote serve --dev --auto-approve
+vibestudio approval watch
+vibestudio approval list --json
+vibestudio approval resolve <approval-id> session
 ```
 
 `--auto-approve` is intentionally accepted only with `--dev`. It covers host
@@ -161,9 +179,19 @@ reasoning effort for the current and later tests. An explicit model override is
 for model-specific investigations and disables that canonical fallback policy.
 Exact test names, categories, and the complete catalog are supported.
 
-There is no default per-test harness deadline. An explicit deadline is only an
-operator cancellation boundary and must never be used to mask an effect,
-transport, or Durable Object liveness bug.
+CLI tests have no harness deadline by default. `--test-timeout-ms` is an
+explicit operator-requested whole-test cancellation boundary. A timeout is an
+investigation trigger and must never be used to mask an effect, transport,
+model-provider, or Durable Object liveness bug.
+
+`--approval-policy fail-fast|reachable|wait` controls the harness response to
+an in-band approval wait. `fail-fast` is the unattended default and reports the
+pending approval ID. `reachable` waits only when a live desktop, mobile, or
+`vibestudio approval watch` client can handle the prompt. `wait` always leaves
+the operation suspended. The ApprovalQueue owns the single bounded decision
+deadline (30 minutes by default); the runner has no approval timer. Pending
+rows, requester identity, allowed choices, and `decisionDeadlineAt` are visible
+through `vibestudio approval list --json`.
 
 In CLI mode, a failed command is the start of the repair loop. Inspect the
 bounded packet, inspect the full trajectory if necessary, fix the root cause,

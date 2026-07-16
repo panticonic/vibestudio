@@ -203,6 +203,8 @@ describe("system-testing CLI-neutral API", () => {
 
     expect(mocks.runnerArgs).toEqual(["ctx-1", { model: SYSTEM_TEST_AGENT_MODEL }]);
     expect(record.config.model).toBe(SYSTEM_TEST_AGENT_MODEL);
+    expect(record.config.testTimeoutMs).toBeUndefined();
+    expect(record.config.approvalPolicy).toBe("fail-fast");
     expect(record.config.modelPolicy).toMatchObject({
       primaryModel: SYSTEM_TEST_AGENT_MODEL,
       fallbackModel: "openai-codex:gpt-5.6-luna",
@@ -345,7 +347,7 @@ describe("system-testing CLI-neutral API", () => {
     }
   });
 
-  it("returns an inspectable partial record from cancellation cleanup", async () => {
+  it("returns an inspectable partial record from terminal cleanup", async () => {
     let resolveSuite!: (value: unknown) => void;
     mocks.runSuite.mockImplementation(() => new Promise((resolve) => (resolveSuite = resolve)));
     mocks.captureAll.mockResolvedValue([
@@ -374,7 +376,7 @@ describe("system-testing CLI-neutral API", () => {
       runId: "st_cancelled",
       contextId: "ctx-1",
       names: ["alpha"],
-      registerCancellationCleanup: (handler) => {
+      registerTerminalCleanup: (handler) => {
         cleanup = handler;
       },
     });
@@ -457,6 +459,7 @@ describe("system-testing CLI-neutral API", () => {
           modelPolicy: mocks.modelPolicySnapshot(),
           concurrency: 1,
           testTimeoutMs: 100,
+          approvalPolicy: "fail-fast",
         },
         provenance: {},
         summary: {

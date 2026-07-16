@@ -1,6 +1,6 @@
 import { rpc, workers, workspace } from "@workspace/runtime";
 import { summarizeEntry, summarizeFailures, type DiagnosticLimits } from "./diagnostics.js";
-import { HeadlessRunner } from "./runner.js";
+import { HeadlessRunner, type SystemTestApprovalPolicy } from "./runner.js";
 import { allTests } from "./stages.js";
 import { TestRunner } from "./test-runner.js";
 import type { TestCase, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
@@ -28,10 +28,12 @@ export interface SystemTestRunOptions {
   model?: string;
   concurrency?: number;
   testTimeoutMs?: number;
+  approvalPolicy?: SystemTestApprovalPolicy;
+  signal?: AbortSignal;
   /** Durable orchestration heartbeat supplied by CLI/UI hosts. */
   onProgress?: (progress: SystemTestRunProgress) => void | Promise<void>;
-  /** EvalDO cancellation hook; lets a cancelled orchestration retire children before RPC abort. */
-  registerCancellationCleanup?: (cleanup: () => Promise<SystemTestRunRecord | void>) => void;
+  /** EvalDO terminal hook; retires run-owned sessions on every terminal outcome. */
+  registerTerminalCleanup?: (cleanup: () => Promise<SystemTestRunRecord | void>) => void;
   /** Periodic, non-blocking record used by the CLI to inspect a running case. */
   onInspectionUpdate?: (record: SystemTestRunRecord) => void | Promise<void>;
 }
@@ -88,6 +90,7 @@ export interface SystemTestRunRecord {
     modelPolicy: ReturnType<HeadlessRunner["modelPolicySnapshot"]>;
     concurrency: number;
     testTimeoutMs?: number;
+    approvalPolicy: SystemTestApprovalPolicy;
   };
   provenance: {
     connection?: unknown;
@@ -110,6 +113,7 @@ export interface SystemTestDoctorResult {
 }
 
 const DEFAULT_CONCURRENCY = 1;
+const DEFAULT_APPROVAL_POLICY: SystemTestApprovalPolicy = "fail-fast";
 const LIVE_COMPLETED_PROBLEM_LIMIT = 4;
 const LIVE_MESSAGE_LIMIT = 20;
 const LIVE_INVOCATION_LIMIT = 30;
@@ -132,6 +136,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
     options.testTimeoutMs === undefined
       ? undefined
       : normalizePositiveInt(options.testTimeoutMs, options.testTimeoutMs);
+  const approvalPolicy = options.approvalPolicy ?? DEFAULT_APPROVAL_POLICY;
   const provenance: SystemTestRunRecord["provenance"] = {};
   const queued = new Set(selected.map((test) => test.name));
   const running = new Map<string, { name: string; category: string; startedAt: string }>();
@@ -180,6 +185,9 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const runner = new HeadlessRunner(options.contextId, { model });
   const tester = new TestRunner(runner, {
     ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+    approvalPolicy,
+    ...(options.signal ? { signal: options.signal } : {}),
+    terminalCleanupOwnsCancellation: options.registerTerminalCleanup !== undefined,
     onTestStart: (test) => {
       queued.delete(test.name);
       running.set(test.name, {
@@ -265,7 +273,15 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
         status: "running",
         startedAt,
         updatedAt: new Date().toISOString(),
-        config: runConfig(options, selected, model, concurrency, testTimeoutMs, runner),
+        config: runConfig(
+          options,
+          selected,
+          model,
+          concurrency,
+          testTimeoutMs,
+          approvalPolicy,
+          runner
+        ),
         provenance,
         summary: summarizeRun(options.runId, suite, "running"),
         suite,
@@ -277,9 +293,14 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const inspectionTimer = options.onInspectionUpdate
     ? setInterval(() => publishInBackground("inspection", publishInspection()), 5_000)
     : undefined;
-  let cancellationRecord: SystemTestRunRecord | null = null;
-  options.registerCancellationCleanup?.(async () => {
-    if (cancellationRecord) return cancellationRecord;
+  let runFinished = false;
+  let terminalCleanupRecord: SystemTestRunRecord | null = null;
+  options.registerTerminalCleanup?.(async () => {
+    if (runFinished) {
+      await runner.closeAll();
+      return;
+    }
+    if (terminalCleanupRecord) return terminalCleanupRecord;
     const captured = await runner.captureAll();
     await runner.closeAll();
     const results = [...completedEntries];
@@ -337,19 +358,27 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
       Date.now() - Date.parse(startedAt)
     );
     const completedAt = new Date().toISOString();
-    cancellationRecord = {
+    terminalCleanupRecord = {
       schemaVersion: SYSTEM_TEST_RUN_SCHEMA_VERSION,
       runId: options.runId,
       status: "cancelled",
       startedAt,
       updatedAt: completedAt,
       completedAt,
-      config: runConfig(options, selected, model, concurrency, testTimeoutMs, runner),
+      config: runConfig(
+        options,
+        selected,
+        model,
+        concurrency,
+        testTimeoutMs,
+        approvalPolicy,
+        runner
+      ),
       provenance,
       summary: summarizeRun(options.runId, suite, "cancelled"),
       suite,
     };
-    return cancellationRecord;
+    return terminalCleanupRecord;
   });
   let suite: TestSuiteResult;
   try {
@@ -357,23 +386,26 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   } finally {
     if (inspectionTimer !== undefined) clearInterval(inspectionTimer);
   }
+  if (options.signal?.aborted) throw new Error("System-test run cancelled");
   suite.skipped = Math.max(0, listSystemTests().length - selected.length);
   const summary = summarizeRun(options.runId, suite, "completed");
   await publishProgress("completed");
 
   const completedAt = new Date().toISOString();
-  return {
+  const record: SystemTestRunRecord = {
     schemaVersion: SYSTEM_TEST_RUN_SCHEMA_VERSION,
     runId: options.runId,
     status: "completed",
     startedAt,
     updatedAt: completedAt,
     completedAt,
-    config: runConfig(options, selected, model, concurrency, testTimeoutMs, runner),
+    config: runConfig(options, selected, model, concurrency, testTimeoutMs, approvalPolicy, runner),
     provenance,
     summary,
     suite,
   };
+  runFinished = true;
+  return record;
 }
 
 function boundedLiveEntry(entry: TestSuiteResultEntry): TestSuiteResultEntry {
@@ -494,6 +526,43 @@ export async function systemTestDoctor(
     "agent worker is registered"
   );
   await capture(
+    "approval-path",
+    async () => {
+      const [pendingRaw, presenceRaw] = await Promise.all([
+        rpc.call("main", "shellApproval.listPending", []),
+        rpc.call("main", "shellPresence.status", []),
+      ]);
+      const pending = Array.isArray(pendingRaw)
+        ? pendingRaw.filter(
+            (value) =>
+              !!value &&
+              typeof value === "object" &&
+              !Array.isArray(value) &&
+              (value as Record<string, unknown>)["repoPath"] === "workers/agent-worker"
+          )
+        : [];
+      const presence =
+        presenceRaw && typeof presenceRaw === "object" && !Array.isArray(presenceRaw)
+          ? (presenceRaw as Record<string, unknown>)
+          : {};
+      if (pending.length > 0) {
+        const ids = pending
+          .map((value) => (value as Record<string, unknown>)["approvalId"])
+          .filter((value): value is string => typeof value === "string");
+        throw new Error(
+          `agent-worker is waiting on ${pending.length} approval(s): ${ids.join(", ")}. ` +
+            "Run `vibestudio approval list` and resolve or deny them."
+        );
+      }
+      return {
+        pendingAgentWorkerApprovals: 0,
+        reachable: presence["reachable"] === true,
+        activeApproverCount: presence["activeApproverCount"] ?? 0,
+      };
+    },
+    "approval queue is clear for the agent worker"
+  );
+  await capture(
     "model",
     async () => {
       const service = await workers.resolveService("vibestudio.models.v1", null);
@@ -523,7 +592,7 @@ export async function systemTestDoctor(
         },
       };
     },
-    "system-test agent models are configured and credentialed"
+    "system-test agent models are configured; exact agent-version credential use is verified on first call"
   );
 
   return { ok: checks.every((check) => check.ok), checks };
@@ -583,6 +652,7 @@ function runConfig(
   model: string,
   concurrency: number,
   testTimeoutMs: number | undefined,
+  approvalPolicy: SystemTestApprovalPolicy,
   runner: HeadlessRunner
 ): SystemTestRunRecord["config"] {
   return {
@@ -594,6 +664,7 @@ function runConfig(
     modelPolicy: runner.modelPolicySnapshot(),
     concurrency,
     ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+    approvalPolicy,
   };
 }
 
@@ -659,6 +730,7 @@ async function runSelectedByCategory(
   };
   const categories = [...new Set(selected.map((test) => test.category))];
   for (const category of categories) {
+    if (tester.aborted) break;
     const tests = selected.filter((test) => test.category === category);
     const partial = await tester.runSuite(tests, {
       concurrency: category === "workers" ? 1 : Math.min(concurrency, tests.length),

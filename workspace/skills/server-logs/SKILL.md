@@ -97,8 +97,6 @@ streaming prefer polling `query({ sinceSeq })` in a loop — it is cheap
 - `<workspace>/state/logs/server-log.jsonl` — the same structured records,
   appended per boot (rotated once to `.1`); read this for post-mortems of a
   server that already exited.
-- `<workspace>/state/logs/server.log` — raw stdout/stderr of a
-  desktop-spawned detached server (unstructured; truncated per spawn).
 - Deployed remote boxes use the systemd user unit:
   `vibestudio remote deploy logs <user@host>` or
   `ssh <host> journalctl --user -u vibestudio-server -f`. Pairing, doctor,

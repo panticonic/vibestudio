@@ -4,17 +4,19 @@ import { writeFileAtomicSync } from "../atomicFile.js";
 import { cliConfigRoot } from "./configPaths.js";
 
 export interface StoredSystemTestRun {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  /** Stable system-test artifact/provenance id. */
   runId: string;
+  /** Opaque handle returned by eval.start. */
+  evalRunId: string;
   createdAt: number;
   serverUrl: string;
   sessionName: string;
   ownerId: string;
   contextId: string;
   subKey: string;
-  /** Absolute run-specific artifact directory. Optional only for schema-v1
-   * records created before artifact provenance was persisted for every run. */
-  artifactDir?: string;
+  /** Absolute run-specific artifact directory. */
+  artifactDir: string;
   config: {
     names: string[];
     category?: string;
@@ -22,6 +24,7 @@ export interface StoredSystemTestRun {
     model?: string;
     concurrency: number;
     testTimeoutMs?: number;
+    approvalPolicy?: "fail-fast" | "wait" | "reachable";
   };
 }
 
@@ -122,15 +125,16 @@ export function loadSystemTestRun(runId: string): StoredSystemTestRun | null {
   try {
     const value = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<StoredSystemTestRun>;
     if (
-      value.schemaVersion !== 1 ||
+      value.schemaVersion !== 2 ||
       value.runId !== runId ||
+      typeof value.evalRunId !== "string" ||
       typeof value.serverUrl !== "string" ||
       typeof value.sessionName !== "string" ||
       typeof value.ownerId !== "string" ||
       typeof value.contextId !== "string" ||
       typeof value.subKey !== "string" ||
-      (value.artifactDir !== undefined &&
-        (typeof value.artifactDir !== "string" || !path.isAbsolute(value.artifactDir))) ||
+      typeof value.artifactDir !== "string" ||
+      !path.isAbsolute(value.artifactDir) ||
       !value.config ||
       !Array.isArray(value.config.names)
     ) {

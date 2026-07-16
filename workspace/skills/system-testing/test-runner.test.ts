@@ -34,6 +34,268 @@ function deferred<T>(): {
 }
 
 describe("TestRunner", () => {
+  it("fails fast with the concrete approval id when a headless model turn parks", async () => {
+    const listeners = new Set<(message: ChatMessage) => void>();
+    const messages: ChatMessage[] = [];
+    const waiting = {
+      id: "turn:approval:waiting",
+      senderId: "agent-approval",
+      content: "Waiting for model credential approval",
+      contentType: "lifecycle",
+      kind: "system",
+      complete: false,
+      lifecycle: {
+        status: "waiting",
+        reason: "model_credential_required",
+        title: "Waiting for model credential approval",
+      },
+    } satisfies ChatMessage;
+    const session = {
+      channelId: "chat-approval",
+      messages,
+      onMessage: vi.fn((listener: (message: ChatMessage) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      sendAndWait: vi.fn(
+        (_prompt: string, opts?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            queueMicrotask(() => {
+              messages.push(waiting);
+              for (const listener of listeners) listener(waiting);
+            });
+            opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+          })
+      ),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-approval",
+        agentEntityId: "agent-entity-approval",
+        agentTargetId: "do:workers/agent-worker:AiChatWorker:approval",
+        agentContextId: "ctx-approval",
+        messages,
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      approvalState: vi.fn(async () => ({
+        reachable: false,
+        activeApproverCount: 0,
+        maxAgeMs: 6_000,
+        pending: [{ approvalId: "approval-model-1", kind: "credential" }],
+      })),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { approvalPolicy: "fail-fast" });
+
+    const { result, execution } = await tester.runOne({
+      name: "approval-fail-fast",
+      category: "test",
+      description: "approval",
+      prompt: "use model",
+      validate: () => ({ passed: true }),
+    });
+
+    expect(result.passed).toBe(false);
+    expect(execution.error).toContain("Headless approval policy is fail-fast");
+    expect(execution.error).toContain("approval-model-1");
+    expect(execution.error).toContain("vibestudio approval resolve");
+    expect(runner.approvalState).toHaveBeenCalledOnce();
+    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: true });
+  });
+
+  it("fails an unresolvable credential reconnect under every approval policy", async () => {
+    const listeners = new Set<(message: ChatMessage) => void>();
+    const messages: ChatMessage[] = [];
+    const reconnect = {
+      id: "turn:credential-reconnect:waiting",
+      senderId: "agent-reconnect",
+      content: "Waiting for model credential reconnect",
+      contentType: "lifecycle",
+      kind: "system",
+      complete: false,
+      lifecycle: {
+        status: "waiting",
+        reason: "model_credential_reconnect_required",
+        title: "Waiting for model credential reconnect",
+      },
+    } satisfies ChatMessage;
+    const session = {
+      channelId: "chat-credential-reconnect",
+      messages,
+      onMessage: vi.fn((listener: (message: ChatMessage) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      sendAndWait: vi.fn(
+        (_prompt: string, opts?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            queueMicrotask(() => {
+              messages.push(reconnect);
+              for (const listener of listeners) listener(reconnect);
+            });
+            opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+          })
+      ),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-credential-reconnect",
+        agentEntityId: "agent-entity-reconnect",
+        agentTargetId: "do:workers/agent-worker:AiChatWorker:reconnect",
+        agentContextId: "ctx-reconnect",
+        messages,
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      approvalState: vi.fn(async () => ({
+        reachable: true,
+        activeApproverCount: 1,
+        maxAgeMs: 6_000,
+        pending: [],
+      })),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { approvalPolicy: "wait" });
+
+    const { result, execution } = await tester.runOne({
+      name: "credential-reconnect",
+      category: "test",
+      description: "reconnect",
+      prompt: "use model",
+      validate: () => ({ passed: true }),
+    });
+
+    expect(result.passed).toBe(false);
+    expect(execution.error).toContain("must be reconnected in an interactive desktop or mobile shell");
+    expect(execution.error).toContain("headless approval side channel cannot refresh");
+    expect(runner.approvalState).not.toHaveBeenCalled();
+    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: true });
+  });
+
+  it("aborts active work and does not start queued tests after run cancellation", async () => {
+    const controller = new AbortController();
+    const session = {
+      channelId: "chat-cancelled",
+      messages: [],
+      sendAndWait: vi.fn(
+        (_prompt: string, opts?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => reject(new Error("run cancelled")), {
+              once: true,
+            });
+          })
+      ),
+      captureModelExecutionEvidence: vi.fn(),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-cancelled",
+        agentEntityId: "agent-cancelled",
+        agentTargetId: "target-cancelled",
+        agentContextId: "ctx-cancelled",
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: false,
+        duration: 1,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { signal: controller.signal, concurrency: 1 });
+    const tests = ["first", "second", "third"].map((name) => ({
+      name,
+      category: "test",
+      description: name,
+      prompt: name,
+      validate: () => ({ passed: true }),
+    }));
+
+    const running = tester.runSuite(tests);
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledOnce());
+    controller.abort();
+    const suite = await running;
+
+    expect(runner.spawn).toHaveBeenCalledOnce();
+    expect(session.captureModelExecutionEvidence).not.toHaveBeenCalled();
+    expect(runner.collectDiagnostics).not.toHaveBeenCalled();
+    expect(session.close).toHaveBeenCalledOnce();
+    expect(suite).toMatchObject({ total: 1, errored: 1 });
+  });
+
+  it("leaves cancelled resources to the structured terminal cleanup owner", async () => {
+    const controller = new AbortController();
+    const session = {
+      channelId: "chat-terminal-owned",
+      messages: [],
+      sendAndWait: vi.fn(
+        (_prompt: string, opts?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener("abort", () => reject(new Error("run cancelled")), {
+              once: true,
+            });
+          })
+      ),
+      captureModelExecutionEvidence: vi.fn(),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-terminal-owned",
+        messages: [],
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, {
+      signal: controller.signal,
+      terminalCleanupOwnsCancellation: true,
+    });
+
+    const running = tester.runOne({
+      name: "terminal-owned",
+      category: "test",
+      description: "terminal-owned",
+      prompt: "terminal-owned",
+      validate: () => ({ passed: true }),
+    });
+    await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledOnce());
+    controller.abort();
+    await running;
+
+    expect(session.close).not.toHaveBeenCalled();
+  });
+
   it("adds pending invocation and lifecycle context to headless timeouts", async () => {
     const lifecycleMessage = {
       id: "turn:waiting",
@@ -91,7 +353,7 @@ describe("TestRunner", () => {
       spawn: vi.fn(async () => session),
       collectDiagnostics: vi.fn(async () => ({})),
     } as unknown as HeadlessRunner;
-    const tester = new TestRunner(runner, { testTimeoutMs: 5 });
+    const tester = new TestRunner(runner, { testTimeoutMs: 5, approvalPolicy: "wait" });
 
     const { result, execution } = await tester.runOne({
       name: "timeout-test",

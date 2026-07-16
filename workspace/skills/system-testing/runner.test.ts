@@ -244,4 +244,28 @@ describe("HeadlessRunner", () => {
       `use the exact repo basename ${JSON.stringify(repoName)}`
     );
   });
+
+  it("reclaims an active repo fixture from the terminal cleanup owner", async () => {
+    const root = new HeadlessRunner("ctx-test");
+    const runner = root.forTest("cancelled-fixture", { workspaceRepoFixture: true });
+    const repoName = runner.workspaceRepoName!;
+    const refs = (...repoPaths: string[]) => repoPaths.map((repoPath) => ({ repoPath }));
+    mocks.rpc.call
+      .mockResolvedValueOnce(refs())
+      .mockResolvedValueOnce(refs("panels/normal"))
+      .mockResolvedValueOnce(refs("panels/normal", `panels/${repoName}`))
+      .mockResolvedValueOnce(refs("panels/normal"));
+    mocks.vcs.deleteRepo.mockResolvedValue({ archived: true });
+
+    await runner.prepareWorkspaceRepoFixture();
+    await root.closeAll();
+    await root.closeAll();
+
+    expect(mocks.vcs.deleteRepo).toHaveBeenCalledOnce();
+    expect(mocks.vcs.deleteRepo).toHaveBeenCalledWith({
+      repoPath: `panels/${repoName}`,
+      force: true,
+    });
+    expect(mocks.rpc.call).toHaveBeenCalledTimes(4);
+  });
 });

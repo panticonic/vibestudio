@@ -38,6 +38,12 @@ Useful flags:
 - Tests have no harness deadline by default. `--test-timeout-ms N` is an
   operator-requested cancellation boundary, not a liveness fix; inspect the
   trajectory and repair the underlying system whenever it fires.
+- `--approval-policy fail-fast|reachable|wait` controls only how this headless
+  harness reacts after the agent reports that it is waiting for approval.
+  `fail-fast` is the unattended default. `reachable` waits only while at least
+  one approval-capable client is live. `wait` always leaves the suspended call
+  to the host approval queue. The queue—not this harness—owns the bounded
+  decision deadline (30 minutes by default).
 - `--detach` starts the durable EvalDO job and immediately returns its run ID.
 - `--out-dir DIR` writes result artifacts below `DIR/<run-id>/`. The default is
   the CLI config root with mode `0600` files.
@@ -45,6 +51,27 @@ Useful flags:
 A completed command exits `1` when any validation failed, a session errored, or
 an unexpected tool failure was observed. It still prints the run ID and saves
 the summary.
+
+## CLI approval side-channel
+
+Use a second terminal when a detached test or eval needs a human decision:
+
+```bash
+vibestudio approval list --json
+vibestudio approval watch
+vibestudio approval resolve <approval-id> session
+```
+
+`approval list` reports exact requester identity, operation, resource, allowed
+decisions, and `decisionDeadlineAt`. `approval watch` continuously heartbeats a
+live approval-capable CLI surface and prints queue changes; resolve or submit a
+decision from another terminal. Structured setup/secret prompts use
+`vibestudio approval submit <approval-id> '{"field":"value"}'`.
+
+Ordinary prompt-enabled evals wait for the queue's bounded decision. Unattended
+system tests default to `fail-fast`, producing the concrete approval ID and the
+commands above instead of looking like a stalled model call. Select `wait` or
+`reachable` explicitly when the side-channel is part of the test.
 
 ## Durable runs and inspection
 

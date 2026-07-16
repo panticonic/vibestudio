@@ -36,7 +36,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
 | `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
-| `approvals` | namespace | `request`, `revoke`, `list` |  |
+| `approvals` | namespace | `request`, `ask`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
 | `openPanel` | value |  |  |
@@ -205,21 +205,21 @@ unit with its own log + history. Reads take a `repoPath` (positional) to scope t
 one repo; `vcs.diff` takes only `state:…` hashes. Do not pass the workspace root
 or `process.cwd()`.
 
-| Task                                          | Call shape                                                 |
-| --------------------------------------------- | ---------------------------------------------------------- |
-| A repo's uncommitted + committed changes      | `await vcs.status("panels/chat")` (includes `uncommitted`) |
-| Status for a specific head in a repo          | `await vcs.status("panels/chat", "ctx:...")`               |
-| Log a repo's commit history                   | `await vcs.log("panels/chat", 20)`                         |
-| Resolve a head to a state hash in a repo      | `(await vcs.resolveHead("main", "panels/chat")).stateHash` |
-| Diff two states                               | `await vcs.diff(leftStateHash, rightStateHash)`            |
+| Task                                          | Call shape                                                          |
+| --------------------------------------------- | ------------------------------------------------------------------- |
+| A repo's uncommitted + committed changes      | `await vcs.status("panels/chat")` (includes `uncommitted`)          |
+| Status for a specific head in a repo          | `await vcs.status("panels/chat", "ctx:...")`                        |
+| Log a repo's commit history                   | `await vcs.log("panels/chat", 20)`                                  |
+| Resolve a head to a state hash in a repo      | `(await vcs.resolveHead("main", "panels/chat")).stateHash`          |
+| Diff two states                               | `await vcs.diff(leftStateHash, rightStateHash)`                     |
 | Read a file from a repo's head                | `await vcs.readFile({ path: "notes.md", repoPath: "panels/chat" })` |
-| Record a working edit (projects to disk)      | `await vcs.edit({ edits: [...] })`                         |
-| Seal working edits as a milestone             | `await vcs.commit({ message: "…", repoPaths: [...] })`     |
-| Drop uncommitted working edits                | `await vcs.discardEdits("panels/chat")`                    |
-| Pre-push check (ahead/diverged/uncommitted)   | `await vcs.pushStatus(["panels/chat"])`                    |
-| Ship a repo's committed changes into its main | `await vcs.push({ repoPaths: ["panels/chat"] })`           |
-| Fold main into your head after a diverge      | `await vcs.merge("panels/chat")`                           |
-| Dry-run a build of your working content       | `await vcs.previewBuild({ repoPaths: ["panels/chat"] })`   |
+| Record a working edit (projects to disk)      | `await vcs.edit({ edits: [...] })`                                  |
+| Seal working edits as a milestone             | `await vcs.commit({ message: "…", repoPaths: [...] })`              |
+| Drop uncommitted working edits                | `await vcs.discardEdits("panels/chat")`                             |
+| Pre-push check (ahead/diverged/uncommitted)   | `await vcs.pushStatus(["panels/chat"])`                             |
+| Ship a repo's committed changes into its main | `await vcs.push({ repoPaths: ["panels/chat"] })`                    |
+| Fold main into your head after a diverge      | `await vcs.merge("panels/chat")`                                    |
+| Dry-run a build of your working content       | `await vcs.previewBuild({ repoPaths: ["panels/chat"] })`            |
 
 `vcs.status(repoPath, head?)` reports that repo head's `uncommitted` working-edit
 count and its committed changes vs the repo's own `main` — a GAD state-diff, not
@@ -475,6 +475,36 @@ first. It refreshes metadata for `handle.call.*` / `emit(...)`. A target held by
 a mobile/non-CDP host rejects CDP access.
 
 ## Userland Approval Prompts
+
+The portable `approvals` namespace has two deliberately different typed
+challenge operations:
+
+- `approvals.request(...)` protects a custom shared resource and may persist a
+  caller/session/version decision as a grant.
+- `approvals.ask(...)` asks a one-shot domain question. It uses the same live
+  queue, routing, expiry, and resume transport, but its answer is never cached
+  and never creates a capability grant.
+
+Use `ask` for provider questions, test/domain choices, and other typed input
+whose answer is data rather than authority:
+
+```ts
+const before = await approvals.list();
+const answer = await approvals.ask({
+  subject: { id: "example:import-format", label: "Import format" },
+  title: "Which harmless format should be used?",
+  promptOptions: "choices",
+  options: [
+    { value: "json", label: "JSON", tone: "primary" },
+    { value: "csv", label: "CSV" },
+  ],
+});
+const after = await approvals.list(); // unchanged: ask never grants
+```
+
+An ephemeral question requires `promptOptions: "choices"` and explicit unique
+options. A dismissed question is returned as `kind: "dismissed"`; it is not a
+denial and is not remembered.
 
 Use `approvals.request()` only when custom userland code exposes a shared resource
 to other panels, workers, DOs, or extensions and needs a user decision that

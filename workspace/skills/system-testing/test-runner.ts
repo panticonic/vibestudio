@@ -6,7 +6,7 @@ import type {
   TestSuiteResultEntry,
   ToolFailureSummary,
 } from "./types.js";
-import type { HeadlessRunner } from "./runner.js";
+import type { HeadlessRunner, SystemTestApprovalPolicy } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 
@@ -26,6 +26,15 @@ export class TestRunner {
       ) => MaybePromise<void>;
       concurrency?: number;
       testTimeoutMs?: number;
+      approvalPolicy?: SystemTestApprovalPolicy;
+      signal?: AbortSignal;
+      /**
+       * A structured terminal-cleanup scope owns resources once the run signal
+       * aborts.  This prevents a cancelled execution's `finally` block from
+       * claiming a session with the already-aborted authored RPC signal before
+       * EvalDO can close it from `ctx.onCleanup`.
+       */
+      terminalCleanupOwnsCancellation?: boolean;
     }
   ) {
     if (!runner) {
@@ -39,6 +48,9 @@ export class TestRunner {
   run = this.runSuite.bind(this);
   /** Alias for runSuite */
   runTests = this.runSuite.bind(this);
+  get aborted(): boolean {
+    return this.opts?.signal?.aborted === true;
+  }
   /** Alias for runSuite with an explicit concurrency cap */
   runSuiteParallel = (tests: TestCase[], opts?: RunSuiteFilter): Promise<TestSuiteResult> => {
     return this.runSuite(tests, {
@@ -77,6 +89,7 @@ export class TestRunner {
     };
     const claimRunnable = async (): Promise<{ index: number; resources: string[] } | null> => {
       for (;;) {
+        if (this.aborted) return null;
         for (const index of pending) {
           const resources = resourcesFor(filtered[index]!);
           if (resources.some((resource) => activeResources.has(resource))) continue;
@@ -126,7 +139,13 @@ export class TestRunner {
       }
     };
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    const wakeOnAbort = () => wakeSchedulers();
+    this.opts?.signal?.addEventListener("abort", wakeOnAbort, { once: true });
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    } finally {
+      this.opts?.signal?.removeEventListener("abort", wakeOnAbort);
+    }
 
     return this.buildSuiteResult(tests.length, filtered.length, results, startTime);
   }
@@ -185,6 +204,7 @@ export class TestRunner {
       | Awaited<ReturnType<HeadlessRunner["prepareWorkspaceRepoFixture"]>>
       | undefined;
     try {
+      if (this.aborted) throw new Error(`System-test run cancelled before "${test.name}" started`);
       if (test.workspaceRepoFixture) {
         workspaceRepoFixtureState = await testRunner.prepareWorkspaceRepoFixture();
       }
@@ -193,34 +213,21 @@ export class TestRunner {
             runner: testRunner,
             testTimeoutMs,
             sendAndWait: async (targetSession, prompt, phase) => {
-              if (testTimeoutMs === undefined) {
-                await targetSession.sendAndWait(prompt);
-              } else {
-                const controller = new AbortController();
-                await this.withTimeout(
-                  targetSession.sendAndWait(prompt, { signal: controller.signal }),
-                  testTimeoutMs,
-                  `Timed out waiting for agent to finish test "${test.name}" during ${phase}`,
-                  controller
-                );
-              }
+              await this.sendAndWait(
+                targetSession,
+                prompt,
+                `Timed out waiting for agent to finish test "${test.name}" during ${phase}`
+              );
               await this.captureAndAssertModelExecution(targetSession, test.name, phase);
             },
           })
         : await (async (): Promise<TestExecutionResult> => {
             session = await testRunner.spawn();
-
-            if (testTimeoutMs === undefined) {
-              await session.sendAndWait(test.prompt);
-            } else {
-              const controller = new AbortController();
-              await this.withTimeout(
-                session.sendAndWait(test.prompt, { signal: controller.signal }),
-                testTimeoutMs,
-                `Timed out waiting for agent to finish test "${test.name}"`,
-                controller
-              );
-            }
+            await this.sendAndWait(
+              session,
+              test.prompt,
+              `Timed out waiting for agent to finish test "${test.name}"`
+            );
 
             const modelExecutionEvidence = await this.captureAndAssertModelExecution(
               session,
@@ -251,7 +258,7 @@ export class TestRunner {
       const duration = Date.now() - startTime;
       const messages = session ? ([...session.messages] as ChatMessage[]) : [];
       let modelExecutionEvidence: unknown;
-      if (session) {
+      if (session && !this.aborted) {
         try {
           const evidenceTimeoutMs = Math.min(testTimeoutMs ?? 5_000, 5_000);
           modelExecutionEvidence = await this.withTimeout(
@@ -286,10 +293,12 @@ export class TestRunner {
         test.expectedToolFailures
       );
       try {
-        execution.diagnostics = await testRunner.collectDiagnostics({
-          channelId: session?.channelId,
-          error: new Error(errorMessage),
-        });
+        execution.diagnostics = this.aborted
+          ? { cancelled: true }
+          : await testRunner.collectDiagnostics({
+              channelId: session?.channelId,
+              error: new Error(errorMessage),
+            });
       } catch (diagnosticErr) {
         execution.diagnostics = {
           generatedAt: new Date().toISOString(),
@@ -302,8 +311,10 @@ export class TestRunner {
         execution,
       };
     } finally {
+      const terminalCleanupOwnsResources =
+        this.aborted && this.opts?.terminalCleanupOwnsCancellation === true;
       try {
-        if (session) {
+        if (session && !terminalCleanupOwnsResources) {
           // A failed/timed-out test may still own an active eval or model call.
           // Await retirement before releasing its resource lock so subsequent
           // tests cannot race background mutations from the failed trajectory.
@@ -381,7 +392,7 @@ export class TestRunner {
           };
         }
       }
-      if (workspaceRepoFixtureState) {
+      if (workspaceRepoFixtureState && !terminalCleanupOwnsResources) {
         try {
           const fixtureCleanup =
             await testRunner.cleanupWorkspaceRepoFixture(workspaceRepoFixtureState);
@@ -440,6 +451,129 @@ export class TestRunner {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
+  }
+
+  private async sendAndWait(
+    session: HeadlessSession,
+    prompt: string,
+    timeoutMessage: string
+  ): Promise<void> {
+    const controller = new AbortController();
+    let approvalGate: ReturnType<TestRunner["approvalGate"]> | undefined;
+    const runSignal = this.opts?.signal;
+    const abortFromRun = () => controller.abort(runSignal?.reason);
+    if (runSignal?.aborted) abortFromRun();
+    else runSignal?.addEventListener("abort", abortFromRun, { once: true });
+    try {
+      const waiting = session.sendAndWait(prompt, { signal: controller.signal });
+      approvalGate = this.approvalGate(session, controller);
+      if (this.opts?.testTimeoutMs === undefined) {
+        await Promise.race([waiting, approvalGate.promise]);
+      } else {
+        await this.withTimeout(
+          Promise.race([waiting, approvalGate.promise]),
+          this.opts.testTimeoutMs,
+          timeoutMessage,
+          controller
+        );
+      }
+    } finally {
+      approvalGate?.cancel();
+      runSignal?.removeEventListener("abort", abortFromRun);
+    }
+  }
+
+  private approvalGate(
+    session: HeadlessSession,
+    controller: AbortController
+  ): { promise: Promise<never>; cancel(): void } {
+    const policy = this.opts?.approvalPolicy ?? "fail-fast";
+    let rejectGate: ((error: Error) => void) | null = null;
+    let checking = false;
+    let settled = false;
+    const promise = new Promise<never>((_resolve, reject) => {
+      rejectGate = reject;
+    });
+    const waitingMessage = () =>
+      [...session.messages]
+        .reverse()
+        .find(
+          (message) =>
+            message.lifecycle?.status === "waiting" &&
+            (message.lifecycle.reason === "model_credential_required" ||
+              message.lifecycle.reason === "model_credential_reconnect_required")
+        );
+    const fail = (message: string) => {
+      if (settled) return;
+      settled = true;
+      rejectGate?.(new Error(message));
+      // Settle the policy gate first so an abort-aware transport cannot race
+      // its generic "aborted" error ahead of the actionable policy diagnosis.
+      controller.abort();
+    };
+    const inspect = async () => {
+      if (checking || settled) return;
+      const lifecycle = waitingMessage();
+      if (!lifecycle) return;
+      // A reconnect card is not an approval: no decision in ApprovalQueue can
+      // replace or refresh an expired provider credential. Headless clients
+      // must therefore terminate with actionable diagnostics under every
+      // approval policy instead of waiting forever on an impossible side
+      // channel operation.
+      if (lifecycle.lifecycle?.reason === "model_credential_reconnect_required") {
+        fail(
+          "The model credential must be reconnected in an interactive desktop or mobile shell; " +
+            "the headless approval side channel cannot refresh provider credentials. Reconnect it, then rerun."
+        );
+        return;
+      }
+      // An explicit wait policy does not depend on a live shell-presence RPC:
+      // ApprovalQueue owns the bounded human-decision deadline and settles the
+      // suspended operation. There is no downstream approval timer here.
+      if (policy === "wait") return;
+      checking = true;
+      try {
+        const state = await this.runner.approvalState(session);
+        if (!waitingMessage() || settled) return;
+        const first = state.pending[0];
+        const approvalId = typeof first?.["approvalId"] === "string" ? first["approvalId"] : null;
+        const kind = typeof first?.["kind"] === "string" ? first["kind"] : "approval";
+        const detail = approvalId ? ` Pending ${kind} approval: ${approvalId}.` : "";
+        const guidance =
+          " Use `vibestudio approval list` to inspect it and `vibestudio approval resolve` to decide it.";
+        if (policy === "fail-fast") {
+          fail(`Headless approval policy is fail-fast.${detail}${guidance}`);
+          return;
+        }
+        if (policy === "reachable" && !state.reachable) {
+          fail(
+            `No approval-capable client is reachable (0 active approvers).${detail} ` +
+              "Start `vibestudio approval watch` or a desktop/mobile shell, then rerun with an approval wait policy."
+          );
+          return;
+        }
+      } catch (error) {
+        fail(
+          `Could not inspect approval reachability: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        checking = false;
+      }
+    };
+    const subscribe = (
+      session as HeadlessSession & {
+        onMessage?: HeadlessSession["onMessage"];
+      }
+    ).onMessage;
+    const unsubscribe = subscribe ? subscribe.call(session, () => void inspect()) : () => {};
+    void inspect();
+    return {
+      promise,
+      cancel() {
+        settled = true;
+        unsubscribe();
+      },
+    };
   }
 
   private async captureAndAssertModelExecution(

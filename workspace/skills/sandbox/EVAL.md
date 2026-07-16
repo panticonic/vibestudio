@@ -10,6 +10,12 @@ sent back.
 chat/editor panel — or the user — disconnects. State (`scope`, the in-DO SQLite
 `db`) lives in the EvalDO and persists across calls and across turns.
 
+Typed interactions suspend and resume the same eval run. Use
+`approvals.request(...)` for a custom resource permission that may create a
+grant; use `approvals.ask(...)` for an ephemeral domain/userland question whose
+answer must never become authority. Both travel through the normal challenge
+queue. See [RUNTIME_API.md#userland-approval-prompts](RUNTIME_API.md#userland-approval-prompts).
+
 ## Eval Perspective
 
 Eval runs in a server-side EvalDO, not in the visible chat/editor panel. That
@@ -33,7 +39,7 @@ perspective:
   import { openPanel } from "@workspace/runtime";
 
   const inherited = await getParent();
-  const root = inherited ?? await openPanel("about/new", { parentId: null });
+  const root = inherited ?? (await openPanel("about/new", { parentId: null }));
   const child = await openPanel("panels/spectrolite", {
     parentId: root.id,
     focus: true,
@@ -45,6 +51,7 @@ perspective:
   // it owns/cleans its descendants. Do not close an inherited user panel.
   if (!inherited) await root.close();
   ```
+
 - When the user points at "this panel", "the parent panel", or another visible
   panel, inspect the visible tree with `panelTree.list()/roots()/children()`,
   choose the target panel, and read `await target.stateArgs.get()` to find its
@@ -112,35 +119,161 @@ file-loaded meaning. For substantial multi-file work, prefer a real entry file.
 
 ## Parameters
 
-| Param     | Type                             | Default | Description                                                            |
-| --------- | -------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `code`    | string                           | —       | TypeScript/JavaScript code to execute |
-| `path`    | string                           | —       | Code file to execute, text/data file to load, or a source-base hint when `code` is also present |
-| `sourcePath` | string                        | —       | Virtual context-relative filename for inline code and relative imports |
-| `syntax`  | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                           |
-| `imports` | `Record<string, string>`         | —       | Packages to build on-demand (workspace or npm)                         |
+| Param            | Type                                             | Default   | Description                                                                                     |
+| ---------------- | ------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------------- |
+| `code`           | string                                           | —         | TypeScript/JavaScript code to execute                                                           |
+| `path`           | string                                           | —         | Code file to execute, text/data file to load, or a source-base hint when `code` is also present |
+| `sourcePath`     | string                                           | —         | Virtual context-relative filename for inline code and relative imports                          |
+| `syntax`         | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"`   | Source syntax                                                                                   |
+| `imports`        | `Record<string, string>`                         | —         | Packages to build on-demand (workspace or npm)                                                  |
+| `reset`          | boolean                                          | `false`   | Atomically clear this eval scope and private database before this run                           |
+| `deadlineMs`     | positive integer                                 | unbounded | Cooperative deadline for the host run                                                           |
+| `idempotencyKey` | string                                           | tool call | Stable logical run identity for lost-response retry and conflict detection                      |
+| `authority`      | authority intent                                 | adaptive  | Optional deliberate containment; ordinary eval should omit it                                   |
+
+`deadlineMs` is a cooperative deadline for computation that is intrinsically
+time-bounded. It is not an approval timeout. Omit it from approval-bearing eval:
+the central approval queue owns the bounded wait and resumes or rejects the
+exact suspended dispatch. Adding a downstream deadline can abort otherwise
+healthy work while a reachable user is still deciding.
+
+## Dynamic Authority And Deliberate Containment
+
+Ordinary eval is intentionally broad and dynamic. With no `authority` option it
+starts in `adaptive` + `mutable` + `prompt`: a runtime-computed call inside the
+reviewed eval ceiling activates on first dispatch, baseline leaves proceed,
+and an approval-classified leaf suspends that exact call for the normal approval
+path. You do not enumerate a static manifest for everyday exploratory work.
+
+Use containment only when it is part of the task:
+
+```ts
+eval({
+  authority: {
+    mode: "strict",
+    effects: "read-only",
+    approvals: "pregranted-only",
+    requests: [
+      {
+        capability: "service:fs.readFile",
+        resource: { kind: "exact", key: "service:fs.readFile" },
+      },
+    ],
+  },
+  code: `return await fs.readFile("README.md", "utf-8")`,
+});
+```
+
+- `mode: "strict"` admits only normalized leaves covered by `requests`. A
+  dynamically chosen undeclared call fails `EVAL_AUTHORITY_CONSTRAINT` without
+  prompting or entering its handler.
+- `effects: "read-only"` blocks write/admin/destructive dispatch on both the
+  service proxy and raw `rpc.call` planes with `EVAL_READ_ONLY`.
+- `approvals: "pregranted-only"` never publishes a prompt. A missing grant
+  fails `EVAL_APPROVAL_REQUIRED` with the canonical grant intent.
+- `preauthorize` accepts canonical host-service or workspace-DO call intents
+  under `authority`. Review completes before JavaScript begins; a preauthorized
+  call cannot offer the exact-dispatch-only `once` choice.
+- `requests` constrain eval; they never grant authority. Resource shapes are
+  `exact`, `prefix`, `origin`, `domain`, or the explicit network `*` form.
+
+For example, preauthorize one exact host-service call while keeping adaptive
+activation for the rest of the snippet:
+
+```ts
+eval({
+  authority: {
+    mode: "adaptive",
+    approvals: "prompt",
+    preauthorize: [
+      {
+        plane: "host-service",
+        method: "corsApproval.authorize",
+        args: [
+          {
+            targetUrl: "https://example.com/data",
+            requestOrigin: "https://vibestudio.test",
+          },
+        ],
+      },
+    ],
+  },
+  code: `return await services.corsApproval.authorize({
+    targetUrl: "https://example.com/data",
+    requestOrigin: "https://vibestudio.test",
+  })`,
+});
+```
+
+Use `plane: "workspace-do"` with `targetId`, `capability`, `method`, and `args`
+for a workspace Durable Object intent. Do not put `requests` in adaptive mode;
+the input schema rejects that combination because requests are a strict-mode
+ceiling, not an approval request.
+
+`idempotencyKey` belongs to the logical run, not the individual tool call. A
+byte-equivalent retry with the same key returns the original durable outcome
+without re-running JavaScript; reusing the key with changed normalized input
+fails `EVAL_IDEMPOTENCY_CONFLICT`. Choose a new key for an intentional new run.
+
+Authority failures are normal terminal eval results and are rendered as failed
+tool invocations so the agent cannot mistake a rejected effect for success.
+Catch ordinary errors inside the snippet only when the test needs to compare
+multiple dispatches in one run; constraints that fail before JavaScript starts
+must be inspected from the tool error details.
 
 ## Injected Variables
 
 These are available in eval code. `services`, `ctx`, `scope`, `scopes`, `db`,
 `help`, `chat`, and `agent` are eval-only ambient variables. `rpc` and `fs` are
 the same portable bindings used by panels/workers; use them ambiently or import
-them from `@workspace/runtime`. Eval also accepts importing an available ambient
-helper from `@workspace/runtime` as a compatibility form; it resolves to the
-same live binding rather than shadowing it.
+them from `@workspace/runtime`. Eval-only ambient helpers are not runtime
+exports and must be used directly.
 
-| Variable | What it is |
-| --- | --- |
-| `rpc.call(targetId, method, args)` | Portable RPC client, same shape as panels/workers. Raw server services target `"main"`: `await rpc.call("main", "vcs.status", ["ctx:" + ctx.contextId])` |
-| `services` | Convenience namespace for server services. If the service name is also a rich runtime binding (`workers`, `vcs`, `fs`, `credentials`, `blobstore`, …), `services.<name>` is that ergonomic runtime client, not the raw service catalog. Raw catalog methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`; non-colliding services are also reachable as `services.<svc>.<method>(...)`. Access is still gated server-side by each method's policy. Use `help()` to list services and `help("workers")` to inspect a runtime binding. |
-| `fs` | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")` |
-| `ctx` | `{ contextId, objectKey }` for the current eval session |
-| `scope` | Persistent REPL scope (see below); `scope.x = …` survives across calls in the same channel |
-| `scopes` | Management API for the serialized scope layer (see below) |
-| `db` | Synchronous in-DO SQLite (see below) |
-| `chat` | The full chat API for the current channel — `publish`/`send`, custom-message cards, `registerMessageType`, `callMethod`, etc. (agent eval only; see below) |
-| `agent` | Inspect/configure THIS agent's own state — `await agent.describe()`, `await agent.setModel("provider:model")`, etc. (agent eval only; see below) |
-| `help()` | `await help()` lists services + import guidance; `await help("vcs")` describes one service |
+| Variable                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rpc.call(targetId, method, args)` | Portable RPC client, same shape as panels/workers. Raw server services target `"main"`: `await rpc.call("main", "vcs.status", ["ctx:" + ctx.contextId])`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `services`                         | Convenience namespace for server services. If the service name is also a rich runtime binding (`workers`, `vcs`, `fs`, `credentials`, `blobstore`, …), `services.<name>` is that ergonomic runtime client, not the raw service catalog. Raw catalog methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`; non-colliding services are also reachable as `services.<svc>.<method>(...)`. Access is still gated server-side by each method's policy. Use `help()` to list services and `help("workers")` to inspect a runtime binding.                                                                                                                                                                                                                                                                                                             |
+| `fs`                               | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `ctx`                              | Run lifecycle: `{ contextId, objectKey, signal, reportProgress(value), onCleanup(handler), detachContext(contextId) }`. `signal` aborts on cooperative cancellation/deadline. `onCleanup` owns a local resource until every terminal outcome, runs exactly once before the scope FIFO lease is released, and returns an unregister function for resources disposed early. Cleanup callbacks receive an independent 30-second RPC cancellation budget, so captured runtime clients can still close resources after the run signal aborts; ordinary user continuations retain the aborted run signal. Cleanup keeps the run's original delegation ceiling and strict/read-only constraints and cannot open a new approval prompt. Fresh contexts created through the runtime are owned automatically; `detachContext` deliberately transfers one out of the run lifecycle. |
+| `scope`                            | Persistent REPL scope (see below); `scope.x = …` survives across calls in the same channel                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `scopes`                           | Management API for the serialized scope layer (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `db`                               | Synchronous in-DO SQLite (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `chat`                             | The full chat API for the current channel — `publish`/`send`, custom-message cards, `registerMessageType`, `callMethod`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `agent`                            | Inspect/configure THIS agent's own state — `await agent.describe()`, `await agent.setModel("provider:model")`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `help()`                           | `await help()` lists services + import guidance; `await help("vcs")` describes one service                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+Run-owned resources must be attached to the eval lifecycle when a library does
+not already do so. Cleanup runs on success, execution error, deadline,
+cancellation, reset, and force reset; all registered handlers are settled even
+if one fails. A cleanup failure is visible in the terminal eval result.
+
+```ts
+const client = await createLongLivedClient();
+const release = ctx.onCleanup(() => client.close());
+
+// If ordinary control flow disposes it first, unregister the terminal hook.
+await client.close();
+release();
+```
+
+Use `ctx.signal` for cooperative work and pass it to APIs that accept an
+`AbortSignal`. Do not retain `ctx`, its signal, callbacks, runtime clients, or
+unsubscribers in persistent `scope`; they are run-local authority and lifecycle
+objects.
+
+Fresh worker/DO contexts created by the run are reclaimed automatically after
+local cleanup. This still works after cancellation: ordinary dispatch aborts,
+the trusted EvalDO kernel rotates the invocation into the bounded cleanup phase,
+destroys only contexts whose fresh creation was durably registered by that run,
+then invalidates the credential. The runtime additionally verifies the immutable
+root-entity/context match. To intentionally keep a fresh context beyond the run,
+make that transfer explicit:
+
+```ts
+const child = await workers.create("workers/background-task");
+ctx.detachContext(child.contextId);
+return { contextId: child.contextId };
+```
 
 ```
 eval({ code: `
@@ -260,7 +393,8 @@ open the `about/server-logs` viewer for a live follow. See
 
 ## Result Shape
 
-`eval.run` returns `{ success, console, returnValue?, error?, scopeKeys? }`:
+The `eval` tool waits on the asynchronous run handle and returns
+`{ success, console, returnValue?, error?, scopeKeys? }`:
 
 - `success` — whether the run completed without throwing.
 - `console` — captured console output. Oversized output is windowed in the
@@ -364,7 +498,7 @@ To pin a specific VCS ref or state hash, use the `imports` parameter explicitly:
 eval({ code: `...`, imports: { "@workspace-skills/workspace-dev": "state:<stateHash>" } })
 ```
 
-The map value is a *ref*, not a package name. Omit workspace packages entirely
+The map value is a _ref_, not a package name. Omit workspace packages entirely
 for the current context; `"latest"`, `"workspace"`, and package-manager-style
 `"workspace:*"`/`"workspace:^"`/`"workspace:~"` are accepted aliases for that
 same context working state. Explicit pins are GAD build refs: `"main"`,
@@ -513,6 +647,10 @@ the post-eval auto-save. No need for extra `scopes.save()` calls within eval.
 `db` is a **synchronous** in-DO SQLite database, persisted in the EvalDO across
 calls (so it survives across turns and panel disconnects). It is the persistent
 storage companion to `scope`.
+
+The complete eval database API is `db.exec(sql, ...params)` and
+`db.run(sql, ...params)`. There is no `db.open`, `db.prepare`, statement object,
+or separate connection lifecycle—the database is already open and owner-scoped.
 
 ```
 eval({ code: `
@@ -729,15 +867,15 @@ Use the `vcs` service for workspace source changes:
 
 The model is **edit → commit → push**, and `main` advances ONLY via push:
 
-- `vcs.edit({ edits })` records a *working* change on your context head and
+- `vcs.edit({ edits })` records a _working_ change on your context head and
   projects it to disk so it builds immediately. It returns a `VcsEditResult`
   (`{ head, stateHash, committed: false, status: "uncommitted", editSeq,
-  changedPaths }`). It is **not** a commit, has no message, and does not appear
+changedPaths }`). It is **not** a commit, has no message, and does not appear
   in `vcs.log`. The `edit`/`write` tools do exactly this for you.
 - `vcs.commit({ message })` folds your uncommitted working edits into a per-repo
   snapshot — a deliberate, messaged milestone. The `message` is **mandatory**.
   It returns a `VcsCommitResult[]` (`{ repoPath, head, stateHash, eventId,
-  editCount, status: "committed" | "unchanged", changedPaths }`).
+editCount, status: "committed" | "unchanged", changedPaths }`).
 - `vcs.push({ repoPaths })` advances `main`. Push is **fast-forward-only** and
   **build-gated** (see below).
 
@@ -745,7 +883,7 @@ So edit ≠ commit: accumulate working edits, then seal them as named commits.
 
 VCS tracks workspace **source**: every path must live under a tracked directory
 (`projects/`, `panels/`, `packages/`, `apps/`, `workers/`, `skills/`,
-`extensions/`). A *temporary* file you write still goes under one of those (e.g.
+`extensions/`). A _temporary_ file you write still goes under one of those (e.g.
 `projects/tmp-foo/note.txt`) — `vcs.edit` rejects platform-ignored paths
 (`.vibestudio`, `.tmp`, `.git`, `.gad`, `node_modules`, `dist`, `.env`, `*.log`),
 so never use an `fs.mktemp()` path here. In container sections such as

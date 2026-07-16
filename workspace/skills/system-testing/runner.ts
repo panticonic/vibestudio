@@ -64,6 +64,15 @@ interface ModelPolicyState {
   activations: ModelPolicyActivation[];
 }
 
+export type SystemTestApprovalPolicy = "fail-fast" | "wait" | "reachable";
+
+export interface HeadlessApprovalState {
+  reachable: boolean;
+  activeApproverCount: number;
+  maxAgeMs: number;
+  pending: Array<Record<string, unknown>>;
+}
+
 export class HeadlessRunner {
   private contextId: string;
   private readonly shared: {
@@ -71,6 +80,7 @@ export class HeadlessRunner {
     testNames: Map<HeadlessSession, string | null>;
     modelPolicy: ModelPolicyState;
     sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
+    workspaceRepoFixtures: Set<WorkspaceRepoFixtureState>;
   };
   private readonly testName: string | null;
   private readonly workspaceRepoFixture: {
@@ -91,6 +101,7 @@ export class HeadlessRunner {
       testNames: Map<HeadlessSession, string | null>;
       modelPolicy: HeadlessRunner["shared"]["modelPolicy"];
       sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
+      workspaceRepoFixtures: Set<WorkspaceRepoFixtureState>;
     },
     testName: string | null = null,
     workspaceRepoFixture: HeadlessRunner["workspaceRepoFixture"] = null
@@ -101,6 +112,7 @@ export class HeadlessRunner {
       sessions: new Set(),
       testNames: new Map(),
       sessionPolicies: new Map(),
+      workspaceRepoFixtures: new Set(),
       modelPolicy: {
         primaryModel,
         activeModel: primaryModel,
@@ -124,6 +136,47 @@ export class HeadlessRunner {
   /** Exact disposable repository basename reserved for this test, when enabled. */
   get workspaceRepoName(): string | null {
     return this.workspaceRepoFixture?.repoName ?? null;
+  }
+
+  /** Approval queue rows attributable to one spawned agent plus live approver presence. */
+  async approvalState(session: HeadlessSession): Promise<HeadlessApprovalState> {
+    const snapshot = session.snapshot();
+    const [pendingRaw, presenceRaw] = await Promise.all([
+      rpc.call("main", "shellApproval.listPending", []),
+      rpc.call("main", "shellPresence.status", []),
+    ]);
+    const pending = Array.isArray(pendingRaw)
+      ? pendingRaw.filter((value): value is Record<string, unknown> => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+          const approval = value as Record<string, unknown>;
+          if (approval["callerId"] === snapshot.agentTargetId) return true;
+          const requester = approval["requester"];
+          if (!requester || typeof requester !== "object" || Array.isArray(requester)) return false;
+          const breadcrumbs = (requester as Record<string, unknown>)["breadcrumbs"];
+          return (
+            Array.isArray(breadcrumbs) &&
+            breadcrumbs.some(
+              (breadcrumb) =>
+                !!breadcrumb &&
+                typeof breadcrumb === "object" &&
+                (breadcrumb as Record<string, unknown>)["id"] === snapshot.agentTargetId
+            )
+          );
+        })
+      : [];
+    const presence =
+      presenceRaw && typeof presenceRaw === "object" && !Array.isArray(presenceRaw)
+        ? (presenceRaw as Record<string, unknown>)
+        : {};
+    return {
+      reachable: presence["reachable"] === true,
+      activeApproverCount:
+        typeof presence["activeApproverCount"] === "number"
+          ? presence["activeApproverCount"]
+          : 0,
+      maxAgeMs: typeof presence["maxAgeMs"] === "number" ? presence["maxAgeMs"] : 0,
+      pending,
+    };
   }
 
   /** Serializable evidence for inspect/status output. */
@@ -166,13 +219,15 @@ export class HeadlessRunner {
     for (const repoPath of staleRepos) {
       await vcs.deleteRepo({ repoPath, force: true });
     }
-    return {
+    const state = {
       testName: this.testName ?? "unknown",
       repoName: fixture.repoName,
       repoNamePrefix: fixture.repoNamePrefix,
       reposBefore: await this.listMainRepoPaths(),
       staleReposRemoved: staleRepos,
     };
+    this.shared.workspaceRepoFixtures.add(state);
+    return state;
   }
 
   /**
@@ -195,11 +250,13 @@ export class HeadlessRunner {
     for (const repoPath of ownedRepos) {
       await vcs.deleteRepo({ repoPath, force: true });
     }
-    return {
+    const result = {
       reposRemoved: ownedRepos,
       escapedRepos,
       reposAfter: await this.listMainRepoPaths(),
     };
+    this.shared.workspaceRepoFixtures.delete(state);
+    return result;
   }
 
   /**
@@ -321,10 +378,14 @@ export class HeadlessRunner {
     return session;
   }
 
-  /** Retire every still-live test agent. Registered with EvalDO cancellation. */
+  /** Retire every still-live test agent. Registered with EvalDO terminal cleanup. */
   async closeAll(): Promise<void> {
     const sessions = [...this.shared.sessions];
-    await Promise.allSettled(sessions.map((session) => session.close()));
+    const fixtures = [...this.shared.workspaceRepoFixtures];
+    await Promise.allSettled([
+      ...sessions.map((session) => session.close()),
+      ...fixtures.map((fixture) => this.cleanupWorkspaceRepoFixture(fixture)),
+    ]);
     for (const session of sessions) this.shared.sessionPolicies.delete(session);
   }
 
