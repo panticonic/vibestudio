@@ -5,18 +5,16 @@
  * DOs get exactly one pending alarm (server-driven, durable across restarts),
  * so any agent with more than one cadence — poll every 30m, briefing daily —
  * ends up hand-rolling the same loop: drain due jobs, back off failures,
- * recompute the earliest next wake, re-arm. This extracts that loop.
+ * recompute the earliest next wake, and return it to the alarm boundary. This
+ * extracts that loop without performing nested scheduling effects.
  *
  * Usage inside a DurableObjectBase subclass:
  *
- *   private scheduler = new RecurringScheduler({
- *     sql: this.sql,
- *     setAlarmAt: (t) => this.setAlarmAt(t),
- *   });
+ *   private scheduler = new RecurringScheduler({ sql: this.sql });
  *
  *   // in createTables(): RecurringScheduler.createTables(this.sql)
  *   // on subscribe:      this.scheduler.upsertJob({ jobId: `poll:${ch}`, channelId: ch, intervalMs: 30*60_000 })
- *   // in alarm():        await this.scheduler.onAlarm(Date.now(), (jobId, channelId) => this.runJob(jobId, channelId))
+ *   // in alarm():        return this.scheduler.onAlarm(Date.now(), (jobId, channelId) => this.runJob(jobId, channelId))
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
@@ -34,8 +32,6 @@ export interface RecurringJob {
 
 export interface RecurringSchedulerDeps {
   sql: SqlStorage;
-  /** Arm the DO's single alarm at an absolute epoch-ms time. */
-  setAlarmAt: (timeMs: number) => void;
   /** Failure backoff base/cap; defaults 5min base, 4h cap. */
   backoffBaseMs?: number;
   backoffMaxMs?: number;
@@ -46,13 +42,11 @@ const DEFAULT_BACKOFF_MAX_MS = 4 * 3_600_000;
 
 export class RecurringScheduler {
   private readonly sql: SqlStorage;
-  private readonly setAlarmAt: (timeMs: number) => void;
   private readonly backoffBaseMs: number;
   private readonly backoffMaxMs: number;
 
   constructor(deps: RecurringSchedulerDeps) {
     this.sql = deps.sql;
-    this.setAlarmAt = deps.setAlarmAt;
     this.backoffBaseMs = deps.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS;
     this.backoffMaxMs = deps.backoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
   }
@@ -70,10 +64,6 @@ export class RecurringScheduler {
         enabled INTEGER NOT NULL DEFAULT 1
       )
     `);
-  }
-
-  static dropTables(sql: SqlStorage): void {
-    sql.exec(`DROP TABLE IF EXISTS recurring_jobs`);
   }
 
   /** Create or reconfigure a job. Preserves the existing next_run_at unless one is given. */
@@ -97,24 +87,20 @@ export class RecurringScheduler {
       job.intervalMs,
       job.jitterMs ?? 0,
       nextRunAt,
-      job.enabled === false ? 0 : 1,
+      job.enabled === false ? 0 : 1
     );
-    this.rearm();
   }
 
   removeJob(jobId: string): void {
     this.sql.exec(`DELETE FROM recurring_jobs WHERE job_id = ?`, jobId);
-    this.rearm();
   }
 
   removeChannel(channelId: string): void {
     this.sql.exec(`DELETE FROM recurring_jobs WHERE channel_id = ?`, channelId);
-    this.rearm();
   }
 
   setEnabled(jobId: string, enabled: boolean): void {
     this.sql.exec(`UPDATE recurring_jobs SET enabled = ? WHERE job_id = ?`, enabled ? 1 : 0, jobId);
-    this.rearm();
   }
 
   /** Pull a job's next run forward (e.g. user pressed "refresh now"). */
@@ -122,9 +108,8 @@ export class RecurringScheduler {
     this.sql.exec(
       `UPDATE recurring_jobs SET next_run_at = ?, backoff_until = NULL WHERE job_id = ?`,
       now,
-      jobId,
+      jobId
     );
-    this.rearm();
   }
 
   /** Next pending wake across all enabled jobs, or undefined when idle. */
@@ -132,7 +117,7 @@ export class RecurringScheduler {
     const rows = this.sql
       .exec(
         `SELECT MIN(MAX(next_run_at, COALESCE(backoff_until, 0))) AS wake
-         FROM recurring_jobs WHERE enabled = 1`,
+         FROM recurring_jobs WHERE enabled = 1`
       )
       .toArray();
     const wake = rows[0]?.["wake"];
@@ -140,67 +125,59 @@ export class RecurringScheduler {
   }
 
   /**
-   * Drain all due jobs, then re-arm the alarm for the earliest pending run.
+   * Drain all due jobs, then return the earliest pending run.
    * Each job runs in its own try/catch: a failing job gets exponential
    * backoff (`min(cap, 2^failCount * base)`) without disturbing the others,
-   * and the alarm is ALWAYS re-armed (finally) so one bad run can never kill
-   * the chain. Jobs overdue by more than one interval run once and realign
+   * and the caller returns the derived wake to AlarmDriver. Jobs overdue by
+   * more than one interval run once and realign
    * to `now + interval` — no catch-up bursts after long sleeps.
    */
   async onAlarm(
     now: number,
-    run: (jobId: string, channelId: string) => Promise<void>,
-  ): Promise<void> {
-    try {
-      const due = this.sql
-        .exec(
-          `SELECT job_id, channel_id, interval_ms, jitter_ms, fail_count FROM recurring_jobs
+    run: (jobId: string, channelId: string) => Promise<void>
+  ): Promise<number | undefined> {
+    const due = this.sql
+      .exec(
+        `SELECT job_id, channel_id, interval_ms, jitter_ms, fail_count FROM recurring_jobs
            WHERE enabled = 1 AND next_run_at <= ? AND COALESCE(backoff_until, 0) <= ?
            ORDER BY next_run_at ASC`,
-          now,
-          now,
-        )
-        .toArray();
-      for (const row of due) {
-        const jobId = String(row["job_id"]);
-        const channelId = String(row["channel_id"]);
-        const intervalMs = Number(row["interval_ms"]);
-        const jitterMs = Number(row["jitter_ms"] ?? 0);
-        try {
-          await run(jobId, channelId);
-          const jitter = jitterMs > 0 ? Math.floor(Math.random() * jitterMs) : 0;
-          this.sql.exec(
-            `UPDATE recurring_jobs
+        now,
+        now
+      )
+      .toArray();
+    for (const row of due) {
+      const jobId = String(row["job_id"]);
+      const channelId = String(row["channel_id"]);
+      const intervalMs = Number(row["interval_ms"]);
+      const jitterMs = Number(row["jitter_ms"] ?? 0);
+      try {
+        await run(jobId, channelId);
+        const jitter = jitterMs > 0 ? Math.floor(Math.random() * jitterMs) : 0;
+        this.sql.exec(
+          `UPDATE recurring_jobs
              SET next_run_at = ?, fail_count = 0, backoff_until = NULL
              WHERE job_id = ?`,
-            now + intervalMs + jitter,
-            jobId,
-          );
-        } catch (err) {
-          const failCount = Number(row["fail_count"] ?? 0) + 1;
-          const backoff = Math.min(
-            this.backoffMaxMs,
-            Math.pow(2, failCount - 1) * this.backoffBaseMs,
-          );
-          console.error(`[RecurringScheduler] job ${jobId} failed (attempt ${failCount}):`, err);
-          this.sql.exec(
-            `UPDATE recurring_jobs
+          now + intervalMs + jitter,
+          jobId
+        );
+      } catch (err) {
+        const failCount = Number(row["fail_count"] ?? 0) + 1;
+        const backoff = Math.min(
+          this.backoffMaxMs,
+          Math.pow(2, failCount - 1) * this.backoffBaseMs
+        );
+        console.error(`[RecurringScheduler] job ${jobId} failed (attempt ${failCount}):`, err);
+        this.sql.exec(
+          `UPDATE recurring_jobs
              SET fail_count = ?, backoff_until = ?, next_run_at = ?
              WHERE job_id = ?`,
-            failCount,
-            now + backoff,
-            now + backoff,
-            jobId,
-          );
-        }
+          failCount,
+          now + backoff,
+          now + backoff,
+          jobId
+        );
       }
-    } finally {
-      this.rearm();
     }
-  }
-
-  private rearm(): void {
-    const wake = this.nextWakeAt();
-    if (wake !== undefined) this.setAlarmAt(wake);
+    return this.nextWakeAt();
   }
 }

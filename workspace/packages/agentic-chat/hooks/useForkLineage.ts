@@ -17,7 +17,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RpcCaller } from "@vibestudio/rpc";
 import { forkConversation } from "@workspace/channel-fork";
 import type { ChatMessage } from "@workspace/agentic-core";
-import type { ForkProjection, MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
+import type {
+  ForkProjection,
+  MessageBlockInput,
+  ParticipantRef,
+} from "@workspace/agentic-protocol";
 import type { PubSubClient } from "@workspace/pubsub";
 import type {
   ChannelProvenance,
@@ -124,9 +128,7 @@ async function readSiblings(
 ): Promise<ForkEntry[]> {
   const target = await resolveChannelTarget(rpc, parentChannelId);
   const { forks } = await rpc.call<{ forks: ForkProjection[] }>(target, "listForks", []);
-  return forks
-    .filter((f) => f.forkedChannelId !== selfChannelId)
-    .map(forkProjectionToEntry);
+  return forks.filter((f) => f.forkedChannelId !== selfChannelId).map(forkProjectionToEntry);
 }
 
 function labelForProvenance(prov: ChannelProvenance | undefined): string {
@@ -137,17 +139,8 @@ function labelForProvenance(prov: ChannelProvenance | undefined): string {
 }
 
 export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
-  const {
-    rpc,
-    channelId,
-    contextId,
-    selfId,
-    selfMetadata,
-    messages,
-    replaySettled,
-    client,
-    nav,
-  } = options;
+  const { rpc, channelId, contextId, selfId, selfMetadata, messages, replaySettled, client, nav } =
+    options;
 
   const [provenance, setProvenance] = useState<ChannelProvenance | undefined>(undefined);
   const [siblings, setSiblings] = useState<ForkEntry[]>([]);
@@ -475,7 +468,10 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
 
   const newFork = useCallback(async (): Promise<void> => {
     // Fork at the current head: the highest seq we have projected.
-    const headSeq = messages.reduce((max, m) => (m.seq !== undefined && m.seq > max ? m.seq : max), 0);
+    const headSeq = messages.reduce(
+      (max, m) => (m.seq !== undefined && m.seq > max ? m.seq : max),
+      0
+    );
     await runFork({ forkPointPubsubId: headSeq, reason: "fork" });
   }, [runFork, messages]);
 
@@ -497,7 +493,6 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
         newFork,
         switchTo: nav?.switchTo ?? (() => {}),
         openInNewPanel: nav?.openInNewPanel ?? (() => {}),
-        reviewContext: nav?.reviewContext ?? (() => {}),
       },
     }),
     [

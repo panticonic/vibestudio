@@ -39,11 +39,20 @@ export interface ConnectionConfig {
   clientId: string;
   rpc: {
     call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
+    stream(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: { signal?: AbortSignal }
+    ): Promise<Response>;
     on(event: string, listener: (event: { payload: unknown }) => void): () => void;
     selfId: string;
   };
   protocol?: string;
-  recoveryCoordinator?: Pick<RecoveryCoordinator, "registerColdRecoverHandler">;
+  recoveryCoordinator?: Pick<
+    RecoveryCoordinator,
+    "registerResubscribeHandler" | "registerColdRecoverHandler"
+  >;
   /** Initial durable envelope replay window. Busy agent transcripts can exceed
    * the pubsub client's generic default quickly because tool lifecycle events
    * count as envelopes even when they collapse into one visible card. */

@@ -175,7 +175,11 @@ function recvItem(command: Extract<Command, { kind: "prompt" | "steer" }>): Appe
   };
 }
 
-function turnOpenedItem(turnId: string, metadata?: AgentTurnMetadata): AppendItem {
+function turnOpenedItem(
+  turnId: string,
+  metadata?: AgentTurnMetadata,
+  triggerMessageId?: string
+): AppendItem {
   return {
     envelopeId: ids.turnOpened(turnId),
     payloadKind: "turn.opened",
@@ -183,7 +187,10 @@ function turnOpenedItem(turnId: string, metadata?: AgentTurnMetadata): AppendIte
       protocol: AGENTIC_PROTOCOL_VERSION,
       ...(metadata ? { metadata } : {}),
     },
-    causality: { turnId },
+    causality: {
+      turnId,
+      ...(triggerMessageId ? { messageId: triggerMessageId as never } : {}),
+    },
     publish: shouldPublishTurnLifecycle(metadata),
   };
 }
@@ -346,7 +353,7 @@ function promotePendingPrompt(
 ): StepOutput {
   const prompt = state.pendingPrompt!;
   const turnId = ids.turnId(state.channelId, prompt.envelopeId, ctx.selfRef.id);
-  const opened = turnOpenedItem(turnId, prompt.metadata);
+  const opened = turnOpenedItem(turnId, prompt.metadata, prompt.envelopeId);
   const afterOpened: AgentState = {
     ...state,
     openTurn: {
@@ -380,7 +387,7 @@ function promotePendingPrompt(
 function promoteSteersAsTurn(state: AgentState, ctx: StepContext): StepOutput {
   const head = state.steeringQueue[0]!;
   const turnId = ids.turnId(state.channelId, head.envelopeId, ctx.selfRef.id);
-  const opened = turnOpenedItem(turnId, head.metadata);
+  const opened = turnOpenedItem(turnId, head.metadata, head.envelopeId);
   const afterOpened: AgentState = {
     ...state,
     openTurn: {
@@ -985,7 +992,7 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
       }
       const recv = recvItem(command);
       const turnId = ids.turnId(command.channelId, command.source.envelopeId, ctx.selfRef.id);
-      const opened = turnOpenedItem(turnId, turnMetadata(command));
+      const opened = turnOpenedItem(turnId, turnMetadata(command), recv.envelopeId);
       const afterOpened = {
         ...state,
         openTurn: {

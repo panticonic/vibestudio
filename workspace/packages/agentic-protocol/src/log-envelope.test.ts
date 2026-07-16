@@ -275,34 +275,6 @@ describe("logEnvelopeSchema", () => {
 describe("new event kinds", () => {
   const base = { actor, createdAt: "2026-06-11T00:00:00.000Z" };
 
-  it("parses state.snapshot_ingested with parentStateHashes", () => {
-    const event = {
-      ...base,
-      kind: "state.snapshot_ingested",
-      payload: {
-        protocol: "agentic.trajectory.v1",
-        inputStateHash: "state:abc",
-        outputStateHash: "state:def",
-        parentStateHashes: ["state:abc", "state:xyz"],
-      },
-    };
-    expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);
-  });
-
-  it("parses state.merge_applied", () => {
-    const event = {
-      ...base,
-      kind: "state.merge_applied",
-      payload: {
-        protocol: "agentic.trajectory.v1",
-        inputStateHash: "state:abc",
-        outputStateHash: "state:merged",
-        parentStateHashes: ["state:other"],
-      },
-    };
-    expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);
-  });
-
   it("parses memory.recalled", () => {
     const event = {
       ...base,

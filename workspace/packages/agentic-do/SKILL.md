@@ -14,7 +14,7 @@ Read the local reference that matches the task before editing:
 - [Agent tuning](references/agent-tuning.md) for default model/provider changes,
   model credential setup, thinking effort, approval, and response policy.
 - [Subagents](references/subagents.md) for `spawn_subagent`, child task channels,
-  child context inspection, and merge/pick/close semantics.
+  child context inspection, semantic integration, and close semantics.
 
 Keep package boundaries explicit. Core runtime mechanics live in this package;
 projection/rendering details can live in sibling packages such as

@@ -8,7 +8,7 @@
  */
 
 export { createReadTool } from "./read.js";
-export type { ReadToolInput, ReadToolDetails, ReadToolDeps, ReadProvenanceDeps } from "./read.js";
+export type { ReadToolInput, ReadToolDetails, ReadToolDeps } from "./read.js";
 
 export { createProvenanceTool } from "./provenance.js";
 export type {
@@ -26,41 +26,25 @@ export type { EditToolInput, EditToolDetails } from "./edit.js";
 export { createWriteTool } from "./write.js";
 export type { WriteToolInput, WriteToolDetails } from "./write.js";
 
+export { createMoveFileTool, createCopyFileTool } from "./file-transfer.js";
+export type { FileTransferToolInput, FileTransferToolDetails } from "./file-transfer.js";
+
 export { createCommitTool } from "./commit.js";
-export type { CommitToolInput, CommitToolDetails, CommitClaimsDeps } from "./commit.js";
+export type { CommitToolInput, CommitToolDetails } from "./commit.js";
 
-export {
-  createRecordClaimTool,
-  createRelateClaimsTool,
-  createReviseClaimTool,
-  createRetractClaimTool,
-  stripClaimHandle,
-} from "./claims.js";
+export { createWorkspaceVcsTool } from "./workspace-vcs.js";
 export type {
-  KnowledgeToolDeps,
-  ClaimPayload,
-  ClaimDuplicate,
-  RecordClaimResult,
-  RecordClaimInput,
-  RecordClaimDetails,
-  RelateClaimsInput,
-  RelateClaimsDetails,
-  ReviseClaimInput,
-  ReviseClaimDetails,
-  RetractClaimInput,
-  RetractClaimDetails,
-} from "./claims.js";
+  WorkspaceVcsToolInput,
+  WorkspaceVcsToolDetails,
+  ToolWorkflowVcs,
+} from "./workspace-vcs.js";
 
-export { createToolVcs, withInvocationId } from "./tool-vcs.js";
+export { createToolVcs, toolCommandId } from "./tool-vcs.js";
 export type {
   ToolVcs,
-  ToolVcsCommitResult,
-  ToolVcsEditOp,
-  ToolVcsEditResult,
-  ToolVcsFileReadContent,
-  ToolVcsFileWriteContent,
-  ToolVcsMergeResult,
-  ToolVcsPushResult,
+  ToolFileTransferVcs,
+  ToolWorkspaceContext,
+  ToolMutationContext,
 } from "./tool-vcs.js";
 
 export { createGrepTool } from "./grep.js";
@@ -88,7 +72,7 @@ export { createDocsSearchTool, createDocsOpenTool } from "./docs.js";
 export type { DocsSearchInput, DocsOpenInput, CatalogHit, CatalogEntry } from "./docs.js";
 
 // Pure helpers
-export { resolveToCwd, resolveReadPath, expandPath } from "./path-utils.js";
+export { resolveToCwd, expandPath } from "./path-utils.js";
 export {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,

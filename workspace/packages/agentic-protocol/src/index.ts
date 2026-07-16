@@ -83,9 +83,6 @@ export type {
   InvocationTransport,
   DiagnosticBlockMetadata,
   DiagnosticSeverity,
-  ClaimRelationKind,
-  KnowledgePayload,
-  KnowledgeRelation,
   MessageBlockInput,
   MessageBlockType,
   MessageModelPayload,
@@ -101,7 +98,6 @@ export type {
   PrincipalRef,
   SandboxSourcePayload,
   SemanticParticipantKind,
-  StatePayload,
   StoredAgenticEvent,
   SubagentProgressKind,
   SubagentProgressUpdate,
@@ -249,15 +245,7 @@ export type {
 
 export { jsonSchemaToZod, jsonSchemaToZodRawShape, isRecord } from "./json-schema-to-zod.js";
 
-export {
-  canonicalJson,
-  checkTrajectoryIntegrity,
-  computeEventHash,
-  sha256Hex,
-  sortForCanonicalJson,
-  verifyEventHash,
-} from "./hash.js";
+export { checkTrajectoryIntegrity, computeEventHash, verifyEventHash } from "./hash.js";
 
 export * from "./log-envelope.js";
-export * from "./worktree-hash.js";
 export * from "./append-errors.js";

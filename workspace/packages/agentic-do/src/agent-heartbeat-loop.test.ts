@@ -51,6 +51,31 @@ async function harness(
 }
 
 describe("AgentHeartbeatLoop", () => {
+  it("rejects an obsolete heartbeat table instead of adding missing columns", async () => {
+    const sql = (await createInMemorySql()) as unknown as SqlStorage;
+    sql.exec(`
+      CREATE TABLE heartbeat_loop_test (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        status TEXT NOT NULL,
+        cadence_ms INTEGER NOT NULL,
+        objective TEXT NOT NULL,
+        last_wake_at INTEGER NOT NULL,
+        last_observed_digest TEXT NOT NULL
+      )
+    `);
+    const loop = new AgentHeartbeatLoop({
+      sql,
+      namespace: "test",
+      evaluate: () => ({ action: "skip" }),
+      enqueueTurn: () => {},
+      scheduleWakeAt: () => {},
+    });
+
+    expect(() => loop.createTables()).toThrow(
+      "Unsupported heartbeat_loop_test schema; delete this pre-release agent state"
+    );
+  });
+
   it("starts, persists state, and schedules through the named source", async () => {
     const h = await harness();
     await h.loop.start({ cadenceMs: 5_000, objective: "watch" });

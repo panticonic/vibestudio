@@ -49,8 +49,8 @@ Completion:
 - Idle, turn closure, and a normal final assistant message are not terminal. Only \`complete\` ends this subagent run.
 
 Durable work:
-- Commit repository work in this child context BEFORE calling \`complete\` — the parent takes your work by merging this context, and only committed work merges.
-- Do not push \`main\` yourself; the parent decides what to merge or pick.
+- Commit repository work in this child context BEFORE calling \`complete\` — the parent integrates changes from your committed child event into its own local working head.
+- Do not push \`main\` yourself; the parent owns integration and publication decisions.
 - Report verification results and remaining uncertainties in \`complete.report\`.`;
 
   return [forkPrefix, base]

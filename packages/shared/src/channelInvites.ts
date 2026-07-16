@@ -2,7 +2,7 @@
  * Canonical workspace-wide channel invitation contracts.
  *
  * Channel DOs own membership and project invite/remove mutations into the
- * workspace GAD store's generic account notification inbox. Clients consume
+ * workspace semantic control plane's generic account notification inbox. Clients consume
  * `channel.invite` notifications without enumerating channel DOs.
  */
 

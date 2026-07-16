@@ -10,6 +10,7 @@ function createConfig(): ConnectionConfig {
     rpc: {
       selfId: "headless-test",
       call: vi.fn(),
+      stream: vi.fn(async () => new Response()),
       on: vi.fn(() => vi.fn()),
     },
   };
@@ -207,22 +208,55 @@ describe("HeadlessSession", () => {
     }).not.toThrow();
   });
 
-  it("starts shared-context unsubscribe and entity retirement together", async () => {
+  it("awaits the agent pause terminal before interrupt returns", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    let settle!: (value: { result: unknown }) => void;
+    const result = new Promise<{ result: unknown }>((resolve) => (settle = resolve));
+    const callMethod = vi.fn(() => ({ result }));
+    (session as any)._client = { callMethod };
+
+    let completed = false;
+    const interrupt = session
+      .interrupt("agent-1", { timeoutMs: 10_000 })
+      .then(() => (completed = true));
+    await Promise.resolve();
+
+    expect(completed).toBe(false);
+    expect(callMethod).toHaveBeenCalledWith("agent-1", "pause", {}, { timeoutMs: 10_000 });
+
+    settle({ result: { paused: true } });
+    await interrupt;
+    expect(completed).toBe(true);
+  });
+
+  it("finishes shared-context unsubscribe before retiring the agent entity", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),
     });
     const calls: Array<{ target: string; method: string; args: unknown[] }> = [];
+    let finishUnsubscribe!: () => void;
+    const unsubscribeFinished = new Promise<void>((resolve) => (finishUnsubscribe = resolve));
     (session as any)._agentEntityId = "do:workers/agent-worker:AiChatWorker:obj-1";
     (session as any)._agentTargetId = "do:workers/agent-worker:AiChatWorker:obj-1";
     (session as any)._channelId = "ch-1";
     (session as any)._agentRpcCall = vi.fn(
       async (target: string, method: string, args: unknown[]) => {
         calls.push({ target, method, args });
+        if (method === "unsubscribeChannel") await unsubscribeFinished;
         return undefined;
       }
     );
 
-    await session.close();
+    const close = session.close();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({
+      target: "do:workers/agent-worker:AiChatWorker:obj-1",
+      method: "unsubscribeChannel",
+      args: ["ch-1"],
+    });
+
+    finishUnsubscribe();
+    await close;
 
     expect(calls).toEqual([
       {
@@ -264,7 +298,7 @@ describe("HeadlessSession", () => {
     ]);
   });
 
-  it("falls back to retiring the root entity when isolated context cleanup fails", async () => {
+  it("records isolated context cleanup failure without creating a second cleanup owner", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = HeadlessSession.create({ config: createConfig() });
     const calls: Array<{ target: string; method: string }> = [];
@@ -287,10 +321,7 @@ describe("HeadlessSession", () => {
         message: "destroy failed",
       }),
     ]);
-    expect(calls).toEqual([
-      { target: "main", method: "runtime.destroyContext" },
-      { target: "main", method: "runtime.retireEntity" },
-    ]);
+    expect(calls).toEqual([{ target: "main", method: "runtime.destroyContext" }]);
     warn.mockRestore();
   });
 
@@ -324,17 +355,16 @@ describe("HeadlessSession", () => {
         method: "unsubscribeChannel",
         args: ["ch-1"],
       },
-      {
-        target: "main",
-        method: "runtime.retireEntity",
-        args: [{ id: "do:workers/agent-worker:AiChatWorker:obj-1" }],
-      },
     ]);
 
     releaseUnsubscribe?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
 
-    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({
+      target: "main",
+      method: "runtime.retireEntity",
+      args: [{ id: "do:workers/agent-worker:AiChatWorker:obj-1" }],
+    });
   });
 
   it("destroys an owned context without waiting on the agent it is reclaiming", async () => {
@@ -706,6 +736,31 @@ describe("HeadlessSession", () => {
 
     await expect(wait).resolves.toBe(idleMessage);
     vi.useRealTimers();
+  });
+
+  it("can treat an externally blocked waiting turn as terminal", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const turnId = brandId<TurnId>("turn-credential-wait");
+    (session as any)._channelView = {
+      ...(session as any)._channelView,
+      turns: {
+        [turnId]: {
+          turnId,
+          actor: { kind: "agent", id: "agent-1" },
+          status: "waiting",
+          reason: "model_credential_reconnect_required",
+          openedAt: "2026-05-27T00:00:00.000Z",
+        },
+      },
+    };
+
+    await expect(
+      session.waitForIdle({
+        terminalWaitingReasons: ["model_credential_reconnect_required"],
+      })
+    ).rejects.toThrow(
+      "Agent turn requires unavailable external action (model_credential_reconnect_required)"
+    );
   });
 
   it("waitForIdle does not let a background subagent block a closed parent turn", async () => {

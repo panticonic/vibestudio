@@ -115,7 +115,14 @@ function statusLabel(availability: ModelAvailability): string | null {
     case "error":
       return availability.message;
     case "needs-setup":
-      return availability.detail === "no-credential" ? "not connected" : "not installed";
+      switch (availability.detail) {
+        case "no-credential":
+          return "not connected";
+        case "credential-expired":
+          return "connection expired";
+        case "not-installed":
+          return "not installed";
+      }
   }
 }
 

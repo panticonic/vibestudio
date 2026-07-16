@@ -70,9 +70,10 @@ function writeCredentials(tmpDir: string, url = "webrtc://room-cli/_workspace/de
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: "device",
       url,
+      workspaceId: "ws_dev",
       workspaceName: "dev",
       serverId: `srv_${"S".repeat(24)}`,
       deviceId: `dev_${"D".repeat(24)}`,
@@ -96,19 +97,17 @@ function writeCredentials(tmpDir: string, url = "webrtc://room-cli/_workspace/de
   );
 }
 
-function writeSession(
-  tmpDir: string,
-  name = "default",
-  serverUrl = "webrtc://room-cli/_workspace/dev"
-) {
+function writeSession(tmpDir: string, name = "default", serverId = `srv_${"S".repeat(24)}`) {
   const dir = path.join(tmpDir, ".config", "vibestudio", "agent-sessions");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `${name}.json`),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 3,
       name,
-      serverUrl,
+      serverId,
+      workspaceId: "ws_dev",
+      workspaceName: "dev",
       entityId: `session:${name}`,
       contextId: "ctx_1",
       scopeKey: name,

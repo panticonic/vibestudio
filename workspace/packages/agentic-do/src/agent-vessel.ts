@@ -12,7 +12,15 @@
  * the DO surface (subscribe/envelope/methodCall/fork/alarm) into commands.
  */
 
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@workspace/runtime/worker";
+import {
+  DurableObjectBase,
+  rpc,
+  type DurableObjectContext,
+  type LifecyclePrepareInput,
+  type LifecyclePrepareResult,
+  type LifecycleResumeInput,
+} from "@workspace/runtime/worker";
+import { withCausalParent, type RpcClient } from "@vibestudio/rpc";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
@@ -39,14 +47,18 @@ import {
   isRespondPolicy,
   participantRefFromActor,
   resolveShouldRespond,
-  sha256Hex,
-  stableSha256Hex,
   type ActorRef,
   type AgenticEvent,
   type CustomMessageDisplayMode,
   type ParticipantRef,
   type SubagentProgressUpdate,
 } from "@workspace/agentic-protocol";
+import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
+import {
+  channelTrajectoryFor,
+  commandIdForTrajectoryInvocation,
+  logIdForChannel,
+} from "@vibestudio/trajectory-identity";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import {
   createAgentEntity,
@@ -58,7 +70,22 @@ import {
   type SubagentIdentity,
 } from "@workspace/agentic-core";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
-import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
+import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import {
+  AGENT_INSPECTION_METHODS,
+  isAgentInspectionMethod,
+  type AgentInspectionMethod,
+} from "@vibestudio/shared/agentInspection";
+import type {
+  VcsCompareResult,
+  VcsIntegrateResult,
+  VcsInspectResult,
+  VcsListFilesResult,
+  VcsNeighborsResult,
+  VcsReadFileResult,
+  VcsStateNodeRef,
+  VcsStatusResult,
+} from "@vibestudio/service-schemas/vcs";
 import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   defaultPolicies,
@@ -77,6 +104,14 @@ import {
   createModelCredentialSentinel,
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
+
+export interface AgentToolExecutionContext {
+  readonly invocationId: string;
+  /** Stable semantic command id derived from the exact causal invocation. */
+  readonly commandId: string;
+  /** Immutable caller bound to the exact trajectory invocation that caused the tool call. */
+  readonly rpc: RpcClient;
+}
 import type {
   ConnectCredentialRequest,
   StoredCredentialSummary as ModelCredentialSummary,
@@ -86,13 +121,14 @@ import { SubscriptionManager } from "./subscription-manager.js";
 import {
   SubagentRunStore,
   type SubagentAgentKind,
-  type SubagentRunMerge,
+  type SubagentRunIntegration,
   type SubagentRunRow,
 } from "./subagent-runs.js";
 import { ChannelClient } from "./channel-client.js";
 import { FeedbackIngest } from "./feedback-ingest.js";
 import { CardManager } from "./custom-cards.js";
 import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
+import { inspectEffectOutbox } from "./effect-outbox.js";
 import {
   CredentialApprovalDeferredError,
   CredentialPendingError,
@@ -121,6 +157,30 @@ const DEFAULT_COMPACTION_TRIGGER_BYTES = 256 * 1024;
 const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 10;
 const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+const SUBAGENT_INTEGRATION_PROTOCOL = "vibestudio.subagent-integration.v2";
+
+function subagentVcsCommandId(
+  phase: "integrate",
+  run: Pick<SubagentRunRow, "runId" | "parentContextId" | "childContextId">,
+  basis: Record<string, string>
+): string {
+  return `subagent-${phase}:${stableSha256Hex({
+    protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+    runId: run.runId,
+    parentContextId: run.parentContextId,
+    childContextId: run.childContextId,
+    basis,
+  })}`;
+}
+
+function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
+  return (
+    left.kind === right.kind &&
+    (left.kind === "event"
+      ? right.kind === "event" && left.eventId === right.eventId
+      : right.kind === "application" && left.applicationId === right.applicationId)
+  );
+}
 
 /** The subset of an external subagent launch result the spawn path consumes.
  *  Typed inline to avoid a vessel→extension source dependency; the call goes
@@ -402,7 +462,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.subscriptions = new SubscriptionManager(
       this.sql,
       (channelId) => this.createChannelClient(channelId),
-      this.identity
+      this.identity,
+      async ({ channelId, config, envelope }) => {
+        await this.ingestSubscriptionReplay(
+          channelId,
+          envelope,
+          configuredWakePolicy(config) === "every-envelope"
+        );
+      }
     );
     this.subscriptions.createTables();
     this.subagentRuns = new SubagentRunStore(this.sql);
@@ -433,6 +500,44 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   protected createTables(): void {
     // Composed managers create their own tables; nothing to do here.
+  }
+
+  override async releaseForLifecycle(
+    input: LifecyclePrepareInput
+  ): Promise<LifecyclePrepareResult> {
+    const releasedEffects = this._driver ? await this._driver.releaseActivation() : 0;
+    if (input.mode === "retire") {
+      const channelIds = this.subscriptions.listChannelIds();
+      for (const channelId of channelIds) await this.unsubscribeChannel(channelId);
+      return {
+        status: "ready",
+        detail: {
+          mode: input.mode,
+          releasedEffects,
+          retiredSubscriptions: channelIds.length,
+        },
+      };
+    }
+    const releasedSubscriptions = await this.subscriptions.releaseActivation();
+    return {
+      status: "ready",
+      detail: { mode: input.mode, releasedEffects, releasedSubscriptions },
+    };
+  }
+
+  override async resumeAfterRestart(input: LifecycleResumeInput): Promise<void> {
+    await super.resumeAfterRestart(input);
+    // Durable rows remember which channels this vessel belongs to; live
+    // membership itself is the routed response resource and must be recreated
+    // after the old workerd activation has disappeared.
+    for (const subscription of this.subscriptions.listStored()) {
+      await this.subscribeChannel({
+        channelId: subscription.channelId,
+        contextId: subscription.contextId,
+        ...(subscription.config !== undefined ? { config: subscription.config } : {}),
+        replay: true,
+      });
+    }
   }
 
   // ── Subclass surface (WS1 §3.2 — names preserved where semantics survive) ─
@@ -565,7 +670,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /** Local tools registered with the local-tool executor. */
-  protected getLoopTools(_channelId: string): AgentTool[] {
+  protected getLoopTools(_channelId: string, _execution?: AgentToolExecutionContext): AgentTool[] {
     return [];
   }
 
@@ -602,33 +707,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     _credential: ModelCredentialSummary
   ): Record<string, unknown> {
     return {};
-  }
-
-  private async resolveModelBaseUrlForProvider(
-    providerId: string,
-    explicitModelBaseUrl: unknown,
-    explicitModelRef: unknown
-  ): Promise<string | null> {
-    if (typeof explicitModelBaseUrl === "string" && explicitModelBaseUrl.length > 0) {
-      return explicitModelBaseUrl;
-    }
-    const modelRef =
-      typeof explicitModelRef === "string" && explicitModelRef.length > 0 ? explicitModelRef : null;
-    if (!modelRef?.includes(":")) return null;
-    const modelProviderId = modelRef.slice(0, modelRef.indexOf(":"));
-    const modelId = modelRef.slice(modelRef.indexOf(":") + 1);
-    if (modelProviderId !== providerId) return null;
-    try {
-      const { getBuiltinModel: getModel } = await import("@earendil-works/pi-ai/providers/all");
-      const registryModel = getModel(modelProviderId as never, modelId as never) as
-        | { baseUrl?: string }
-        | undefined;
-      return typeof registryModel?.baseUrl === "string" && registryModel.baseUrl.length > 0
-        ? registryModel.baseUrl
-        : null;
-    } catch {
-      return null;
-    }
   }
 
   /** Fork hook. The clone has been re-identified and its subscription renamed
@@ -742,49 +820,37 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.alarmDeadlines.delete(source.id);
     } else {
       this.alarmDeadlines.set(source.id, next);
-      this.rearmAgentAlarm();
     }
   }
 
   protected unregisterAgentAlarmSource(sourceId: string): void {
     this.alarmSources.delete(sourceId);
     this.alarmDeadlines.delete(sourceId);
-    this.rearmAgentAlarm();
   }
 
   protected scheduleAgentAlarm(sourceId: string, timeMs: number): void {
     if (!Number.isFinite(timeMs)) return;
     this.alarmDeadlines.set(sourceId, Math.max(Math.round(timeMs), Date.now() + 1));
-    this.rearmAgentAlarm();
   }
 
   protected clearAgentAlarm(sourceId: string): void {
     this.alarmDeadlines.delete(sourceId);
-    this.rearmAgentAlarm();
   }
 
-  private rearmAgentAlarm(): void {
-    const deadlines = [...this.alarmSources.values()]
-      .map((source) => {
-        const next = source.nextWakeAt();
-        if (next === null) this.alarmDeadlines.delete(source.id);
-        else this.alarmDeadlines.set(source.id, next);
-        return next;
-      })
-      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-    if (deadlines.length === 0) {
-      try {
-        this.deleteAlarm();
-      } catch {
-        // Object key may not be available during constructor-time source registration.
-      }
-      return;
+  protected nextAgentAlarmSchedule(): DoAlarmSchedule | null {
+    for (const source of this.alarmSources.values()) {
+      const next = source.nextWakeAt();
+      if (next === null) this.alarmDeadlines.delete(source.id);
+      else this.alarmDeadlines.set(source.id, next);
     }
-    try {
-      this.setAlarmAt(Math.min(...deadlines));
-    } catch {
-      // Object key may not be available during constructor-time source registration.
-    }
+    const deadlines = [...this.alarmDeadlines.values()].filter(
+      (value) => Number.isFinite(value) && value >= 0
+    );
+    return deadlines.length === 0 ? null : { wakeAt: Math.min(...deadlines) };
+  }
+
+  protected override nextAlarmAfterRequest(): DoAlarmSchedule | null {
+    return this.nextAgentAlarmSchedule();
   }
 
   private async fireAgentAlarms(now: number): Promise<void> {
@@ -799,7 +865,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.alarmDeadlines.delete(source.id);
       await source.fire(now);
     }
-    this.rearmAgentAlarm();
   }
 
   private driverNextWakeAtFromSql(): number | null {
@@ -973,28 +1038,39 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
       localTools: {
         run: async ({ channelId, tool, invocationId, args, signal, onProgress }) => {
-          // The `eval` tool DEFERS: the agent can't hold a connection for a multi-minute run (its
-          // own execution is request-capped). `runDeferredEval` kicks off a server-held run and the
-          // result arrives out-of-band (server → onEvalComplete → deliverEffectOutcome). The driver
-          // parks the leased row.
-          if (tool === "eval") {
-            return this.runDeferredEval(channelId, invocationId, args);
-          }
-          // `spawn_subagent` launches a child and returns a run handle immediately.
-          // The run itself continues on its task channel; completion publishes a
-          // subagent terminal card instead of holding this tool effect open.
-          if (tool === "spawn_subagent") {
-            return this.runDeferredSpawn(channelId, invocationId, args);
-          }
-          const registry = await this.toolRegistry(channelId);
-          const agentTool = registry.get(tool);
-          if (!agentTool) {
-            return { result: `unknown tool: ${tool}`, isError: true };
-          }
-          const params = agentTool.prepareArguments
-            ? agentTool.prepareArguments(args)
-            : (args as never);
+          const trajectory = channelTrajectoryFor(channelId);
+          const execution = Object.freeze({
+            invocationId,
+            commandId: commandIdForTrajectoryInvocation({
+              logId: trajectory.logId,
+              head: trajectory.head,
+              invocationId,
+            }),
+            rpc: withCausalParent(this.rpc, {
+              kind: "trajectory-invocation",
+              logId: trajectory.logId,
+              head: trajectory.head,
+              invocationId,
+            }),
+          }) satisfies AgentToolExecutionContext;
           try {
+            // The `eval` tool DEFERS: the agent can't hold a connection for a multi-minute run.
+            // eval.startRun receives this verified parent scope and delegates it to the EvalDO.
+            if (tool === "eval") {
+              return await this.runDeferredEval(channelId, invocationId, args, execution.rpc);
+            }
+            // `spawn_subagent` is an agentic lifecycle operation, not workspace authorship.
+            if (tool === "spawn_subagent") {
+              return await this.runDeferredSpawn(channelId, invocationId, args);
+            }
+            const registry = await this.toolRegistry(channelId, execution);
+            const agentTool = registry.get(tool);
+            if (!agentTool) {
+              return { result: `unknown tool: ${tool}`, isError: true };
+            }
+            const params = agentTool.prepareArguments
+              ? agentTool.prepareArguments(args)
+              : (args as never);
             const result = await agentTool.execute(
               invocationId,
               params as never,
@@ -1134,8 +1210,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // so drop each channel's cached loop + fold so the next wake refolds with it.
     for (const channelId of this.subscriptions.listChannelIds()) {
       this.driver.dropLoop(channelId);
-      const logId = ids.logIdForChannel(channelId);
-      this.driver.foldCache.delete(logId, logId);
+      const { logId, head } = channelTrajectoryFor(channelId);
+      this.driver.foldCache.delete(logId, head);
     }
     return this.getAgentSettings();
   }
@@ -1146,7 +1222,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * invited agent starts with the config it was created with, then persisted so
    * later reads are stable and edits (updateSettings) win over the seed.
    */
-  private storedSettings(): StoredSettings {
+  private storedSettings(persistSeed = true): StoredSettings {
     const raw = this.getStateValue(AGENT_SETTINGS_KEY);
     if (raw) {
       try {
@@ -1156,7 +1232,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
     }
     const seed = this.seedSettingsFromStateArgs();
-    if (Object.keys(seed).length > 0) {
+    if (persistSeed && Object.keys(seed).length > 0) {
       this.setStateValue(AGENT_SETTINGS_KEY, JSON.stringify(seed));
     }
     return seed;
@@ -1199,8 +1275,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return seed;
   }
 
-  getAgentSettings(): AgentSettings {
-    const stored = this.storedSettings();
+  private resolveAgentSettings(persistSeed: boolean): AgentSettings {
+    const stored = this.storedSettings(persistSeed);
     const approval = stored.approvalLevel;
     return {
       model: stored.model ?? this.getDefaultModel(),
@@ -1220,6 +1296,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         : this.getRespondPolicy(),
       respondFrom: stored.respondFrom ?? this.getDefaultRespondFrom(),
     };
+  }
+
+  getAgentSettings(): AgentSettings {
+    return this.resolveAgentSettings(true);
+  }
+
+  /** Settings projection for operational inspection; never seeds local state. */
+  private inspectAgentSettings(): AgentSettings {
+    return this.resolveAgentSettings(false);
   }
 
   protected getRespondPolicy(): RespondPolicy {
@@ -1423,10 +1508,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.deleteStateValue(`agent:promptArtifactError:${channelId}`);
       if (changed) {
         this.driver.dropLoop(channelId);
-        this.driver.foldCache.delete(
-          ids.logIdForChannel(channelId),
-          ids.logIdForChannel(channelId)
-        );
+        const { logId, head } = channelTrajectoryFor(channelId);
+        this.driver.foldCache.delete(logId, head);
       }
     } catch (err) {
       await this.publishPromptArtifactDiagnostic(channelId, err);
@@ -1498,7 +1581,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
-  private async toolRegistry(channelId: string): Promise<Map<string, AgentTool>> {
+  private async toolRegistry(
+    channelId: string,
+    execution?: AgentToolExecutionContext
+  ): Promise<Map<string, AgentTool>> {
+    if (execution) {
+      const registry = new Map<string, AgentTool>();
+      registry.set("memory_recall", this.createMemoryRecallTool());
+      for (const tool of this.getLoopTools(channelId, execution)) {
+        registry.set(tool.name, tool);
+      }
+      return registry;
+    }
     let registry = this.localTools.get(channelId);
     if (!registry) {
       registry = new Map();
@@ -1513,17 +1607,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
-   * Workspace memory search (WS4): chat messages, knowledge claims, and
-   * committed file content, with provenance. The recall result is journaled
-   * via the invocation terminal like any tool output — replays and audits
-   * see exactly what was recalled.
+   * Workspace memory search (WS4): chat messages and committed file content,
+   * with provenance. The recall result is journaled via the invocation terminal
+   * like any tool output — replays and audits see exactly what was recalled.
    */
   private createMemoryRecallTool(): AgentTool<never> {
     return {
       name: "memory_recall",
       label: "memory_recall",
       description:
-        "Search workspace memory: past conversation messages, recorded knowledge claims, and committed file content. " +
+        "Search workspace memory: past conversation messages and committed file content. " +
         "Returns snippets with provenance (who/when/where). Use before re-deriving facts that may already be known.",
       parameters: {
         type: "object",
@@ -1531,7 +1624,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           query: { type: "string", description: "Search terms." },
           kinds: {
             type: "array",
-            items: { type: "string", enum: ["message", "claim", "file"] },
+            items: { type: "string", enum: ["message", "file"] },
             description: "Optional filter by memory kind.",
           },
           limit: { type: "number", description: "Max results (default 10, max 50)." },
@@ -1591,19 +1684,31 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     replay?: boolean;
   }): Promise<{ ok: boolean; participantId: string }> {
     this.ensureIdentity();
+    const firstSubscription = this.subscriptions.count() === 0;
+    if (firstSubscription) {
+      await this.registerLifecycleRelease({ kind: "channel-subscriptions" });
+    }
     const descriptor = this.getEffectiveParticipantInfo(opts.channelId, opts.config);
     // Subscription is MEMBERSHIP + presentation only. Behavior config (model,
     // approvalLevel, respondPolicy, …) is per-agent and seeded at creation from
     // STATE_ARGS.agentConfig — it does NOT ride the subscription. `config` here
     // carries only channel-presentation (handle, systemPrompt) consumed via the
     // participant descriptor / getPromptOverride.
-    const result = await this.subscriptions.subscribe({
-      channelId: opts.channelId,
-      contextId: opts.contextId,
-      config: opts.config,
-      descriptor,
-      replay: opts.replay,
-    });
+    let result: Awaited<ReturnType<SubscriptionManager["subscribe"]>>;
+    try {
+      result = await this.subscriptions.subscribe({
+        channelId: opts.channelId,
+        contextId: opts.contextId,
+        config: opts.config,
+        descriptor,
+        replay: opts.replay,
+      });
+    } catch (error) {
+      if (firstSubscription && this.subscriptions.count() === 0) {
+        await this.clearLifecycleRelease();
+      }
+      throw error;
+    }
     await this.ensurePromptArtifacts(opts.channelId);
     await this.ingestSubscriptionReplay(
       opts.channelId,
@@ -1641,22 +1746,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     event: ChannelReplayEnvelope["logEvents"][number]
   ): Promise<void> {
     await this.processChannelEvent(channelId, {
-          id: event.id,
-          messageId: event.messageId,
-          type: event.type,
-          payload: event.payload,
-          senderId: event.senderId,
-          ts: event.ts,
-          ...(event.senderMetadata ? { senderMetadata: event.senderMetadata } : {}),
-          ...(event.contentType ? { contentType: event.contentType } : {}),
-          ...(event.attachments ? { attachments: event.attachments } : {}),
-          ...((event as unknown as { annotations?: Record<string, unknown> }).annotations
-            ? {
-                annotations: (event as unknown as { annotations: Record<string, unknown> })
-                  .annotations,
-              }
-            : {}),
-        });
+      id: event.id,
+      messageId: event.messageId,
+      type: event.type,
+      payload: event.payload,
+      senderId: event.senderId,
+      ts: event.ts,
+      ...(event.senderMetadata ? { senderMetadata: event.senderMetadata } : {}),
+      ...(event.contentType ? { contentType: event.contentType } : {}),
+      ...(event.attachments ? { attachments: event.attachments } : {}),
+      ...((event as unknown as { annotations?: Record<string, unknown> }).annotations
+        ? {
+            annotations: (event as unknown as { annotations: Record<string, unknown> }).annotations,
+          }
+        : {}),
+    });
   }
 
   @rpc({ callers: ["panel", "do"] })
@@ -1670,6 +1774,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } finally {
       this.subscriptions.deleteSubscription(channelId);
       this.driver.dropLoop(channelId);
+      if (this.subscriptions.count() === 0) await this.clearLifecycleRelease();
     }
     return { ok: true };
   }
@@ -2266,6 +2371,43 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
+   * Operational, activation-local inspection for a channel or the host.
+   *
+   * This is deliberately separate from `onMethodCall`: inspection is not an
+   * agent action and must not enter participant invocation routing. Every read
+   * below is in-memory or local SQLite; missing folded state remains explicitly
+   * missing instead of being hydrated through GAD.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async readAgentInspection(
+    channelId: string,
+    methodName: string
+  ): Promise<{ result: unknown; isError?: boolean }> {
+    this.assertChannelDeliveryCaller("readAgentInspection");
+    if (!isAgentInspectionMethod(methodName)) {
+      throw new Error(
+        `readAgentInspection: unsupported method ${methodName}; expected one of ` +
+          AGENT_INSPECTION_METHODS.join(", ")
+      );
+    }
+    return this.readStandardAgentInspection(channelId, methodName);
+  }
+
+  private readStandardAgentInspection(
+    channelId: string,
+    methodName: AgentInspectionMethod
+  ): { result: unknown; isError?: boolean } {
+    switch (methodName) {
+      case "getDebugState":
+        return { result: this.activationDebugState(channelId) };
+      case "getAgentSettings":
+        return { result: this.inspectAgentSettings() };
+      case "inspectMethodSuspensions":
+        return { result: { outbox: inspectEffectOutbox(this.sql) } };
+    }
+  }
+
+  /**
    * Journal-derived model route/usage evidence for headless orchestration.
    * This direct RPC remains available when channel presence has already gone
    * stale, which is precisely when timeout/cancellation diagnostics need it.
@@ -2281,60 +2423,27 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     methodName: string,
     args: unknown
   ): Promise<{ result: unknown; isError?: boolean } | null> {
+    if (isAgentInspectionMethod(methodName)) {
+      return this.readStandardAgentInspection(channelId, methodName);
+    }
     switch (methodName) {
       case "pause": {
-        // `flushDeferred` (Esc / "Send now") = incremental flush: deliver queued
-        // steers, else promote one deferred head. Append the interrupt FIRST so
-        // its marker is folded before abort produces the interrupted terminal
-        // (deterministic continue-vs-close for the soft steer flush); a plain
-        // pause aborts first then interrupts.
         const flushDeferred = (args as { flushDeferred?: unknown } | null)?.flushDeferred === true;
-        if (flushDeferred) {
-          // The post-append abort is ONLY for the soft-flush case (a model call
-          // is mid-flight): aborting it makes its interrupted terminal re-run the
-          // turn with the queued steers consumed. But when nothing is in flight —
-          // the turn is parked on a pending invocation (e.g. a feedback form) or
-          // idle — the loop's flush instead cancels the wait and opens a FRESH
-          // turn whose model call delivers the steers; aborting the channel here
-          // would kill that very call and the agent would make no progress. So
-          // only abort when a model call was actually running when the flush hit.
-          const hadInFlight = !!(await this.driver.loop(channelId)).state.inFlightModelCall;
-          await this.driver.handleIncoming(channelId, {
-            type: "command",
-            command: { kind: "interrupt", flushDeferred: true },
-          });
-          if (hadInFlight) this.driver.abortChannel(channelId);
-        } else {
-          this.driver.abortChannel(channelId);
-          await this.driver.handleIncoming(channelId, {
-            type: "command",
-            command: { kind: "interrupt" },
-          });
-        }
-        // Best-effort: clear any wedged EvalDO so a restarted/paused agent never
-        // inherits a stuck eval scope/run chain. The eval is owned by THIS agent
-        // (subKey = channelId), so we call eval.forceReset for OURSELVES (the eval
-        // service resolves the owner from the caller). Never fail the pause on this.
-        try {
-          await this.rpc.call("main", "eval.forceReset", [{ subKey: channelId }]);
-        } catch (err) {
-          console.warn(
-            `[AgentVessel] eval.forceReset during pause for ${channelId} failed (ignored):`,
-            err instanceof Error ? err.message : err
-          );
-        }
+        await this.driver.interruptChannel(channelId, flushDeferred);
         return { result: { paused: true } };
       }
       case "cancelEval": {
         // The chat-panel pill cancels a SERVER-SIDE eval run by asking THIS agent
         // (the eval's owner, subKey = channelId) to cancel it. The agent calls
         // eval.cancel for itself — the eval service resolves the owner from the
-        // caller, so the panel cannot address another owner's EvalDO. `runId` is
-        // the eval invocation's id (invocationId === runId for agent evals).
-        const runId = (args as { runId?: unknown } | null)?.runId;
-        if (typeof runId !== "string" || runId.length === 0) {
-          return { result: { error: "cancelEval requires a runId" }, isError: true };
+        // caller, so the panel cannot address another owner's EvalDO. The UI
+        // supplies the journaled invocation coordinate; this trusted owner
+        // derives the distinct eval-effect coordinate used as the run id.
+        const invocationId = (args as { invocationId?: unknown } | null)?.invocationId;
+        if (typeof invocationId !== "string" || invocationId.length === 0) {
+          return { result: { error: "cancelEval requires an invocationId" }, isError: true };
         }
+        const runId = ids.invocationEffect(invocationId);
         try {
           const result = await this.rpc.call<{ ok: boolean }>("main", "eval.cancel", [
             { subKey: channelId, runId },
@@ -2377,21 +2486,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             isError: true,
           };
         }
-        const modelBaseUrl = await this.resolveModelBaseUrlForProvider(
-          input.providerId,
-          input.modelBaseUrl,
-          input.modelRef ?? this.getAgentSettings().model
-        );
-        if (!modelBaseUrl) {
-          return {
-            result: {
-              error: `connectModelCredential requires a concrete modelBaseUrl for provider ${input.providerId}`,
-            },
-            isError: true,
-          };
-        }
         const browser = normalizeBrowserOpenMode(input.browserOpenMode);
-        const request = toCredentialConnectRequest(input.providerId, modelBaseUrl, { browser });
+        const request = toCredentialConnectRequest(input.providerId, { browser });
         if (!request) {
           return {
             result: { error: `no credential connect request for provider ${input.providerId}` },
@@ -2496,18 +2592,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           },
         };
       }
-      case "getAgentSettings":
-        return { result: this.getAgentSettings() };
       case "getModelExecutionEvidence":
         return { result: await this.driver.modelExecutionEvidence(channelId) };
-      case "getDebugState":
-        return { result: await this.getDebugState(channelId) };
-      case "inspectMethodSuspensions":
-        return {
-          result: {
-            outbox: this.driver.outbox.all(),
-          },
-        };
       default:
         return null;
     }
@@ -2671,7 +2757,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  caller to be that EvalDO. */
   private async assertOwnEvalCaller(channelId: string): Promise<void> {
     const callerId = this.rpcCallerId;
-    const expectedKey = await sha256Hex(`${this.participantId()}\0${channelId}`);
+    const expectedKey = sha256HexSyncText(`${this.participantId()}\0${channelId}`);
     const expectedCaller = `do:vibestudio/internal:EvalDO:${expectedKey.slice(0, 40)}`;
     if (callerId !== expectedCaller) {
       throw new Error(
@@ -2957,23 +3043,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
-   * Server push when a deferred (agent) eval finishes (the held `executeRun` returned). Format the
-   * result and deliver it as the tool outcome for the parked invocation effect — `runId` is the
-   * deterministic invocationId, so the effect id is `ids.invocationEffect(runId)`. Idempotent:
-   * `deliverEffectOutcome` no-ops if the row already settled (e.g. a getRun-poll backstop beat us).
-   */
-  /**
    * The deferral half of the agent's `eval` tool. Kicks off a server-held run (`eval.startRun`,
-   * idempotent on the deterministic `invocationId` so crash-replay / deferRedrive re-runs never
-   * duplicate the eval) and returns `{deferred:true}` while it's in flight. The result normally
+   * idempotent on a deterministic effect id derived from `invocationId`, while keeping that run id
+   * distinct from authorship. Crash-replay / deferRedrive therefore never duplicates the eval. It
+   * returns `{deferred:true}` while in flight. The result normally
    * arrives via the `onEvalComplete` push; if that was lost, a ~60s deferRedrive re-runs this and the
    * `getRun` poll completes the invocation INLINE (`done` → result, `cancelled` → error).
    */
   protected async runDeferredEval(
     channelId: string,
     invocationId: string,
-    args: unknown
+    args: unknown,
+    scopedRpc: RpcClient
   ): Promise<{ deferred: true } | { result: unknown; isError: boolean }> {
+    const runId = ids.invocationEffect(invocationId);
     const p = (args ?? {}) as {
       code?: string;
       path?: string;
@@ -2991,15 +3074,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         isError: true,
       };
     }
-    await this.rpc.call("main", "eval.startRun", [
+    await scopedRpc.call("main", "eval.startRun", [
       {
         subKey: channelId, // the agent's eval subKey IS its channelId
-        channelId,
         reset: p.reset === true,
         ...source,
         syntax: p.syntax,
         imports: p.imports,
-        runId: invocationId,
+        runId,
       },
     ]);
     // `getRun` is a poll BACKSTOP, not the primary settle path — the run is already
@@ -3012,14 +3094,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // never bounds the (legitimately long-running) eval.
     let status: { status: string; result?: EvalRunResult };
     try {
-      status = await this.rpc.call<{ status: string; result?: EvalRunResult }>(
+      status = await scopedRpc.call<{ status: string; result?: EvalRunResult }>(
         "main",
         "eval.getRun",
-        [{ subKey: channelId, runId: invocationId }]
+        [{ subKey: channelId, runId }]
       );
     } catch (err) {
       console.warn(
-        `[AgentVessel] eval.getRun poll for ${invocationId} failed (run parked; push/redrive backstop covers it):`,
+        `[AgentVessel] eval.getRun poll for ${runId} failed (run parked; push/redrive backstop covers it):`,
         err instanceof Error ? err.message : err
       );
       return { deferred: true };
@@ -3047,8 +3129,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * a server-side EvalDO; during the held run the EvalDO forwards buffered console chunks here (gated
    * by `assertOwnEvalCaller`, exactly like the `chat` binding's `chatOp` — only this agent's own
    * EvalDO may act as it). Each chunk is published as an `invocation.output` event keyed to the eval
-   * invocation (`runId === invocationId`), so the chat panel renders the console live AND persists it
-   * for the card's details view. Best-effort: a dropped chunk is just a gap in the live console — the
+   * parent tool invocation (`agentInvocationId`), independently of the eval effect's `runId`, so the
+   * chat panel renders the console live AND persists it for the card's details view. Best-effort: a
+   * dropped chunk is just a gap in the live console — the
    * final result still carries the full console text. Ordering: the EvalDO awaits its final flush
    * before completing, so every output precedes the `invocation.completed` terminal (the reducer drops
    * output after terminal).
@@ -3056,6 +3139,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   @rpc({ callers: ["do"] })
   async onEvalProgress(payload: {
     runId: string;
+    agentInvocationId: string;
     channelId: string;
     output: string;
   }): Promise<void> {
@@ -3067,7 +3151,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const event: AgenticEvent<"invocation.output"> = {
       kind: "invocation.output",
       actor,
-      causality: { invocationId: payload.runId as never },
+      causality: { invocationId: payload.agentInvocationId as never },
       payload: { protocol: AGENTIC_PROTOCOL_VERSION, output: payload.output, channel: "stdout" },
       createdAt: new Date().toISOString(),
     };
@@ -3076,9 +3160,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
+  /**
+   * Settle the exact eval effect addressed by `runId`. Parent invocation
+   * identity is carried separately for causality and never reconstructed from
+   * the effect id. Duplicate settlement is an idempotent driver no-op.
+   */
   @rpc({ callers: ["server"] })
   async onEvalComplete(payload: {
     runId: string;
+    agentInvocationId?: string;
     result?: EvalRunResult;
     channelId?: string;
   }): Promise<void> {
@@ -3086,7 +3176,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!payload.channelId || !payload.result) return;
     const formatted = formatEvalResult(payload.result);
     await this.driver.deliverEffectOutcome(
-      ids.invocationEffect(payload.runId),
+      payload.runId,
       {
         kind: "tool",
         result: { protocolContent: formatted.content, details: formatted.details },
@@ -3331,18 +3421,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       `INSERT OR REPLACE INTO state (key, value) VALUES ('__objectKey', ?)`,
       this.objectKey
     );
-    const from = ids.logIdForChannel(oldChannelId);
-    const to = ids.logIdForChannel(newChannelId);
+    const from = channelTrajectoryFor(oldChannelId);
+    const to = channelTrajectoryFor(newChannelId);
     const atSeq = await this.resolveTrajectorySeqForChannelSeq(
-      from,
+      from.logId,
       oldChannelId,
       forkPointPubsubId
     );
     await this.callGad("forkLog", {
-      fromLogId: from,
-      fromHead: from,
-      toLogId: to,
-      toHead: to,
+      fromLogId: from.logId,
+      fromHead: from.head,
+      toLogId: to.logId,
+      toHead: to.head,
       atSeq,
     });
     const driver = this.driver;
@@ -3502,12 +3592,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     parentSeq: number;
     taskChannelId: string;
   }): Promise<number> {
-    const to = ids.logIdForChannel(input.taskChannelId);
+    const to = channelTrajectoryFor(input.taskChannelId);
     const existing = await this.callGad<{
       parentLogId: string | null;
       parentHead: string | null;
       forkSeq: number | null;
-    } | null>("getLogHead", { logId: to, head: to });
+    } | null>("getLogHead", { logId: to.logId, head: to.head });
     const parentHead = input.parentLogId;
     const equivalentExisting =
       existing?.parentLogId === input.parentLogId &&
@@ -3515,15 +3605,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       existing.forkSeq != null;
     if (existing && !equivalentExisting) {
       throw new Error(
-        `subagent task trajectory already exists with different fork lineage: ${to}:${to}`
+        `subagent task trajectory already exists with different fork lineage: ${to.logId}:${to.head}`
       );
     }
     const atSeq = equivalentExisting ? existing.forkSeq! : input.parentSeq;
     await this.callGad("forkLog", {
       fromLogId: input.parentLogId,
       fromHead: parentHead,
-      toLogId: to,
-      toHead: to,
+      toLogId: to.logId,
+      toHead: to.head,
       atSeq,
     });
     return atSeq;
@@ -3724,6 +3814,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         className,
         key: targetKey,
         contextId,
+        agentChannelId: taskChannelId,
         config: childConfig,
         stateArgs: {
           subagent: {
@@ -3751,7 +3842,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         label,
         depth: childDepth,
         status: "starting",
-        merge: null,
+        integration: null,
         startedAt: now,
         lastActivityAt: now,
         agentKind: "pi",
@@ -3763,7 +3854,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // trajectory fork before ANY task-channel participant subscribes. That
       // keeps observer-side roster/presence bookkeeping from claiming the task
       // trajectory as a root log.
-      const parentLogId = ids.logIdForChannel(channelId);
+      const parentLogId = logIdForChannel(channelId);
       const parentSeq = mode === "fork" ? await this.trajectoryHeadSeq(channelId) : 0;
       if (mode === "fork") {
         await this.ensureSubagentTaskTrajectoryFork({
@@ -3841,7 +3932,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         let canTeardown = run.status === "starting";
         if (run.status === "running") {
           try {
-            await this.settleSubagentTerminal(run, "failed", message, run.merge ?? undefined);
+            await this.settleSubagentTerminal(run, "failed", message, run.integration ?? undefined);
             canTeardown = true;
           } catch (terminalErr) {
             console.error(
@@ -3914,7 +4005,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       label,
       depth: childDepth,
       status: "starting",
-      merge: null,
+      integration: null,
       startedAt: now,
       lastActivityAt: now,
       agentKind,
@@ -4007,21 +4098,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       parentContextId: run.parentContextId,
       childEntityId: run.childEntityId,
       status: run.status,
+      integration: run.integration,
       // W6b: the SubagentRunCard badges the reasoning engine from this field.
       agentKind: run.agentKind,
       ...(run.externalSessionEntityId
         ? { externalSessionEntityId: run.externalSessionEntityId }
         : {}),
-    };
-  }
-
-  private subagentContextScope(run: SubagentRunRow): {
-    contextId: string;
-    ownerContextId?: string;
-  } {
-    return {
-      contextId: run.childContextId,
-      ...(run.parentContextId ? { ownerContextId: run.parentContextId } : {}),
     };
   }
 
@@ -4128,7 +4210,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             label: typeof subagent["label"] === "string" ? subagent["label"] : "subagent",
             depth: this.currentSubagentDepth() + 1,
             status: "running",
-            merge: null,
+            integration: null,
             startedAt,
             lastActivityAt: startedAt,
             agentKind:
@@ -4143,9 +4225,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           continue;
         }
         if (recovered && subagent) {
-          const merge = subagent["merge"];
-          if (merge === "merged" || merge === "conflicted" || merge === "discarded") {
-            recovered = { ...recovered, merge };
+          const integration = subagent["integration"];
+          if (
+            integration === "integrated" ||
+            integration === "conflicted" ||
+            integration === "discarded"
+          ) {
+            recovered = { ...recovered, integration };
           }
         }
         if (!recovered) continue;
@@ -4162,7 +4248,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
     if (!recovered) return null;
     this.subagentRuns.insert(recovered);
-    if (recovered.merge) this.subagentRuns.setMerge(recovered.runId, recovered.merge);
+    if (recovered.integration) {
+      this.subagentRuns.setIntegration(recovered.runId, recovered.integration);
+    }
     return this.subagentRuns.get(runId) ?? recovered;
   }
 
@@ -4209,9 +4297,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return this.toolText(`sent to subagent ${run.runId}`, { runId: run.runId, messageId });
   }
 
-  /** Inspect a subagent's CHILD-CONTEXT working tree via the host vcs.* read
-   *  surfaces (authorized cross-context by WS-2's ownership check). `query` is
-   *  `status` | `diff` | `log` | a file path. */
+  /** Inspect a subagent through the sole canonical semantic VCS service.
+   *  `query` is `status` | `diff` | `log` | an exact file path. */
   protected async inspectSubagent(
     runId: string,
     query: string,
@@ -4219,83 +4306,250 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
-    const context = this.subagentContextScope(run);
     const q = (query ?? "status").trim() || "status";
+    const callVcs = <T>(method: string, input: unknown): Promise<T> =>
+      this.rpc.call<T>("main", `vcs.${method}`, [input]);
+    const status = await callVcs<VcsStatusResult>("status", { contextId: run.childContextId });
     let result: unknown;
     if (q === "status") {
-      result = await this.rpc.call<unknown>("main", "vcs.contextStatus", [context]);
+      result = status;
     } else if (q === "diff") {
-      result = await this.rpc.call<unknown>("main", "vcs.contextDiff", [
-        { ...context, against: "fork-base" },
-      ]);
+      result = await callVcs<VcsInspectResult>("inspect", {
+        node: status.workingHead,
+        edgeLimit: 500,
+      });
     } else if (q === "log") {
-      // `vcs.log` is per-repo and USERLAND-dispatched (P5c) — it carries no
-      // host caller-context head resolution, so a bare call reads the CALLER's
-      // head. Authorize the cross-context read + enumerate the child's touched
-      // repos through the host (throw-not-prompt, WS-2's ownership gate), then
-      // read each repo's commit log at the CHILD's ctx head from the userland
-      // `vcs` service.
-      const repos = await this.rpc.call<Array<{ repoPath: string }>>("main", "vcs.contextStatus", [
-        context,
-      ]);
-      const childHead = `ctx:${run.childContextId}`;
-      const vcsUserland = createVcsUserlandClient(this.rpc as unknown as RpcCallerLike);
-      result = await Promise.all(
-        repos.map(async (r) => ({
-          repoPath: r.repoPath,
-          log: await vcsUserland.call<unknown>("vcsLog", r.repoPath, null, childHead),
-        }))
-      );
+      result = await callVcs("history", {
+        root: status.workingHead,
+        direction: "past",
+        limit: 100,
+      });
     } else {
-      result = await this.rpc.call<unknown>("main", "vcs.readFile", ["", q, undefined, context]);
+      const repositoryRefs = new Map<
+        string,
+        Extract<VcsNeighborsResult["edges"][number]["to"], { kind: "repository" }>
+      >();
+      let neighborCursor: string | undefined;
+      do {
+        const page = await callVcs<VcsNeighborsResult>("neighbors", {
+          root: status.workingHead,
+          limit: 500,
+          ...(neighborCursor ? { cursor: neighborCursor } : {}),
+        });
+        for (const edge of page.edges) {
+          for (const node of [edge.from, edge.to]) {
+            if (node.kind === "repository" && sameState(node.state, status.workingHead)) {
+              repositoryRefs.set(node.repositoryId, node);
+            }
+          }
+        }
+        neighborCursor = page.nextCursor ?? undefined;
+      } while (neighborCursor);
+
+      const requestedPath = q.replace(/^\/+/, "");
+      const matches: Array<{
+        repositoryId: string;
+        repoPath: string;
+        fileId: string;
+        path: string;
+      }> = [];
+      for (const repository of repositoryRefs.values()) {
+        const inspected = await callVcs<VcsInspectResult>("inspect", {
+          node: repository,
+          edgeLimit: 1,
+        });
+        if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
+          continue;
+        }
+        const repoPath = inspected.node.value.repoPath;
+        let fileCursor: string | undefined;
+        do {
+          const listed = await callVcs<VcsListFilesResult>("listFiles", {
+            state: status.workingHead,
+            repositoryId: repository.repositoryId,
+            limit: 500,
+            ...(fileCursor ? { cursor: fileCursor } : {}),
+          });
+          for (const file of listed.files) {
+            if (file.path === requestedPath || `${repoPath}/${file.path}` === requestedPath) {
+              matches.push({
+                repositoryId: repository.repositoryId,
+                repoPath,
+                fileId: file.fileId,
+                path: file.path,
+              });
+            }
+          }
+          fileCursor = listed.nextCursor ?? undefined;
+        } while (fileCursor);
+      }
+      if (matches.length > 1) {
+        throw new Error(
+          `ambiguous subagent file path ${q}; matches repositories ${matches
+            .map((candidate) => candidate.repoPath)
+            .join(", ")}`
+        );
+      }
+      const file = matches[0];
+      result = file
+        ? await callVcs<VcsReadFileResult>("readFile", {
+            state: status.workingHead,
+            repositoryId: file.repositoryId,
+            file: { kind: "id", fileId: file.fileId },
+          })
+        : null;
     }
     return this.toolText(typeof result === "string" ? result : JSON.stringify(result, null, 2), {
       runId: run.runId,
       query: q,
+      integration: run.integration,
     });
   }
 
-  /** Take EVERYTHING from a subagent: merge its child context into ours
-   *  (commit-gated both sides — WS-1's source-side dirty gate surfaces here). */
-  protected async mergeSubagent(
+  /**
+   * Adopt a child context's committed changes into the parent's local working
+   * chain. Each call is an ordinary `vcs.integrate` application. It does not
+   * create a parallel merge session or commit unrelated parent work. The
+   * parent can inspect or reconcile remaining changes and
+   * later commit the whole local chain with the normal VCS tool.
+   */
+  protected async integrateSubagent(
     runId: string,
-    parentChannelId?: string
+    parentChannelId?: string,
+    toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
-    const result = await this.rpc.call<unknown>("main", "vcs.merge", [
-      { source: this.subagentContextScope(run) },
-    ]);
-    const merge = this.mergeStatusFromResult(result);
-    this.subagentRuns.setMerge(run.runId, merge);
-    this.subagentRuns.touch(run.runId, Date.now());
-    return this.toolText(`merged subagent ${run.runId}: ${merge}`, {
-      runId: run.runId,
-      merge,
-      result: result as Record<string, unknown>,
-    });
-  }
-
-  /** Selectively cherry-pick commits/paths from a subagent's child context. */
-  protected async pickFromSubagent(
-    runId: string,
-    picks: unknown,
-    parentChannelId?: string
-  ): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = await this.resolveSubagentRun(runId, parentChannelId);
-    if (!run) throw new Error(`unknown subagent run ${runId}`);
-    if (!Array.isArray(picks) || picks.length === 0) {
-      throw new Error("pick_from_subagent requires a non-empty picks array");
+    if (!run.parentContextId) {
+      throw new Error(`subagent ${run.runId} has no recoverable parent context`);
     }
-    const result = await this.rpc.call<unknown>("main", "vcs.pick", [
-      { source: this.subagentContextScope(run), picks },
+
+    const callVcs = <T>(method: string, input: unknown): Promise<T> =>
+      toolRpc.call<T>("main", `vcs.${method}`, [input]);
+    const [targetStatus, sourceStatus] = await Promise.all([
+      callVcs<VcsStatusResult>("status", { contextId: run.parentContextId }),
+      callVcs<VcsStatusResult>("status", { contextId: run.childContextId }),
     ]);
-    this.subagentRuns.setMerge(run.runId, "merged");
+    if (!sourceStatus.clean) {
+      this.subagentRuns.setIntegration(run.runId, "conflicted");
+      this.subagentRuns.touch(run.runId, Date.now());
+      return this.toolText(
+        `subagent ${run.runId} has uncommitted semantic work; commit the child context before integration`,
+        {
+          protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+          runId: run.runId,
+          status: "source-uncommitted",
+          source: sourceStatus,
+        }
+      );
+    }
+    if (sourceStatus.committed.kind !== "event") {
+      throw new Error(`subagent ${run.runId} has no committed source event`);
+    }
+
+    const sourceEventId = sourceStatus.committed.eventId;
+    const initialWorkingHead = targetStatus.workingHead;
+    let workingHead = initialWorkingHead;
+    const integrations: VcsIntegrateResult[] = [];
+    let remaining: VcsCompareResult["changes"] = [];
+    let counts: VcsCompareResult["counts"] | null = null;
+
+    for (;;) {
+      const changes: VcsCompareResult["changes"] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await callVcs<VcsCompareResult>("compare", {
+          target: workingHead,
+          sourceEventId,
+          view: "changes",
+          disposition: "actionable",
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        });
+        counts = page.counts;
+        changes.push(...page.changes);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+
+      const applicable = changes.filter(
+        (change) =>
+          change.disposition.status === "actionable" &&
+          change.disposition.applicability === "applicable"
+      );
+      if (applicable.length === 0) {
+        remaining = changes;
+        break;
+      }
+
+      const sourceChangeIds = applicable.slice(0, 200).map((change) => change.changeId);
+      const previousHead = workingHead;
+      const integration = await callVcs<VcsIntegrateResult>("integrate", {
+        commandId: subagentVcsCommandId("integrate", run, {
+          expectedWorkingHead:
+            previousHead.kind === "event" ? previousHead.eventId : previousHead.applicationId,
+          sourceEventId,
+          sourceChangeIds: sourceChangeIds.join(","),
+        }),
+        contextId: run.parentContextId,
+        expectedWorkingHead: previousHead,
+        intentSummary: `Adopt changes from subagent ${run.label || run.runId}`,
+        sourceEventId,
+        decision: { kind: "adopted", sourceChangeIds },
+      });
+      if (sameState(integration.workingHead, previousHead)) {
+        throw new Error("vcs.integrate returned success without advancing the working head");
+      }
+      integrations.push(integration);
+      workingHead = integration.workingHead;
+    }
+
+    const unresolved = remaining.filter(
+      (change) =>
+        change.disposition.status === "actionable" &&
+        change.disposition.applicability !== "applicable"
+    );
+    const needsDecision =
+      unresolved.length > 0 || (counts?.conflicting ?? 0) > 0 || (counts?.blocked ?? 0) > 0;
+    this.subagentRuns.setIntegration(run.runId, needsDecision ? "conflicted" : "integrated");
     this.subagentRuns.touch(run.runId, Date.now());
-    return this.toolText(`picked from subagent ${run.runId}`, {
-      runId: run.runId,
-      result: result as Record<string, unknown>,
-    });
+
+    if (needsDecision) {
+      return this.toolText(
+        `adopted ${integrations.reduce((total, step) => total + step.incorporatedChangeIds.length, 0)} ` +
+          `subagent changes locally; remaining changes require explicit decisions`,
+        {
+          protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+          runId: run.runId,
+          status: "needs-decision",
+          sourceEventId,
+          initialWorkingHead,
+          workingHead,
+          integrations,
+          counts,
+          unresolved,
+        }
+      );
+    }
+
+    const adopted = integrations.reduce(
+      (total, step) => total + step.incorporatedChangeIds.length,
+      0
+    );
+    return this.toolText(
+      adopted > 0
+        ? `integrated ${adopted} subagent changes into the local working chain`
+        : `subagent ${run.runId} has no unaccounted changes`,
+      {
+        protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+        runId: run.runId,
+        status: adopted > 0 ? "working" : "unchanged",
+        sourceEventId,
+        initialWorkingHead,
+        workingHead,
+        integrations,
+        counts,
+      }
+    );
   }
 
   /** Read a subagent's task-channel envelopes since a cursor (the `manual`-wake
@@ -4359,14 +4613,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) return this.toolText(`subagent ${runId} already closed`, { runId });
-    if (discard && run.merge === null) this.subagentRuns.setMerge(run.runId, "discarded");
+    if (discard && run.integration === null) {
+      this.subagentRuns.setIntegration(run.runId, "discarded");
+    }
     const refreshed = this.subagentRuns.get(run.runId)!;
     if (refreshed.status === "starting" || refreshed.status === "running") {
       await this.settleSubagentTerminal(
         refreshed,
         "cancelled",
         "closed by parent",
-        refreshed.merge ?? undefined
+        refreshed.integration ?? undefined
       );
     }
     await this.teardownRun(refreshed);
@@ -4415,7 +4671,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const reportText =
       typeof payload.report === "string" ? payload.report : JSON.stringify(payload.report ?? null);
     this.subagentRuns.touch(payload.runId, Date.now());
-    await this.settleSubagentTerminal(run, outcome, reportText, run.merge ?? undefined, {
+    await this.settleSubagentTerminal(run, outcome, reportText, run.integration ?? undefined, {
       wakeParent: true,
     });
   }
@@ -4430,10 +4686,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     run: SubagentRunRow,
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string,
-    merge?: SubagentRunMerge,
+    integration?: SubagentRunIntegration,
     opts: { wakeParent?: boolean } = {}
   ): Promise<void> {
-    await this.publishSubagentTerminal(run, outcome, text, merge);
+    await this.publishSubagentTerminal(run, outcome, text, integration);
     if (opts.wakeParent) {
       await this.wakeParentForSubagentTerminal(run, outcome, text);
     }
@@ -4475,22 +4731,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  private mergeStatusFromResult(result: unknown): SubagentRunMerge {
-    if (result && typeof result === "object") {
-      const r = result as Record<string, unknown>;
-      const conflicts = r["conflicts"] ?? r["conflicted"] ?? r["conflictedRepos"];
-      if (
-        r["conflicted"] === true ||
-        (Array.isArray(conflicts) && conflicts.length > 0) ||
-        (Array.isArray((r["results"] as unknown[]) ?? undefined) &&
-          (r["results"] as Array<{ conflicted?: boolean }>).some((x) => x?.conflicted === true))
-      ) {
-        return "conflicted";
-      }
-    }
-    return "merged";
-  }
-
   private async publishSubagentStarted(run: SubagentRunRow): Promise<void> {
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
@@ -4528,7 +4768,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     run: SubagentRunRow,
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string,
-    merge?: SubagentRunMerge
+    integration?: SubagentRunIntegration
   ): Promise<void> {
     const kindByOutcome = {
       completed: "invocation.completed",
@@ -4545,7 +4785,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
     const actor = this.cardActor(run.parentChannelId, participantId);
-    const subagent = merge ? { merge } : {};
+    const subagent = integration ? { integration } : {};
     const payload: Record<string, unknown> =
       outcome === "completed"
         ? {
@@ -4833,10 +5073,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     let lastMessageId: string | undefined;
     try {
       const channel = this.createChannelClient(channelId);
-      const pages = iterateChannelReplayAfterPages(
-        (request) => channel.getReplayAfter(request),
-        { after: cursor }
-      );
+      const pages = iterateChannelReplayAfterPages((request) => channel.getReplayAfter(request), {
+        after: cursor,
+      });
       for await (const envelope of pages) {
         for (const event of envelope.logEvents) {
           maxId = Math.max(maxId, event.id ?? 0);
@@ -4892,35 +5131,44 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
-  override async alarm(): Promise<void> {
+  override async alarm(): Promise<DoAlarmSchedule | null> {
     await super.alarm();
     await this.fireAgentAlarms(Date.now());
+    return this.nextAgentAlarmSchedule();
   }
 
-  async getDebugState(channelId?: string): Promise<Record<string, unknown>> {
+  private activationDebugState(channelId?: string): Record<string, unknown> {
     const channels = channelId ? [channelId] : this.subscriptions.listChannelIds();
     const loops: Record<string, unknown> = {};
     for (const id of channels) {
-      try {
-        const loop = await this.driver.loop(id);
+      const loop = this._driver?.peekLoadedLoop(id) ?? null;
+      if (loop) {
         loops[id] = {
+          loaded: true,
           turnStatus: derivedTurnStatus(loop.state),
           lastSeq: loop.state.lastSeq,
           pendingInvocations: Object.keys(loop.state.pendingInvocations),
           pendingApprovals: Object.keys(loop.state.pendingApprovals),
           pendingCredentialWaits: Object.keys(loop.state.pendingCredentialWaits),
-          settings: this.getAgentSettings(),
+          settings: this.inspectAgentSettings(),
         };
-      } catch (err) {
-        loops[id] = { error: err instanceof Error ? err.message : String(err) };
+      } else {
+        loops[id] = {
+          loaded: false,
+          note: "No folded loop is loaded in this activation; inspect GAD for durable trajectory state.",
+        };
       }
     }
     return {
       participantId: this.participantId(),
       loops,
-      outbox: this.driver.outbox.all(),
+      outbox: inspectEffectOutbox(this.sql),
       subagentProgressOutbox: this.subagentRuns.progressDiagnostics(),
     };
+  }
+
+  async getDebugState(channelId?: string): Promise<Record<string, unknown>> {
+    return this.activationDebugState(channelId);
   }
 
   /**

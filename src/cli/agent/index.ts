@@ -55,6 +55,15 @@ function sessionName(inv: ParsedInvocation): string {
   return name;
 }
 
+function assertSessionWorkspace(session: AgentSession, creds: CliCredentials): void {
+  if (session.serverId !== creds.serverId || session.workspaceId !== creds.workspaceId) {
+    throw new StaleSessionError(
+      `session ${session.name} belongs to ${session.serverId}/${session.workspaceId}, ` +
+        `but the selected workspace is ${creds.serverId}/${creds.workspaceId}`
+    );
+  }
+}
+
 /** Whether an RPC failure means the entity is already gone on the server. */
 function isEntityNotFoundError(error: unknown): boolean {
   return (
@@ -77,7 +86,8 @@ interface EnsuredAgentSession {
 
 async function ensureAgentSessionWithCredentials(
   name: string,
-  creds: CliCredentials
+  creds: CliCredentials,
+  client = new RpcClient(creds)
 ): Promise<EnsuredAgentSession> {
   if (!isValidSessionName(name)) {
     throw new UsageError(`Invalid session name: ${name} (use letters, digits, "_", "-")`);
@@ -87,19 +97,22 @@ async function ensureAgentSessionWithCredentials(
       "no remote workspace selected — run `vibestudio remote select <workspace>`"
     );
   }
-  const client = new RpcClient(creds);
   const existing = loadAgentSession(name);
-  if (existing && existing.serverUrl !== creds.url) {
+  const sameWorkspace =
+    existing?.serverId === creds.serverId && existing.workspaceId === creds.workspaceId;
+  if (existing && !sameWorkspace) {
     console.error(
-      `warning: session ${name} was created for ${existing.serverUrl}; recreating it on ${creds.url}`
+      `warning: session ${name} belongs to ${existing.serverId}/${existing.workspaceId}; ` +
+        `recreating it on ${creds.serverId}/${creds.workspaceId}`
     );
   }
-  if (
-    existing &&
-    existing.serverUrl === creds.url &&
-    (await sessionEntityExists(client, existing.entityId))
-  ) {
-    return { session: existing, reused: true };
+  if (existing && sameWorkspace && (await sessionEntityExists(client, existing.entityId))) {
+    const current =
+      existing.workspaceName === creds.workspaceName
+        ? existing
+        : { ...existing, workspaceName: creds.workspaceName };
+    if (current !== existing) saveAgentSession(current);
+    return { session: current, reused: true };
   }
 
   const runtime = typedClient("runtime", runtimeMethods, client);
@@ -110,9 +123,11 @@ async function ensureAgentSessionWithCredentials(
     title: name,
   })) as RuntimeEntityHandle;
   const session: AgentSession = {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name,
-    serverUrl: creds.url,
+    serverId: creds.serverId,
+    workspaceId: creds.workspaceId,
+    workspaceName: creds.workspaceName,
     entityId: handle.id,
     contextId: handle.contextId,
     scopeKey: name,
@@ -125,8 +140,12 @@ async function ensureAgentSessionWithCredentials(
 /** Ensure a named session exists in the currently selected workspace.
  * System-test commands use this for explicit `--session` scopes so an
  * ephemeral dev-workspace restart repairs its context without a manual attach. */
-export async function ensureNamedAgentSession(name: string): Promise<AgentSession> {
-  return (await ensureAgentSessionWithCredentials(name, requireWorkspaceCredentials())).session;
+export async function ensureNamedAgentSession(
+  name: string,
+  client?: RpcClient
+): Promise<AgentSession> {
+  return (await ensureAgentSessionWithCredentials(name, requireWorkspaceCredentials(), client))
+    .session;
 }
 
 async function attach(inv: ParsedInvocation): Promise<number> {
@@ -190,6 +209,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
     const session = loadAgentSession(name);
     if (!session) throw new CliError(`no session named ${name} — run \`vibestudio agent attach\``);
     const creds = requireWorkspaceCredentials();
+    assertSessionWorkspace(session, creds);
     const client = new RpcClient(creds);
     const live = await sessionEntityExists(client, session.entityId);
     if (!live) {
@@ -203,7 +223,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
         json,
         human: () => {
           console.log(`session: ${session.name}`);
-          console.log(`server: ${session.serverUrl}`);
+          console.log(`server: ${session.serverId}/${session.workspaceName}`);
           console.log(`entity: ${session.entityId}`);
           console.log(`context: ${session.contextId}`);
           console.log("status: live");
@@ -223,6 +243,7 @@ async function detach(inv: ParsedInvocation): Promise<number> {
     const session = loadAgentSession(name);
     if (!session) throw new CliError(`no session named ${name}`);
     const creds = requireWorkspaceCredentials();
+    assertSessionWorkspace(session, creds);
     const client = new RpcClient(creds);
     const runtime = typedClient("runtime", runtimeMethods, client);
     let entityMissing = false;
@@ -272,9 +293,15 @@ async function sessions(inv: ParsedInvocation): Promise<number> {
       name: session.name,
       entityId: session.entityId,
       contextId: session.contextId,
-      serverUrl: session.serverUrl,
+      serverId: session.serverId,
+      workspaceId: session.workspaceId,
+      workspaceName: session.workspaceName,
       live:
-        creds && liveIds ? session.serverUrl === creds.url && liveIds.has(session.entityId) : null,
+        creds && liveIds
+          ? session.serverId === creds.serverId &&
+            session.workspaceId === creds.workspaceId &&
+            liveIds.has(session.entityId)
+          : null,
     }));
     printResult(rows, {
       json,

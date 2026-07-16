@@ -13,6 +13,7 @@ import { fakeGmailClient } from "@workspace/gmail/test-utils";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import { ids } from "@workspace/agent-loop";
+import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 
 import { GmailAgentWorker, triageModelCandidates } from "./gmail-agent-worker.js";
@@ -48,9 +49,10 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     opts?: unknown;
   }> = [];
   signals: Array<{ participantId: string; content: string; type?: string }> = [];
-  unsubscribed: string[] = [];
+  closedSubscriptions: string[] = [];
   gadCalls: Array<{ method: string; args: unknown[] }> = [];
   rawSqlRows: Array<Record<string, unknown>> = [{ seq: null }];
+  lifecycleLeaseCalls: Array<{ method: string; input: unknown }> = [];
   agentInitiatedTurns: Array<{ channelId: string; content: string }> = [];
   replayEvents: Array<{
     id: number;
@@ -139,9 +141,6 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   writtenFiles: Array<{ path: string; data: Uint8Array }> = [];
   /** Fake clock: null = real time (most tests); set for alarm-loop tests. */
   clock: number | null = null;
-  /** Alarm delays captured instead of scheduling real DO alarms. */
-  capturedAlarms: number[] = [];
-  captureAlarms = false;
 
   protected override async writeWorkspaceFile(path: string, data: Uint8Array): Promise<void> {
     this.writtenFiles.push({ path, data });
@@ -151,12 +150,8 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.clock ?? Date.now();
   }
 
-  protected override setAlarm(ms: number): void {
-    if (this.captureAlarms) {
-      this.capturedAlarms.push(ms);
-      return;
-    }
-    super.setAlarm(ms);
+  nextAlarmForTest() {
+    return this.nextAlarmAfterRequest();
   }
 
   rpcCall = vi.fn(async (_target: string, method: string, args?: unknown[]): Promise<unknown> => {
@@ -176,16 +171,13 @@ class TestGmailAgentWorker extends GmailAgentWorker {
       if (args?.[0] === "vibestudio.gad.workspace.v1") {
         return {
           kind: "durable-object",
-          source: "workers/gad-store",
+          source: "vibestudio/internal",
           className: "GadWorkspaceDO",
-          objectKey: "workspace-gad",
+          objectKey: "workspace-semantic-control-plane",
           targetId: "do:gad:test",
         };
       }
       return { kind: "durable-object", targetId: "do:channel:test" };
-    }
-    if (method === "subscribe") {
-      return { ok: true, participantId: "agent-gmail", channelConfig: {} };
     }
     if (method === "workspace.getAgentsMd") return "";
     if (method === "workspace.listSkills") return [];
@@ -198,6 +190,14 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     if (method === "credentials.connect") return { id: "cred-1" };
     if (method === "credentials.resolveCredential") return { id: "cred-1" };
     if (method === "workspace-state.alarmSet" || method === "workspace-state.alarmClear") {
+      return undefined;
+    }
+    if (
+      _target === "main" &&
+      (method === "workspace-state.lifecycleLeaseUpsert" ||
+        method === "workspace-state.lifecycleLeaseClear")
+    ) {
+      this.lifecycleLeaseCalls.push({ method, input: args?.[0] });
       return undefined;
     }
     if (method === "fs.readFile") {
@@ -279,13 +279,27 @@ class TestGmailAgentWorker extends GmailAgentWorker {
 
   protected override createChannelClient() {
     return {
-      subscribe: async () => ({
-        ok: true,
-        channelConfig: undefined,
-        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
-      }),
-      unsubscribe: async (participantId: string) => {
-        this.unsubscribed.push(participantId);
+      openSubscription: async (participantId: string) => {
+        let settleClosed = () => {};
+        const closed = new Promise<void>((resolve) => {
+          settleClosed = resolve;
+        });
+        let isClosed = false;
+        return {
+          result: {
+            ok: true,
+            participantId,
+            channelConfig: undefined,
+            envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+          },
+          closed,
+          close: () => {
+            if (isClosed) return;
+            isClosed = true;
+            this.closedSubscriptions.push(participantId);
+            settleClosed();
+          },
+        };
       },
       getConfig: async () => null,
       getParticipants: async () => [],
@@ -419,11 +433,6 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.sql.exec(query, ...(params as never[])).toArray();
   }
 
-  runMigration(fromVersion = 1) {
-    this.migrate(fromVersion, (this.constructor as typeof GmailAgentWorker).schemaVersion);
-    this.createTables();
-  }
-
   bootstrapIdentityForTest(): void {
     this.ensureIdentity();
   }
@@ -441,7 +450,7 @@ describe("GmailAgentWorker", () => {
     });
   });
 
-  it("bumps the base vessel schema version so base + gmail migrations run", () => {
+  it("owns a schema epoch beyond the base vessel shape", () => {
     expect(GmailAgentWorker.schemaVersion).toBeGreaterThan(AgentWorkerBase.schemaVersion);
   });
 
@@ -492,7 +501,7 @@ describe("GmailAgentWorker", () => {
         spec: expect.objectContaining({
           flow: expect.objectContaining({ type: "oauth2-auth-code-pkce" }),
           credential: expect.objectContaining({
-            audience: [{ url: "https://chatgpt.com/backend-api/codex", match: "path-prefix" }],
+            audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
             metadata: expect.objectContaining({
               modelProviderId: "openai-codex",
               accountIdentityJwtClaimField: "chatgpt_account_id",
@@ -585,17 +594,47 @@ describe("GmailAgentWorker", () => {
       channel_id: "ch-1",
       credential_id: "google-cred-2",
     });
+    expect(worker.lifecycleLeaseCalls).toEqual([
+      {
+        method: "workspace-state.lifecycleLeaseUpsert",
+        input: {
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+          detail: { kind: "channel-subscriptions" },
+        },
+      },
+    ]);
   });
 
   it("removes local subscription state when unsubscribing from a channel", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
-    worker.seedSubscription("ch-1", "agent-gmail");
+    const { participantId } = await worker.subscribeChannel({
+      channelId: "ch-1",
+      contextId: "ctx-1",
+      replay: false,
+    });
 
     await expect(worker.unsubscribeChannel("ch-1")).resolves.toEqual({ ok: true });
 
-    expect(worker.unsubscribed).toEqual(["agent-gmail"]);
+    expect(worker.closedSubscriptions).toEqual([participantId]);
     expect(worker.subscriptionRows()).toEqual([]);
+    expect(worker.lifecycleLeaseCalls).toEqual([
+      {
+        method: "workspace-state.lifecycleLeaseUpsert",
+        input: {
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+          detail: { kind: "channel-subscriptions" },
+        },
+      },
+      {
+        method: "workspace-state.lifecycleLeaseClear",
+        input: { source: "test", className: "TestDO", objectKey: "test-key" },
+      },
+    ]);
   });
 
   it("forks cloned agent state at genesis when no prior trajectory event was published", async () => {
@@ -613,12 +652,12 @@ describe("GmailAgentWorker", () => {
     const rawSql = worker.gadCalls.find((call) => call.method === "rawSql");
     expect(rawSql?.args).toEqual([
       expect.stringContaining("ch.origin_head = ?"),
-      ["old-channel", 12, ids.logIdForChannel("old-channel"), ids.logIdForChannel("old-channel")],
+      ["old-channel", 12, logIdForChannel("old-channel"), logIdForChannel("old-channel")],
     ]);
     const forkLog = worker.gadCalls.find((call) => call.method === "forkLog");
     expect(forkLog?.args[0]).toMatchObject({
-      fromLogId: ids.logIdForChannel("old-channel"),
-      toLogId: ids.logIdForChannel("new-channel"),
+      fromLogId: logIdForChannel("old-channel"),
+      toLogId: logIdForChannel("new-channel"),
       atSeq: 0,
     });
     expect(worker.subscriptionRows()).toEqual([
@@ -857,7 +896,6 @@ describe("GmailAgentWorker", () => {
     worker.seedSubscription();
     const base = 1_750_000_000_000;
     worker.clock = base;
-    worker.captureAlarms = true;
 
     await worker.onMethodCall("ch-1", "call-1", "gmail_set_attention", {
       preferences: "Wake me for urgent mail.",
@@ -870,29 +908,28 @@ describe("GmailAgentWorker", () => {
 
     // Candidate is 30s old: triage retry (~30s) beats the 5-min poll interval.
     worker.clock = base + 30_000;
-    worker.capturedAlarms = [];
-    await worker.alarm();
-    const minAlarm = Math.min(...worker.capturedAlarms);
-    expect(minAlarm).toBeGreaterThan(0);
-    expect(minAlarm).toBeLessThanOrEqual(30_000);
+    const firstSchedule = await worker.alarm();
+    expect(firstSchedule).not.toBeNull();
+    expect(firstSchedule!.wakeAt - worker.clock).toBeGreaterThan(0);
+    expect(firstSchedule!.wakeAt - worker.clock).toBeLessThanOrEqual(30_000);
 
     // Candidate aged past 60s: the triage pass runs (and here wakes), so the
     // wake debounce deadline (~90s) becomes the earliest signal.
     worker.clock = base + 61_000;
     worker.triageResponses = [JSON.stringify([{ i: 1, decision: "wake", reason: "urgent" }])];
-    worker.capturedAlarms = [];
-    await worker.alarm();
+    const secondSchedule = await worker.alarm();
     expect(worker.triageCalls).toHaveLength(1);
     expect(worker.triageQueueRows()).toHaveLength(0);
-    expect(Math.min(...worker.capturedAlarms)).toBeLessThanOrEqual(90_000);
+    expect(secondSchedule).not.toBeNull();
+    expect(secondSchedule!.wakeAt - worker.clock).toBeLessThanOrEqual(90_000);
 
     // Past the debounce deadline the queued wake drains into a digest turn,
     // and the next alarm falls back to the poll interval.
     worker.clock = base + 61_000 + 91_000;
-    worker.capturedAlarms = [];
-    await worker.alarm();
+    const thirdSchedule = await worker.alarm();
     expect(worker.agentInitiatedTurns).toHaveLength(1);
-    expect(Math.min(...worker.capturedAlarms)).toBeLessThanOrEqual(5 * 60 * 1000);
+    expect(thirdSchedule).not.toBeNull();
+    expect(thirdSchedule!.wakeAt - worker.clock).toBeLessThanOrEqual(5 * 60 * 1000);
   });
 
   it("skips auth-needed channels and honors rate-limit backoff in alarm scheduling", async () => {
@@ -901,7 +938,6 @@ describe("GmailAgentWorker", () => {
     worker.seedSubscription();
     const base = 1_750_000_000_000;
     worker.clock = base;
-    worker.captureAlarms = true;
 
     // Seed channel state, then mark it rate-limited for 2 minutes.
     await worker.onMethodCall("ch-1", "call-1", "checkNow", {});
@@ -912,61 +948,21 @@ describe("GmailAgentWorker", () => {
     );
     worker.profile.mockClear();
     worker.sync.mockClear();
-    worker.capturedAlarms = [];
-    await worker.alarm();
+    const rateLimitSchedule = await worker.alarm();
     expect(worker.sync).not.toHaveBeenCalled();
     // The alarm targets the backoff deadline, not the poll interval.
-    expect(Math.min(...worker.capturedAlarms)).toBeLessThanOrEqual(120_000);
-    expect(Math.min(...worker.capturedAlarms)).toBeGreaterThan(60_000);
+    expect(rateLimitSchedule).not.toBeNull();
+    expect(rateLimitSchedule!.wakeAt - worker.clock).toBeLessThanOrEqual(120_000);
+    expect(rateLimitSchedule!.wakeAt - worker.clock).toBeGreaterThan(60_000);
 
     // Auth-needed channels neither sync nor reschedule polling.
     worker.execSqlForTest(
       `UPDATE gmail_channel_state SET sync_state = 'auth-needed', rate_limited_until = NULL WHERE channel_id = ?`,
       "ch-1"
     );
-    worker.capturedAlarms = [];
-    await worker.alarm();
+    const authNeededSchedule = await worker.alarm();
     expect(worker.sync).not.toHaveBeenCalled();
-    const gmailAlarms = worker.capturedAlarms.filter((ms) => ms <= 5 * 60 * 1000);
-    expect(gmailAlarms).toEqual([]);
-  });
-
-  it("resets Gmail state to the one current schema without translating prior layouts", async () => {
-    const { instance } = await createTestDO(TestGmailAgentWorker);
-    const worker = instance as TestGmailAgentWorker;
-    worker.seedSubscription();
-    worker.seedRepliedSender("ch-1", "friend@example.com");
-
-    await worker.onMethodCall("ch-1", "call-1", "gmail_set_attention", {
-      preferences: "Invoices and urgent mail.",
-      markConfigured: true,
-    });
-    worker.execSqlForTest(
-      `UPDATE gmail_channel_state SET credential_id = ? WHERE channel_id = ?`,
-      "google-cred-7",
-      "ch-1"
-    );
-    await worker.onMethodCall("ch-1", "call-2", "checkNow", {});
-    await worker.onMethodCall("ch-1", "call-3", "checkNow", {});
-    expect(worker.rows(`SELECT * FROM gmail_threads`)).not.toEqual([]);
-    const turnsBefore = worker.agentInitiatedTurns.length;
-    worker.execSqlForTest(`CREATE TABLE gmail_retired_shape (value TEXT)`);
-
-    worker.runMigration(1);
-
-    expect(worker.rows(`SELECT * FROM gmail_threads`)).toEqual([]);
-    expect(worker.rows(`SELECT * FROM gmail_triage_queue`)).toEqual([]);
-    expect(worker.channelStateRow("ch-1")).toBeUndefined();
-    expect(worker.rows(`SELECT * FROM gmail_attention_prefs`)).toEqual([]);
-    expect(worker.rows(`SELECT * FROM gmail_replied_senders`)).toEqual([]);
-    expect(
-      worker.rows(`SELECT name FROM sqlite_master WHERE name = 'gmail_retired_shape'`)
-    ).toEqual([]);
-
-    await (
-      worker as unknown as { startSetupTurnIfNeeded(channelId: string): Promise<void> }
-    ).startSetupTurnIfNeeded("ch-1");
-    expect(worker.agentInitiatedTurns.length).toBe(turnsBefore + 1);
+    expect(authNeededSchedule).toBeNull();
   });
 
   it("saves natural-language attention preferences and reads them back", async () => {
@@ -1675,7 +1671,6 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
     worker.seedSubscription();
-    worker.captureAlarms = true;
     await worker.onMethodCall("ch-1", "call-1", "checkNow", {});
     worker.sync.mockClear();
 
@@ -1685,8 +1680,6 @@ describe("GmailAgentWorker", () => {
     });
     expect(result).toEqual({ synced: ["ch-1"] });
     expect(worker.sync).toHaveBeenCalledTimes(1);
-    // The follow-up alarm drains triage/wake queues.
-    expect(worker.capturedAlarms).toContain(1000);
 
     // Unknown mailboxes are a no-op.
     await expect(
@@ -1751,7 +1744,6 @@ describe("GmailAgentWorker", () => {
     worker.seedSubscription();
     const base = 1_750_000_000_000;
     worker.clock = base;
-    worker.captureAlarms = true;
     await worker.onMethodCall("ch-1", "call-1", "checkNow", {});
     await worker.onMethodCall("ch-1", "call-2", "checkNow", {});
 

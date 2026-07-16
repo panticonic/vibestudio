@@ -10,13 +10,19 @@ interface RpcCall {
   targetId: string;
   method: string;
   args: unknown[];
+  options?: { idempotencyKey?: string };
 }
 
 function createMockRpc(forkResult: unknown) {
   const calls: RpcCall[] = [];
   const rpc = {
-    async call<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
-      calls.push({ targetId, method, args });
+    async call<T>(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: { idempotencyKey?: string }
+    ): Promise<T> {
+      calls.push({ targetId, method, args, options });
       if (targetId === "main" && method === "workers.resolveService") {
         return {
           kind: "durable-object",
@@ -58,7 +64,14 @@ describe("forkConversation()", () => {
 
     const forkCall = calls.find((c) => c.method === "fork");
     expect(forkCall?.targetId).toBe("do:workers/pubsub-channel:PubSubChannel:chan-1");
-    expect(forkCall?.args[0]).toEqual({ forkPointPubsubId: 42, reason: "deep-dive" });
+    expect(forkCall?.args[0]).toEqual({
+      operationId: expect.any(String),
+      forkPointPubsubId: 42,
+      reason: "deep-dive",
+    });
+    expect(forkCall?.options?.idempotencyKey).toBe(
+      `channel-fork:${(forkCall?.args[0] as { operationId: string }).operationId}`
+    );
   });
 
   it("threads seed / label / include through to the DO", async () => {
@@ -83,6 +96,7 @@ describe("forkConversation()", () => {
 
     const forkCall = calls.find((c) => c.method === "fork");
     expect(forkCall?.args[0]).toEqual({
+      operationId: expect.any(String),
       forkPointPubsubId: 7,
       seed: { author, blocks: [{ type: "text", content: "hi" }] },
       label: "My branch",

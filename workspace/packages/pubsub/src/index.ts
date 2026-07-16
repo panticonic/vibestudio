@@ -33,6 +33,15 @@ export type { PubSubClient } from "./client.js";
 export { connectViaRpc } from "./rpc-client.js";
 export type { RpcConnectOptions } from "./rpc-client.js";
 export { iterateChannelReplayAfterPages, type ChannelReplayPageReader } from "./channel-replay.js";
+export {
+  CHANNEL_SUBSCRIPTION_BUFFER_BYTES,
+  channelSubscriptionQueuingStrategy,
+  encodeChannelSubscriptionRecord,
+  enqueueChannelSubscriptionBytes,
+  readChannelSubscriptionRecords,
+  type ChannelSubscriptionEnqueueResult,
+  type ChannelSubscriptionRecord,
+} from "@vibestudio/service-schemas/channel";
 
 // Content type constants
 export * from "./content-types.js";
@@ -42,7 +51,6 @@ export * from "./protocol-wire.js";
 
 // Protocol types (agentic messaging types and events)
 export * from "./protocol-types.js";
-export * from "./internal-constants.js";
 
 // Tracker types and interfaces
 export * from "./tracker-types.js";

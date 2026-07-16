@@ -1,4 +1,9 @@
-import { AgentWorkerBase, installMessageTypes, type RespondPolicy } from "@workspace/agentic-do";
+import {
+  AgentWorkerBase,
+  installMessageTypes,
+  type AgentToolExecutionContext,
+  type RespondPolicy,
+} from "@workspace/agentic-do";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { rpc } from "@workspace/runtime/worker";
 import type { DurableObjectContext, WebhookDeliveryEvent } from "@workspace/runtime/worker";
@@ -15,8 +20,9 @@ import {
 } from "@workspace/gmail/renderers/gmail-thread.reducer";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
+import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 
-import { DEFAULT_ATTENTION_PREFERENCES, createGmailTables, dropGmailTables } from "./schema.js";
+import { DEFAULT_ATTENTION_PREFERENCES, createGmailTables } from "./schema.js";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   booleanArg,
@@ -145,7 +151,6 @@ export class GmailAgentWorker extends AgentWorkerBase {
       isConfigured: (channelId) => this.getChannelState(channelId).setupStatus === "configured",
       applyDecision: (channelId, threadId, decision) =>
         this.syncEngine.applyTriageDecision(channelId, threadId, decision),
-      onWakeEnqueued: () => this.setAlarm(WAKE_DEBOUNCE_MS),
       now,
     });
     this.syncEngine = new SyncEngine({
@@ -158,7 +163,6 @@ export class GmailAgentWorker extends AgentWorkerBase {
       getChannelState: (channelId) => this.getChannelState(channelId),
       saveChannelState: (state) => this.saveChannelState(state),
       publishSetup: (channelId) => this.publishSetupCard(channelId),
-      schedulePoll: (ms) => this.setAlarm(ms),
       now,
     });
     this.handlers = new GmailHandlers({
@@ -174,7 +178,6 @@ export class GmailAgentWorker extends AgentWorkerBase {
       getChannelState: (channelId) => this.getChannelState(channelId),
       saveChannelState: (state) => this.saveChannelState(state),
       publishSetup: (channelId) => this.publishSetupCard(channelId),
-      setPollAlarm: (ms) => this.setAlarm(ms),
       generateDraftReplyBody: (channelId, thread) => this.generateDraftReplyBody(channelId, thread),
       isSubscribed: (channelId) => Boolean(this.subscriptions.getParticipantId(channelId)),
       writeFile: (path, data) => this.writeWorkspaceFile(path, data),
@@ -207,13 +210,6 @@ export class GmailAgentWorker extends AgentWorkerBase {
   protected override createTables(): void {
     super.createTables();
     createGmailTables(this.sql);
-  }
-
-  protected override migrate(fromVersion: number, toVersion: number): void {
-    super.migrate(fromVersion, toVersion);
-    if (fromVersion !== toVersion) {
-      dropGmailTables(this.sql);
-    }
   }
 
   // ── Gmail client & channel state ──────────────────────────────────────────
@@ -375,9 +371,12 @@ export class GmailAgentWorker extends AgentWorkerBase {
       .trim();
   }
 
-  protected override getLoopTools(channelId: string): AgentTool[] {
+  protected override getLoopTools(
+    channelId: string,
+    execution?: AgentToolExecutionContext
+  ): AgentTool[] {
     const universalTools = super
-      .getLoopTools(channelId)
+      .getLoopTools(channelId, execution)
       .filter((tool) => GMAIL_UNIVERSAL_LOOP_TOOL_NAMES.has(tool.name));
     const gmailTools = toolOperations().map(
       (op) =>
@@ -430,13 +429,60 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
     await this.installChannelUi(opts.channelId);
     await this.publishSetupCard(opts.channelId);
-    this.setAlarm(this.getChannelState(opts.channelId).pollIntervalMs);
     await this.startSetupTurnIfNeeded(opts.channelId);
     await this.ensureWatch(opts.channelId);
     return result;
   }
 
-  override async alarm(): Promise<void> {
+  private nextGmailAlarmSchedule(now = this.now()): DoAlarmSchedule | null {
+    const wakeTimes: number[] = [];
+    const reminderAt = this.store.nextReminderAt();
+    if (reminderAt !== undefined) wakeTimes.push(Math.max(reminderAt, now + 1000));
+
+    for (const channelId of this.store.channelsWithPendingCandidates()) {
+      const wakeAt = this.triage.nextWakeAt(channelId, now);
+      if (wakeAt !== undefined) wakeTimes.push(wakeAt);
+    }
+    const attentionChannels = this.sql
+      .exec(`SELECT DISTINCT channel_id FROM gmail_attention_queue ORDER BY channel_id`)
+      .toArray();
+    for (const row of attentionChannels) {
+      const wakeAt = this.wake.nextWakeAt(String(row["channel_id"]), now);
+      if (wakeAt !== undefined) wakeTimes.push(wakeAt);
+    }
+
+    const channels = this.sql
+      .exec(
+        `SELECT poll_interval_ms, sync_state, rate_limited_until, watch_expiration
+           FROM gmail_channel_state`
+      )
+      .toArray();
+    for (const row of channels) {
+      if (String(row["sync_state"] ?? "ok") === "auth-needed") continue;
+      const rateLimitedUntil = Number(row["rate_limited_until"] ?? 0);
+      const watchExpiration = Number(row["watch_expiration"] ?? 0);
+      const watchActive = watchExpiration > now + WATCH_RENEW_MARGIN_MS;
+      const basePoll = Number(row["poll_interval_ms"]) || DEFAULT_POLL_INTERVAL_MS;
+      const poll = watchActive
+        ? Math.min(
+            Math.max(basePoll, WATCH_FALLBACK_POLL_MS),
+            Math.max(watchExpiration - WATCH_RENEW_MARGIN_MS - now, 60_000)
+          )
+        : basePoll;
+      wakeTimes.push(rateLimitedUntil > now ? Math.max(rateLimitedUntil, now + 1000) : now + poll);
+    }
+    return wakeTimes.length === 0 ? null : { wakeAt: Math.min(...wakeTimes) };
+  }
+
+  protected override nextAlarmAfterRequest(): DoAlarmSchedule | null {
+    const agent = super.nextAlarmAfterRequest();
+    const gmail = this.nextGmailAlarmSchedule();
+    if (agent === null) return gmail;
+    if (gmail === null) return agent;
+    return agent.wakeAt <= gmail.wakeAt ? agent : gmail;
+  }
+
+  override async alarm(): Promise<DoAlarmSchedule | null> {
     await super.alarm();
     const now = this.now();
     const rows = this.sql
@@ -453,36 +499,10 @@ export class GmailAgentWorker extends AgentWorkerBase {
       });
       await this.ensureWatch(channelId);
     }
-    const reminderDelay = this.processDueReminders(now);
-    const triageDelay = await this.processTriageQueues();
-    const wakeDelay = await this.processWakeQueues(now);
-    // Recompute the next wake from fresh state: auth-needed channels do not
-    // reschedule; rate-limited channels wake at their backoff deadline; wake
-    // digest and triage deadlines compete for the earliest alarm.
-    const fresh = this.sql
-      .exec(
-        `SELECT poll_interval_ms, sync_state, rate_limited_until, watch_expiration FROM gmail_channel_state`
-      )
-      .toArray();
-    let nextDelay = minDefined(minDefined(wakeDelay, triageDelay), reminderDelay);
-    for (const row of fresh) {
-      if (String(row["sync_state"] ?? "ok") === "auth-needed") continue;
-      const rateLimitedUntil = Number(row["rate_limited_until"] ?? 0);
-      // With an active push watch, polling is only a safety net (and the
-      // watch renewal deadline still bounds the sleep).
-      const watchExpiration = Number(row["watch_expiration"] ?? 0);
-      const watchActive = watchExpiration > now + WATCH_RENEW_MARGIN_MS;
-      const basePoll = Number(row["poll_interval_ms"]) || DEFAULT_POLL_INTERVAL_MS;
-      const poll = watchActive
-        ? Math.min(
-            Math.max(basePoll, WATCH_FALLBACK_POLL_MS),
-            Math.max(watchExpiration - WATCH_RENEW_MARGIN_MS - now, 60_000)
-          )
-        : basePoll;
-      const interval = rateLimitedUntil > now ? Math.max(rateLimitedUntil - now, 1000) : poll;
-      nextDelay = nextDelay === undefined ? interval : Math.min(nextDelay, interval);
-    }
-    if (nextDelay) this.setAlarm(nextDelay);
+    this.processDueReminders(now);
+    await this.processTriageQueues();
+    await this.processWakeQueues(now);
+    return this.nextAlarmAfterRequest();
   }
 
   // ── push notifications (users.watch → Cloud Pub/Sub → webhook ingress) ───
@@ -660,7 +680,6 @@ export class GmailAgentWorker extends AgentWorkerBase {
       if (result?.ok) synced.push(channelId);
     }
     // Let the normal alarm pipeline drain triage candidates + wake digests.
-    if (synced.length > 0) this.setAlarm(1000);
     return { synced };
   }
 

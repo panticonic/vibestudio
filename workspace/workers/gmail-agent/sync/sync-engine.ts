@@ -43,8 +43,6 @@ export interface SyncEngineDeps {
   getChannelState: (channelId: string) => GmailChannelState;
   saveChannelState: (state: GmailChannelState) => void;
   publishSetup: (channelId: string) => Promise<void>;
-  /** Schedule the poll alarm to fire in `ms` (earliest-wins). */
-  schedulePoll: (ms: number) => void;
   now?: () => number;
 }
 
@@ -139,7 +137,6 @@ export class SyncEngine {
       );
       state.backoffMs = backoff;
       state.rateLimitedUntil = this.now() + backoff;
-      this.deps.schedulePoll(backoff);
     } else {
       state.lastError = failure.message;
     }

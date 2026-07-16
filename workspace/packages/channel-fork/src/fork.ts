@@ -71,13 +71,20 @@ export async function forkConversation(
   ]);
   const target =
     service.targetId ?? `do:${service.source}:${service.className}:${service.objectKey}`;
-  return rpc.call<ForkResult>(target, "fork", [
-    {
-      forkPointPubsubId: opts.forkPointPubsubId,
-      ...(opts.seed ? { seed: opts.seed } : {}),
-      ...(opts.label !== undefined ? { label: opts.label } : {}),
-      reason: opts.reason,
-      ...(opts.include ? { include: opts.include } : {}),
-    },
-  ]);
+  const operationId = crypto.randomUUID();
+  return rpc.call<ForkResult>(
+    target,
+    "fork",
+    [
+      {
+        operationId,
+        forkPointPubsubId: opts.forkPointPubsubId,
+        ...(opts.seed ? { seed: opts.seed } : {}),
+        ...(opts.label !== undefined ? { label: opts.label } : {}),
+        reason: opts.reason,
+        ...(opts.include ? { include: opts.include } : {}),
+      },
+    ],
+    { idempotencyKey: `channel-fork:${operationId}` }
+  );
 }

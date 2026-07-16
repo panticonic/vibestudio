@@ -14,7 +14,7 @@
  * presence events).
  */
 
-/// <reference path="../workerd.d.ts" />
+/// <reference path="./workerd.d.ts" />
 import {
   createDurableObjectServiceClient,
   rpc,
@@ -24,6 +24,11 @@ import {
   type UserlandApprovalChoice,
 } from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
+import {
+  channelSubscriptionQueuingStrategy,
+  encodeChannelSubscriptionRecord,
+  enqueueChannelSubscriptionBytes,
+} from "@workspace/pubsub";
 import type {
   BootstrapSnapshot,
   ChannelInvite,
@@ -35,6 +40,7 @@ import type {
   DeleteChannelMembershipInput,
   PutChannelMembershipInput,
 } from "@vibestudio/shared/channelInvites";
+import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -51,7 +57,6 @@ import {
   type MessageBlockInput,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
-import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
 import {
   participantMetadataSchema,
   participantIsAgentVessel,
@@ -64,7 +69,6 @@ import {
   broadcast,
   buildChannelEvent,
   channelEventToRpcSignal,
-  queueEmit,
   queueDoEnvelope,
   type BroadcastDeps,
   cleanupDeliveryChain,
@@ -73,11 +77,15 @@ import { ChannelLog, type ChannelReplayContext, type MessageTypeDefinition } fro
 import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
 import { CallTransport, type PendingCallRow } from "./calls.js";
 import type { PolicyEnvelopeView } from "@workspace/channel-policies";
+import {
+  AGENT_INSPECTION_METHODS,
+  AGENT_INSPECTION_RPC_METHOD,
+  isAgentInspectionMethod,
+  type AgentInspectionMethod,
+} from "@vibestudio/shared/agentInspection";
 
-/** How long before an RPC participant is considered stale (no heartbeat). */
-const PARTICIPANT_STALE_MS = 5 * 60 * 1000; // 5 minutes
-/** Connected humans move through these activity states without being removed
- * from the roster. Heartbeats are liveness only and never reset activity. */
+/** Subscribed humans move through these activity states without being removed
+ * from the roster. Only domain activity resets these clocks. */
 const PRESENCE_IDLE_MS = 5 * 60 * 1000;
 const PRESENCE_AWAY_MS = 30 * 60 * 1000;
 /** WP8 §3 — how long a departed user's `presence_last_seen` row is retained so
@@ -90,16 +98,11 @@ const REPLAY_LIMIT = 50;
 /** Dedup keys are a latency cache; the durable dedupe is the `ik:{key}`
  *  envelope id in the log lineage. */
 const DEDUP_TTL_MS = 5 * 60 * 1000;
-/** A pending call is eligible for lost-delivery redelivery once it is older
- *  than this (its original delivery already happened at creation). */
+/** A pending call is eligible for at-least-once redelivery after its initial
+ * delivery has had a short opportunity to settle. */
 const PENDING_REDELIVERY_STALE_MS = 10_000;
-/** Bounded redelivery cadence while calls are in flight. Anchored on a
- *  swept-at marker that advances each sweep — NOT on created_at (which never
- *  advances and would re-arm the alarm every 100ms for the call's lifetime,
- *  defeating hibernation). */
 const PENDING_REDELIVERY_INTERVAL_MS = 15_000;
 const PENDING_REDELIVERY_SWEPT_AT_KEY = "pendingRedeliverySweptAt";
-/** Retry cadence for the per-channel membership → workspace invite projection. */
 const INVITE_INDEX_RETRY_MS = 5_000;
 const INVITE_INDEX_REVISION_KEY = "inviteIndexRevision";
 
@@ -109,18 +112,15 @@ const DEFAULT_POLICY_NAME = "agentic.conversation.v1";
  *  lineage forwarding). */
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
-/** Debounce window before a durable head advance fans out up the lineage. */
-const LINEAGE_REPORT_DEBOUNCE_MS = 500;
 /** Signal contentType for the ephemeral fork.head_changed lineage badge. */
 const FORK_HEAD_CHANGED_SIGNAL = "fork.head_changed";
-/** How long an interrupted fork op waits before the alarm reconciler resumes
- *  or rolls it back. */
 const FORK_OP_RECONCILE_MS = 5_000;
 
 /** Ordered fork-op phases; a resume skips everything at or below the recorded
- *  phase. `rolledback` is terminal (the op was torn down). */
+ * phase. `rollback-pending` remains retryable until owned context cleanup is
+ * confirmed; `rolledback` is terminal. */
 const FORK_PHASES = ["journaled", "cloned", "postcloned", "seeded", "announced", "done"] as const;
-type ForkPhase = (typeof FORK_PHASES)[number] | "rolledback";
+type ForkPhase = (typeof FORK_PHASES)[number] | "rollback-pending" | "rolledback";
 function forkPhaseReached(phase: string, target: ForkPhase): boolean {
   const a = FORK_PHASES.indexOf(phase as (typeof FORK_PHASES)[number]);
   const b = FORK_PHASES.indexOf(target as (typeof FORK_PHASES)[number]);
@@ -151,6 +151,9 @@ interface ForkSeed {
  *  are cloned (root-context entity scope → cloneContext.include); omit to clone
  *  every agent vessel in the roster. `exclude`/`replace` are REMOVED (C7). */
 interface ForkOpts {
+  /** Stable identity allocated once by the caller and retained by transport
+   * retries. It is also the saga identity and clone target key. */
+  operationId: string;
   forkPointPubsubId: number;
   seed?: ForkSeed;
   label?: string;
@@ -259,11 +262,7 @@ function scrubUserParticipantMetadata(metadata: Record<string, unknown>): Record
   return scrubbed;
 }
 
-const ADMIN_AGENT_DEBUG_METHODS = new Set([
-  "getDebugState",
-  "getAgentSettings",
-  "inspectMethodSuspensions",
-]);
+const AGENT_INSPECTION_TIMEOUT_MS = 5_000;
 
 function stableShortHash(input: string): string {
   let h1 = 0xdeadbeef ^ input.length;
@@ -317,12 +316,21 @@ interface ChannelPresenceEntry {
 }
 
 export class PubSubChannel extends DurableObjectBase {
-  static override schemaVersion = 112;
+  static override schemaVersion = 114;
   private _channelLog: ChannelLog | null = null;
   private _inviteIndex: DurableObjectServiceClient | null = null;
   private _policyHost: PolicyHost | null = null;
   private _calls: CallTransport | null = null;
   private readonly publishDedupInFlight = new Map<string, Promise<ChannelEvent>>();
+  private readonly subscriptionStreams = new Map<
+    string,
+    {
+      participantId: string;
+      deliveryId: string;
+      token: symbol;
+      controller: ReadableStreamDefaultController<Uint8Array>;
+    }
+  >();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -333,6 +341,26 @@ export class PubSubChannel extends DurableObjectBase {
     } catch {
       /* workerd may ignore pragmas */
     }
+    this.reapOrphanedSubscriptionProjection();
+  }
+
+  /**
+   * `participants` is the durable projection of activation-local response
+   * resources. A live response keeps this activation resident; therefore any
+   * rows observed by a fresh activation have no possible owning stream and are
+   * orphans. Rebuild them only from new subscription responses.
+   */
+  private reapOrphanedSubscriptionProjection(): void {
+    const disconnectedAt = Date.now();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO presence_last_seen (participant_id, last_seen)
+         SELECT id, ? FROM participants WHERE id LIKE 'user:%'
+         ON CONFLICT(participant_id) DO UPDATE SET last_seen = excluded.last_seen`,
+        disconnectedAt
+      );
+      this.sql.exec(`DELETE FROM participants`);
+    });
   }
 
   protected createTables(): void {
@@ -341,8 +369,7 @@ export class PubSubChannel extends DurableObjectBase {
         id TEXT PRIMARY KEY,
         metadata TEXT NOT NULL,
         transport TEXT NOT NULL CHECK (transport IN ('rpc','do')),
-        -- Freshest real client activity across a user's sessions. Heartbeats
-        -- live in participant_sessions and deliberately do not touch this.
+        -- Freshest real client activity across a user's subscriptions.
         last_active_at INTEGER,
         presence_status TEXT CHECK (presence_status IN ('online','idle','away')),
         handle TEXT,
@@ -351,25 +378,6 @@ export class PubSubChannel extends DurableObjectBase {
         do_object_key TEXT
       )
     `);
-    // A participant identity may have multiple independently-owned live
-    // sessions. `delivery_id` is the actual RPC endpoint (panel slot / DO id),
-    // while participant_id is the canonical channel actor (`user:<userId>` for
-    // a human).
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS participant_sessions (
-        participant_id TEXT NOT NULL,
-        session_id     TEXT NOT NULL,
-        delivery_id    TEXT NOT NULL,
-        last_seen      INTEGER NOT NULL,
-        PRIMARY KEY (participant_id, session_id),
-        UNIQUE (delivery_id, session_id),
-        FOREIGN KEY (participant_id) REFERENCES participants(id) ON DELETE CASCADE
-      )
-    `);
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_participant_sessions_stale
-         ON participant_sessions(last_seen)`
-    );
     this.sql.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_handle
          ON participants(handle) WHERE handle IS NOT NULL`
@@ -466,46 +474,17 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_invite_index_ops_updated ON invite_index_ops(updated_at)`
     );
-    // WP8 §3 — retained last-seen for account presence. When a user's LAST live
-    // panel leaves (graceful release, disconnect eviction), we stamp `last_seen`
+    // WP8 §3 — retained last-seen for account presence. When a user's last
+    // subscribed panel leaves, we stamp `last_seen`
     // here so an offline member still renders "last seen Xm ago". Deliberately
     // OUTLIVES the ephemeral `participants` row (which is deleted on leave); a
-    // (re)join clears the row. Bounded by PRESENCE_LAST_SEEN_RETENTION_MS. Like
-    // `channel_members`, it is durable presence with no other copy, so it is NOT
-    // dropped on a schema bump.
+    // (re)join clears the row. Bounded by PRESENCE_LAST_SEEN_RETENTION_MS.
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS presence_last_seen (
         participant_id TEXT PRIMARY KEY,    -- user:<userId>
         last_seen      INTEGER NOT NULL
       )
     `);
-  }
-
-  protected override migrate(_fromVersion: number, _toVersion: number): void {
-    this.sql.exec(`DROP INDEX IF EXISTS idx_channel_envelopes_published_at`);
-    this.sql.exec(`DROP INDEX IF EXISTS idx_messages_root`);
-    this.sql.exec(`DROP INDEX IF EXISTS idx_messages_root_chat`);
-    this.sql.exec(`DROP TABLE IF EXISTS channel_envelopes`);
-    this.sql.exec(`DROP TABLE IF EXISTS messages`);
-    this.sql.exec(`DROP TABLE IF EXISTS participant_sessions`);
-    this.sql.exec(`DROP TABLE IF EXISTS participants`);
-    this.sql.exec(`DROP TABLE IF EXISTS pending_calls`);
-    this.sql.exec(`DROP TABLE IF EXISTS dedup_keys`);
-    this.sql.exec(`DROP TABLE IF EXISTS fork_ops`);
-    this.sql.exec(`DROP TABLE IF EXISTS lineage_subscribers`);
-    this.sql.exec(`DROP TABLE IF EXISTS invite_index_ops`);
-    // The v112+ pre-release schema line is an intentional cut: projection
-    // operations carry a required monotonic revision. Older journal rows are
-    // not migrated or retained.
-    this.sql.exec(`DROP TABLE IF EXISTS channel_members`);
-    // Channel-side registry cache deleted for good — GAD's
-    // channel_message_types projection is the only copy.
-    this.sql.exec(`DROP TABLE IF EXISTS message_types`);
-    // Retained last-seen has no schema change and remains the sole bounded
-    // channel-presence record. All membership rows are recreated in the clean
-    // current shape; this pre-release cut intentionally carries no compatibility
-    // bridge for the removed acknowledgement column or unversioned mutations.
-    this.createTables();
   }
 
   // ── Wiring ────────────────────────────────────────────────────────────────
@@ -515,6 +494,8 @@ export class PubSubChannel extends DurableObjectBase {
       sql: this.sql,
       rpc: this.rpc,
       objectKey: this.objectKey,
+      deliverParticipant: (participantId, payload) =>
+        this.deliverParticipantPayload(participantId, payload),
     };
   }
 
@@ -561,7 +542,7 @@ export class PubSubChannel extends DurableObjectBase {
       broadcastLive: (event, senderId, ref) =>
         broadcast(this.broadcastDeps, event, { kind: "log", phase: "live", ref }, senderId),
       emitSignal: (participantId, event) => {
-        void queueEmit(this.broadcastDeps, participantId, {
+        void this.deliverParticipantPayload(participantId, {
           channelId: this.objectKey,
           message: channelEventToRpcSignal(event),
         });
@@ -579,7 +560,6 @@ export class PubSubChannel extends DurableObjectBase {
         if (this.ctx.waitUntil) this.ctx.waitUntil(promise);
         else void promise;
       },
-      scheduleNextAlarm: () => this.scheduleNextAlarm(),
       getStateValue: (key) => this.getStateValue(key),
       setStateValue: (key, value) => this.setStateValue(key, value),
     });
@@ -752,80 +732,112 @@ export class PubSubChannel extends DurableObjectBase {
     return false;
   }
 
-  private callerDeliveryId(): string | null {
-    const caller = this.caller;
-    if (!caller) return null;
-    return caller.callerKind === "panel"
-      ? (caller.callerPanelId ?? caller.callerId)
-      : caller.callerId;
+  private participantSubscriptionCount(participantId: string): number {
+    let count = 0;
+    for (const stream of this.subscriptionStreams.values()) {
+      if (stream.participantId === participantId) count += 1;
+    }
+    return count;
   }
 
-  /** Session ownership is part of every public liveness/release operation. The
-   * participant check prevents cross-user attribution; the delivery-id check
-   * prevents one device of the same user from controlling another device. */
-  private assertParticipantSession(
+  private subscriptionStreamKey(participantId: string, deliveryId: string): string {
+    return `${participantId}\u0000${deliveryId}`;
+  }
+
+  private async deliverParticipantPayload(participantId: string, payload: unknown): Promise<void> {
+    const bytes = encodeChannelSubscriptionRecord({ kind: "message", payload });
+    const terminated: Array<{ key: string; token: symbol }> = [];
+    for (const [key, stream] of this.subscriptionStreams) {
+      if (stream.participantId !== participantId) continue;
+      try {
+        if (enqueueChannelSubscriptionBytes(stream.controller, bytes) !== "enqueued") {
+          terminated.push({ key, token: stream.token });
+        }
+      } catch {
+        terminated.push({ key, token: stream.token });
+      }
+    }
+    for (const stream of terminated) {
+      await this.terminateSubscriptionStream(stream.key, stream.token, "response-buffer-full");
+    }
+  }
+
+  private async terminateSubscriptionStream(
+    key: string,
+    token: symbol,
+    reason: string
+  ): Promise<void> {
+    const stream = this.subscriptionStreams.get(key);
+    if (!stream || stream.token !== token) return;
+    this.subscriptionStreams.delete(key);
+    try {
+      stream.controller.error(new Error(`Channel subscription terminated: ${reason}`));
+    } catch {
+      // Already terminal.
+    }
+    await this.unsubscribeParticipant(stream.participantId, "disconnect", stream.deliveryId);
+  }
+
+  private openSubscriptionResponse(
     participantId: string,
-    sessionId: string,
-    method: string,
-    options?: { allowMissing?: boolean }
-  ): boolean {
-    this.assertParticipantCaller(participantId, method);
-    if (typeof sessionId !== "string" || sessionId.length === 0) {
-      throw new Error(`${method}: sessionId is required`);
+    deliveryId: string,
+    replaceParticipant: boolean,
+    result: SubscribeResult
+  ): Response {
+    const key = this.subscriptionStreamKey(participantId, deliveryId);
+    const token = Symbol(key);
+    for (const [streamKey, previous] of [...this.subscriptionStreams]) {
+      if (streamKey !== key && (!replaceParticipant || previous.participantId !== participantId)) {
+        continue;
+      }
+      this.subscriptionStreams.delete(streamKey);
+      try {
+        previous.controller.close();
+      } catch {
+        // Already terminal.
+      }
     }
-    const row = this.sql
-      .exec(
-        `SELECT delivery_id FROM participant_sessions
-           WHERE participant_id = ? AND session_id = ?`,
-        participantId,
-        sessionId
-      )
-      .toArray()[0];
-    if (!row) {
-      if (options?.allowMissing) return false;
-      throw new Error(`${method}: session does not belong to participant ${participantId}`);
-    }
-    const callerDeliveryId = this.callerDeliveryId();
-    if (callerDeliveryId && row["delivery_id"] !== callerDeliveryId) {
-      throw new Error(`${method}: session is owned by a different client endpoint`);
-    }
-    return true;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start: (controller) => {
+          this.subscriptionStreams.set(key, {
+            participantId,
+            deliveryId,
+            token,
+            controller,
+          });
+          const ack = encodeChannelSubscriptionRecord({ kind: "subscribed", result });
+          if (enqueueChannelSubscriptionBytes(controller, ack) !== "enqueued") {
+            void this.terminateSubscriptionStream(key, token, "subscription-ack-too-large");
+          }
+        },
+        cancel: async () => {
+          const current = this.subscriptionStreams.get(key);
+          if (!current || current.token !== token) return;
+          this.subscriptionStreams.delete(key);
+          await this.unsubscribeParticipant(participantId, "disconnect", deliveryId);
+        },
+      },
+      channelSubscriptionQueuingStrategy()
+    );
+    return new Response(body, {
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
-  private participantSessionCount(participantId: string): number {
-    const count = this.sql
-      .exec(
-        `SELECT COUNT(*) AS count FROM participant_sessions WHERE participant_id = ?`,
-        participantId
-      )
-      .toArray()[0]?.["count"];
-    return typeof count === "number" ? count : 0;
-  }
-
-  /**
-   * Eager reconnect cleanup uses the same release path as the alarm and public
-   * unsubscribe flows. Deleting only the stale session row would strand the
-   * participant identity, skip retained last-seen, and leave pending calls
-   * targeting an endpoint that no longer exists.
-   */
-  private async releaseStaleParticipantSessions(
-    participantId: string,
-    cutoff = Date.now() - PARTICIPANT_STALE_MS
-  ): Promise<number> {
-    const staleSessionIds = this.sql
-      .exec(
-        `SELECT session_id FROM participant_sessions
-          WHERE participant_id = ? AND last_seen < ?
-          ORDER BY session_id`,
-        participantId,
-        cutoff
-      )
-      .toArray()
-      .map((row) => String(row["session_id"]));
-    for (const sessionId of staleSessionIds) {
-      await this.unsubscribeParticipant(participantId, "disconnect", sessionId);
+  private closeSubscriptionStream(participantId: string, deliveryId: string): void {
+    const key = this.subscriptionStreamKey(participantId, deliveryId);
+    const stream = this.subscriptionStreams.get(key);
+    if (!stream) return;
+    this.subscriptionStreams.delete(key);
+    try {
+      stream.controller.close();
+    } catch {
+      // Already terminal.
     }
-    return staleSessionIds.length;
   }
 
   private isPrivilegedRpcCaller(): boolean {
@@ -920,8 +932,7 @@ export class PubSubChannel extends DurableObjectBase {
     return "away";
   }
 
-  /** Record real user activity (message, typing, method interaction). This is
-   * separate from touch(), whose only job is transport liveness. */
+  /** Record real user activity (message, typing, method interaction). */
   private markParticipantActive(participantId: string): void {
     if (!isUserParticipantId(participantId)) return;
     const now = Date.now();
@@ -942,7 +953,6 @@ export class PubSubChannel extends DurableObjectBase {
         lastActiveAt: now,
       });
     }
-    this.scheduleNextAlarm();
   }
 
   private recordOfflinePresence(participantId: string, lastSeen: number): void {
@@ -962,11 +972,9 @@ export class PubSubChannel extends DurableObjectBase {
     const entries = new Map<string, ChannelPresenceEntry>();
     for (const row of this.sql
       .exec(
-        `SELECT p.id, p.last_active_at, p.presence_status, COUNT(s.session_id) AS session_count
-           FROM participants p
-           JOIN participant_sessions s ON s.participant_id = p.id
-          WHERE p.id LIKE 'user:%'
-          GROUP BY p.id, p.last_active_at, p.presence_status`
+        `SELECT id, last_active_at, presence_status
+           FROM participants
+          WHERE id LIKE 'user:%'`
       )
       .toArray()) {
       const participantId = row["id"] as string;
@@ -977,7 +985,7 @@ export class PubSubChannel extends DurableObjectBase {
         status: this.presenceStatusAt(lastActiveAt, generatedAt),
         lastActiveAt,
         lastSeenAt: null,
-        sessionCount: Number(row["session_count"] ?? 0),
+        sessionCount: this.participantSubscriptionCount(participantId),
       });
     }
     for (const row of this.sql
@@ -1019,14 +1027,9 @@ export class PubSubChannel extends DurableObjectBase {
    * then builds replay, so an initial roster snapshot includes the subscriber.
    */
   @rpc({ callers: ["panel", "do", "shell", "agent"] })
-  async subscribe(
-    participantId: string,
-    metadata: Record<string, unknown>
-  ): Promise<SubscribeResult> {
-    const deliveryId = participantId;
-    const doRef = parseDOParticipantId(deliveryId);
+  async subscribe(participantId: string, metadata: Record<string, unknown>): Promise<Response> {
+    const doRef = parseDOParticipantId(participantId);
     const transport = doRef ? "do" : "rpc";
-    const callerId = this.rpcCallerId;
 
     // ── Principal-derived human identity (WP6 §3-4) ──────────────────────
     // A human panel/shell joins as the STABLE account participant
@@ -1061,22 +1064,14 @@ export class PubSubChannel extends DurableObjectBase {
         `Participant ${participantId} cannot be subscribed by caller ${caller?.callerId ?? "unknown"}`
       );
     }
+    const deliveryId = subscribeCaller?.callerPanelId ?? subscribeCaller?.callerId;
+    if (!deliveryId) throw new Error("subscribe: authenticated delivery identity is required");
 
     const parsedMetadata = participantMetadataSchema.safeParse(metadata);
     if (!parsedMetadata.success) {
       const issue = parsedMetadata.error.issues[0];
       throw new Error(
         `subscribe: invalid participant metadata at ${issue?.path.join(".") || "$"}: ${issue?.message ?? "invalid"}`
-      );
-    }
-
-    const participantSessionId =
-      typeof metadata[PARTICIPANT_SESSION_METADATA_KEY] === "string"
-        ? (metadata[PARTICIPANT_SESSION_METADATA_KEY] as string)
-        : null;
-    if (!participantSessionId) {
-      throw new Error(
-        `subscribe: ${PARTICIPANT_SESSION_METADATA_KEY} is required for session ownership`
       );
     }
 
@@ -1107,7 +1102,7 @@ export class PubSubChannel extends DurableObjectBase {
       }
     }
 
-    if (doRef && callerId) {
+    if (doRef) {
       await this.rpc.call("main", "workers.resolveDurableObject", [
         doRef.source,
         doRef.className,
@@ -1115,44 +1110,10 @@ export class PubSubChannel extends DurableObjectBase {
       ]);
     }
 
-    // Re-subscribe with the same participant ID: replace the roster entry, but
-    // only redeliver in-flight calls if the underlying client session changed.
-    // Human rows are instead ref-counted (WP6 §4): every live panel/device of
-    // one user MERGES into the single `user:<userId>` row — no leave/replace
-    // churn, no N anonymous rows.
-    // Release dead sessions before deciding whether this is a new logical
-    // join. This must run the canonical release path: a bare session DELETE
-    // would strand last-seen, identity, pending-call, and presence state.
-    await this.releaseStaleParticipantSessions(participantId);
-    const existing = this.sql
-      .exec(`SELECT id FROM participants WHERE id = ?`, participantId)
-      .toArray();
-    const existingSessions = this.sql
-      .exec(
-        `SELECT session_id, delivery_id FROM participant_sessions WHERE participant_id = ?`,
-        participantId
-      )
-      .toArray();
-    let sessionReplaced = false;
-    let replacedNonUser:
-      | {
-          metadata: Record<string, unknown>;
-          previousSessionId: string | null;
-          leaveReason: "graceful" | "replaced";
-        }
-      | undefined;
-    if (isUserParticipant) {
-      sessionReplaced = !existingSessions.some((row) => row["session_id"] === participantSessionId);
-    } else if (existing.length > 0) {
-      const previousSessionId = (existingSessions[0]?.["session_id"] as string | undefined) ?? null;
-      const oldMetadata = this.getSenderMetadata(participantId) ?? {};
-      sessionReplaced = previousSessionId !== participantSessionId;
-      replacedNonUser = {
-        metadata: oldMetadata,
-        previousSessionId,
-        leaveReason: sessionReplaced ? "replaced" : "graceful",
-      };
-    }
+    // Active response resources are the one source of subscription lifetime.
+    // Human identity is shared across independently authenticated delivery
+    // endpoints; every other participant has one replaceable response.
+    const existingSubscriptions = this.participantSubscriptionCount(participantId);
 
     // Extract replay options before cleaning metadata
     const wantsReplay = metadata["replay"] !== false;
@@ -1167,14 +1128,12 @@ export class PubSubChannel extends DurableObjectBase {
     delete storedMetadata["sinceId"];
     delete storedMetadata["replayMessageLimit"];
     delete storedMetadata["transport"];
-    delete storedMetadata[PARTICIPANT_SESSION_METADATA_KEY];
     if (isUserParticipant) storedMetadata = scrubUserParticipantMetadata(storedMetadata);
 
     try {
       if (isUserParticipant) {
-        // The shared human identity, delivery session, and retained-presence
-        // reset form one storage commit. In particular, a delivery/session
-        // uniqueness collision cannot leave a phantom participant row behind.
+        // The shared human identity and retained-presence reset form one
+        // storage commit.
         // Joining IS activity (WP8 §3): seed `last_active_at` on first join and
         // bump it on every (re)join so a returning panel resets idle/away.
         const joinNow = Date.now();
@@ -1193,53 +1152,30 @@ export class PubSubChannel extends DurableObjectBase {
             JSON.stringify(storedMetadata),
             joinNow
           );
-          this.sql.exec(
-            `INSERT INTO participant_sessions (participant_id, session_id, delivery_id, last_seen)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(participant_id, session_id) DO UPDATE SET
-               delivery_id = excluded.delivery_id,
-               last_seen = excluded.last_seen`,
-            participantId,
-            participantSessionId,
-            deliveryId,
-            joinNow
-          );
           // Back online — drop retained last-seen in the same commit.
           this.sql.exec(`DELETE FROM presence_last_seen WHERE participant_id = ?`, participantId);
         });
       } else {
-        this.ctx.storage.transactionSync(() => {
-          // A replacement removes the old identity/session and installs the new
-          // pair atomically. If either INSERT fails, the old roster entry remains.
-          if (replacedNonUser) {
-            this.sql.exec(
-              `DELETE FROM participant_sessions WHERE participant_id = ?`,
-              participantId
-            );
-            this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
-          }
-          this.sql.exec(
-            `INSERT INTO participants (
-               id, metadata, transport, last_active_at, presence_status, handle,
-               do_source, do_class, do_object_key
-             ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
-            participantId,
-            JSON.stringify(storedMetadata),
-            transport === "do" ? "do" : "rpc",
-            handle,
-            doRef?.source ?? null,
-            doRef?.className ?? null,
-            doRef?.objectKey ?? null
-          );
-          this.sql.exec(
-            `INSERT INTO participant_sessions (participant_id, session_id, delivery_id, last_seen)
-             VALUES (?, ?, ?, ?)`,
-            participantId,
-            participantSessionId,
-            deliveryId,
-            Date.now()
-          );
-        });
+        this.sql.exec(
+          `INSERT INTO participants (
+             id, metadata, transport, last_active_at, presence_status, handle,
+             do_source, do_class, do_object_key
+           ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             metadata = excluded.metadata,
+             transport = excluded.transport,
+             handle = excluded.handle,
+             do_source = excluded.do_source,
+             do_class = excluded.do_class,
+             do_object_key = excluded.do_object_key`,
+          participantId,
+          JSON.stringify(storedMetadata),
+          transport === "do" ? "do" : "rpc",
+          handle,
+          doRef?.source ?? null,
+          doRef?.className ?? null,
+          doRef?.objectKey ?? null
+        );
       }
     } catch (err) {
       if (handle && err instanceof Error && /unique/iu.test(err.message)) {
@@ -1251,31 +1187,12 @@ export class PubSubChannel extends DurableObjectBase {
       throw err;
     }
 
-    if (replacedNonUser) {
-      cleanupDeliveryChain(this.objectKey, participantId);
-      await this.publishPresenceEvent(
-        participantId,
-        "leave",
-        replacedNonUser.metadata,
-        replacedNonUser.leaveReason
-      );
-      if (sessionReplaced) {
-        const pendingCountRow = this.sql
-          .exec(`SELECT COUNT(*) as cnt FROM pending_calls WHERE target_id = ?`, participantId)
-          .toArray();
-        const pendingCount = (pendingCountRow[0]?.["cnt"] as number) ?? 0;
-        console.log(
-          `[Channel] Participant session replaced: target=${participantId} previousSession=${replacedNonUser.previousSessionId ?? "unknown"} newSession=${participantSessionId} pendingCalls=${pendingCount}`
-        );
-      }
-    }
-
     // Publish join presence before building replay so the initial roster snapshot
-    // includes self. An additional panel of an already-present user refreshes the
-    // shared row with "update" instead of a duplicate "join".
+    // includes self. Replacing a transport generation is an update to the same
+    // semantic participant, not a synthetic leave/join pair.
     await this.publishPresenceEvent(
       participantId,
-      isUserParticipant && existingSessions.length > 0 ? "update" : "join",
+      existingSubscriptions > 0 ? "update" : "join",
       storedMetadata
     );
 
@@ -1287,136 +1204,12 @@ export class PubSubChannel extends DurableObjectBase {
             wantsReplay ? (replayMessageLimit ?? REPLAY_LIMIT) : 0,
             this.currentReplayContext()
           );
-    // Deliver the structured `onChannelEnvelope` replay only to DO participants
-    // that opted in (agent vessels). RPC-style DO clients (the eval's
-    // connectViaRpc) receive replay via the `channel:message` emits + subscribe
-    // ACK fallback, and have no onChannelEnvelope handler.
-    this.queueReplayEnvelope(
-      deliveryId,
-      envelope,
-      doRef != null && metadata["receivesChannelEnvelopes"] === true
-    );
-
-    // Redelivery + the reconnect/redelivery alarm are RPC-STYLE concerns: they serve participants that
-    // settle method calls via the broadcast `started` + submitMethodResult — panels AND RPC-style
-    // connectionless DO clients (the eval). Agent vessels get method calls via onMethodCall and don't
-    // process the redelivered `started`, so they're excluded. Gate on the agent-vessel discriminator,
-    // NOT `transport` (which would wrongly exclude the eval just because its id is a DO id).
-    const isAgentVessel = participantIsAgentVessel(this.getSenderMetadata(participantId));
-    if (sessionReplaced && !isAgentVessel) await this.calls.redeliverPendingCallsTo(participantId);
-
-    if (!isAgentVessel) {
-      this.scheduleNextAlarm();
-    }
-
-    return {
+    return this.openSubscriptionResponse(participantId, deliveryId, !isUserParticipant, {
       ok: true,
       participantId,
       channelConfig: this.getChannelConfig() ?? undefined,
       envelope,
-    };
-  }
-
-  private queueReplayEnvelope(
-    subscriberId: string,
-    envelope: Awaited<ReturnType<ChannelLog["replayInitial"]>>,
-    deliverToDo: boolean
-  ): void {
-    const onFatal = (err: { code?: string }) => {
-      if (
-        err?.code === "TARGET_NOT_REACHABLE" ||
-        err?.code === "RECONNECT_GRACE_EXPIRED" ||
-        err?.code === "DO_NOT_CREATED"
-      ) {
-        const affected = this.sql
-          .exec(
-            `SELECT participant_id FROM participant_sessions WHERE delivery_id = ?`,
-            subscriberId
-          )
-          .toArray();
-        this.sql.exec(`DELETE FROM participant_sessions WHERE delivery_id = ?`, subscriberId);
-        for (const row of affected) {
-          const participantId = row["participant_id"] as string;
-          if (this.participantSessionCount(participantId) > 0) continue;
-          if (isUserParticipantId(participantId)) {
-            this.recordOfflinePresence(participantId, Date.now());
-          }
-          this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
-        }
-        cleanupDeliveryChain(this.objectKey, subscriberId);
-        return true;
-      }
-      return false;
-    };
-    for (const event of envelope.logEvents) {
-      void queueEmit(
-        this.broadcastDeps,
-        subscriberId,
-        {
-          channelId: this.objectKey,
-          message: { kind: "log", phase: "replay", event },
-        },
-        onFatal
-      );
-      if (deliverToDo) {
-        void queueDoEnvelope(
-          this.broadcastDeps,
-          subscriberId,
-          {
-            kind: "log",
-            phase: "replay",
-            event,
-          },
-          onFatal
-        );
-      }
-    }
-    for (const snapshot of envelope.snapshots) {
-      const message = {
-        kind: "control" as const,
-        type: "roster-snapshot" as const,
-        participants: snapshot.participants,
-        ts: snapshot.ts,
-      };
-      void queueEmit(
-        this.broadcastDeps,
-        subscriberId,
-        { channelId: this.objectKey, message },
-        onFatal
-      );
-      if (deliverToDo) {
-        void queueDoEnvelope(this.broadcastDeps, subscriberId, message, onFatal);
-      }
-    }
-    const readyMessage = {
-      kind: "control" as const,
-      type: "ready" as const,
-      ready: envelope.ready,
-    };
-    void queueEmit(
-      this.broadcastDeps,
-      subscriberId,
-      { channelId: this.objectKey, message: readyMessage },
-      onFatal
-    );
-    if (deliverToDo) {
-      void queueDoEnvelope(this.broadcastDeps, subscriberId, readyMessage, onFatal);
-    }
-  }
-
-  /** Release exactly one caller-owned session. Public callers can never evict
-   * another device or the whole canonical human identity. */
-  @rpc({ callers: ["panel", "do", "shell", "agent"] })
-  async unsubscribe(participantId: string, sessionId: string): Promise<void> {
-    // DELETE-like cleanup is idempotent. The stale-session alarm and a
-    // graceful client close can race; if the alarm already released this exact
-    // caller-owned session, cleanup is complete. Caller identity is still
-    // checked before allowing the missing row, so this does not permit one
-    // participant to probe or evict another.
-    if (!this.assertParticipantSession(participantId, sessionId, "unsubscribe", {
-      allowMissing: true,
-    })) return;
-    await this.unsubscribeParticipant(participantId, "graceful", sessionId);
+    });
   }
 
   @rpc({ callers: ["server", "shell"] })
@@ -1428,48 +1221,29 @@ export class PubSubChannel extends DurableObjectBase {
   private async unsubscribeParticipant(
     participantId: string,
     leaveReason: "graceful" | "disconnect" | "replaced",
-    sessionId?: string
+    deliveryId?: string
   ): Promise<void> {
     const metadata = this.getSenderMetadata(participantId) ?? {};
-    const releasedSessions = this.sql
-      .exec(
-        sessionId
-          ? `SELECT session_id, delivery_id FROM participant_sessions
-               WHERE participant_id = ? AND session_id = ?`
-          : `SELECT session_id, delivery_id FROM participant_sessions
-               WHERE participant_id = ?`,
-        ...(sessionId ? [participantId, sessionId] : [participantId])
-      )
-      .toArray();
     const participantExists =
       this.sql.exec(`SELECT 1 FROM participants WHERE id = ?`, participantId).toArray().length > 0;
-    if (!participantExists && releasedSessions.length === 0) return;
-
-    let releasedLastSession = false;
-    this.ctx.storage.transactionSync(() => {
-      if (sessionId) {
-        this.sql.exec(
-          `DELETE FROM participant_sessions WHERE participant_id = ? AND session_id = ?`,
-          participantId,
-          sessionId
-        );
-      } else {
-        this.sql.exec(`DELETE FROM participant_sessions WHERE participant_id = ?`, participantId);
+    if (deliveryId) {
+      this.closeSubscriptionStream(participantId, deliveryId);
+    } else {
+      for (const stream of [...this.subscriptionStreams.values()]) {
+        if (stream.participantId === participantId) {
+          this.closeSubscriptionStream(participantId, stream.deliveryId);
+        }
       }
-      if (this.participantSessionCount(participantId) > 0) return;
-      releasedLastSession = participantExists;
-      if (releasedLastSession && isUserParticipantId(participantId)) {
+    }
+    if (this.participantSubscriptionCount(participantId) > 0) return;
+    if (!participantExists) return;
+
+    this.ctx.storage.transactionSync(() => {
+      if (isUserParticipantId(participantId)) {
         this.recordOfflinePresence(participantId, Date.now());
       }
-      if (releasedLastSession) {
-        this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
-      }
+      this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
     });
-
-    for (const row of releasedSessions) {
-      cleanupDeliveryChain(this.objectKey, String(row["delivery_id"]));
-    }
-    if (!releasedLastSession) return;
     cleanupDeliveryChain(this.objectKey, participantId);
     await this.calls.failPendingCallsTargeting(participantId, leaveReason);
     await this.publishPresenceEvent(
@@ -1481,7 +1255,6 @@ export class PubSubChannel extends DurableObjectBase {
       },
       leaveReason
     );
-    this.scheduleNextAlarm();
   }
 
   /** Abandoned terminals for every pending call targeting a leaver (or, on a
@@ -1491,21 +1264,6 @@ export class PubSubChannel extends DurableObjectBase {
     reason: "graceful" | "disconnect" | "replaced" | "aborted-by-fork"
   ): Promise<void> {
     await this.calls.failPendingCallsTargeting(targetId, reason);
-  }
-
-  /** Liveness heartbeat for exactly one caller-owned session. It deliberately
-   * does not update last_active_at: an idle open tab is not user activity. */
-  @rpc({ callers: ["panel", "do", "worker"] })
-  async touch(participantId: string, sessionId: string): Promise<void> {
-    this.assertParticipantSession(participantId, sessionId, "touch");
-    this.sql.exec(
-      `UPDATE participant_sessions SET last_seen = ?
-         WHERE participant_id = ? AND session_id = ?`,
-      Date.now(),
-      participantId,
-      sessionId
-    );
-    this.scheduleNextAlarm();
   }
 
   /**
@@ -1661,7 +1419,6 @@ export class PubSubChannel extends DurableObjectBase {
           Date.now(),
           idempotencyKey
         );
-        this.scheduleNextAlarm();
         return event;
       } catch (err) {
         this.sql.exec(`DELETE FROM dedup_keys WHERE key = ? AND result_id IS NULL`, idempotencyKey);
@@ -1920,9 +1677,7 @@ export class PubSubChannel extends DurableObjectBase {
         }
       });
       if (pendingPut) {
-        this.scheduleNextAlarm();
         const synced = await this.flushInviteIndexOp(memberId);
-        this.scheduleNextAlarm();
         if (!synced) {
           throw new Error(
             `addMember: membership is saved, but invitation delivery is pending; retry to confirm`
@@ -1951,9 +1706,7 @@ export class PubSubChannel extends DurableObjectBase {
       );
       this.journalInvitePut(memberId, handle, addedBy, addedAt);
     });
-    this.scheduleNextAlarm();
     const synced = await this.flushInviteIndexOp(memberId);
-    this.scheduleNextAlarm();
     // Live nudge is a membership signal, never a presence event: inviting an
     // offline person must not make them appear online.
     this.broadcastChannelSignal("channel.invite", {
@@ -1985,9 +1738,7 @@ export class PubSubChannel extends DurableObjectBase {
     const userId = requireBareUserId(input?.userId, "removeMember");
     const memberId = toUserMemberId(userId);
     const removed = this.deleteMembershipRow(memberId);
-    this.scheduleNextAlarm();
     const synced = await this.flushInviteIndexOp(memberId);
-    this.scheduleNextAlarm();
     if (!synced) {
       throw new Error(
         `removeMember: membership was removed, but invitation cleanup is pending; retry to confirm`
@@ -2155,8 +1906,7 @@ export class PubSubChannel extends DurableObjectBase {
       this.sql.exec(`DELETE FROM invite_index_ops WHERE user_id = ? AND op_id = ?`, memberId, opId);
       return true;
     } catch (error) {
-      // Anchor the next attempt to this failure, avoiding a 100ms busy-loop once
-      // the original updated_at is already in the past.
+      // Retain the latest failed attempt for explicit action retry and diagnosis.
       this.sql.exec(
         `UPDATE invite_index_ops SET updated_at = ? WHERE user_id = ? AND op_id = ?`,
         Date.now(),
@@ -2241,7 +1991,6 @@ export class PubSubChannel extends DurableObjectBase {
     this.assertAdminCaller("adminInspectSchema");
     const tableNames = [
       "participants",
-      "participant_sessions",
       "pending_calls",
       "dedup_keys",
       "fork_ops",
@@ -2346,11 +2095,13 @@ export class PubSubChannel extends DurableObjectBase {
     return this.inspectAgentReadOnly(participantId, methodName);
   }
 
-  private assertSupportedAgentInspectionMethod(methodName: string): void {
-    if (ADMIN_AGENT_DEBUG_METHODS.has(methodName)) return;
+  private assertSupportedAgentInspectionMethod(
+    methodName: string
+  ): asserts methodName is AgentInspectionMethod {
+    if (isAgentInspectionMethod(methodName)) return;
     throw new Error(
       `inspectAgent: unsupported method ${methodName}; expected one of ` +
-        [...ADMIN_AGENT_DEBUG_METHODS].join(", ")
+        AGENT_INSPECTION_METHODS.join(", ")
     );
   }
 
@@ -2399,18 +2150,11 @@ export class PubSubChannel extends DurableObjectBase {
     methodName: string
   ): Promise<AgentInspectionResult> {
     this.assertSupportedAgentInspectionMethod(methodName);
-    const doRef = parseDOParticipantId(participantId);
-    if (!doRef) {
+    if (!parseDOParticipantId(participantId)) {
       throw new Error(
         `inspectAgent: participant ${participantId} is not a Durable Object participant id`
       );
     }
-
-    await this.rpc.call("main", "workers.resolveDurableObject", [
-      doRef.source,
-      doRef.className,
-      doRef.objectKey,
-    ]);
 
     const rosterRows = this.sql
       .exec(`SELECT metadata, transport FROM participants WHERE id = ?`, participantId)
@@ -2432,12 +2176,12 @@ export class PubSubChannel extends DurableObjectBase {
       }
     }
 
-    const response = (await this.rpc.call(participantId, "onMethodCall", [
-      this.objectKey,
-      `admin-inspect:${crypto.randomUUID()}`,
-      methodName,
-      {},
-    ])) as { result?: unknown; isError?: boolean } | unknown;
+    const response = (await this.rpc.call(
+      participantId,
+      AGENT_INSPECTION_RPC_METHOD,
+      [this.objectKey, methodName],
+      { readOnly: true, timeoutMs: AGENT_INSPECTION_TIMEOUT_MS }
+    )) as { result?: unknown; isError?: boolean } | unknown;
     const payload =
       response && typeof response === "object" && "result" in response
         ? (response as { result?: unknown; isError?: boolean })
@@ -2682,14 +2426,6 @@ export class PubSubChannel extends DurableObjectBase {
     return typeof oldest === "number" ? oldest + DEDUP_TTL_MS : null;
   }
 
-  private nextParticipantSweepAt(now: number): number | null {
-    void now;
-    const earliest = this.sql
-      .exec(`SELECT MIN(last_seen) AS connectedAt FROM participant_sessions`)
-      .toArray()[0]?.["connectedAt"];
-    return typeof earliest === "number" ? earliest + PARTICIPANT_STALE_MS : null;
-  }
-
   private nextPresenceTransitionAt(): number | null {
     const row = this.sql
       .exec(
@@ -2723,50 +2459,50 @@ export class PubSubChannel extends DurableObjectBase {
     return typeof oldest === "number" ? oldest + INVITE_INDEX_RETRY_MS : null;
   }
 
-  private scheduleNextAlarm(): void {
+  private nextPendingRedeliveryAt(): number | null {
+    const oldest = this.sql
+      .exec(`SELECT MIN(created_at) AS created_at FROM pending_calls`)
+      .toArray()[0]?.["created_at"];
+    if (typeof oldest !== "number") return null;
+    const firstEligible = oldest + PENDING_REDELIVERY_STALE_MS;
+    const lastSwept = Number(this.getStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY) ?? 0);
+    return Math.max(
+      firstEligible,
+      lastSwept > 0 ? lastSwept + PENDING_REDELIVERY_INTERVAL_MS : firstEligible
+    );
+  }
+
+  private nextForkOpReconcileAt(): number | null {
+    const oldest = this.sql
+      .exec(
+        `SELECT MIN(updated_at) AS oldest FROM fork_ops
+          WHERE phase NOT IN ('done', 'rolledback')`
+      )
+      .toArray()[0]?.["oldest"];
+    return typeof oldest === "number" ? oldest + FORK_OP_RECONCILE_MS : null;
+  }
+
+  private nextAlarmSchedule(): DoAlarmSchedule | null {
     const now = Date.now();
     const sources = [
       this.nextDedupSweepAt(),
-      this.nextParticipantSweepAt(now),
       this.nextPresenceTransitionAt(),
       this.nextPresenceRetentionSweepAt(),
       this.nextInviteIndexSyncAt(),
       this.calls.nextCallDeadlineAt(),
-      // While method calls are in flight, wake soon enough for the
-      // lost-delivery redelivery sweep (at-least-once within seconds, not
-      // only at the 5-minute expiry).
-      this.nextPendingRedeliveryAt(now),
-      // Fork-op crash-recovery reconcile + debounced lineage head fan-out.
-      this.nextForkOpReconcileAt(now),
-      this.nextLineageReportAt(),
+      this.nextPendingRedeliveryAt(),
+      this.nextForkOpReconcileAt(),
     ].filter((value): value is number => typeof value === "number");
-    if (sources.length === 0) {
-      this.deleteAlarm();
-      return;
-    }
-    this.setAlarm(Math.max(Math.min(...sources) - now, 100));
+    return sources.length === 0 ? null : { wakeAt: Math.max(Math.min(...sources), now + 100) };
   }
 
-  private nextPendingRedeliveryAt(now: number): number | null {
-    void now;
-    const oldest = this.sql
-      .exec(`SELECT MIN(created_at) AS createdAt FROM pending_calls`)
-      .toArray()[0]?.["createdAt"];
-    if (typeof oldest !== "number") return null;
-    // First redelivery one stale-window after the call was created; every
-    // subsequent one is `interval` after the LAST sweep (the marker advances
-    // in alarm()), so the alarm never busy-loops while a long call runs.
-    const firstEligible = oldest + PENDING_REDELIVERY_STALE_MS;
-    const lastSwept = Number(this.getStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY) ?? 0);
-    const nextRecurring =
-      lastSwept > 0 ? lastSwept + PENDING_REDELIVERY_INTERVAL_MS : firstEligible;
-    return Math.max(firstEligible, nextRecurring);
+  protected override nextAlarmAfterRequest(): DoAlarmSchedule | null {
+    return this.nextAlarmSchedule();
   }
 
-  override async alarm(): Promise<void> {
+  override async alarm(): Promise<DoAlarmSchedule | null> {
     await super.alarm();
 
-    await this.evictStaleParticipants();
     this.advancePresenceStatuses();
     this.sql.exec(
       `DELETE FROM presence_last_seen WHERE last_seen < ?`,
@@ -2777,10 +2513,7 @@ export class PubSubChannel extends DurableObjectBase {
     // publish succeeds is still swept).
     this.sql.exec(`DELETE FROM dedup_keys WHERE created_at < ?`, Date.now() - DEDUP_TTL_MS);
 
-    // Membership mutations are committed locally before their workspace-inbox
-    // projection. Re-drive any operation whose cross-DO response was lost.
     await this.flushInviteIndexOps();
-
     await this.calls.timeoutExpiredPendingCalls(async (pending, message) => {
       await this.publishMethodCallFeedback(
         pending.targetId,
@@ -2789,90 +2522,41 @@ export class PubSubChannel extends DurableObjectBase {
         message
       );
     });
-
-    // Convergence sweep for the pending_calls cache (cheap: skipped when the
-    // observed head hasn't moved).
     try {
       await this.calls.reconcilePendingCalls();
-    } catch (err) {
-      console.warn(`[Channel] reconcilePendingCalls failed:`, err);
+    } catch (error) {
+      console.warn("[Channel] pending-call reconciliation failed:", error);
     }
-
-    // At-least-once for in-flight method calls: a delivery lost to a session
-    // replacement race otherwise strands the call until expiry. Re-emitting
-    // is idempotent client-side (executing/submitted call-id sets). The
-    // swept-at marker advances the next redelivery deadline by one interval
-    // so the alarm can't busy-loop on a long-running call.
     try {
-      const pendingCount = this.sql
-        .exec(`SELECT COUNT(*) AS cnt FROM pending_calls`)
-        .toArray()[0]?.["cnt"];
-      if (typeof pendingCount === "number" && pendingCount > 0) {
+      const count = Number(
+        this.sql.exec(`SELECT COUNT(*) AS count FROM pending_calls`).toArray()[0]?.["count"] ?? 0
+      );
+      if (count > 0) {
         await this.redeliverStalePendingCalls();
         this.setStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY, String(Date.now()));
       } else {
-        // No pending calls — clear the marker so the next call's first
-        // redelivery is anchored to its own creation, not a stale sweep.
         this.setStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY, "0");
       }
-    } catch (err) {
-      console.warn(`[Channel] pending-call redelivery sweep failed:`, err);
+    } catch (error) {
+      console.warn("[Channel] pending-call redelivery failed:", error);
     }
+    await this.reconcileForkOps();
 
-    // Debounced lineage head fan-out (root → lineage subscribers) and
-    // fork-op crash reconcile (resume or roll back an interrupted fork).
-    try {
-      await this.flushLineageHeadReport();
-    } catch (err) {
-      console.warn(`[Channel] lineage head report failed:`, err);
-    }
-    try {
-      await this.reconcileForkOps();
-    } catch (err) {
-      console.warn(`[Channel] fork-op reconcile failed:`, err);
-    }
-
-    this.scheduleNextAlarm();
+    return this.nextAlarmSchedule();
   }
 
-  /** Re-emit pending calls older than one alarm tick whose target is a
-   *  connected rpc participant (lost-delivery healing). */
   private async redeliverStalePendingCalls(): Promise<void> {
-    const cutoff = Date.now() - 10_000;
-    const targets = new Set<string>();
-    for (const row of this.sql
-      .exec(`SELECT DISTINCT target_id FROM pending_calls WHERE created_at < ?`, cutoff)
-      .toArray()) {
-      targets.add(String((row as Record<string, unknown>)["target_id"]));
-    }
-    for (const targetId of targets) {
-      const connected = this.sql
-        .exec(`SELECT 1 FROM participants WHERE id = ? AND transport = 'rpc'`, targetId)
-        .toArray();
-      if (connected.length > 0) await this.calls.redeliverPendingCallsTo(targetId);
-    }
-  }
-
-  private async evictStaleParticipants(): Promise<void> {
-    const cutoff = Date.now() - PARTICIPANT_STALE_MS;
-    const stale = this.sql
+    const targets = this.sql
       .exec(
-        `SELECT participant_id AS id, session_id
-           FROM participant_sessions
-          WHERE last_seen < ?
-          ORDER BY participant_id, session_id`,
-        cutoff
+        `SELECT DISTINCT target_id FROM pending_calls WHERE created_at <= ?`,
+        Date.now() - PENDING_REDELIVERY_STALE_MS
       )
-      .toArray();
-
-    for (const row of stale) {
-      const pid = row["id"] as string;
-      await this.unsubscribeParticipant(pid, "disconnect", String(row["session_id"]));
-    }
-
-    if (stale.length > 0) {
-      console.log(`[Channel] Evicted ${stale.length} stale RPC participant(s)`);
-      this.scheduleNextAlarm();
+      .toArray()
+      .map((row) => String(row["target_id"]));
+    for (const targetId of targets) {
+      if (this.participantSubscriptionCount(targetId) > 0) {
+        await this.calls.redeliverPendingCallsTo(targetId);
+      }
     }
   }
 
@@ -2962,8 +2646,8 @@ export class PubSubChannel extends DurableObjectBase {
   //   journal → clone (targetKey=`fork:{forkId}`) → postClones → appendSeed →
   //   channel.forked → done.
   // Every phase is idempotent (deterministic clone targetKey + deterministic
-  // envelopeIds `fork-seed:{forkId}` / `fork-event:{forkId}`), so a crash resumes
-  // from `reconcileForkOps()` (or rolls back via destroyContext).
+  // envelopeIds `fork-seed:{forkId}` / `fork-event:{forkId}`), so callers can
+  // safely retry the operation.
 
   /** Thin host-call wrapper (the DO drives runtime.cloneContext/destroyContext).
    *  Host runtime services take exactly ONE opts object, positional. */
@@ -2982,7 +2666,24 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   async fork(opts: ForkOpts): Promise<ForkResult> {
-    const forkId = crypto.randomUUID();
+    const forkId = opts.operationId;
+    if (typeof forkId !== "string" || forkId.length < 8) {
+      throw new Error("fork requires a stable operationId");
+    }
+    const existing = this.getForkOpRow(forkId);
+    if (existing) {
+      if (String(existing["opts"]) !== JSON.stringify(opts)) {
+        throw new Error(`fork operation ${forkId} was reused with different input`);
+      }
+      if (existing["phase"] === "rollback-pending") {
+        await this.rollbackForkOp(forkId);
+        throw new Error(`fork operation ${forkId} failed and its cloned context was cleaned up`);
+      }
+      if (existing["phase"] === "rolledback") {
+        throw new Error(`fork operation ${forkId} previously failed and was rolled back`);
+      }
+      return this.runForkOp(forkId);
+    }
     const now = Date.now();
     // Journal FIRST — before any host/DO call — so a crash is always recoverable.
     this.sql.exec(
@@ -2994,9 +2695,6 @@ export class PubSubChannel extends DurableObjectBase {
       now,
       now
     );
-    // Arm the reconcile alarm now (durable) so a hard crash mid-saga still gets
-    // resumed/rolled back even if no other RPC re-arms the DO.
-    this.scheduleNextAlarm();
     return this.runForkOp(forkId);
   }
 
@@ -3221,9 +2919,9 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
-  /** Tear down a failed fork: destroy the cloned context (we own it) and mark
-   *  the journal `rolledback` so the reconciler leaves it alone. */
-  private async rollbackForkOp(forkId: string): Promise<void> {
+  /** Tear down a failed fork. Cleanup failure is itself durable and retryable;
+   * the operation becomes terminal only after context destruction succeeds. */
+  private async rollbackForkOp(forkId: string): Promise<boolean> {
     const row = this.getForkOpRow(forkId);
     const forkedContextId = row?.["forked_context_id"] as string | null | undefined;
     if (forkedContextId) {
@@ -3231,9 +2929,12 @@ export class PubSubChannel extends DurableObjectBase {
         await this.callMain("runtime.destroyContext", { contextId: forkedContextId });
       } catch (e) {
         console.error(`[Channel] fork rollback destroyContext failed for ${forkedContextId}:`, e);
+        this.setForkOpPhase(forkId, "rollback-pending");
+        return false;
       }
     }
     this.setForkOpPhase(forkId, "rolledback");
+    return true;
   }
 
   /** Append the durable `channel.forked` event to the parent log (this channel).
@@ -3362,34 +3063,27 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  /** Resume or roll back any interrupted fork op (multiplexed onto alarm()). */
+  /** Resume every stale, non-terminal fork saga from its durable phase. Each
+   * step uses stable fork-derived identities, so alarm delivery is safe under
+   * at-least-once execution. */
   private async reconcileForkOps(): Promise<void> {
-    const stale = Date.now() - FORK_OP_RECONCILE_MS;
     const rows = this.sql
       .exec(
         `SELECT fork_id FROM fork_ops
-           WHERE phase NOT IN ('done', 'rolledback') AND updated_at < ?`,
-        stale
+          WHERE phase NOT IN ('done', 'rolledback') AND updated_at <= ?`,
+        Date.now() - FORK_OP_RECONCILE_MS
       )
       .toArray();
     for (const row of rows) {
-      const forkId = row["fork_id"] as string;
+      const forkId = String(row["fork_id"]);
       try {
-        await this.runForkOp(forkId);
-      } catch (err) {
-        console.warn(`[Channel] fork op ${forkId} reconcile failed:`, err);
+        const op = this.getForkOpRow(forkId);
+        if (op?.["phase"] === "rollback-pending") await this.rollbackForkOp(forkId);
+        else await this.runForkOp(forkId);
+      } catch (error) {
+        console.warn(`[Channel] fork op ${forkId} reconciliation failed:`, error);
       }
     }
-  }
-
-  private nextForkOpReconcileAt(now: number): number | null {
-    const oldest = this.sql
-      .exec(
-        `SELECT MIN(updated_at) AS oldest FROM fork_ops WHERE phase NOT IN ('done', 'rolledback')`
-      )
-      .toArray()[0]?.["oldest"];
-    void now;
-    return typeof oldest === "number" ? oldest + FORK_OP_RECONCILE_MS : null;
   }
 
   // ── appendSeed — fork opening message ──────────────────────────────────────
@@ -3514,15 +3208,13 @@ export class PubSubChannel extends DurableObjectBase {
       }
     }
     await this.channelLog.forkFrom(parentChannelId, forkPointId);
-    // The child must NOT inherit the parent's fork journal or lineage roster —
-    // it runs neither the parent's reconciler nor its head fan-out.
+    // The child must NOT inherit the parent's fork journal or lineage roster.
     this.sql.exec(`DELETE FROM fork_ops`);
     this.sql.exec(`DELETE FROM lineage_subscribers`);
     // A cloned operation was authored for the parent's object key. Membership
     // may be inherited, but its in-flight projection must never be replayed as
     // a new pending invite for the child channel.
     this.sql.exec(`DELETE FROM invite_index_ops`);
-    this.deleteStateValue("lineageDirtyAt");
     // Clear operational state + caches
     this.sql.exec(`DELETE FROM participants`);
     this.sql.exec(`DELETE FROM pending_calls`);
@@ -3590,27 +3282,11 @@ export class PubSubChannel extends DurableObjectBase {
     await this.relayLineageHead(report.channelId, report.headSeq);
   }
 
-  /** Record a local durable head advance for the debounced fan-out. */
+  /** Fan a local durable head advance out as an event-driven best-effort signal. */
   private noteLineageHeadAdvance(seq: number): void {
-    const pending = Number(this.getStateValue("lineagePendingHead") ?? 0);
-    if (seq <= pending) return;
-    this.setStateValue("lineagePendingHead", String(seq));
-    if (!this.getStateValue("lineageDirtyAt")) {
-      this.setStateValue("lineageDirtyAt", String(Date.now()));
-      this.scheduleNextAlarm();
-    }
-  }
-
-  private nextLineageReportAt(): number | null {
-    const dirtyAt = this.getStateValue("lineageDirtyAt");
-    return dirtyAt ? Number(dirtyAt) + LINEAGE_REPORT_DEBOUNCE_MS : null;
-  }
-
-  private async flushLineageHeadReport(): Promise<void> {
-    if (!this.getStateValue("lineageDirtyAt")) return;
-    const head = Number(this.getStateValue("lineagePendingHead") ?? 0);
-    this.deleteStateValue("lineageDirtyAt");
-    await this.relayLineageHead(this.objectKey, head);
+    const relay = this.relayLineageHead(this.objectKey, seq);
+    if (this.ctx.waitUntil) this.ctx.waitUntil(relay);
+    else void relay;
   }
 
   /** Root → fan out to lineage subscribers; otherwise forward up to the parent. */
@@ -3648,22 +3324,7 @@ export class PubSubChannel extends DurableObjectBase {
     const signal = channelEventToRpcSignal(event);
     for (const row of subs) {
       const pid = (row as Record<string, unknown>)["id"] as string;
-      void queueEmit(
-        this.broadcastDeps,
-        pid,
-        { channelId: this.objectKey, message: signal },
-        (err) => {
-          if (
-            err?.code === "TARGET_NOT_REACHABLE" ||
-            err?.code === "RECONNECT_GRACE_EXPIRED" ||
-            err?.code === "DO_NOT_CREATED"
-          ) {
-            this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, pid);
-            return true;
-          }
-          return false;
-        }
-      );
+      void this.deliverParticipantPayload(pid, { channelId: this.objectKey, message: signal });
     }
   }
 

@@ -15,7 +15,9 @@ vibestudio agent services SERVICE_NAME --json
 
 Generated statically from `src/server/services/`; a server build may register
 a subset depending on its configuration — `vibestudio agent services` shows what
-is actually live.
+is actually live. This is the selected workspace child's API. Server-wide
+workspace, device, and account mutation commands run over the client's separate
+stable hub session and intentionally do not appear as child services here.
 
 Some internal services (e.g. workerd) are not shell-callable and do not appear
 here. Create workers and DOs via `runtime.createEntity` (`kind: "worker"` /
@@ -23,7 +25,7 @@ here. Create workers and DOs via `runtime.createEntity` (`kind: "worker"` /
 
 ## `account`
 
-Account profiles: live identity projection + personalization
+Read-only live account profiles for this workspace
 
 Allowed callers: `server`, `shell`, `app`, `panel`
 
@@ -33,7 +35,6 @@ Allowed callers: `server`, `shell`, `app`, `panel`
 | `account.resolveProfiles` | Batch-resolve userIds to live profiles for rendering user participants. Unknown ids are absent from the result. |
 | `account.isMember` | Return whether a user belongs to this child server's bound workspace. The workspace is host-bound, never caller-selected. |
 | `account.listWorkspaceMembers` | List live account profiles for this child server's bound workspace, including implicit root membership. |
-| `account.updateProfile` | Update personalization (displayName/avatar/color/handle). Self, or root for others. The hub is the sole identity writer. |
 
 ## `audit`
 
@@ -73,11 +74,11 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 | `blobstore.grep` | Search a blob's text for a regex pattern; returns matching lines with optional surrounding context, or null if the blob is absent. |
 | `blobstore.putBase64` | Store raw bytes from exactly one base64 string; returns content digest + byte size (idempotent by content). The blobstore stores bytes only: do not pass MIME/options metadata, and instead carry it alongside the returned digest. |
 | `blobstore.getBase64` | Full blob contents as a base64 string, or null if absent. |
-| `blobstore.putTree` | Store one immutable directory node (tree object) in the CAS from its entries; returns its `manifest:` tree hash (gad-manifest compatible). Every referenced child must already exist in the store — file contentHash blobs and dir childHash tree nodes are verified, so a tree hash can never be claimed while its objects are missing. Pass {root:true} to also store a `state:` root pointer and get the gad-compatible stateHash back. Idempotent by content. Build deep trees bottom-up (children before parents). |
+| `blobstore.putTree` | Store one immutable directory node in the content-addressed store and return its tree hash. Every referenced file blob and child tree must already exist, so a tree hash cannot name missing objects. Pass {root:true} to also store a content-state root pointer. Content states are build/projection inputs, never semantic revision or ancestry identities. Idempotent by content; build deep trees bottom-up. |
 | `blobstore.getTree` | Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node). |
-| `blobstore.listTree` | Recursive listing of a tree: every file (contentHash+mode) and directory (treeHash) under an optional prefix path, sorted by path. Returns null if the root tree object is absent. |
+| `blobstore.listTree` | Exact keyset-paged recursive listing of an immutable tree. Each page is bound to the requested ref, resolved root manifest, normalized prefix, and canonical tree-preorder. A continuation names the last emitted path; cursor/basis mismatches and missing interior objects fail loudly. Returns null only when the requested root object is absent. |
 | `blobstore.readFileAtTree` | Resolve a tree-relative file path to its content digest and mode, or null if the path is absent or not a file. Read the bytes via the ordinary blob APIs. |
-| `blobstore.diffTrees` | Authoritative diff between two trees: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing from the store. |
+| `blobstore.diffTrees` | Bounded authoritative diff for host admission checks: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing or the change set exceeds 100000 entries; semantic/user-facing comparison uses its exact paged projection. |
 | `blobstore.materializeTree` | Project a tree onto disk at outDir (absolute path): hardlinks non-executable files from the CAS (copies executables so chmod never touches the shared CAS inode). Existing files with matching size are trusted and skipped. Admin-only — writes outside the store. |
 | `blobstore.delete` | Delete a blob by digest; returns true if it existed. Destructive, admin-only. |
 | `blobstore.list` | List blob digests, optionally filtered by hex prefix and capped by limit. Admin-only. |
@@ -93,8 +94,7 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. |
-| `build.validate` | Gad-facing push validation (narrow-host VCS): build + cache + classify a composed candidate workspace view. Keyed by (viewHash, repoPaths, baseViewHash) — repoPaths are the pushed repos (buildable pushed units gate absolutely; content-only skip) and baseViewHash drives the dependent regression gate (a dependent also red on the base is informational; omitted ⇒ failed dependents gate absolutely). IDEMPOTENT: never promotes the EV baseline or records provenance, so it is safe to call on candidates that are never published. |
-| `build.getBuildReport` | Queryable companion to the synchronous push gate: build a unit (runtime, or library targets for packages) at the given workspace state (omitted = main HEAD) and return its agent-actionable RepoBuildReport with structured esbuild + tsc diagnostics. Does NOT advance any head. |
+| `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report with structured esbuild + tsc diagnostics. This advisory projection does not publish source, authorize publication, or advance any head. |
 | `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
@@ -161,7 +161,6 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`,
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
 | `eval.cancel` | Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal. |
-| `eval.forceReset` | Forced recovery for a wedged eval DO: cancel every non-terminal run, abort all in-flight runs, and reset the eval context (wipe scope + user db) IMMEDIATELY without waiting on the stuck run chain. Use when `reset` itself would hang behind a wedged run. |
 
 ## `externalOpen`
 
@@ -175,33 +174,33 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 ## `fs`
 
-Filesystem operations. Context-bound callers are sandboxed to their context folder; supported workspace-repo file mutations route through GAD working edits, while platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
+Filesystem operations. Context-bound callers are sandboxed to their context folder; the semantic workspace records managed reads and mutations before host projection, with structured move/copy preserving explicit provenance. Scratch-only adapters may access context-local paths outside reserved workspace source roots and fail closed for managed paths. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
 
 Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`, `agent`
 
 | Method | Description |
 |--------|-------------|
-| `fs.readFile` | Read a file's contents. Overloaded: with an encoding string (or Node-style `{ encoding: "utf8" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.) |
-| `fs.writeFile` | Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. For such callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
-| `fs.appendFile` | Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. For context-bound callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
+| `fs.readFile` | Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: "utf8" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.) |
+| `fs.writeFile` | Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
+| `fs.appendFile` | Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
 | `fs.readdir` | List the entries of a directory; returns bare name strings, or Dirent-shaped objects with type flags when `withFileTypes` is set, optionally recursing into subdirectories. |
-| `fs.mkdir` | Create a directory directly on the context filesystem projection (not as a GAD working edit); with `recursive` it creates missing parents and returns the first-created path relative to the context root, otherwise returns undefined. |
-| `fs.rmdir` | Remove a directory. For context-bound callers, a valid workspace-repo path routes subtree removal through GAD; a scratch directory is removed directly and throws if it is not empty. |
-| `fs.rm` | Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. For context-bound callers, a valid workspace-repo path routes the removal through GAD; scratch paths are removed directly. |
+| `fs.mkdir` | Create a scratch directory directly on the context filesystem. Managed workspace paths reject mkdir because empty directories have no semantic fact; author a file instead and its parent directories are implicit. With `recursive`, scratch mkdir creates missing parents and returns the first-created path relative to the context root; otherwise it returns undefined. |
+| `fs.rmdir` | Remove a directory. The semantic workspace records a managed subtree removal atomically before projection; a scratch directory is removed directly and throws if it is not empty. |
+| `fs.rm` | Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. The semantic workspace records managed removals atomically before projection; scratch paths are removed directly. |
 | `fs.stat` | Return metadata (type flags, size, mtime/ctime, mode) for a path, following symlinks to their target. |
 | `fs.lstat` | Like stat, but reports on the symlink itself rather than following it to its target. |
 | `fs.exists` | Return whether a path exists and is accessible to the caller. |
 | `fs.access` | Test a path's accessibility against the given fs.constants mode bits; resolves on success, throws on failure. |
-| `fs.unlink` | Delete a single file (not a directory). For context-bound callers, a valid workspace-repo path routes the deletion through GAD; a scratch path is deleted directly. |
-| `fs.copyFile` | Copy a file between context-root-relative paths, overwriting the destination. For context-bound callers, a valid workspace-repo destination becomes a GAD working edit; a platform-ignored destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape. |
-| `fs.rename` | Move or rename a context-root-relative file or directory. For context-bound callers, scratch-to-scratch renames are direct; scratch-to-repo and repo-to-repo moves become GAD working edits. Moving a tracked repo path out to scratch is rejected so source state cannot bypass VCS. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape. |
+| `fs.unlink` | Delete a single file (not a directory). The semantic workspace records a managed deletion before projection; a scratch path is deleted directly. |
+| `fs.copyFile` | Copy a file between context-root-relative paths. Managed destinations must be vacant: managed-to-managed copies mint a distinct file identity with exact copy provenance, while scratch-to-managed copies author an ordinary file creation caused by this copy invocation. Scratch content has no earlier semantic origin to preserve. Scratch destinations retain ordinary filesystem overwrite semantics. A platform-excluded destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape. |
+| `fs.rename` | Move or rename a context-root-relative file or directory. Scratch-to-scratch renames are direct. The semantic workspace records managed-to-managed moves before projection and preserves stable file identity. Generic scratch-to-managed rename is refused because a path cannot prove new-import versus trusted atomic-replacement intent; use `copyFile` for a vacant managed import or an explicit managed write/edit for replacement, and the refused rename leaves the scratch source intact. Moving a tracked managed path out to scratch is also refused. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape. |
 | `fs.realpath` | Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute host path (unrestricted callers). |
 | `fs.ensureMaterialized` | Materialize the given workspace path(s)/repo(s) (or 'all') into the context working folder. Context folders are SPARSE — only what is materialized exists on disk — so call this for the narrowest scope you need (a repo path like 'panels/chat', a section like 'panels', or specific paths) before reading them OUTSIDE the fs.* API (e.g. a grep/find subprocess). fs.* reads materialize on demand automatically. |
-| `fs.truncate` | Truncate (or zero-extend) a file to the given byte length (default 0). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch file is changed directly. |
+| `fs.truncate` | Truncate (or zero-extend) a file to the given byte length (default 0). The semantic workspace records a managed file update before projection; a scratch file is changed directly. |
 | `fs.readlink` | Read a symlink's target; absolute targets are relativized to the context root to avoid leaking host paths. |
-| `fs.symlink` | Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Workspace-repo link paths are rejected because GAD does not represent symlink entries. |
-| `fs.chmod` | Change a path's Unix permission bits (mode). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch path is changed directly. |
-| `fs.utimes` | Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; this does not create a GAD working edit. |
+| `fs.symlink` | Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Managed workspace link paths are rejected because the semantic file manifest does not represent symlink entries. |
+| `fs.chmod` | Change a path's Unix permission bits (mode). The semantic workspace records a managed file mode change before projection; a scratch path is changed directly. |
+| `fs.utimes` | Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; timestamps carry no semantic workspace fact. |
 | `fs.grep` | Search file contents under the context root for a regex pattern (the first argument), returning matching lines with optional context; uses ripgrep when available with a pure-JS fallback, skipping .git, node_modules, symlinks, and binary files. |
 | `fs.glob` | Find files whose path matches a glob pattern (the first argument) under the context root, returned newest-first by mtime; skips .git, node_modules, and symlinks. |
 | `fs.open` | Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths. |
@@ -234,20 +233,19 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `gitInterop.setUpstream` | Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml; may prompt for capability approval. No network egress happens here. |
 | `gitInterop.removeUpstream` | Remove upstream tracking for a workspace repo from meta/vibestudio.yml; may prompt for capability approval. |
 | `gitInterop.detachUpstream` | Atomically remove upstream tracking (and optionally the declared remote) for a workspace repo in one config write and one approval; may prompt for capability approval. |
-| `gitInterop.setAutoPush` | Toggle auto-push on an already declared upstream, persisting the change to meta/vibestudio.yml; may prompt for capability approval. |
-| `gitInterop.upstreamStatus` | Return external Git upstream status for tracked repos. The configured gitInterop provider performs any Git/network work. |
-| `gitInterop.pushUpstream` | Export protected main and push it to the repo's declared upstream through the configured gitInterop provider. |
-| `gitInterop.pullUpstream` | Fetch/pull a declared upstream and import upstream changes into protected main through the configured gitInterop provider. |
+| `gitInterop.setAutoPush` | Toggle optional outgoing Git push for future exports of already-published protected main, persisting the change to meta/vibestudio.yml; this never publishes import candidates and may prompt for capability approval. |
+| `gitInterop.upstreamStatus` | Return external Git upstream status for tracked repos, including integration-required candidate coordinates. The configured gitInterop provider performs any Git/network work. |
+| `gitInterop.pushUpstream` | Export protected main and push it to the repo's declared upstream through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. |
+| `gitInterop.pullUpstream` | Fetch a declared upstream and import its exact snapshot as a semantic candidate. Reconcile and publish it only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push. |
 | `gitInterop.publishRepo` | Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider. |
 | `gitInterop.createDisposableRemote` | Create a short-lived, credential-free smart-HTTP Git remote managed by this workspace host. Prefer publishToDisposableRemote(repoPath) for one-call verification. For a persistent stepwise flow, create a remote, call pushDisposableRemote(repoPath, url, branch), then inspect or remove it. |
 | `gitInterop.publishToDisposableRemote` | Export one workspace repo, push it to a fresh credential-free host-managed smart-HTTP remote, verify the received commit count, and clean the remote up. This is the one-call development/system-verification path and does not replace or mutate the repo's declared upstream. |
 | `gitInterop.pushDisposableRemote` | Export one workspace repo and push it to an existing host-managed disposable Git remote. The host verifies that the URL is an active disposable remote and returns the received commit count without removing it. |
 | `gitInterop.inspectDisposableRemote` | Verify a host-managed disposable Git remote and return its branch head and total received commit count. |
 | `gitInterop.removeDisposableRemote` | Delete a host-managed disposable Git remote before its automatic expiry. |
-| `gitInterop.resetExportMarker` | Clear a repo's git-bridge export marker so the next export rebuilds from an empty checkout. Recovery command for a marker that no longer matches the repo log. |
-| `gitInterop.commitMapping` | Return the gad↔git commit mapping for a repo's checkout, read from the GAD-State/GAD-Event trailers of exported commits (newest first). |
-| `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote and upstream in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
-| `gitInterop.completeWorkspaceDependencies` | Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results. |
+| `gitInterop.commitMapping` | Return the semantic-event↔Git commit mapping for a repo's checkout, read from Vibestudio-Event trailers (newest first). |
+| `gitInterop.importProject` | Clone an external Git project, record its remote/upstream config, and return the semantic candidate context and event. The import does not publish protected main; use the ordinary VCS integration path. |
+| `gitInterop.completeWorkspaceDependencies` | Ask the configured provider for upstream status, clone each supported declaration reported as not-materialized, and return one unpublished semantic candidate per successful import. Other reported states are skipped as already-materialized; candidates require ordinary VCS integration and explicit publication. |
 
 ## `governance`
 
@@ -269,31 +267,6 @@ Allowed callers: `shell`, `server`
 |--------|-------------|
 | `hostLifecycle.shutdown` | Gracefully shut down the workspace server process (same path as SIGTERM). Shell-only. |
 
-## `hubControl`
-
-Authenticated workspace-child to server-hub control plane
-
-Allowed callers: `shell`, `panel`, `app`, `server`
-
-| Method | Description |
-|--------|-------------|
-| `hubControl.listWorkspaces` | List workspaces visible to the authenticated account. |
-| `hubControl.routeWorkspace` | Route the authenticated device directly into a workspace child. |
-| `hubControl.createWorkspace` | Create and register a workspace through the hub control plane. |
-| `hubControl.deleteWorkspace` | Delete a workspace and cascade every membership row. |
-| `hubControl.addWorkspaceMember` | Add an existing account to a workspace. |
-| `hubControl.removeWorkspaceMember` | Remove an account from a workspace and close its child sessions. |
-| `hubControl.listWorkspaceMembers` | List the account membership projection for one workspace. |
-| `hubControl.listUserPresence` | List the visible workspaces where a user currently has a live human endpoint. |
-| `hubControl.inviteUser` | Create an account, grant workspaces, and mint its first-device invite. |
-| `hubControl.pairDevice` | Mint another device invite for the authenticated account. |
-| `hubControl.listDevices` | List the caller's paired devices; administrators see every account's devices. |
-| `hubControl.revokeDevice` | Revoke a device and close all of its child sessions. |
-| `hubControl.revokeUser` | Revoke an account, credentials, memberships, and live deputies. |
-| `hubControl.setRole` | Set an account role; root-only at the hub. |
-| `hubControl.updateProfile` | Update the authenticated account profile, or another account as root. |
-| `hubControl.getProfile` | Read the authenticated account profile, or a specified account. |
-
 ## `mirror`
 
 Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.
@@ -302,8 +275,8 @@ Allowed callers: `shell`, `agent`, `do`, `server`, `panel`
 
 | Method | Description |
 |--------|-------------|
-| `mirror.targets` | The per-repo { repoPath, stateHash } targets a context resolves to (read-side of the projector). Fetch these, then stream each state's tree via `objects`. |
-| `mirror.objects` | Stream the content-addressed tree for a `stateHash` as size-bounded pages of { path, mode, content (base64), size }. Page with the returned `next` cursor until absent; optionally restrict to `paths`. |
+| `mirror.targets` | Return repository content projections for a context's exact working head. Each {repoPath,stateHash} is a content-only projector target, never ancestry or a semantic revision. Stream its immutable tree through `objects`. |
+| `mirror.objects` | Stream one content-only repository tree as bounded pages of {path,mode,content,size}. Agent callers may read only states currently reachable from their host-bound context; no prior `targets` call is required. A stateHash never grants workspace history or provenance. Page with `next` until absent and optionally restrict to paths. |
 
 ## `notification`
 
@@ -435,18 +408,6 @@ Allowed callers: `server`, `shell`
 | `presence.markPanelsOwned` |  |
 | `presence.getPanelActiveOwner` |  |
 
-## `refs`
-
-Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.
-
-Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
-
-| Method | Description |
-|--------|-------------|
-| `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
-| `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
-| `refs.listMainRefLog` | The host main-ref movement log for a repo (§2): every `main` advance with its operation, host-verified writer/on-behalf-of attribution, reason, and old→new values, oldest first. `sinceId` pages movements after a known id (omit for the full log). The render paths read main-advance provenance from here; the DO's stale-intent discard consults it (§6). |
-
 ## `runtime`
 
 Runtime entity creation and retirement
@@ -459,12 +420,12 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
 | `runtime.listEntities` | List live entities (id, kind, source, contextId, title, createdAt). |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
-| `runtime.createContext` | Create a full logical workspace context branch. Every context presents the whole workspace tree; per-repo ctx heads are created lazily as edits are made. Use vcs.contextStatus to inspect uncommitted changes, ahead/behind repos, and deleted refs. |
-| `runtime.cloneContext` | Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them. |
+| `runtime.createContext` | Create a full logical semantic workspace context. When invoked by a context-scoped runtime, the new context is recorded as that exact runtime entity's lifecycle child, making ownership, initialization authority, and teardown walkable instead of leaving an ownerless context island. Root host callers create root contexts. The state machine initializes one exact committed event and event/application working head over the whole workspace; later semantic operations advance that working head atomically. Use vcs.status for compact ancestry and integration orientation, then page repository and work membership through focused VCS inspectors. |
+| `runtime.cloneContext` | Clone a context's durable state—every worker/DO store plus its exact committed event and event/application working head—into a fresh isolated context. Immutable semantic history and authored facts are shared by identity, not copied into a parallel snapshot history. Returns the new contextId and source-to-clone entity/context maps. With `recursive`, the whole lifecycle subtree is cloned (never following lineage edges); with `targetKey`, retry returns the same child. The caller performs per-entity rewiring such as fork-log re-rooting on the returned clones. |
 | `runtime.destroyContext` | Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context. |
 | `runtime.listOwnedContexts` | List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }. |
 | `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
-| `runtime.createSubagentContext` | Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; callers must not hand-roll this. |
+| `runtime.createSubagentContext` | Create a subagent's child context from a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's committed event and exact event/application working head while retaining provenance lineage, ensure its projection directory, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes context lifecycle and registry operations; callers must not hand-roll this. |
 
 ## `serverLog`
 
@@ -509,34 +470,30 @@ Allowed callers: `shell`, `app`, `server`
 
 ## `vcs`
 
-Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibestudio vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.
+One provenance-native workspace history: direct state nodes, local incremental integration, whole-chain commit/discard, explicit move/copy, and protected publication.
 
 Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`, `agent`
 
 | Method | Description |
 |--------|-------------|
-| `vcs.edit` | Record a batch of file edits as UNCOMMITTED WORKING changes on the caller's context head — tracked durably with full provenance, but NOT a commit: no commit-log entry, no head advance, no build, and they never appear in vcs.log. Edits route to their owning repo by path; bare paths use the workspace's declared defaultRepo. Make deliberate milestones with vcs.commit. Edits target a `ctx:*` head; `main` advances only via push. |
-| `vcs.commit` | Fold the caller context's uncommitted working edits into ONE deliberate, messaged snapshot per repo, advancing each repo's context head and owning exactly those edits (queryable via commitEdits). `message` is mandatory. `paths` seals only the listed paths (`git add <paths>`); `exclude` seals everything except the listed paths. A repo with a pending merge commits the resolution — even with zero working edits (sealing a merge that needed no manual resolution). Multi-repo commits report a per-repo status (`committed`/`unchanged`/`refused`) and never throw away partial results. `main` is rejected (push only). |
-| `vcs.discardEdits` | Drop a repo's uncommitted working edits on the caller's context head AND clear any in-progress merge, restoring the committed head on disk (abort / stash-drop). To abort ONLY a pending merge while keeping other working edits, use vcs.abortMerge instead. |
-| `vcs.previewBuild` | On-demand build of the caller context's WORKING content (committed head + uncommitted edits), scoped to specific repos or units. Does NOT touch the published EV baseline — builds happen authoritatively only at push. Use for a dev preview without committing. |
-| `vcs.readFile` | Read one file's content (text or base64 bytes), state/content hashes, and mode. The object address has one meaning on every transport: path is workspace-relative unless repoPath explicitly makes it repo-relative; ref defaults to the caller's current head; scope selects an owned/forked context. Bare paths use meta/vibestudio.yml defaultRepo and fail clearly when none is declared. |
-| `vcs.listFiles` | List every file (path, content hash, mode) at a VCS ref. Omit the input/ref for the caller's composed current head; pass repoPath for a repo-relative listing; scope selects an owned/forked context. |
-| `vcs.revert` | Undo a prior change by forward-applying its inverse patch onto the caller's head as an UNCOMMITTED WORKING edit — the head does NOT advance until you seal it with vcs.commit (and push it like any other change). Target the change by state hash or event id; when both are omitted, the latest commit on the repo head is reverted. Pass repoPath to revert on a specific repo's log. |
-| `vcs.log` | Recent commits for a repo head, newest first. Omit head for the caller's current context head. This host compatibility route matches the runtime vcs.log(repoPath, limit?, head?) surface. |
-| `vcs.status` | Status of a repo's head against both baselines: committed changes relative to main and uncommitted working changes relative to the committed head, with path lists, divergence/behind state, deletion, and any pending merge. Not a filesystem scan. repoPath is required (per-repo VCS). |
-| `vcs.diff` | Diff two GAD states by their `state:…` hashes, returning the added/removed/changed files between them (name-status only — use vcs.diffContent for hunks). |
-| `vcs.diffContent` | CONTENT diff with real hunks and a unified-diff rendering — review what actually changed before committing or pushing. Scope `working` diffs the uncommitted edits (what a commit would seal), `committed` the unpushed commits (what a push would carry), `all` (default) everything unpushed; or pass explicit left/right `state:…` hashes. Binary files are flagged, never hunked. |
-| `vcs.resolveHead` | Resolve a ref to its head name and current `state:…` hash on a repo's log. Omit the ref for the caller's current context head; pass "main"/"ctx:…" for an explicit ref, and repoPath to scope to a repo. |
-| `vcs.workspaceViewWithRepoAt` | Compose a workspace-rooted state view with one repo replaced by a repo-rooted state hash (or removed when null). Use this to convert a repo state from vcs.log/vcs.commit/vcs.resolveHead into the immutable state ref that build.getBuild expects. |
-| `vcs.merge` | Reconcile divergence: pull a SOURCE (`main`, or a context you own/forked) INTO the caller's context head, producing a MERGE COMMIT per repo. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Commit-gated on BOTH sides: a repo with uncommitted edits on the source (or target) reports status `refused` (with the reason) while the other repos still merge — no mid-loop throw, no lost partial results. Omit repoPaths to reconcile every repo your context branch touches. Returns one result per repo. After merging main, the context head descends from main so push fast-forwards. |
-| `vcs.pick` | Cherry-pick selected changes from a SOURCE (`main`, or a context you own/forked) onto the caller's context head as UNCOMMITTED working edits (never a head advance): a `commit` pick 3-way-applies a whole commit's patch; a `paths` pick injects the source context's working content at specific paths (source must be `{ contextId }`). Review the result, then vcs.commit to seal it. Returns one working-edit result per repo touched. |
-| `vcs.contextDiff` | Diff a context you own or forked against a baseline — its `fork-base` (the state it inherited when forked; the default) or the current workspace `main` — returning the added/removed/changed files its branch introduced. The read is authorized against the runtime ownership/lineage registry; an unowned context throws. |
-| `vcs.abortMerge` | Abort ONLY the pending (conflicted) merge on a repo's head, restoring its pre-merge tree; other uncommitted working edits are untouched (vcs.discardEdits drops everything, merge included). repoPath is required; omit head for the caller's own context head. |
-| `vcs.pendingMerge` | Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head. |
-| `vcs.pushStatus` | How far each repo's head is ahead of that repo's main: the unpushed change count and per-file changes a push would carry. |
-| `vcs.contextStatus` | Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace while your branch still references it — a push will be refused, so drop/rebase your context; `pendingMerge` = an in-progress merge is parked on this repo (resolve + vcs.commit to seal it, or vcs.abortMerge). Only repos with changes or drift are returned. Pass a context you own/forked to summarize ITS branch instead of your own. |
-| `vcs.rebaseContext` | Pull the latest main into your context: 3-way merges main into each repo you've edited, then re-pins your context's base to the current workspace so unedited repos also advance to latest. Use when contextStatus shows repos `behind`. Returns each edited repo's merge status. |
-| `vcs.recall` | Semantic recall over the workspace's VCS memory (log summaries, file snippets) matching a query; pass repoPaths to scope to selected repos. Returns ranked snippets with their head/event/path anchors. |
+| `vcs.edit` | Atomically create repositories with their initial files or author exact text, binary, file-create, delete, and mode changes on the working head. |
+| `vcs.move` | Move stable file or repository identities without reconstructing intent from bytes. |
+| `vcs.copy` | Copy exact source files into new identities with immediate coordinate provenance. |
+| `vcs.integrate` | Take one local adopt, reconcile, or decline step against an exact source event. |
+| `vcs.revert` | Author explicit counteractions of exact semantic changes. |
+| `vcs.commit` | Commit the complete local application chain; derive its unique integration parent from recorded decisions, or accept an explicit zero-change source. |
+| `vcs.discard` | Discard the complete uncommitted chain and return to the committed event. |
+| `vcs.importSnapshot` | Import one exact complete external snapshot as ordinary changes on an import work unit. |
+| `vcs.push` | Publish one exact already-committed event to protected main. |
+| `vcs.status` | Return context pointers, clean state, main relation, and compact working counts. |
+| `vcs.compare` | Compare an exact target state with a committed source event by semantic change. |
+| `vcs.inspect` | Inspect one typed semantic node and a bounded preview of its direct adjacency. |
+| `vcs.neighbors` | Page immediate typed provenance edges without persisting traversal state. |
+| `vcs.history` | Page event history in either direction or past file history from one exact state. |
+| `vcs.blame` | Trace an exact bounded file range through immediate content-coordinate mappings. |
+| `vcs.resolveRepository` | Resolve one canonical repository path at one exact semantic state. |
+| `vcs.readFile` | Read one file from an exact semantic state. |
+| `vcs.listFiles` | Page the exact path-to-file manifest of one repository at one semantic state. |
 
 ## `webhookIngress`
 
@@ -574,33 +531,28 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 ## `workers`
 
-Worker discovery and userland service resolution
+Worker discovery and workspace service resolution
 
 Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 | Method | Description |
 |--------|-------------|
 | `workers.listSources` | List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers) |
-| `workers.listServices` | List manifest-declared userland services |
-| `workers.resolveService` | Resolve a userland service by name or protocol |
+| `workers.listServices` | List workspace-authored services declared in the manifest |
+| `workers.resolveService` | Resolve a workspace service by name or protocol |
 | `workers.resolveDurableObject` | Resolve a Durable Object RPC target by source/class/key |
 
 ## `workspace`
 
-Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)
+Current-workspace configuration, units, and lifecycle
 
 Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 | Method | Description |
 |--------|-------------|
 | `workspace.getInfo` | Filesystem paths (source, state, contexts) and resolved config for the active workspace. |
-| `workspace.list` | List all known workspaces in the catalog with their last-opened timestamps. |
 | `workspace.getActive` | Name (id) of the currently active workspace. |
-| `workspace.getActiveEntry` | Catalog entry (name + last-opened) for the currently active workspace. |
 | `workspace.getConfig` | The active workspace's resolved config (meta/vibestudio.yml). |
-| `workspace.create` | Create and register a new workspace on disk, optionally forking from an existing one; userland callers are approval-gated. |
-| `workspace.delete` | Permanently delete a workspace directory and remove it from the catalog; refuses to delete the active workspace and is approval-gated for userland. |
-| `workspace.select` | Switch the active workspace, touching the catalog and signalling the host to relaunch into it; disruptive and approval-gated for userland. |
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
@@ -671,15 +623,3 @@ Allowed callers: `server`, `shell`, `app`, `panel`
 | Method | Description |
 |--------|-------------|
 | `workspacePresence.list` | List the users with ≥1 live human connection to this workspace, plus recently-departed users with a last-seen time (WP8 §4 host presence). Fed only by the session registry — carries no channel/conversation data. |
-
-## `worktree`
-
-Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).
-
-Allowed callers: `do`, `shell`, `server`
-
-| Method | Description |
-|--------|-------------|
-| `worktree.scan` | Scan a working tree into the content store and return its content-addressed state. Resolves the (repoPath, head) directory, hashes+mirrors every file into the CAS (refreshing the .gad sidecar), and returns { stateHash, files }. A pure disk→CAS primitive: no commit, no ref advance, no history — the caller (the gad-store DO) owns all VCS semantics. |
-| `worktree.project` | Materialize a content-addressed `stateHash` onto the (repoPath, head) working tree (the disk-projection primitive, sibling of `scan`). Semantics-free: hardlinks the CAS tree onto disk and refreshes the sidecar — no commit, no ref advance, no history. The gad-store DO drives it to re-materialize a restored/forked repo into the ACTIVE context checkout (`ctx:workspace`); `main` is never projected (D1). |
-| `worktree.dependentRepos` | Workspace-relative paths of repos whose build unit directly imports `repoPath`'s unit, at the live workspace view. A content-derived build-graph read (dumb primitive, same class as `scan`): it holds no delete semantics — the gad-store DO consumes it to decide whether a deletion is refused without `force`. Empty when `repoPath` is content-only or has no dependents. |

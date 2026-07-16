@@ -7,17 +7,17 @@
  *   3. permission relay (Claude Code permission_request ⇄ workspace approval),
  *   4. hook ingestion (unix socket ← `vibestudio claude emit`).
  *
- * With a launch profile env (VIBESTUDIO_AGENT_TOKEN et al) it attaches
- * directly; with none it ADOPTS (plan §8.3): discovers the context from the
- * cwd marker, calls the configured Claude Code provider's `prepare` under the
- * paired device credential (which gates on a workspace-side first-adoption approval),
- * and proceeds identically. All Claude-side protocol knowledge lives here and
- * nowhere else (plan §11 containment).
+ * Only the controlled `vibestudio claude` launcher may start this bridge. That
+ * launcher places Claude behind the OS read-only projection boundary before
+ * supplying the profile env. Unmanaged/plugin adoption is intentionally absent:
+ * the bridge cannot retrofit filesystem containment around an already-running
+ * process.
  */
 
 import * as path from "node:path";
-import { loadCliCredentials } from "../credentialStore.js";
-import { RpcClient } from "../rpcClient.js";
+import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
+import { loadCliCredentials, type CliStoredPairing } from "../credentialStore.js";
+import { RpcClient, type RawTokenCredential } from "../rpcClient.js";
 import { AuthError, CliError } from "../output.js";
 import { normalizeServerBaseUrl } from "../serverUrl.js";
 import {
@@ -30,22 +30,17 @@ import {
 } from "./mcpServer.js";
 import {
   TurnTracker,
-  agentSocketPath,
   mapHookEvent,
   startHookSocketServer,
   type EmittedHookLine,
 } from "./hookSocket.js";
-import { findContextMarker } from "./context.js";
-
-export const LINKED_AGENT_EVENT = "linked-agent:event";
-const HEARTBEAT_INTERVAL_MS = 30_000;
-const REATTACH_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-const CLAUDE_CODE_PROVIDER = "claudeCode";
 
 export interface BridgeConfig {
-  mode: "launched" | "adopted";
-  /** Canonical server base the RpcClient dials. */
+  mode: "launched";
+  /** Current HTTP base or selected WebRTC route the RpcClient dials. */
   serverUrl: string;
+  /** Present when an agent token rides the paired device's WebRTC route. */
+  workspacePairing?: CliStoredPairing;
   agentToken: string;
   entityId: string;
   contextId: string;
@@ -67,6 +62,15 @@ export interface BridgeSubagentInfo {
   contract: string;
 }
 
+/** One canonical bridge credential: agent auth plus transport reach. */
+export function bridgeRpcCredential(config: BridgeConfig): RawTokenCredential {
+  return {
+    url: config.serverUrl,
+    token: config.agentToken,
+    ...(config.workspacePairing ? { workspacePairing: config.workspacePairing } : {}),
+  };
+}
+
 /** Parse the optional subagent duty out of a launch-profile env record. */
 function subagentFromEnv(env: Record<string, string | undefined>): BridgeSubagentInfo | undefined {
   const runId = env["VIBESTUDIO_SUBAGENT_RUN_ID"];
@@ -83,32 +87,19 @@ export function normalizeServerUrl(raw: string): string {
   return normalizeServerBaseUrl(raw);
 }
 
-export interface AdoptionEnvironment {
-  cwd: string;
-  channelFlag?: string;
-  /** Test seams. */
+export interface BridgeEnvironment {
+  /** Test seam for resolving a paired WebRTC launch route. */
   loadCredentials?: typeof loadCliCredentials;
-  makeClient?: (creds: NonNullable<ReturnType<typeof loadCliCredentials>>) => RpcClient;
-  warn?: (message: string) => void;
-}
-
-interface PreparedLaunch {
-  entityId: string;
-  contextId: string;
-  channelId: string;
-  vesselRef: string;
-  contextFolder: string;
-  env: Record<string, string>;
-  argv: string[];
 }
 
 /**
- * Resolve the bridge config. Precedence (plan §8.3 discovery order): the
- * launch-profile env wins; otherwise adopt via marker + device credential.
+ * Resolve a complete controlled-launch profile. There is no fallback path: an
+ * already-running Claude process cannot be made read-only by this child MCP
+ * server, so accepting one would reopen an unprovenanced native-write path.
  */
 export async function resolveBridgeConfig(
   env: NodeJS.ProcessEnv,
-  adoption: AdoptionEnvironment
+  environment: BridgeEnvironment = {}
 ): Promise<BridgeConfig> {
   const token = env["VIBESTUDIO_AGENT_TOKEN"];
   if (token) {
@@ -117,124 +108,46 @@ export async function resolveBridgeConfig(
     const contextId = env["VIBESTUDIO_CONTEXT_ID"];
     const channelId = env["VIBESTUDIO_CHANNEL_ID"];
     const vesselRef = env["VIBESTUDIO_VESSEL_REF"];
-    if (!serverUrl || !entityId || !contextId || !channelId || !vesselRef) {
+    const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
+    if (!serverUrl || !entityId || !contextId || !channelId || !vesselRef || !profile) {
       throw new CliError(
         "incomplete launch profile env: VIBESTUDIO_AGENT_TOKEN is set but " +
-          "SERVER_URL/ENTITY_ID/CONTEXT_ID/CHANNEL_ID/VESSEL_REF are not all present"
+          "SERVER_URL/ENTITY_ID/CONTEXT_ID/CHANNEL_ID/VESSEL_REF/LAUNCH_PROFILE are not all present"
       );
     }
-    const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
     const subagent = subagentFromEnv(env);
+    const reach = launchReach(serverUrl, environment.loadCredentials ?? loadCliCredentials);
     return {
       mode: "launched",
-      serverUrl: normalizeServerUrl(serverUrl),
+      ...reach,
       agentToken: token,
       entityId,
       contextId,
       channelId,
       vesselRef,
-      hookSocketPaths: [
-        ...(profile ? [path.join(profile, "hook.sock")] : []),
-        agentSocketPath(contextId),
-      ],
+      hookSocketPaths: [path.join(profile, "hook.sock")],
       ...(subagent ? { subagent } : {}),
     };
   }
-  return await adopt(adoption);
+  throw new CliError(
+    "unmanaged linked-Claude adoption is unsupported: launch with `vibestudio claude` so the managed context is OS-read-only"
+  );
 }
 
-/** Adoption mode (plan §8.3): marker → prepare under the device credential. */
-async function adopt(adoption: AdoptionEnvironment): Promise<BridgeConfig> {
-  const warn = adoption.warn ?? ((message: string) => console.error(message));
-  const load = adoption.loadCredentials ?? loadCliCredentials;
+function launchReach(
+  serverUrl: string,
+  load: typeof loadCliCredentials
+): Pick<BridgeConfig, "serverUrl" | "workspacePairing"> {
+  if (new URL(serverUrl).protocol !== "webrtc:") {
+    return { serverUrl: normalizeServerUrl(serverUrl) };
+  }
   const creds = load();
-  if (!creds) {
+  if (!creds || creds.url !== serverUrl) {
     throw new AuthError(
-      'adoption requires a paired device — run `vibestudio remote pair "<pair-link>"` first'
+      "launch profile selects a WebRTC route that does not match the paired CLI credential"
     );
   }
-  const client = adoption.makeClient ? adoption.makeClient(creds) : new RpcClient(creds);
-
-  const marker = findContextMarker(adoption.cwd);
-  let channelId = adoption.channelFlag;
-  if (!channelId) {
-    if (!marker) {
-      throw new CliError(
-        "adoption refused: not inside a context folder (no .vibestudio-context.json found) " +
-          "and no --channel given. Local file tools would operate on a different tree than " +
-          "the workspace context — pass an explicit --channel <id> to bind anyway."
-      );
-    }
-    const primary = await invokeExtension<{ channelId: string } | null>(
-      client,
-      "resolvePrimaryChannel",
-      [{ contextId: marker.contextId }]
-    );
-    if (!primary?.channelId) {
-      throw new CliError(
-        `context ${marker.contextId} has no known conversation channel yet — ` +
-          "launch once with an explicit --channel <id> to bind one"
-      );
-    }
-    channelId = primary.channelId;
-  }
-
-  const prepared = await invokeExtension<PreparedLaunch>(client, "prepare", [{ channelId }]);
-
-  // cwd/context divergence guard (plan §8.3): never silently bind a session to
-  // a tree it isn't looking at.
-  const inside = isInside(adoption.cwd, prepared.contextFolder);
-  if (!inside) {
-    if (!adoption.channelFlag) {
-      throw new CliError(
-        `adoption refused: cwd ${adoption.cwd} is outside the context folder ` +
-          `${prepared.contextFolder} for channel ${channelId}. Claude's local file tools and ` +
-          "`vibestudio fs/vcs` would see different bytes. Re-run with an explicit " +
-          "--channel <id> to proceed anyway."
-      );
-    }
-    warn(
-      `WARNING: cwd ${adoption.cwd} is OUTSIDE the context folder ${prepared.contextFolder}. ` +
-        "Local file tools and `vibestudio fs/vcs` are looking at DIFFERENT trees. " +
-        "Proceeding because --channel was explicit. Consider `vibestudio context mirror` " +
-        "or cd into the context folder."
-    );
-  }
-  await client.close().catch(() => undefined);
-
-  const env = prepared.env;
-  const agentToken = env["VIBESTUDIO_AGENT_TOKEN"];
-  const serverUrl = env["VIBESTUDIO_SERVER_URL"];
-  if (!agentToken || !serverUrl || !prepared.vesselRef) {
-    throw new CliError("extension prepare returned incomplete agent connection coordinates");
-  }
-  const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
-  const subagent = subagentFromEnv(env);
-  return {
-    mode: "adopted",
-    serverUrl: normalizeServerUrl(serverUrl),
-    agentToken,
-    entityId: prepared.entityId,
-    contextId: prepared.contextId,
-    channelId: prepared.channelId,
-    vesselRef: prepared.vesselRef,
-    hookSocketPaths: [
-      // Adopted sessions' hooks have no profile env — they fall back to the
-      // per-context socket; listen on the profile sock too for good measure.
-      ...(profile ? [path.join(profile, "hook.sock")] : []),
-      agentSocketPath(prepared.contextId),
-    ],
-    ...(subagent ? { subagent } : {}),
-  };
-}
-
-function isInside(child: string, parent: string): boolean {
-  const rel = path.relative(path.resolve(parent), path.resolve(child));
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-async function invokeExtension<T>(client: RpcClient, method: string, args: unknown[]): Promise<T> {
-  return await client.call<T>("extensions.invokeProvider", [CLAUDE_CODE_PROVIDER, method, args]);
+  return { serverUrl: creds.url, workspacePairing: creds.workspacePairing };
 }
 
 // ---------------------------------------------------------------------------
@@ -308,19 +221,18 @@ export const WORKSPACE_SKILL_ADDENDUM = `> **You are reading a WORKSPACE skill a
 > It is written for the workspace's in-process (Pi) agents; translate as you read:
 >
 > - Pi loop tools named in skills (\`spawn_subagent\`, \`read_subagent\`,
->   \`inspect_subagent\`, \`merge_subagent\`, \`suspend_turn\`, \`ask_user\`, panel
+>   \`inspect_subagent\`, \`integrate_subagent\`, \`suspend_turn\`, \`ask_user\`, panel
 >   \`handle.*\`) are NOT your tools. Your MCP tools are \`say\` and \`complete\`;
->   everything else routes through the \`vibestudio\` CLI (\`fs\`/\`vcs\`/\`eval\`/
->   \`channel\`/\`panel\`). You cannot spawn subagents — \`say\` a delegation
->   request to the workspace agent in your conversation instead.
-> - TypeScript snippets that import \`@workspace/*\` or call runtime bindings
->   (\`openPanel\`, \`getPanelHandle\`, \`services.*\`, \`chat\`, …) run INSIDE the
->   workspace via \`vibestudio eval run -e '...'\` — never in your local shell
->   or node.
+>   the \`vibestudio\` CLI is available for read-only \`fs\`/\`vcs\` orientation and
+>   channel/panel diagnostics. Managed mutations and eval require an in-process
+>   invocation edge that linked sessions do not have, so the server refuses them.
+>   You cannot spawn subagents — \`say\` a delegation or implementation request to
+>   the workspace agent in your conversation instead.
+> - TypeScript snippets that import \`@workspace/*\` or call runtime bindings are
+>   examples for in-process agents, not commands this linked session can execute.
 > - Panel automation examples (\`handle.cdp.screenshot()\` etc.) map to
->   \`vibestudio panel screenshot/console\`, or eval
->   \`(await getPanelHandle(id)).cdp\`. Agents may only automate panels in
->   their own context; open your own preview instance for foreign UI.
+>   the linked session's read-only \`vibestudio panel screenshot/console\`
+>   diagnostics. Mutation examples require an in-process agent.
 > - Approval prompts skills mention resolve as workspace approval cards for
 >   the user (or fail closed); do not expect an interactive prompt locally.
 > - Files a skill references beside its SKILL.md (RECIPES.md, references/…)
@@ -386,16 +298,18 @@ export function bridgeInstructions(config: BridgeConfig): string {
       "for messages the conversation should actually receive.",
     "",
     "The `vibestudio` CLI in this session is pre-scoped to this context " +
-      `(context ${config.contextId}, channel ${config.channelId}): \`vibestudio fs/vcs\` operate ` +
-      "on the context tree, `vibestudio channel send/history/tail` on conversations, and " +
-      "`vibestudio eval` executes TS/JS INSIDE the running workspace server (userland, " +
-      "context-scoped) — the full-power surface for programmatic workspace access. The " +
-      "`vibestudio-agent` skill installed in this project documents all of it (CLI, eval, and " +
-      "the edit→commit workflow) — read it before file/VCS work.",
+      `(context ${config.contextId}, channel ${config.channelId}): use \`vibestudio fs\` reads and ` +
+      "`vibestudio vcs status/compare/history/blame` to inspect semantic state, and " +
+      "`vibestudio channel send/history/tail` for conversations. This linked process has no " +
+      "in-process tool-invocation edge, so managed fs/vcs mutations and `vibestudio eval` " +
+      "fail closed. Native Edit/Write/Bash changes to projected repository bytes are not " +
+      "semantic work and will be discarded by projection; do not use them. Ask the workspace " +
+      "agent with `say` when implementation is required. The `vibestudio-agent` skill in this " +
+      "MCP server's resources documents the exact boundary.",
     "",
-    "The context folder materializes repos on demand, so a fresh checkout can look almost " +
+    "The read-only context projection materializes repos on demand, so a fresh checkout can look almost " +
       "empty to local `ls`/glob. Discover the tree with `vibestudio fs ls /` (server-side, " +
-      "authoritative) before concluding files are missing; `vibestudio fs` operations " +
+      "authoritative) before concluding files are missing; `vibestudio fs` reads " +
       "materialize the repos they touch onto disk for your local tools.",
     "",
     "The workspace's own skill library (how-to guides for working in THIS workspace: " +
@@ -436,11 +350,13 @@ export async function runChannelHostLoop(
   const log = deps.log ?? ((message: string) => console.error(`[channel-host] ${message}`));
   const client = deps.makeClient
     ? deps.makeClient(config)
-    : new RpcClient({ url: config.serverUrl, token: config.agentToken });
+    : new RpcClient(bridgeRpcCredential(config));
 
   const vessel = {
     call: <T>(method: string, args: unknown[] = []): Promise<T> =>
       client.callTargetPush<T>(config.vesselRef, method, args),
+    stream: (method: string, args: unknown[], signal: AbortSignal): Promise<Response> =>
+      client.stream(config.vesselRef, method, args, { signal }),
   };
 
   const sessionId = `bridge:${process.pid}:${Date.now().toString(36)}`;
@@ -497,11 +413,8 @@ export async function runChannelHostLoop(
   });
   mcp.start();
 
-  // ── Vessel push events ────────────────────────────────────────────────────
-  const unsubscribe = await client.onEvent(LINKED_AGENT_EVENT, (payload) => {
+  const handleBridgePayload = (payload: unknown): void => {
     const event = (payload ?? {}) as Record<string, unknown>;
-    const bridge = typeof event["bridge"] === "string" ? event["bridge"] : null;
-    if (bridge && bridge !== sessionId) return;
     switch (event["kind"]) {
       case "message":
       case "prompt": {
@@ -532,20 +445,13 @@ export async function runChannelHostLoop(
           kind: "interrupt",
         });
         return;
-      case "detach":
-        log(`vessel detached us (${String(event["reason"] ?? "unknown")}); will re-attach`);
-        scheduleReattach();
-        return;
       default:
         return;
     }
-  });
+  };
 
-  // ── Attach / heartbeat / reattach ─────────────────────────────────────────
-  let heartbeatTimer: NodeJS.Timeout | null = null;
-  let reattachTimer: NodeJS.Timeout | null = null;
+  // ── Response-owned bridge lifetime ────────────────────────────────────────
   let hookServer: ReturnType<typeof startHookSocketServer> | null = null;
-  let backoffIdx = 0;
 
   const ensureHookServer = (): void => {
     if (hookServer) return;
@@ -564,56 +470,20 @@ export async function runChannelHostLoop(
     log(`listening for hooks on ${hookServer.paths.join(", ") || "(no sockets bound)"}`);
   };
 
-  const attach = async (): Promise<void> => {
-    const result = await vessel.call<{ pendingCount: number }>("attach", [
-      {
-        sessionInfo: {
-          bridge: sessionId,
-          mode: config.mode,
-          pid: process.pid,
-          agentKind: "claude-code",
-          permissionCapability: "claude-code.tool",
-        },
-      },
-    ]);
-    backoffIdx = 0;
-    log(`attached (${result.pendingCount} pending event(s) will replay)`);
-    ensureHookServer();
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
-      void vessel.call("heartbeat").catch((err) => {
-        log(`heartbeat failed: ${err instanceof Error ? err.message : err}`);
-        scheduleReattach();
-      });
-    }, HEARTBEAT_INTERVAL_MS);
-    heartbeatTimer.unref?.();
-  };
+  interface ActiveBridge {
+    generation: number;
+    controller: AbortController;
+    terminal: Promise<void>;
+  }
+  let activeBridge: ActiveBridge | null = null;
+  let bridgeGeneration = 0;
+  let bridgeRefresh: Promise<void> = Promise.resolve();
+  let stopRecovery = (): void => {};
 
-  const scheduleReattach = (): void => {
-    if (shuttingDown || reattachTimer) return;
-    const delay =
-      REATTACH_BACKOFF_MS[Math.min(backoffIdx, REATTACH_BACKOFF_MS.length - 1)] ?? 30_000;
-    backoffIdx += 1;
-    reattachTimer = setTimeout(() => {
-      reattachTimer = null;
-      void attach().catch((err) => {
-        log(`re-attach failed: ${err instanceof Error ? err.message : err}`);
-        scheduleReattach();
-      });
-    }, delay);
-    reattachTimer.unref?.();
-  };
-
-  await client.onRecovery(() => {
-    log("transport recovered; re-attaching");
-    scheduleReattach();
-  });
-
-  // ── Hook socket ───────────────────────────────────────────────────────────
-  // Bound lazily after attach; a rejected duplicate bridge must not unlink the
-  // active bridge's hook socket.
-
-  // ── Shutdown ──────────────────────────────────────────────────────────────
+  // An unexpected terminal response means the host no longer has a truthful
+  // attachment. The bridge process exits instead of inventing a second
+  // application-level reconnect loop. Actual transport recovery is the one
+  // event that may replace the response below.
   let resolveDone: (code: number) => void;
   const done = new Promise<number>((resolve) => {
     resolveDone = resolve;
@@ -621,26 +491,105 @@ export async function runChannelHostLoop(
   const shutdown = async (code: number): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (reattachTimer) clearTimeout(reattachTimer);
-    unsubscribe();
-    await vessel.call("detachSelf").catch(() => undefined);
+    stopRecovery();
+    const bridge = activeBridge;
+    activeBridge = null;
+    bridge?.controller.abort();
+    await bridge?.terminal.catch(() => {});
     await hookServer?.close().catch(() => undefined);
     await client.close().catch(() => undefined);
     resolveDone(code);
   };
+
+  const openBridge = async (): Promise<void> => {
+    const previous = activeBridge;
+    const generation = ++bridgeGeneration;
+    previous?.controller.abort();
+    await previous?.terminal.catch(() => {});
+    if (shuttingDown) return;
+
+    const controller = new AbortController();
+    let resolveAck!: (result: { pendingCount: number }) => void;
+    let rejectAck!: (error: Error) => void;
+    let acknowledged = false;
+    const ack = new Promise<{ pendingCount: number }>((resolve, reject) => {
+      resolveAck = resolve;
+      rejectAck = reject;
+    });
+    const terminal = (async () => {
+      try {
+        const response = await vessel.stream(
+          "openBridge",
+          [
+            {
+              sessionInfo: {
+                bridge: sessionId,
+                mode: config.mode,
+                pid: process.pid,
+                agentKind: "claude-code",
+                permissionCapability: "claude-code.tool",
+              },
+            },
+          ],
+          controller.signal
+        );
+        for await (const record of readChannelSubscriptionRecords<
+          { pendingCount: number },
+          Record<string, unknown>
+        >(response)) {
+          if (activeBridge?.generation !== generation) break;
+          if (record.kind === "subscribed") {
+            if (acknowledged) throw new Error("Linked bridge sent more than one ACK");
+            acknowledged = true;
+            resolveAck(record.result);
+            continue;
+          }
+          if (!acknowledged) throw new Error("Linked bridge delivered data before its ACK");
+          handleBridgePayload(record.payload);
+        }
+        if (!acknowledged) throw new Error("Linked bridge closed before its ACK");
+        if (!controller.signal.aborted && activeBridge?.generation === generation) {
+          throw new Error("Linked bridge closed unexpectedly");
+        }
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (!acknowledged) rejectAck(failure);
+        throw failure;
+      }
+    })();
+    terminal.catch((error) => {
+      if (!controller.signal.aborted && !shuttingDown && activeBridge?.generation === generation) {
+        log(`bridge response ended: ${error instanceof Error ? error.message : error}`);
+        void shutdown(1);
+      }
+    });
+    activeBridge = { generation, controller, terminal };
+    const result = await ack;
+    log(`attached (${result.pendingCount} pending event(s) will replay)`);
+    ensureHookServer();
+  };
+
+  const queueBridgeOpen = (): Promise<void> => {
+    const refresh = bridgeRefresh.then(() => openBridge());
+    bridgeRefresh = refresh.catch(() => {});
+    return refresh;
+  };
+
+  // ── Hook socket ───────────────────────────────────────────────────────────
+  // Bound lazily only after the bridge ACK proves the response resource exists.
+
+  // ── Shutdown ──────────────────────────────────────────────────────────────
   process.once("SIGTERM", () => void shutdown(0));
   process.once("SIGINT", () => void shutdown(0));
   // Claude Code exiting closes our stdin — the canonical MCP shutdown signal.
   process.stdin.once("end", () => void shutdown(0));
   process.stdin.once("close", () => void shutdown(0));
 
-  try {
-    await attach();
-  } catch (err) {
-    log(`initial attach failed: ${err instanceof Error ? err.message : err}`);
-    scheduleReattach();
-  }
+  await queueBridgeOpen();
+  stopRecovery = await client.onRecovery(() => {
+    log("transport recovered; replacing bridge response");
+    return queueBridgeOpen();
+  });
 
   return await done;
 }

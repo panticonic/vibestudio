@@ -12,12 +12,13 @@ import {
   type MessageId,
 } from "@workspace/agentic-protocol";
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
 import { PubSubChannel } from "../../../workers/pubsub-channel/channel-do.js";
 
 export const TRANSCRIPT_TEST_CHANNEL_ID = "transcript-pipeline";
 export const TRANSCRIPT_TEST_CHANNEL_TARGET = `do:workers/pubsub-channel:PubSubChannel:${TRANSCRIPT_TEST_CHANNEL_ID}`;
-export const TRANSCRIPT_TEST_GAD_TARGET = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+export const TRANSCRIPT_TEST_GAD_TARGET =
+  "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
 
 function setRpcCaller(
   instance: PubSubChannel,
@@ -31,7 +32,9 @@ function setRpcCaller(
 
 export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNEL_ID) {
   const channelTarget = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
-  const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
+  const gad = await createTestDO(GadWorkspaceDO, {
+    __objectKey: "workspace-semantic-control-plane",
+  });
   const channel = await createTestDO(PubSubChannel, { __objectKey: channelId });
   const listeners = new Map<string, (event: { payload: unknown }) => void>();
   const blobs = new Map<string, string>();
@@ -53,9 +56,9 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
       if (target === "main" && method === "workers.resolveService") {
         return {
           kind: "durable-object",
-          source: "workers/gad-store",
+          source: "vibestudio/internal",
           className: "GadWorkspaceDO",
-          objectKey: "workspace-gad",
+          objectKey: "workspace-semantic-control-plane",
           targetId: TRANSCRIPT_TEST_GAD_TARGET,
         };
       }
@@ -113,32 +116,88 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
   };
 
   function createParticipantRpc(opts: { id: string; name: string; type: string; handle: string }) {
+    const call = vi.fn(async (target: string, method: string, args: unknown[]) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return { kind: "durable-object", targetId: channelTarget };
+      }
+      if (target === channelTarget) {
+        const participantId = typeof args[0] === "string" ? args[0] : null;
+        const participantKind = participantId?.startsWith("panel:")
+          ? "panel"
+          : participantId?.startsWith("agent:")
+            ? "agent"
+            : null;
+        setRpcCaller(channel.instance, participantId, participantKind);
+        const callable = channel.instance as unknown as Record<
+          string,
+          (...methodArgs: unknown[]) => unknown
+        >;
+        return await callable[method]!(...args);
+      }
+      throw new Error(`unexpected client rpc call ${target}.${method}`);
+    });
+
     return {
       selfId: opts.id,
-      call: vi.fn(async (target: string, method: string, args: unknown[]) => {
-        if (target === "main" && method === "workers.resolveService") {
-          return { kind: "durable-object", targetId: channelTarget };
+      call,
+      stream: vi.fn(
+        async (
+          target: string,
+          method: string,
+          args: unknown[],
+          options?: { signal?: AbortSignal }
+        ) => {
+          const response = await call(target, method, args);
+          if (!(response instanceof Response)) {
+            throw new Error(`streaming client rpc ${target}.${method} did not return a Response`);
+          }
+          if (!response.body || !options?.signal) return response;
+
+          const reader = response.body.getReader();
+          const signal = options.signal;
+          let terminal = false;
+          let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+          const stop = async (reason?: unknown) => {
+            if (terminal) return;
+            terminal = true;
+            signal.removeEventListener("abort", abort);
+            await reader.cancel(reason).catch(() => {});
+            try {
+              streamController?.close();
+            } catch {
+              // The consumer already cancelled the response.
+            }
+          };
+          const abort = () => {
+            void stop(signal.reason);
+          };
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              signal.addEventListener("abort", abort, { once: true });
+            },
+            async pull(controller) {
+              const chunk = await reader.read();
+              if (terminal) return;
+              if (chunk.done) {
+                terminal = true;
+                signal.removeEventListener("abort", abort);
+                controller.close();
+                return;
+              }
+              controller.enqueue(chunk.value);
+            },
+            cancel(reason) {
+              return stop(reason);
+            },
+          });
+          return new Response(body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
         }
-        if (target === channelTarget) {
-          const participantId = typeof args[0] === "string" ? args[0] : null;
-          const participantKind = participantId?.startsWith("panel:")
-            ? "panel"
-            : participantId?.startsWith("agent:")
-              ? "agent"
-              : null;
-          setRpcCaller(channel.instance, participantId, participantKind);
-          const callable = channel.instance as unknown as Record<
-            string,
-            (...methodArgs: unknown[]) => unknown
-          >;
-          return await callable[method]!(...args);
-        }
-        throw new Error(`unexpected client rpc call ${target}.${method}`);
-      }),
-      on: vi.fn((_event: string, listener: (event: { payload: unknown }) => void) => {
-        listeners.set(opts.id, listener);
-        return () => listeners.delete(opts.id);
-      }),
+      ),
     };
   }
 

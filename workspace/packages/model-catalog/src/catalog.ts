@@ -76,12 +76,15 @@ export interface PiModelSpec {
 }
 
 /** Live usability of a model (design §7.1) — worker-computed, shared by all
- *  consumers. Cloud: credential presence (+ TTL'd probe). Local: extension
- *  server state via models.changed events. */
+ *  consumers. Cloud: an active credential or a renewable expired credential.
+ *  Local: extension server state via models.changed events. */
 export type ModelAvailability =
   | { state: "ready"; detail?: "running" | "credentialed" }
   | { state: "startable"; detail: "will-load-on-use" }
-  | { state: "needs-setup"; detail: "no-credential" | "not-installed" }
+  | {
+      state: "needs-setup";
+      detail: "no-credential" | "credential-expired" | "not-installed";
+    }
   | { state: "starting" }
   | { state: "downloading"; progress: number; phase: "active" | "queued" | "paused" }
   | { state: "error"; message: string };

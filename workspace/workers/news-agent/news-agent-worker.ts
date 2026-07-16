@@ -3,11 +3,13 @@ import {
   RecurringScheduler,
   installMessageTypes,
   type ClonedChannelContext,
+  type AgentToolExecutionContext,
   type RespondPolicy,
 } from "@workspace/agentic-do";
 import { rpc } from "@workspace/runtime/worker";
 import type { DurableObjectContext } from "@workspace/runtime/worker";
 import type { ActorRef } from "@workspace/agentic-protocol";
+import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import {
@@ -26,7 +28,7 @@ import {
   type NewsStoryRef,
 } from "@workspace/feeds/card-types";
 
-import { createNewsTables, dropNewsTables } from "./schema.js";
+import { createNewsTables } from "./schema.js";
 import {
   BRIEFING_WATCHDOG_MS,
   BRIEFING_WATCHDOG_TICK_MS,
@@ -123,10 +125,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       fetcher: this.feedFetcher(),
       sleep: (ms) => this.politenessSleep(ms),
     });
-    this.scheduler = new RecurringScheduler({
-      sql: this.sql,
-      setAlarmAt: (timeMs) => this.setAlarmAt(timeMs),
-    });
+    this.scheduler = new RecurringScheduler({ sql: this.sql });
     this.newsCards = new NewsCards(this.cards);
     this.operationIndex = buildOperationIndex();
     this.operationContext = { handlers: this };
@@ -147,23 +146,23 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  private combinedAlarmSchedule(agent: DoAlarmSchedule | null): DoAlarmSchedule | null {
+    const recurringWakeAt = this.scheduler.nextWakeAt();
+    if (recurringWakeAt === undefined) return agent;
+    if (agent === null || recurringWakeAt < agent.wakeAt) {
+      return { wakeAt: recurringWakeAt };
+    }
+    return agent;
+  }
+
+  protected override nextAlarmAfterRequest(): DoAlarmSchedule | null {
+    return this.combinedAlarmSchedule(super.nextAlarmAfterRequest());
+  }
+
   protected override createTables(): void {
     super.createTables();
     createNewsTables(this.sql);
     RecurringScheduler.createTables(this.sql);
-  }
-
-  protected override migrate(fromVersion: number, toVersion: number): void {
-    super.migrate(fromVersion, toVersion);
-    if (
-      fromVersion > 0 &&
-      fromVersion < (this.constructor as typeof NewsAgentWorker).schemaVersion
-    ) {
-      dropNewsTables(this.sql);
-      RecurringScheduler.dropTables(this.sql);
-      createNewsTables(this.sql);
-      RecurringScheduler.createTables(this.sql);
-    }
   }
 
   // ── channel state ──────────────────────────────────────────────────────────
@@ -307,9 +306,12 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     return this.getMode(channelId) === "analyst" ? NEWS_ANALYST_PROMPT : NEWS_SYSTEM_PROMPT;
   }
 
-  protected override getLoopTools(channelId: string): AgentTool[] {
+  protected override getLoopTools(
+    channelId: string,
+    execution?: AgentToolExecutionContext
+  ): AgentTool[] {
     const baseTools = super
-      .getLoopTools(channelId)
+      .getLoopTools(channelId, execution)
       .filter((tool) => NEWS_BASE_LOOP_TOOL_NAMES.has(tool.name));
     const newsTools = toolOperations().map(
       (op) =>
@@ -436,8 +438,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     return { ok: true };
   }
 
-  override async alarm(): Promise<void> {
-    await super.alarm();
+  override async alarm(): Promise<DoAlarmSchedule | null> {
+    const agentAlarm = await super.alarm();
     await this.scheduler.onAlarm(this.now(), async (jobId, channelId) => {
       // Defense in depth: a clone copies the parent's jobs wholesale, and
       // other paths can unsubscribe. A job for a channel we no longer hold a
@@ -449,9 +451,12 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       if (jobId.startsWith("poll:")) await this.runPoll(channelId);
       else if (jobId.startsWith("briefing:")) {
         // "Vacation": keep polling, but skip the scheduled digest while paused.
-        if (!this.getChannelState(channelId).briefingPaused) await this.runBriefing(channelId);
+        if (!this.getChannelState(channelId).briefingPaused) {
+          await this.runBriefing(channelId);
+        }
       } else if (jobId.startsWith("watchdog:")) this.runWatchdog(channelId);
     });
+    return this.combinedAlarmSchedule(agentAlarm);
   }
 
   /** Active watchdog tick: flip stalled briefings to error, then retire once
@@ -464,7 +469,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         channelId
       )
       .toArray();
-    if (stillSummarizing.length === 0) this.scheduler.removeJob(`watchdog:${channelId}`);
+    if (stillSummarizing.length === 0) {
+      this.scheduler.removeJob(`watchdog:${channelId}`);
+    }
   }
 
   /** Entry point for workspace-level `recurring:` jobs (vibestudio.yml). */

@@ -1,15 +1,5 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 
-export function dropGmailTables(sql: SqlStorage): void {
-  const tables = sql
-    .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'gmail_%'`)
-    .toArray();
-  for (const row of tables) {
-    const table = String(row["name"]);
-    sql.exec(`DROP TABLE "${table.replaceAll('"', '""')}"`);
-  }
-}
-
 export function createGmailTables(sql: SqlStorage): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS gmail_channel_state (

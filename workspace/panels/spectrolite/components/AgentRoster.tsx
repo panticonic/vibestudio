@@ -17,7 +17,7 @@ export function useVisibleRoster(): RosterAgent[] {
   const removedHandles = useAppState((s) => s.removedHandles);
   return useMemo(
     () => roster.filter((agent) => !removedHandles.includes(agent.handle)),
-    [roster, removedHandles],
+    [roster, removedHandles]
   );
 }
 
@@ -70,7 +70,9 @@ export function AgentRoster() {
   return (
     <Flex direction="column" gap="2">
       {agents.length === 0 ? (
-        <Text size="1" color="gray">No agents in the channel yet.</Text>
+        <Text size="1" color="gray">
+          No agents in the channel yet.
+        </Text>
       ) : (
         agents.map((agent) => (
           <Flex
@@ -85,8 +87,12 @@ export function AgentRoster() {
             style={{ minHeight: isMobile ? 48 : 36 }}
           >
             <Flex align="center" gap="2">
-              <span className="spectrolite-agent-avatar"><PersonIcon /></span>
-              <Text size="2" weight="medium">@{agent.handle}</Text>
+              <span className="spectrolite-agent-avatar">
+                <PersonIcon />
+              </span>
+              <Text size="2" weight="medium">
+                @{agent.handle}
+              </Text>
               <Badge size="1" color={agent.status === "live" ? "grass" : "gray"} variant="soft">
                 {agent.status}
               </Badge>
@@ -128,7 +134,10 @@ export function AgentRoster() {
                 data-testid={`spectrolite-agent-option-${a.className}`}
                 onSelect={() => void add(a.id)}
               >
-                {a.name} <Text color="gray" size="1">({a.className})</Text>
+                {a.name}{" "}
+                <Text color="gray" size="1">
+                  ({a.className})
+                </Text>
               </DropdownMenu.Item>
             ))
           )}

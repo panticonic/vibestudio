@@ -12,6 +12,7 @@
 
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { AgenticEvent } from "@workspace/agentic-protocol";
+import { assertExactSqlTableSchema } from "./sql-table-schema.js";
 
 export type SubagentRunStatus =
   | "starting"
@@ -21,7 +22,7 @@ export type SubagentRunStatus =
   | "cancelled"
   | "abandoned";
 
-export type SubagentRunMerge = "merged" | "conflicted" | "discarded";
+export type SubagentRunIntegration = "integrated" | "conflicted" | "discarded";
 
 /** The reasoning engine behind a subagent: "pi" is the in-process vessel; any
  *  other string names an extension-owned external launcher. */
@@ -39,7 +40,7 @@ export interface SubagentRunRow {
   label: string;
   depth: number;
   status: SubagentRunStatus;
-  merge: SubagentRunMerge | null;
+  integration: SubagentRunIntegration | null;
   startedAt: number;
   lastActivityAt: number;
   /** Reasoning engine kind (default "pi"). */
@@ -54,6 +55,19 @@ export type SubagentRunReferenceResolution =
   | null;
 
 const MIN_ABBREVIATED_RUN_ID_LENGTH = 16;
+const SUBAGENT_RUN_STATUSES = [
+  "starting",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "abandoned",
+] as const satisfies readonly SubagentRunStatus[];
+const SUBAGENT_RUN_INTEGRATIONS = [
+  "integrated",
+  "conflicted",
+  "discarded",
+] as const satisfies readonly SubagentRunIntegration[];
 
 function stripTrailingEllipsis(reference: string): string | null {
   const trimmed = reference.trim();
@@ -110,12 +124,11 @@ interface SubagentRunSqlRow {
   label: string;
   depth: number;
   status: string;
-  merge_status: string | null;
+  integration_status: string | null;
   started_at: number;
   last_activity_at: number;
-  agent_kind: string | null;
+  agent_kind: string;
   external_session_entity_id: string | null;
-  process_id?: string | null;
 }
 
 interface SubagentProgressOutboxSqlRow {
@@ -159,9 +172,7 @@ export interface SubagentProgressOutboxDiagnostics {
   }>;
 }
 
-function toProgressOutboxEntry(
-  row: SubagentProgressOutboxSqlRow
-): SubagentProgressOutboxEntry {
+function toProgressOutboxEntry(row: SubagentProgressOutboxSqlRow): SubagentProgressOutboxEntry {
   return {
     sequence: Number(row.sequence),
     idempotencyKey: row.idempotency_key,
@@ -178,6 +189,15 @@ function toProgressOutboxEntry(
 }
 
 function toRow(row: SubagentRunSqlRow): SubagentRunRow {
+  const mode = exactEnum("mode", row.mode, ["fresh", "fork"] as const);
+  const status = exactEnum("status", row.status, SUBAGENT_RUN_STATUSES);
+  const integration =
+    row.integration_status === null
+      ? null
+      : exactEnum("integration_status", row.integration_status, SUBAGENT_RUN_INTEGRATIONS);
+  if (typeof row.agent_kind !== "string" || row.agent_kind.trim().length === 0) {
+    throw new Error(`Invalid subagent_runs.agent_kind: ${JSON.stringify(row.agent_kind)}`);
+  }
   return {
     runId: row.run_id,
     taskChannelId: row.task_channel_id,
@@ -186,16 +206,25 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
     childEntityId: row.child_entity_id,
     childParticipantId: row.child_participant_id ?? null,
     parentChannelId: row.parent_channel_id,
-    mode: row.mode === "fork" ? "fork" : "fresh",
+    mode,
     label: row.label,
     depth: Number(row.depth),
-    status: (row.status as SubagentRunStatus) ?? "running",
-    merge: (row.merge_status as SubagentRunMerge | null) ?? null,
+    status,
+    integration,
     startedAt: Number(row.started_at),
     lastActivityAt: Number(row.last_activity_at),
-    agentKind: row.agent_kind || "pi",
-    externalSessionEntityId: row.external_session_entity_id ?? row.process_id ?? null,
+    agentKind: row.agent_kind,
+    externalSessionEntityId: row.external_session_entity_id ?? null,
   };
+}
+
+function exactEnum<const Value extends string>(
+  field: string,
+  value: unknown,
+  allowed: readonly Value[]
+): Value {
+  if (typeof value === "string" && allowed.includes(value as Value)) return value as Value;
+  throw new Error(`Invalid subagent_runs.${field}: ${JSON.stringify(value)}`);
 }
 
 export class SubagentRunStore {
@@ -215,24 +244,49 @@ export class SubagentRunStore {
         label TEXT NOT NULL,
         depth INTEGER NOT NULL,
         status TEXT NOT NULL,
-        merge_status TEXT,
+        integration_status TEXT,
         started_at INTEGER NOT NULL,
         last_activity_at INTEGER NOT NULL,
-        agent_kind TEXT,
+        agent_kind TEXT NOT NULL,
         external_session_entity_id TEXT
       )
     `);
-    try {
-      this.sql.exec(`ALTER TABLE subagent_runs ADD COLUMN parent_context_id TEXT`);
-    } catch {
-      // Existing/new tables may already have the migration.
-    }
+    assertExactSqlTableSchema(this.sql, {
+      table: "subagent_runs",
+      columns: [
+        ["run_id", "TEXT", false],
+        ["task_channel_id", "TEXT", true],
+        ["parent_context_id", "TEXT", false],
+        ["child_context_id", "TEXT", true],
+        ["child_entity_id", "TEXT", true],
+        ["child_participant_id", "TEXT", false],
+        ["parent_channel_id", "TEXT", true],
+        ["mode", "TEXT", true],
+        ["label", "TEXT", true],
+        ["depth", "INTEGER", true],
+        ["status", "TEXT", true],
+        ["integration_status", "TEXT", false],
+        ["started_at", "INTEGER", true],
+        ["last_activity_at", "INTEGER", true],
+        ["agent_kind", "TEXT", true],
+        ["external_session_entity_id", "TEXT", false],
+      ],
+      primaryKey: ["run_id"],
+    });
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS subagent_wake_cursors (
         channel_id TEXT PRIMARY KEY,
         last_seq INTEGER NOT NULL
       )
     `);
+    assertExactSqlTableSchema(this.sql, {
+      table: "subagent_wake_cursors",
+      columns: [
+        ["channel_id", "TEXT", false],
+        ["last_seq", "INTEGER", true],
+      ],
+      primaryKey: ["channel_id"],
+    });
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS subagent_progress_outbox (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -248,15 +302,27 @@ export class SubagentRunStore {
         created_at INTEGER NOT NULL
       )
     `);
+    assertExactSqlTableSchema(this.sql, {
+      table: "subagent_progress_outbox",
+      columns: [
+        ["sequence", "INTEGER", false],
+        ["idempotency_key", "TEXT", true],
+        ["run_id", "TEXT", true],
+        ["message_seq", "INTEGER", true],
+        ["parent_channel_id", "TEXT", true],
+        ["participant_id", "TEXT", true],
+        ["event_json", "TEXT", true],
+        ["attempts", "INTEGER", true, "0"],
+        ["next_attempt_at", "INTEGER", true],
+        ["last_error", "TEXT", false],
+        ["created_at", "INTEGER", true],
+      ],
+      primaryKey: ["sequence"],
+    });
     this.sql.exec(`
       CREATE INDEX IF NOT EXISTS subagent_progress_outbox_run_sequence
       ON subagent_progress_outbox (run_id, sequence)
     `);
-    try {
-      this.sql.exec(`ALTER TABLE subagent_runs ADD COLUMN external_session_entity_id TEXT`);
-    } catch {
-      // Column already exists on fresh/newer stores.
-    }
   }
 
   /** Idempotent insert — a re-driven spawn (same runId) is a no-op. */
@@ -264,7 +330,7 @@ export class SubagentRunStore {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
          (run_id, task_channel_id, parent_context_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
-          mode, label, depth, status, merge_status, started_at, last_activity_at, agent_kind, external_session_entity_id)
+          mode, label, depth, status, integration_status, started_at, last_activity_at, agent_kind, external_session_entity_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
@@ -277,7 +343,7 @@ export class SubagentRunStore {
       row.label,
       row.depth,
       row.status,
-      row.merge,
+      row.integration,
       row.startedAt,
       row.lastActivityAt,
       row.agentKind,
@@ -360,8 +426,12 @@ export class SubagentRunStore {
     this.sql.exec(`UPDATE subagent_runs SET status = ? WHERE run_id = ?`, status, runId);
   }
 
-  setMerge(runId: string, merge: SubagentRunMerge): void {
-    this.sql.exec(`UPDATE subagent_runs SET merge_status = ? WHERE run_id = ?`, merge, runId);
+  setIntegration(runId: string, integration: SubagentRunIntegration): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET integration_status = ? WHERE run_id = ?`,
+      integration,
+      runId
+    );
   }
 
   setChildParticipantId(runId: string, participantId: string | null): void {

@@ -53,9 +53,11 @@ export {
   publishAgentTaskSeed,
   retireAgentEntity,
   subscribeAgentToChannel,
+  unsubscribeAgentFromChannel,
 } from "./agent-launch.js";
 export type {
   AgentChannelSubscriptionInput,
+  AgentChannelUnsubscriptionInput,
   AgentEntityCreateInput,
   AgentEntityHandle,
   AgentLaunchRpc,
@@ -86,10 +88,7 @@ export { createPanelSandboxConfig } from "./sandbox-factory.js";
 
 // --- Signal Event Envelope (typed structured channel payloads) ---
 export { parseSignalEvent } from "./signal-event-envelope.js";
-export type {
-  SignalEventEnvelope,
-  SignalMessageLike,
-} from "./signal-event-envelope.js";
+export type { SignalEventEnvelope, SignalMessageLike } from "./signal-event-envelope.js";
 
 // --- Derived UI shapes (computed from channel trajectory events for rendering) ---
 export type {
@@ -128,10 +127,7 @@ export type {
   MessageTypeDoctorOptions,
   MessageTypeDoctorSpec,
 } from "./message-type-doctor.js";
-export type {
-  CustomMessageComponentProps,
-  MessageTypeModule,
-} from "./custom-message-types.js";
+export type { CustomMessageComponentProps, MessageTypeModule } from "./custom-message-types.js";
 
 // --- Invocation card payload (derived UI shape for invocation events) ---
 export type {
@@ -150,8 +146,5 @@ export {
 } from "./channel-chat-merge.js";
 
 // --- Invocation result helpers ---
-export {
-  isChatMethodResult,
-  unwrapChatMethodResult,
-} from "./invocation-result.js";
+export { isChatMethodResult, unwrapChatMethodResult } from "./invocation-result.js";
 export type { ChatMethodResult } from "./invocation-result.js";

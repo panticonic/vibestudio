@@ -15,6 +15,7 @@ class TestableAiChatWorker extends AiChatWorker {
   }
   readonly blobs = new Map<string, string>();
   readonly published: Array<{ participantId: string; event: unknown; opts?: unknown }> = [];
+  readonly lifecycleLeaseCalls: Array<{ method: string; input: unknown }> = [];
   readonly driverHandleIncoming = vi.fn(async () => undefined);
   readonly driverWake = vi.fn(async () => undefined);
   readonly fakeDriver = {
@@ -56,6 +57,14 @@ class TestableAiChatWorker extends AiChatWorker {
       this.blobs.set(digest, value);
       return { digest, size: value.length };
     }
+    if (
+      target === "main" &&
+      (method === "workspace-state.lifecycleLeaseUpsert" ||
+        method === "workspace-state.lifecycleLeaseClear")
+    ) {
+      this.lifecycleLeaseCalls.push({ method, input: args[0] });
+      return undefined;
+    }
     throw new Error(`unexpected rpc ${target}.${method}`);
   });
 
@@ -79,12 +88,22 @@ class TestableAiChatWorker extends AiChatWorker {
         this.published.push({ participantId, event, opts });
         return { id: this.published.length };
       },
-      subscribe: async () => ({
-        ok: true,
-        channelConfig: undefined,
-        envelope: this.subscribeEnvelope,
-      }),
-      unsubscribe: async () => undefined,
+      openSubscription: async (participantId: string) => {
+        let settleClosed = () => {};
+        const closed = new Promise<void>((resolve) => {
+          settleClosed = resolve;
+        });
+        return {
+          result: {
+            ok: true,
+            participantId,
+            channelConfig: undefined,
+            envelope: this.subscribeEnvelope,
+          },
+          closed,
+          close: settleClosed,
+        };
+      },
       getParticipants: async () => [],
     } as never;
   }
@@ -126,7 +145,7 @@ async function makeWorker() {
 }
 
 describe("AiChatWorker", () => {
-  it("inherits the base agent schema version so base-table migrations run", () => {
+  it("inherits the base agent schema epoch", () => {
     expect(TestableAiChatWorker.schemaVersion).toBe(AiChatWorker.schemaVersion);
   });
 
@@ -170,6 +189,17 @@ describe("AiChatWorker", () => {
 
     await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: true });
 
+    expect(worker.lifecycleLeaseCalls).toEqual([
+      {
+        method: "workspace-state.lifecycleLeaseUpsert",
+        input: {
+          source: "test",
+          className: "TestDO",
+          objectKey: "agent-1",
+          detail: { kind: "channel-subscriptions" },
+        },
+      },
+    ]);
     expect(worker.driverHandleIncoming).toHaveBeenCalledWith(
       "ch-1",
       expect.objectContaining({

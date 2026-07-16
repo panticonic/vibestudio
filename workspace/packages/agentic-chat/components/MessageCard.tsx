@@ -983,20 +983,6 @@ function ForkRow({ fork }: { fork: NonNullable<ChatMessage["fork"]> }) {
           >
             Switch
           </Button>
-          <Button
-            size="1"
-            variant="ghost"
-            color="gray"
-            onClick={() =>
-              forkState?.actions.reviewContext({
-                kind: "fork",
-                contextId: fork.forkedContextId,
-                label: fork.label || "Fork",
-              })
-            }
-          >
-            Review &amp; pick
-          </Button>
         </Flex>
       </Card>
     </Box>

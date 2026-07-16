@@ -1,620 +1,110 @@
-import type {
-  BuildDiagnostic,
-  RepoBuildReport,
-  VcsApplyEditsInput,
-  VcsCommitResult,
-  VcsEditResult,
-  VcsDiffContentResult,
-  VcsPushResult,
-  VcsPushStatus,
-  VcsRepoDivergence,
-  VcsStatusResult,
+/** Small semantic VCS CLI over the canonical public contract. */
+
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import {
+  vcsMethods,
+  type VcsCommitInput,
+  type VcsCopyInput,
+  type VcsMoveInput,
+  type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
   JSON_FLAG,
   type CliCommand,
   type FlagSpec,
   type ParsedInvocation,
 } from "../commandTable.js";
-import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
+import { jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
-import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import type { RpcClient } from "../rpcClient.js";
-import { normalizeRepoPath, REPO_FLAG, requireRepo } from "./vcsCommandShared.js";
 import { vcsGitCommand } from "./vcsGitCommands.js";
+import {
+  loadVcsCommandJournalEntry,
+  saveVcsCommandJournalEntry,
+  type FriendlyVcsMutationMethod,
+} from "./vcsCommandJournal.js";
 
-interface VcsDeleteRepoResult {
-  repoPath: string;
-  archived: boolean;
-  archiveHead: string | null;
-  removedPaths: string[];
-  dependents: string[];
-  stateHash: string;
-}
+type CliVcs = TypedServiceClient<typeof vcsMethods>;
 
-interface VcsRestoreRepoResult {
-  repoPath: string;
-  restored: boolean;
-  fromArchiveHead: string | null;
-  restoredPaths: string[];
-  stateHash: string;
-}
-
-/** Adapt the CLI RpcClient to the target-capable {@link RpcCallerLike} the
- *  userland `vcs` service client needs (P3: push is userland-dispatched). */
-function userlandRpcFor(client: RpcClient): RpcCallerLike {
-  return {
-    call: <T>(targetId: string, method: string, callArgs: unknown[]): Promise<T> =>
-      targetId === "main"
-        ? client.call<T>(method, callArgs)
-        : client.callTarget<T>(targetId, method, callArgs),
-  };
-}
-
-/**
- * `vibestudio vcs ...` — per-repo GAD-native version control.
- *
- * In the per-repo VCS model each workspace repo (`packages/foo`, `panels/chat`,
- * `projects/vault`, the flat `meta` repo) is a first-class versioned unit with
- * its own log (`vcs:repo:<repoPath>`), `main` head, and `ctx:*` context heads.
- * These commands operate on the attached agent session's per-repo context heads
- * and advance `main` only through the **build-gated** CLI/userland push path.
- *
- * The model is **edit → commit → push**. `vcs edit` records uncommitted working
- * changes (no build); `vcs commit -m` folds them into a messaged snapshot per
- * repo; `vibestudio vcs push --repo <p>` resolves the userland `vcs` service and
- * build-gates that snapshot into `main` through the DO's `vcsPush`. A push that
- * comes back `build-failed` did NOT advance `main` (read the structured
- * diagnostics, fix the cited `file:line:col`, re-push); a push that comes back
- * `diverged` means `main` moved past your base — `vcs merge` to reconcile, then
- * push. Only conflicting merges need a follow-up commit after marker resolution.
- */
-
+const INPUT_FLAG: FlagSpec = {
+  name: "input",
+  takesValue: true,
+  description: "Canonical JSON input object; omit to read JSON from stdin",
+};
 const MESSAGE_FLAG: FlagSpec = {
   name: "message",
   short: "m",
   takesValue: true,
-  description: "Commit message (required for `commit`; optional log summary for `push`)",
+  description: "Commit message",
 };
-
-const FORCE_FLAG: FlagSpec = {
-  name: "force",
+const INTEGRATES_FLAG: FlagSpec = {
+  name: "integrates",
+  takesValue: true,
+  description: "Exact fully-accounted source event to add as integration parent",
+};
+const COMMAND_ID_FLAG: FlagSpec = {
+  name: "command-id",
+  takesValue: true,
+  description: "Stable retry identity (generated and printed when omitted)",
+};
+const VIEW_FLAG: FlagSpec = {
+  name: "view",
+  takesValue: true,
+  description: "overview | changes",
+};
+const LIMIT_FLAG: FlagSpec = {
+  name: "limit",
+  takesValue: true,
+  description: "Maximum page size",
+};
+const DRY_RUN_FLAG: FlagSpec = {
+  name: "dry-run",
   takesValue: false,
-  description: "Delete even when other repos depend on this one (their builds may break)",
+  description: "Resolve and print exact state/file identities without mutating",
 };
 
-// ----- CLI-local response shapes -----
-// The push-contract types (BuildDiagnostic / RepoBuildReport / VcsPushResult,
-// incl. VcsRepoDivergence) are imported from the canonical zod schema in
-// @vibestudio/service-schemas/vcs so they cannot drift from the server.
-
-interface RepoLogEntry {
-  seq: number;
-  envelopeId: string;
-  actor: unknown;
-  summary: string | null;
-  outputStateHash: string | null;
-  appendedAt: string;
+interface FriendlyTransfer {
+  source: string;
+  destination: string;
 }
 
-/**
- * Every `--repo` value (repeatable) plus any positionals, deduped in order.
- * Two or more repos form an **atomic group push** — all advance or none do.
- */
-function collectRepos(inv: ParsedInvocation): string[] {
-  const repos: string[] = [];
-  const seen = new Set<string>();
-  const add = (raw: string) => {
-    const repo = normalizeRepoPath(raw);
-    if (repo && !seen.has(repo)) {
-      seen.add(repo);
-      repos.push(repo);
-    }
-  };
-  for (const value of inv.flagsMulti("repo")) add(value);
-  for (const positional of inv.positionals) add(positional);
-  if (repos.length === 0) {
-    throw new UsageError(
-      "missing repo path — pass --repo REPOPATH (repeat --repo for an atomic group push)"
-    );
-  }
-  return repos;
+interface FriendlyTransferBatch {
+  transfers: FriendlyTransfer[];
+  intentSummary?: string;
 }
 
-function headForContext(contextId: string): string {
-  return `ctx:${contextId}`;
-}
-
-function formatNameStatus(result: VcsDiffContentResult): string {
-  const code = { added: "A", changed: "M", removed: "D" } as const;
-  return result.files.map((file) => `${code[file.status]}\t${file.path}`).join("\n");
-}
-
-// ----- diagnostic rendering (W6.5 delivery surface) -----
-
-/**
- * Render every report's diagnostics grouped by file as
- * `file:line:col  severity  message`, with `lineText`/`suggestion` indented
- * underneath when present. This is the agent's actionable error list.
- */
-function printReportDiagnostics(reports: RepoBuildReport[]): void {
-  const byFile = new Map<string, BuildDiagnostic[]>();
-  let total = 0;
-  for (const report of reports) {
-    for (const build of report.builds) {
-      for (const diag of build.diagnostics) {
-        total += 1;
-        const list = byFile.get(diag.file) ?? [];
-        list.push(diag);
-        byFile.set(diag.file, list);
-      }
-    }
-  }
-  if (total === 0) {
-    // No diagnostics but a failing status — surface the failed repos so the
-    // agent still knows where to look.
-    const failed = reports.filter((r) => r.status === "failed").map((r) => r.repoPath);
-    if (failed.length > 0) {
-      console.error(`build failed in: ${failed.join(", ")} (no structured diagnostics emitted)`);
-    }
-    return;
-  }
-  for (const [file, diags] of byFile) {
-    diags.sort((a, b) => (a.line ?? 1) - (b.line ?? 1) || (a.column ?? 1) - (b.column ?? 1));
-    for (const diag of diags) {
-      const line = diag.line ?? 1;
-      const column = diag.column ?? 1;
-      const loc = `${file}:${line}:${column}`;
-      console.error(`${loc}  ${diag.severity}  [${diag.source}] ${diag.message}`);
-      if (diag.lineText) console.error(`    ${diag.lineText.trim()}`);
-      if (diag.suggestion) console.error(`    suggestion: ${diag.suggestion}`);
-    }
-  }
-  const errors = total;
-  console.error(`\n${errors} diagnostic${errors === 1 ? "" : "s"} across ${byFile.size} file(s).`);
-}
-
-function summarizeReports(reports: RepoBuildReport[]): void {
-  for (const report of reports) {
-    const counts = report.builds.reduce(
-      (acc, build) => {
-        for (const diag of build.diagnostics) {
-          if (diag.severity === "error") acc.errors += 1;
-          else acc.warnings += 1;
-        }
-        return acc;
-      },
-      { errors: 0, warnings: 0 }
-    );
-    const role = report.role === "pushed" ? "pushed" : "dependent";
-    const tail =
-      counts.errors > 0 || counts.warnings > 0
-        ? ` (${counts.errors} error(s), ${counts.warnings} warning(s))`
-        : "";
-    console.log(`  ${report.status.padEnd(8)} ${role.padEnd(9)} ${report.repoPath}${tail}`);
-  }
-}
-
-// ----- commands -----
-
-async function push(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repoPaths = collectRepos(inv);
-    const { client, contextId } = resolveSessionScope(inv);
-    const sourceHead = headForContext(contextId);
-    const message = typeof inv.flags["message"] === "string" ? inv.flags["message"] : undefined;
-
-    // Push is userland-dispatched (P3 flip): route to the gad-store DO's
-    // `vcsPush` via the `vcs` manifest service, not the host `vcs.push` service.
-    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsPushResult>(
-      "vcsPush",
-      { repoPaths, sourceHead, ...(message ? { message } : {}) }
-    );
-
-    if (json) {
-      // Always emit the full discriminated union under --json.
-      printResult(result, { json });
-    } else {
-      renderPushHuman(result, repoPaths);
-    }
-
-    // Non-zero exit on diverged / build-failed so scripts and agents can gate.
-    if (result.status === "diverged" || result.status === "build-failed") {
-      return EXIT_ERROR;
-    }
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-function renderPushHuman(result: VcsPushResult, repoPaths: string[]): void {
-  const group = repoPaths.length > 1 ? ` (group of ${repoPaths.length})` : "";
-  switch (result.status) {
-    case "pushed":
-      console.log(`pushed ${result.repoPaths.join(", ")}${group}`);
-      summarizeReports(result.reports);
-      return;
-    case "up-to-date":
-      console.log(`up-to-date — nothing to push for ${result.repoPaths.join(", ")}`);
-      return;
-    case "diverged":
-      renderDivergences(result.divergences);
-      return;
-    case "build-failed":
-      console.error(
-        `build-failed${group} — main did NOT advance. Fix the diagnostics and re-push:\n`
-      );
-      printReportDiagnostics(result.reports);
-      return;
-  }
-}
-
-/**
- * Fast-forward-only push rejected because `main` advanced past the context
- * head's merge-base. Print the upstream commits + whether a merge would be clean
- * or conflicting, then point at `vcs merge` to reconcile and re-push.
- */
-function renderDivergences(divergences: VcsRepoDivergence[]): void {
-  console.error("diverged — main advanced past your context's base; no head advanced.");
-  for (const d of divergences) {
-    const n = d.upstreamCommits.length;
-    console.error(
-      `\n  ${d.repoPath}: ${n} upstream commit(s) on main; merge would be ${d.mergeable}`
-    );
-    for (const c of d.upstreamCommits) {
-      console.error(`    ${c.stateHash}  ${c.message}`);
-    }
-    if (d.mergeable === "conflict" && d.conflictPaths && d.conflictPaths.length > 0) {
-      console.error(`    conflicting paths: ${d.conflictPaths.join(", ")}`);
-    }
-  }
-  console.error(
-    "\nReconcile with `vibestudio vcs merge --repo REPOPATH`, then push. " +
-      "If the merge conflicts, resolve markers and commit before pushing."
+function clientFor(client: RpcClient): CliVcs {
+  return createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
+    client.call(`vcs.${method}`, args)
   );
 }
 
-async function pushStatus(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repoPaths = collectRepos(inv);
-    const { client } = resolveSessionScope(inv);
-    const result = await client.call<VcsPushStatus[]>("vcs.pushStatus", [repoPaths]);
-    printResult(result, {
-      json,
-      human: () => {
-        for (const repo of result) {
-          const needsAttention =
-            repo.deleted || repo.diverged || repo.behind || repo.uncommitted > 0;
-          if (repo.ahead === 0 && !needsAttention) {
-            console.log(`${repo.repoPath}: clean (in sync with main)`);
-            continue;
-          }
-          const parts: string[] = [];
-          if (repo.deleted) parts.push("DELETED");
-          if (repo.diverged) parts.push("diverged");
-          if (repo.behind) parts.push("behind main");
-          if (repo.uncommitted > 0) {
-            parts.push(`${repo.uncommitted} uncommitted working edit(s)`);
-          }
-          if (repo.ahead > 0) parts.push(`${repo.ahead} unpushed change(s)`);
-          console.log(`${repo.repoPath}: ${parts.join(", ")}`);
-          for (const file of repo.files) {
-            console.log(`  ${file.kind}\t${file.path}`);
-          }
-          if (repo.uncommitted > 0) {
-            for (const path of repo.uncommittedPaths) {
-              console.log(`  uncommitted\t${path}`);
-            }
-            console.log("  commit or discard uncommitted edits before push");
-          }
-          if (repo.diverged) {
-            console.log("  merge/rebase this context before push");
-          }
-          if (repo.behind) {
-            console.log("  main advanced; merge/rebase to update this context");
-          }
-          if (repo.deleted) {
-            console.log(
-              "  repo was deleted from workspace main; restore it or drop/rebase this context"
-            );
-          }
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
+function commandId(inv: ParsedInvocation): string {
+  return typeof inv.flags["command-id"] === "string"
+    ? inv.flags["command-id"]
+    : `cli:${randomUUID()}`;
 }
 
-async function status(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const { client, contextId } = resolveSessionScope(inv);
-    const head = headForContext(contextId);
-    // Per-repo native status separates committed-but-unpushed changes from
-    // uncommitted working changes so neither state is hidden or conflated.
-    const result = await client.call<VcsStatusResult>("vcs.status", [repo, head]);
-    printResult(result, {
-      json,
-      human: () => {
-        console.log(`repo: ${repo}`);
-        console.log(`committed state: ${result.committedStateHash ?? "(none)"}`);
-        console.log(`working state: ${result.workingStateHash ?? "(none)"}`);
-        if (result.deleted) {
-          console.log("DELETED\trepo removed from workspace main; push will be refused");
-        }
-        if (!result.dirty && !result.deleted) {
-          console.log("clean (in sync with main)");
-          return;
-        }
-        if (result.uncommitted > 0) {
-          console.log(`U\t${result.uncommitted} uncommitted working edit(s)`);
-        }
-        for (const p of result.committed.added) console.log(`C A\t${p}`);
-        for (const p of result.committed.changed) console.log(`C M\t${p}`);
-        for (const p of result.committed.removed) console.log(`C D\t${p}`);
-        for (const p of result.working.added) console.log(`W A\t${p}`);
-        for (const p of result.working.changed) console.log(`W M\t${p}`);
-        for (const p of result.working.removed) console.log(`W D\t${p}`);
-        if (result.diverged) console.log("diverged from main; merge/rebase before push");
-        else if (result.behind) console.log("behind main; merge/rebase to update this context");
-        if (result.pendingMerge) {
-          console.log(
-            `pending merge from ${result.pendingMerge.source}: ${result.pendingMerge.conflictPaths.join(", ")}`
-          );
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
+function mutationCommandId(inv: ParsedInvocation): string {
+  const explicit = inv.flags["command-id"];
+  if (typeof explicit === "string") return explicit;
+  const generated = `cli:${randomUUID()}`;
+  console.error(`[vibestudio] command-id: ${generated}`);
+  return generated;
 }
 
-async function diff(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const { client, contextId } = resolveSessionScope(inv);
-    const head = headForContext(contextId);
-    const diffResult = await client.call<VcsDiffContentResult>("vcs.diffContent", [
-      { repoPath: repo, head, scope: "all", contextLines: 0 },
-    ]);
-    const result = formatNameStatus(diffResult);
-    if (json) printResult(result, { json });
-    else process.stdout.write(result ? `${result}\n` : "");
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
+function pageLimit(inv: ParsedInvocation, fallback = 50): number {
+  const value = typeof inv.flags["limit"] === "string" ? Number(inv.flags["limit"]) : fallback;
+  if (!Number.isInteger(value) || value <= 0 || value > 500) {
+    throw new UsageError("--limit must be an integer between 1 and 500");
   }
-}
-
-async function log(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const { client } = resolveSessionScope(inv);
-    const limit = typeof inv.flags["limit"] === "string" ? Number(inv.flags["limit"]) : undefined;
-    // vcs.log is USERLAND-dispatched (P5c): resolve the `vcs` manifest service
-    // (gad-store DO) and call its vcsLog(repoPath, limit?, head?) — the head
-    // defaults to `main`, matching the CLI shell caller's previous default.
-    const service = await client.call<{ kind: string; targetId?: string }>(
-      "workers.resolveService",
-      ["vibestudio.vcs.v1", null]
-    );
-    if (service.kind !== "durable-object" || !service.targetId) {
-      throw new CliError("workspace vcs service is not a durable-object service");
-    }
-    const result = await client.callTarget<RepoLogEntry[]>(service.targetId, "vcsLog", [
-      repo,
-      limit && Number.isFinite(limit) ? limit : null,
-    ]);
-    printResult(result, {
-      json,
-      human: () => {
-        if (result.length === 0) {
-          console.log(`no history for ${repo}`);
-          return;
-        }
-        for (const entry of result) {
-          const state = entry.outputStateHash ?? "(no-state)";
-          console.log(`${state}  ${entry.appendedAt}  #${entry.seq}`);
-          if (entry.summary) console.log(`    ${entry.summary}`);
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-async function forkRepo(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const from = inv.positionals[0];
-    const to = inv.positionals[1];
-    if (!from || !to) {
-      throw new UsageError(
-        "usage: vibestudio vcs fork-repo FROM_REPO TO_REPO (e.g. fork-repo panels/chat panels/mychat)"
-      );
-    }
-    const { client } = resolveSessionScope(inv);
-    // Phase 4: fork is userland-dispatched to the gad-store DO's `vcsForkRepo`
-    // (like `vcsPush`), not the host `vcs.forkRepo` service — direct DO dispatch
-    // keeps the on-behalf-of attribution intact.
-    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<{
-      repoPath: string;
-      head: string;
-      inherited: number;
-      stateHash: string;
-    }>("vcsForkRepo", {
-      fromPath: normalizeRepoPath(from),
-      toPath: normalizeRepoPath(to),
-    });
-    printResult(result, {
-      json,
-      human: () => {
-        console.log(`forked ${normalizeRepoPath(from)} → ${result.repoPath}`);
-        console.log(`  inherited ${result.inherited} commit(s) of history`);
-        console.log(`  edit under ${result.repoPath}/ (package name already rewritten), then push`);
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-async function deleteRepo(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const force = inv.flags["force"] === true;
-    const { client } = resolveSessionScope(inv);
-    // SEVERE: the server gates this behind explicit, per-repo user approval; the
-    // call blocks until the user grants or denies (a denial surfaces as an error).
-    // Without --force it ERRORS if other repos depend on this one.
-    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsDeleteRepoResult>(
-      "vcsDeleteRepo",
-      { repoPath: repo, ...(force ? { force: true } : {}) }
-    );
-    printResult(result, {
-      json,
-      human: () => {
-        console.log(
-          `deleted ${result.repoPath} — removed ${result.removedPaths.length} file(s) from workspace main`
-        );
-        if (result.archiveHead) {
-          console.log(`  history archived at ${result.archiveHead} (recoverable)`);
-        }
-        if (result.dependents.length > 0) {
-          console.log(
-            `  ⚠ ${result.dependents.length} dependent repo(s) may now fail to build: ${result.dependents.join(", ")}`
-          );
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-async function restoreRepo(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const { client } = resolveSessionScope(inv);
-    // Blocks on user approval; fails if a different repo now occupies the path.
-    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsRestoreRepoResult>(
-      "vcsRestoreRepo",
-      { repoPath: repo }
-    );
-    printResult(result, {
-      json,
-      human: () => {
-        console.log(
-          `restored ${result.repoPath} — re-added ${result.restoredPaths.length} file(s) to workspace main`
-        );
-        if (result.fromArchiveHead) {
-          console.log(`  recovered from archive ${result.fromArchiveHead}`);
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-async function contextStatus(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const { client } = resolveSessionScope(inv);
-    const result = await client.call<
-      Array<{
-        repoPath: string;
-        forked: boolean;
-        uncommitted: boolean;
-        ahead: boolean;
-        behind: boolean;
-        deleted: boolean;
-      }>
-    >("vcs.contextStatus", []);
-    printResult(result, {
-      json,
-      human: () => {
-        if (result.length === 0) {
-          console.log("context clean — spans nothing beyond main, in sync");
-          return;
-        }
-        for (const r of result) {
-          const tags = [
-            r.deleted && "DELETED",
-            r.forked && "forked",
-            r.uncommitted && "uncommitted",
-            r.ahead && "ahead",
-            r.behind && "behind",
-          ]
-            .filter(Boolean)
-            .join(", ");
-          console.log(`${r.repoPath}: ${tags}`);
-        }
-        if (result.some((r) => r.uncommitted)) {
-          console.log(
-            "\n`vibestudio vcs commit -m MESSAGE` to seal uncommitted edits (or `vcs discard`)."
-          );
-        }
-        if (result.some((r) => r.deleted)) {
-          console.log(
-            "\nA repo your context references was DELETED from the workspace — a push will be " +
-              "refused. Drop/rebase your context, or `vibestudio vcs restore-repo` to recover it."
-          );
-        }
-        if (result.some((r) => r.behind)) {
-          console.log("\n`vibestudio vcs rebase` to pull latest main into your context.");
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
-}
-
-async function rebase(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const { client } = resolveSessionScope(inv);
-    const result = await client.call<{
-      repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }>;
-      baseView: string;
-    }>("vcs.rebaseContext", []);
-    printResult(result, {
-      json,
-      human: () => {
-        for (const r of result.repos) console.log(`${r.status.padEnd(11)} ${r.repoPath}`);
-        const conflicted = result.repos.filter((r) => r.status === "conflicted");
-        if (conflicted.length > 0) {
-          console.log(
-            `\n${conflicted.length} repo(s) conflicted — resolve the markers, ` +
-              "commit the resolution, then re-push."
-          );
-        } else {
-          console.log("\ncontext rebased onto latest main.");
-        }
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
+  return value;
 }
 
 async function readStdin(): Promise<string> {
@@ -625,304 +115,432 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/**
- * Record UNCOMMITTED working edits on the context head (vcs.edit). The edit ops
- * are read as a JSON array from `--edits '<json>'` or stdin — each op is the
- * discriminated `{ kind, path, … }` shape (write/replace/create/delete/chmod),
- * with `{ path, content: "…" }` accepted shorthand for a write. This does NOT
- * commit, build, or advance the head; seal milestones with `vcs commit`.
- */
-async function edit(inv: ParsedInvocation): Promise<number> {
+async function jsonInput(inv: ParsedInvocation): Promise<unknown> {
+  const raw =
+    typeof inv.flags["input"] === "string" ? inv.flags["input"] : (await readStdin()).trim();
+  if (!raw) throw new UsageError("pass --input '<canonical JSON object>' or pipe JSON on stdin");
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("input must be an object");
+    }
+    return value;
+  } catch (error) {
+    throw new UsageError(`invalid JSON input: ${String(error)}`);
+  }
+}
+
+function output(inv: ParsedInvocation, result: unknown): void {
+  printResult(result, {
+    json: jsonMode(inv.flags["json"] === true),
+    human: () => console.log(JSON.stringify(result, null, 2)),
+  });
+}
+
+async function run(
+  inv: ParsedInvocation,
+  operation: (vcs: CliVcs, contextId: string, serverUrl: string) => Promise<unknown>
+) {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const raw =
-      typeof inv.flags["edits"] === "string" ? inv.flags["edits"] : (await readStdin()).trim();
-    if (!raw) {
+    const { client, contextId, session } = resolveSessionScope(inv);
+    output(inv, await operation(clientFor(client), contextId, session.serverUrl));
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+async function runRetriableMutation(
+  inv: ParsedInvocation,
+  vcs: CliVcs,
+  target: { serverUrl: string; contextId: string },
+  method: FriendlyVcsMutationMethod,
+  intent: unknown,
+  buildInput: (commandId: string) => Promise<Record<string, unknown>>
+): Promise<unknown> {
+  const id = mutationCommandId(inv);
+  const journalTarget = { ...target, commandId: id };
+  const existing = loadVcsCommandJournalEntry(journalTarget);
+  if (existing) {
+    if (existing.method !== method || !isDeepStrictEqual(existing.intent, intent)) {
       throw new UsageError(
-        "no edits — pass --edits '<json array>' or pipe a JSON edit-op array on stdin"
+        `--command-id ${id} already identifies a different ${existing.method} request`
       );
     }
-    let edits: VcsApplyEditsInput["edits"];
-    try {
-      const parsed = JSON.parse(raw);
-      edits = Array.isArray(parsed) ? parsed : parsed?.edits;
-    } catch (parseError) {
-      throw new UsageError(`--edits is not valid JSON: ${String(parseError)}`);
-    }
-    if (!Array.isArray(edits) || edits.length === 0) {
-      throw new UsageError("edits must be a non-empty JSON array of edit ops");
-    }
-    const repo =
-      typeof inv.flags["repo"] === "string" ? normalizeRepoPath(inv.flags["repo"]) : undefined;
-    const { client, contextId } = resolveSessionScope(inv);
-    const head = headForContext(contextId);
-    const input: VcsApplyEditsInput = { edits, head, ...(repo ? { repoPath: repo } : {}) };
-    const result = await client.call<VcsEditResult>("vcs.edit", [input]);
-    printResult(result, {
-      json,
-      human: () => {
-        console.log(
-          `recorded ${result.changedPaths.length} working change(s) (uncommitted, editSeq ${result.editSeq})`
-        );
-        for (const p of result.changedPaths) console.log(`  ${p}`);
-        console.log("seal with `vibestudio vcs commit -m MESSAGE`.");
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
+    const member = vcs[method] as unknown as (input: Record<string, unknown>) => Promise<unknown>;
+    return member(existing.input);
   }
+  const input = await buildInput(id);
+  saveVcsCommandJournalEntry({
+    schemaVersion: 1,
+    ...journalTarget,
+    method,
+    intent,
+    input,
+    createdAt: Date.now(),
+  });
+  const member = vcs[method] as unknown as (input: Record<string, unknown>) => Promise<unknown>;
+  return member(input);
 }
 
-/**
- * Fold the context's uncommitted working edits into ONE messaged snapshot per
- * repo (vcs.commit). `message` is mandatory; scope to repos with `--repo`
- * (repeatable) or omit to commit every repo the context has edits in.
- */
-async function commit(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const message = typeof inv.flags["message"] === "string" ? inv.flags["message"] : undefined;
-    if (!message) {
-      throw new UsageError("commit requires a message — pass -m MESSAGE (or --message MESSAGE)");
-    }
-    const repoPaths = [...inv.flagsMulti("repo"), ...inv.positionals]
-      .map(normalizeRepoPath)
-      .filter(Boolean);
-    const { client, contextId } = resolveSessionScope(inv);
-    const head = headForContext(contextId);
-    const result = await client.call<VcsCommitResult[]>("vcs.commit", [
-      { message, head, ...(repoPaths.length > 0 ? { repoPaths } : {}) },
-    ]);
-    const committed = result.filter((r) => r.status === "committed");
-    const unchanged = result.filter((r) => r.status === "unchanged");
-    if (committed.length === 0 || unchanged.length > 0) {
-      throw new CliError(
-        committed.length === 0
-          ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
-              "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
-              "scratch/direct fs writes under .tmp, .vibestudio, node_modules, dist, etc. are outside VCS."
-          : `commit returned unchanged repo(s) (${unchanged.map((r) => r.repoPath).join(", ")}). ` +
-              "This is treated as an error because commit should seal real working edits, not silently no-op."
-      );
-    }
-    printResult(result, {
-      json,
-      human: () => {
-        for (const r of committed) {
-          console.log(`committed ${r.repoPath} — ${r.editCount} edit(s)`);
-          for (const p of r.changedPaths) console.log(`  ${p}`);
-        }
-        console.log("\npush with `vibestudio vcs push --repo REPOPATH`.");
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
+async function repositoryAt(vcs: CliVcs, state: VcsStateNodeRef, repoPath: string) {
+  const repository = await vcs.resolveRepository({ state, repoPath });
+  if (repository) return repository;
+  throw new UsageError(`repository ${repoPath} is not present at the requested state`);
 }
 
-/**
- * Reconcile a repo with `main` (vcs.merge): pull main's commits into the context
- * head as a merge commit. A clean merge needs no resolution; a conflicting merge
- * materializes markers into the working tree — resolve with `vcs edit`, then
- * `vcs commit` seals it. After merging, the head fast-forwards on push.
- */
-async function merge(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const { client, contextId } = resolveSessionScope(inv);
-    const head = headForContext(contextId);
-    const results = await client.call<
-      Array<{
-        repoPath: string;
-        status: string;
-        mergeable: "clean" | "conflict";
-        upstreamCommits: Array<{ stateHash: string; message: string }>;
-        conflictPaths?: string[];
-      }>
-    >("vcs.merge", [{ source: "main", repoPaths: [repo], head }]);
-    printResult(results, {
-      json,
-      human: () => {
-        for (const result of results) {
-          const n = result.upstreamCommits.length;
-          console.log(
-            `merged ${result.repoPath}: pulled ${n} upstream commit(s) from main (${result.mergeable})`
-          );
-          for (const c of result.upstreamCommits) console.log(`  ${c.stateHash}  ${c.message}`);
-          if (result.mergeable === "conflict") {
-            console.log(
-              `\nconflict markers written to: ${(result.conflictPaths ?? []).join(", ") || "(see status)"}`
-            );
-            console.log(
-              "resolve them with `vcs edit`, then `vcs commit` to seal the merge, then push."
-            );
-          } else {
-            console.log("\nclean merge committed — push now fast-forwards.");
+function splitFile(path: string) {
+  const split = splitRepoPath(path.replace(/^\/+/, ""));
+  if (!split?.repoRelPath) throw new UsageError(`${path} must name a workspace repository file`);
+  return split;
+}
+
+async function resolveExactFile(vcs: CliVcs, state: VcsStateNodeRef, workspacePath: string) {
+  const split = splitFile(workspacePath);
+  const repository = await repositoryAt(vcs, state, split.repoPath);
+  return vcs.readFile({
+    state,
+    repositoryId: repository.repositoryId,
+    file: { kind: "path", path: split.repoRelPath },
+  });
+}
+
+const status = (inv: ParsedInvocation) => run(inv, (vcs, contextId) => vcs.status({ contextId }));
+
+const compare = (inv: ParsedInvocation) =>
+  run(inv, async (vcs, contextId) => {
+    const current = await vcs.status({ contextId });
+    const view = String(inv.flags["view"] ?? "overview");
+    if (view !== "overview" && view !== "changes") {
+      throw new UsageError("--view must be overview or changes");
+    }
+    return vcs.compare({
+      target: current.workingHead,
+      sourceEventId: inv.positionals[0] ?? current.mainEventId,
+      view,
+      limit: pageLimit(inv),
+    });
+  });
+
+const history = (inv: ParsedInvocation) =>
+  run(inv, async (vcs, contextId) => {
+    const current = await vcs.status({ contextId });
+    return vcs.history({ root: current.committed, direction: "past", limit: pageLimit(inv) });
+  });
+
+const resolveFile = (inv: ParsedInvocation) =>
+  run(inv, async (vcs, contextId) => {
+    const path = inv.positionals[0];
+    if (!path) throw new UsageError("usage: vibestudio vcs resolve-file PATH");
+    const current = await vcs.status({ contextId });
+    return resolveExactFile(vcs, current.workingHead, path);
+  });
+
+async function transfer(inv: ParsedInvocation, kind: "move" | "copy") {
+  return run(inv, async (vcs, contextId, serverUrl) => {
+    const batch = await friendlyTransferBatch(inv, kind);
+    const resolve = async () => {
+      const current = await vcs.status({ contextId });
+      const workingHead = current.workingHead;
+      const resolved = await Promise.all(
+        batch.transfers.map(async ({ source: sourcePath, destination: destinationPath }) => {
+          const source = await resolveExactFile(vcs, workingHead, sourcePath);
+          if (!source?.repositoryId || !source.fileId) {
+            throw new UsageError(`${sourcePath} is not present at the working state`);
           }
-        }
-      },
+          const destinationSplit = splitFile(destinationPath);
+          const destinationRepository = await repositoryAt(
+            vcs,
+            workingHead,
+            destinationSplit.repoPath
+          );
+          return {
+            sourcePath,
+            destinationPath,
+            source: {
+              ...source,
+              repositoryId: source.repositoryId,
+              fileId: source.fileId,
+            },
+            destination: {
+              repositoryId: destinationRepository.repositoryId,
+              path: destinationSplit.repoRelPath,
+            },
+          };
+        })
+      );
+      const onlyTransfer = resolved.length === 1 ? resolved[0] : undefined;
+      const intentSummary =
+        batch.intentSummary ??
+        (onlyTransfer
+          ? `${kind === "move" ? "Move" : "Copy"} ${onlyTransfer.sourcePath} to ${onlyTransfer.destinationPath}`
+          : `${kind === "move" ? "Move" : "Copy"} ${resolved.length} files atomically`);
+      return { workingHead, resolved, intentSummary };
+    };
+    if (inv.flags["dry-run"] === true) {
+      const { workingHead, resolved } = await resolve();
+      return {
+        dryRun: true,
+        operation: kind,
+        commandId: commandId(inv),
+        contextId,
+        expectedWorkingHead: workingHead,
+        transfers: resolved,
+      };
+    }
+    return runRetriableMutation(inv, vcs, { contextId, serverUrl }, kind, batch, async (id) => {
+      const { workingHead, resolved, intentSummary } = await resolve();
+      if (kind === "move") {
+        const input: VcsMoveInput = {
+          contextId,
+          expectedWorkingHead: workingHead,
+          commandId: id,
+          intentSummary,
+          moves: resolved.map(({ source, destination }) => ({
+            kind: "file",
+            repositoryId: source.repositoryId,
+            fileId: source.fileId,
+            destinationRepositoryId: destination.repositoryId,
+            destinationPath: destination.path,
+          })),
+        };
+        return input;
+      }
+      const input: VcsCopyInput = {
+        contextId,
+        expectedWorkingHead: workingHead,
+        commandId: id,
+        intentSummary,
+        copies: resolved.map(({ source, destination }) => ({
+          source: {
+            state: workingHead,
+            repositoryId: source.repositoryId,
+            fileId: source.fileId,
+          },
+          destination,
+        })),
+      };
+      return input;
     });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
-  }
+  });
 }
 
-/**
- * Drop a repo's uncommitted working edits on the context head (vcs.discardEdits)
- * — and clear any in-progress merge — restoring the committed head on disk.
- */
-async function discard(inv: ParsedInvocation): Promise<number> {
-  const json = jsonMode(inv.flags["json"] === true);
-  try {
-    const repo = requireRepo(inv);
-    const { client, contextId } = resolveSessionScope(inv);
-    const head = headForContext(contextId);
-    const result = await client.call<{ discarded: number; stateHash: string }>("vcs.discardEdits", [
-      repo,
-      head,
-    ]);
-    printResult(result, {
-      json,
-      human: () => {
-        console.log(`discarded ${result.discarded} uncommitted edit(s) in ${repo}`);
-      },
-    });
-    return 0;
-  } catch (error) {
-    return printError(error, { json });
+async function friendlyTransferBatch(
+  inv: ParsedInvocation,
+  kind: "move" | "copy"
+): Promise<FriendlyTransferBatch> {
+  if (inv.positionals.length > 0) {
+    if (typeof inv.flags["input"] === "string") {
+      throw new UsageError("choose positional SOURCE/DESTINATION pairs or --input, not both");
+    }
+    if (inv.positionals.length % 2 !== 0) {
+      throw new UsageError(
+        `usage: vibestudio vcs ${kind}-file SOURCE DESTINATION [SOURCE DESTINATION ...]`
+      );
+    }
+    const transfers: FriendlyTransfer[] = [];
+    for (let index = 0; index < inv.positionals.length; index += 2) {
+      const source = inv.positionals[index];
+      const destination = inv.positionals[index + 1];
+      if (!source || !destination) {
+        throw new UsageError(
+          `usage: vibestudio vcs ${kind}-file SOURCE DESTINATION [SOURCE DESTINATION ...]`
+        );
+      }
+      transfers.push({
+        source,
+        destination,
+      });
+    }
+    return { transfers };
   }
+
+  const record = (await jsonInput(inv)) as Record<string, unknown>;
+  const unknownTopLevel = Object.keys(record).filter(
+    (key) => key !== "transfers" && key !== "intentSummary"
+  );
+  if (unknownTopLevel.length > 0) {
+    throw new UsageError(`unknown batch input field(s): ${unknownTopLevel.join(", ")}`);
+  }
+  if (!Array.isArray(record["transfers"]) || record["transfers"].length === 0) {
+    throw new UsageError(
+      `batch input for ${kind}-file requires {"transfers":[{"source":"...","destination":"..."}]}`
+    );
+  }
+  const transfers = record["transfers"].map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new UsageError(`transfers[${index}] must be an object`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    const unknown = Object.keys(candidate).filter(
+      (key) => key !== "source" && key !== "destination"
+    );
+    if (unknown.length > 0) {
+      throw new UsageError(`transfers[${index}] has unknown field(s): ${unknown.join(", ")}`);
+    }
+    if (typeof candidate["source"] !== "string" || typeof candidate["destination"] !== "string") {
+      throw new UsageError(`transfers[${index}] requires string source and destination paths`);
+    }
+    return { source: candidate["source"], destination: candidate["destination"] };
+  });
+  if (record["intentSummary"] !== undefined && typeof record["intentSummary"] !== "string") {
+    throw new UsageError("intentSummary must be a string");
+  }
+  const intentSummary =
+    typeof record["intentSummary"] === "string" ? record["intentSummary"].trim() : undefined;
+  if (intentSummary === "") throw new UsageError("intentSummary must not be empty");
+  return { transfers, ...(intentSummary ? { intentSummary } : {}) };
 }
 
-const EDITS_FLAG: FlagSpec = {
-  name: "edits",
-  takesValue: true,
-  description: "JSON array of edit ops (omit to read the array from stdin)",
-};
+const commit = (inv: ParsedInvocation) =>
+  run(inv, async (vcs, contextId, serverUrl) => {
+    const message = typeof inv.flags["message"] === "string" ? inv.flags["message"].trim() : "";
+    if (!message) throw new UsageError("commit requires -m MESSAGE");
+    const integratesEventId =
+      typeof inv.flags["integrates"] === "string" ? inv.flags["integrates"] : null;
+    return runRetriableMutation(
+      inv,
+      vcs,
+      { contextId, serverUrl },
+      "commit",
+      { message, integratesEventId },
+      async (id) => {
+        const current = await vcs.status({ contextId });
+        const input: VcsCommitInput = {
+          contextId,
+          expectedWorkingHead: current.workingHead,
+          message,
+          commandId: id,
+          ...(integratesEventId ? { integratesEventId } : {}),
+        };
+        return input;
+      }
+    );
+  });
 
-const LIMIT_FLAG: FlagSpec = {
-  name: "limit",
-  takesValue: true,
-  description: "Maximum number of log entries to return",
-};
+const discard = (inv: ParsedInvocation) =>
+  run(inv, (vcs, contextId, serverUrl) =>
+    runRetriableMutation(inv, vcs, { contextId, serverUrl }, "discard", {}, async (id) => {
+      const current = await vcs.status({ contextId });
+      return { contextId, expectedWorkingHead: current.workingHead, commandId: id };
+    })
+  );
+
+const push = (inv: ParsedInvocation) =>
+  run(inv, (vcs, contextId, serverUrl) =>
+    runRetriableMutation(inv, vcs, { contextId, serverUrl }, "push", {}, async (id) => {
+      const current = await vcs.status({ contextId });
+      if (current.committed.kind !== "event") throw new Error("committed state is not an event");
+      return {
+        contextId,
+        expectedCommittedEventId: current.committed.eventId,
+        expectedMainEventId: current.mainEventId,
+        commandId: id,
+      };
+    })
+  );
+
+function jsonMethod(method: keyof CliVcs) {
+  return (inv: ParsedInvocation) =>
+    run(inv, async (vcs) => {
+      const member = vcs[method] as (value: unknown) => Promise<unknown>;
+      return member(await jsonInput(inv));
+    });
+}
+
+const common = [...SCOPE_FLAGS, JSON_FLAG];
+const inputFlags = [INPUT_FLAG, ...common];
+const commandFlags = [COMMAND_ID_FLAG, ...common];
+const transferFlags = [INPUT_FLAG, DRY_RUN_FLAG, ...commandFlags];
 
 export const vcsCommands: CliCommand[] = [
   vcsGitCommand,
   {
     group: "vcs",
-    name: "edit",
-    summary: "Record uncommitted working edits on your context head (no commit, no build)",
-    usage: "vibestudio vcs edit [--repo REPOPATH] --edits '<json>'  (or pipe JSON on stdin)",
-    flags: [REPO_FLAG, EDITS_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: edit,
-  },
-  {
-    group: "vcs",
-    name: "commit",
-    summary: "Fold your context's uncommitted working edits into one messaged snapshot per repo",
-    usage: "vibestudio vcs commit -m MESSAGE [--repo REPOPATH ...]",
-    flags: [REPO_FLAG, MESSAGE_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: commit,
-  },
-  {
-    group: "vcs",
-    name: "push",
-    summary: "Build-gate a repo's context head into main (repeat --repo for an atomic group)",
-    usage: "vibestudio vcs push --repo REPOPATH [--repo REPOPATH ...] [-m MESSAGE]",
-    flags: [REPO_FLAG, MESSAGE_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: push,
-  },
-  {
-    group: "vcs",
-    name: "merge",
-    summary: "Pull main into your context head (reconcile divergence before re-pushing)",
-    usage: "vibestudio vcs merge --repo REPOPATH",
-    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: merge,
-  },
-  {
-    group: "vcs",
-    name: "discard",
-    summary: "Drop a repo's uncommitted working edits (and abort any in-progress merge)",
-    usage: "vibestudio vcs discard --repo REPOPATH",
-    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: discard,
-  },
-  {
-    group: "vcs",
-    name: "push-status",
-    summary: "Show how many changes each repo has ahead of main (pre-push)",
-    usage: "vibestudio vcs push-status --repo REPOPATH [--repo REPOPATH ...]",
-    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: pushStatus,
-  },
-  {
-    group: "vcs",
     name: "status",
-    summary: "Show a repo's committed and working changes, drift, and pending merge",
-    usage: "vibestudio vcs status --repo REPOPATH",
-    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
+    summary: "Inspect committed and working state",
+    flags: common,
     run: status,
   },
   {
     group: "vcs",
-    name: "diff",
-    summary: "Show a name-status diff of all unpushed committed and working changes",
-    usage: "vibestudio vcs diff --repo REPOPATH",
-    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: diff,
+    name: "compare",
+    summary: "Compare the working state with a source event (main by default)",
+    usage: "vibestudio vcs compare [SOURCE_EVENT_ID]",
+    flags: [VIEW_FLAG, LIMIT_FLAG, ...common],
+    run: compare,
   },
   {
     group: "vcs",
-    name: "log",
-    summary: "Show a single repo's push history",
-    usage: "vibestudio vcs log --repo REPOPATH [--limit N]",
-    flags: [REPO_FLAG, LIMIT_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: log,
+    name: "history",
+    summary: "Page committed semantic history",
+    flags: [LIMIT_FLAG, ...common],
+    run: history,
   },
   {
     group: "vcs",
-    name: "fork-repo",
-    summary: "Fork a repo to a new path, preserving its history (edit on top of the fork)",
-    usage: "vibestudio vcs fork-repo FROM_REPO TO_REPO",
-    flags: [...SCOPE_FLAGS, JSON_FLAG],
-    run: forkRepo,
+    name: "resolve-file",
+    summary: "Resolve PATH to stable repository/file identity",
+    usage: "vibestudio vcs resolve-file PATH",
+    flags: common,
+    run: resolveFile,
   },
   {
     group: "vcs",
-    name: "delete-repo",
-    summary:
-      "Permanently remove a repo from the workspace — archives its history, drops it from main (requires user approval; refuses if depended-on unless --force)",
-    usage: "vibestudio vcs delete-repo --repo REPOPATH [--force]",
-    flags: [REPO_FLAG, FORCE_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: deleteRepo,
+    name: "move-file",
+    summary: "Move one stable file identity atomically",
+    usage: "vibestudio vcs move-file SOURCE DESTINATION [SOURCE DESTINATION ...] [--dry-run]",
+    flags: transferFlags,
+    run: (inv) => transfer(inv, "move"),
   },
   {
     group: "vcs",
-    name: "restore-repo",
-    summary:
-      "Recover a deleted repo from its archived history (fails if a different repo now occupies the path; requires user approval)",
-    usage: "vibestudio vcs restore-repo --repo REPOPATH",
-    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
-    run: restoreRepo,
+    name: "copy-file",
+    summary: "Copy a file with explicit immediate provenance",
+    usage: "vibestudio vcs copy-file SOURCE DESTINATION [SOURCE DESTINATION ...] [--dry-run]",
+    flags: transferFlags,
+    run: (inv) => transfer(inv, "copy"),
   },
   {
     group: "vcs",
-    name: "context-status",
-    summary: "Show what your context has edited and how far it has drifted from main",
-    usage: "vibestudio vcs context-status",
-    flags: [...SCOPE_FLAGS, JSON_FLAG],
-    run: contextStatus,
+    name: "commit",
+    summary: "Commit the complete local application chain",
+    usage: "vibestudio vcs commit -m MESSAGE [--integrates SOURCE_EVENT_ID]",
+    flags: [MESSAGE_FLAG, INTEGRATES_FLAG, ...commandFlags],
+    run: commit,
   },
   {
     group: "vcs",
-    name: "rebase",
-    summary: "Pull latest main into your context (merge edited repos + re-pin base)",
-    usage: "vibestudio vcs rebase",
-    flags: [...SCOPE_FLAGS, JSON_FLAG],
-    run: rebase,
+    name: "discard",
+    summary: "Discard the complete local application chain",
+    flags: commandFlags,
+    run: discard,
   },
+  {
+    group: "vcs",
+    name: "push",
+    summary: "Publish the exact committed event to protected main",
+    flags: commandFlags,
+    run: push,
+  },
+  ...(
+    [
+      ["edit", "Submit an identity-checked edit transaction"],
+      ["integrate", "Take one local integration decision"],
+      ["revert", "Counteract exact semantic changes"],
+      ["importSnapshot", "Import an exact external snapshot"],
+      ["inspect", "Inspect one typed semantic node"],
+      ["neighbors", "Page adjacent provenance edges"],
+      ["blame", "Trace content coordinates through provenance"],
+      ["readFile", "Read file content from an exact semantic state"],
+      ["listFiles", "Page files in one repository state"],
+    ] as const
+  ).map(([method, summary]) => ({
+    group: "vcs",
+    name: method.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
+    summary,
+    flags: inputFlags,
+    run: jsonMethod(method),
+  })),
 ];

@@ -7,6 +7,7 @@
 
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { EffectDescriptor, EffectKind } from "@workspace/agent-loop";
+import { assertExactSqlTableSchema } from "./sql-table-schema.js";
 
 export interface OutboxRow {
   effectId: string;
@@ -40,24 +41,7 @@ export function parseOutboxExternalId(
   };
 }
 
-function outboxPrimaryKey(sql: SqlStorage): string[] {
-  const rows = sql.exec(`PRAGMA table_info(effect_outbox)`).toArray() as Record<string, unknown>[];
-  return rows
-    .filter((row) => Number(row["pk"] ?? 0) > 0)
-    .sort((a, b) => Number(a["pk"] ?? 0) - Number(b["pk"] ?? 0))
-    .map((row) => String(row["name"]));
-}
-
 export function ensureOutboxSchema(sql: SqlStorage): void {
-  const existingPk = outboxPrimaryKey(sql);
-  if (
-    existingPk.length > 0 &&
-    (existingPk.length !== 2 || existingPk[0] !== "branch_id" || existingPk[1] !== "effect_id")
-  ) {
-    // The outbox is a reconstructible dispatch cache. Rebuild obsolete global
-    // effect-id schemas instead of carrying a compatibility path forever.
-    sql.exec(`DROP TABLE effect_outbox`);
-  }
   sql.exec(`
     CREATE TABLE IF NOT EXISTS effect_outbox (
       branch_id        TEXT NOT NULL,
@@ -73,6 +57,22 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
       PRIMARY KEY (branch_id, effect_id)
     )
   `);
+  assertExactSqlTableSchema(sql, {
+    table: "effect_outbox",
+    columns: [
+      ["branch_id", "TEXT", true],
+      ["effect_id", "TEXT", true],
+      ["channel_id", "TEXT", true],
+      ["kind", "TEXT", true],
+      ["idempotency_key", "TEXT", true],
+      ["descriptor_json", "TEXT", true],
+      ["attempts", "INTEGER", true, "0"],
+      ["next_attempt_at", "INTEGER", false],
+      ["lease_expires_at", "INTEGER", false],
+      ["created_at", "INTEGER", true],
+    ],
+    primaryKey: ["branch_id", "effect_id"],
+  });
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_effect_outbox_due ON effect_outbox(next_attempt_at)`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_effect_outbox_effect ON effect_outbox(effect_id)`);
   sql.exec(
@@ -130,6 +130,21 @@ function mapRow(row: Record<string, unknown>): OutboxRow {
     leaseExpiresAt: row["lease_expires_at"] == null ? null : Number(row["lease_expires_at"]),
     createdAt: Number(row["created_at"] ?? 0),
   };
+}
+
+/**
+ * Inspect the activation-local outbox without creating or migrating its
+ * reconstructible schema. A diagnostic read must not initialize an otherwise
+ * unused agent merely because no outbox has existed in this activation yet.
+ */
+export function inspectEffectOutbox(sql: SqlStorage): OutboxRow[] {
+  const tables = sql
+    .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'effect_outbox'`)
+    .toArray();
+  if (tables.length === 0) return [];
+  return (sql.exec(`SELECT * FROM effect_outbox`).toArray() as Record<string, unknown>[]).map(
+    mapRow
+  );
 }
 
 export class EffectOutbox {
@@ -207,9 +222,7 @@ export class EffectOutbox {
   }
 
   all(): OutboxRow[] {
-    return (
-      this.sql.exec(`SELECT * FROM effect_outbox`).toArray() as Record<string, unknown>[]
-    ).map(mapRow);
+    return inspectEffectOutbox(this.sql);
   }
 
   /** Rows due for dispatch: unleased (or expired lease) and past nextAttemptAt. */

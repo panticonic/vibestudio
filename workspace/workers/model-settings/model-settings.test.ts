@@ -3,8 +3,30 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import { DEFAULT_AGENT_MODEL_REF, type ModelCatalog } from "@workspace/model-catalog/catalog";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
-import type { UrlAudience } from "@vibestudio/credential-client/urlAudience";
+import type { StoredCredentialSummary } from "@vibestudio/credential-client";
 import { getModelCatalog, ModelSettingsDO, type LocalModelEntry } from "./index.js";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+
+const BASE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
+
+function storedCredential(
+  id: string,
+  url: string,
+  lifecycle: StoredCredentialSummary["lifecycle"] = { state: "active", canRefresh: false }
+): StoredCredentialSummary {
+  return {
+    id,
+    label: id,
+    audience: [{ url, match: "origin" }],
+    injection: {
+      type: "header",
+      name: "authorization",
+      valueTemplate: "Bearer {token}",
+    },
+    scopes: [],
+    lifecycle,
+  };
+}
 
 const CATALOG: ModelCatalog = {
   providers: [
@@ -54,19 +76,19 @@ const CATALOG: ModelCatalog = {
 };
 
 class TestModelSettingsDO extends ModelSettingsDO {
-  static config: WorkspaceConfig = { id: "test" };
+  static config: WorkspaceConfig = { ...BASE_CONFIG };
   static writes: Array<{ key: string; value: unknown }> = [];
 
   protected getCatalog(): Promise<ModelCatalog> {
     return Promise.resolve(CATALOG);
   }
 
-  // Both fixture providers count as credentialed — availability is a worker
-  // overlay now (design §7.1), so the seam is audiences, not entry fields.
-  protected credentialAudiences(): Promise<UrlAudience[]> {
+  // Both fixture providers count as usable — availability is a worker overlay
+  // now (design §7.1), so the seam is lifecycle summaries, not entry fields.
+  protected storedCredentials(): Promise<StoredCredentialSummary[]> {
     return Promise.resolve([
-      { url: "https://api.openai.com/v1", match: "origin" },
-      { url: "https://api.anthropic.com/v1", match: "origin" },
+      storedCredential("openai", "https://api.openai.com/v1"),
+      storedCredential("anthropic", "https://api.anthropic.com/v1"),
     ]);
   }
 
@@ -91,7 +113,7 @@ class TestModelSettingsDO extends ModelSettingsDO {
 
 /** No credentials at all + a live local fallback — the offline first-run shape. */
 class OfflineModelSettingsDO extends TestModelSettingsDO {
-  protected override credentialAudiences(): Promise<UrlAudience[]> {
+  protected override storedCredentials(): Promise<StoredCredentialSummary[]> {
     return Promise.resolve([]);
   }
 
@@ -109,6 +131,19 @@ class OfflineModelSettingsDO extends TestModelSettingsDO {
         downloadProgress: null,
         errorMessage: null,
       },
+    ]);
+  }
+}
+
+class ExpiredModelSettingsDO extends TestModelSettingsDO {
+  static lifecycle: StoredCredentialSummary["lifecycle"] = {
+    state: "expired",
+    canRefresh: false,
+  };
+
+  protected override storedCredentials(): Promise<StoredCredentialSummary[]> {
+    return Promise.resolve([
+      storedCredential("openai", "https://api.openai.com/v1", ExpiredModelSettingsDO.lifecycle),
     ]);
   }
 }
@@ -132,7 +167,7 @@ describe("ModelSettingsDO", () => {
 
   it("reads the configured workspace default agent config (model + behavior)", async () => {
     TestModelSettingsDO.config = {
-      id: "test",
+      ...BASE_CONFIG,
       defaultAgentConfig: {
         model: "anthropic:claude-opus-4-1",
         thinkingLevel: "high",
@@ -154,7 +189,7 @@ describe("ModelSettingsDO", () => {
 
   it("falls back when the configured model is missing, keeping valid behavior", async () => {
     TestModelSettingsDO.config = {
-      id: "test",
+      ...BASE_CONFIG,
       defaultAgentConfig: { model: "missing:model", thinkingLevel: "low" },
     };
     const { call } = await createTestDO(TestModelSettingsDO);
@@ -168,7 +203,7 @@ describe("ModelSettingsDO", () => {
   });
 
   it("falls back to the local floor when nothing is credentialed (offline first-run)", async () => {
-    OfflineModelSettingsDO.config = { id: "test" };
+    OfflineModelSettingsDO.config = { ...BASE_CONFIG };
     const { call } = await createTestDO(OfflineModelSettingsDO);
 
     const snapshot = await call("getSettings");
@@ -191,8 +226,30 @@ describe("ModelSettingsDO", () => {
     expect(JSON.stringify(local?.modelSpec)).not.toMatch(/authorization|api[-_]?key/iu);
   });
 
+  it("does not report an expired credential without persisted refresh material as ready", async () => {
+    ExpiredModelSettingsDO.config = { ...BASE_CONFIG };
+    ExpiredModelSettingsDO.lifecycle = { state: "expired", canRefresh: false };
+    const { call } = await createTestDO(ExpiredModelSettingsDO);
+
+    const snapshot = (await call("getSettings")) as { catalog: ModelCatalog };
+    expect(snapshot.catalog.models.find((model) => model.ref === "openai:gpt-5")).toMatchObject({
+      availability: { state: "needs-setup", detail: "credential-expired" },
+    });
+  });
+
+  it("keeps an expired credential ready when persisted material can renew it", async () => {
+    ExpiredModelSettingsDO.config = { ...BASE_CONFIG };
+    ExpiredModelSettingsDO.lifecycle = { state: "expired", canRefresh: true };
+    const { call } = await createTestDO(ExpiredModelSettingsDO);
+
+    const snapshot = (await call("getSettings")) as { catalog: ModelCatalog };
+    expect(snapshot.catalog.models.find((model) => model.ref === "openai:gpt-5")).toMatchObject({
+      availability: { state: "ready", detail: "credentialed" },
+    });
+  });
+
   it("persists a validated default agent config to workspace config", async () => {
-    TestModelSettingsDO.config = { id: "test" };
+    TestModelSettingsDO.config = { ...BASE_CONFIG };
     TestModelSettingsDO.writes = [];
     const { call } = await createTestDO(TestModelSettingsDO);
 
@@ -220,7 +277,7 @@ describe("ModelSettingsDO", () => {
   });
 
   it("persists extended effort levels", async () => {
-    TestModelSettingsDO.config = { id: "test" };
+    TestModelSettingsDO.config = { ...BASE_CONFIG };
     TestModelSettingsDO.writes = [];
     const { call } = await createTestDO(TestModelSettingsDO);
 
@@ -239,7 +296,7 @@ describe("ModelSettingsDO", () => {
   });
 
   it("rejects invalid behavior fields instead of silently dropping them", async () => {
-    TestModelSettingsDO.config = { id: "test" };
+    TestModelSettingsDO.config = { ...BASE_CONFIG };
     TestModelSettingsDO.writes = [];
     const { call } = await createTestDO(TestModelSettingsDO);
 
@@ -255,7 +312,7 @@ describe("ModelSettingsDO", () => {
 
   it("rejects malformed stored configuration instead of normalizing it", async () => {
     TestModelSettingsDO.config = {
-      id: "test",
+      ...BASE_CONFIG,
       defaultAgentConfig: { model: "openai:gpt-5", retiredField: true },
     } as never;
     const { call } = await createTestDO(TestModelSettingsDO);
@@ -263,7 +320,7 @@ describe("ModelSettingsDO", () => {
   });
 
   it("rejects unknown default model refs", async () => {
-    TestModelSettingsDO.config = { id: "test" };
+    TestModelSettingsDO.config = { ...BASE_CONFIG };
     const { call } = await createTestDO(TestModelSettingsDO);
 
     await expect(call("setDefaultAgentConfig", { model: "missing:model" })).rejects.toThrow(

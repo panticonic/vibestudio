@@ -66,7 +66,7 @@ export function AgentMessageNotifier() {
           if (focusedRef.current) continue;
 
           const mentionsMe = evt.payload?.mentions?.includes(PANEL_HANDLE) ?? false;
-          const isFirstAfterQuiet = prevAgentTs === null || (ts - prevAgentTs) > QUIET_PERIOD_MS;
+          const isFirstAfterQuiet = prevAgentTs === null || ts - prevAgentTs > QUIET_PERIOD_MS;
           if (!mentionsMe && !isFirstAfterQuiet) continue;
 
           const senderHandle = wire.senderMetadata?.handle ?? wire.senderMetadata?.name ?? "agent";
@@ -77,14 +77,16 @@ export function AgentMessageNotifier() {
               title: `@${senderHandle}`,
               message: preview,
               ttl: NOTIFICATION_TTL_MS,
-              actions: [{
-                label: "Open chat",
-                variant: "soft",
-                onClick: () => {
-                  void panel.focusPanel(panelId);
-                  app.session.openDock();
+              actions: [
+                {
+                  label: "Open chat",
+                  variant: "soft",
+                  onClick: () => {
+                    void panel.focusPanel(panelId);
+                    app.session.openDock();
+                  },
                 },
-              }],
+              ],
             });
           } catch (err) {
             console.debug("[Spectrolite] notification failed:", err);
@@ -94,7 +96,9 @@ export function AgentMessageNotifier() {
         if (!cancelled) console.warn("[Spectrolite] notifier stream ended:", err);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [client, app]);
 
   return null;

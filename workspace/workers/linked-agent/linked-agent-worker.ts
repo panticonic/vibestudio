@@ -7,10 +7,11 @@
  * `vibestudio claude channel-host`). Everything else — identity, subscriptions,
  * channel envelopes, addressing, presence, fork-cloning, subagent task duty —
  * is inherited unchanged from the vessel base. The bridge authenticates with
- * an entity-scoped `agent:` credential (caller kind "agent") and attaches over
- * `attach()`; while attached, addressing-approved conversation input is pushed
- * to it as `linked-agent:event` emits; while detached, input buffers durably
- * and presence shows the agent offline.
+ * an entity-scoped `agent:` credential (caller kind "agent") and owns one
+ * `openBridge()` response stream. While that response is alive,
+ * addressing-approved conversation input flows through it; cancelling or losing
+ * the response detaches the exact generation. While detached, input buffers
+ * durably and presence shows the agent offline.
  */
 
 import type { DurableObjectContext } from "@workspace/runtime/worker";
@@ -25,19 +26,18 @@ import {
   type AgenticEvent,
 } from "@workspace/agentic-protocol";
 import { ids } from "@workspace/agent-loop";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentTool } from "@workspace/pi-core";
+import {
+  CHANNEL_SUBSCRIPTION_BUFFER_BYTES,
+  channelSubscriptionQueuingStrategy,
+  encodeChannelSubscriptionRecord,
+  enqueueChannelSubscriptionBytes,
+} from "@workspace/pubsub";
 
-/** Push-event name the bridge listens on (transport: `rpc.emit` to the agent
- *  credential's callerId — every live connection of that caller receives it;
- *  one bridge per credential makes that per-connection in practice). */
-export const LINKED_AGENT_EVENT = "linked-agent:event";
-
-/** Bridge must heartbeat at least this often or the vessel detaches it. */
-export const LINKED_HEARTBEAT_TIMEOUT_MS = 90_000;
 /** A pending permission with no verdict auto-denies after this long. */
 export const LINKED_PERMISSION_TIMEOUT_MS = 120_000;
 
-const ATTACHMENT_KEY = "linked:attachment";
 const COMPLETED_KEY = "linked:completed";
 const PRIMARY_CHANNEL_KEY = "linked:primaryChannelId";
 const ACK_SEQ_KEY = "linked:ackSeq";
@@ -45,12 +45,20 @@ const PROCESSED_SEQ_KEY = "linked:processedSeq";
 const OPEN_TURN_KEY = "linked:openTurn";
 const SESSION_KEY = "linked:session";
 const ALARM_SOURCE = "linked-agent";
+const BRIDGE_REPLAY_PAGE_SIZE = 64;
 
 export interface LinkedAttachment {
   callerId: string;
   sessionInfo: Record<string, unknown>;
   attachedAt: number;
-  lastHeartbeatAt: number;
+}
+
+interface LinkedBridgeStream extends LinkedAttachment {
+  token: symbol;
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  replayCursor: number;
+  replayPending: boolean;
+  replayPump: Promise<void> | null;
 }
 
 /** Hook events reported by the bridge (plan §7.4). `seq` is a per-session
@@ -58,7 +66,7 @@ export interface LinkedAttachment {
 export type LinkedHookEvent =
   | { hook: "SessionStart"; model?: string; cwd?: string }
   | { hook: "UserPromptSubmit"; promptText: string; turnKey: string }
-  | { hook: "PreToolUse"; toolName: string; toolUseId: string; inputSummary?: string }
+  | { hook: "PreToolUse"; toolName: string; toolUseId: string; request?: unknown }
   | {
       hook: "PostToolUse";
       toolUseId: string;
@@ -120,11 +128,6 @@ function isExternallyFedInput(event: ChannelEvent): boolean {
   );
 }
 
-function sessionBridgeId(sessionInfo: Record<string, unknown> | undefined): string | null {
-  const bridge = sessionInfo?.["bridge"];
-  return typeof bridge === "string" && bridge.length > 0 ? bridge : null;
-}
-
 function permissionCapabilityFromSession(sessionInfo: Record<string, unknown> | undefined): string {
   const explicit = sessionInfo?.["permissionCapability"];
   if (typeof explicit === "string" && explicit.trim().length > 0) return explicit;
@@ -135,6 +138,7 @@ function permissionCapabilityFromSession(sessionInfo: Record<string, unknown> | 
 
 export class LinkedAgentWorker extends AgentWorkerBase {
   static override schemaVersion = AgentWorkerBase.schemaVersion;
+  private bridgeStream: LinkedBridgeStream | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -219,16 +223,17 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return true;
   }
 
-  // ── Attachment state machine (plan §5.1) ───────────────────────────────────
+  // ── Response-owned bridge lifetime (plan §5.1) ─────────────────────────────
 
   protected attachment(): LinkedAttachment | null {
-    const raw = this.getStateValue(ATTACHMENT_KEY);
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw) as LinkedAttachment;
-    } catch {
-      return null;
-    }
+    const stream = this.bridgeStream;
+    return stream
+      ? {
+          callerId: stream.callerId,
+          sessionInfo: stream.sessionInfo,
+          attachedAt: stream.attachedAt,
+        }
+      : null;
   }
 
   /** The entity this vessel serves. The launch orchestrator creates the vessel
@@ -263,34 +268,8 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   }
 
   @rpc({ callers: ["agent", "server"] })
-  async attach(opts?: { sessionInfo?: Record<string, unknown> }): Promise<{
-    ok: boolean;
-    cursor: number;
-    replayFromSeq: number;
-    pendingCount: number;
-    primaryChannelId: string | null;
-    contextId: string | null;
-    channelIds: string[];
-  }> {
-    const callerId = this.requireBridgeCaller("attach");
-    const now = Date.now();
-    const existing = this.attachment();
-    if (existing && now < existing.lastHeartbeatAt + LINKED_HEARTBEAT_TIMEOUT_MS) {
-      const existingBridge = sessionBridgeId(existing.sessionInfo);
-      const incomingBridge = sessionBridgeId(opts?.sessionInfo);
-      if (!existingBridge || !incomingBridge || existingBridge !== incomingBridge) {
-        throw new Error("attach: linked bridge already attached");
-      }
-    }
-    const attachment: LinkedAttachment = {
-      callerId,
-      sessionInfo: opts?.sessionInfo ?? {},
-      attachedAt: now,
-      lastHeartbeatAt: now,
-    };
-    this.setStateValue(ATTACHMENT_KEY, JSON.stringify(attachment));
-    this.scheduleAgentAlarm(ALARM_SOURCE, now + LINKED_HEARTBEAT_TIMEOUT_MS);
-    await this.refreshPresence();
+  async openBridge(opts?: { sessionInfo?: Record<string, unknown> }): Promise<Response> {
+    const callerId = this.requireBridgeCaller("openBridge");
     const primaryChannelId = this.primaryChannelId();
     let contextId: string | null = null;
     if (primaryChannelId) {
@@ -301,40 +280,74 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       }
     }
     const replayFromSeq = this.processedSeq();
-    const pending = this.queueRowsAfter(replayFromSeq);
-    // Replay from the last turn boundary (§7.5): acked-but-unprocessed input is
-    // re-delivered into the fresh session; duplicates are context, not commands.
-    for (const row of pending) {
-      await this.openBridgeQueueTurn(row);
-      this.emitToBridge(this.queueEventPayload(row));
-    }
-    return {
+    const result = {
       ok: true,
       cursor: this.ackSeq(),
       replayFromSeq,
-      pendingCount: pending.length,
+      pendingCount: this.queuePendingCountAfter(replayFromSeq),
       primaryChannelId,
       contextId,
       channelIds: this.subscriptions.listChannelIds(),
     };
-  }
 
-  @rpc({ callers: ["agent", "server"] })
-  async heartbeat(): Promise<{ ok: boolean; attached: boolean }> {
-    this.requireBridgeCaller("heartbeat");
-    const attachment = this.attachment();
-    if (!attachment) return { ok: true, attached: false };
-    attachment.lastHeartbeatAt = Date.now();
-    this.setStateValue(ATTACHMENT_KEY, JSON.stringify(attachment));
-    this.scheduleAgentAlarm(ALARM_SOURCE, attachment.lastHeartbeatAt + LINKED_HEARTBEAT_TIMEOUT_MS);
-    return { ok: true, attached: true };
-  }
+    // Replacing a response is atomic desired-state replacement. Fence the old
+    // response by token before closing it so its eventual cancel callback can
+    // never detach the new stream.
+    const previous = this.bridgeStream;
+    if (previous) {
+      this.bridgeStream = null;
+      try {
+        previous.controller.close();
+      } catch {
+        // Already terminal.
+      }
+    }
+    const token = Symbol("linked-bridge");
+    let stream!: LinkedBridgeStream;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start: (controller) => {
+          stream = {
+            token,
+            controller,
+            callerId,
+            sessionInfo: opts?.sessionInfo ?? {},
+            attachedAt: Date.now(),
+            replayCursor: replayFromSeq,
+            replayPending: true,
+            replayPump: null,
+          };
+          this.bridgeStream = stream;
+          const ack = encodeChannelSubscriptionRecord({ kind: "subscribed", result });
+          if (enqueueChannelSubscriptionBytes(controller, ack) !== "enqueued") {
+            void this.closeBridgeStream(token, "subscription-ack-too-large");
+          }
+        },
+        pull: async () => this.pumpBridgeReplay(token),
+        cancel: async () => this.closeBridgeStream(token, "response-cancelled"),
+      },
+      channelSubscriptionQueuingStrategy()
+    );
 
-  @rpc({ callers: ["agent", "server"] })
-  async detachSelf(): Promise<{ ok: boolean }> {
-    this.requireBridgeCaller("detachSelf");
-    await this.detach("bridge-detached");
-    return { ok: true };
+    try {
+      await this.refreshPresence();
+    } catch (error) {
+      try {
+        await this.closeBridgeStream(token, "setup-failed");
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "linked bridge setup and attachment cleanup failed"
+        );
+      }
+      throw error;
+    }
+    return new Response(body, {
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
   @rpc({ callers: ["agent", "server"] })
@@ -347,16 +360,25 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, ackSeq: next };
   }
 
-  protected async detach(reason: string): Promise<void> {
-    const attachment = this.attachment();
-    if (!attachment) return;
-    this.emitToBridge({ kind: "detach", reason });
+  private async closeBridgeStream(token: symbol, reason: string, failure?: unknown): Promise<void> {
+    const stream = this.bridgeStream;
+    if (!stream || stream.token !== token) return;
+    this.bridgeStream = null;
+    try {
+      if (failure === undefined) stream.controller.close();
+      else stream.controller.error(failure);
+    } catch {
+      // Already terminal.
+    }
     await this.closeOpenTurn(`bridge detached (${reason})`, false);
-    this.setStateValue(ATTACHMENT_KEY, "");
-    this.clearAgentAlarm(ALARM_SOURCE);
     // No consumer for verdicts anymore — pending permissions fail closed.
     await this.denyPendingPermissions(`bridge detached (${reason})`);
     await this.refreshPresence();
+  }
+
+  private async closeCurrentBridge(reason: string): Promise<void> {
+    const stream = this.bridgeStream;
+    if (stream) await this.closeBridgeStream(stream.token, reason);
   }
 
   /** Re-advertise participant metadata (attachment state) on every channel. */
@@ -381,22 +403,14 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   }
 
   private linkedNextWakeAt(): number | null {
-    const deadlines: number[] = [];
-    const attachment = this.attachment();
-    if (attachment) deadlines.push(attachment.lastHeartbeatAt + LINKED_HEARTBEAT_TIMEOUT_MS);
     const row = this.sql
       .exec(`SELECT MIN(deadline_at) AS due FROM linked_permissions WHERE status = 'pending'`)
       .toArray()[0];
     const due = row?.["due"];
-    if (typeof due === "number") deadlines.push(due);
-    return deadlines.length ? Math.min(...deadlines) : null;
+    return typeof due === "number" ? due : null;
   }
 
   private async linkedAlarm(now: number): Promise<void> {
-    const attachment = this.attachment();
-    if (attachment && now >= attachment.lastHeartbeatAt + LINKED_HEARTBEAT_TIMEOUT_MS) {
-      await this.detach("heartbeat-timeout");
-    }
     const expired = this.sql
       .exec(
         `SELECT request_id FROM linked_permissions WHERE status = 'pending' AND deadline_at <= ?`,
@@ -409,7 +423,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     }
   }
 
-  // ── Bridge delivery (queue + push) ─────────────────────────────────────────
+  // ── Bridge delivery (durable queue + response stream) ──────────────────────
 
   protected primaryChannelId(): string | null {
     const stored = this.getStateValue(PRIMARY_CHANNEL_KEY);
@@ -430,8 +444,13 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   private queueRowsAfter(seq: number): QueueRow[] {
     return this.sql
       .exec(
-        `SELECT seq, kind, channel_id, payload FROM linked_bridge_queue WHERE seq > ? ORDER BY seq`,
-        seq
+        `SELECT seq, kind, channel_id, payload
+         FROM linked_bridge_queue
+         WHERE seq > ?
+         ORDER BY seq
+         LIMIT ?`,
+        seq,
+        BRIDGE_REPLAY_PAGE_SIZE
       )
       .toArray()
       .map((row) => ({
@@ -440,6 +459,69 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         channelId: String(row["channel_id"]),
         payload: JSON.parse(String(row["payload"])) as Record<string, unknown>,
       }));
+  }
+
+  private queuePendingCountAfter(seq: number): number {
+    const row = this.sql
+      .exec(`SELECT COUNT(*) AS count FROM linked_bridge_queue WHERE seq > ?`, seq)
+      .toArray()[0];
+    return Number(row?.["count"] ?? 0);
+  }
+
+  private async pumpBridgeReplay(token: symbol): Promise<void> {
+    const stream = this.bridgeStream;
+    if (!stream || stream.token !== token || !stream.replayPending) return;
+    if (stream.replayPump) return stream.replayPump;
+
+    const pump = this.runBridgeReplay(stream);
+    stream.replayPump = pump;
+    try {
+      await pump;
+    } catch (error) {
+      try {
+        await this.closeBridgeStream(token, "replay-failed", error);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "linked bridge replay and cleanup failed");
+      }
+      throw error;
+    } finally {
+      if (stream.replayPump === pump) stream.replayPump = null;
+    }
+  }
+
+  /** Fill only currently available response capacity, reading durable rows one page at a time. */
+  private async runBridgeReplay(stream: LinkedBridgeStream): Promise<void> {
+    while (this.bridgeStream === stream && stream.replayPending) {
+      const rows = this.queueRowsAfter(stream.replayCursor);
+      if (rows.length === 0) {
+        stream.replayPending = false;
+        return;
+      }
+      for (const row of rows) {
+        if (this.bridgeStream !== stream) return;
+        const bytes = encodeChannelSubscriptionRecord({
+          kind: "message",
+          payload: this.queueEventPayload(row),
+        });
+        if (bytes.byteLength > CHANNEL_SUBSCRIPTION_BUFFER_BYTES) {
+          throw new Error("Linked bridge replay record exceeds the response buffer limit");
+        }
+        const capacity = stream.controller.desiredSize;
+        if (capacity === null) return;
+        if (bytes.byteLength > capacity) return;
+
+        // Replay starts at the last completed turn boundary (§7.5):
+        // acked-but-unprocessed input is context for the fresh session.
+        await this.openBridgeQueueTurn(row);
+        if (this.bridgeStream !== stream) return;
+        const outcome = enqueueChannelSubscriptionBytes(stream.controller, bytes);
+        if (outcome === "backpressured") return;
+        if (outcome !== "enqueued") {
+          throw new Error(`Linked bridge replay record cannot be delivered: ${outcome}`);
+        }
+        stream.replayCursor = row.seq;
+      }
+    }
   }
 
   private enqueueForBridge(
@@ -467,19 +549,21 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { kind: row.kind, seq: row.seq, channelId: row.channelId, ...row.payload };
   }
 
-  /** Fire-and-forget push to the attached bridge (no-op while detached; the
-   *  durable queue is the source of truth, pushes are the live tail). */
+  /** Enqueue onto the response-owned bridge tail. The durable queue remains
+   *  authoritative; a failed response write terminates that exact attachment. */
   protected emitToBridge(payload: Record<string, unknown>): void {
-    const attachment = this.attachment();
-    if (!attachment) return;
-    const rpc = this.rpc as unknown as {
-      emit: (target: string, event: string, payload: unknown) => Promise<void>;
-    };
-    const bridge = sessionBridgeId(attachment.sessionInfo);
-    const framed = bridge ? { ...payload, bridge } : payload;
-    void rpc.emit(attachment.callerId, LINKED_AGENT_EVENT, framed).catch((err: unknown) => {
-      console.warn("[LinkedAgent] bridge emit failed:", err instanceof Error ? err.message : err);
-    });
+    const stream = this.bridgeStream;
+    if (!stream) return;
+    const seq = payload["seq"];
+    if (stream.replayPending && typeof seq === "number" && seq > stream.replayCursor) return;
+    try {
+      const bytes = encodeChannelSubscriptionRecord({ kind: "message", payload });
+      if (enqueueChannelSubscriptionBytes(stream.controller, bytes) !== "enqueued") {
+        void this.closeBridgeStream(stream.token, "response-buffer-full");
+      }
+    } catch {
+      void this.closeBridgeStream(stream.token, "response-write-failed");
+    }
   }
 
   /** The vessel-base seam: addressing-approved conversation input is queued for
@@ -487,17 +571,22 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   protected override async dispatchApprovedInput(
     channelId: string,
     event: ChannelEvent,
-    _sourceMessageId: string | undefined
+    sourceMessageId: string | undefined
   ): Promise<void> {
     // The subagent task seed is delivered out-of-band as the headless launch
     // prompt (`claude -p <task>`); relaying it here would hand the session its
     // task twice (live push + attach replay). It stays on the channel for
     // trajectory visibility and `channel history`, just not in the bridge queue.
     if (event.messageId.startsWith("subagent-seed:")) return;
+    if (!sourceMessageId) {
+      throw new Error(
+        `linked input ${event.messageId} has no canonical source message identity; refusing an unwalkable turn`
+      );
+    }
     const agentic = event.payload as AgenticEvent | null;
     const senderMetadata = (event as { senderMetadata?: Record<string, unknown> }).senderMetadata;
     const payload = (agentic?.payload ?? {}) as { mentions?: string[] };
-    const content = bounded(this.turnContent(channelId, event));
+    const content = this.turnContent(channelId, event);
     const meta: Record<string, unknown> = {
       channel_id: channelId,
       seq: event.id,
@@ -510,11 +599,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     };
     const seq = this.enqueueForBridge("message", channelId, `msg:${channelId}:${event.messageId}`, {
       content,
+      triggerMessageId: sourceMessageId,
       meta,
     });
     if (seq !== null) {
       if (this.attachment()) {
-        await this.openChannelTurn(channelId, event, content);
+        await this.openReceivedMessageTurn(channelId, sourceMessageId);
       }
       this.emitToBridge({ kind: "message", seq, channelId, content, meta });
     }
@@ -596,9 +686,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     if (opts?.runId && opts.runId !== sub.runId) return { ok: true, settled: false };
     if (this.getStateValue(COMPLETED_KEY)) return { ok: true, settled: false };
     this.setStateValue(COMPLETED_KEY, "1");
-    // The bridge died with the process; fail-close its pending permissions now
-    // rather than waiting out the heartbeat timeout.
-    await this.detach("process-exit");
+    await this.closeCurrentBridge("process-exit");
     const exitDesc =
       typeof opts?.signal === "string" && opts.signal
         ? `signal ${opts.signal}`
@@ -631,7 +719,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return {
       attached: attachment !== null,
       sessionInfo: attachment?.sessionInfo ?? null,
-      pendingCount: this.queueRowsAfter(this.processedSeq()).length,
+      pendingCount: this.queuePendingCountAfter(this.processedSeq()),
       ackSeq: this.ackSeq(),
       processedSeq: this.processedSeq(),
       primaryChannelId: this.primaryChannelId(),
@@ -659,15 +747,15 @@ export class LinkedAgentWorker extends AgentWorkerBase {
           "prompt",
           channelId,
           `prompt:${channelId}:${this.rpcRequestId ?? `${Date.now()}`}`,
-          { content: bounded(text), meta: { from: this.rpcCallerId ?? "channel" } }
+          { content: text, meta: { from: this.rpcCallerId ?? "channel" } }
         );
         if (seq !== null) {
-          await this.openCommandTurn(channelId, String(seq), bounded(text));
+          await this.openCommandTurn(channelId, String(seq), text);
           this.emitToBridge({
             kind: "prompt",
             seq,
             channelId,
-            content: bounded(text),
+            content: text,
             meta: { from: this.rpcCallerId ?? "channel" },
           });
         }
@@ -689,7 +777,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     }
   }
 
-  // ── Trajectory authorship from hook events (plan §7.4) ─────────────────────
+  // ── Observable trajectory and causal recording from hooks (plan §7.4) ─────
 
   @rpc({ callers: ["agent", "server"] })
   async ingestHookEvent(opts: {
@@ -748,13 +836,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         const messageId = `lm:${turnId}:user`;
         await this.appendTrajectory(channelId, [
           {
-            envelopeId: ids.turnOpened(turnId),
-            payloadKind: "turn.opened",
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-            causality: { turnId },
-            publish: true,
-          },
-          {
             envelopeId: ids.messageTerminal(messageId),
             payloadKind: "message.completed",
             payload: {
@@ -764,7 +845,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
                 {
                   blockId: `${messageId}:block:0`,
                   type: "text",
-                  content: bounded(event.promptText),
+                  content: event.promptText,
                 },
               ],
               outcome: "completed",
@@ -774,6 +855,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
             causality: { turnId, messageId },
             publish: true,
           },
+          this.triggeredTurnOpenedItem(turnId, messageId),
         ]);
         break;
       }
@@ -791,7 +873,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
               name: event.toolName,
               invocationType: "tool",
               userVisible: true,
-              ...(event.inputSummary ? { summary: bounded(event.inputSummary, 2_000) } : {}),
+              ...(event.request !== undefined ? { request: event.request } : {}),
             },
             causality: { invocationId, ...this.openTurnCausality() },
             publish: true,
@@ -821,20 +903,14 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       }
       case "Stop": {
         const open = this.openTurn();
-        const turnId = open?.turnId ?? this.turnIdFor(channelId, sessionId, event.turnKey);
+        if (!open) {
+          throw new Error(
+            `linked Stop ${event.turnKey} has no captured prompt or received message; refusing to invent turn causality`
+          );
+        }
+        const turnId = open.turnId;
         const messageId = `lm:${turnId}:final`;
         const items: TrajectoryItem[] = [];
-        if (!open) {
-          // Channel-driven turns have no UserPromptSubmit: open retroactively so
-          // the pair is well-formed (idempotent by envelopeId on redelivery).
-          items.push({
-            envelopeId: ids.turnOpened(turnId),
-            payloadKind: "turn.opened",
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-            causality: { turnId },
-            publish: true,
-          });
-        }
         if (typeof event.finalText === "string" && event.finalText.trim().length > 0) {
           // Mirrored final assistant message (plan §7.5): visible in trajectory
           // and cards, tier "secondary" and no say-saliency — not spoken INTO the
@@ -849,7 +925,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
                 {
                   blockId: `${messageId}:block:0`,
                   type: "text",
-                  content: bounded(event.finalText),
+                  content: event.finalText,
                 },
               ],
               outcome: "completed",
@@ -892,7 +968,9 @@ export class LinkedAgentWorker extends AgentWorkerBase {
             },
           },
         ]);
-        await this.detach("session-end");
+        // The bridge response is client-owned. MCP stdin closure cancels it;
+        // this hook records the semantic event but does not create a second,
+        // server-side lifetime decision.
         break;
       }
     }
@@ -918,38 +996,22 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return open ? { turnId: open.turnId } : {};
   }
 
-  private async openChannelTurn(
+  /**
+   * Open a linked turn from a message that already exists in the canonical
+   * trajectory. No mirrored copy is authored: the turn points straight at the
+   * received message identity, so turn -> message -> sender/content stays one
+   * public, walkable chain on live delivery and durable replay alike.
+   */
+  private async openReceivedMessageTurn(
     channelId: string,
-    event: ChannelEvent,
-    content: string
+    triggerMessageId: string
   ): Promise<void> {
     if (this.openTurn()) return;
-    const turnKey = `channel:${event.messageId}`;
+    const turnKey = `channel:${triggerMessageId}`;
     const turnId = ids.turnId(channelId, turnKey, this.participantId());
     this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey }));
-    const messageId = `lm:${turnId}:channel-input`;
     await this.appendTrajectory(channelId, [
-      {
-        envelopeId: ids.turnOpened(turnId),
-        payloadKind: "turn.opened",
-        payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-        causality: { turnId },
-        publish: true,
-      },
-      {
-        envelopeId: ids.messageTerminal(messageId),
-        payloadKind: "message.completed",
-        payload: {
-          protocol: AGENTIC_PROTOCOL_VERSION,
-          role: "user",
-          blocks: [{ blockId: `${messageId}:block:0`, type: "text", content }],
-          outcome: "completed",
-          tier: "primary",
-          metadata: { source: "channel" },
-        },
-        causality: { turnId, messageId },
-        publish: true,
-      },
+      this.triggeredTurnOpenedItem(turnId, triggerMessageId),
     ]);
   }
 
@@ -960,13 +1022,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey }));
     const messageId = `lm:${turnId}:channel-command`;
     await this.appendTrajectory(channelId, [
-      {
-        envelopeId: ids.turnOpened(turnId),
-        payloadKind: "turn.opened",
-        payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-        causality: { turnId },
-        publish: true,
-      },
       {
         envelopeId: ids.messageTerminal(messageId),
         payloadKind: "message.completed",
@@ -981,45 +1036,38 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         causality: { turnId, messageId },
         publish: true,
       },
+      this.triggeredTurnOpenedItem(turnId, messageId),
     ]);
   }
 
   private async openBridgeQueueTurn(row: QueueRow): Promise<void> {
     if (this.openTurn()) return;
-    const content = bounded(row.payload["content"]);
     if (row.kind === "message") {
-      const turnKey = `queue:${row.seq}`;
-      const turnId = ids.turnId(row.channelId, turnKey, this.participantId());
-      this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey }));
-      const messageId = `lm:${turnId}:queued-input`;
-      await this.appendTrajectory(row.channelId, [
-        {
-          envelopeId: ids.turnOpened(turnId),
-          payloadKind: "turn.opened",
-          payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-          causality: { turnId },
-          publish: true,
-        },
-        {
-          envelopeId: ids.messageTerminal(messageId),
-          payloadKind: "message.completed",
-          payload: {
-            protocol: AGENTIC_PROTOCOL_VERSION,
-            role: "user",
-            blocks: [{ blockId: `${messageId}:block:0`, type: "text", content }],
-            outcome: "completed",
-            tier: "primary",
-            metadata: { source: "queued-channel" },
-          },
-          causality: { turnId, messageId },
-          publish: true,
-        },
-      ]);
+      const triggerMessageId = row.payload["triggerMessageId"];
+      if (typeof triggerMessageId !== "string" || triggerMessageId.length === 0) {
+        throw new Error(`linked queue row ${row.seq} has no canonical trigger message identity`);
+      }
+      await this.openReceivedMessageTurn(row.channelId, triggerMessageId);
       return;
     }
     if (row.kind === "prompt") {
-      await this.openCommandTurn(row.channelId, String(row.seq), content);
+      const content = row.payload["content"];
+      await this.openCommandTurn(
+        row.channelId,
+        String(row.seq),
+        typeof content === "string" ? content : String(content ?? "")
+      );
     }
+  }
+
+  private triggeredTurnOpenedItem(turnId: string, triggerMessageId: string): TrajectoryItem {
+    return {
+      envelopeId: ids.turnOpened(turnId),
+      payloadKind: "turn.opened",
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      causality: { turnId, messageId: triggerMessageId },
+      publish: true,
+    };
   }
 
   private async closeOpenTurn(
@@ -1047,14 +1095,14 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   private async appendTrajectory(channelId: string, items: TrajectoryItem[]): Promise<void> {
     if (items.length === 0) return;
-    const logId = ids.logIdForChannel(channelId);
+    const { logId, head } = channelTrajectoryFor(channelId);
     const selfRef = this.selfRef(channelId);
     const result = await this.callGad<{
       envelopes: Array<{ envelopeId: string }>;
       published?: Array<{ originEnvelopeId: string; channelId: string; envelopeId: string }>;
     }>("appendLogEvent", {
       logId,
-      head: logId,
+      head,
       logKind: "trajectory",
       owner: { kind: "agent", id: selfRef.id },
       idempotency: "idempotent-by-id",
@@ -1343,7 +1391,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     newChannelId: string;
     forkPointPubsubId: number;
   }): Promise<void> {
-    this.setStateValue(ATTACHMENT_KEY, "");
+    await this.closeCurrentBridge("channel-forked");
     this.setStateValue(COMPLETED_KEY, "");
     this.setStateValue(ACK_SEQ_KEY, "");
     this.setStateValue(PROCESSED_SEQ_KEY, "");

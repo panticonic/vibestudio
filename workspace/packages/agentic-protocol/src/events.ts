@@ -14,7 +14,6 @@ import type {
   EventId,
   InvocationId,
   MessageId,
-  StateHash,
   TrajectoryId,
   TurnId,
 } from "./ids.js";
@@ -35,10 +34,7 @@ export const PARTICIPANT_KINDS = [
   // existing transcript history. Use PrincipalKind for execution attribution.
   "panel",
 ] as const;
-export const ACTOR_KINDS = [
-  ...SEMANTIC_PARTICIPANT_KINDS,
-  ...PRINCIPAL_KINDS,
-] as const;
+export const ACTOR_KINDS = [...SEMANTIC_PARTICIPANT_KINDS, ...PRINCIPAL_KINDS] as const;
 
 /** Semantic role of a participant in a conversation. */
 export type SemanticParticipantKind = (typeof SEMANTIC_PARTICIPANT_KINDS)[number];
@@ -104,9 +100,6 @@ export type EventKind =
   | "messageType.cleared"
   | "custom.started"
   | "custom.updated"
-  | "state.transition_recorded"
-  | "state.snapshot_ingested"
-  | "state.merge_applied"
   | "memory.recalled"
   | "build.completed"
   | "external.envelope_published"
@@ -122,11 +115,7 @@ export type EventKind =
   | "turn.waiting"
   | "turn.closed"
   | "system.event"
-  | "system.compaction_recorded"
-  | "knowledge.claim_recorded"
-  | "knowledge.claim_updated"
-  | "knowledge.claim_retracted"
-  | "knowledge.claims_related";
+  | "system.compaction_recorded";
 
 export interface EventCausality {
   parentEventId?: EventId;
@@ -356,8 +345,8 @@ export type InvocationCompletedPayload = {
   terminalOutcome: "success";
   terminalReasonCode?: string;
   /** Present when this invocation is a subagent run terminating on the parent
-   *  trajectory; `merge` records how the child's work was reconciled. */
-  subagent?: { merge?: "merged" | "conflicted" | "discarded" };
+   *  trajectory; `integration` records its semantic disposition. */
+  subagent?: { integration?: "integrated" | "conflicted" | "discarded" };
 };
 
 export type InvocationTerminalFailureOutcome = Exclude<InvocationOutcome, "success">;
@@ -370,8 +359,8 @@ type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutco
   terminalOutcome: Outcome;
   terminalReasonCode?: string;
   /** Present when this invocation is a subagent run terminating on the parent
-   *  trajectory; `merge` records how the child's work was reconciled. */
-  subagent?: { merge?: "merged" | "conflicted" | "discarded" };
+   *  trajectory; `integration` records its semantic disposition. */
+  subagent?: { integration?: "integrated" | "conflicted" | "discarded" };
 };
 
 export type InvocationFailedPayload = InvocationFailurePayloadBase<
@@ -665,7 +654,6 @@ export interface BranchPayload {
   branchId?: BranchId;
   parentBranchId?: BranchId;
   headEventId?: EventId;
-  headStateHash?: StateHash;
   forkEventId?: EventId;
   name?: string;
 }
@@ -703,16 +691,6 @@ export interface ChannelForkArchivedPayload {
   forkId: string;
 }
 
-export interface StatePayload {
-  protocol: "agentic.trajectory.v1";
-  inputStateHash?: StateHash;
-  outputStateHash?: StateHash;
-  /** Merge parents beyond `inputStateHash` (which stays parent 0). */
-  parentStateHashes?: StateHash[];
-  summary?: string;
-  metadata?: Record<string, unknown>;
-}
-
 export interface SystemPayload {
   protocol: "agentic.trajectory.v1";
   kind?: string;
@@ -743,35 +721,6 @@ export interface BuildCompletedPayload {
   evHash?: string;
   artifactRefs?: unknown;
   diagnostics?: unknown;
-  metadata?: Record<string, unknown>;
-}
-
-export type ClaimRelationKind = "supports" | "contradicts" | "about" | "refines" | "depends_on";
-
-export interface KnowledgeRelation {
-  src: string;
-  relation: ClaimRelationKind;
-  dst: string;
-  weight?: number;
-}
-
-export interface KnowledgePayload {
-  protocol: "agentic.trajectory.v1";
-  id?: string;
-  subject?: string;
-  predicate?: string;
-  object?: string;
-  claimId?: string;
-  /** Pointer to the durable knowledge-ledger entry that owns this claim's content (§8.1). */
-  ledgerEntryId: string;
-  /** Free-text claim statement (nullable alongside subject/predicate/object). */
-  text?: string;
-  /** Claim kind (entity | predicate | statement, etc.). */
-  kind?: string;
-  status?: string;
-  /** Asserted relations carried by knowledge.claims_related events. */
-  relations?: KnowledgeRelation[];
-  body?: unknown;
   metadata?: Record<string, unknown>;
 }
 
@@ -819,25 +768,21 @@ export type PayloadFor<K extends EventKind> = K extends "message.received" | "me
                                 ? BranchPayload
                                 : K extends `turn.${string}`
                                   ? TurnPayload
-                                  : K extends `state.${string}`
-                                    ? StatePayload
-                                    : K extends "system.compaction_recorded"
-                                      ? CompactionPayload
-                                      : K extends "system.event"
-                                        ? SystemPayload
-                                        : K extends "memory.recalled"
-                                          ? MemoryRecalledPayload
-                                          : K extends "build.completed"
-                                            ? BuildCompletedPayload
-                                            : K extends `knowledge.${string}`
-                                              ? KnowledgePayload
-                                              : K extends "channel.forked"
-                                                ? ChannelForkedPayload
-                                                : K extends "channel.fork_renamed"
-                                                  ? ChannelForkRenamedPayload
-                                                  : K extends "channel.fork_archived"
-                                                    ? ChannelForkArchivedPayload
-                                                    : never;
+                                  : K extends "system.compaction_recorded"
+                                    ? CompactionPayload
+                                    : K extends "system.event"
+                                      ? SystemPayload
+                                      : K extends "memory.recalled"
+                                        ? MemoryRecalledPayload
+                                        : K extends "build.completed"
+                                          ? BuildCompletedPayload
+                                          : K extends "channel.forked"
+                                            ? ChannelForkedPayload
+                                            : K extends "channel.fork_renamed"
+                                              ? ChannelForkRenamedPayload
+                                              : K extends "channel.fork_archived"
+                                                ? ChannelForkArchivedPayload
+                                                : never;
 
 export interface AgenticEvent<K extends EventKind = EventKind> {
   kind: K;

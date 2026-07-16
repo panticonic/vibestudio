@@ -10,7 +10,7 @@
  * id-collision). `*-standing` keys are ONLY for scheduled instances in `vibestudio.yml`.
  */
 import { contextId as runtimeContextId, rpc } from "@workspace/runtime";
-import { toSubscriptionConfig } from "@workspace/agentic-core";
+import { toSubscriptionConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
 
 export interface AddAgentToChannelArgs {
   /** Worker source, e.g. "workers/explorer-agent". */
@@ -103,10 +103,10 @@ export async function removeAgentFromChannel(args: {
   channelId: string;
 }): Promise<{ ok: boolean }> {
   const channelId = args.channelId.trim();
-  const target = await rpc.call<{ targetId: string }>("main", "workers.resolveDurableObject", [
-    args.source,
-    args.className,
-    agentObjectKey(args.handle, channelId),
-  ]);
-  return rpc.call<{ ok: boolean }>(target.targetId, "unsubscribeChannel", [channelId]);
+  return unsubscribeAgentFromChannel(rpc, {
+    source: args.source,
+    className: args.className,
+    key: agentObjectKey(args.handle, channelId),
+    channelId,
+  });
 }

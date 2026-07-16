@@ -1,7 +1,7 @@
 /**
- * Edit tool — GAD-native. Reads the base from the caller's vcs head and records
+ * Edit tool. Reads the base from the caller's exact working state and records
  * the change as an UNCOMMITTED working edit through `vcs.edit` (edit-first; disk
- * is a projection of the head, never written directly). It does NOT commit, so
+ * is a projection of semantic state, never written directly). It does NOT commit, so
  * nothing builds or advances `main` until a deliberate `vcs.commit` + `vcs.push`.
  * The fuzzy / BOM / line-ending matching logic is the upstream pi-coding-agent
  * behaviour.
@@ -10,12 +10,21 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import type { VcsWorkingMutationResult } from "@vibestudio/service-schemas/vcs";
 import {
   canonicalizeWorkspaceFilePath,
   splitRepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { RuntimeFs } from "./runtime-fs.js";
-import { toVcsPath, withInvocationId, type ToolVcs, type ToolVcsEditOp } from "./tool-vcs.js";
+import {
+  resolveToolFile,
+  resolveToolWorkingState,
+  toVcsPath,
+  toolCommandId,
+  toolContextId,
+  type ToolEditingVcs,
+  type ToolMutationContext,
+} from "./tool-vcs.js";
 import {
   detectLineEnding,
   fuzzyFindText,
@@ -46,11 +55,14 @@ export interface EditToolDetails {
   matchCount?: number;
   /** One-based candidate line numbers for an ambiguous replacement. */
   candidateLines?: number[];
+  /** Exact canonical semantic result for a managed edit. */
+  vcsResult?: VcsWorkingMutationResult;
 }
 
 export function createEditTool(
   cwd: string,
-  vcs: ToolVcs,
+  vcs: ToolEditingVcs,
+  context: ToolMutationContext,
   fs?: Pick<RuntimeFs, "readFile" | "writeFile">
 ): AgentTool<typeof editSchema, EditToolDetails> {
   return {
@@ -59,7 +71,7 @@ export function createEditTool(
     description:
       "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.",
     parameters: editSchema,
-    execute: async (toolCallId, input, signal) => {
+    execute: async (_toolCallId, input, signal) => {
       const { path, oldText, newText } = input;
       if (typeof path !== "string" || typeof oldText !== "string" || typeof newText !== "string") {
         throw new Error("edit requires path, oldText, and newText");
@@ -68,10 +80,12 @@ export function createEditTool(
 
       const relPath = canonicalizeWorkspaceFilePath(toVcsPath(path, cwd));
       const repo = splitRepoPath(relPath);
-      const bareTrackedFile = relPath.length > 0 && !relPath.includes("/");
-      const useVcs = Boolean(repo || bareTrackedFile || !fs);
+      const useVcs = Boolean(repo || !fs);
       const scratch = !useVcs && fs ? await fs.readFile(relPath, "utf8") : null;
-      const base = useVcs ? await vcs.readFile(relPath) : null;
+      const workingHead = useVcs ? await resolveToolWorkingState(vcs, context) : null;
+      const exactFile =
+        useVcs && workingHead ? await resolveToolFile(vcs, workingHead, relPath) : null;
+      const base = exactFile;
       if (!base && scratch === null) {
         return {
           content: [
@@ -179,36 +193,38 @@ export function createEditTool(
       }
 
       // On the common LF / no-BOM path the normalized content is byte-identical
-      // to what GAD stores, so emit a surgical replacement hunk (offsets valid
+      // to what the semantic control plane stores, so emit a surgical replacement hunk (offsets valid
       // against the base) which merges cleanly with concurrent edits elsewhere.
       // Otherwise fall back to a whole-file write that preserves BOM/endings.
-      let edits: ToolVcsEditOp[];
-      if (!matchResult.usedFuzzyMatch && bom === "" && originalEnding === "\n") {
-        edits = [
-          {
-            kind: "replace",
-            path: relPath,
-            hunks: [
-              { start, end, oldText: baseContent.slice(start, end), newText: normalizedNewText },
-            ],
-          },
-        ];
-      } else {
-        edits = [
-          {
-            kind: "write",
-            path: relPath,
-            content: { kind: "text", text: bom + restoreLineEndings(newContent, originalEnding) },
-          },
-        ];
-      }
+      const surgical = !matchResult.usedFuzzyMatch && bom === "" && originalEnding === "\n";
 
       // Tie this edit to the authoring tool-call (the edge into the agentic
       // trajectory: file → edit → invocation → turn → session, queryable + kept
-      // through commit). The invocationId is stamped by the shared adapter seam
-      // (T2) — the tool no longer hand-passes it per vcs call.
-      if (base) {
-        await withInvocationId(vcs, toolCallId).edit({ baseStateHash: base.stateHash, edits });
+      // through commit). The exact causal invocation arrives through verified
+      // RPC context, never through this tool payload.
+      let vcsResult: VcsWorkingMutationResult | undefined;
+      if (base && exactFile && workingHead) {
+        vcsResult = await vcs.edit({
+          contextId: toolContextId(context),
+          expectedWorkingHead: workingHead,
+          commandId: toolCommandId(context),
+          changes: [
+            {
+              kind: "text-edit",
+              repositoryId: exactFile.repositoryId,
+              fileId: exactFile.fileId,
+              edits: surgical
+                ? [{ start, end, text: normalizedNewText }]
+                : [
+                    {
+                      start: 0,
+                      end: sourceContent.length,
+                      text: bom + restoreLineEndings(newContent, originalEnding),
+                    },
+                  ],
+            },
+          ],
+        });
       } else if (fs) {
         await fs.writeFile(relPath, bom + restoreLineEndings(newContent, originalEnding));
       }
@@ -224,6 +240,7 @@ export function createEditTool(
           diff: diffResult.diff,
           firstChangedLine: diffResult.firstChangedLine,
           storage: base ? "vcs" : "scratch",
+          ...(vcsResult ? { vcsResult } : {}),
         },
       };
     },

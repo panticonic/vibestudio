@@ -1,7 +1,7 @@
 # Subagents
 
 Use this guide when delegating work to a child agent, inspecting a child
-agent's work, merging or cherry-picking work back, choosing between the
+agent's work, integrating committed changes, choosing between the
 in-process Pi engine and an external engine (Claude Code), or reasoning about
 conversation forks versus subagent task channels.
 
@@ -13,11 +13,8 @@ and `src/subagent-runs.ts`.
 
 - Conversation fork: an alternate chat branch. It is user-facing chat lineage,
   not a source repo fork.
-- Repo fork: `vcs.forkRepo(fromPath, toPath)`, a source-control operation that
-  copies a repo to a new path while preserving history.
-- Context fork: the VCS/runtime state copied for an isolated workspace context.
-  Subagents use child contexts so their edits are isolated until the parent
-  merges or picks them.
+- Context fork: an isolated semantic workspace state. Subagents use child
+  contexts so their changes remain isolated until the parent adopts them.
 - Subagent: a child agent spawned by `spawn_subagent`. It has its own task
   channel transcript and child context. The parent supervises it through the
   `*_subagent` tools.
@@ -28,7 +25,7 @@ Spawn a subagent when the work is meaningfully separable:
 
 - independent investigation or cross-checking
 - parallel workstreams
-- isolated edits that may be merged or picked later
+- isolated work whose committed changes can be integrated later
 - long-running or exploratory work where a separate transcript is useful
 
 Do not spawn for small linear tasks you can do directly in the current turn. A
@@ -46,9 +43,9 @@ and closeout.
    child's messages directly.
 6. Use `inspect_subagent` for child-context files and VCS state: `status`,
    `diff`, `log`, or a file path.
-7. Decide what to take:
-   - `merge_subagent` takes everything from the child context.
-   - `pick_from_subagent` takes selected commits or paths.
+7. Call `integrate_subagent` to adopt every currently applicable child change.
+   Conflicting or blocked changes remain explicit and require focused
+   adopt/reconcile/decline decisions through the canonical `vcs` service.
    - `close_subagent({ discard: true })` records that you intentionally dropped
      the child's work.
 8. Close the run once you no longer need the child context.
@@ -60,12 +57,12 @@ spawn_subagent({
   mode: "fresh",
   label: "API audit",
   task: [
-    "Audit the workspace API docs for stale VCS merge examples.",
+    "Audit the workspace API docs for stale VCS integration examples.",
     "Read relevant skills/docs first.",
     "Use say only for meaningful milestones.",
-    "When finished, call complete with a concise report and list uncertainties."
-  ].join("\n")
-})
+    "When finished, call complete with a concise report and list uncertainties.",
+  ].join("\n"),
+});
 ```
 
 ## Fresh Versus Fork
@@ -94,7 +91,7 @@ vessel class. Any other value names an extension-owned external launcher
 Code session in the child context. Everything about supervision stays the same:
 the run gets a task channel and child context, progress is pushed into your
 channel, the run card badges the engine, and `send_to_subagent` /
-`inspect_subagent` / `merge_subagent` / `pick_from_subagent` /
+`inspect_subagent` / `integrate_subagent` /
 `close_subagent` all work identically. Depth and fan-out gates are shared.
 
 ```ts
@@ -103,8 +100,8 @@ spawn_subagent({
   agentKind: "claude-code",
   label: "repo audit",
   task: "Audit packages/foo for stale contracts. Commit fixes in this context; complete with findings.",
-  config: { model: "opus", effort: "high" }
-})
+  config: { model: "opus", effort: "high" },
+});
 ```
 
 When to choose which engine:
@@ -129,13 +126,13 @@ External-engine specifics:
 - **`config` maps to the launcher CLI** (whitelisted; unknown keys and
   flag-shaped values are dropped). For claude-code:
 
-  | key | CLI flag | values |
-  |-----|----------|--------|
-  | `model` | `--model` | alias (`"opus"`, `"sonnet"`, `"haiku"`) or full model name |
-  | `effort` | `--effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` |
+  | key              | CLI flag            | values                                                                                                  |
+  | ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+  | `model`          | `--model`           | alias (`"opus"`, `"sonnet"`, `"haiku"`) or full model name                                              |
+  | `effort`         | `--effort`          | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"`                                               |
   | `permissionMode` | `--permission-mode` | `"auto"` (default) \| `"acceptEdits"` \| `"bypassPermissions"` \| `"manual"` \| `"dontAsk"` \| `"plan"` |
-  | `fallbackModel` | `--fallback-model` | model name |
-  | `maxBudgetUsd` | `--max-budget-usd` | positive number |
+  | `fallbackModel`  | `--fallback-model`  | model name                                                                                              |
+  | `maxBudgetUsd`   | `--max-budget-usd`  | positive number                                                                                         |
 
 - **Permissions default to `auto`**: your spawn is the authorization, and a
   headless run blocked on interactive prompts would hang. Override
@@ -191,15 +188,15 @@ them in their session instructions, with `say`/`complete` as MCP tools and the
 2. Read required skills/docs yourself.
 3. Use `say` sparingly for parent-visible progress.
 4. Commit child-context edits when the task asks for durable work — the parent
-   takes your work by merging this context, and only committed work merges. Do
-   not push `main` yourself; the parent decides what to merge or pick.
+   integrates your committed changes from this context. Do not push
+   `main` yourself; the parent owns integration and publication decisions.
 5. Finish exactly once with:
 
 ```ts
 complete({
   outcome: "success",
-  report: "What changed, verification run, uncertainties, and any recommended merge/pick."
-})
+  report: "What changed, verification run, uncertainties, and any integration considerations.",
+});
 ```
 
 Use `outcome: "failed"` when the task cannot be completed. Include the blocking
@@ -225,37 +222,37 @@ redo parent work unless it is necessary for that task.
 Use `read_subagent` for what the child said. Use `inspect_subagent` for what
 the child changed.
 
-## Merge, Pick, Or Discard
+## Integrate Or Discard
 
 Before taking child work, inspect it:
 
 ```ts
-inspect_subagent({ runId, query: "status" })
-inspect_subagent({ runId, query: "diff" })
+inspect_subagent({ runId, query: "status" });
+inspect_subagent({ runId, query: "diff" });
 ```
 
-Use `merge_subagent` when the whole child branch should come back. It is
-commit-gated: parent and child work should be committed first. If it reports a
-dirty side, commit deliberately in that context and retry.
-
-Use `pick_from_subagent` when only part of the child work is useful:
+`integrate_subagent` compares the parent's exact working state with the child's
+committed event and adopts each currently applicable child Change as an
+ordinary local application. It does not commit the parent, publish `main`,
+create marker files, or create a hidden pending-merge state. Parent work and
+adopted child work remain one local incremental chain until the parent commits.
 
 ```ts
-pick_from_subagent({
-  runId,
-  picks: [{ kind: "paths", paths: ["packages/foo/src/fix.ts"] }]
-})
+integrate_subagent({ runId });
 ```
 
-After merge or pick, verify in the parent context. Then close the child run
-when inspection is no longer needed.
+If the result reports conflicts or dependency blocks, use `vcs.compare` with
+the `changes` view and record explicit
+`vcs.integrate` adopt/reconcile/decline decisions. Paths are inspection
+coordinates, never a substitute for Change identity. Verify the result in the
+parent context, then close the child run when inspection is no longer needed.
 
 ## Failure And Cleanup
 
 - If a child reports failure, read its report and inspect status/diff before
   deciding whether to salvage partial work.
 - If the work is not useful, `close_subagent({ runId, discard: true })`.
-- If you merged or picked useful work, close the run once the parent has
+- If you integrated useful work, close the run once the parent has
   verified and no longer needs the child context.
 - Do not leave subagents running as background memory. They are task workers,
   not permanent collaborators.

@@ -75,17 +75,19 @@ function messageEvent(id: string, content: string, actorId = "agent-1") {
 
 interface MockRpc {
   call: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
+  stream: ReturnType<typeof vi.fn>;
   selfId: string;
 }
 
 /**
- * Creates a mock RPC object. The `on` mock captures the listener
- * so tests can emit events by calling `emit(payload)`.
+ * Creates a mock RPC object. `emit` writes a record onto the active
+ * subscription response body, matching the production resource lifetime.
  */
 function createMockRpc() {
-  let eventListener: ((event: { payload: unknown }) => void) | null = null;
   const removeListener = vi.fn();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const pendingPayloads: unknown[] = [];
+  const encoder = new TextEncoder();
 
   const rpc: MockRpc = {
     call: vi.fn(async (target: string, method: string) => {
@@ -94,75 +96,107 @@ function createMockRpc() {
       }
       return undefined;
     }),
-    on: vi
-      .fn()
-      .mockImplementation((_event: string, listener: (event: { payload: unknown }) => void) => {
-        eventListener = listener;
-        return removeListener;
-      }),
+    stream: vi.fn(
+      async (
+        target: string,
+        method: string,
+        args: unknown[],
+        options?: { signal?: AbortSignal }
+      ) => {
+        const result = await rpc.call(target, method, args);
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode(`${JSON.stringify({ kind: "subscribed", result })}\n`)
+            );
+            for (const payload of pendingPayloads.splice(0)) {
+              controller.enqueue(
+                encoder.encode(`${JSON.stringify({ kind: "message", payload })}\n`)
+              );
+            }
+            options?.signal?.addEventListener(
+              "abort",
+              () => {
+                if (streamController === controller) streamController = null;
+                removeListener();
+                controller.close();
+              },
+              { once: true }
+            );
+          },
+          cancel() {
+            streamController = null;
+            removeListener();
+          },
+        });
+        return new Response(body);
+      }
+    ),
     selfId: SELF_ID,
   };
 
+  function writePayload(payload: unknown): void {
+    if (!streamController) {
+      pendingPayloads.push(payload);
+      return;
+    }
+    streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: "message", payload })}\n`));
+  }
+
   function emit(msg: Record<string, unknown>) {
-    if (!eventListener) throw new Error("No event listener registered");
     if (msg["kind"] === "ready") {
-      eventListener({
-        payload: {
-          channelId: CHANNEL,
-          message: {
-            kind: "control",
-            type: "ready",
-            ready: {
-              contextId: msg["contextId"],
-              channelConfig: msg["channelConfig"],
-              totalCount: msg["totalCount"],
-              envelopeCount: msg["envelopeCount"],
-              firstEnvelopeSeq: msg["firstEnvelopeSeq"],
-              hasMoreBefore: msg["hasMoreBefore"],
-            },
+      writePayload({
+        channelId: CHANNEL,
+        message: {
+          kind: "control",
+          type: "ready",
+          ready: {
+            contextId: msg["contextId"],
+            channelConfig: msg["channelConfig"],
+            totalCount: msg["totalCount"],
+            envelopeCount: msg["envelopeCount"],
+            firstEnvelopeSeq: msg["firstEnvelopeSeq"],
+            hasMoreBefore: msg["hasMoreBefore"],
           },
         },
       });
       return;
     }
     if (msg["stream"] === "log") {
-      eventListener({
-        payload: {
-          channelId: CHANNEL,
-          message: {
-            kind: "log",
-            phase: msg["phase"] === "replay" ? "replay" : "live",
-            event: {
-              id: msg["id"],
-              messageId: `test-${msg["id"]}`,
-              type: msg["type"],
-              payload: msg["payload"],
-              senderId: msg["senderId"],
-              ts: msg["ts"],
-              senderMetadata: msg["senderMetadata"],
-              attachments: msg["attachments"],
-            },
+      writePayload({
+        channelId: CHANNEL,
+        message: {
+          kind: "log",
+          phase: msg["phase"] === "replay" ? "replay" : "live",
+          event: {
+            id: msg["id"],
+            messageId: `test-${msg["id"]}`,
+            type: msg["type"],
+            payload: msg["payload"],
+            senderId: msg["senderId"],
+            ts: msg["ts"],
+            senderMetadata: msg["senderMetadata"],
+            attachments: msg["attachments"],
           },
         },
       });
       return;
     }
     if (msg["stream"] === "signal") {
-      eventListener({
-        payload: {
-          channelId: CHANNEL,
-          message: {
-            kind: "signal",
-            type: msg["type"],
-            payload: msg["payload"],
-            senderId: msg["senderId"],
-            ts: msg["ts"],
-          },
+      writePayload({
+        channelId: CHANNEL,
+        message: {
+          kind: "signal",
+          type: msg["type"],
+          payload: msg["payload"],
+          senderId: msg["senderId"],
+          ts: msg["ts"],
         },
       });
       return;
     }
-    eventListener({ payload: { channelId: CHANNEL, message: msg } });
+    writePayload({ channelId: CHANNEL, message: msg });
   }
 
   return { rpc, emit, removeListener };
@@ -229,22 +263,39 @@ describe("connectViaRpc", () => {
   // ── 1. Subscribe + ready flow ──────────────────────────────────────────
 
   describe("subscribe + ready flow", () => {
-    it("registers event listener and calls subscribe on the channel service", async () => {
+    it("opens subscribe as the long-lived channel resource", async () => {
       const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockRpc.on).toHaveBeenCalledWith("channel:message", expect.any(Function));
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "subscribe", [
-        SELF_ID,
-        expect.objectContaining({
-          __participantSessionId: expect.any(String),
-          replay: true,
-          replayMessageLimit: 500,
-        }),
-      ]);
+      expect(mockRpc.stream).toHaveBeenCalledWith(
+        DO_TARGET,
+        "subscribe",
+        [
+          SELF_ID,
+          expect.objectContaining({
+            replay: true,
+            replayMessageLimit: 500,
+          }),
+        ],
+        { signal: expect.any(AbortSignal) }
+      );
 
       client.close();
+    });
+
+    it("does not create a parallel PubSub heartbeat loop", async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      try {
+        await emitReplayAndReady(emit, []);
+        await client.ready();
+        expect(setIntervalSpy).not.toHaveBeenCalled();
+        expect(mockRpc.call.mock.calls.some(([, method]) => method === "touch")).toBe(false);
+      } finally {
+        client.close();
+        setIntervalSpy.mockRestore();
+      }
     });
 
     it("resolves ready() after replay + ready events", async () => {
@@ -325,10 +376,7 @@ describe("connectViaRpc", () => {
 
       client.close();
       await Promise.resolve();
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [
-        "user:usr_alice",
-        expect.any(String),
-      ]);
+      expect(mockRpc.call.mock.calls.some(([, method]) => method === "unsubscribe")).toBe(false);
     });
 
     it("resolves ready() from the subscribe acknowledgment after applying fallback replay", async () => {
@@ -1013,8 +1061,7 @@ describe("connectViaRpc", () => {
         // Once the handler has been stuck well past the wedge threshold, a redelivery DOES warn.
         await vi.advanceTimersByTimeAsync(31_000);
         emitStarted(203);
-        await Promise.resolve();
-        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
         expect(executeFn).toHaveBeenCalledTimes(1);
         expect(wedgeWarns().length).toBeGreaterThanOrEqual(1);
         expect(String(wedgeWarns()[0]![0])).toMatch(/still executing after \d+s/);
@@ -1418,10 +1465,11 @@ describe("connectViaRpc", () => {
 
     it("recovers a pending method result from a replayed invocation.completed on resubscribe", async () => {
       let recover!: () => Promise<void>;
-      const registerColdRecoverHandler = vi.fn((_id: string, handler: () => Promise<void>) => {
+      const registerResubscribeHandler = vi.fn((_id: string, handler: () => Promise<void>) => {
         recover = handler;
         return vi.fn();
       });
+      const registerColdRecoverHandler = vi.fn(() => vi.fn());
       // The resubscribe replay carries the missed terminal as a durable
       // invocation.completed log event (no getSettledResult read-back).
       let pendingCallId: string | undefined;
@@ -1465,7 +1513,7 @@ describe("connectViaRpc", () => {
       const client = connectViaRpc({
         rpc: mockRpc as any,
         channel: CHANNEL,
-        recoveryCoordinator: { registerColdRecoverHandler },
+        recoveryCoordinator: { registerResubscribeHandler, registerColdRecoverHandler },
       });
       await client.ready();
       mockRpc.call.mockClear();
@@ -1475,6 +1523,9 @@ describe("connectViaRpc", () => {
       await recover();
 
       await expect(handle.result).resolves.toEqual({ content: { answer: 42 } });
+      expect(mockRpc.stream).toHaveBeenCalledTimes(2);
+      expect(removeListener).toHaveBeenCalledTimes(1);
+      expect(mockRpc.call.mock.calls.some((call) => call[1] === "unsubscribe")).toBe(false);
       expect(mockRpc.call.mock.calls.some((call) => call[1] === "getSettledResult")).toBe(false);
 
       client.close();
@@ -1544,7 +1595,7 @@ describe("connectViaRpc", () => {
   // ── 4. Close ──────────────────────────────────────────────────────────
 
   describe("close", () => {
-    it("calls unsubscribe and fires disconnect handlers", async () => {
+    it("cancels the subscription resource and fires disconnect handlers", async () => {
       const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
       await emitReplayAndReady(emit, []);
       await client.ready();
@@ -1558,17 +1609,12 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // Verify unsubscribe was called (session-scoped: WP6 §4 shared user
-      // rows release only this client's session ref)
-      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "unsubscribe", [
-        SELF_ID,
-        expect.any(String),
-      ]);
+      expect(mockRpc.call.mock.calls.some(([, method]) => method === "unsubscribe")).toBe(false);
 
       // Verify disconnect handler fired
       expect(disconnectFn).toHaveBeenCalledTimes(1);
 
-      // Verify event listener was removed
+      // The response stream reached its terminal cancellation.
       expect(removeListener).toHaveBeenCalled();
 
       // Verify connected is false
@@ -1778,7 +1824,7 @@ describe("connectViaRpc", () => {
         ts: Date.now(),
       });
 
-      expect(capturedSignal!.aborted).toBe(true);
+      await vi.waitFor(() => expect(capturedSignal!.aborted).toBe(true));
 
       client.close();
     });

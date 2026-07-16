@@ -72,13 +72,6 @@ export class WebhookStoreDO extends DurableObjectBase {
     `);
   }
 
-  protected override migrate(fromVersion: number, _toVersion: number): void {
-    if (fromVersion === 0) return;
-    this.sql.exec(`DROP INDEX IF EXISTS webhook_ingress_subscriptions_owner_idx`);
-    this.sql.exec(`DROP TABLE IF EXISTS webhook_ingress_subscriptions`);
-    this.createTables();
-  }
-
   @rpc
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">

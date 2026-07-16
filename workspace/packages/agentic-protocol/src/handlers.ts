@@ -103,7 +103,7 @@ export interface ProjectedInvocation {
   terminalOutcome?: InvocationOutcome;
   terminalReasonCode?: string;
   /** Present when this invocation is a subagent run. The spawn fields are folded
-   *  from `invocation.started`; `merge` from the terminal envelope. */
+   *  from `invocation.started`; `integration` from the terminal envelope. */
   subagent?: {
     runId?: string;
     mode?: "fresh" | "fork";
@@ -112,7 +112,7 @@ export interface ProjectedInvocation {
     parentContextId?: string | null;
     childEntityId?: string;
     label?: string;
-    merge?: "merged" | "conflicted" | "discarded";
+    integration?: "integrated" | "conflicted" | "discarded";
     /** Reasoning engine of the child run — SubagentRunCard badge. */
     agentKind?: string;
   };
@@ -308,7 +308,11 @@ export function applyMessageEvent(
     if (existing.retracted) return messages;
     if (existing.readBy && Object.keys(existing.readBy).length > 0) return messages;
     // Stale-edit guard: drop an edit that precedes the last content event.
-    if (seq !== undefined && existing.lastContentSeq !== undefined && seq < existing.lastContentSeq) {
+    if (
+      seq !== undefined &&
+      existing.lastContentSeq !== undefined &&
+      seq < existing.lastContentSeq
+    ) {
       return messages;
     }
     return {
@@ -410,11 +414,15 @@ export function applyMessageEvent(
     if (outcome === "empty") {
       blocks = blocksWithDiagnostic(
         blocks,
-        diagnosticBlock(`${messageId}:diagnostic:empty`, "Assistant message had no visible content.", {
-          code: "message_empty",
-          severity: "warning",
-          reason: "empty",
-        })
+        diagnosticBlock(
+          `${messageId}:diagnostic:empty`,
+          "Assistant message had no visible content.",
+          {
+            code: "message_empty",
+            severity: "warning",
+            reason: "empty",
+          }
+        )
       );
     }
     const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
@@ -471,20 +479,16 @@ export function applyMessageEvent(
             recoverable: "recoverable" in event.payload ? event.payload.recoverable : undefined,
             failureCode: "code" in event.payload ? event.payload.code : undefined,
             resetAt: "resetAt" in event.payload ? event.payload.resetAt : undefined,
-            retryAfterMs:
-              "retryAfterMs" in event.payload ? event.payload.retryAfterMs : undefined,
+            retryAfterMs: "retryAfterMs" in event.payload ? event.payload.retryAfterMs : undefined,
           }
         )
       ),
       failedAt: event.createdAt,
       failureReason: "reason" in event.payload ? event.payload.reason : existing.failureReason,
       failureCode: "code" in event.payload ? event.payload.code : existing.failureCode,
-      failureResetAt:
-        "resetAt" in event.payload ? event.payload.resetAt : existing.failureResetAt,
+      failureResetAt: "resetAt" in event.payload ? event.payload.resetAt : existing.failureResetAt,
       failureRetryAfterMs:
-        "retryAfterMs" in event.payload
-          ? event.payload.retryAfterMs
-          : existing.failureRetryAfterMs,
+        "retryAfterMs" in event.payload ? event.payload.retryAfterMs : existing.failureRetryAfterMs,
       failureRecoverable:
         "recoverable" in event.payload ? event.payload.recoverable : existing.failureRecoverable,
       updatedAt: event.createdAt,

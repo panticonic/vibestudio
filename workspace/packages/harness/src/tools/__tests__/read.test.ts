@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Value } from "@sinclair/typebox/value";
-import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibestudio/service-schemas/vcs";
-import { createReadTool, type ReadProvenanceDeps } from "../read.js";
+import { createReadTool } from "../read.js";
 import { StubFs } from "./stub-fs.js";
 
 const CWD = "/work/ctx";
@@ -10,7 +9,7 @@ describe("createReadTool", () => {
   it("reads a small text file", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
     const tool = createReadTool(CWD, fs);
-    const result = await tool.execute("call-1", { path: "hello.txt", provenance: "none" });
+    const result = await tool.execute("call-1", { path: "hello.txt" });
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
     expect(result.details.path).toBe("hello.txt");
   });
@@ -24,7 +23,7 @@ describe("createReadTool", () => {
     });
     const tool = createReadTool(CWD, fs);
 
-    const result = await tool.execute("call-1", { path: "skills", provenance: "none" });
+    const result = await tool.execute("call-1", { path: "skills" });
 
     expect(result.details).toMatchObject({
       path: "skills",
@@ -45,7 +44,6 @@ describe("createReadTool", () => {
 
     const result = await tool.execute("call-1", {
       path: "panel/index.html",
-      provenance: "none",
     });
 
     expect(result.details).toMatchObject({
@@ -85,7 +83,6 @@ describe("createReadTool", () => {
 
     const result = await tool.execute("call-1", {
       path: "skills/git-bridge/SKILL.md",
-      provenance: "none",
     });
 
     expect(result.content[0]).toMatchObject({ type: "text", text: "# Git Bridge\n" });
@@ -95,7 +92,7 @@ describe("createReadTool", () => {
     });
   });
 
-  it("validates and executes serialized calls that omit provenance", async () => {
+  it("validates and executes the minimal serialized call", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
     const tool = createReadTool(CWD, fs);
     const input = { path: "hello.txt" };
@@ -122,7 +119,6 @@ describe("createReadTool", () => {
     const tool = createReadTool(CWD, fs);
     const result = await tool.execute("call-1", {
       path: "big.txt",
-      provenance: "none",
       offset: 3,
       limit: 2,
     });
@@ -139,7 +135,6 @@ describe("createReadTool", () => {
 
     const result = await tool.execute("call-1", {
       path: "small.txt",
-      provenance: "none",
       offset: 615,
     });
 
@@ -165,7 +160,6 @@ describe("createReadTool", () => {
 
     const result = await tool.execute("call-1", {
       path: "big.txt",
-      provenance: "none",
       offset: 3,
       limit: 2,
     });
@@ -198,12 +192,7 @@ describe("createReadTool", () => {
     const onUpdate = vi.fn();
     const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "hello.txt", provenance: "none" },
-      undefined,
-      onUpdate
-    );
+    const result = await tool.execute("call-1", { path: "hello.txt" }, undefined, onUpdate);
 
     expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
     expect(result.details).toMatchObject({
@@ -249,12 +238,7 @@ describe("createReadTool", () => {
     const onUpdate = vi.fn();
     const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "hello.txt", provenance: "none" },
-      undefined,
-      onUpdate
-    );
+    const result = await tool.execute("call-1", { path: "hello.txt" }, undefined, onUpdate);
 
     expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
     expect(result.details).toMatchObject({
@@ -294,7 +278,7 @@ describe("createReadTool", () => {
     };
     const tool = createReadTool(CWD, fs, { rpc });
 
-    const result = await tool.execute("call-1", { path: "pic.png", provenance: "none" });
+    const result = await tool.execute("call-1", { path: "pic.png" });
 
     const last = result.content[result.content.length - 1] as { type: string; mimeType: string };
     expect(last.type).toBe("image");
@@ -309,9 +293,9 @@ describe("createReadTool", () => {
   it("returns a non-poisoning discovery result when a file is missing", async () => {
     const fs = new StubFs();
     const tool = createReadTool(CWD, fs);
-    await expect(
-      tool.execute("call-1", { path: "missing.txt", provenance: "none" })
-    ).resolves.toMatchObject({ details: { missing: true, path: "missing.txt" } });
+    await expect(tool.execute("call-1", { path: "missing.txt" })).resolves.toMatchObject({
+      details: { missing: true, path: "missing.txt" },
+    });
   });
 
   it("returns ImageContent when the image service extension detects an image type", async () => {
@@ -340,7 +324,7 @@ describe("createReadTool", () => {
       stream: vi.fn(async () => new Response()),
     };
     const tool = createReadTool(CWD, fs, { rpc });
-    const result = await tool.execute("call-1", { path: "pic.png", provenance: "none" });
+    const result = await tool.execute("call-1", { path: "pic.png" });
     const last = result.content[result.content.length - 1] as { type: string; mimeType: string };
     expect(last.type).toBe("image");
     expect(last.mimeType).toBe("image/png");
@@ -351,153 +335,6 @@ describe("createReadTool", () => {
     const tool = createReadTool(CWD, fs);
     const ac = new AbortController();
     ac.abort();
-    await expect(
-      tool.execute("call-1", { path: "foo.txt", provenance: "none" }, ac.signal)
-    ).rejects.toThrow(/abort/i);
-  });
-});
-
-describe("createReadTool provenance attachment (§7.5)", () => {
-  const REPO_CWD = "/";
-  const makeProvenance = (
-    result: Partial<VcsProvenanceForFileResult> & { items?: VcsProvItem[] },
-    calls: Array<Record<string, unknown>>
-  ): ReadProvenanceDeps => ({
-    provenanceForFile: async (input) => {
-      calls.push(input);
-      return {
-        items: [],
-        shown: 0,
-        total: 0,
-        suppressed: false,
-        ...result,
-      } as VcsProvenanceForFileResult;
-    },
-    head: "ctx:c1",
-    sessionLogId: "branch:channel:ch",
-    sessionHead: "branch:channel:ch",
-  });
-
-  it("appends the §7.5 block after content, exceptions first, with the K-of-M tail", async () => {
-    const fs = new StubFs({ files: { ["/packages/foo/bar.ts"]: "line1\nline2" } });
-    const calls: Array<Record<string, unknown>> = [];
-    const items: VcsProvItem[] = [
-      {
-        line: '⚠ contradicts claim#7 "retries are caller-controlled" → provenance(claim#7)',
-        handle: "claim#7",
-        kind: "claim",
-        exception: true,
-        score: 0,
-      },
-      {
-        line: 'last commit c:9f2e "clamp the retry budget" · 2 turns ago',
-        handle: "commit:9f2e",
-        kind: "commit",
-        exception: false,
-        score: 0.9,
-      },
-    ];
-    const tool = createReadTool(REPO_CWD, fs, {
-      provenance: makeProvenance({ items, shown: 2, total: 6, nextCursor: "2" }, calls),
-    });
-    const result = await tool.execute("inv-1", {
-      path: "packages/foo/bar.ts",
-      provenance: "moderate",
-      recallKeywords: ["retry"],
-    });
-    // Content first, provenance block appended as a trailing text item.
-    const block = (result.content[result.content.length - 1] as { text: string }).text;
-    expect((result.content[0] as { text: string }).text).toContain("line1");
-    expect(block).toContain("prov · packages/foo/bar.ts · 2 of 6 items");
-    expect(block).toContain("● ⚠ contradicts claim#7");
-    expect(block).toContain('+4 more → provenance("packages/foo/bar.ts")');
-    // Threaded the repo, workspace-relative path, head, session, invocation, keywords.
-    expect(calls[0]).toMatchObject({
-      repoPath: "packages/foo",
-      path: "packages/foo/bar.ts",
-      head: "ctx:c1",
-      tier: "moderate",
-      sessionLogId: "branch:channel:ch",
-      sessionHead: "branch:channel:ch",
-      invocationId: "inv-1",
-      recallKeywords: ["retry"],
-    });
-  });
-
-  it("renders no block when suppressed", async () => {
-    const fs = new StubFs({ files: { ["/packages/foo/bar.ts"]: "x" } });
-    const calls: Array<Record<string, unknown>> = [];
-    const tool = createReadTool(REPO_CWD, fs, {
-      provenance: makeProvenance(
-        {
-          items: [
-            { line: "claim#1 foo", handle: "claim#1", kind: "claim", exception: false, score: 1 },
-          ],
-          shown: 1,
-          total: 1,
-          suppressed: true,
-        },
-        calls
-      ),
-    });
-    const result = await tool.execute("inv-1", { path: "packages/foo/bar.ts", provenance: "deep" });
-    expect(result.content).toHaveLength(1);
-    expect(calls).toHaveLength(1);
-  });
-
-  it("calls at tier none (touch only, no block) but skips outside-repo and skills paths", async () => {
-    const fs = new StubFs({
-      files: {
-        ["/packages/foo/bar.ts"]: "x",
-        ["/skills/orient/SKILL.md"]: "y",
-        ["/loose.txt"]: "z",
-      },
-    });
-    const calls: Array<Record<string, unknown>> = [];
-    const tool = createReadTool(REPO_CWD, fs, {
-      provenance: makeProvenance({ items: [], shown: 0, total: 0 }, calls),
-    });
-    // §7.4: tier none still records the observed touch (empty items ⇒ no block).
-    const noneResult = await tool.execute("i", { path: "packages/foo/bar.ts", provenance: "none" });
-    expect(noneResult.content).toHaveLength(1);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ tier: "none", repoPath: "packages/foo" });
-    // Documentation overlay + outside-any-repo reads never touch the DO.
-    await tool.execute("i", { path: "skills/orient/SKILL.md", provenance: "moderate" });
-    await tool.execute("i", { path: "loose.txt", provenance: "moderate" });
-    expect(calls).toHaveLength(1);
-  });
-
-  it("does not record a provenance touch for a missing-file discovery result", async () => {
-    const fs = new StubFs();
-    const calls: Array<Record<string, unknown>> = [];
-    const tool = createReadTool(REPO_CWD, fs, {
-      provenance: makeProvenance({ items: [], shown: 0, total: 0 }, calls),
-    });
-
-    await expect(
-      tool.execute("i", { path: "packages/foo/missing.ts", provenance: "moderate" })
-    ).resolves.toMatchObject({ details: { missing: true } });
-
-    expect(calls).toHaveLength(0);
-  });
-
-  it("never fails the read when the provenance call rejects", async () => {
-    const fs = new StubFs({ files: { ["/packages/foo/bar.ts"]: "content" } });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const tool = createReadTool(REPO_CWD, fs, {
-      provenance: {
-        provenanceForFile: async () => {
-          throw new Error("DO down");
-        },
-        head: "ctx:c1",
-        sessionLogId: "s",
-        sessionHead: "s",
-      },
-    });
-    const result = await tool.execute("i", { path: "packages/foo/bar.ts", provenance: "deep" });
-    expect((result.content[0] as { text: string }).text).toContain("content");
-    expect(result.content).toHaveLength(1);
-    warn.mockRestore();
+    await expect(tool.execute("call-1", { path: "foo.txt" }, ac.signal)).rejects.toThrow(/abort/i);
   });
 });

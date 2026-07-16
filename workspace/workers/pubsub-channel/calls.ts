@@ -71,8 +71,10 @@ export function derivePendingCalls(envelopes: LogEnvelope[]): PendingCallRow[] {
     const kind = (event as { kind?: string }).kind ?? "";
     const causality = ((event as { causality?: Record<string, unknown> }).causality ??
       {}) as Record<string, unknown>;
-    const payload = ((event as { payload?: Record<string, unknown> }).payload ??
-      {}) as Record<string, unknown>;
+    const payload = ((event as { payload?: Record<string, unknown> }).payload ?? {}) as Record<
+      string,
+      unknown
+    >;
     const transport = (payload["transport"] ?? {}) as Record<string, unknown>;
     const transportCallId =
       typeof causality["transportCallId"] === "string"
@@ -133,7 +135,6 @@ export interface CallTransportDeps {
   participantTransport(participantId: string): "rpc" | "do" | null;
   rpcCall(targetId: string, method: string, args: unknown[]): Promise<unknown>;
   waitUntil(promise: Promise<unknown>): void;
-  scheduleNextAlarm(): void;
   getStateValue(key: string): string | null;
   setStateValue(key: string, value: string): void;
 }
@@ -296,14 +297,7 @@ export class CallTransport {
     this.startInFlight.set(transportCallId, startBarrier.promise);
     const dispatch = await (async () => {
       try {
-        return await this.journalCallStart(
-          callerPid,
-          targetPid,
-          callId,
-          method,
-          args,
-          opts
-        );
+        return await this.journalCallStart(callerPid, targetPid, callId, method, args, opts);
       } finally {
         startBarrier.resolve();
         if (this.startInFlight.get(transportCallId) === startBarrier.promise) {
@@ -398,7 +392,6 @@ export class CallTransport {
     // 2. cache row, 3. alarm, 4. broadcast
     this.insertRow(pendingRow);
     this.recordObservedHead(callEvent.id);
-    this.deps.scheduleNextAlarm();
     this.deps.broadcastLive(callEvent, callerPid);
 
     return () => this.dispatchCallStart(pendingRow, callerPid);
@@ -411,11 +404,7 @@ export class CallTransport {
       const message =
         `Target ${pendingRow.targetId} is not joined to channel ${this.deps.objectKey}; ` +
         "chat.callMethod is channel-scoped and only routes to live participants in this channel";
-      await this.settleCall(
-        pendingRow.transportCallId,
-        { error: message },
-        true
-      );
+      await this.settleCall(pendingRow.transportCallId, { error: message }, true);
       return;
     }
     // A "do" target gets the synchronous `onMethodCall` dispatch ONLY if it's an agent vessel — it
@@ -423,9 +412,9 @@ export class CallTransport {
     // SubscriptionManager). An RPC-style connectionless DO client (the eval's `connectViaRpc` /
     // HeadlessSession) has NO `onMethodCall` handler: its participant id is just the host DO's id, so
     // `transport` is "do" purely by id-shape — but it settles method calls the RPC way, via the
-    // broadcast `started` (delivered as a `channel:message` to every participant, broadcast.ts) +
+    // broadcast `started` (delivered on every participant subscription, broadcast.ts) +
     // `submitMethodResult`. Routing it through `deliverDoMethodCall` dispatches to a missing handler and
-    // never settles the call (the redelivery echo). Same discriminator broadcast.ts uses for the
+    // never settles the call. Same discriminator broadcast.ts uses for the
     // structured envelope, so the two dispatch decisions stay aligned.
     const isAgentVesselTarget = participantIsAgentVessel(
       this.deps.getSenderMetadata(pendingRow.targetId)
@@ -557,7 +546,6 @@ export class CallTransport {
     // 4. consume the cache row AFTER the durable append; 5. alarm; 6. broadcast.
     this.deleteRow(transportCallId);
     this.recordObservedHead(event.id);
-    this.deps.scheduleNextAlarm();
     const sender = opts?.senderId ?? pending.callerId;
     const callerPresent =
       opts?.senderId != null || this.deps.participantTransport(pending.callerId) !== null;
@@ -650,7 +638,6 @@ export class CallTransport {
     // 3. There is no cache row to consume. Record head, schedule, and FORCE the
     //    broadcast — the caller is a subscriber matching by invocationId.
     this.recordObservedHead(event.id);
-    this.deps.scheduleNextAlarm();
     this.deps.broadcastLive(event, synthetic.callerId);
     return event.id;
   }
@@ -764,14 +751,12 @@ export class CallTransport {
       // silently no-ops and the call hangs (mirrors settleCall / resolveSubmitter).
       const existingTerminal = await this.deps.log.getEventByEnvelopeId(`terminal:${callId}`);
       if (existingTerminal) {
-        this.deps.scheduleNextAlarm();
         return null;
       }
       await this.reconcilePendingCalls(true);
       pending = this.peek(callId);
     }
     if (!pending) {
-      this.deps.scheduleNextAlarm();
       return null;
     }
     const event = this.deps.builders().cancelled({
@@ -816,7 +801,13 @@ export class CallTransport {
             : `Target ${targetId} did not follow the fork; its pending call was aborted`;
     for (const row of rows) {
       try {
-        await this.settleCall(row.transportCallId, { error: errorMessage }, true, "abandoned", reason);
+        await this.settleCall(
+          row.transportCallId,
+          { error: errorMessage },
+          true,
+          "abandoned",
+          reason
+        );
       } catch (err) {
         console.warn(
           `[Channel] failPendingCallsTargeting: settle failed for ${row.transportCallId}:`,
@@ -830,8 +821,8 @@ export class CallTransport {
     return rows.length;
   }
 
-  /** Re-emit still-pending calls targeting a (re)subscribed participant as
-   *  signals (at-least-once delivery over the call lifetime). */
+  /** Re-emit still-pending calls targeting a subscribed participant. Delivery
+   * is at-least-once; invocation ids make receiver execution idempotent. */
   async redeliverPendingCallsTo(participantId: string): Promise<number> {
     const rows = this.pendingFor(participantId);
     if (rows.length === 0) return 0;
@@ -841,8 +832,7 @@ export class CallTransport {
     let redelivered = 0;
     let pruned = 0;
     for (const row of rows) {
-      const terminalEnvelopeId = `terminal:${row.transportCallId}`;
-      if (terminalEnvelopeIds.has(terminalEnvelopeId)) {
+      if (terminalEnvelopeIds.has(`terminal:${row.transportCallId}`)) {
         this.deleteRow(row.transportCallId);
         pruned += 1;
         continue;
@@ -859,19 +849,28 @@ export class CallTransport {
         ...(row.deadlineAt != null ? { deadlineAt: row.deadlineAt } : {}),
         createdAt: new Date().toISOString(),
       });
-      const event: ChannelEvent = {
-        id: 0,
-        messageId: row.invocationId,
-        type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload,
-        senderId: row.callerId,
-        senderMetadata: this.deps.getSenderMetadata(row.callerId),
-        ts: Date.now(),
-      };
-      this.deps.emitSignal(participantId, event);
+      const transport = this.deps.participantTransport(participantId);
+      const isAgentVesselTarget = participantIsAgentVessel(
+        this.deps.getSenderMetadata(participantId)
+      );
+      if (transport === "do" && isAgentVesselTarget) {
+        // Agent vessels execute method calls only through the structured
+        // onMethodCall boundary. Their subscription response owns membership
+        // but intentionally is not a second semantic delivery path.
+        await this.dispatchCallStart(row, row.callerId);
+      } else {
+        this.deps.emitSignal(participantId, {
+          id: 0,
+          messageId: row.invocationId,
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload,
+          senderId: row.callerId,
+          senderMetadata: this.deps.getSenderMetadata(row.callerId),
+          ts: Date.now(),
+        });
+      }
       redelivered += 1;
     }
-    if (pruned > 0) this.deps.scheduleNextAlarm();
     if (redelivered > 0 || pruned > 0) {
       console.log(
         `[Channel] Redelivered ${redelivered} pending call(s) to ${participantId}` +
@@ -884,16 +883,19 @@ export class CallTransport {
   async timeoutExpiredPendingCalls(
     onTimeout: (pending: PendingCallRow, reason: string) => Promise<void>
   ): Promise<void> {
-    const now = Date.now();
     const rows = this.deps.sql
       .exec(
-        `SELECT transport_call_id FROM pending_calls WHERE deadline_at IS NOT NULL AND deadline_at <= ?`,
-        now
+        `SELECT transport_call_id FROM pending_calls
+          WHERE deadline_at IS NOT NULL AND deadline_at <= ?`,
+        Date.now()
       )
       .toArray();
     for (const row of rows) {
-      const transportCallId = row["transport_call_id"] as string;
-      const pending = await this.cancelMethodCall(transportCallId, "Channel method deadline expired");
+      const transportCallId = String(row["transport_call_id"]);
+      const pending = await this.cancelMethodCall(
+        transportCallId,
+        "Channel method deadline expired"
+      );
       if (pending) await onTimeout(pending, "method call deadline expired");
     }
   }
@@ -951,7 +953,6 @@ export class CallTransport {
       inserted += 1;
     }
     this.deps.setStateValue("calls_reconciled_through", String(headSeq));
-    if (inserted || deleted) this.deps.scheduleNextAlarm();
     return { inserted, deleted };
   }
 }

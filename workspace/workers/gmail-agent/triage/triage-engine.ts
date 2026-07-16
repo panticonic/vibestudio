@@ -33,8 +33,6 @@ export interface TriageEngineDeps {
     threadId: string,
     decision: GmailAttentionDecision
   ) => Promise<void>;
-  /** Called after a wake enqueue so the worker can schedule the debounce alarm. */
-  onWakeEnqueued: (channelId: string) => void;
   now?: () => number;
 }
 
@@ -52,6 +50,21 @@ export class TriageEngine {
 
   private now(): number {
     return this.deps.now ? this.deps.now() : Date.now();
+  }
+
+  /** Exact next time this channel's durable candidate queue needs attention. */
+  nextWakeAt(channelId: string, now = this.now()): number | undefined {
+    const oldest = this.deps.store.oldestCandidateAt(channelId);
+    if (oldest === undefined) return undefined;
+    if (!this.deps.isConfigured(channelId) && !this.deps.store.hasSavedPrefs(channelId)) {
+      return undefined;
+    }
+    const minimumAgeAt = oldest + TRIAGE_MIN_CANDIDATE_AGE_MS;
+    if (minimumAgeAt > now) return minimumAgeAt;
+    if (this.deps.store.runsInLastHour(channelId) >= TRIAGE_RUNS_PER_HOUR_CAP) {
+      return now + 10 * 60 * 1000;
+    }
+    return now + 1000;
   }
 
   /**
@@ -73,7 +86,6 @@ export class TriageEngine {
       this.deps.store.recordHit(channelId, event.threadId, decision);
       if (this.deps.store.shouldStartTurn(channelId, event, KNOWN_SENDER_SOURCE)) {
         this.deps.wake.enqueue(channelId, event, decision);
-        this.deps.onWakeEnqueued(channelId);
       }
       return decision;
     }
@@ -87,7 +99,9 @@ export class TriageEngine {
    * Returns the delay until this channel's queue should be looked at again,
    * or undefined when the queue is drained.
    */
-  async runTriagePass(channelId: string): Promise<{ result: TriagePassResult; retryInMs?: number }> {
+  async runTriagePass(
+    channelId: string
+  ): Promise<{ result: TriagePassResult; retryInMs?: number }> {
     const now = this.now();
     const oldest = this.deps.store.oldestCandidateAt(channelId);
     if (oldest === undefined) return { result: { kind: "skipped", reason: "empty" } };
@@ -230,7 +244,6 @@ export class TriageEngine {
       const event = eventFromCandidate(candidate);
       if (this.deps.store.shouldStartTurn(channelId, event, TRIAGE_SOURCE)) {
         this.deps.wake.enqueue(channelId, event, decision);
-        this.deps.onWakeEnqueued(channelId);
       }
     }
   }

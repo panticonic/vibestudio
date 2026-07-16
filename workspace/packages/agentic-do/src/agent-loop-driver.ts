@@ -1,7 +1,7 @@
 /**
  * Agent loop driver (WS1 §2) — the only impure layer of the event-sourced
  * harness. Owns the effect outbox, the fold cache, executor dispatch, and
- * the gad-store client. One LoopInstance per subscribed channel; shared
+ * the semantic control-plane client. One LoopInstance per subscribed channel; shared
  * outbox; one alarm.
  *
  * Discipline (P2): every append carries `expectedHeadHash = state.lastHash`;
@@ -37,6 +37,7 @@ import {
   type MessageModelPayload,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
+import { channelTrajectoryFor, logIdForChannel } from "@vibestudio/trajectory-identity";
 import type { SqlStorage } from "@workspace/runtime/worker";
 import {
   EffectOutbox,
@@ -61,6 +62,15 @@ export interface LoopInstance {
   head: string;
   state: AgentState;
   step: StepFn;
+}
+
+interface ActiveEffectDispatch {
+  controller: AbortController;
+  branchId: string;
+  effectId: string;
+  channelId: string;
+  settled: Promise<void>;
+  resolveSettled: () => void;
 }
 
 export interface DriverDeps {
@@ -317,10 +327,10 @@ export class AgentLoopDriver {
   readonly outbox: EffectOutbox;
   readonly foldCache: FoldCache;
   private readonly loops = new Map<string, LoopInstance>();
-  private readonly aborts = new Map<
-    string,
-    { controller: AbortController; branchId: string; effectId: string; channelId: string }
-  >();
+  private readonly currentDispatchByRow = new Map<string, ActiveEffectDispatch>();
+  private readonly activeDispatches = new Set<ActiveEffectDispatch>();
+  private readonly closedEffectAdmission = new Map<string, number>();
+  private activationReleased = false;
 
   constructor(private readonly deps: DriverDeps) {
     this.outbox = new EffectOutbox(deps.sql);
@@ -379,10 +389,10 @@ export class AgentLoopDriver {
   async loop(channelId: string): Promise<LoopInstance> {
     const existing = this.loops.get(channelId);
     if (existing) return existing;
-    const logId = ids.logIdForChannel(channelId);
+    const { logId, head } = channelTrajectoryFor(channelId);
     const state = await this.foldCache.loadState({
       logId,
-      head: logId,
+      head,
       channelId,
       config: this.deps.configFor(channelId),
       // Fold filters out other participants' turn lifecycle so this agent never adopts
@@ -392,12 +402,22 @@ export class AgentLoopDriver {
     const instance: LoopInstance = {
       channelId,
       logId,
-      head: logId,
+      head,
       state,
       step: composeStep(this.deps.policiesFor(channelId)),
     };
     this.loops.set(channelId, instance);
     return instance;
+  }
+
+  /**
+   * Return only an already-folded activation-local loop.
+   *
+   * Diagnostics use this instead of `loop()`: a probe must never hydrate from
+   * GAD or wait on the subsystem whose stall it is trying to explain.
+   */
+  peekLoadedLoop(channelId: string): LoopInstance | null {
+    return this.loops.get(channelId) ?? null;
   }
 
   /**
@@ -545,7 +565,7 @@ export class AgentLoopDriver {
     // before deferRedrive parks the row with a backstop.
     if (row.leaseExpiresAt > this.deps.now()) return true;
     // A leased row with a live AbortController is running in this isolate.
-    return this.aborts.has(this.rowKey(row));
+    return this.currentDispatchByRow.has(this.rowKey(row));
   }
 
   /**
@@ -1019,7 +1039,7 @@ export class AgentLoopDriver {
   hasOpenTurn(channelId: string): boolean {
     const loop = this.loops.get(channelId);
     if (loop?.state.openTurn) return true;
-    return this.outbox.forBranch(ids.logIdForChannel(channelId)).length > 0;
+    return this.outbox.forBranch(logIdForChannel(channelId)).length > 0;
   }
 
   async dispatchDue(): Promise<void> {
@@ -1050,10 +1070,41 @@ export class AgentLoopDriver {
   }
 
   private async dispatchRow(row: OutboxRow): Promise<void> {
+    if (this.activationReleased) return;
+    // Interrupt closes admission before it journals the marker. A concurrently
+    // delivered alarm may already have leased this row, but it must not start a
+    // new host effect inside that semantic interruption boundary; reconcile
+    // removes the now-unexpected leased row from the outbox.
+    if (this.closedEffectAdmission.has(row.channelId)) return;
     // Stall diagnostics for the pre-executor phases (fold load, descriptor
     // hydration) — these ride host RPCs with no transport deadline, and a hang
     // here never reaches the executor's own slow-call watchdog.
     const dispatchProgress = { phase: "load-loop", startedAt: Date.now() };
+    const rowKey = this.rowKey(row);
+    const stale = this.currentDispatchByRow.get(rowKey);
+    if (stale) {
+      console.warn("[agent-loop-driver] superseding wedged effect dispatch:", {
+        kind: row.kind,
+        effectId: row.effectId,
+        channelId: row.channelId,
+      });
+      stale.controller.abort(new Error("effect lease expired; superseded by redispatch"));
+    }
+    const controller = new AbortController();
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    const active: ActiveEffectDispatch = {
+      controller,
+      branchId: row.branchId,
+      effectId: row.effectId,
+      channelId: row.channelId,
+      settled,
+      resolveSettled,
+    };
+    this.currentDispatchByRow.set(rowKey, active);
+    this.activeDispatches.add(active);
     const slowTimer = setInterval(() => {
       console.warn("[agent-loop-driver] slow effect dispatch:", {
         phase: dispatchProgress.phase,
@@ -1074,46 +1125,25 @@ export class AgentLoopDriver {
       }
     }, 30_000);
     try {
-      await this.dispatchRowInner(row, dispatchProgress);
+      await this.dispatchRowInner(row, dispatchProgress, controller);
     } finally {
       clearInterval(slowTimer);
+      this.activeDispatches.delete(active);
+      if (this.currentDispatchByRow.get(rowKey) === active) {
+        this.currentDispatchByRow.delete(rowKey);
+      }
+      resolveSettled();
     }
   }
 
   private async dispatchRowInner(
     row: OutboxRow,
-    dispatchProgress: { phase: string; startedAt: number }
+    dispatchProgress: { phase: string; startedAt: number },
+    controller: AbortController
   ): Promise<void> {
     const loop = await this.loopForBranch(row.branchId, row.channelId);
     if (!loop) return;
     this.outbox.lease(row.branchId, row.effectId, this.deps.now());
-    // Lease-expiry redispatch: a previous run of this row may still be wedged
-    // in this isolate. Abort it before superseding its registration — its
-    // signal-honoring awaits unwind, and its cleanup (guarded below) can no
-    // longer clobber the new run's abort registration.
-    const stale = this.aborts.get(this.rowKey(row));
-    if (stale) {
-      console.warn("[agent-loop-driver] superseding wedged effect dispatch:", {
-        kind: row.kind,
-        effectId: row.effectId,
-        channelId: row.channelId,
-      });
-      stale.controller.abort(new Error("effect lease expired; superseded by redispatch"));
-    }
-    const controller = new AbortController();
-    this.aborts.set(this.rowKey(row), {
-      controller,
-      branchId: row.branchId,
-      effectId: row.effectId,
-      channelId: row.channelId,
-    });
-    // Only this run's own registration may be removed — a superseded run
-    // finishing late must not delete the live run's abort handle.
-    const releaseAbort = () => {
-      if (this.aborts.get(this.rowKey(row))?.controller === controller) {
-        this.aborts.delete(this.rowKey(row));
-      }
-    };
     const executor = this.deps.executorOverride?.(row.descriptor) ?? executorFor(row.descriptor);
     // Storage boundary, read side: effects re-derived from a RELOADED fold
     // carry journaled blob refs for spilled fields (tool args, http request).
@@ -1137,10 +1167,14 @@ export class AgentLoopDriver {
         onModelExecutionAttempt: (event) => this.recordModelExecutionAttempt(event),
       });
     } catch (err) {
+      // Lifecycle suspension deliberately leaves the durable outbox row as-is.
+      // Recording the abort as a model/tool outcome would turn process
+      // replacement into user-visible authorship and lose resumability.
+      if (this.activationReleased && controller.signal.aborted) return;
       // A superseded run must not touch the row: a lease-expiry redispatch owns
       // it now, and a late aborted terminal racing the live run's appends is a
       // second writer on the same log (GadAppendError[replay-mismatch] class).
-      if (this.aborts.get(this.rowKey(row))?.controller !== controller) return;
+      if (this.currentDispatchByRow.get(this.rowKey(row))?.controller !== controller) return;
       // EXECUTION failed → retry/backoff path. (applyOutcome errors below are
       // driver-level crashes and must propagate so the reconcile heals them.)
       const message = err instanceof Error ? err.message : String(err);
@@ -1159,7 +1193,6 @@ export class AgentLoopDriver {
             retryAfterMs: failure.retryAfterMs,
             code: failure.code,
           });
-          releaseAbort();
           return;
         }
         if (
@@ -1178,7 +1211,6 @@ export class AgentLoopDriver {
               failureCode: failure.code,
             })
           );
-          releaseAbort();
           return;
         }
         if (!failure.recoverable) {
@@ -1201,7 +1233,6 @@ export class AgentLoopDriver {
               recoverable: true,
               failure: { ...failure, recoverable: true },
             });
-            releaseAbort();
             return;
           }
           await this.applyOutcome(row, {
@@ -1212,7 +1243,6 @@ export class AgentLoopDriver {
             recoverable: false,
             failure,
           });
-          releaseAbort();
           return;
         }
       }
@@ -1222,13 +1252,11 @@ export class AgentLoopDriver {
       } else {
         this.scheduleEarliest();
       }
-      releaseAbort();
       return;
     }
     // Superseded run (see catch above): the live redispatch owns the row —
     // discard this outcome instead of racing its appends.
-    if (this.aborts.get(this.rowKey(row))?.controller !== controller) return;
-    releaseAbort();
+    if (this.currentDispatchByRow.get(this.rowKey(row))?.controller !== controller) return;
     if ((outcome as { deferred?: boolean }).deferred) {
       // Result arrives out-of-band. Keep an earlier wake if the result raced
       // this deferred ack; otherwise redrive later as a backstop.
@@ -1642,11 +1670,77 @@ export class AgentLoopDriver {
     this.outbox.delete(row.branchId, row.effectId);
   }
 
-  /** Abort in-flight executors for a channel (interrupt command wiring). */
-  abortChannel(channelId: string): void {
-    for (const entry of this.aborts.values()) {
-      if (entry.channelId === channelId) entry.controller.abort();
+  /**
+   * Journal one interruption while effect admission is closed, then resolve
+   * only after every previously admitted executor has left the dispatch
+   * boundary. This is the terminal lifecycle operation used by agent pause.
+   */
+  async interruptChannel(channelId: string, flushDeferred = false): Promise<void> {
+    const loop = await this.loop(channelId);
+    if (flushDeferred) {
+      const hadInFlight = !!loop.state.inFlightModelCall;
+      if (!hadInFlight) {
+        await this.handleIncoming(channelId, {
+          type: "command",
+          command: { kind: "interrupt", flushDeferred: true },
+        });
+        return;
+      }
     }
+
+    this.closedEffectAdmission.set(channelId, (this.closedEffectAdmission.get(channelId) ?? 0) + 1);
+    const active = [...this.activeDispatches].filter((entry) => entry.channelId === channelId);
+    const pendingModel = loop.state.inFlightModelCall
+      ? this.outbox.get(loop.logId, ids.modelEffect(loop.state.inFlightModelCall.messageId))
+      : null;
+    const modelWasAdmitted =
+      pendingModel !== null &&
+      active.some(
+        (entry) =>
+          entry.branchId === pendingModel.branchId && entry.effectId === pendingModel.effectId
+      );
+    try {
+      // Intent is durable before its effect: the folded marker deterministically
+      // decides whether the later aborted terminal closes the turn or, for a
+      // soft flush, continues it with queued steering.
+      await this.handleIncoming(channelId, {
+        type: "command",
+        command: { kind: "interrupt", ...(flushDeferred ? { flushDeferred: true } : {}) },
+      });
+      if (pendingModel && !modelWasAdmitted) {
+        const stillPending = this.outbox.get(pendingModel.branchId, pendingModel.effectId);
+        if (stillPending) {
+          await this.applyOutcome(stillPending, {
+            kind: "model",
+            blocks: [],
+            stopReason: "aborted",
+          });
+        }
+      }
+    } finally {
+      for (const entry of active) entry.controller.abort();
+      try {
+        await Promise.all(active.map((entry) => entry.settled));
+      } finally {
+        const remaining = (this.closedEffectAdmission.get(channelId) ?? 1) - 1;
+        if (remaining === 0) this.closedEffectAdmission.delete(channelId);
+        else this.closedEffectAdmission.set(channelId, remaining);
+      }
+    }
+  }
+
+  /**
+   * Stop every activation-owned executor without manufacturing a semantic
+   * terminal. Durable outbox rows remain leased and are recovered by the next
+   * activation through the ordinary alarm/replay path.
+   */
+  async releaseActivation(): Promise<number> {
+    this.activationReleased = true;
+    const active = [...this.activeDispatches];
+    const reason = new Error("durable-object activation released");
+    for (const entry of active) entry.controller.abort(reason);
+    await Promise.all(active.map((entry) => entry.settled));
+    return active.length;
   }
 
   async alarm(): Promise<void> {

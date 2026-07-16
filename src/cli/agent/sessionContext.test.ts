@@ -24,7 +24,8 @@ vi.mock("../sessionStore.js", () => ({
   },
 }));
 
-import { findContextMarker, resolveSessionScope } from "./sessionContext.js";
+import { findContextBinding, resolveSessionScope } from "./sessionContext.js";
+import { contextBinding } from "@vibestudio/shared/contextBinding";
 
 const ENV_KEYS = [
   "VIBESTUDIO_AGENT_TOKEN",
@@ -45,9 +46,10 @@ function inv(flags: Record<string, string | boolean> = {}) {
   return { positionals: [], flags, flagsMulti: () => [] };
 }
 const deviceCreds = {
-  schemaVersion: 3 as const,
+  schemaVersion: 4 as const,
   kind: "device" as const,
   url: "webrtc://room-1234/_workspace/ws",
+  workspaceId: "workspace-1",
   workspaceName: "ws",
   serverId: `srv_${"S".repeat(24)}`,
   deviceId: `dev_${"D".repeat(24)}`,
@@ -77,7 +79,7 @@ beforeEach(() => {
   state.session = null;
   state.loadCredsCalls = 0;
   state.loadSessionCalls = 0;
-  // Neutral cwd with no marker so the default tiers are exercised deterministically.
+  // Neutral cwd with no binding so the default tiers are exercised deterministically.
   process.chdir(mkTemp());
 });
 afterEach(() => {
@@ -93,9 +95,11 @@ describe("resolveSessionScope precedence", () => {
   it("tier 1: explicit --session loads the named session file", () => {
     state.creds = deviceCreds;
     state.session = {
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: "mysess",
-      serverUrl: deviceCreds.url,
+      serverId: deviceCreds.serverId,
+      workspaceId: deviceCreds.workspaceId,
+      workspaceName: deviceCreds.workspaceName,
       entityId: "ent-s",
       contextId: "ctx-sess",
       scopeKey: "sk",
@@ -126,36 +130,39 @@ describe("resolveSessionScope precedence", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-marker", serverUrl: deviceCreds.url })
+      JSON.stringify(contextBinding({ contextId: "ctx-binding", workspaceId: "workspace-1" }))
     );
     const deep = path.join(root, "a", "b");
     fs.mkdirSync(deep, { recursive: true });
     process.chdir(deep);
-    expect(findContextMarker()?.contextId).toBe("ctx-marker");
+    expect(findContextBinding()?.contextId).toBe("ctx-binding");
 
     state.creds = deviceCreds;
     const scope = resolveSessionScope(inv());
-    expect(scope.contextId).toBe("ctx-marker");
+    expect(scope.contextId).toBe("ctx-binding");
     expect(scope.callerId).toBe(`shell:dev_${"D".repeat(24)}`);
     expect(state.loadSessionCalls).toBe(0); // never reached the session-file tier
   });
 
-  it("tier 3: refuses non-canonical websocket endpoint aliases", () => {
+  it("tier 3: refuses legacy bindings with transient reach fields", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-marker", serverUrl: "ws://srv/rpc" })
+      JSON.stringify({
+        ...contextBinding({ contextId: "ctx-binding", workspaceId: "workspace-1" }),
+        serverUrl: "ws://srv/rpc",
+      })
     );
     process.chdir(root);
     state.creds = deviceCreds;
-    expect(() => resolveSessionScope(inv())).toThrow(/names server/);
+    expect(() => resolveSessionScope(inv())).toThrow(/unknown field/);
   });
 
-  it("tier 2 wins over a present marker (env token beats cwd marker)", () => {
+  it("tier 2 wins over a present binding (env token beats cwd binding)", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-marker", serverUrl: deviceCreds.url })
+      JSON.stringify(contextBinding({ contextId: "ctx-binding", workspaceId: "workspace-1" }))
     );
     process.chdir(root);
     process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:ag-1:secret";
@@ -166,18 +173,18 @@ describe("resolveSessionScope precedence", () => {
     expect(scope.callerId).toMatch(/^agent:/);
   });
 
-  it("refuses a marker whose serverUrl mismatches the paired credential", () => {
+  it("refuses a binding for a different durable workspace", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify({ contextId: "ctx-marker", serverUrl: "http://other" })
+      JSON.stringify(contextBinding({ contextId: "ctx-binding", workspaceId: "workspace-2" }))
     );
     process.chdir(root);
     state.creds = deviceCreds;
-    expect(() => resolveSessionScope(inv())).toThrow(/names server/);
+    expect(() => resolveSessionScope(inv())).toThrow(/belongs to workspace workspace-2/);
   });
 
-  it("tier 1b: explicit --context with no token/marker uses the device credential", () => {
+  it("tier 1b: explicit --context with no token/binding uses the device credential", () => {
     state.creds = deviceCreds;
     const scope = resolveSessionScope(inv({ context: "ctx-flag" }));
     expect(scope.contextId).toBe("ctx-flag");

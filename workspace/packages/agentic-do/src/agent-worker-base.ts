@@ -15,11 +15,10 @@ import {
   createReadTool,
   createProvenanceTool,
   createWriteTool,
+  createMoveFileTool,
+  createCopyFileTool,
   createCommitTool,
-  createRecordClaimTool,
-  createRelateClaimsTool,
-  createReviseClaimTool,
-  createRetractClaimTool,
+  createWorkspaceVcsTool,
   createSuspendTurnTool,
   createEvalTool,
   createDocsSearchTool,
@@ -29,20 +28,18 @@ import {
   loadVibestudioResources,
 } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
-import type {
-  ParticipantDescriptor,
-  KnowledgeToolDeps,
-  RecordClaimResult,
-} from "@workspace/harness";
+import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loop";
 import { ids } from "@workspace/agent-loop";
-import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
-import type {
-  VcsProvenanceForFileResult,
-  VcsProvenanceForSessionResult,
-} from "@vibestudio/service-schemas/vcs";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import type { RpcClient } from "@vibestudio/rpc";
 import { SUPPORTED_IMAGE_TYPES } from "@workspace/pubsub";
-import { AgentVesselBase, type AgentPromptResources, type ApprovalLevel } from "./agent-vessel.js";
+import {
+  AgentVesselBase,
+  type AgentPromptResources,
+  type AgentToolExecutionContext,
+  type ApprovalLevel,
+} from "./agent-vessel.js";
 import { AgentHeartbeatLoop, type AgentHeartbeatLoopDeps } from "./agent-heartbeat-loop.js";
 import { readSayAttachments } from "./say-attachments.js";
 import {
@@ -77,6 +74,10 @@ type StandardAgentMethodOptions = {
 };
 
 const PROMPT_RESOURCE_CACHE_TTL_MS = 5_000;
+
+function requireBoundMutationInvocation(): never {
+  throw new Error("A semantic mutation cannot execute without a bound trajectory invocation");
+}
 
 export abstract class AgentWorkerBase extends AgentVesselBase {
   private promptResourceCache: { value: AgentPromptResources; expiresAt: number } | null = null;
@@ -272,112 +273,45 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   /** The six workerd-clean file tools over the agent's context folder
    *  (fs RPC scopes paths to the caller's context). Without them, agents
    *  whose prompts say `read(".../SKILL.md")` can only flail. */
-  protected override getLoopTools(channelId: string): AgentTool[] {
-    const fs = createRpcFs(this.rpc as never);
+  protected override getLoopTools(
+    channelId: string,
+    execution?: AgentToolExecutionContext
+  ): AgentTool[] {
+    const toolRpc = execution?.rpc ?? this.rpc;
+    const fs = createRpcFs(toolRpc as never);
     const cwd = "/";
     // Reads come from the materialized working tree (fs RPC, scoped to the
-    // caller's context); writes go through GAD's edit-first commit so the head
-    // is authoritative and disk is its projection.
-    // Push is userland-dispatched (P3): route it to the gad-store DO via the
-    // `vcs` manifest service on `this.rpc`, with THIS agent's context head as
-    // the source (the same head its edit/commit land on).
-    const userlandRpc = this.rpc as unknown as RpcCallerLike;
-    const vcs = createToolVcs(
-      <T>(method: string, methodArgs: unknown[]) => this.rpc.call<T>("main", method, methodArgs),
-      {
-        rpc: userlandRpc,
-        // Lazy: the channel subscription is only guaranteed at push time.
-        sourceHead: () => `ctx:${this.subscriptions.getContextId(channelId)}`,
-      }
+    // caller's context); writes go through the canonical semantic VCS so the
+    // exact working state is authoritative and disk is its projection.
+    const vcs = createToolVcs(<T>(method: string, methodArgs: unknown[]) =>
+      toolRpc.call<T>("main", method, methodArgs)
     );
-    // §6/§7 provenance: the read attachment + the drill-down `provenance` tool
-    // reach the gad-store DO's provenanceFor* @rpc surface via the same userland
-    // `vcs` manifest service the history reads / push use. Session identity is
-    // THIS agent's trajectory branch (logId === head for the loop), distinct
-    // from the vcs `head` (ctx:<contextId>) where files live.
-    const provClient = createVcsUserlandClient(userlandRpc);
-    const sessionLogId = ids.logIdForChannel(channelId);
-    // Lazy + throw-safe: getContextId throws until the channel is subscribed;
-    // an empty head makes the provenance call skip (best-effort, never fatal).
-    const headFor = () => {
-      try {
-        return `ctx:${this.subscriptions.getContextId(channelId)}`;
-      } catch {
-        return "";
-      }
-    };
-    const provenanceForFile = (input: {
-      repoPath: string;
-      path: string;
-      head: string;
-      tier: "none" | "moderate" | "deep";
-      sessionLogId: string;
-      sessionHead: string;
-      invocationId?: string | null;
-      recallKeywords?: string[] | null;
-      after?: string | null;
-      skipSuppression?: boolean | null;
-    }) => provClient.call<VcsProvenanceForFileResult>("provenanceForFile", input);
-    const provenanceForClaim = (input: {
-      claimId: string;
-      sessionLogId: string;
-      sessionHead: string;
-      invocationId?: string | null;
-      after?: string | null;
-    }) => provClient.call<VcsProvenanceForFileResult>("provenanceForClaim", input);
-    const provenanceForSession = (input: {
-      sessionLogId: string;
-      sessionHead: string;
-      after?: string | null;
-    }) => provClient.call<VcsProvenanceForSessionResult>("provenanceForSession", input);
-    // §8 knowledge capture: the commit tool's `claims:` + the standalone
-    // record/relate/revise/retract tools write to the gad-store DO's knowledge
-    // @rpc surface on THIS agent's own trajectory (logId === head for the loop),
-    // reached via the SAME userland manifest service the provenance reads use
-    // (both `gad` and `vcs` resolve to the one DO; dispatch is by method name,
-    // gated by the 'do' caller kind in the knowledge* @rpc allowlist). Claim
-    // content NEVER travels through vcsService (strict §8 layering).
-    const knowledge: KnowledgeToolDeps = {
-      recordClaim: (input) => provClient.call<RecordClaimResult>("knowledgeRecordClaim", input),
-      relateClaims: (input) =>
-        provClient.call<{ ledgerEntryId: string; related: number }>("knowledgeRelateClaims", input),
-      reviseClaim: (input) =>
-        provClient.call<{ claimId: string; ledgerEntryId: string }>("knowledgeReviseClaim", input),
-      retractClaim: (input) =>
-        provClient.call<{ claimId: string; ledgerEntryId: string }>("knowledgeRetractClaim", input),
-      logId: sessionLogId,
-      head: sessionLogId,
+    const session = channelTrajectoryFor(channelId);
+    const contextId = () => this.subscriptions.getContextId(channelId);
+    // Tool registries are also built without an invocation to expose schemas
+    // to the model. Defer the fail-closed check until a mutation executes.
+    const mutationContext = {
+      contextId,
+      commandId: execution?.commandId ?? requireBoundMutationInvocation,
     };
     const base = [
-      createReadTool(cwd, fs, {
-        rpc: this.rpc,
-        provenance: {
-          provenanceForFile,
-          head: headFor,
-          sessionLogId,
-          sessionHead: sessionLogId,
-        },
-      }),
+      createReadTool(cwd, fs, { rpc: toolRpc }),
       createProvenanceTool(cwd, {
-        provenanceForFile,
-        provenanceForClaim,
-        provenanceForSession,
-        head: headFor,
-        sessionLogId,
-        sessionHead: sessionLogId,
+        vcs,
+        contextId,
+        session: { logId: session.logId, head: session.head },
       }),
       createLsTool(cwd, fs),
-      createGrepTool(cwd, fs, { rpc: this.rpc }),
-      createFindTool(cwd, fs, { rpc: this.rpc }),
-      createEditTool(cwd, vcs, fs),
-      createWriteTool(cwd, vcs, fs),
-      createCommitTool(vcs, knowledge),
-      createRecordClaimTool(knowledge),
-      createRelateClaimsTool(knowledge),
-      createReviseClaimTool(knowledge),
-      createRetractClaimTool(knowledge),
+      createGrepTool(cwd, fs, { rpc: toolRpc }),
+      createFindTool(cwd, fs, { rpc: toolRpc }),
+      createEditTool(cwd, vcs, mutationContext, fs),
+      createWriteTool(cwd, vcs, mutationContext, fs),
+      createMoveFileTool(cwd, vcs, mutationContext),
+      createCopyFileTool(cwd, vcs, mutationContext),
+      createWorkspaceVcsTool(cwd, vcs, mutationContext),
+      createCommitTool(vcs, mutationContext),
       createEvalTool(
-        <T>(method: string, methodArgs: unknown[]) => this.rpc.call<T>("main", method, methodArgs),
+        <T>(method: string, methodArgs: unknown[]) => toolRpc.call<T>("main", method, methodArgs),
         // Scope the agent's EvalDO per channel (matches the old per-(channel,panel) scope),
         // so one multi-channel agent doesn't share REPL scope/db across unrelated chats.
         { subKey: channelId }
@@ -385,16 +319,16 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       // Capability discovery: search/open the caller-aware catalog (services
       // and runtime APIs) with typed schemas + access rules.
       createDocsSearchTool(<T>(method: string, methodArgs: unknown[]) =>
-        this.rpc.call<T>("main", method, methodArgs)
+        toolRpc.call<T>("main", method, methodArgs)
       ),
       createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
-        this.rpc.call<T>("main", method, methodArgs)
+        toolRpc.call<T>("main", method, methodArgs)
       ),
       createSuspendTurnTool(),
       this.createAskUserTool(),
       ...createWebTools({
         rpc: {
-          call: (target, method, args) => this.rpc.call(target, method, args),
+          call: (target, method, args) => toolRpc.call(target, method, args),
         },
         hasCredentialForOrigin: async (origin) => {
           try {
@@ -414,7 +348,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // publishPolicy governs whether model narration also publishes) + the
     // subagent supervision surface. The child-side `complete` tool is added
     // ONLY when this agent is itself a subagent.
-    return [...base, this.createSayTool(channelId, fs), ...this.createSubagentTools(channelId)];
+    return [
+      ...base,
+      this.createSayTool(channelId, fs),
+      ...this.createSubagentTools(channelId, toolRpc),
+    ];
   }
 
   /** The generalized `say` tool: an explicit, deliberate channel utterance
@@ -497,17 +435,17 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   }
 
   /** The subagent tool surface: parent-side supervision (spawn/send/inspect/
-   *  merge/pick/read/close) plus the child-side `complete` terminal trigger
+   *  integrate/read/close) plus the child-side `complete` terminal trigger
    *  (advertised only to subagents). The vessel implements the spawn mechanics
    *  in the local-tool executor (it never reaches the `execute` below — see
    *  AgentVesselBase.runDeferredSpawn). */
-  private createSubagentTools(channelId: string): AgentTool[] {
+  private createSubagentTools(channelId: string, toolRpc: RpcClient): AgentTool[] {
     const tools: AgentTool[] = [
       {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId exactly, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then merge/pick/close. Progress is pushed; do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
+          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId exactly, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then integrate or close. Progress is pushed; do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {
@@ -540,7 +478,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             agentKind: {
               type: "string",
               description:
-                "Reasoning engine for the child (default 'pi', an in-process agent). Any other value names an external launcher extension @workspace-extensions/<agentKind>; the task is required and the launched child reports progress, completes, and merges back exactly like a 'pi' subagent.",
+                "Reasoning engine for the child (default 'pi', an in-process agent). Any other value names an external launcher extension @workspace-extensions/<agentKind>; the task is required and the launched child reports progress, completes, and integrates its committed changes exactly like a 'pi' subagent.",
             },
           },
           required: ["mode"],
@@ -606,10 +544,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         },
       } as AgentTool,
       {
-        name: "merge_subagent",
-        label: "merge_subagent",
+        name: "integrate_subagent",
+        label: "integrate_subagent",
         description:
-          "Take EVERYTHING from a subagent by merging its child context into yours. Inspect status/diff first. Merge is commit-gated on both sides; if parent or child is dirty, commit deliberately, then retry. This does not push main.",
+          "Adopt every currently applicable committed change from a subagent into your local working state. Inspect its status and comparison first; conflicts require explicit adopt/reconcile/decline decisions. This does not commit or publish your work.",
         parameters: {
           type: "object",
           properties: {
@@ -623,34 +561,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown };
-          return this.mergeSubagent(String(p.runId ?? ""), channelId);
-        },
-      } as AgentTool,
-      {
-        name: "pick_from_subagent",
-        label: "pick_from_subagent",
-        description:
-          "Selectively take commits or paths from a subagent's child context. Inspect status/diff/log first. Path picks land as parent working edits; commit picks follow vcs.pick semantics.",
-        parameters: {
-          type: "object",
-          properties: {
-            runId: {
-              type: "string",
-              description:
-                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
-            },
-            picks: {
-              type: "array",
-              description:
-                "Pick specs: {kind:'commit',repoPath,eventId} | {kind:'paths',paths:[…]}.",
-              items: { type: "object" },
-            },
-          },
-          required: ["runId", "picks"],
-        } as never,
-        execute: async (_toolCallId, params) => {
-          const p = params as { runId?: unknown; picks?: unknown };
-          return this.pickFromSubagent(String(p.runId ?? ""), p.picks, channelId);
+          return this.integrateSubagent(String(p.runId ?? ""), channelId, toolRpc);
         },
       } as AgentTool,
       {
@@ -686,7 +597,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "close_subagent",
         label: "close_subagent",
         description:
-          "Close a subagent run when you are done inspecting it. Cancels it if still open, then tears down its context and its own subagents. Set discard:true when intentionally dropping unmerged work.",
+          "Close a subagent run when you are done inspecting it. Cancels it if still open, then tears down its context and its own subagents. Set discard:true when intentionally dropping unintegrated work.",
         parameters: {
           type: "object",
           properties: {

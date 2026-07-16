@@ -1,6 +1,6 @@
 import { z } from "zod";
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { GENESIS_EVENT_HASH } from "./constants.js";
-import { canonicalJson, sha256Hex } from "./hash.js";
 import type { EnvelopeId } from "./ids.js";
 import type { ActorRef, EventCausality, ParticipantRef, ParticipantSelector } from "./events.js";
 import {
@@ -40,7 +40,7 @@ export interface LogEnvelope<Payload = unknown> {
 export const LOG_GENESIS_HASH = GENESIS_EVENT_HASH;
 
 /** Structural input for the hash-covered slice — accepts both full
- *  LogEnvelopes and the gad-store's pre-append event shape. */
+ *  LogEnvelopes and the semantic control plane's pre-append event shape. */
 export interface LogEnvelopeSemanticInput {
   envelopeId: string;
   actor: unknown;
@@ -82,7 +82,7 @@ export interface LogEnvelopeHashInput {
 }
 
 /** The ONE preimage construction for envelope hashes. Both the async
- *  protocol path (computeLogEnvelopeHash) and the gad-store's sync path
+ *  protocol path (computeLogEnvelopeHash) and the semantic control plane's sync path
  *  hash exactly this string — never assemble the preimage anywhere else.
  *  Length prefixes (UTF-16 code units, matching String.length in both
  *  implementations) make every field boundary unambiguous; the semantic
@@ -99,7 +99,7 @@ export function logEnvelopeHashPreimage(input: LogEnvelopeHashInput): string {
 }
 
 export async function computeLogEnvelopeHash(input: LogEnvelopeHashInput): Promise<string> {
-  return sha256Hex(logEnvelopeHashPreimage(input));
+  return sha256HexSyncText(logEnvelopeHashPreimage(input));
 }
 
 export async function verifyLogEnvelopeHash(envelope: LogEnvelope): Promise<boolean> {

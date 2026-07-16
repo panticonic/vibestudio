@@ -8,13 +8,11 @@ const MIN = 60_000;
 async function makeScheduler(opts?: { backoffBaseMs?: number; backoffMaxMs?: number }) {
   const sql = (await createInMemorySql()) as unknown as SqlStorage;
   RecurringScheduler.createTables(sql);
-  const alarms: number[] = [];
   const scheduler = new RecurringScheduler({
     sql,
-    setAlarmAt: (t) => alarms.push(t),
     ...opts,
   });
-  return { sql, scheduler, alarms };
+  return { sql, scheduler };
 }
 
 describe("RecurringScheduler", () => {
@@ -22,10 +20,11 @@ describe("RecurringScheduler", () => {
     const { scheduler } = await makeScheduler();
     scheduler.upsertJob({ jobId: "poll", channelId: "ch1", intervalMs: 30 * MIN, nextRunAt: 1000 });
     const runs: string[] = [];
-    await scheduler.onAlarm(1000, async (jobId) => {
+    const nextWakeAt = await scheduler.onAlarm(1000, async (jobId) => {
       runs.push(jobId);
     });
     expect(runs).toEqual(["poll"]);
+    expect(nextWakeAt).toBe(1000 + 30 * MIN);
     expect(scheduler.nextWakeAt()).toBe(1000 + 30 * MIN);
   });
 
@@ -33,22 +32,29 @@ describe("RecurringScheduler", () => {
     const { scheduler } = await makeScheduler();
     scheduler.upsertJob({ jobId: "poll", channelId: "ch1", intervalMs: 30 * MIN, nextRunAt: 5000 });
     const runs: string[] = [];
-    await scheduler.onAlarm(1000, async (jobId) => {
+    const nextWakeAt = await scheduler.onAlarm(1000, async (jobId) => {
       runs.push(jobId);
     });
     expect(runs).toEqual([]);
+    expect(nextWakeAt).toBe(5000);
     expect(scheduler.nextWakeAt()).toBe(5000);
   });
 
-  it("drains multiple due jobs independently and re-arms the earliest wake", async () => {
+  it("drains multiple due jobs independently and returns the earliest wake", async () => {
     const { scheduler } = await makeScheduler();
     scheduler.upsertJob({ jobId: "poll", channelId: "ch1", intervalMs: 30 * MIN, nextRunAt: 0 });
-    scheduler.upsertJob({ jobId: "briefing", channelId: "ch1", intervalMs: 24 * 60 * MIN, nextRunAt: 0 });
+    scheduler.upsertJob({
+      jobId: "briefing",
+      channelId: "ch1",
+      intervalMs: 24 * 60 * MIN,
+      nextRunAt: 0,
+    });
     const runs: string[] = [];
-    await scheduler.onAlarm(0, async (jobId) => {
+    const nextWakeAt = await scheduler.onAlarm(0, async (jobId) => {
       runs.push(jobId);
     });
     expect(runs.sort()).toEqual(["briefing", "poll"]);
+    expect(nextWakeAt).toBe(30 * MIN);
     expect(scheduler.nextWakeAt()).toBe(30 * MIN);
   });
 
@@ -105,15 +111,14 @@ describe("RecurringScheduler", () => {
     errSpy.mockRestore();
   });
 
-  it("re-arms the alarm even when the run callback throws synchronously deep", async () => {
-    const { scheduler, alarms } = await makeScheduler();
+  it("returns the derived wake even when a run callback throws", async () => {
+    const { scheduler } = await makeScheduler();
     scheduler.upsertJob({ jobId: "a", channelId: "ch1", intervalMs: MIN, nextRunAt: 0 });
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    alarms.length = 0;
-    await scheduler.onAlarm(0, async () => {
+    const nextWakeAt = await scheduler.onAlarm(0, async () => {
       throw new Error("boom");
     });
-    expect(alarms.length).toBeGreaterThan(0);
+    expect(nextWakeAt).toBe(5 * MIN);
     errSpy.mockRestore();
   });
 
@@ -131,7 +136,13 @@ describe("RecurringScheduler", () => {
 
   it("adds bounded jitter to rescheduled runs", async () => {
     const { scheduler } = await makeScheduler();
-    scheduler.upsertJob({ jobId: "poll", channelId: "ch1", intervalMs: 10 * MIN, jitterMs: MIN, nextRunAt: 0 });
+    scheduler.upsertJob({
+      jobId: "poll",
+      channelId: "ch1",
+      intervalMs: 10 * MIN,
+      jitterMs: MIN,
+      nextRunAt: 0,
+    });
     await scheduler.onAlarm(0, async () => {});
     const next = scheduler.nextWakeAt()!;
     expect(next).toBeGreaterThanOrEqual(10 * MIN);

@@ -1,4 +1,5 @@
 import { AGENTIC_PROTOCOL_VERSION, type AgenticEvent } from "@workspace/agentic-protocol";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   toSubscriptionConfig,
   type AgentSubscriptionConfig,
@@ -34,6 +35,8 @@ export interface AgentEntityCreateInput {
   config?: AgentSubscriptionConfig | Record<string, unknown>;
   stateArgs?: Record<string, unknown>;
   agentBinding?: { entityId: string; channelId: string };
+  /** Host derives the self entity/context coordinates and binds this agent to the channel. */
+  agentChannelId?: string;
 }
 
 export interface AgentChannelSubscriptionInput {
@@ -41,6 +44,13 @@ export interface AgentChannelSubscriptionInput {
   contextId: string;
   config?: AgentSubscriptionConfig | Record<string, unknown>;
   replay?: boolean;
+}
+
+export interface AgentChannelUnsubscriptionInput {
+  source: string;
+  className: string;
+  key: string;
+  channelId: string;
 }
 
 export interface AgentTrajectoryForkInput {
@@ -111,6 +121,7 @@ export function buildAgentEntityCreateSpec(input: AgentEntityCreateInput): Recor
     ...(input.contextId ? { contextId: input.contextId } : {}),
     ...(Object.keys(stateArgs).length > 0 ? { stateArgs } : {}),
     ...(input.agentBinding ? { agentBinding: input.agentBinding } : {}),
+    ...(input.agentChannelId ? { agentChannelId: input.agentChannelId } : {}),
   };
 }
 
@@ -142,6 +153,25 @@ export async function subscribeAgentToChannel(
   ]);
 }
 
+/**
+ * Unsubscribe an already-active agent without acquiring or reactivating it.
+ * Absence or retirement is reported by the ordinary active-entity relay.
+ */
+export async function unsubscribeAgentFromChannel(
+  rpc: AgentLaunchRpc,
+  input: AgentChannelUnsubscriptionInput
+): Promise<AgentSubscriptionResult> {
+  return rpc.call<AgentSubscriptionResult>(
+    doTargetId({
+      source: input.source,
+      className: input.className,
+      objectKey: input.key,
+    }),
+    "unsubscribeChannel",
+    [input.channelId]
+  );
+}
+
 export async function initAgentFromTrajectoryFork(
   rpc: AgentLaunchRpc,
   handleOrTargetId: AgentEntityHandle | string,
@@ -166,7 +196,10 @@ export async function launchAgentIntoChannel(
   rpc: AgentLaunchRpc,
   input: LaunchAgentIntoChannelInput
 ): Promise<LaunchAgentIntoChannelResult> {
-  const handle = await createAgentEntity(rpc, input);
+  const handle = await createAgentEntity(rpc, {
+    ...input,
+    agentChannelId: input.channelId,
+  });
   if (input.contextId && handle.contextId && handle.contextId !== input.contextId) {
     if (input.retireEntityOnSubscribeFailure && handle.id) {
       await retireAgentEntity(rpc, handle.id).catch(() => undefined);

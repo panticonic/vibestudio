@@ -17,7 +17,7 @@ export interface InvocationCardPayload {
   execution: ToolExecutionState;
   /** Present when this invocation is a subagent run — drives the standalone
    *  SubagentRunCard render instead of the inline tool pill. Folded from the
-   *  trajectory `invocation.subagent` payload (spawn fields + terminal merge). */
+   *  trajectory `invocation.subagent` payload (spawn fields + terminal integration). */
   subagent?: SubagentRunState;
 }
 
@@ -30,7 +30,7 @@ export interface SubagentRunState {
   parentContextId?: string | null;
   childEntityId?: string;
   label?: string;
-  merge?: "merged" | "conflicted" | "discarded";
+  integration?: "integrated" | "conflicted" | "discarded";
   /** Reasoning engine of the child run. Drives the card's kind badge; tolerant
    *  of absence for older spawn payloads. */
   agentKind?: string;

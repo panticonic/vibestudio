@@ -156,16 +156,10 @@ function toolPresentation(payload: InvocationCardPayload): {
       preview: `${compactText(args["query"] ?? details?.["query"] ?? "status", 44)}${runId ? ` for ${runId}` : ""}`,
     };
   }
-  if (payload.name === "merge_subagent") {
+  if (payload.name === "integrate_subagent") {
     return {
-      displayName: "Merge Subagent",
-      preview: runId ? `Take all changes from ${runId}` : "Take all changes",
-    };
-  }
-  if (payload.name === "pick_from_subagent") {
-    return {
-      displayName: "Pick From Subagent",
-      preview: runId ? `Select changes from ${runId}` : "Select child changes",
+      displayName: "Integrate Subagent",
+      preview: runId ? `Integrate changes from ${runId}` : "Integrate changes",
     };
   }
   if (payload.name === "close_subagent") {

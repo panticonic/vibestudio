@@ -3,13 +3,26 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+  assertClaudeCodeVersion,
+  materializeClaudeLaunch,
+  removeMaterializedClaudeLaunch,
+  type ClaudeLaunchProfile,
+  type MaterializedClaudeLaunch,
+} from "@vibestudio/shared/claudeLaunchProfile";
+import { confineClaudeReadOnly } from "@vibestudio/shared/claudeReadOnlyLaunch";
+import { cliConfigRoot } from "../configPaths.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
 import { AuthError, CliError } from "../output.js";
 import { printResult } from "../output.js";
-import { CONTEXT_MARKER, findContextMarker } from "./context.js";
-import { agentSocketPath } from "./hookSocket.js";
-import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
+import {
+  CONTEXT_BINDING_FILE,
+  assertBindingWorkspace,
+  findContextBinding,
+  findContextBindingLocation,
+} from "../contextBinding.js";
+import { bridgeRpcCredential, resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
 
 /**
  * `vibestudio claude` command group. The CLI stays Claude-agnostic apart from
@@ -21,17 +34,15 @@ import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
 const CLAUDE_CODE_PROVIDER = "claudeCode";
 
 /** Structural mirror of the extension's PrepareResult (no workspace import). */
-interface PrepareResult {
+export interface PrepareResult {
   entityId: string;
   contextId: string;
   channelId: string;
   vesselRef: string;
-  contextFolder: string;
-  env: Record<string, string>;
-  argv: string[];
+  profile: ClaudeLaunchProfile;
 }
 
-export { findContextMarker };
+export { findContextBinding };
 
 export function printClaudeHelp(): void {
   console.log(`vibestudio claude
@@ -40,8 +51,7 @@ Usage:
   vibestudio claude [--channel <id>]        Launch Claude Code as a linked channel agent
   vibestudio claude status                  Report link tier and attachment state
   vibestudio claude emit <event>            Relay a Claude Code hook event to the bridge (used by hooks)
-  vibestudio claude channel-host [--channel <id>]
-                                            Channel MCP bridge (spawned by Claude Code)
+  vibestudio claude channel-host             Contained-launch MCP bridge (spawned by Claude Code)
 `);
 }
 
@@ -77,40 +87,113 @@ async function runLauncher(argv: string[]): Promise<number> {
     throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
   }
   const client = new RpcClient(creds);
+  const profilesRoot = path.join(cliConfigRoot(), "claude-launches");
+  try {
+    const location = findContextBindingLocation(process.cwd());
+    if (!location) {
+      throw new CliError(
+        `no ${CONTEXT_BINDING_FILE} found in this or any parent directory — ` +
+          "Claude must launch inside the local context tree its file tools will edit"
+      );
+    }
+    assertBindingWorkspace(location.binding, creds);
 
-  let channelId = channelFlag;
-  if (!channelId) {
-    const marker = findContextMarker(process.cwd());
-    if (!marker) {
-      throw new CliError(
-        `no --channel given and no ${CONTEXT_MARKER} found in this or any parent directory — ` +
-          `run inside a context folder or pass --channel <id>`
+    let channelId = channelFlag;
+    if (!channelId) {
+      const primary = await invokeExtension<{ channelId: string } | null>(
+        client,
+        "resolvePrimaryChannel",
+        [{ contextId: location.binding.contextId }]
       );
+      if (!primary?.channelId) {
+        throw new CliError(
+          `context ${location.binding.contextId} has no known conversation channel yet — ` +
+            `launch once with \`vibestudio claude --channel <id>\` to bind one`
+        );
+      }
+      channelId = primary.channelId;
     }
-    const primary = await invokeExtension<{ channelId: string } | null>(
-      client,
-      "resolvePrimaryChannel",
-      [{ contextId: marker.contextId }]
-    );
-    if (!primary?.channelId) {
-      throw new CliError(
-        `context ${marker.contextId} has no known conversation channel yet — ` +
-          `launch once with \`vibestudio claude --channel <id>\` to bind one`
-      );
-    }
-    channelId = primary.channelId;
+
+    // Validate the executable on the selected machine before minting a launch credential.
+    await assertClaudeCodeVersion();
+    const prepared = await invokeExtension<PrepareResult>(client, "prepare", [{ channelId }]);
+    return await executePreparedClaudeLaunch({
+      prepared,
+      expectedContextId: location.binding.contextId,
+      contextDirectory: location.directory,
+      profilesRoot,
+      serverUrl: creds.url,
+      release: async (entityId, launchId) => {
+        await invokeExtension(client, "release", [{ entityId, launchId }]);
+      },
+    });
+  } finally {
+    await client.close().catch(() => undefined);
   }
-
-  const prepared = await invokeExtension<PrepareResult>(client, "prepare", [{ channelId }]);
-  return await spawnClaude(prepared);
 }
 
-function spawnClaude(prepared: PrepareResult): Promise<number> {
-  const [command, ...args] = prepared.argv;
+/** Execute a prepared declaration on this machine and own its whole lifecycle. */
+export async function executePreparedClaudeLaunch(input: {
+  prepared: PrepareResult;
+  expectedContextId: string;
+  contextDirectory: string;
+  profilesRoot: string;
+  serverUrl: string;
+  release: (entityId: string, launchId: string) => Promise<void>;
+  spawnLaunch?: typeof spawnClaude;
+}): Promise<number> {
+  const { prepared } = input;
+  let launch: MaterializedClaudeLaunch | undefined;
+  let outcome: { ok: true; exitCode: number } | { ok: false; error: unknown };
+  try {
+    if (prepared.contextId !== input.expectedContextId) {
+      throw new CliError(
+        `channel ${prepared.channelId} belongs to context ${prepared.contextId}, but the local tree is ` +
+          `${input.expectedContextId}; launch from that context's bound directory`
+      );
+    }
+    launch = await materializeClaudeLaunch({
+      profile: prepared.profile,
+      profilesRoot: input.profilesRoot,
+      serverUrl: input.serverUrl,
+    });
+    outcome = {
+      ok: true,
+      exitCode: await (input.spawnLaunch ?? spawnClaude)(launch, input.contextDirectory),
+    };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+
+  let cleanupError: unknown;
+  try {
+    if (launch) await removeMaterializedClaudeLaunch(launch);
+  } catch (error) {
+    cleanupError = error;
+  }
+  try {
+    await input.release(prepared.entityId, prepared.profile.launchId);
+  } catch (error) {
+    cleanupError ??= error;
+  }
+  if (!outcome.ok) throw outcome.error;
+  if (cleanupError) throw cleanupError;
+  return outcome.exitCode;
+}
+
+export function spawnClaude(
+  launch: MaterializedClaudeLaunch,
+  contextDirectory: string
+): Promise<number> {
+  const confined = confineClaudeReadOnly({
+    argv: launch.argv,
+    profileDir: launch.profileDir,
+    contextDirectory,
+  });
   return new Promise((resolve, reject) => {
-    const child = spawn(command ?? "claude", args, {
-      cwd: prepared.contextFolder,
-      env: { ...process.env, ...prepared.env },
+    const child = spawn(confined.command, confined.args, {
+      cwd: contextDirectory,
+      env: { ...process.env, ...launch.env, ...confined.env },
       stdio: "inherit",
     });
     child.on("error", reject);
@@ -149,15 +232,15 @@ async function runEmit(argv: string[]): Promise<number> {
 }
 
 /**
- * Where a hook emission goes: the launch profile's socket when launched by
- * us, else the per-context fallback socket (plugin/adopted sessions, whose
- * env has no profile) discovered via the cwd-upward context marker.
+ * Where a hook emission goes. Hooks only exist in an OS-contained launch and
+ * therefore always use its disposable profile socket. There is no unmanaged
+ * per-context fallback.
  */
 export function emitSocketPath(env: NodeJS.ProcessEnv, cwd: string): string | null {
   const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
   if (profile) return path.join(profile, "hook.sock");
-  const contextId = env["VIBESTUDIO_CONTEXT_ID"] ?? findContextMarker(cwd)?.contextId;
-  return contextId ? agentSocketPath(contextId) : null;
+  void cwd;
+  return null;
 }
 
 function readStdinSafe(): Promise<unknown> {
@@ -209,10 +292,12 @@ export function writeToHookSocket(socketPath: string, line: string): Promise<voi
 // ---------------------------------------------------------------------------
 
 async function runChannelHost(argv: string[]): Promise<number> {
-  const config = await resolveBridgeConfig(process.env, {
-    cwd: process.cwd(),
-    channelFlag: readValueFlag(argv, "--channel"),
-  });
+  if (readValueFlag(argv, "--channel")) {
+    throw new CliError(
+      "channel-host no longer adopts unmanaged sessions; launch the contained session with `vibestudio claude --channel <id>`"
+    );
+  }
+  const config = await resolveBridgeConfig(process.env);
   return await runChannelHostLoop(config);
 }
 
@@ -222,20 +307,22 @@ async function runChannelHost(argv: string[]): Promise<number> {
 
 async function runStatus(json: boolean): Promise<number> {
   const env = process.env;
-  const marker = findContextMarker(process.cwd());
+  const binding = findContextBinding(process.cwd());
   const creds = loadCliCredentials();
+  if (binding && creds) assertBindingWorkspace(binding, creds);
   const launched = Boolean(env["VIBESTUDIO_AGENT_TOKEN"] && env["VIBESTUDIO_LAUNCH_PROFILE"]);
   const agentToken = env["VIBESTUDIO_AGENT_TOKEN"];
-  const bridgeSocket = bridgeHookSocket(env, marker);
+  const bridgeSocket = bridgeHookSocket(env, binding);
 
-  // Tier model (plan §8.3): 2 = our terminal launch (profile env), 1 = channel
-  // connected via agent credential (plugin/adoption), 0 = paired CLI only.
-  const tier = launched ? 2 : agentToken || bridgeSocket ? 1 : 0;
+  // Tier model: 2 = our OS-contained terminal launch, 0 = paired CLI only.
+  // The former unmanaged/plugin adoption tier was removed because a child MCP
+  // process cannot make its already-running parent filesystem read-only.
+  const tier = launched ? 2 : 0;
 
   const lines: string[] = [
-    `tier: ${tier} (${tier === 2 ? "launched terminal session" : tier === 1 ? "linked (plugin/adoption)" : "CLI only"})`,
+    `tier: ${tier} (${tier === 2 ? "contained linked session" : "CLI only"})`,
     `paired device credential: ${creds ? `yes (${creds.url})` : "no"}`,
-    `context marker: ${marker ? `${marker.contextId}${marker.serverUrl ? ` @ ${marker.serverUrl}` : ""}` : "none (not inside a context folder)"}`,
+    `context binding: ${binding ? `${binding.workspaceId}/${binding.contextId}` : "none (not inside a context folder)"}`,
     `agent credential env: ${agentToken ? "present" : "absent"}`,
     `launch profile: ${env["VIBESTUDIO_LAUNCH_PROFILE"] ?? "absent"}`,
     `bridge hook socket: ${bridgeSocket ?? "absent"}`,
@@ -243,8 +330,8 @@ async function runStatus(json: boolean): Promise<number> {
 
   if (agentToken && env["VIBESTUDIO_SERVER_URL"]) {
     try {
-      const config = await resolveBridgeConfig(env, { cwd: process.cwd() });
-      const client = new RpcClient({ url: config.serverUrl, token: config.agentToken });
+      const config = await resolveBridgeConfig(env);
+      const client = new RpcClient(bridgeRpcCredential(config));
       const status = await client.callTarget<Record<string, unknown>>(
         config.vesselRef,
         "linkedStatus",
@@ -263,7 +350,7 @@ async function runStatus(json: boolean): Promise<number> {
   }
 
   printResult(
-    { tier, paired: Boolean(creds), contextId: marker?.contextId ?? null, lines },
+    { tier, paired: Boolean(creds), contextId: binding?.contextId ?? null, lines },
     { json, human: () => console.log(lines.join("\n")) }
   );
   return 0;
@@ -275,17 +362,14 @@ async function runStatus(json: boolean): Promise<number> {
 
 function bridgeHookSocket(
   env: NodeJS.ProcessEnv,
-  marker: ReturnType<typeof findContextMarker>
+  _binding: ReturnType<typeof findContextBinding>
 ): string | null {
   const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
   if (profile) {
     const profileSocket = path.join(profile, "hook.sock");
     if (fs.existsSync(profileSocket)) return profileSocket;
   }
-  const contextId = env["VIBESTUDIO_CONTEXT_ID"] ?? marker?.contextId;
-  if (!contextId) return null;
-  const socketPath = agentSocketPath(contextId);
-  return fs.existsSync(socketPath) ? socketPath : null;
+  return null;
 }
 
 function readValueFlag(argv: string[], name: string): string | undefined {

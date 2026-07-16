@@ -1,13 +1,5 @@
 import { agenticSlice, type AgenticEvent, type TrajectoryEvent } from "./events.js";
-
-export { canonicalJson, sortForCanonicalJson } from "./canonical-json.js";
-import { canonicalJson } from "./canonical-json.js";
-
-export async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 
 export async function computeEventHash(input: {
   prevEventHash: string;
@@ -15,7 +7,9 @@ export async function computeEventHash(input: {
   seq: number;
   event: AgenticEvent;
 }): Promise<string> {
-  return sha256Hex(`${input.prevEventHash}${input.branchId}${input.seq}${canonicalJson(input.event)}`);
+  return sha256HexSyncText(
+    `${input.prevEventHash}${input.branchId}${input.seq}${canonicalJson(input.event)}`
+  );
 }
 
 export async function verifyEventHash(event: TrajectoryEvent): Promise<boolean> {
