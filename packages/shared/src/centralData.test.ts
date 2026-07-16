@@ -18,15 +18,6 @@ describe("CentralDataManager SQLite control store", () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  const localServer = {
-    gatewayPort: 4321,
-    pid: 999,
-    serverId: "srv-1",
-    serverBootId: "boot-1",
-    startedAt: 1234,
-    version: "1.0.0",
-  };
-
   function manager(now?: () => number): CentralDataManager {
     return new CentralDataManager({ databasePath, ...(now ? { now } : {}) });
   }
@@ -56,7 +47,6 @@ describe("CentralDataManager SQLite control store", () => {
     const second = manager();
     first.addWorkspace("alpha");
     second.addWorkspace("beta");
-    first.setHubRuntime(localServer);
     second.setKeepServerOnQuit(true);
 
     expect(
@@ -65,19 +55,9 @@ describe("CentralDataManager SQLite control store", () => {
         .map((entry) => entry.name)
         .sort()
     ).toEqual(["alpha", "beta"]);
-    expect(second.getHubRuntime()).toEqual(localServer);
     expect(first.getKeepServerOnQuit()).toBe(true);
     first.close();
     second.close();
-  });
-
-  it("records, reads, and clears the singleton local hub runtime", () => {
-    const central = manager();
-    central.setHubRuntime(localServer);
-    expect(central.getHubRuntime()).toEqual(localServer);
-    central.clearHubRuntime();
-    expect(central.getHubRuntime()).toBeNull();
-    central.close();
   });
 
   it("stores independent authenticated-user resume cursors", () => {
@@ -118,10 +98,23 @@ describe("CentralDataManager SQLite control store", () => {
   });
 
   it("recovers a crash-marked ephemeral workspace without touching persistent workspaces", () => {
-    const first = manager();
+    let now = 1_000;
+    const first = manager(() => now);
+    first.claimHubProcessLease({
+      ownerBootId: "boot-first",
+      gatewayPort: 3030,
+      pid: 101,
+      ttlMs: 50,
+    });
     first.addWorkspace("default");
-    const ephemeral = first.addEphemeralWorkspace("dev");
-    first.setEphemeralWorkspaceDiskName(ephemeral.workspaceId, "dev-deadbeef");
+    const ephemeral = first.addEphemeralWorkspace("dev", "boot-first");
+    expect(
+      first.rotateEphemeralWorkspaceDiskName("boot-first", ephemeral.workspaceId, "dev-deadbeef")
+    ).toBeNull();
+    expect(
+      first.rotateEphemeralWorkspaceDiskName("boot-first", ephemeral.workspaceId, "dev-deadbeef")
+    ).toBeNull();
+    expect(first.listEphemeralWorkspaceCleanups("boot-first")).toEqual([]);
     const db = new DatabaseSync(databasePath);
     db.prepare(
       `INSERT INTO users (id, handle, display_name, role, created_at)
@@ -138,23 +131,106 @@ describe("CentralDataManager SQLite control store", () => {
     db.close();
     first.close();
 
-    const recovered = manager();
-    expect(recovered.removeEphemeralWorkspace()).toEqual({
-      ...ephemeral,
+    now = 1_051;
+    const recovered = manager(() => now);
+    expect(
+      recovered.claimHubProcessLease({
+        ownerBootId: "boot-replacement",
+        gatewayPort: 3031,
+        pid: 202,
+        ttlMs: 50,
+      })
+    ).toMatchObject({ ownerBootId: "boot-first" });
+    const removal = recovered.removeEphemeralWorkspace("boot-replacement", "boot-first");
+    expect(removal?.workspace).toEqual({ ...ephemeral, diskName: "dev-deadbeef" });
+    expect(removal?.cleanup).toMatchObject({
       diskName: "dev-deadbeef",
+      sourceOwnerBootId: "boot-first",
     });
     expect(recovered.listWorkspaces().map((entry) => entry.name)).toEqual(["default"]);
     expect(recovered.getLastWorkspaceForUser("usr_member")).toBeNull();
-    expect(recovered.removeEphemeralWorkspace()).toBeNull();
+    expect(recovered.removeEphemeralWorkspace("boot-replacement", "boot-first")).toBeNull();
     recovered.close();
   });
 
   it("never adopts a persistent workspace as ephemeral", () => {
     const central = manager();
+    central.claimHubProcessLease({
+      ownerBootId: "boot-owner",
+      gatewayPort: 3030,
+      pid: 101,
+      ttlMs: 1_000,
+    });
     central.addWorkspace("dev");
-    expect(() => central.addEphemeralWorkspace("dev")).toThrow(/Cannot shadow persistent/);
+    expect(() => central.addEphemeralWorkspace("dev", "boot-owner")).toThrow(
+      /Cannot shadow persistent/
+    );
     expect(central.getWorkspaceEntry("dev")).not.toBeNull();
     central.close();
+  });
+
+  it("fences concurrent hubs before either can mutate the other's ephemeral checkout", () => {
+    let now = 10_000;
+    const first = manager(() => now);
+    const second = manager(() => now);
+    expect(
+      first.claimHubProcessLease({
+        ownerBootId: "boot-live",
+        gatewayPort: 3030,
+        pid: 101,
+        ttlMs: 100,
+      })
+    ).toBeNull();
+    const ephemeral = first.addEphemeralWorkspace("dev", "boot-live");
+    first.rotateEphemeralWorkspaceDiskName("boot-live", ephemeral.workspaceId, "dev-deadbeef");
+
+    expect(() =>
+      second.claimHubProcessLease({
+        ownerBootId: "boot-contender",
+        gatewayPort: 3031,
+        pid: 202,
+        ttlMs: 100,
+      })
+    ).toThrow(/owned by boot-live/);
+    expect(() => second.removeEphemeralWorkspace("boot-contender", "boot-live")).toThrow(
+      /does not own the active machine-control lease/
+    );
+    expect(second.getEphemeralWorkspace()).toEqual({
+      ...ephemeral,
+      diskName: "dev-deadbeef",
+    });
+
+    now = 10_101;
+    expect(
+      second.claimHubProcessLease({
+        ownerBootId: "boot-contender",
+        gatewayPort: 3031,
+        pid: 202,
+        ttlMs: 100,
+      })
+    ).toMatchObject({ ownerBootId: "boot-live" });
+    expect(first.renewHubProcessLease("boot-live", 100)).toBe(false);
+    expect(first.releaseHubProcessLease("boot-live")).toBe(false);
+    expect(() => first.removeEphemeralWorkspace("boot-live", "boot-live")).toThrow(
+      /does not own the active machine-control lease/
+    );
+    expect(second.removeEphemeralWorkspace("boot-contender", "wrong-owner")).toBeNull();
+    expect(second.getEphemeralWorkspace()?.diskName).toBe("dev-deadbeef");
+    const removal = second.removeEphemeralWorkspace("boot-contender", "boot-live");
+    expect(removal?.workspace).toEqual({ ...ephemeral, diskName: "dev-deadbeef" });
+    expect(removal?.cleanup).toMatchObject({
+      diskName: "dev-deadbeef",
+      sourceOwnerBootId: "boot-live",
+    });
+    expect(() => first.completeEphemeralWorkspaceCleanup("boot-live", removal!.cleanup!)).toThrow(
+      /does not own the active machine-control lease/
+    );
+    expect(second.completeEphemeralWorkspaceCleanup("boot-contender", removal!.cleanup!)).toBe(
+      true
+    );
+    expect(second.getHubProcessLease()?.ownerBootId).toBe("boot-contender");
+    first.close();
+    second.close();
   });
 
   it("atomically cascades workspace deletion across every workspace-owned control row", () => {
@@ -256,16 +332,16 @@ describe("CentralDataManager SQLite control store", () => {
     const central = manager();
     central.close();
     const db = new DatabaseSync(databasePath);
-    db.exec("DROP TABLE hub_runtime");
+    db.exec("DROP TABLE hub_process_lease");
     db.close();
     const before = fs.readFileSync(databasePath);
 
-    expect(() => manager()).toThrow(/missing \[table:hub_runtime\]/);
+    expect(() => manager()).toThrow(/missing \[table:hub_process_lease\]/);
     expect(fs.readFileSync(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath);
     expect(
       unchanged
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'hub_runtime'")
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'hub_process_lease'")
         .get()
     ).toBeUndefined();
     unchanged.close();

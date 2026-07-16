@@ -9,7 +9,7 @@ import {
   unitChangeSessionGrantKey,
   type UnitMetaChangeApprovalProvider,
 } from "@vibestudio/unit-host";
-import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
+import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { mirrorWorktreeTree, putBytes } from "./blobstoreService.js";
@@ -20,6 +20,7 @@ import {
   type MetaApprovalGrantStore,
   type RefAdvanceGateContext,
   type RepoDeletionApprovalCandidate,
+  type SemanticAdvanceApprovalCandidate,
 } from "./mainAdvanceApproval.js";
 
 const roots: string[] = [];
@@ -66,7 +67,6 @@ function candidate(
     repoPath: "meta",
     changedPaths: ["meta/vibestudio.yml"],
     stateHash: "state:next",
-    sourceHead: "ctx:ctx-1",
     ...overrides,
   };
 }
@@ -80,13 +80,13 @@ function panelCaller() {
   });
 }
 
-function approvalQueue(decision: "once" | "session" | "version" | "repo" | "deny") {
+function approvalQueue(decision: "once" | "session" | "version" | "deny") {
   return {
     request: vi.fn(async () => decision),
   } as unknown as ApprovalQueue & { request: ReturnType<typeof vi.fn> };
 }
 
-function gateDeps(opts: { decision?: "once" | "session" | "version" | "repo" | "deny" } = {}) {
+function gateDeps(opts: { decision?: "once" | "session" | "version" | "deny" } = {}) {
   const queue = approvalQueue(opts.decision ?? "once");
   const grantStore = new MemoryGrantStore();
   return {
@@ -160,7 +160,7 @@ describe("createMainAdvanceApprovalGate", () => {
   });
 
   it("approves non-meta main advances with the workspace repo write capability prompt", async () => {
-    const deps = gateDeps({ decision: "repo" });
+    const deps = gateDeps({ decision: "version" });
     const provider: UnitMetaChangeApprovalProvider<UnitBatchEntry> = {
       metaChangeApprovalForCommit: vi.fn(async () => ({ units: [unit], identityKeys: [] })),
       acceptPreapprovedTrust: vi.fn(),
@@ -178,7 +178,7 @@ describe("createMainAdvanceApprovalGate", () => {
         callerKind: "panel",
         repoPath: "panels/test",
         effectiveVersion: "ev-panel",
-        capability: "workspace-repo-write",
+        capability: "workspace-main-advance",
         grantResourceKey: "workspace-source-change:main",
         title: "Update workspace main",
         description: "This advance moves workspace main and changes 1 path.",
@@ -189,14 +189,40 @@ describe("createMainAdvanceApprovalGate", () => {
         },
         details: [
           { label: "Repo", value: "apps/shell" },
-          { label: "Source", value: "ctx:ctx-1" },
           { label: "State", value: "state:next" },
           { label: "Changes", value: "apps/shell/index.tsx" },
-          { label: "Built", value: "not validated" },
         ],
       })
     );
     expect(provider.metaChangeApprovalForCommit).not.toHaveBeenCalled();
+  });
+
+  it("approves a content-identical semantic advance with its exact event edge", async () => {
+    const deps = gateDeps();
+    const gate = createMainAdvanceApprovalGate(deps);
+
+    await gate.approveSemanticAdvance({
+      caller: panelCaller(),
+      previousEventId: "event:before",
+      publishedEventId: "event:after",
+      via: "do:Agent:one",
+    });
+
+    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "capability",
+        capability: "workspace-main-advance",
+        dedupKey: "workspace-semantic-advance:event:after",
+        title: "Advance workspace history",
+        description:
+          "This advances workspace main to a new semantic event without changing protected repository content.",
+        details: [
+          { label: "Via", value: "do:Agent:one" },
+          { label: "Previous event", value: "event:before" },
+          { label: "Published event", value: "event:after" },
+        ],
+      })
+    );
   });
 
   it("bypasses the prompt for a chrome-authorized RESOLVED caller (on-behalf-of, not the writer DO)", async () => {
@@ -211,7 +237,7 @@ describe("createMainAdvanceApprovalGate", () => {
     await gate.approve(
       candidate({
         caller: shell,
-        via: "do:workers/gad-store:GadStore:vcs",
+        via: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
         repoPath: "apps/shell",
         changedPaths: ["apps/shell/index.tsx"],
       })
@@ -277,7 +303,7 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.approvalQueue.request).not.toHaveBeenCalled();
   });
 
-  it("forwards the diff-review payload onto the workspace-repo-write prompt", async () => {
+  it("forwards the diff-review payload onto the workspace-main-advance prompt", async () => {
     const deps = gateDeps({ decision: "once" });
     const gate = createMainAdvanceApprovalGate(deps);
     const diffReview = [
@@ -359,11 +385,11 @@ describe("createMainAdvanceApprovalGate", () => {
       );
     });
 
-    it("is NOT auto-approved by a prior generic workspace-repo-write grant", async () => {
+    it("is NOT auto-approved by a prior generic workspace-main-advance grant", async () => {
       const deps = gateDeps({ decision: "deny" });
       // Pre-grant the ordinary write capability broadly for this caller.
       deps.capabilityGrantStore.grant(
-        "workspace-repo-write",
+        "workspace-main-advance",
         "workspace-source-change:main",
         { callerId: "panel-1", repoPath: "panels/test", effectiveVersion: "ev-panel" },
         "session"
@@ -402,6 +428,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
   function refGateDeps(blobsDir: string) {
     const approvals: MainAdvanceApprovalCandidate[] = [];
+    const semanticAdvances: SemanticAdvanceApprovalCandidate[] = [];
     const deletions: Array<{ repoPath: string; fileCount: number; stateHash: string }> = [];
     // Phase 4/5: restore is no longer a distinct classification — `restores`
     // stays empty (the gate never calls a restore hook); a re-creation lands in
@@ -416,6 +443,9 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         approve: async (candidate) => {
           approvals.push(candidate);
         },
+        approveSemanticAdvance: async (candidate) => {
+          semanticAdvances.push(candidate);
+        },
         approveRepoDeletion: async (c) => {
           deletions.push({ repoPath: c.repoPath, fileCount: c.fileCount, stateHash: c.stateHash });
           deletionCandidates.push(c);
@@ -428,7 +458,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       },
       workspaceViewWithReposAt: async () => "state:composed-fallback",
     });
-    return { gate, approvals, deletions, restores, deletionCandidates };
+    return { gate, approvals, semanticAdvances, deletions, restores, deletionCandidates };
   }
 
   type Entry = {
@@ -450,9 +480,14 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         next: e.next,
         priorDeleted: e.priorDeleted ?? false,
       })),
+      publication: {
+        publicationId: "publication:test",
+        previousEventId: "event:before",
+        publishedEventId: "event:after",
+      },
       operation,
       reason: "test",
-      writer: "do:workers/gad-store:GadStore:vcs",
+      writer: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
       onBehalfOf: null,
       ...(context !== undefined ? { gateContext: context } : {}),
     };
@@ -467,13 +502,37 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     expect(approvals).toHaveLength(0);
   });
 
-  it("system advances (scans/bootstrap/adoption) bypass approval", async () => {
+  it("only the exact workspace-initialization publication bypasses approval", async () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
     const { gate, approvals } = refGateDeps(blobsDir);
     const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
 
-    await gate(batch([{ next }], { kind: "system" }));
+    await gate(batch([{ next }], { kind: "workspace-initialization" }));
     expect(approvals).toHaveLength(0);
+  });
+
+  it("fails closed for the former generic system authority", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const { gate } = refGateDeps(blobsDir);
+    const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
+
+    await expect(gate(batch([{ next }], { kind: "system" }))).rejects.toThrow(/no gate context/);
+  });
+
+  it("approves a content-identical semantic main advance", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const { gate, semanticAdvances } = refGateDeps(blobsDir);
+
+    await gate(batch([], { kind: "caller", caller: panelCaller(), via: "agent:one" }));
+
+    expect(semanticAdvances).toEqual([
+      {
+        caller: panelCaller(),
+        previousEventId: "event:before",
+        publishedEventId: "event:after",
+        via: "agent:one",
+      },
+    ]);
   });
 
   it("computes the approval's changed paths from the server-side tree diff, re-rooted to the repo", async () => {
@@ -492,7 +551,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const context: RefAdvanceGateContext = {
       kind: "caller",
       caller: panelCaller(),
-      sourceHead: "ctx:ctx-1",
     };
 
     await gate(batch([{ old: oldState, next }], context));
@@ -507,7 +565,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       "panels/x/removed.txt",
     ]);
     expect(candidate.repoPath).toBe("panels/x");
-    expect(candidate.sourceHead).toBe("ctx:ctx-1");
     // No candidate view supplied → the gate composes one itself.
     expect(candidate.stateHash).toBe("state:composed-fallback");
   });
@@ -689,7 +746,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       const bigBody = "x".repeat(1024 * 1024 + 16); // > 1 MiB → tooLarge
       const next = await stageTree(blobsDir, [
         { path: "text.txt", body: "hi\n" },
-        { path: "bin.dat", body: "a b\n" },
+        { path: "bin.dat", body: "a\x00b\n" },
         { path: "big.txt", body: bigBody },
       ]);
 
@@ -724,41 +781,5 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       // A truncated list can't carry accurate totals → omitted.
       expect(entry.diffStat.insertions).toBeUndefined();
     });
-  });
-});
-
-describe("createMainAdvanceApprovalGate build-status line", () => {
-  it("renders the HOST-sourced build status in the advance prompt (never a build trigger)", async () => {
-    const deps = gateDeps({ decision: "once" });
-    const calls: string[] = [];
-    const gate = createMainAdvanceApprovalGate({
-      ...deps,
-      getBuildStatusAt: async (viewHash) => {
-        calls.push(viewHash);
-        return { validated: true, failed: true };
-      },
-    });
-
-    await gate.approve(
-      candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"] })
-    );
-
-    expect(calls).toEqual(["state:next"]);
-    const request = deps.approvalQueue.request.mock.calls[0]![0] as {
-      details: Array<{ label: string; value: string }>;
-    };
-    expect(request.details).toContainEqual({ label: "Built", value: "failed" });
-  });
-
-  it("renders 'not validated' when no build status is recorded (absent dep)", async () => {
-    const deps = gateDeps({ decision: "once" });
-    const gate = createMainAdvanceApprovalGate(deps);
-    await gate.approve(
-      candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"] })
-    );
-    const request = deps.approvalQueue.request.mock.calls[0]![0] as {
-      details: Array<{ label: string; value: string }>;
-    };
-    expect(request.details).toContainEqual({ label: "Built", value: "not validated" });
   });
 });

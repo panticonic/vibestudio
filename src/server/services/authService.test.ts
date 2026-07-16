@@ -8,7 +8,8 @@ import { Gateway } from "../gateway.js";
 import { RouteRegistry } from "../routeRegistry.js";
 import {
   createAuthService,
-  createPairingRedeemer,
+  createHubCredentialRedeemer,
+  createWorkspaceCredentialRedeemer,
   MobileAppBootstrapBodySchema,
   RefreshAgentBodySchema,
   RefreshPrincipalGrantBodySchema,
@@ -38,16 +39,29 @@ function makePanelRecord(id: string): EntityRecord {
 
 function makeSessionRecord(
   id: string,
-  opts: { contextId?: string; parentId?: string; status?: EntityRecord["status"] } = {}
+  opts: {
+    contextId?: string;
+    channelId?: string;
+    ownerUserId?: string;
+    parentId?: string;
+    status?: EntityRecord["status"];
+  } = {}
 ): EntityRecord {
   const key = id.startsWith("session:") ? id.slice("session:".length) : id;
+  const contextId = opts.contextId ?? "ctx-abc";
   return {
     id,
     kind: "session",
     source: { repoPath: "agent-cli", effectiveVersion: "" },
-    contextId: opts.contextId ?? "ctx-abc",
+    contextId,
     key,
+    agentBinding: {
+      entityId: id,
+      contextId,
+      channelId: opts.channelId ?? "channel:agent",
+    },
     parentId: opts.parentId,
+    ownerUserId: opts.ownerUserId ?? "system",
     createdAt: Date.now(),
     status: opts.status ?? "active",
     cleanupComplete: true,
@@ -443,7 +457,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
     return { dispatcher, authStore, records, tokenManager };
   };
 
-  it("lets the owning extension mint + revoke, deriving context from the target session", async () => {
+  it("lets the owning extension rotate + revoke authentication for a self-bound session", async () => {
     const { dispatcher, authStore, records, tokenManager } = makeDispatcher();
     const extensionId = "extension:agent-launcher";
     records.set(
@@ -453,7 +467,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
     const ext = { caller: createVerifiedCaller(extensionId, "extension") };
 
     const minted = (await dispatcher.dispatch(ext, "auth", "mintAgentCredential", [
-      { entityId: "session:s1", channelId: "chan-1" },
+      { entityId: "session:s1" },
     ])) as { agentId: string; agentToken: string };
     expect(minted.agentId).toMatch(/^agt_/);
     expect(minted.agentToken.startsWith(`agent:${minted.agentId}:`)).toBe(true);
@@ -461,8 +475,6 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
       authStore.validateAgentToken(minted.agentId, minted.agentToken.split(":")[2]!)
     ).toMatchObject({
       entityId: "session:s1",
-      contextId: "ctx-derived",
-      channelId: "chan-1",
     });
     const bearer = tokenManager.ensureToken("agent:session:s1", "agent");
     expect(tokenManager.validateToken(bearer)).not.toBeNull();
@@ -485,18 +497,18 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
       { caller: createVerifiedCaller("server", "server") },
       "auth",
       "mintAgentCredential",
-      [{ entityId: "session:s2", channelId: "chan-2" }]
+      [{ entityId: "session:s2" }]
     )) as { agentId: string; agentToken: string };
     expect(
       authStore.validateAgentToken(serverMinted.agentId, serverMinted.agentToken.split(":")[2]!)
-    ).toMatchObject({ contextId: "ctx-server" });
+    ).toMatchObject({ entityId: "session:s2" });
 
     await expect(
       dispatcher.dispatch(
         { caller: createVerifiedCaller("extension:other", "extension") },
         "auth",
         "mintAgentCredential",
-        [{ entityId: "session:s2", channelId: "chan-2" }]
+        [{ entityId: "session:s2" }]
       )
     ).rejects.toThrow(/does not own target entity/);
   });
@@ -509,18 +521,18 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
           { caller: createVerifiedCaller(`${kind}:x`, kind) },
           "auth",
           "mintAgentCredential",
-          [{ entityId: "e", channelId: "ch" }]
+          [{ entityId: "e" }]
         )
       ).rejects.toThrow(/not accessible/i);
     }
   });
 });
 
-describe("createPairingRedeemer (hub-directed pairing)", () => {
-  function fixture(touchDevice?: (deviceId: string) => Promise<void>) {
+describe("transport-specific credential redemption", () => {
+  function hubFixture(touchDevice?: (deviceId: string) => Promise<void>) {
     const identity = makeIdentity({ withRoot: true, now: () => 1234 });
     const tokenManager = new TokenManager();
-    const redeem = createPairingRedeemer({
+    const redeem = createHubCredentialRedeemer({
       deviceAuthStore: identity.deviceAuthStore,
       tokenManager,
       redeemPairingCode: async (code, input) =>
@@ -531,24 +543,42 @@ describe("createPairingRedeemer (hub-directed pairing)", () => {
     return { ...identity, tokenManager, redeem };
   }
 
-  it("delegates one-shot code redemption and returns a subject-bearing device", async () => {
-    const { deviceAuthStore, rootId, workspaceId, redeem } = fixture();
-    const code = deviceAuthStore.createPairingCode(60_000, {
+  function workspaceFixture(touchDevice?: (deviceId: string) => Promise<void>) {
+    const identity = makeIdentity({ withRoot: true, now: () => 1234 });
+    const tokenManager = new TokenManager();
+    const entities = new Map<string, EntityRecord>();
+    const redeem = createWorkspaceCredentialRedeemer({
+      deviceAuthStore: identity.deviceAuthStore,
+      tokenManager,
+      ...(touchDevice ? { touchDevice } : {}),
+      resolveUser: (userId) => identity.userStore.getUser(userId),
+      resolveRuntimeEntity: (entityId) => entities.get(entityId) ?? null,
+    });
+    return { ...identity, tokenManager, entities, redeem };
+  }
+
+  it("delegates pairing redemption and returns a subject-bearing device with its target", async () => {
+    const { deviceAuthStore, rootId, workspaceId, redeem } = hubFixture();
+    const { code } = deviceAuthStore.createPairingInvite(60_000, {
       workspaceId,
       userId: rootId!,
     });
     const result = await redeem(code, { clientLabel: "laptop", clientPlatform: "desktop" });
     expect(result).toMatchObject({
       callerKind: "shell",
+      pairingContext: { workspaceId },
       subject: { userId: rootId, handle: "root" },
     });
-    expect(result?.deviceCredential?.deviceId).toMatch(/^dev_/);
+    expect(
+      result && "deviceCredential" in result ? result.deviceCredential.deviceId : null
+    ).toMatch(/^dev_/);
     await expect(redeem(code, {})).resolves.toBeNull();
+    expect(deviceAuthStore.listDevices()).toHaveLength(1);
   });
 
   it("validates a returning device without issuing another credential", async () => {
     const touchDevice = vi.fn(async () => undefined);
-    const { deviceAuthStore, rootId, redeem } = fixture(touchDevice);
+    const { deviceAuthStore, rootId, redeem } = hubFixture(touchDevice);
     const issued = deviceAuthStore.issueDevice({ userId: rootId!, label: "phone" });
     const result = await redeem("refresh:" + issued.deviceId + ":" + issued.refreshToken, {});
     expect(result).toMatchObject({
@@ -556,23 +586,44 @@ describe("createPairingRedeemer (hub-directed pairing)", () => {
       callerKind: "shell",
       subject: { userId: rootId, handle: "root" },
     });
-    expect(result?.deviceCredential).toBeUndefined();
+    expect(result).not.toHaveProperty("deviceCredential");
+    expect(result).not.toHaveProperty("pairingContext");
     expect(touchDevice).toHaveBeenCalledWith(issued.deviceId);
   });
 
-  it("validates agent credentials and preserves inherited user binding", async () => {
-    const { deviceAuthStore, rootId, redeem } = fixture();
+  it("derives agent coordinates and subject from the live session entity", async () => {
+    const { deviceAuthStore, rootId, entities, redeem } = workspaceFixture();
+    entities.set(
+      "session:s1",
+      makeSessionRecord("session:s1", {
+        contextId: "ctx",
+        channelId: "channel",
+        ownerUserId: rootId!,
+      })
+    );
     const issued = deviceAuthStore.mintAgentCredential({
       entityId: "session:s1",
-      contextId: "ctx",
-      channelId: "channel",
-      userId: rootId!,
     });
-    const result = await redeem(issued.agentToken, {});
+    const result = await redeem(issued.agentToken);
     expect(result).toMatchObject({
       callerId: "agent:session:s1",
-      agentBinding: { userId: rootId, contextId: "ctx", channelId: "channel" },
+      agentBinding: { entityId: "session:s1", contextId: "ctx", channelId: "channel" },
       subject: { userId: rootId, handle: "root" },
     });
+  });
+
+  it("keeps hub pairing and workspace agent credentials on their owning ingress", async () => {
+    const hub = hubFixture();
+    const agent = hub.deviceAuthStore.mintAgentCredential({
+      entityId: "session:hub-denied",
+    });
+    await expect(hub.redeem(agent.agentToken, {})).resolves.toBeNull();
+
+    const workspace = workspaceFixture();
+    const invite = workspace.deviceAuthStore.createPairingInvite(60_000, {
+      workspaceId: workspace.workspaceId,
+      userId: workspace.rootId!,
+    });
+    await expect(workspace.redeem(invite.code)).resolves.toBeNull();
   });
 });

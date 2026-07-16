@@ -368,7 +368,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "workspace-repo-write",
+      capability: "workspace-main-advance",
       title: "Write project files",
       resource: {
         type: "git-repo",
@@ -383,7 +383,7 @@ describe("approvalQueue", () => {
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
-      capability: "workspace-repo-write",
+      capability: "workspace-main-advance",
       title: "Write project files",
       resource: {
         type: "git-repo",

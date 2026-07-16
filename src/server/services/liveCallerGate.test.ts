@@ -32,20 +32,36 @@ describe("createLiveCallerGate", () => {
             ? ({
                 agentId: "agt_1",
                 entityId: "session:one",
-                contextId: "ctx_1",
-                channelId: "channel_1",
-                userId: "usr_alice",
                 tokenHash: "hash",
                 createdAt: 1,
               } as const)
             : null,
       },
       entityCache: {
-        resolveActive: () => ({ kind: "app", ownerUserId: "usr_alice" }) as never,
+        resolveActive: (entityId) =>
+          entityId === "session:one"
+            ? ({
+                id: entityId,
+                kind: "session",
+                source: { repoPath: "agent-cli", effectiveVersion: "" },
+                contextId: "ctx_1",
+                key: "one",
+                agentBinding: {
+                  entityId,
+                  contextId: "ctx_1",
+                  channelId: "channel_1",
+                },
+                ownerUserId: "usr_alice",
+                createdAt: 1,
+                status: "active",
+                cleanupComplete: true,
+              } as never)
+            : ({ kind: "app", ownerUserId: "usr_alice" } as never),
       },
       isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
       isLiveSystemRuntime: (callerId, callerKind) =>
-        callerId === "do:workers/gad-store:GadStore:workspace" && callerKind === "do",
+        callerId === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
+        callerKind === "do",
       now: () => 10,
     });
     return {
@@ -99,7 +115,6 @@ describe("createLiveCallerGate", () => {
         entityId: "session:one",
         contextId: "ctx_1",
         channelId: "channel_1",
-        userId: "usr_alice",
       },
       { userId: "usr_alice", handle: "alice" }
     );
@@ -167,7 +182,7 @@ describe("createLiveCallerGate", () => {
     expect(
       state.gate(
         createVerifiedCaller(
-          "do:workers/gad-store:GadStore:workspace",
+          "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
           "do",
           null,
           null,
@@ -177,7 +192,13 @@ describe("createLiveCallerGate", () => {
     ).toBe(true);
     expect(
       state.gate(
-        createVerifiedCaller("do:workers/gad-store:GadStore:other", "do", null, null, systemSubject)
+        createVerifiedCaller(
+          "do:vibestudio/internal:GadWorkspaceDO:other",
+          "do",
+          null,
+          null,
+          systemSubject
+        )
       )
     ).toBe(false);
   });

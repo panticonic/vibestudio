@@ -9,14 +9,12 @@
 
 export type UserRole = "root" | "admin" | "member";
 
-/** Host-verified entity/context/channel scope of an agent credential. */
+/** Host-derived projection of a live entity's semantic agent binding. */
 export interface AgentBinding {
   entityId: string;
   contextId: string;
   channelId: string;
   agentId: string;
-  /** User lineage stamped by the host for attribution and routing. */
-  userId: string;
 }
 
 export interface User {

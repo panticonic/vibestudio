@@ -47,7 +47,7 @@ export interface CapabilityPermissionRequest {
   title: string;
   description?: string;
   details?: PendingCapabilityApproval["details"];
-  /** Host-computed diff-review payload (narrow-host-vcs-plan §5.1) surfaced on
+  /** Host-computed diff-review payload (provenance-aware-diff-merge-plan §9) surfaced on
    *  the pending approval. */
   diffReview?: DiffReviewEntry[];
   deniedReason: string;

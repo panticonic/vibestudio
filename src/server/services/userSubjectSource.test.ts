@@ -64,13 +64,16 @@ describe("createUserSubjectSource", () => {
       userStore: { getUser: () => null, listUsers: () => [] },
       entityCache: { resolveActive: () => null },
       isSystemRuntime: (callerId, callerKind) =>
-        callerId === "do:workers/gad-store:GadStore:workspace" && callerKind === "do",
+        callerId === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
+        callerKind === "do",
     });
 
-    expect(source.resolve("do:workers/gad-store:GadStore:workspace", "do")).toEqual({
+    expect(
+      source.resolve("do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane", "do")
+    ).toEqual({
       userId: "system",
       handle: "system",
     });
-    expect(source.resolve("do:workers/gad-store:GadStore:other", "do")).toBeNull();
+    expect(source.resolve("do:vibestudio/internal:GadWorkspaceDO:other", "do")).toBeNull();
   });
 });

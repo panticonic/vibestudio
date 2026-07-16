@@ -1,29 +1,20 @@
 /**
- * `account` service — profile reads + personalization writes (WP6 §6).
+ * `account` service — read-only workspace-scoped profile projections.
  *
  * Reads (`getProfile` / `resolveProfiles`) are CHILD-LOCAL: they go through the
  * shared identity DB the child opens read-only (`identityDb.resolveUsers`,
  * WP0 §3.7) and project the live `{handle, displayName, color, avatar}` down to
- * userland — userland never opens the DB itself (INV-2). Because callers
- * re-resolve rather than snapshot, an `updateProfile` re-renders everywhere a
- * human is named without any roster rewrite.
+ * userland — userland never opens the DB itself (INV-2). Personalization writes
+ * go directly to `hubControl.updateProfile` over the client's stable hub
+ * session; this child has no write deputy.
  *
- * `updateProfile` is a HUB WRITE: the hub is the SOLE writer of the identity DB
- * (WP0 §2). The child handler authorizes the acting subject and delegates over
- * its authenticated control capability; there is no child-local write mode.
- *
- * Identity here is ATTRIBUTION/personalization for mutually trusting members
- * (plan §0.0) — the self-or-root gate on `updateProfile` is data hygiene (your
- * profile is yours to edit), not an inter-user security wall.
+ * Identity here is ATTRIBUTION/personalization for mutually trusting members.
+ * This is a shared-DB read projection, not an account-control service.
  */
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import {
-  accountMethods,
-  type AccountProfile,
-  type AccountProfileUpdate,
-} from "@vibestudio/service-schemas/account";
+import { accountMethods, type AccountProfile } from "@vibestudio/service-schemas/account";
 import type { IdentityDb, ResolvedUser } from "@vibestudio/identity/identityDb";
 
 function profileOfResolved(userId: string, resolved: ResolvedUser): AccountProfile {
@@ -48,11 +39,6 @@ export function createAccountService(deps: {
   /** Active account ids visible in this child server's bound workspace,
    * including implicit root membership. */
   listWorkspaceMemberUserIds: () => string[];
-  /** Required child→hub mutation channel; children never write identity rows. */
-  writeProfile: (
-    actor: { userId: string; handle: string },
-    input: AccountProfileUpdate & { userId: string }
-  ) => Promise<AccountProfile>;
 }): ServiceDefinition {
   const requireSubject = (
     subject: { userId: string; handle: string } | undefined,
@@ -68,8 +54,7 @@ export function createAccountService(deps: {
 
   return {
     name: "account",
-    description: "Account profiles: live identity projection + personalization",
-    // Human-driven surfaces only for the write default; reads widen per-method.
+    description: "Read-only live account profiles for this workspace",
     policy: { allowed: ["server", "shell", "app", "panel"] },
     methods: accountMethods,
     handler: defineServiceHandler("account", accountMethods, {
@@ -93,19 +78,6 @@ export function createAccountService(deps: {
           const user = resolved.get(userId);
           return user && user.revokedAt === undefined ? [profileOfResolved(userId, user)] : [];
         });
-      },
-      updateProfile: async (ctx, [input]) => {
-        const subject = requireSubject(ctx.caller.subject, "updateProfile");
-        const targetUserId = input.userId ?? subject.userId;
-        if (targetUserId !== subject.userId) {
-          // Editing someone ELSE's profile is root-only (WP6 §6) — resolve
-          // the caller's CURRENT role live, never a session snapshot.
-          const actor = deps.identityDb.resolveUsers([subject.userId]).get(subject.userId);
-          if (actor?.role !== "root") {
-            throw new Error("Only root may update another user's profile");
-          }
-        }
-        return await deps.writeProfile(subject, { ...input, userId: targetUserId });
       },
     }),
   };

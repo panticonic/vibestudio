@@ -386,7 +386,7 @@ export interface DiffReviewFile {
 
 /**
  * One repo's worth of changes in a batch main-advance approval, host-computed
- * from `diffTrees` (narrow-host-vcs-plan §5.1). File CONTENTS are never inlined:
+ * from `diffTrees` (provenance-aware-diff-merge-plan §9). File contents are never inlined:
  * only content hashes travel, and the approval card lazily fetches the trusted
  * blobs by hash. `newState` is `null` for a delete entry (all files `removed`);
  * `insertions`/`deletions` are OPTIONAL — omitted whenever any file in the entry
@@ -427,7 +427,7 @@ export interface PendingApprovalBase {
   /** Structured operation metadata used for copy, grouping, and risk display. */
   operation?: ApprovalOperationDescriptor;
   /**
-   * Host-computed diff-review payload (narrow-host-vcs-plan §5.1). Attached by
+   * Host-computed diff-review payload (provenance-aware-diff-merge-plan §9). Attached by
    * the main-advance approval gate to workspace-main-advance / repo
    * deletion / restore prompts; absent on every other approval. Content hashes
    * only — the approval card fetches the trusted blobs lazily by hash.

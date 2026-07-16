@@ -186,7 +186,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
     if (approval.units.every((unit) => unit.unitKind === "extension")) return "Extension setup";
     return "Workspace setup";
   }
-  if (approval.capability === "workspace-repo-write") {
+  if (approval.capability === "workspace-main-advance") {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
     );
@@ -314,7 +314,7 @@ export function getStandardActionCopy(
       denyDescription: "Do not open this sign-in flow.",
     };
   }
-  if (approval.capability === "workspace-repo-write") {
+  if (approval.capability === "workspace-main-advance") {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
     );
@@ -588,7 +588,7 @@ export function getApprovalCopy(approval: PendingApproval): {
     };
   }
   if (approval.kind === "capability") {
-    if (approval.capability === "workspace-repo-write") {
+    if (approval.capability === "workspace-main-advance") {
       const destination = approval.resource?.value ?? "this repository";
       if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
         return {

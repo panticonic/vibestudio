@@ -362,12 +362,7 @@ export function ApprovalCard({
         </Flex>
       </div>
 
-      <fieldset
-        className="approval-card-footer"
-        disabled={actionPending}
-        aria-busy={actionPending}
-        style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
-      >
+      <fieldset className="approval-card-footer" disabled={actionPending} aria-busy={actionPending}>
         {actions}
         {actionPending ? (
           <Text size="1" color="gray" ml="2" role="status">

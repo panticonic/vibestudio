@@ -46,7 +46,7 @@ export class TokenManager {
   // callerId -> token
   private callerIdToToken = new Map<string, string>();
   // revocation listeners
-  private revokeListeners: ((callerId: string) => void)[] = [];
+  private revokeListeners = new Set<(callerId: string) => void>();
   // admin token for privileged operations
   private adminToken: string | null = null;
 
@@ -162,8 +162,9 @@ export class TokenManager {
   /**
    * Register a listener that is called when a token is revoked.
    */
-  onRevoke(listener: (callerId: string) => void): void {
-    this.revokeListeners.push(listener);
+  onRevoke(listener: (callerId: string) => void): () => void {
+    this.revokeListeners.add(listener);
+    return () => this.revokeListeners.delete(listener);
   }
 
   /**

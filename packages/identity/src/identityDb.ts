@@ -40,16 +40,11 @@ export interface DeviceRow {
   revokedAt?: number;
 }
 
-/** An entity-scoped agent credential row plus the spawning user (WP0 §3.3). */
+/** Authentication secret for one exact runtime entity. Semantic binding lives on the entity. */
 export interface AgentCredentialRow {
   agentId: string;
   tokenHash: string;
   entityId: string;
-  contextId: string;
-  channelId: string;
-  scopes?: string[];
-  /** The user whose lineage spawned the agent; inherited into the subject. */
-  userId: string;
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;
@@ -67,11 +62,30 @@ export interface PairingCodeRow {
   code: string;
   /** Bound user the redeemed device will belong to; absent for root bootstrap. */
   userId?: string;
-  /** Workspace child that owns the invite's durable signaling route. */
+  /** Workspace suggested by the invitation; the hub owns the control route. */
   workspaceId: string;
   intent: PairingCodeIntent;
   createdAt: number;
   expiresAt: number;
+}
+
+/** One hub-owned control ingress room with exactly one current owner. */
+export type ControlRoomRow =
+  | {
+      kind: "invite";
+      room: string;
+      codeHash: string;
+      expiresAt: number;
+    }
+  | {
+      kind: "device";
+      room: string;
+      deviceId: string;
+    };
+
+/** A pairing code and its hub-owned invite room, inserted atomically. */
+export interface PairingInviteRow extends PairingCodeRow {
+  room: string;
 }
 
 /** A workspace membership row (WP0 §3.5). `workspaceId` is the opaque stable id. */
@@ -270,6 +284,35 @@ export class IdentityDb {
       .map(rowToPairingCode);
   }
 
+  getControlRoom(room: string): ControlRoomRow | null {
+    const row = this.stmt("SELECT * FROM control_rooms WHERE room = ?").get(room);
+    return row ? rowToControlRoom(row) : null;
+  }
+
+  getInviteControlRoom(codeHash: string): Extract<ControlRoomRow, { kind: "invite" }> | null {
+    const row = this.stmt("SELECT * FROM control_rooms WHERE invite_code_hash = ?").get(codeHash);
+    if (!row) return null;
+    const room = rowToControlRoom(row);
+    if (room.kind !== "invite") {
+      throw new Error(`Control room for invite ${codeHash} has a non-invite owner`);
+    }
+    return room;
+  }
+
+  getDeviceControlRoom(deviceId: string): Extract<ControlRoomRow, { kind: "device" }> | null {
+    const row = this.stmt("SELECT * FROM control_rooms WHERE device_id = ?").get(deviceId);
+    if (!row) return null;
+    const room = rowToControlRoom(row);
+    if (room.kind !== "device") {
+      throw new Error(`Control room for device ${deviceId} has a non-device owner`);
+    }
+    return room;
+  }
+
+  listControlRooms(): ControlRoomRow[] {
+    return this.stmt("SELECT * FROM control_rooms ORDER BY room").all().map(rowToControlRoom);
+  }
+
   listMembers(workspaceId: string): WorkspaceMembership[] {
     return this.stmt("SELECT * FROM membership WHERE workspace_id = ? ORDER BY added_at, user_id")
       .all(workspaceId)
@@ -356,9 +399,10 @@ export class IdentityDb {
   }
 
   /**
-   * Revoke a user and cascade in one transaction: revoke their devices and
-   * agent credentials, delete their membership rows and pending pairing codes
-   * (WP0 §3.1). Returns false when the user is unknown or already revoked.
+   * Revoke a user and cascade machine identity in one transaction: revoke their
+   * devices, delete membership/pairing state, and queue each workspace to retire
+   * entity-owned deputies. Agent credentials have no copied user id; retirement
+   * revokes them through their exact entity instead.
    */
   revokeUser(
     userId: string,
@@ -376,11 +420,8 @@ export class IdentityDb {
         userId
       );
       this.stmt(
-        "DELETE FROM pairing_receipts WHERE device_id IN (SELECT device_id FROM devices WHERE user_id = ?)"
+        "DELETE FROM control_rooms WHERE device_id IN (SELECT device_id FROM devices WHERE user_id = ?)"
       ).run(userId);
-      this.stmt(
-        "UPDATE agent_credentials SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL"
-      ).run(revokedAt, userId);
       this.stmt("DELETE FROM membership WHERE user_id = ?").run(userId);
       this.stmt("DELETE FROM pairing_codes WHERE user_id = ?").run(userId);
       for (const workspaceId of new Set(workspaceIds)) {
@@ -433,8 +474,9 @@ export class IdentityDb {
 
   /**
    * Roll back an invite that was never exposed to a caller. This is deliberately
-   * narrower than user deletion: root, activated users, and agent-owning users
-   * are rejected. It exists only to make invite + ephemeral-route creation
+   * narrower than user deletion: root and device-activated users are rejected.
+   * Agent authentication is entity-owned and cannot activate an account invite.
+   * This exists only to make invite + ephemeral-route creation
    * atomic at the hub boundary.
    */
   deleteUnactivatedInvite(userId: string): boolean {
@@ -447,10 +489,7 @@ export class IdentityDb {
       }
       const hasCredentials =
         this.stmt("SELECT 1 AS one FROM devices WHERE user_id = ? LIMIT 1").get(userId) !==
-          undefined ||
-        this.stmt("SELECT 1 AS one FROM agent_credentials WHERE user_id = ? LIMIT 1").get(
-          userId
-        ) !== undefined;
+        undefined;
       if (hasCredentials) {
         throw new Error("An activated user cannot be rolled back");
       }
@@ -498,13 +537,14 @@ export class IdentityDb {
   /** Revoke a device, returning the revoked row or null when already inactive. */
   revokeDevice(deviceId: string, revokedAt = this.now()): DeviceRow | null {
     this.assertWritable();
-    const changed = this.stmt(
-      "UPDATE devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL"
-    ).run(revokedAt, deviceId).changes;
-    if (changed > 0) {
-      this.stmt("DELETE FROM pairing_receipts WHERE device_id = ?").run(deviceId);
-    }
-    return changed > 0 ? this.getDevice(deviceId) : null;
+    return this.transaction(() => {
+      const changed = this.stmt(
+        "UPDATE devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL"
+      ).run(revokedAt, deviceId).changes;
+      if (changed === 0) return null;
+      this.stmt("DELETE FROM control_rooms WHERE device_id = ?").run(deviceId);
+      return this.getDevice(deviceId);
+    });
   }
 
   /** Revoke every live device of a user; returns the revoked rows. */
@@ -521,7 +561,7 @@ export class IdentityDb {
         userId
       );
       this.stmt(
-        "DELETE FROM pairing_receipts WHERE device_id IN (SELECT device_id FROM devices WHERE user_id = ?)"
+        "DELETE FROM control_rooms WHERE device_id IN (SELECT device_id FROM devices WHERE user_id = ?)"
       ).run(userId);
       return live
         .map((deviceId) => this.getDevice(deviceId))
@@ -532,16 +572,18 @@ export class IdentityDb {
   insertAgentCredential(credential: AgentCredentialRow): void {
     this.assertWritable();
     this.stmt(
-      `INSERT INTO agent_credentials (agent_id, token_hash, entity_id, context_id, channel_id, scopes, user_id, created_at, expires_at, revoked_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO agent_credentials (agent_id, token_hash, entity_id, created_at, expires_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(entity_id) DO UPDATE SET
+         agent_id = excluded.agent_id,
+         token_hash = excluded.token_hash,
+         created_at = excluded.created_at,
+         expires_at = excluded.expires_at,
+         revoked_at = excluded.revoked_at`
     ).run(
       credential.agentId,
       credential.tokenHash,
       credential.entityId,
-      credential.contextId,
-      credential.channelId,
-      credential.scopes ? JSON.stringify(credential.scopes) : null,
-      credential.userId,
       credential.createdAt,
       credential.expiresAt ?? null,
       credential.revokedAt ?? null
@@ -557,7 +599,7 @@ export class IdentityDb {
     );
   }
 
-  /** Revoke every live credential of an entity; returns the revoked agent ids. */
+  /** Revoke the live credential of an entity; returns its credential id when present. */
   revokeAgentCredentialsForEntity(entityId: string, revokedAt = this.now()): string[] {
     this.assertWritable();
     return this.transaction(() => {
@@ -573,19 +615,26 @@ export class IdentityDb {
     });
   }
 
-  insertPairingCode(code: PairingCodeRow): void {
+  /** Insert a pending code and its hub-owned invite room as one fact. */
+  insertPairingInvite(invite: PairingInviteRow): void {
     this.assertWritable();
-    this.stmt(
-      `INSERT INTO pairing_codes (code, user_id, workspace_id, intent, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(
-      code.code,
-      code.userId ?? null,
-      code.workspaceId,
-      code.intent,
-      code.createdAt,
-      code.expiresAt
-    );
+    this.transaction(() => {
+      this.stmt(
+        `INSERT INTO pairing_codes (code, user_id, workspace_id, intent, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        invite.code,
+        invite.userId ?? null,
+        invite.workspaceId,
+        invite.intent,
+        invite.createdAt,
+        invite.expiresAt
+      );
+      this.stmt(
+        `INSERT INTO control_rooms (room, invite_code_hash, device_id, invite_expires_at)
+         VALUES (?, ?, NULL, ?)`
+      ).run(invite.room, invite.code, invite.expiresAt);
+    });
   }
 
   /**
@@ -595,42 +644,25 @@ export class IdentityDb {
    */
   completePairing(input: {
     code: string;
-    expectedWorkspaceId?: string;
     createRootUser?: () => string;
-    createDevice: (userId: string) => DeviceRow;
-  }): { device: DeviceRow; expiresAt: number; replayed: boolean } | null {
+    createDevice: (userId: string) => { device: DeviceRow; refreshToken: string };
+  }): {
+    device: DeviceRow;
+    refreshToken: string;
+    controlRoom: string;
+    workspaceId: string;
+  } | null {
     this.assertWritable();
     return this.transaction(() => {
       const row = this.stmt("SELECT * FROM pairing_codes WHERE code = ?").get(input.code);
-      if (!row) {
-        const receipt = this.stmt(
-          "SELECT device_id, workspace_id, expires_at FROM pairing_receipts WHERE code = ?"
-        ).get(input.code);
-        if (!receipt) return null;
-        const expiresAt = receipt["expires_at"] as number;
-        if (expiresAt <= this.now()) {
-          this.stmt("DELETE FROM pairing_receipts WHERE code = ?").run(input.code);
-          return null;
-        }
-        const workspaceId = receipt["workspace_id"] as string;
-        if (input.expectedWorkspaceId && input.expectedWorkspaceId !== workspaceId) return null;
-        const existing = this.getDevice(receipt["device_id"] as string);
-        if (!existing || existing.revokedAt !== undefined) return null;
-        const proposed = input.createDevice(existing.userId);
-        if (
-          proposed.deviceId !== existing.deviceId ||
-          proposed.refreshTokenHash !== existing.refreshTokenHash
-        ) {
-          return null;
-        }
-        return { device: existing, expiresAt, replayed: true };
-      }
+      if (!row) return null;
       const record = rowToPairingCode(row);
+      const inviteRoom = this.getInviteControlRoom(record.code);
+      if (!inviteRoom || inviteRoom.expiresAt !== record.expiresAt) {
+        throw new Error(`Pairing code ${record.code} has no matching invite control room`);
+      }
       if (record.expiresAt <= this.now()) {
         this.stmt("DELETE FROM pairing_codes WHERE code = ?").run(input.code);
-        return null;
-      }
-      if (input.expectedWorkspaceId && input.expectedWorkspaceId !== record.workspaceId) {
         return null;
       }
       let userId = record.userId;
@@ -640,26 +672,83 @@ export class IdentityDb {
       if (!userId) {
         throw new Error("Pairing code is not bound to a user");
       }
-      const device = input.createDevice(userId);
+      const issuance = input.createDevice(userId);
+      const { device, refreshToken } = issuance;
       this.upsertDevice(device);
-      this.stmt(
-        `INSERT INTO pairing_receipts (code, device_id, workspace_id, expires_at)
-         VALUES (?, ?, ?, ?)`
-      ).run(input.code, device.deviceId, record.workspaceId, record.expiresAt);
+      const promoted = this.stmt(
+        `UPDATE control_rooms
+         SET invite_code_hash = NULL, device_id = ?, invite_expires_at = NULL
+         WHERE room = ? AND invite_code_hash = ? AND device_id IS NULL`
+      ).run(device.deviceId, inviteRoom.room, input.code).changes;
+      if (promoted !== 1) {
+        throw new Error(`Pairing invite room ${inviteRoom.room} could not be promoted`);
+      }
       this.stmt("DELETE FROM pairing_codes WHERE code = ?").run(input.code);
-      return { device, expiresAt: record.expiresAt, replayed: false };
+      return {
+        device,
+        refreshToken,
+        controlRoom: inviteRoom.room,
+        workspaceId: record.workspaceId,
+      };
     });
   }
 
-  deleteExpiredPairingReceipts(now = this.now()): number {
+  /** Delete an unredeemed invite; its room follows by foreign-key cascade. */
+  deletePairingInvite(codeHash: string): Extract<ControlRoomRow, { kind: "invite" }> | null {
     this.assertWritable();
-    return Number(this.stmt("DELETE FROM pairing_receipts WHERE expires_at <= ?").run(now).changes);
+    return this.transaction(() => {
+      const room = this.getInviteControlRoom(codeHash);
+      const deleted = this.stmt("DELETE FROM pairing_codes WHERE code = ?").run(codeHash).changes;
+      if (deleted === 0) return null;
+      if (!room) throw new Error(`Pairing code ${codeHash} had no invite control room`);
+      return room;
+    });
   }
 
-  /** Delete an unredeemed code (proactive expiry timers). */
-  deletePairingCode(code: string): boolean {
+  /** Remove expired pending invites and return the rooms the live ingress must disarm. */
+  deleteExpiredPairingInvites(
+    now = this.now()
+  ): Array<Extract<ControlRoomRow, { kind: "invite" }>> {
     this.assertWritable();
-    return this.stmt("DELETE FROM pairing_codes WHERE code = ?").run(code).changes > 0;
+    return this.transaction(() => {
+      const expired = this.stmt(
+        `SELECT * FROM control_rooms
+         WHERE invite_code_hash IS NOT NULL AND invite_expires_at <= ?
+         ORDER BY room`
+      )
+        .all(now)
+        .map(rowToControlRoom)
+        .map((room) => {
+          if (room.kind !== "invite") throw new Error("Expired control room is not an invite");
+          return room;
+        });
+      this.stmt("DELETE FROM pairing_codes WHERE expires_at <= ?").run(now);
+      return expired;
+    });
+  }
+
+  /** Defensive startup cleanup for device rooms whose owners were already revoked. */
+  deleteRevokedDeviceControlRooms(): Array<Extract<ControlRoomRow, { kind: "device" }>> {
+    this.assertWritable();
+    return this.transaction(() => {
+      const revoked = this.stmt(
+        `SELECT control_rooms.* FROM control_rooms
+         JOIN devices ON devices.device_id = control_rooms.device_id
+         WHERE devices.revoked_at IS NOT NULL
+         ORDER BY control_rooms.room`
+      )
+        .all()
+        .map(rowToControlRoom)
+        .map((room) => {
+          if (room.kind !== "device") throw new Error("Revoked control room is not a device");
+          return room;
+        });
+      this.stmt(
+        `DELETE FROM control_rooms
+         WHERE device_id IN (SELECT device_id FROM devices WHERE revoked_at IS NOT NULL)`
+      ).run();
+      return revoked;
+    });
   }
 
   /** Idempotent upsert on `(user_id, workspace_id)`; refreshes addedBy/addedAt. */
@@ -764,11 +853,7 @@ function rowToAgentCredential(row: Row): AgentCredentialRow {
     agentId: row["agent_id"] as string,
     tokenHash: row["token_hash"] as string,
     entityId: row["entity_id"] as string,
-    contextId: row["context_id"] as string,
-    channelId: row["channel_id"] as string,
-    userId: row["user_id"] as string,
     createdAt: row["created_at"] as number,
-    ...(row["scopes"] != null ? { scopes: JSON.parse(row["scopes"] as string) as string[] } : {}),
     ...(row["expires_at"] != null ? { expiresAt: row["expires_at"] as number } : {}),
     ...(row["revoked_at"] != null ? { revokedAt: row["revoked_at"] as number } : {}),
   };
@@ -783,6 +868,24 @@ function rowToPairingCode(row: Row): PairingCodeRow {
     expiresAt: row["expires_at"] as number,
     ...(row["user_id"] != null ? { userId: row["user_id"] as string } : {}),
   };
+}
+
+function rowToControlRoom(row: Row): ControlRoomRow {
+  const inviteCodeHash = row["invite_code_hash"];
+  const deviceId = row["device_id"];
+  const expiresAt = row["invite_expires_at"];
+  if (typeof inviteCodeHash === "string" && deviceId == null && typeof expiresAt === "number") {
+    return {
+      kind: "invite",
+      room: row["room"] as string,
+      codeHash: inviteCodeHash,
+      expiresAt,
+    };
+  }
+  if (inviteCodeHash == null && typeof deviceId === "string" && expiresAt == null) {
+    return { kind: "device", room: row["room"] as string, deviceId };
+  }
+  throw new Error(`Control room ${String(row["room"])} has an invalid owner`);
 }
 
 function rowToMembership(row: Row): WorkspaceMembership {

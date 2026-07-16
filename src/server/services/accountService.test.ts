@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { createAccountService } from "./accountService.js";
 import { updateAccountProfile } from "../hostCore/accountProfile.js";
+import { accountProfileUpdateSchema } from "@vibestudio/service-schemas/account";
 
 function makeStores() {
   const identityDb = new IdentityDb({ path: ":memory:", readOnly: false });
@@ -27,8 +28,6 @@ function createService(
     identityDb: stores.identityDb,
     isWorkspaceMember: (userId) => memberIds.has(userId),
     listWorkspaceMemberUserIds: () => [...memberIds],
-    writeProfile: async (_actor, input) =>
-      updateAccountProfile({ userStore: stores.userStore }, input),
   });
 }
 
@@ -40,8 +39,6 @@ function ctxFor(userId: string | undefined): ServiceContext {
     },
   };
 }
-
-const TINY_AVATAR = "data:image/png;base64,iVBORw0KGgo=";
 
 describe("accountService", () => {
   it("getProfile defaults to the caller's own subject and projects live fields", async () => {
@@ -66,52 +63,6 @@ describe("accountService", () => {
     ])) as Record<string, { handle: string }>;
     expect(Object.keys(profiles).sort()).toEqual([member.id, root.id].sort());
     expect(profiles[member.id]?.handle).toBe("mara");
-  });
-
-  it("updateProfile patches self, clears via null, and re-resolves live", async () => {
-    const { identityDb, userStore, member } = makeStores();
-    const service = createService({ identityDb, userStore }, [member.id]);
-
-    const updated = await service.handler(ctxFor(member.id), "updateProfile", [
-      { displayName: "Mara S.", color: "#4a90d9", avatar: TINY_AVATAR },
-    ]);
-    expect(updated).toMatchObject({
-      handle: "mara",
-      displayName: "Mara S.",
-      color: "#4a90d9",
-      avatar: TINY_AVATAR,
-    });
-
-    // Live projection: the next read sees the write with no other plumbing.
-    const readBack = await service.handler(ctxFor(member.id), "getProfile", []);
-    expect(readBack).toMatchObject({ displayName: "Mara S." });
-
-    const cleared = (await service.handler(ctxFor(member.id), "updateProfile", [
-      { color: null },
-    ])) as { color?: string };
-    expect(cleared.color).toBeUndefined();
-  });
-
-  it("only root may update ANOTHER user's profile", async () => {
-    const { identityDb, userStore, root, member } = makeStores();
-    const second = userStore.inviteUser({
-      handle: "kai",
-      displayName: "Kai",
-      role: "member",
-      createdBy: root.id,
-    });
-    const service = createService({ identityDb, userStore }, [root.id, member.id]);
-
-    await expect(
-      service.handler(ctxFor(member.id), "updateProfile", [
-        { userId: second.id, displayName: "Hijacked" },
-      ])
-    ).rejects.toThrow(/Only root/);
-
-    const byRoot = await service.handler(ctxFor(root.id), "updateProfile", [
-      { userId: second.id, displayName: "Kai Renamed" },
-    ]);
-    expect(byRoot).toMatchObject({ userId: second.id, displayName: "Kai Renamed" });
   });
 
   it("validates handle renames against the regex + reserved set", () => {
@@ -173,7 +124,7 @@ describe("accountService", () => {
   });
 
   it("accepts only valid CSS hex color lengths and rejects unknown patch fields", () => {
-    const { identityDb, userStore, member } = makeStores();
+    const { userStore, member } = makeStores();
     for (const color of ["#1", "#12", "#12345", "#1234567", "#123456789"]) {
       expect(() => updateAccountProfile({ userStore }, { userId: member.id, color })).toThrow(
         /hex tint/
@@ -183,10 +134,8 @@ describe("accountService", () => {
       expect(updateAccountProfile({ userStore }, { userId: member.id, color }).color).toBe(color);
     }
 
-    const service = createService({ identityDb, userStore }, [member.id]);
     expect(
-      service.methods["updateProfile"]?.args.safeParse([{ displayName: "Mara", legacy: true }])
-        .success
+      accountProfileUpdateSchema.safeParse({ displayName: "Mara", legacy: true }).success
     ).toBe(false);
   });
 
@@ -204,33 +153,6 @@ describe("accountService", () => {
         { userId: member.id, avatar: "data:image/svg+xml;base64,PHN2Zy8+" }
       )
     ).toThrow(/base64 PNG/);
-  });
-
-  it("delegates updateProfile through the required hub writer", async () => {
-    const { identityDb, userStore, member } = makeStores();
-    const writeProfile = vi.fn(async (_actor, input) => updateAccountProfile({ userStore }, input));
-    const service = createAccountService({
-      identityDb,
-      isWorkspaceMember: (userId) => userId === member.id,
-      listWorkspaceMemberUserIds: () => [member.id],
-      writeProfile,
-    });
-
-    await expect(
-      service.handler(ctxFor(member.id), "updateProfile", [{ displayName: "Updated" }])
-    ).resolves.toMatchObject({ displayName: "Updated" });
-    expect(writeProfile).toHaveBeenCalledWith(
-      { userId: member.id, handle: "irrelevant" },
-      { userId: member.id, displayName: "Updated" }
-    );
-  });
-
-  it("requires a subject for updateProfile (bootstrap principals have none)", async () => {
-    const { identityDb, userStore } = makeStores();
-    const service = createService({ identityDb, userStore });
-    await expect(
-      service.handler(ctxFor(undefined), "updateProfile", [{ displayName: "X" }])
-    ).rejects.toThrow(/account subject/);
   });
 
   it("answers membership only for the host-bound workspace predicate", async () => {
@@ -256,8 +178,6 @@ describe("accountService", () => {
         stores.member.id,
         "usr_unknown",
       ],
-      writeProfile: async (_actor, input) =>
-        updateAccountProfile({ userStore: stores.userStore }, input),
     });
 
     await expect(

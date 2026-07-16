@@ -14,8 +14,7 @@
         "shell",
         "worker"
       ],
-      "resolveProfiles": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
-      "updateProfile": null
+      "resolveProfiles": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"]
     }
   },
   "audit": {
@@ -80,8 +79,7 @@
       "inspectBuildProvenance": null,
       "listRecentBuildEvents": null,
       "listSkills": null,
-      "recompute": null,
-      "validate": null
+      "recompute": null
     }
   },
   "corsApproval": {
@@ -127,7 +125,6 @@
     "methods": {
       "cancel": null,
       "deleteScopeValue": null,
-      "forceReset": null,
       "getRun": null,
       "readScopeTextPage": null,
       "reset": null,
@@ -198,7 +195,6 @@
       "removeDisposableRemote": null,
       "removeSharedRemote": null,
       "removeUpstream": null,
-      "resetExportMarker": null,
       "setAutoPush": null,
       "setSharedRemote": null,
       "setUpstream": null,
@@ -215,27 +211,6 @@
     "service": ["server", "shell"],
     "methods": {
       "shutdown": null
-    }
-  },
-  "hubControl": {
-    "service": ["app", "panel", "server", "shell"],
-    "methods": {
-      "addWorkspaceMember": null,
-      "createWorkspace": null,
-      "deleteWorkspace": null,
-      "getProfile": null,
-      "inviteUser": null,
-      "listDevices": null,
-      "listUserPresence": null,
-      "listWorkspaceMembers": null,
-      "listWorkspaces": null,
-      "pairDevice": null,
-      "removeWorkspaceMember": null,
-      "revokeDevice": null,
-      "revokeUser": null,
-      "routeWorkspace": null,
-      "setRole": null,
-      "updateProfile": null
     }
   },
   "mirror": {
@@ -328,6 +303,15 @@
       "revoke": null
     }
   },
+  "phoneProvisioning": {
+    "service": ["agent", "app", "panel", "shell"],
+    "methods": {
+      "devices": null,
+      "install": null,
+      "openPairing": null,
+      "providers": null
+    }
+  },
   "presence": {
     "service": ["server", "shell"],
     "methods": {
@@ -345,20 +329,11 @@
       "markPanelsOwned": null
     }
   },
-  "refs": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-    "methods": {
-      "listMainRefLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "listMains": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "readMain": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "updateMains": ["do"]
-    }
-  },
   "runtime": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "cloneContext": null,
-      "createContext": ["app", "do", "panel", "server", "shell", "worker"],
+      "createContext": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "createEntity": null,
       "createSubagentContext": ["do", "panel", "server", "shell", "worker"],
       "destroyContext": null,
@@ -415,28 +390,24 @@
   "vcs": {
     "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
-      "abortMerge": null,
+      "blame": null,
       "commit": null,
-      "contextDiff": null,
-      "contextStatus": null,
-      "diff": null,
-      "diffContent": null,
-      "discardEdits": null,
+      "compare": null,
+      "copy": null,
+      "discard": null,
       "edit": null,
+      "history": null,
+      "importSnapshot": null,
+      "inspect": null,
+      "integrate": null,
       "listFiles": null,
-      "log": null,
-      "merge": null,
-      "pendingMerge": null,
-      "pick": null,
-      "previewBuild": null,
-      "pushStatus": null,
+      "move": null,
+      "neighbors": null,
+      "push": null,
       "readFile": null,
-      "rebaseContext": null,
-      "recall": null,
-      "resolveHead": null,
+      "resolveRepository": null,
       "revert": null,
-      "status": null,
-      "workspaceViewWithRepoAt": null
+      "status": null
     }
   },
   "webhookIngress": {
@@ -473,12 +444,9 @@
   "workspace": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
-      "create": ["app", "do", "panel", "server", "shell", "worker"],
-      "delete": ["app", "do", "panel", "server", "shell", "worker"],
       "ensureContextFolder": ["do", "extension", "panel", "server", "shell", "worker"],
       "findUnitForPath": null,
       "getActive": null,
-      "getActiveEntry": null,
       "getAgentsMd": null,
       "getConfig": null,
       "getInfo": null,
@@ -497,11 +465,9 @@
       "hostTargets.resolveLaunchSessionApproval": ["app", "server", "shell"],
       "hostTargets.setSelection": ["server", "shell"],
       "hostTargets.versions": ["server", "shell"],
-      "list": null,
       "listSkills": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
       "readSkill": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
       "recurring.list": ["app", "do", "panel", "server", "shell", "worker"],
-      "select": ["app", "do", "panel", "server", "shell", "worker"],
       "setConfigField": ["app", "do", "panel", "server", "shell", "worker"],
       "setInitPanels": ["app", "do", "panel", "server", "shell", "worker"],
       "sourceTree": null,
@@ -549,14 +515,6 @@
     "service": ["app", "panel", "server", "shell"],
     "methods": {
       "list": null
-    }
-  },
-  "worktree": {
-    "service": ["do", "server", "shell"],
-    "methods": {
-      "dependentRepos": ["do", "server", "shell"],
-      "project": ["do", "server", "shell"],
-      "scan": ["do", "server", "shell"]
     }
   }
 }

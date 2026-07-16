@@ -23,7 +23,7 @@ const AUTH_REVOKE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",
 };
 
-/** The entity/context/channel binding surfaced for an `agent`-kind connection. */
+/** Live entity/context/channel projection surfaced for an `agent` connection. */
 export const AgentBindingSchema = z
   .object({
     entityId: z.string(),
@@ -41,7 +41,9 @@ export const RefreshShellResponseSchema = z
     label: z.string(),
     serverId: z.string().min(1),
     serverBootId: z.string().min(1),
-    workspaceId: z.string().min(1),
+    // The machine-control hub authenticates the device before a workspace is
+    // selected; workspace children always return their concrete workspace id.
+    workspaceId: z.string().min(1).nullable(),
   })
   .strict();
 
@@ -95,27 +97,22 @@ export const authMethods = defineServiceMethods({
   },
   mintAgentCredential: {
     description:
-      "Mint an entity-scoped agent credential (caller kind `agent`, principal `agent:<entityId>`) bound to a runtime session and channel. The host derives context from the target session. Returns { agentId, agentToken } where agentToken is the full `agent:<agentId>:<token>` string. Callable only by the server or by the extension that owns the target session.",
+      "Rotate the authentication secret for a live self-bound agent session. The credential proves only the exact entity id; context, channel, and owner are resolved from the session entity whenever it authenticates. Returns { agentId, agentToken }. Callable only by the server or by the extension that owns the target session.",
     args: z.tuple([
       z.object({
         entityId: z.string().describe("Runtime entity id the credential is bound to."),
-        channelId: z.string().describe("Primary channel the agent is invited into."),
         ttlMs: z
           .number()
           .int()
           .positive()
           .optional()
           .describe("Credential lifetime in milliseconds; omit for no expiry (entity-lifetime)."),
-        scopes: z
-          .array(z.string())
-          .optional()
-          .describe("Optional capability scopes carried on the credential."),
-      }),
+      }).strict(),
     ]),
     returns: z.object({ agentId: z.string(), agentToken: z.string() }),
     policy: { allowed: ["extension", "server"] },
     access: AUTH_PAIRING_ACCESS,
-    examples: [{ args: [{ entityId: "session:s1", channelId: "chan-1" }] }],
+    examples: [{ args: [{ entityId: "session:s1" }] }],
   },
   revokeAgentCredential: {
     description:

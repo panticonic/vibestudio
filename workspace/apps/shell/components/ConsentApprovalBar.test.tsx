@@ -20,7 +20,7 @@ const shellClient = vi.hoisted(() => ({
   submitCredentialInput: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(() => Promise.resolve()),
   unsubscribe: vi.fn(() => Promise.resolve()),
-  onRpcEvent: vi.fn((_event: string, _listener: (event: { payload: unknown }) => void) => () => {}),
+  onEvent: vi.fn((_event: string, _listener: (payload: unknown) => void) => () => {}),
   getText: vi.fn<(hash: string) => Promise<string | null>>(() => Promise.resolve("blob-text")),
   getProfile: vi.fn(() =>
     Promise.resolve({ userId: "alice", handle: "alice", displayName: "Alice", role: "member" })
@@ -52,8 +52,11 @@ vi.mock("../shell/client", () => ({
     submitCredentialInput: shellClient.submitCredentialInput,
   },
   shellPresence: { heartbeat: shellClient.heartbeat },
-  events: { subscribe: shellClient.subscribe, unsubscribe: shellClient.unsubscribe },
-  onRpcEvent: shellClient.onRpcEvent,
+  events: {
+    subscribe: shellClient.subscribe,
+    unsubscribe: shellClient.unsubscribe,
+    on: shellClient.onEvent,
+  },
   blobstore: { getText: shellClient.getText },
   account: { getProfile: shellClient.getProfile },
   panel: {

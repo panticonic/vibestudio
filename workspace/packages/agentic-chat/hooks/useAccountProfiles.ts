@@ -6,7 +6,7 @@
  * everything mutable (handle, displayName, color, avatar) resolves live from
  * the host's `account.resolveProfiles` RPC — the host reads the shared
  * identity DB and projects it down; userland never opens the DB (INV-2). So an
- * `account.updateProfile` re-renders every roster badge and transcript actor
+ * `hubControl.updateProfile` re-renders every roster badge and transcript actor
  * WITHOUT any roster rewrite: components just re-resolve.
  *
  * The plain `resolveAccountProfiles` fetcher is exported as a clean seam for

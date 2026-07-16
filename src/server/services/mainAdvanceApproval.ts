@@ -8,7 +8,7 @@ import {
 import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
+import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
 import { joinRepoPrefix } from "../vcsHost/paths.js";
@@ -18,16 +18,15 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./protectedRefStore.js";
 
-const WORKSPACE_REPO_WRITE_CAPABILITY = "workspace-repo-write";
+const WORKSPACE_MAIN_ADVANCE_CAPABILITY = "workspace-main-advance";
 // Deliberately DISTINCT from the write capability: a generic
-// `workspace-repo-write` session/repo grant must NEVER silently authorize a
+// `workspace-main-advance` grant must NEVER silently authorize a
 // destructive whole-repo deletion. The per-repo resource key (below) further
 // ensures approving the deletion of one repo never covers another.
 const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
 // Restoring a deleted repo re-creates its `main` ref (`expectedOld: null`), so it
 // flows through the GENERIC advance prompt as an add-repo (classified from the CAS
-// shape) — there is no distinct restore capability (narrow-host boundary refactor
-// Phase 4/5; restore semantics are DO-owned).
+// shape)—there is no distinct restore capability; restore semantics are GAD-owned.
 
 /**
  * A candidate protected-ref (`repo` → main) advance awaiting approval. The
@@ -46,33 +45,27 @@ export interface MainAdvanceApprovalCandidate {
    *  group push shares ONE candidate view across its repos, so the whole group
    *  coalesces into one prompt/grant. */
   stateHash: string;
-  sourceHead?: string;
   /** Display-only "requested by X via Y" attribution: the DO identity a
    *  caller-driven advance was dispatched through (§4). The AUTHORITATIVE
    *  principal is `caller` (host-resolved); `via` is prompt copy only. */
   via?: string;
-  /** Host-sourced build-status line for the candidate view ("ok" / "failed" /
-   *  "not validated"), computed by the approval gate — never caller-supplied. */
-  buildStatusLine?: string;
   /** Host-computed diff-review payload for the whole batch (§5.1), surfaced on
    *  the approval so the reviewer sees the full server-side diff. */
   diffReview?: DiffReviewEntry[];
 }
 
 /**
- * Per-batch context the VCS layer attaches to `updateMains` calls
- * (`UpdateMainsInput.gateContext`). `system` marks server-internal advances —
- * workspace scans adopting the user's own on-disk edits, bootstrap seeding,
- * fork/restore adoption — which are not approval-gated (exactly the paths that
- * ran ungated before refs existed). Every caller-driven advance carries the
- * verified caller for the approval machinery.
+ * Per-batch context on the private protected-ref effect. Caller publications
+ * carry the host-verified requester. The only caller-free publication is the
+ * exact first workspace snapshot installed by the trusted lifecycle operation.
+ * Durable publication replay is recognized by ProtectedRefStore evidence and
+ * never needs a gate context.
  */
 export type RefAdvanceGateContext =
-  | { kind: "system"; actor?: { id: string; kind: string } }
+  | { kind: "workspace-initialization" }
   | {
       kind: "caller";
       caller: VerifiedCaller;
-      sourceHead?: string;
       /** DO identity the write was dispatched through, for "requested by X via
        *  Y" prompt copy (§4). Never authoritative. */
       via?: string;
@@ -84,20 +77,23 @@ export type RefAdvanceGateContext =
 
 /**
  * The ProtectedRefStore gate for protected `main` refs — THE single approval path for
- * every main advance (step 6 of docs/blob-addressed-cleanly.md). It computes
+ * every main advance (docs/provenance-aware-diff-merge-plan.md §9). It computes
  * the AUTHORITATIVE diff itself from the CAS'd trees (`expectedOld` → `next`)
  * via the content store; callers may propose summaries, but the prompt's
  * changed paths always come from this server-side diff.
  */
 export function createMainRefAdvanceGate(deps: {
   blobsDir: string;
-  approvalGate: Pick<MainAdvanceApprovalGate, "approve" | "approveRepoDeletion">;
-  /** Lazy mirroring hook (WorktreeStore.ensureStateMirrored) so historical states
+  approvalGate: Pick<
+    MainAdvanceApprovalGate,
+    "approve" | "approveRepoDeletion" | "approveSemanticAdvance"
+  >;
+  /** Lazy mirroring hook (ContentProjectionStore.ensureStateMirrored) so historical states
    *  minted inside the store resolve to full trees before diffing. */
   ensureStateMirrored(stateHash: string): Promise<void>;
-  /** Compose the candidate workspace view with a batch of repo overrides
-   *  (`stateHash: null` removes the repo). Generalizes the single-repo
-   *  `workspaceViewWithRepoAt`. */
+  /** Compose the candidate workspace content view with one atomic batch of repo
+   *  overrides (`stateHash: null` removes the repo). This is a protected-ref
+   *  effect input, never a semantic revision or ancestry authority. */
   workspaceViewWithReposAt(
     overrides: Array<{ repoPath: string; stateHash: string | null }>
   ): Promise<string>;
@@ -109,12 +105,22 @@ export function createMainRefAdvanceGate(deps: {
 }): RefGate {
   return async (batch: RefGateBatch): Promise<void> => {
     const context = batch.gateContext as RefAdvanceGateContext | undefined;
-    if (!context || (context.kind !== "system" && context.kind !== "caller")) {
+    if (!context || (context.kind !== "workspace-initialization" && context.kind !== "caller")) {
       // Fail CLOSED: a protected-main update without an explicit advance
       // context is a programming error, never an implicit allow.
       throw new Error(`Protected main update carries no gate context`);
     }
-    if (context.kind === "system") return;
+    if (context.kind === "workspace-initialization") return;
+
+    if (batch.entries.length === 0) {
+      await deps.approvalGate.approveSemanticAdvance({
+        caller: context.caller,
+        previousEventId: batch.publication.previousEventId,
+        publishedEventId: batch.publication.publishedEventId,
+        ...(context.via ? { via: context.via } : {}),
+      });
+      return;
+    }
 
     // ONE candidate workspace view for the whole batch: current mains ⊕ entries
     // (deletes remove the repo). The shared view hash is the dedup key that
@@ -172,14 +178,13 @@ export function createMainRefAdvanceGate(deps: {
         changedPaths,
         stateHash: candidateView,
         diffReview,
-        ...(context.sourceHead ? { sourceHead: context.sourceHead } : {}),
         ...(context.via ? { via: context.via } : {}),
       });
     }
   };
 }
 
-// Host-side diff-review payload construction (narrow-host-vcs-plan §5.1).
+// Host-side protected-publication diff review (provenance-aware-diff-merge-plan §9).
 const BINARY_SNIFF_BYTES = 8 * 1024;
 /** A file over 1 MiB (either side) renders diffstat-only in the viewer. */
 const TOO_LARGE_BYTES = 1024 * 1024;
@@ -235,7 +240,7 @@ async function buildDiffReviewEntry(
       newHash: f.toContentHash,
     })),
   ];
-  raw.sort((a, b) => a.path.localeCompare(b.path));
+  raw.sort((a, b) => compareUtf16CodeUnits(a.path, b.path));
 
   const changedPaths = raw.map((f) => joinRepoPrefix(entry.repoPath, f.path));
   const filesChanged = raw.length;
@@ -367,8 +372,19 @@ export interface RepoDeletionApprovalCandidate {
   diffReview?: DiffReviewEntry[];
 }
 
+/** A protected semantic-main advance whose repository snapshot is unchanged. */
+export interface SemanticAdvanceApprovalCandidate {
+  caller: VerifiedCaller;
+  previousEventId: string;
+  publishedEventId: string;
+  /** Display-only host dispatch identity; never authorization or authorship. */
+  via?: string;
+}
+
 export interface MainAdvanceApprovalGate {
   approve(candidate: MainAdvanceApprovalCandidate): Promise<void>;
+  /** Gate a new semantic event even when it preserves every protected byte. */
+  approveSemanticAdvance(candidate: SemanticAdvanceApprovalCandidate): Promise<void>;
   /** Gate a severe, global-state whole-repo deletion. Throws if denied. */
   approveRepoDeletion(candidate: RepoDeletionApprovalCandidate): Promise<void>;
 }
@@ -443,24 +459,10 @@ export function createMainAdvanceApprovalGate(deps: {
   capabilityGrantStore: CapabilityGrantStore;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   getProviders(): Array<UnitMetaChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
-  /**
-   * Host-sourced build-status read over the candidate view (§2.2 `build.statusAt`):
-   * a PURE cache lookup over the host's own recorded per-unit builds — it MUST
-   * NEVER trigger a build. Returns `null` (or is absent) when nothing is
-   * recorded for the view, which the prompt renders as "not validated". The
-   * build side is implemented in parallel (P2); the gate only defines and
-   * consumes this interface.
-   */
-  getBuildStatusAt?: (viewHash: string) => Promise<{ validated: boolean; failed?: boolean }> | null;
 }): MainAdvanceApprovalGate {
   return {
     async approve(candidate) {
       if (candidate.changedPaths.length === 0) return;
-      const buildStatusLine = await resolveBuildStatusLine(
-        deps.getBuildStatusAt,
-        candidate.stateHash
-      );
-      candidate = { ...candidate, buildStatusLine };
       const metaChanged = candidate.changedPaths.some(isMetaPath);
 
       const runtimeKind = candidate.caller.runtime.kind;
@@ -551,6 +553,59 @@ export function createMainAdvanceApprovalGate(deps: {
       }
     },
 
+    async approveSemanticAdvance(candidate) {
+      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
+        return;
+      }
+      const runtimeKind = candidate.caller.runtime.kind;
+      if (!userlandCallerKind(runtimeKind)) {
+        throw new Error(`Workspace main advances from ${runtimeKind} callers are not supported`);
+      }
+      const identity = candidate.caller.code;
+      if (!identity || identity.callerKind !== runtimeKind) {
+        throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
+      }
+      const authorization = await requestCapabilityPermission(
+        {
+          approvalQueue: deps.approvalQueue,
+          grantStore: deps.capabilityGrantStore,
+        },
+        {
+          caller: candidate.caller,
+          capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
+          dedupKey: `workspace-semantic-advance:${candidate.publishedEventId}`,
+          resource: {
+            type: "vcs-head",
+            label: "Head",
+            value: "workspace main",
+            key: "workspace-source-change:main",
+          },
+          operation: {
+            kind: "workspace",
+            verb: "advance workspace history",
+            object: {
+              type: "vcs-head",
+              label: "Head",
+              value: "workspace main",
+            },
+            groupKey: `workspace-semantic-advance:${candidate.publishedEventId}`,
+          },
+          title: "Advance workspace history",
+          description:
+            "This advances workspace main to a new semantic event without changing protected repository content.",
+          details: [
+            ...(candidate.via ? [{ label: "Via", value: candidate.via }] : []),
+            { label: "Previous event", value: candidate.previousEventId },
+            { label: "Published event", value: candidate.publishedEventId },
+          ],
+          deniedReason: "Workspace main update denied",
+        }
+      );
+      if (!authorization.allowed) {
+        throw new Error(authorization.reason ?? "Workspace main update denied");
+      }
+    },
+
     async approveRepoDeletion(candidate) {
       // The shell acts on the user's behalf (it carries its own confirm UX), so
       // chrome callers pass — same trust model as `approve`. Every other caller
@@ -636,7 +691,7 @@ async function approveWorkspaceMainAdvance(
     },
     {
       caller: candidate.caller,
-      capability: WORKSPACE_REPO_WRITE_CAPABILITY,
+      capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
       dedupKey: `workspace-source-change:main:${candidate.stateHash}`,
       resource: {
         type: "vcs-head",
@@ -749,34 +804,9 @@ function mainAdvanceDetails(
   return [
     { label: "Repo", value: candidate.repoPath },
     ...(candidate.via ? [{ label: "Via", value: candidate.via }] : []),
-    ...(candidate.sourceHead ? [{ label: "Source", value: candidate.sourceHead }] : []),
     { label: "State", value: candidate.stateHash },
     { label: "Changes", value: changedPathsSummary(candidate.changedPaths) },
-    { label: "Built", value: candidate.buildStatusLine ?? "not validated" },
   ];
-}
-
-/**
- * Render the host-sourced build-status line for the candidate view. A pure
- * cache read (§2.2) that NEVER triggers a build: absent dep, a null result, or
- * an unvalidated view all render "not validated"; a validated view renders
- * "ok" unless a unit failed ("failed").
- */
-async function resolveBuildStatusLine(
-  getBuildStatusAt:
-    | ((viewHash: string) => Promise<{ validated: boolean; failed?: boolean }> | null)
-    | undefined,
-  viewHash: string
-): Promise<string> {
-  if (!getBuildStatusAt) return "not validated";
-  let status: { validated: boolean; failed?: boolean } | null;
-  try {
-    status = await getBuildStatusAt(viewHash);
-  } catch {
-    return "not validated";
-  }
-  if (!status || !status.validated) return "not validated";
-  return status.failed ? "failed" : "ok";
 }
 
 function pathCountSummary(paths: string[]): string {
