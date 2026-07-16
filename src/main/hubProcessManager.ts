@@ -7,39 +7,51 @@
  */
 
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { serverAuthRouteUrl, serverRpcHttpUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
-import type { CentralDataManager, HubRuntimeRecord } from "@vibestudio/shared/centralData";
-import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
+import { createConnectionlessRpcClient } from "@vibestudio/rpc";
+import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
+import type { CentralDataManager, HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import {
+  isDeviceId,
+  isDeviceRefreshToken,
+  SERVER_BOOT_ID_PATTERN,
+  SERVER_ID_PATTERN,
+} from "@vibestudio/shared/deviceCredentials";
 import {
   HubReadyPayloadSchema,
+  HubWorkspaceEntrySchema,
+  hubControlMethods,
   type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 import {
   loadDeviceCredentialByServerId,
-  loadPendingLoopbackPairing,
   saveDeviceCredential,
-  savePendingLoopbackPairing,
   type DeviceCredentialEntry,
 } from "./services/deviceCredentialStore.js";
 
 const log = createDevLogger("HubProcessManager");
 const READY_POLL_INTERVAL_MS = 250;
-const READY_TIMEOUT_MS = 120_000;
 const HEALTHZ_TIMEOUT_MS = 1_500;
 const HEALTH_RETRY_ATTEMPTS = 3;
 const HEALTH_RETRY_INTERVAL_MS = 250;
 const STOP_SIGTERM_TIMEOUT_MS = 12_000;
 
+/** The detached machine hub owns every local workspace child's captured output. */
+export function getLocalHubLogPath(): string {
+  return path.join(getCentralDataPath(), "logs", "hub.log");
+}
+
 export interface HubProcessManagerConfig {
   workspaceName: string;
+  ephemeral: boolean;
   appRoot: string;
   appVersion: string;
   logLevel?: string;
@@ -87,17 +99,19 @@ export function parseHubReadyFile(value: unknown): HubReadyFilePayload {
 }
 
 interface HubProcessTarget {
-  record: HubRuntimeRecord;
+  record: HubRuntime;
   rootInviteCode: string | null;
   rootInviteExpiresAt: number | null;
   attached: boolean;
 }
 
-interface RoutedWorkspace {
-  workspace?: unknown;
-  workspaceId?: unknown;
-  serverUrl?: unknown;
-  serverBootId?: unknown;
+interface HubRuntime {
+  gatewayPort: number;
+  pid: number;
+  serverId: string;
+  serverBootId: string;
+  startedAt: number;
+  version: string;
 }
 
 async function probeHealthz(gatewayPort: number): Promise<HealthzPayload | null> {
@@ -171,13 +185,18 @@ export class HubProcessManager {
   /** PIDs proven to be this manager's hub, either by spawn or authenticated health metadata. */
   private verifiedHubPids = new Set<number>();
 
-  constructor(private readonly config: HubProcessManagerConfig) {}
+  constructor(private readonly config: HubProcessManagerConfig) {
+    if (config.ephemeral && config.workspaceName !== EPHEMERAL_DEV_WORKSPACE_NAME) {
+      throw new Error(
+        `Ephemeral desktop sessions use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
+      );
+    }
+  }
 
   async attachOrSpawn(): Promise<HubWorkspaceTarget> {
-    const existing = this.config.centralData.getHubRuntime();
+    const existing = this.liveLease();
     let processTarget = existing ? await this.tryAttach(existing) : null;
     if (!processTarget) {
-      if (existing) this.config.centralData.clearHubRuntime();
       processTarget = await this.spawnDetached();
     }
     const credential = await this.ensureDeviceCredential(processTarget);
@@ -186,50 +205,66 @@ export class HubProcessManager {
     return target;
   }
 
-  private async tryAttach(record: HubRuntimeRecord): Promise<HubProcessTarget | null> {
+  private liveLease(): HubProcessLeaseRecord | null {
+    const lease = this.config.centralData.getHubProcessLease();
+    return lease && lease.expiresAt > Date.now() ? lease : null;
+  }
+
+  private async tryAttach(lease: HubProcessLeaseRecord): Promise<HubProcessTarget | null> {
     let health: HealthzPayload | null = null;
     for (let attempt = 1; attempt <= HEALTH_RETRY_ATTEMPTS; attempt += 1) {
-      health = await probeHealthz(record.gatewayPort);
-      if (health?.serverId === record.serverId && health.gatewayPort === record.gatewayPort) break;
+      health = await probeHealthz(lease.gatewayPort);
+      if (
+        health?.serverBootId === lease.ownerBootId &&
+        health.gatewayPort === lease.gatewayPort &&
+        health.pid === lease.pid
+      ) {
+        break;
+      }
       if (attempt < HEALTH_RETRY_ATTEMPTS) {
         await new Promise((resolve) => setTimeout(resolve, HEALTH_RETRY_INTERVAL_MS));
       }
     }
     if (
       !health ||
-      health.serverId !== record.serverId ||
-      health.gatewayPort !== record.gatewayPort
+      health.serverBootId !== lease.ownerBootId ||
+      health.gatewayPort !== lease.gatewayPort ||
+      health.pid !== lease.pid
     ) {
+      if (health) {
+        throw new Error(
+          `Hub health identity does not match fenced lease ${lease.ownerBootId}; refusing to signal either process`
+        );
+      }
       // A failed probe is not proof of process death. Conclusively retire the
       // recorded writer before the caller is allowed to clear its row/spawn.
-      const processIdentity = recordedPidIsHub(record.pid);
+      const processIdentity = recordedPidIsHub(lease.pid);
       if (processIdentity === true) {
-        this.verifiedHubPids.add(record.pid);
-        await this.waitForExit(record.pid, false);
-      } else if (processIdentity === null && pidAlive(record.pid)) {
+        this.verifiedHubPids.add(lease.pid);
+        await this.waitForExit(lease.pid, false);
+      } else if (processIdentity === null && pidAlive(lease.pid)) {
         throw new Error(
-          `Hub health check failed, but live PID ${record.pid} could not be verified; refusing to terminate an unrelated process`
+          `Hub health check failed, but live PID ${lease.pid} could not be verified; refusing to terminate an unrelated process`
         );
       }
       return null;
     }
-    if (health.pid !== record.pid) {
-      throw new Error(
-        `Hub health PID ${health.pid} does not match recorded process ${record.pid}; refusing to signal either process`
-      );
-    }
-    this.verifiedHubPids.add(record.pid);
+    this.verifiedHubPids.add(lease.pid);
     if (health.version !== this.config.appVersion) {
       log.info(
         `[attach] hub version mismatch (${health.version ?? "?"} != ${this.config.appVersion}); replacing it`
       );
-      await this.waitForExit(record.pid, false);
+      await this.waitForExit(lease.pid, false);
       return null;
     }
     return {
       record: {
-        ...record,
+        gatewayPort: health.gatewayPort,
+        pid: health.pid,
+        serverId: health.serverId,
         serverBootId: health.serverBootId,
+        startedAt: lease.acquiredAt,
+        version: health.version,
       },
       rootInviteCode: null,
       rootInviteExpiresAt: null,
@@ -242,11 +277,12 @@ export class HubProcessManager {
     const esbuildBinaryPath = getEsbuildBinaryPath();
     const stateDir = path.join(getCentralDataPath(), "server-auth");
     const readyFile = path.join(stateDir, "hub-ready.json");
-    const logDir = path.join(getCentralDataPath(), "logs");
+    const logPath = getLocalHubLogPath();
+    const logDir = path.dirname(logPath);
     fs.mkdirSync(logDir, { recursive: true });
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.rmSync(readyFile, { force: true });
-    const logFd = fs.openSync(path.join(logDir, "hub.log"), "w");
+    const logFd = fs.openSync(logPath, "w");
     const env: Record<string, string | undefined> = {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
@@ -260,7 +296,7 @@ export class HubProcessManager {
       VIBESTUDIO_IDENTITY_DB_PATH: undefined,
       VIBESTUDIO_WORKSPACE_ID: undefined,
       VIBESTUDIO_HUB_URL: undefined,
-      VIBESTUDIO_HUB_CONTROL_TOKEN: undefined,
+      VIBESTUDIO_WORKSPACE_CHILD_TOKEN: undefined,
       ...(preferredGatewayPort !== undefined
         ? { VIBESTUDIO_GATEWAY_PORT: String(preferredGatewayPort) }
         : {}),
@@ -276,6 +312,7 @@ export class HubProcessManager {
         readyFile,
         "--bootstrap-workspace",
         this.config.workspaceName,
+        ...(this.config.ephemeral ? ["--ephemeral"] : []),
       ],
       { detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true, env }
     );
@@ -310,7 +347,7 @@ export class HubProcessManager {
       fs.rmSync(readyFile, { force: true });
       throw error;
     }
-    const record: HubRuntimeRecord = {
+    const record: HubRuntime = {
       gatewayPort: ready.gatewayPort,
       pid: ready.pid,
       serverId: ready.serverId,
@@ -318,11 +355,10 @@ export class HubProcessManager {
       startedAt: spawnedAt,
       version: ready.version,
     };
-    this.config.centralData.setHubRuntime(record);
     return {
       record,
-      rootInviteCode: ready.rootInvites === null ? null : ready.rootInvites.desktop.code,
-      rootInviteExpiresAt: ready.rootInvites === null ? null : ready.rootInvites.desktop.expiresAt,
+      rootInviteCode: ready.rootInvite?.code ?? null,
+      rootInviteExpiresAt: ready.rootInvite?.expiresAt ?? null,
       attached: false,
     };
   }
@@ -330,56 +366,36 @@ export class HubProcessManager {
   private async ensureDeviceCredential(target: HubProcessTarget): Promise<DeviceCredentialEntry> {
     const existing = loadDeviceCredentialByServerId(target.record.serverId);
     if (existing) return existing;
-    let pending = loadPendingLoopbackPairing(target.record.serverId);
-    if (!pending) {
-      const inviteCode = target.rootInviteCode;
-      const expiresAt = target.rootInviteExpiresAt;
-      if (!inviteCode || !expiresAt) {
-        throw new Error(
-          "The local hub already has users but this desktop is not paired. Pair this device from an existing member."
-        );
-      }
-      const preparedAt = Date.now();
-      pending = {
-        serverId: target.record.serverId,
-        transport: "pending-loopback",
-        deviceId: `dev_${randomBytes(18).toString("base64url")}`,
-        refreshToken: randomBytes(32).toString("base64url"),
-        inviteCode,
-        expiresAt,
-        preparedAt,
-        label: `${os.hostname()} desktop`,
-      };
-      // The clear secret and invite are encrypted+fsynced before the hub can
-      // consume the one-time root code. A post-response save failure therefore
-      // replays the exact same receipt on the next attach.
-      savePendingLoopbackPairing(pending);
+    const inviteCode = target.rootInviteCode;
+    const expiresAt = target.rootInviteExpiresAt;
+    if (!inviteCode || !expiresAt) {
+      throw new Error(
+        "The local hub already has users but this desktop is not paired. Pair this device from an existing member."
+      );
     }
-    if (pending.expiresAt <= Date.now()) {
-      throw new Error("The durable local pairing activation expired before it could complete");
+    if (expiresAt <= Date.now()) {
+      throw new Error("The local desktop pairing invite expired before it could complete");
     }
+    const label = `${os.hostname()} desktop`;
     const baseUrl = `http://127.0.0.1:${target.record.gatewayPort}`;
     const paired = await postJson(serverAuthRouteUrl(baseUrl, "complete-pairing"), {
-      code: pending.inviteCode,
-      handle: "root",
-      displayName: os.userInfo().username || "Root",
-      label: pending.label,
+      code: inviteCode,
+      label,
       platform: "desktop",
-      deviceId: pending.deviceId,
-      refreshToken: pending.refreshToken,
     });
     if (
-      paired["deviceId"] !== pending.deviceId ||
-      paired["refreshToken"] !== pending.refreshToken
+      paired["serverId"] !== target.record.serverId ||
+      !isDeviceId(paired["deviceId"]) ||
+      !isDeviceRefreshToken(paired["refreshToken"])
     ) {
-      throw new Error("Local hub pairing did not replay the prepared device credential");
+      throw new Error("Local hub pairing returned an invalid device credential");
     }
     const credential: DeviceCredentialEntry = {
       serverId: target.record.serverId,
-      deviceId: pending.deviceId,
-      refreshToken: pending.refreshToken,
+      deviceId: paired["deviceId"],
+      refreshToken: paired["refreshToken"],
       transport: "loopback",
-      label: pending.label,
+      label,
       pairedAt: Date.now(),
     };
     saveDeviceCredential(credential);
@@ -398,20 +414,35 @@ export class HubProcessManager {
     if (typeof session["shellToken"] !== "string") {
       throw new Error("Hub refresh returned no shell session token");
     }
-    const rpcResponse = await postJson(
-      serverRpcHttpUrl(baseUrl),
-      {
-        method: "hubControl.routeWorkspace",
-        args: [{ workspace: this.config.workspaceName }],
-      },
-      session["shellToken"]
+    const rpc = createConnectionlessRpcClient({
+      selfId: `shell:${credential.deviceId}`,
+      callerKind: "shell",
+      serverUrl: baseUrl,
+      authToken: session["shellToken"],
+      fetch: globalThis.fetch,
+    }).client;
+    const hubControl = createTypedServiceClient(
+      "hubControl",
+      hubControlMethods,
+      (service, method, args) => rpc.call("main", `${service}.${method}`, args)
     );
-    const routed = rpcResponse["result"] as RoutedWorkspace | undefined;
-    if (!routed || typeof routed !== "object") {
-      throw new Error("Hub returned no workspace routing result");
+    let workspace: z.infer<typeof HubWorkspaceEntrySchema>;
+    if (this.config.ephemeral) {
+      workspace = await hubControl.ensureEphemeralWorkspace();
+      if (workspace.name !== this.config.workspaceName || workspace.ephemeral !== true) {
+        throw new Error("Hub did not establish the requested ephemeral workspace lifecycle");
+      }
+    } else {
+      const visible = await hubControl.listWorkspaces();
+      const selected = visible.find((entry) => entry.name === this.config.workspaceName);
+      if (!selected) {
+        throw new Error(`Workspace "${this.config.workspaceName}" is not visible to this device`);
+      }
+      workspace = selected;
     }
-    if (typeof routed.serverUrl !== "string" || typeof routed.workspaceId !== "string") {
-      throw new Error("Hub returned invalid workspace routing coordinates");
+    const routed = await hubControl.routeWorkspace({ workspaceId: workspace.workspaceId });
+    if (routed.workspaceId !== workspace.workspaceId || routed.workspace !== workspace.name) {
+      throw new Error("Hub routed a different workspace than the one requested");
     }
     return {
       gatewayPort: target.record.gatewayPort,
@@ -433,8 +464,11 @@ export class HubProcessManager {
     spawnedAt: number,
     exitCode: () => number | null | undefined
   ): Promise<unknown> {
-    const deadline = Date.now() + READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    // The hub owns its workspace child's progress diagnostics and exits when
+    // that child cannot start. Waiting here therefore follows process
+    // liveness rather than imposing a second, shorter startup deadline that
+    // can abandon a healthy cold build.
+    for (;;) {
       const exited = exitCode();
       if (exited !== undefined) throw new Error(`Local hub exited during startup with ${exited}`);
       try {
@@ -447,7 +481,6 @@ export class HubProcessManager {
       }
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_INTERVAL_MS));
     }
-    throw new Error(`Local hub did not become ready within ${READY_TIMEOUT_MS / 1000}s`);
   }
 
   getAuthToken(): string {
@@ -463,6 +496,28 @@ export class HubProcessManager {
     return this.current?.serverUrl ?? null;
   }
 
+  /** Stable hub RPC coordinate; unlike getCurrentServerUrl this never points at a child. */
+  getHubWsUrl(): string {
+    const current = this.current;
+    if (!current) throw new Error("No routed local workspace");
+    return serverRpcWsUrl(`http://127.0.0.1:${current.gatewayPort}`);
+  }
+
+  /** Refresh the paired desktop's short-lived shell session on the stable hub. */
+  async getHubAuthToken(): Promise<string> {
+    const current = this.current;
+    if (!current) throw new Error("No routed local workspace");
+    const response = await postJson(
+      serverAuthRouteUrl(`http://127.0.0.1:${current.gatewayPort}`, "refresh-shell"),
+      { deviceId: current.deviceId, refreshToken: current.refreshToken }
+    );
+    const shellToken = response["shellToken"];
+    if (typeof shellToken !== "string" || shellToken.length === 0) {
+      throw new Error("Hub refresh returned no shell session token");
+    }
+    return shellToken;
+  }
+
   getGatewayPort(): number | null {
     return this.current?.gatewayPort ?? null;
   }
@@ -476,10 +531,15 @@ export class HubProcessManager {
 
   private async ensureAlive(): Promise<void> {
     const current = this.current;
-    const record = this.config.centralData.getHubRuntime();
-    if (!current || !record) return;
-    const attached = await this.tryAttach(record);
-    if (attached) return;
+    if (!current) return;
+    const lease = this.liveLease();
+    const attached = lease ? await this.tryAttach(lease) : null;
+    if (attached?.record.serverBootId === current.serverBootId) return;
+    if (attached) {
+      const credential = await this.ensureDeviceCredential(attached);
+      this.current = await this.routeWorkspace(attached, credential);
+      return;
+    }
     const now = Date.now();
     this.restartTimestamps = this.restartTimestamps.filter((at) => now - at < 60_000);
     if (this.restartTimestamps.length >= 5) {
@@ -487,7 +547,6 @@ export class HubProcessManager {
       return;
     }
     this.restartTimestamps.push(now);
-    this.config.centralData.clearHubRuntime();
     try {
       // The desktop session exposes the gateway port to panel and asset
       // consumers. Rebind the replacement hub to that same port so a successful
@@ -504,9 +563,8 @@ export class HubProcessManager {
   async stop(): Promise<void> {
     this.isStopping = true;
     this.current = null;
-    const record = this.config.centralData.getHubRuntime();
-    if (record) await this.waitForExit(record.pid, false);
-    this.config.centralData.clearHubRuntime();
+    const lease = this.liveLease();
+    if (lease) await this.waitForExit(lease.pid, false);
   }
 
   detach(): void {

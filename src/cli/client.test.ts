@@ -23,7 +23,10 @@ const webrtcMock = vi.hoisted(() => ({
     config: {
       pairing: { room: string; fp: string; code?: string; sig: string; ice?: string };
       getToken: () => string;
-      onPaired?: (credential: { deviceId: string; refreshToken: string }) => void | Promise<void>;
+      onPaired?: (
+        credential: { deviceId: string; refreshToken: string },
+        context?: { workspaceId: string }
+      ) => void | Promise<void>;
     };
     closed: boolean;
   }>,
@@ -69,10 +72,13 @@ vi.mock("./webrtcClient.js", () => ({
 
     async ready(): Promise<void> {
       if (webrtcMock.readyError) throw webrtcMock.readyError;
-      await this.config.onPaired?.({
-        deviceId: TEST_DEVICE_ID,
-        refreshToken: TEST_REFRESH_TOKEN,
-      });
+      await this.config.onPaired?.(
+        {
+          deviceId: TEST_DEVICE_ID,
+          refreshToken: TEST_REFRESH_TOKEN,
+        },
+        { workspaceId: "ws_dev" }
+      );
     }
 
     async call(method: string, args: unknown[] = []): Promise<unknown> {
@@ -91,21 +97,15 @@ vi.mock("./webrtcClient.js", () => ({
         ];
       }
       if (method === "hubControl.routeWorkspace") {
-        const workspace = String(
-          (args[0] as { workspace?: string } | undefined)?.workspace ?? "dev"
+        const workspaceId = String(
+          (args[0] as { workspaceId?: string } | undefined)?.workspaceId ?? "ws_dev"
         );
+        const workspace = workspaceId === "ws_docs" ? "docs" : "dev";
         return {
           workspace,
-          workspaceId: `ws_${workspace}`,
+          workspaceId,
           running: true,
           serverUrl: `webrtc://child-${workspace}/_workspace/${workspace}`,
-          controlReach: {
-            room: `control-${workspace}`,
-            fp: "CC".repeat(32),
-            sig: "wss://signal.example/",
-            v: 2,
-            ice: "all",
-          },
           workspaceReach: {
             room: `child-${workspace}`,
             fp: "BB".repeat(32),
@@ -214,9 +214,10 @@ describe("vibestudio CLI", () => {
     fs.writeFileSync(
       credentialPath(),
       JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         kind: "device",
         url: "webrtc://room-1111-2222/_workspace/dev",
+        workspaceId: "ws_dev",
         workspaceName: "dev",
         serverId: TEST_SERVER_ID,
         deviceId: TEST_DEVICE_ID,
@@ -284,16 +285,17 @@ describe("vibestudio CLI", () => {
 
     expect(webrtcMock.instances[0]?.config.getToken()).toBe("A".repeat(32));
     expect(JSON.parse(fs.readFileSync(credentialPath(), "utf8"))).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       kind: "device",
       url: "webrtc://child-dev/_workspace/dev",
+      workspaceId: "ws_dev",
       workspaceName: "dev",
       serverId: TEST_SERVER_ID,
       deviceId: TEST_DEVICE_ID,
       refreshToken: TEST_REFRESH_TOKEN,
       controlPairing: {
-        room: "control-dev",
-        fp: "CC".repeat(32),
+        room: "room-1111-2222",
+        fp: FP,
         sig: "wss://signal.example/",
       },
       workspacePairing: {
@@ -305,7 +307,7 @@ describe("vibestudio CLI", () => {
     expect(webrtcMock.calls).toContainEqual({
       room: "room-1111-2222",
       method: "hubControl.routeWorkspace",
-      args: [{ workspace: "dev" }],
+      args: [{ workspaceId: "ws_dev" }],
       token: "A".repeat(32),
     });
     if (process.platform !== "win32") {
@@ -348,11 +350,13 @@ describe("vibestudio CLI", () => {
     expect(output).toContain("vibestudio remote pair");
     expect(output).toContain("vibestudio remote invite-user");
     expect(output).toContain("vibestudio mobile install");
+    expect(output).toContain("vibestudio model connect");
     await expect(main(["pair"])).resolves.toBe(2);
 
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio remote pair"));
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio mobile install"));
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio mobile smoke"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio model connect"));
     expect(console.log).not.toHaveBeenCalledWith(
       expect.stringContaining(["vibestudio", "remote", "start"].join(" "))
     );
@@ -446,15 +450,16 @@ describe("vibestudio CLI", () => {
     await expect(main(["remote", "select", "docs", "--json"])).resolves.toBe(0);
     const stored = JSON.parse(fs.readFileSync(credentialPath(), "utf8"));
     expect(stored).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       url: "webrtc://child-docs/_workspace/docs",
+      workspaceId: "ws_docs",
       workspaceName: "docs",
       serverId: TEST_SERVER_ID,
       deviceId: TEST_DEVICE_ID,
       refreshToken: TEST_REFRESH_TOKEN,
       controlPairing: {
-        room: "control-docs",
-        fp: "CC".repeat(32),
+        room: "room-1111-2222",
+        fp: FP,
         sig: "wss://signal.example/",
         v: 2,
         ice: "all",
@@ -469,9 +474,19 @@ describe("vibestudio CLI", () => {
     });
     expect(stored).not.toHaveProperty("hubUrl");
     expect(stored).not.toHaveProperty("hubCredential");
+    expect(webrtcMock.calls.filter(({ method }) => method === "hubControl.routeWorkspace")).toEqual(
+      [
+        {
+          room: "room-1111-2222",
+          method: "hubControl.routeWorkspace",
+          args: [{ workspaceId: "ws_docs" }],
+          token: `refresh:${TEST_DEVICE_ID}:${TEST_REFRESH_TOKEN}`,
+        },
+      ]
+    );
     await expect(main(["remote", "workspaces", "--json"])).resolves.toBe(0);
     expect(webrtcMock.calls).toContainEqual({
-      room: "control-docs",
+      room: "room-1111-2222",
       method: "hubControl.listWorkspaces",
       args: [],
       token: `refresh:${TEST_DEVICE_ID}:${TEST_REFRESH_TOKEN}`,
@@ -485,13 +500,6 @@ describe("vibestudio CLI", () => {
       workspaceId: "ws_docs",
       running: true,
       serverUrl: "webrtc://child-docs/_workspace/docs",
-      controlReach: {
-        room: "control-docs",
-        fp: "CC".repeat(32),
-        sig: "wss://signal.example/",
-        v: 2,
-        ice: "all",
-      },
       workspaceReach: {
         room: "child-docs",
         fp: "BB".repeat(32),
@@ -688,7 +696,8 @@ describe("vibestudio CLI", () => {
     const link = createConnectDeepLink(pairing("A".repeat(32)));
     await expect(main(["terminal", "start", "--pair", link, "--yes", "--json"])).resolves.toBe(0);
     expect(JSON.parse(fs.readFileSync(credentialPath(), "utf8"))).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
+      workspaceId: "ws_dev",
       workspaceName: "dev",
       deviceId: TEST_DEVICE_ID,
     });
@@ -716,7 +725,6 @@ describe("vibestudio CLI", () => {
       connections: unknown[];
       bridgeSockets: unknown[];
       token?: string;
-      serverEvents: Array<{ event: string; payload: unknown }>;
       resubscribes: number;
     };
   } {
@@ -729,7 +737,6 @@ describe("vibestudio CLI", () => {
       connections: [] as unknown[],
       bridgeSockets: [] as unknown[],
       token: undefined as string | undefined,
-      serverEvents: [] as Array<{ event: string; payload: unknown }>,
       resubscribes: 0,
     };
     (
@@ -762,10 +769,9 @@ export class HeadlessHost {
     const connection = await this.config.connectionFactory();
     state.connections.push(connection);
     state.token = connection.getToken();
-    connection.onServerEvent((event, payload) => state.serverEvents.push({ event, payload }));
     connection.onResubscribe(async () => { state.resubscribes += 1; });
     await connection.rpc.call("main", "panelRuntime.registerClient", [{ from: "mock" }]);
-    await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
+    await connection.rpc.stream("main", "events.watch", [["panel:runtimeLeaseChanged"]]);
     await connection.rpc.stream("main", "panelCdp.hostProvider.open", ["provider-session", this.config.clientSessionId]);
     this.config.bridgeSocketFactory("ws://ignored");
     for (const entry of globalThis.__vibestudioCliWebRtcEventListeners ?? []) {

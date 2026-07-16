@@ -13,9 +13,11 @@ import {
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
+import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
 import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
 import { authMethods } from "@vibestudio/service-schemas/auth";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 
@@ -100,6 +102,19 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcStreamOptions
   ): Promise<Response>;
+  /** Stream a backend service as an Electron-hosted runtime principal. */
+  streamAs(
+    caller: ScopedServerCaller,
+    service: string,
+    method: string,
+    args: unknown[],
+    options?: RpcStreamOptions
+  ): Promise<Response>;
+  /** Listen only to an event addressed to this authenticated shell session. */
+  onDirectEvent<E extends EventName>(
+    event: E,
+    listener: (payload: EventPayloads[E]) => void
+  ): () => void;
   /** Check if connected */
   isConnected(): boolean;
   /** Current connection status */
@@ -136,8 +151,6 @@ export interface ServerClientOptions {
   onDisconnect?: () => void;
   /** Called when connection status changes (for UI indicators) */
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
-  /** Called when the server sends a host event */
-  onServerEvent?: (event: string, payload: unknown) => void;
   /** Called after auth when the transport needs subscriptions or state replayed. */
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   /** Enable automatic reconnection on disconnect (default: true if getWsUrl is set). */
@@ -150,7 +163,7 @@ export interface ServerClientOptions {
    * can authenticate with `refresh:<deviceId>:<refreshToken>` instead of
    * re-pairing. Mirrors the WebRTC client's `onPaired` (webrtcServerClient.ts).
    */
-  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
+  onPaired?: (credential: DeviceCredential, context?: PairingContext) => void;
 }
 
 export async function createServerClient(
@@ -168,10 +181,9 @@ export async function createServerClient(
     getWsUrl,
     reconnect: shouldReconnect,
     logPrefix: "ServerClient",
-    onServerEvent: options?.onServerEvent,
     onRecovery: options?.onRecovery,
     onAuthResult: (msg) => {
-      if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential);
+      if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential, msg.pairingContext);
     },
     adapter: {
       now: () => Date.now(),
@@ -225,15 +237,6 @@ export async function createServerClient(
       getWsUrl,
       reconnect: false,
       logPrefix: `ServerClient:${caller.callerId}`,
-      translateEvent: (event, payload, deliver) => {
-        deliver({
-          type: "event",
-          fromId: "main",
-          event,
-          payload,
-        });
-        return true;
-      },
       adapter: {
         now: () => Date.now(),
         getAuthToken: async () => grant.token,
@@ -295,6 +298,9 @@ export async function createServerClient(
     ): Promise<Response> {
       return rpc.stream("main", `${service}.${method}`, args, options);
     },
+    onDirectEvent(event, listener) {
+      return rpc.on(event, ({ payload }) => listener(payload as never));
+    },
     async callAs(
       caller: ScopedServerCaller,
       service: string,
@@ -308,6 +314,16 @@ export async function createServerClient(
       // there is no shell→runtime proxy.
       const client = await getScopedClient(caller);
       return client.rpc.call("main", `${service}.${method}`, args, options);
+    },
+    async streamAs(
+      caller: ScopedServerCaller,
+      service: string,
+      method: string,
+      args: unknown[],
+      options?: RpcStreamOptions
+    ): Promise<Response> {
+      const client = await getScopedClient(caller);
+      return client.rpc.stream("main", `${service}.${method}`, args, options);
     },
     addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void {
       const key = scopedKey(caller);
@@ -334,10 +350,6 @@ export async function createServerClient(
         connectionId,
         reconnect: false,
         logPrefix: `PanelSession:${runtimeEntityId}`,
-        translateEvent: (event, payload, deliver) => {
-          deliver({ type: "event", fromId: "main", event, payload });
-          return true;
-        },
         adapter: {
           now: () => Date.now(),
           getAuthToken: async () => (await authClient.grantConnection(runtimeEntityId)).token,

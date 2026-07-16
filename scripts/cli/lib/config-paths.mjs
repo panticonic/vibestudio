@@ -11,6 +11,10 @@ export function cliCredentialPath() {
   return path.join(cliConfigRoot(), "cli-credentials.json");
 }
 
+export function hubIdentityPath() {
+  return path.join(cliConfigRoot(), "server-auth", "webrtc", "identity.pem");
+}
+
 export function workspaceIdentityPath(workspace = "default") {
-  return path.join(cliConfigRoot(), "workspaces", workspace, "state", "webrtc", "identity.pem");
+  return path.join(cliConfigRoot(), "workspaces", workspace, "reach", "webrtc", "identity.pem");
 }

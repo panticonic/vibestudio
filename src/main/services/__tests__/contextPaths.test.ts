@@ -2,17 +2,17 @@ import { describe, it, expect } from "vitest";
 import { resolveWithinContext, validateFilePathWithinRoot } from "@vibestudio/shared/contextPaths";
 
 describe("resolveWithinContext", () => {
-  const root = "/workspace/.contexts/abc";
+  const root = "/workspace/.context-projections/v5/abc";
 
   it("resolves a valid relative path", () => {
     expect(resolveWithinContext(root, "panels/my-app")).toBe(
-      "/workspace/.contexts/abc/panels/my-app"
+      "/workspace/.context-projections/v5/abc/panels/my-app"
     );
   });
 
   it("resolves nested paths", () => {
     expect(resolveWithinContext(root, "panels/my-app/src/index.tsx")).toBe(
-      "/workspace/.contexts/abc/panels/my-app/src/index.tsx"
+      "/workspace/.context-projections/v5/abc/panels/my-app/src/index.tsx"
     );
   });
 
@@ -32,7 +32,7 @@ describe("resolveWithinContext", () => {
 });
 
 describe("validateFilePathWithinRoot", () => {
-  const panelRoot = "/workspace/.contexts/abc/panels/my-app";
+  const panelRoot = "/workspace/.context-projections/v5/abc/panels/my-app";
 
   it("accepts a valid relative file path", () => {
     expect(() => validateFilePathWithinRoot(panelRoot, "src/index.tsx")).not.toThrow();

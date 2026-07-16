@@ -13,6 +13,7 @@ import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
 import { consumeDesktopAutoApproveOnce, resolveWorkspaceName } from "@vibestudio/workspace/loader";
 import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
+import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 
@@ -25,6 +26,7 @@ export const WORKSPACE_CREATE_IF_MISSING_ARG = "--workspace-create-if-missing";
  * across relaunches within a session rather than minting a new one each time.
  */
 export const EPHEMERAL_WORKSPACE_ARG = "--ephemeral-workspace";
+export { EPHEMERAL_DEV_WORKSPACE_NAME };
 
 export type StartupMode =
   | {
@@ -87,6 +89,16 @@ export function resolveStartupMode(
     return { kind: "pending" };
   }
 
+  if (process.argv.includes(EPHEMERAL_WORKSPACE_ARG)) {
+    const requested = resolveWorkspaceName();
+    if (requested && requested !== EPHEMERAL_DEV_WORKSPACE_NAME) {
+      throw new Error(
+        `Ephemeral development launches use the canonical workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`
+      );
+    }
+    return resolveEphemeralDevStartupMode();
+  }
+
   if (hasExplicitWorkspaceSelection()) {
     return resolveLocalStartupMode(centralData);
   }
@@ -97,7 +109,7 @@ export function resolveStartupMode(
   }
 
   if (opts?.interactiveDesktop === true && isDev()) {
-    return resolveLocalStartupMode(centralData);
+    return resolveEphemeralDevStartupMode();
   }
 
   // Pre-session startup has no authenticated user. Use the catalog's machine
@@ -147,22 +159,35 @@ export function chooseConnectionRelaunchArgs(rawArgs = process.argv.slice(1)): s
   return [...stripStartupSelectionArgs(rawArgs), CHOOSE_CONNECTION_ARG];
 }
 
-/**
- * Relaunch into a fresh disposable dev workspace. Pins the generated name via `--workspace` so the
- * workspace is stable across relaunches in the session, and tags it ephemeral so it is deleted on
- * exit. Dev-only — the caller gates on isDev().
- */
-export function ephemeralWorkspaceRelaunchArgs(
-  name: string,
-  rawArgs = process.argv.slice(1)
-): string[] {
+/** Relaunch into the one hub-owned disposable development workspace. */
+export function ephemeralWorkspaceRelaunchArgs(rawArgs = process.argv.slice(1)): string[] {
   return [
     ...stripStartupSelectionArgs(rawArgs),
     "--workspace",
-    name,
-    WORKSPACE_CREATE_IF_MISSING_ARG,
+    EPHEMERAL_DEV_WORKSPACE_NAME,
     EPHEMERAL_WORKSPACE_ARG,
   ];
+}
+
+/**
+ * Select the hub-owned disposable development workspace without creating or
+ * registering a competing desktop-owned checkout. The logical directory is
+ * reserved for desktop state and durable reach identity; the hub owns the
+ * random source/state checkout used by the workspace child.
+ */
+export function resolveEphemeralDevStartupMode(): LocalStartupMode {
+  const wsDir = path.join(getCentralConfigDirectory(), "workspaces", EPHEMERAL_DEV_WORKSPACE_NAME);
+  log.info(`[Workspace] Selected hub-owned ephemeral workspace "${EPHEMERAL_DEV_WORKSPACE_NAME}"`);
+  return {
+    kind: "local",
+    wsDir,
+    workspaceName: EPHEMERAL_DEV_WORKSPACE_NAME,
+    // Provisional until the hub returns its opaque registry id. Main replaces
+    // this immediately after the server session is established.
+    workspaceId: EPHEMERAL_DEV_WORKSPACE_NAME,
+    isEphemeral: true,
+    autoApproveStartupUnits: false,
+  };
 }
 
 export function resolveLocalStartupMode(
@@ -177,12 +202,11 @@ export function resolveLocalStartupMode(
     centralData,
     name: wsName ?? undefined,
     ...(wsName ? { init: shouldCreateExplicitWorkspaceIfMissing() } : {}),
-    isDev: isDev(),
   });
   log.info(
     `[Workspace] Loaded: ${startup.resolved.wsDir} (id: ${startup.resolved.workspace.config.id})`
   );
-  const isEphemeral = startup.isEphemeral || process.argv.includes(EPHEMERAL_WORKSPACE_ARG);
+  const isEphemeral = startup.isEphemeral;
   const createdInApp = consumeDesktopAutoApproveOnce(startup.resolved.wsDir);
   const autoApproveStartupUnits =
     process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
@@ -192,8 +216,6 @@ export function resolveLocalStartupMode(
     wsDir: startup.resolved.wsDir,
     workspaceName: startup.resolved.name,
     workspaceId: startup.resolved.workspace.config.id,
-    // A named launch tagged --ephemeral-workspace (the dev "new ephemeral workspace" button) is
-    // disposable even though it was resolved by name; mark it so will-quit deletes it.
     isEphemeral,
     autoApproveStartupUnits,
   };

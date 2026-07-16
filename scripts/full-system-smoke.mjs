@@ -280,7 +280,7 @@ function expect(condition, message) {
 
 /** An `EACCES` refusal: HTTP 403 and/or a payload carrying the code. */
 function isAccessDenied({ status, payload }) {
-  const code = payload?.code ?? "";
+  const code = payload?.code ?? payload?.errorCode ?? "";
   const text = payload?.error ?? "";
   return status === 403 || code === "EACCES" || /EACCES/.test(String(text));
 }
@@ -378,22 +378,39 @@ async function runMultiUserPhase(options, resultsDir) {
   try {
     const ready = await readJsonFileWhenReady(readyFile, hub, Math.min(options.timeoutMs, 120_000));
     expect(ready.mode === "hub", `expected a hub ready file, got mode=${ready.mode}`);
-    const rootInviteCode = ready.rootInvites?.desktop?.code;
+    const rootInviteCode = ready.rootInvite?.code;
     expect(
       typeof rootInviteCode === "string" && rootInviteCode,
       "fresh hub must advertise a complete root invite"
     );
     const base = `http://127.0.0.1:${ready.gatewayPort}`;
     const auth = (route, body) => postJson(`${base}/_r/s/auth/${route}`, body);
-    const rpc = (token, method, ...args) => postJson(`${base}/rpc`, { method, args }, token);
-    const routeWorkspace = async (credential, name) => {
+    const rpc = async (token, method, ...args) => {
+      const callerId = "full-system-smoke";
+      const response = await postJson(
+        `${base}/rpc`,
+        envelopeFromMessage({
+          from: callerId,
+          target: "main",
+          callerKind: "shell",
+          message: {
+            type: "request",
+            requestId: crypto.randomUUID(),
+            fromId: callerId,
+            method,
+            args,
+          },
+        }),
+        token
+      );
+      const message = response.payload?.envelope?.message ?? response.payload?.message;
+      return { ...response, payload: message ?? response.payload };
+    };
+    const routeWorkspace = async (credential, workspaceId) => {
       const response = await rpc(credential.shellToken, "hubControl.routeWorkspace", {
-        workspace: name,
+        workspaceId,
       });
-      return {
-        ...response,
-        payload: response.payload?.result ?? response.payload,
-      };
+      return { ...response, payload: response.payload?.result ?? response.payload };
     };
     const refreshWorkspace = async (serverUrl, credential) => {
       const refreshed = await postJson(`${serverUrl}/_r/s/auth/refresh-shell`, {
@@ -506,7 +523,9 @@ async function runMultiUserPhase(options, resultsDir) {
     let bob = null;
     let bobSecondDevice = null;
     let visibleWorkspace = null;
+    let visibleWorkspaceId = null;
     let bobWorkspace = null;
+    let bobWorkspaceId = null;
     let aliceChild = null;
     let bobChild = null;
     let bobSecondChild = null;
@@ -516,8 +535,6 @@ async function runMultiUserPhase(options, resultsDir) {
     await step("root-bootstrap: first pairing becomes root", async () => {
       const { status, payload } = await auth("complete-pairing", {
         code: rootInviteCode,
-        handle: "alice",
-        displayName: "Alice",
         label: "smoke-alice-desktop",
       });
       expect(
@@ -540,13 +557,20 @@ async function runMultiUserPhase(options, resultsDir) {
     await step("workspace catalog: root creates an isolated invitee workspace", async () => {
       const rootView = await rpc(alice.shellToken, "hubControl.listWorkspaces");
       visibleWorkspace = rootView.payload?.result?.[0]?.name;
-      expect(typeof visibleWorkspace === "string", "root must see the bootstrap workspace");
+      visibleWorkspaceId = rootView.payload?.result?.[0]?.workspaceId;
+      expect(
+        typeof visibleWorkspace === "string" && typeof visibleWorkspaceId === "string",
+        "root must see the exact bootstrap workspace identity"
+      );
       bobWorkspace = "bob-space";
       const created = await rpc(alice.shellToken, "hubControl.createWorkspace", {
         workspace: bobWorkspace,
       });
+      bobWorkspaceId = created.payload?.result?.workspaceId;
       expect(
-        created.status === 200 && created.payload?.result?.name === bobWorkspace,
+        created.status === 200 &&
+          created.payload?.result?.name === bobWorkspace &&
+          typeof bobWorkspaceId === "string",
         `hubControl.createWorkspace failed: ${JSON.stringify(created.payload)}`
       );
     });
@@ -638,7 +662,7 @@ async function runMultiUserPhase(options, resultsDir) {
 
     await step("membership: route refuses a non-member with EACCES (no child spawn)", async () => {
       const denied = await rpc(bob.shellToken, "hubControl.routeWorkspace", {
-        workspace: visibleWorkspace,
+        workspaceId: visibleWorkspaceId,
       });
       expect(
         isAccessDenied(denied),
@@ -683,9 +707,9 @@ async function runMultiUserPhase(options, resultsDir) {
           added.status === 200,
           `hubControl.addWorkspaceMember failed: ${JSON.stringify(added.payload)}`
         );
-        const aliceRoute = await routeWorkspace(alice, visibleWorkspace);
-        const bobRoute = await routeWorkspace(bob, visibleWorkspace);
-        const bobSecondRoute = await routeWorkspace(bobSecondDevice, visibleWorkspace);
+        const aliceRoute = await routeWorkspace(alice, visibleWorkspaceId);
+        const bobRoute = await routeWorkspace(bob, visibleWorkspaceId);
+        const bobSecondRoute = await routeWorkspace(bobSecondDevice, visibleWorkspaceId);
         expect(
           aliceRoute.status === 200 && bobRoute.status === 200 && bobSecondRoute.status === 200,
           "both members and both Bob devices must route"

@@ -23,7 +23,11 @@ import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/hostCore/deviceAuthStore.js";
-import { createPairingRedeemer } from "../src/server/services/authService.js";
+import type { PairedDeviceCredential } from "../src/server/hostCore/deviceAuthStore.js";
+import {
+  createHubCredentialRedeemer,
+  createWorkspaceCredentialRedeemer,
+} from "../src/server/services/authService.js";
 import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngress.js";
 import { ensurePersistentCert } from "../src/node/webrtc/cert.js";
 
@@ -52,8 +56,19 @@ async function startCliSmokeSignaling(): Promise<ChildProcess> {
   throw new Error("wrangler dev (CLI smoke signaling) did not become healthy");
 }
 
-function makeCliSmokeServer(databasePath: string): {
-  server: RpcServer;
+function makeCliSmokeServers(
+  databasePath: string,
+  workspaceReach: {
+    room: string;
+    fp: string;
+    sig: string;
+    v: typeof PAIRING_PROTOCOL_VERSION;
+    ice: "all" | "relay";
+  },
+  onRedeemed: (credential: PairedDeviceCredential) => Promise<void>
+): {
+  hubServer: RpcServer;
+  workspaceServer: RpcServer;
   deviceAuthStore: DeviceAuthStore;
   identityDb: IdentityDb;
   userStore: UserStore;
@@ -65,13 +80,38 @@ function makeCliSmokeServer(databasePath: string): {
   const identityDb = new IdentityDb({ path: databasePath, readOnly: false });
   const userStore = new UserStore(identityDb);
   userStore.createRoot({ handle: "root", displayName: "Root" });
-  const tokenManager = new TokenManager();
-  const dispatcher = {
+  const deviceAuthStore = new DeviceAuthStore({
+    db: identityDb,
+    serverIdPath: path.join(path.dirname(databasePath), "server-id.json"),
+  });
+  const serverId = deviceAuthStore.getServerId();
+  const serverBootId = `boot_${"b".repeat(24)}`;
+  const hubDispatcher = {
+    initialized: true,
+    dispatch: async (_ctx: ServiceContext, service: string, method: string) => {
+      if (service === "hubControl" && method === "routeWorkspace") {
+        return {
+          workspace: "dev",
+          workspaceId,
+          running: true,
+          serverUrl: `webrtc://${workspaceReach.room}/_workspace/dev`,
+          workspaceReach,
+          serverId,
+          serverBootId,
+        };
+      }
+      return { ok: true };
+    },
+    getPolicy: (service: string) =>
+      service === "hubControl" ? { allowed: ["shell"] as CallerKind[] } : undefined,
+    getMethodPolicy: () => undefined,
+  } as unknown as ServiceDispatcher;
+  const workspaceDispatcher = {
     initialized: true,
     dispatch: async (_ctx: ServiceContext, service: string, method: string) => {
       if (service === "workspace" && method === "getActive") return "dev";
       if (service === "auth" && method === "getConnectionInfo") {
-        return { serverId: "srv_cli_live", workspaceId: "ws_dev" };
+        return { serverId, workspaceId };
       }
       return { ok: true };
     },
@@ -81,25 +121,36 @@ function makeCliSmokeServer(databasePath: string): {
         : undefined,
     getMethodPolicy: () => undefined,
   } as unknown as ServiceDispatcher;
-  const deviceAuthStore = new DeviceAuthStore({
-    db: identityDb,
-    serverIdPath: path.join(path.dirname(databasePath), "server-id.json"),
-  });
+  const hubTokenManager = new TokenManager();
+  const workspaceTokenManager = new TokenManager();
   return {
-    server: new RpcServer({
-      tokenManager,
-      dispatcher,
+    hubServer: new RpcServer({
+      tokenManager: hubTokenManager,
+      dispatcher: hubDispatcher,
       entityCache: new EntityCache(),
-      redeemPairingCredential: createPairingRedeemer({
+      redeemPairingCredential: createHubCredentialRedeemer({
         deviceAuthStore,
-        tokenManager,
-        redeemPairingCode: async (code, input) =>
-          deviceAuthStore.completePairing({
+        tokenManager: hubTokenManager,
+        redeemPairingCode: async (code, input) => {
+          const credential = deviceAuthStore.completePairing({
             code,
-            expectedWorkspaceId: workspaceId,
             ...input,
-          }),
+          });
+          await onRedeemed(credential);
+          return credential;
+        },
         resolveUser: (userId) => userStore.getUser(userId),
+      }),
+    }),
+    workspaceServer: new RpcServer({
+      tokenManager: workspaceTokenManager,
+      dispatcher: workspaceDispatcher,
+      entityCache: new EntityCache(),
+      redeemPairingCredential: createWorkspaceCredentialRedeemer({
+        deviceAuthStore,
+        tokenManager: workspaceTokenManager,
+        resolveUser: (userId) => userStore.getUser(userId),
+        resolveRuntimeEntity: () => null,
       }),
     }),
     deviceAuthStore,
@@ -133,35 +184,60 @@ describe("live CLI smoke", () => {
     async () => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-live-"));
       let wrangler: ChildProcess | null = null;
-      let ingress: WebRtcIngress | null = null;
+      let hubIngress: WebRtcIngress | null = null;
+      let workspaceIngress: WebRtcIngress | null = null;
       let identityDb: IdentityDb | null = null;
       try {
         wrangler = await startCliSmokeSignaling();
         const cert = ensurePersistentCert({
           identityPemFile: path.join(tmp, "identity.pem"),
         });
-        const smoke = makeCliSmokeServer(path.join(tmp, "identity.db"));
-        const { server, deviceAuthStore, userStore, workspaceId } = smoke;
+        const workspaceRoom = randomUUID();
+        const workspaceReach = {
+          room: workspaceRoom,
+          fp: cert.fingerprint,
+          sig: CLI_SIGNAL_URL,
+          v: PAIRING_PROTOCOL_VERSION,
+          ice: "all" as const,
+        };
+        const smoke = makeCliSmokeServers(
+          path.join(tmp, "identity.db"),
+          workspaceReach,
+          async (credential) => {
+            if (!hubIngress || !workspaceIngress) {
+              throw new Error("CLI smoke ingresses are not ready");
+            }
+            await Promise.all([
+              hubIngress.armRoom(credential.controlRoom, { deviceId: credential.deviceId }),
+              workspaceIngress.armRoom(workspaceRoom, { deviceId: credential.deviceId }),
+            ]);
+          }
+        );
+        const { hubServer, workspaceServer, deviceAuthStore, userStore, workspaceId } = smoke;
         identityDb = smoke.identityDb;
-        ingress = startWebRtcIngress({
-          rpcServer: server,
+        hubIngress = startWebRtcIngress({
+          rpcServer: hubServer,
           signalUrl: CLI_SIGNAL_URL,
           certificatePemFile: cert.certificatePemFile,
           keyPemFile: cert.keyPemFile,
-          fingerprint: cert.fingerprint,
+        });
+        workspaceIngress = startWebRtcIngress({
+          rpcServer: workspaceServer,
+          signalUrl: CLI_SIGNAL_URL,
+          certificatePemFile: cert.certificatePemFile,
+          keyPemFile: cert.keyPemFile,
         });
         const root = userStore.getByHandle("root");
         if (!root) throw new Error("CLI smoke root user is missing");
-        const code = deviceAuthStore.createPairingCode(undefined, {
+        const invite = deviceAuthStore.createPairingInvite(undefined, {
           workspaceId,
           userId: root.id,
         });
-        const room = randomUUID();
-        await ingress.armRoom(room, {});
+        await hubIngress.armRoom(invite.room, {});
         const deepLink = createConnectDeepLink({
-          room,
+          room: invite.room,
           fp: cert.fingerprint,
-          code,
+          code: invite.code,
           sig: CLI_SIGNAL_URL,
           v: PAIRING_PROTOCOL_VERSION,
           ice: "all",
@@ -178,7 +254,7 @@ describe("live CLI smoke", () => {
           { cwd: repoRoot, env: childEnv, timeout: 60_000, maxBuffer: 2 * 1024 * 1024 }
         );
         const pairJson = parseCliJson(pair.stdout);
-        expect(pairJson["url"]).toBe(`webrtc://${room}/_workspace/dev`);
+        expect(pairJson["url"]).toBe(`webrtc://${workspaceRoom}/_workspace/dev`);
 
         const credentialPath = path.join(
           childEnv.HOME,
@@ -188,10 +264,12 @@ describe("live CLI smoke", () => {
         );
         const stored = JSON.parse(fs.readFileSync(credentialPath, "utf8")) as {
           workspaceName?: string;
-          pairing?: { room?: string };
+          controlPairing?: { room?: string };
+          workspacePairing?: { room?: string };
         };
         expect(stored.workspaceName).toBe("dev");
-        expect(stored.pairing?.room).toBe(room);
+        expect(stored.controlPairing?.room).toBe(invite.room);
+        expect(stored.workspacePairing?.room).toBe(workspaceRoom);
 
         const status = await execFileAsync("pnpm", ["cli", "remote", "status", "--json"], {
           cwd: repoRoot,
@@ -200,12 +278,12 @@ describe("live CLI smoke", () => {
           maxBuffer: 2 * 1024 * 1024,
         });
         expect(parseCliJson(status.stdout)).toMatchObject({
-          url: `webrtc://${room}/_workspace/dev`,
-          workspaceId: "ws_dev",
-          serverId: "srv_cli_live",
+          url: `webrtc://${workspaceRoom}/_workspace/dev`,
+          workspaceId,
+          serverId: deviceAuthStore.getServerId(),
         });
       } finally {
-        await ingress?.close().catch(() => undefined);
+        await Promise.allSettled([hubIngress?.close(), workspaceIngress?.close()]);
         identityDb?.close();
         wrangler?.kill("SIGTERM");
         fs.rmSync(tmp, { recursive: true, force: true });

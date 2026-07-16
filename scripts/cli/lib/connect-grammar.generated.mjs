@@ -10,7 +10,7 @@ var PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 var WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 var PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 var FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
-var CONNECT_PARAMETER_KEYS = /* @__PURE__ */ new Set(["room", "fp", "code", "sig", "v", "ice", "srv", "exp"]);
+var CONNECT_PARAMETER_KEYS = /* @__PURE__ */ new Set(["room", "fp", "code", "sig", "v", "ice", "exp"]);
 var PAIRING_PROTOCOL_VERSION = 2;
 function normalizeFingerprint(fp) {
   return fp.replace(/[:\s]/g, "").toUpperCase();
@@ -44,7 +44,6 @@ function encodeConnectParams(pairing) {
     `v=${encodeURIComponent(String(pairing.v))}`,
     `ice=${encodeURIComponent(pairing.ice)}`
   ];
-  if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
   if (pairing.exp) params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
   return params.join("&");
 }
@@ -197,7 +196,6 @@ function parseConnectLink(raw) {
     sig: sigParsed.url,
     v: PAIRING_PROTOCOL_VERSION,
     ice,
-    srv: params.values.get("srv") || void 0,
     ...exp !== void 0 ? { exp } : {}
   };
 }

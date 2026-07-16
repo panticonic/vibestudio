@@ -15,18 +15,12 @@ vi.mock("@vibestudio/env-paths", () => ({
 
 const credentialStore = {
   loadDeviceCredentialByServerId: vi.fn(),
-  loadPendingLoopbackPairing: vi.fn(),
   saveDeviceCredential: vi.fn(),
-  savePendingLoopbackPairing: vi.fn(),
 };
 vi.mock("./services/deviceCredentialStore.js", () => ({
   loadDeviceCredentialByServerId: (...args: unknown[]) =>
     credentialStore.loadDeviceCredentialByServerId(...args),
-  loadPendingLoopbackPairing: (...args: unknown[]) =>
-    credentialStore.loadPendingLoopbackPairing(...args),
   saveDeviceCredential: (...args: unknown[]) => credentialStore.saveDeviceCredential(...args),
-  savePendingLoopbackPairing: (...args: unknown[]) =>
-    credentialStore.savePendingLoopbackPairing(...args),
 }));
 
 const spawnMock = vi.fn();
@@ -34,10 +28,14 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { HubProcessManager, parseHubReadyFile } from "./hubProcessManager.js";
+import { getLocalHubLogPath, HubProcessManager, parseHubReadyFile } from "./hubProcessManager.js";
 
 const SERVER_ID = `srv_${"S".repeat(24)}`;
 const SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
+const CHILD_SERVER_ID = `srv_${"C".repeat(24)}`;
+const CHILD_SERVER_BOOT_ID = `boot_${"C".repeat(24)}`;
+const ISSUED_DEVICE_ID = `dev_${"D".repeat(24)}`;
+const ISSUED_REFRESH_TOKEN = "R".repeat(43);
 const RECORD = {
   gatewayPort: 5000,
   pid: 99_999_999,
@@ -46,13 +44,21 @@ const RECORD = {
   startedAt: 1000,
   version: "1.2.3",
 };
+const LEASE = {
+  ownerBootId: RECORD.serverBootId,
+  gatewayPort: RECORD.gatewayPort,
+  pid: RECORD.pid,
+  acquiredAt: RECORD.startedAt,
+  heartbeatAt: 1_500,
+  expiresAt: 2_000_000_000_000,
+};
 
-function readyInvite(kind: "desktop" | "mobile") {
+function readyInvite() {
   const pairing = {
-    room: `room-${kind}`,
+    room: "root-room",
     fp: "AA".repeat(32),
     sig: "wss://signal.example/",
-    code: (kind === "desktop" ? "D" : "M").repeat(32),
+    code: "D".repeat(32),
     v: 2 as const,
     ice: "all" as const,
   };
@@ -67,22 +73,23 @@ function readyInvite(kind: "desktop" | "mobile") {
   };
 }
 
-function makeCentralData(initial: typeof RECORD | null = RECORD) {
-  let record: typeof RECORD | null = initial;
+function makeCentralData(initial: typeof LEASE | null = LEASE) {
+  let lease: typeof LEASE | null = initial;
   return {
-    getHubRuntime: vi.fn(() => record),
-    setHubRuntime: vi.fn((next: typeof RECORD) => {
-      record = next;
-    }),
-    clearHubRuntime: vi.fn(() => {
-      record = null;
-    }),
+    getHubProcessLease: vi.fn(() => lease),
+    setLease: (next: typeof LEASE | null) => {
+      lease = next;
+    },
   };
 }
 
-function manager(centralData: ReturnType<typeof makeCentralData>) {
+function manager(
+  centralData: ReturnType<typeof makeCentralData>,
+  options: { ephemeral?: boolean; workspaceName?: string } = {}
+) {
   return new HubProcessManager({
-    workspaceName: "alpha",
+    workspaceName: options.workspaceName ?? "alpha",
+    ephemeral: options.ephemeral ?? false,
     appRoot: "/tmp/app",
     appVersion: "1.2.3",
     centralData: centralData as never,
@@ -90,12 +97,65 @@ function manager(centralData: ReturnType<typeof makeCentralData>) {
   });
 }
 
+interface TestRpcRequest {
+  from: string;
+  message: {
+    requestId: string;
+    method: string;
+    args: unknown[];
+  };
+}
+
+function rpcCall(init: RequestInit | undefined): {
+  method: string;
+  args: unknown[];
+  body: TestRpcRequest;
+} {
+  const body = JSON.parse(String(init?.body)) as TestRpcRequest;
+  return {
+    method: body.message.method,
+    args: body.message.args,
+    body,
+  };
+}
+
+function rpcResult(request: TestRpcRequest, result: unknown): Response {
+  const responder = { callerId: "main", callerKind: "server" };
+  return Response.json({
+    from: "main",
+    target: request.from,
+    delivery: { caller: responder },
+    provenance: [responder],
+    message: {
+      type: "response",
+      requestId: request.message.requestId,
+      result,
+    },
+  });
+}
+
+function workspaceRoute(workspace: string, workspaceId: string) {
+  return {
+    workspace,
+    workspaceId,
+    running: true as const,
+    serverUrl: `http://127.0.0.1:5000/_r/ws/${workspace}`,
+    workspaceReach: {
+      room: `workspace-${workspace}`,
+      fp: "AA".repeat(32),
+      sig: "wss://signal.example/",
+      v: 2 as const,
+      ice: "all" as const,
+    },
+    serverId: CHILD_SERVER_ID,
+    serverBootId: CHILD_SERVER_BOOT_ID,
+  };
+}
+
 beforeEach(() => {
   spawnMock.mockReset();
   credentialStore.loadDeviceCredentialByServerId.mockReset();
-  credentialStore.loadPendingLoopbackPairing.mockReset();
   credentialStore.saveDeviceCredential.mockReset();
-  credentialStore.savePendingLoopbackPairing.mockReset();
 });
 
 afterEach(() => {
@@ -104,12 +164,15 @@ afterEach(() => {
 });
 
 describe("HubProcessManager", () => {
+  it("exposes the detached hub's canonical captured-output path", () => {
+    expect(getLocalHubLogPath()).toBe("/tmp/vibestudio-hub-manager-test/logs/hub.log");
+  });
+
   it("accepts only the canonical secret-free ready contract", () => {
     const canonical = {
       mode: "hub",
       gatewayUrl: "http://127.0.0.1:5000",
-      connectUrl: "http://127.0.0.1:5000",
-      rootInvites: { desktop: readyInvite("desktop"), mobile: readyInvite("mobile") },
+      rootInvite: readyInvite(),
       serverId: SERVER_ID,
       serverBootId: SERVER_BOOT_ID,
       gatewayPort: 5000,
@@ -121,25 +184,20 @@ describe("HubProcessManager", () => {
     expect(() => parseHubReadyFile({ ...canonical, adminToken: "secret" })).toThrow(
       /canonical contract/
     );
-    expect(() => parseHubReadyFile({ ...canonical, rootInvites: {} })).toThrow(
+    expect(() => parseHubReadyFile({ ...canonical, connectUrl: canonical.gatewayUrl })).toThrow(
       /canonical contract/
     );
+    expect(() => parseHubReadyFile({ ...canonical, rootInvite: {} })).toThrow(/canonical contract/);
     expect(() =>
       parseHubReadyFile({
         ...canonical,
-        rootInvites: {
-          ...canonical.rootInvites,
-          desktop: { ...canonical.rootInvites.desktop, ice: undefined },
-        },
+        rootInvite: { ...canonical.rootInvite, ice: undefined },
       })
     ).toThrow(/canonical contract/);
     expect(() =>
       parseHubReadyFile({
         ...canonical,
-        rootInvites: {
-          ...canonical.rootInvites,
-          desktop: { ...canonical.rootInvites.desktop, url: "https://legacy.example" },
-        },
+        rootInvite: { ...canonical.rootInvite, url: "https://legacy.example" },
       })
     ).toThrow(/canonical contract/);
   });
@@ -174,18 +232,23 @@ describe("HubProcessManager", () => {
       }
       expect(url).toBe("http://127.0.0.1:5000/rpc");
       expect(init?.headers).toMatchObject({ Authorization: "Bearer shell-session" });
-      expect(JSON.parse(String(init?.body))).toEqual({
+      const request = rpcCall(init);
+      if (request.method === "hubControl.listWorkspaces") {
+        expect(request.args).toEqual([]);
+        return rpcResult(request.body, [
+          {
+            workspaceId: "ws_alpha",
+            name: "alpha",
+            lastOpened: 1,
+            running: true,
+          },
+        ]);
+      }
+      expect(request).toMatchObject({
         method: "hubControl.routeWorkspace",
-        args: [{ workspace: "alpha" }],
+        args: [{ workspaceId: "ws_alpha" }],
       });
-      return Response.json({
-        result: {
-          workspace: "alpha",
-          workspaceId: "ws_alpha",
-          serverUrl: "http://127.0.0.1:5000/_r/ws/alpha",
-          serverBootId: "child-boot",
-        },
-      });
+      return rpcResult(request.body, workspaceRoute("alpha", "ws_alpha"));
     });
     vi.stubGlobal("fetch", fetchMock);
     const centralData = makeCentralData();
@@ -198,6 +261,61 @@ describe("HubProcessManager", () => {
       authToken: "refresh:dev-1:refresh-1",
       wsUrl: "ws://127.0.0.1:5000/_r/ws/alpha/rpc",
     });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("establishes an ephemeral workspace on an already-running machine hub before routing", async () => {
+    credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
+      serverId: RECORD.serverId,
+      transport: "loopback",
+      deviceId: "dev-1",
+      refreshToken: "refresh-1",
+      pairedAt: 1,
+    });
+    const rpcCalls: Array<{ method: string; args: unknown[] }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/healthz")) {
+          return Response.json({
+            ok: true,
+            mode: "hub",
+            serverId: RECORD.serverId,
+            serverBootId: SERVER_BOOT_ID,
+            gatewayPort: RECORD.gatewayPort,
+            pid: RECORD.pid,
+            version: RECORD.version,
+          });
+        }
+        if (url.endsWith("/_r/s/auth/refresh-shell")) {
+          return Response.json({ shellToken: "shell-session" });
+        }
+        const request = rpcCall(init);
+        rpcCalls.push({ method: request.method, args: request.args });
+        if (request.method === "hubControl.ensureEphemeralWorkspace") {
+          return rpcResult(request.body, {
+            workspaceId: "ws_dev",
+            name: "dev",
+            lastOpened: 1,
+            running: true,
+            ephemeral: true,
+          });
+        }
+        return rpcResult(request.body, workspaceRoute("dev", "ws_dev"));
+      })
+    );
+
+    const target = await manager(makeCentralData(), {
+      ephemeral: true,
+      workspaceName: "dev",
+    }).attachOrSpawn();
+
+    expect(rpcCalls).toEqual([
+      { method: "hubControl.ensureEphemeralWorkspace", args: [] },
+      { method: "hubControl.routeWorkspace", args: [{ workspaceId: "ws_dev" }] },
+    ]);
+    expect(target).toMatchObject({ attached: true, workspaceId: "ws_dev" });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -224,7 +342,7 @@ describe("HubProcessManager", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("rejects health metadata that points at a different PID without signaling it", async () => {
+  it("rejects health metadata that does not match the fenced lease without signaling it", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -242,24 +360,14 @@ describe("HubProcessManager", () => {
     const killMock = vi.spyOn(process, "kill");
 
     await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow(
-      /does not match recorded process/
+      /does not match fenced lease/
     );
     expect(killMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("replays the prepared root credential after final persistence fails", async () => {
-    let pending: Record<string, unknown> | null = null;
+  it("persists the credential atomically issued by the hub without proposing client secrets", async () => {
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
-    credentialStore.loadPendingLoopbackPairing.mockImplementation(() => pending);
-    credentialStore.savePendingLoopbackPairing.mockImplementation((value) => {
-      pending = value as Record<string, unknown>;
-    });
-    credentialStore.saveDeviceCredential
-      .mockImplementationOnce(() => {
-        throw new Error("keychain unavailable");
-      })
-      .mockImplementation(() => undefined);
     const posted: Record<string, unknown>[] = [];
     vi.stubGlobal(
       "fetch",
@@ -267,8 +375,9 @@ describe("HubProcessManager", () => {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         posted.push(body);
         return Response.json({
-          deviceId: body["deviceId"],
-          refreshToken: body["refreshToken"],
+          serverId: SERVER_ID,
+          deviceId: ISSUED_DEVICE_ID,
+          refreshToken: ISSUED_REFRESH_TOKEN,
         });
       })
     );
@@ -290,28 +399,30 @@ describe("HubProcessManager", () => {
       attached: false,
     };
 
-    await expect(ensure(freshTarget)).rejects.toThrow(/keychain unavailable/);
-    expect(pending).toMatchObject({
-      serverId: SERVER_ID,
-      transport: "pending-loopback",
-      inviteCode: "D".repeat(32),
-    });
-
-    await expect(
-      ensure({ ...freshTarget, rootInviteCode: null, rootInviteExpiresAt: null, attached: true })
-    ).resolves.toMatchObject({
+    await expect(ensure(freshTarget)).resolves.toMatchObject({
       serverId: SERVER_ID,
       transport: "loopback",
-      deviceId: pending?.["deviceId"],
-      refreshToken: pending?.["refreshToken"],
+      deviceId: ISSUED_DEVICE_ID,
+      refreshToken: ISSUED_REFRESH_TOKEN,
     });
-    expect(posted).toHaveLength(2);
-    expect(posted[1]).toEqual(posted[0]);
-    expect(credentialStore.savePendingLoopbackPairing).toHaveBeenCalledTimes(1);
-    expect(credentialStore.saveDeviceCredential).toHaveBeenCalledTimes(2);
+    expect(posted).toEqual([
+      {
+        code: "D".repeat(32),
+        label: expect.stringMatching(/ desktop$/),
+        platform: "desktop",
+      },
+    ]);
+    expect(credentialStore.saveDeviceCredential).toHaveBeenCalledWith({
+      serverId: SERVER_ID,
+      transport: "loopback",
+      deviceId: ISSUED_DEVICE_ID,
+      refreshToken: ISSUED_REFRESH_TOKEN,
+      label: expect.stringMatching(/ desktop$/),
+      pairedAt: expect.any(Number),
+    });
   });
 
-  it("clears a dead hub record before attempting a clean hub spawn", async () => {
+  it("replaces a dead leased hub with a clean hub spawn", async () => {
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
     vi.stubGlobal(
       "fetch",
@@ -329,7 +440,6 @@ describe("HubProcessManager", () => {
     await expect(manager(centralData).attachOrSpawn()).rejects.toThrow(
       "Local hub exited during startup"
     );
-    expect(centralData.clearHubRuntime).toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledOnce();
     expect(spawnMock.mock.calls[0]?.[1]).toEqual([
       "--max-old-space-size=4096",
@@ -338,6 +448,34 @@ describe("HubProcessManager", () => {
       "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json",
       "--bootstrap-workspace",
       "alpha",
+    ]);
+  });
+
+  it("hands the canonical ephemeral lifecycle to the spawned hub", async () => {
+    credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new Error("refused")))
+    );
+    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    child.pid = 42;
+    child.unref = () => undefined;
+    spawnMock.mockImplementation(() => {
+      setTimeout(() => child.emit("exit", 1), 0);
+      return child;
+    });
+
+    await expect(
+      manager(makeCentralData(), { ephemeral: true, workspaceName: "dev" }).attachOrSpawn()
+    ).rejects.toThrow("Local hub exited during startup");
+    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
+      "--max-old-space-size=4096",
+      "/tmp/server-entry.js",
+      "--ready-file",
+      "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json",
+      "--bootstrap-workspace",
+      "dev",
+      "--ephemeral",
     ]);
   });
 
@@ -400,6 +538,5 @@ describe("HubProcessManager", () => {
       env: { VIBESTUDIO_GATEWAY_PORT: String(RECORD.gatewayPort) },
     });
     expect(fs.existsSync(readyFile)).toBe(false);
-    expect(centralData.setHubRuntime).not.toHaveBeenCalled();
   });
 });

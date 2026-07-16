@@ -1,27 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { evalMethods } from "@vibestudio/service-schemas/eval";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
-import { CliError, UsageError, jsonMode, printError, printResult } from "./output.js";
+import {
+  CliError,
+  ConnectionError,
+  UsageError,
+  jsonMode,
+  printError,
+  printResult,
+} from "./output.js";
 import {
   DEFAULT_SESSION,
-  findContextMarker,
+  findContextBinding,
   resolveSessionScope,
   SCOPE_FLAGS,
   type SessionScope,
 } from "./agent/sessionContext.js";
 import { ensureNamedAgentSession } from "./agent/index.js";
-import { loadCliCredentials } from "./credentialStore.js";
-import { RpcClient } from "./rpcClient.js";
+import { RpcClient, RpcError } from "./rpcClient.js";
 import { loadAgentSession } from "./sessionStore.js";
 import { typedClient } from "./typedClients.js";
 import {
   loadSystemTestRun,
   loadSystemTestArtifact,
-  loadSystemTestTarget,
   listSystemTestRuns,
-  clearSystemTestTarget,
   saveSystemTestRun,
-  saveSystemTestTarget,
   systemTestArtifactDir,
   systemTestRunDir,
   writeSystemTestArtifact,
@@ -32,6 +35,8 @@ type EvalClient = ReturnType<typeof evalClientFor>;
 type EvalStatus = Awaited<ReturnType<EvalClient["getRun"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
+const DEFAULT_TEST_TIMEOUT_MS = 5 * 60 * 1_000;
+const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
 // Stay below EvalDO's 60k structured-return preview threshold even after wire
 // serialization. Pages are returned as UTF-16LE base64 (2 bytes per JS code
 // unit, then 4/3 expansion), so 20k source chars remain ~53.4k plus a tiny
@@ -55,8 +60,7 @@ async function resolveSystemTestScope(
   const explicitSession =
     typeof inv.flags["session"] === "string" ? inv.flags["session"] : undefined;
   if (explicitSession) {
-    await ensureNamedAgentSession(explicitSession);
-    return await preferDoctorVerifiedLocalTarget(resolveSessionScope(inv));
+    return await ensureSystemTestSession(inv, explicitSession);
   }
 
   // System tests are a self-contained CLI workflow. When no ordinary scope
@@ -66,81 +70,21 @@ async function resolveSystemTestScope(
   const hasAmbientScope =
     typeof inv.flags["context"] === "string" ||
     Boolean(process.env["VIBESTUDIO_AGENT_TOKEN"]) ||
-    findContextMarker() !== null ||
+    findContextBinding() !== null ||
     loadAgentSession(DEFAULT_SESSION) !== null;
   if (!hasAmbientScope) {
-    await ensureNamedAgentSession(preferredSession);
-    return await preferDoctorVerifiedLocalTarget(
-      resolveSessionScope({
-        ...inv,
-        flags: { ...inv.flags, session: preferredSession },
-      })
-    );
+    const sessionInvocation = {
+      ...inv,
+      flags: { ...inv.flags, session: preferredSession },
+    };
+    return await ensureSystemTestSession(sessionInvocation, preferredSession);
   }
-  return await preferDoctorVerifiedLocalTarget(resolveSessionScope(inv));
+  return resolveSessionScope(inv);
 }
 
-/**
- * Use the loopback gateway discovered by `system-test doctor` for subsequent
- * orchestration/status traffic. The paired credential still supplies the
- * principal, and WebRTC remains the bootstrap/fallback for remote hosts.
- *
- * A stale local route is reported and removed before falling back. That makes
- * a source-server restart self-healing without silently hiding the failed
- * transport claim that doctor previously recorded.
- */
-async function preferDoctorVerifiedLocalTarget(scope: SessionScope): Promise<SessionScope> {
-  const target = loadSystemTestTarget();
-  const credentials = loadCliCredentials();
-  if (
-    !target ||
-    !credentials ||
-    target.pairedUrl !== credentials.url ||
-    target.workspaceName !== credentials.workspaceName ||
-    target.serverId !== credentials.serverId
-  ) {
-    return scope;
-  }
-
-  const direct = new RpcClient({
-    url: target.serverUrl,
-    deviceId: credentials.deviceId,
-    refreshToken: credentials.refreshToken,
-  });
-  try {
-    const info = await direct.call<Record<string, unknown>>("auth.getConnectionInfo", []);
-    if (
-      info["serverId"] !== target.serverId ||
-      info["serverBootId"] !== target.serverBootId ||
-      info["workspaceId"] !== target.workspaceId
-    ) {
-      throw new Error("the gateway identity no longer matches the doctor-verified target");
-    }
-    await scope.client.close();
-    return { ...scope, client: direct };
-  } catch (error) {
-    await direct.close().catch(() => undefined);
-    clearSystemTestTarget();
-    console.warn(
-      `[system-test] doctor-verified local gateway became unavailable: ${
-        error instanceof Error ? error.message : String(error)
-      }; continuing over the paired transport`
-    );
-    return scope;
-  }
-}
-
-function isLoopbackServerUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      (url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "localhost")
-    );
-  } catch {
-    return false;
-  }
+async function ensureSystemTestSession(inv: ParsedInvocation, name: string): Promise<SessionScope> {
+  await ensureNamedAgentSession(name);
+  return resolveSessionScope(inv);
 }
 
 function positiveInt(inv: ParsedInvocation, name: string, fallback?: number): number | undefined {
@@ -320,9 +264,27 @@ async function waitForRun(
   // direct gateway, so status/inspect/cancel remain concurrently available;
   // remote users who need that concurrency can start the durable run detached.
   const release = connection.retainConnection();
+  let consecutiveReadFailures = 0;
   try {
     for (;;) {
-      const status = await client.getRun({ ...route, runId });
+      let status: EvalStatus;
+      try {
+        status = await client.getRun({ ...route, runId });
+        consecutiveReadFailures = 0;
+      } catch (error) {
+        const retryable =
+          error instanceof ConnectionError ||
+          (error instanceof RpcError &&
+            (error.errorKind === "transport" ||
+              error.errorKind === "internal" ||
+              error.errorKind === "service"));
+        consecutiveReadFailures += 1;
+        if (!retryable || consecutiveReadFailures >= MAX_CONSECUTIVE_STATUS_READ_FAILURES) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+        continue;
+      }
       if (!["pending", "running"].includes(status.status)) return status;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
@@ -414,9 +376,8 @@ async function run(inv: ParsedInvocation): Promise<number> {
       all,
       ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
       concurrency: positiveInt(inv, "concurrency", 1) ?? 1,
-      ...(inv.flags["test-timeout-ms"] !== undefined
-        ? { testTimeoutMs: positiveInt(inv, "test-timeout-ms") }
-        : {}),
+      testTimeoutMs:
+        positiveInt(inv, "test-timeout-ms", DEFAULT_TEST_TIMEOUT_MS) ?? DEFAULT_TEST_TIMEOUT_MS,
     };
     const stored = await startRun(scope, config, outDir(inv));
     if (inv.flags["detach"] === true) {
@@ -880,6 +841,7 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
     }
     const scope = await resolveSystemTestScope(inv, storedPrior.sessionName);
     const concurrency = positiveInt(inv, "concurrency");
+    const testTimeoutMs = positiveInt(inv, "test-timeout-ms");
     const stored = await startRun(
       scope,
       {
@@ -888,6 +850,7 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
         all: false,
         ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
         ...(concurrency !== undefined ? { concurrency } : {}),
+        ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
       },
       outDir(inv)
     );
@@ -945,31 +908,6 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
       ok?: boolean;
       checks?: Array<{ name: string; ok: boolean; detail: string; data?: unknown }>;
     };
-    const serverCheck = value.checks?.find((check) => check.name === "server" && check.ok);
-    const server =
-      serverCheck?.data && typeof serverCheck.data === "object" && !Array.isArray(serverCheck.data)
-        ? (serverCheck.data as Record<string, unknown>)
-        : null;
-    const credentials = loadCliCredentials();
-    if (
-      credentials &&
-      server &&
-      isLoopbackServerUrl(server["serverUrl"]) &&
-      server["serverId"] === credentials.serverId &&
-      typeof server["serverBootId"] === "string" &&
-      typeof server["workspaceId"] === "string"
-    ) {
-      saveSystemTestTarget({
-        schemaVersion: 1,
-        pairedUrl: credentials.url,
-        workspaceName: credentials.workspaceName,
-        serverUrl: server["serverUrl"],
-        serverId: credentials.serverId,
-        serverBootId: server["serverBootId"],
-        workspaceId: server["workspaceId"],
-        verifiedAt: Date.now(),
-      });
-    }
     printResult(value, {
       json,
       human: () => {
@@ -1013,7 +951,11 @@ const RUN_FLAGS = [
   { name: "all", takesValue: false, description: "Run the complete catalog" },
   { name: "model", takesValue: true, description: "Model ref for spawned test agents" },
   { name: "concurrency", takesValue: true, description: "Maximum concurrent test agents" },
-  { name: "test-timeout-ms", takesValue: true, description: "Per-test timeout in milliseconds" },
+  {
+    name: "test-timeout-ms",
+    takesValue: true,
+    description: "Per-test timeout in milliseconds (default 300000)",
+  },
   { name: "poll-ms", takesValue: true, description: "Status polling interval (default 1000)" },
   {
     name: "detach",
@@ -1119,6 +1061,11 @@ export const systemTestCommands: CliCommand[] = [
     flags: [
       { name: "model", takesValue: true },
       { name: "concurrency", takesValue: true },
+      {
+        name: "test-timeout-ms",
+        takesValue: true,
+        description: "Replace the prior run's per-test timeout in milliseconds",
+      },
       { name: "poll-ms", takesValue: true },
       { name: "detach", takesValue: false },
       { name: "out-dir", takesValue: true },

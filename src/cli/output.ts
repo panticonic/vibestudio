@@ -50,6 +50,16 @@ export class AuthError extends CliError {
   }
 }
 
+/** A reachability failure, distinct from rejected or malformed credentials.
+ * It keeps the CLI's connection/auth exit class while giving durable workflows
+ * a typed signal they may retry without parsing prose. */
+export class ConnectionError extends AuthError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectionError";
+  }
+}
+
 export class TimeoutError extends CliError {
   constructor(message: string) {
     super(message, EXIT_TIMEOUT);

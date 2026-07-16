@@ -5,7 +5,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { WebSocket } from "ws";
 import { envelopeFromMessage } from "@vibestudio/rpc";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
@@ -74,19 +73,20 @@ async function rpc(url, shellToken, method, args = []) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${shellToken}`,
     },
-    body: JSON.stringify({
-      from: caller.callerId,
-      target: "main",
-      delivery: { caller },
-      provenance: [caller],
-      message: {
-        type: "request",
-        requestId: crypto.randomUUID(),
-        fromId: caller.callerId,
-        method,
-        args,
-      },
-    }),
+    body: JSON.stringify(
+      envelopeFromMessage({
+        from: caller.callerId,
+        target: "main",
+        callerKind: caller.callerKind,
+        message: {
+          type: "request",
+          requestId: crypto.randomUUID(),
+          fromId: caller.callerId,
+          method,
+          args,
+        },
+      })
+    ),
   });
   const body = await res.json();
   const message = (body?.envelope ?? body)?.message;
@@ -96,14 +96,12 @@ async function rpc(url, shellToken, method, args = []) {
 }
 
 async function pairShellToken(ready) {
-  const url = ready.connectUrl;
-  const code = ready.rootInvites?.desktop?.code;
+  const url = ready.gatewayUrl;
+  const code = ready.rootInvite?.code;
   if (!url) throw new Error("Server ready file did not include a pairing URL");
   if (!code) throw new Error("Server ready file did not include a terminal pairing code");
   const issued = await postJson(url, "/_r/s/auth/complete-pairing", {
     code,
-    handle: "terminal-smoke",
-    displayName: "Terminal Smoke",
     label: "Terminal app smoke",
     platform: "desktop",
   });
@@ -114,13 +112,16 @@ async function pairShellToken(ready) {
   ) {
     throw new Error("Pairing response did not include complete device and shell credentials");
   }
-  const routed = await postJson(
-    url,
-    "/rpc",
-    { method: "hubControl.routeWorkspace", args: [{ workspace: "dev" }] },
-    issued.shellToken
-  );
-  const selected = routed.result;
+  const workspaces = await rpc(url, issued.shellToken, "hubControl.listWorkspaces");
+  const workspace = Array.isArray(workspaces)
+    ? (workspaces.find((entry) => entry?.name === "dev") ?? workspaces[0])
+    : null;
+  if (typeof workspace?.workspaceId !== "string") {
+    throw new Error("Hub did not expose an exact workspace identity");
+  }
+  const selected = await rpc(url, issued.shellToken, "hubControl.routeWorkspace", [
+    { workspaceId: workspace.workspaceId },
+  ]);
   if (typeof selected.serverUrl !== "string") {
     throw new Error("Workspace selection response did not include a server URL");
   }
@@ -134,128 +135,19 @@ async function pairShellToken(ready) {
   return { url: selected.serverUrl, shellToken: refreshed.shellToken };
 }
 
-function rpcWsUrl(rawUrl) {
-  const url = new URL(rawUrl);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  url.pathname = `${basePath}/rpc`;
-  url.search = "";
-  url.hash = "";
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
-async function createShellEventClient(url, shellToken) {
-  const events = [
-    "host-target-launch:session-changed",
-    "apps:status",
-    "apps:available",
-    "workspace:unit-log",
-  ];
-  const waiters = new Set();
-  let revision = 0;
-  const notify = () => {
-    revision += 1;
-    for (const waiter of [...waiters]) waiter();
-  };
-  let requestIndex = 0;
-  const ws = new WebSocket(rpcWsUrl(url));
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("Timed out connecting terminal smoke event stream")),
-      15_000
-    );
-    ws.once("open", () => {
-      ws.send(
-        JSON.stringify({
-          type: "ws:auth",
-          token: shellToken,
-          clientLabel: "Terminal app smoke",
-          clientPlatform: "headless",
-        })
-      );
-    });
-    ws.once("error", reject);
-    ws.on("message", (chunk) => {
-      let message;
-      try {
-        message = JSON.parse(String(chunk));
-      } catch {
-        return;
-      }
-      if (message?.type === "ws:auth-result") {
-        if (message.success !== true) {
-          clearTimeout(timeout);
-          reject(new Error(message.error || "Terminal smoke event stream auth failed"));
-          return;
-        }
-        for (const event of events) {
-          requestIndex += 1;
-          const envelope = envelopeFromMessage({
-            from: "terminal-smoke",
-            target: "main",
-            callerKind: "shell",
-            message: {
-              type: "request",
-              requestId: `terminal-smoke-subscribe-${requestIndex}`,
-              fromId: "terminal-smoke",
-              method: "events.subscribe",
-              args: [event],
-            },
-          });
-          ws.send(
-            JSON.stringify({
-              type: "ws:rpc",
-              envelope,
-              message: envelope.message,
-            })
-          );
-        }
-        clearTimeout(timeout);
-        resolve();
-        return;
-      }
-      if (message?.type === "ws:event") {
-        const eventName =
-          typeof message.event === "string" && message.event.startsWith("event:")
-            ? message.event.slice("event:".length)
-            : message.event;
-        if (events.includes(eventName)) notify();
-      }
-    });
-  });
+async function createShellEventClient() {
+  // This smoke only needs a bounded wake between authoritative snapshot reads.
+  // Keep it as polling instead of recreating the product's streamed-event
+  // client and lifetime machinery in a standalone script.
   return {
     checkpoint() {
-      return revision;
+      return 0;
     },
-    wait(timeoutMs, afterRevision = revision) {
-      if (revision !== afterRevision) return Promise.resolve(true);
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          waiters.delete(done);
-          resolve(false);
-        }, timeoutMs);
-        const done = () => {
-          clearTimeout(timer);
-          waiters.delete(done);
-          resolve(true);
-        };
-        waiters.add(done);
-      });
+    async wait(timeoutMs) {
+      await wait(timeoutMs);
+      return false;
     },
-    close() {
-      return new Promise((resolve) => {
-        if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-          resolve();
-          return;
-        }
-        const timer = setTimeout(resolve, 2000);
-        ws.once("close", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        ws.close();
-      });
-    },
+    async close() {},
   };
 }
 
